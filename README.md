@@ -25,14 +25,18 @@ model prompts stay on the machine. There is no telemetry or automatic cloud
 inference fallback. Optional Microsoft upload verification uses account, file
 metadata and audit APIs, not remote document analysis.
 
-Without either optional integration enabled, Intern has two user-initiated
-network features, neither carrying document information:
+Without either optional integration enabled, Intern has two network features,
+neither carrying document information:
 
 1. The one-off download of the pinned model file — 1.19 GiB, the text model and
    nothing else.
-2. **Check for updates** in Settings, which asks GitHub for the release
-   manifest. There is no background poll and no timer. An update is installed
-   only if it is signed by this project's key; anything else is refused.
+2. A check for the GitHub release manifest, asking only "is there a newer,
+   signed build" — nothing else about the machine or its documents. It runs
+   once when Intern starts, again on a fixed interval for as long as it keeps
+   running, and on demand from **Check for updates** in Settings. A found
+   update is never installed by the check itself: installing is always a
+   separate, explicit click, and only ever happens if the update is signed by
+   this project's key — anything else is refused.
 
 There are two optional integrations. Both require an explicit choice. Settings
 can point Intern at a **hosted model** — Anthropic's, OpenAI's, or any service
