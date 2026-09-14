@@ -2332,6 +2332,7 @@ dependencies = [
 name = "intern-core"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "rand 0.8.5",
  "rusqlite",
  "serde",
  "sha2",
@@ -2368,6 +2369,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "url",
  "windows-sys 0.61.2",
 ]
 

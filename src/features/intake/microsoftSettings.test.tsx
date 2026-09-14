@@ -4,7 +4,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import { MicrosoftIntakeSettings } from './MicrosoftIntakeSettings';
 import type { MicrosoftIntakeBridge, MicrosoftIntakeStatus, MicrosoftAccount } from './microsoft';
 const account: MicrosoftAccount = { tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', displayName: 'Zachary Brenner', email: 'zack@example.test' };
-const initial: MicrosoftIntakeStatus = { connected: false, account: null, tenantId: account.tenantId, clientId: 'cccccccc-cccc-cccc-cccc-cccccccccccc', binding: null, documents: [], error: null };
+const initial: MicrosoftIntakeStatus = { connected: false, account: null, binding: null, documents: [], error: null };
 function bridge(status = initial) {
   let current = { ...status };
   const microsoft: MicrosoftIntakeBridge = {
@@ -12,8 +12,8 @@ function bridge(status = initial) {
     microsoftSignInStart: vi.fn(async () => ({ userCode: 'ABCD-EFGH', verificationUri: 'https://microsoft.com/devicelogin', intervalSeconds: 5, expiresAt: 9999999999 })),
     microsoftSignInPoll: vi.fn(async () => ({ state: 'pending' as const, intervalSeconds: 5 })),
     microsoftDisconnect: vi.fn(async () => { current = { ...current, connected: false, account: null }; }),
-    microsoftBindIntake: vi.fn(async (driveId, folderId) => {
-      const binding = { localFolder: 'C:/Intake', driveId, folderId, webUrl: 'https://example.sharepoint.com/Legal/Intake', tenantId: account.tenantId };
+    microsoftBindIntake: vi.fn(async () => {
+      const binding = { localFolder: 'C:/Intake', driveId: 'fixed-drive', folderId: 'fixed-inbox', webUrl: 'https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox', tenantId: account.tenantId };
       current = { ...current, binding }; return binding;
     }),
     microsoftOpenSignIn: vi.fn(async () => {}),
@@ -21,16 +21,27 @@ function bridge(status = initial) {
   return { ...createInMemoryBridge(), ...microsoft };
 }
 describe('Microsoft upload identity setup', () => {
-  it('requires explicit permissions acknowledgment and valid public IDs', async () => {
-    render(<MicrosoftIntakeSettings bridge={bridge()} savedFolder="C:/Intake" unsavedFolder={false} />);
-    await waitFor(() => expect(screen.getByLabelText('Microsoft tenant ID')).toHaveValue(account.tenantId));
+  it('shows a disabled deployment as persistent status rather than masking action alerts', async () => {
+    const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
+    render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, error: unavailable })} savedFolder="C:/Intake" unsavedFolder={false} />);
+
+    expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent(unavailable);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect my Microsoft account' })).toBeDisabled();
+  });
+
+  it('uses one managed connection action without audit consent or identifier fields', async () => {
+    const api = bridge();
+    render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
     const connect = screen.getByRole('button', { name: 'Connect my Microsoft account' });
-    expect(connect).toBeDisabled();
-    fireEvent.click(screen.getByLabelText(/understand the Microsoft permissions/));
     expect(connect).toBeEnabled();
-    fireEvent.change(screen.getByLabelText('Microsoft application ID'), { target: { value: 'Zachary Brenner' } });
-    expect(connect).toBeDisabled();
-    expect(screen.getByRole('note')).toHaveTextContent('Audit permissions cover the workload, not just this folder.');
+    expect(screen.queryByLabelText(/tenant ID|application ID|drive ID|folder ID/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/understand the Microsoft permissions/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent('profile and file metadata');
+    expect(screen.getByRole('note')).not.toHaveTextContent(/audit/i);
+    fireEvent.click(connect);
+    await screen.findByRole('status', { name: 'Microsoft sign-in' });
+    expect(api.microsoftSignInStart).toHaveBeenCalledWith();
   });
   it('shows the authenticated identity, with no editable name that could grant ownership', async () => {
     render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, connected: true, account })} savedFolder="C:/Intake" unsavedFolder={false} />);
@@ -42,8 +53,6 @@ describe('Microsoft upload identity setup', () => {
   it('uses a fixed sign-in action and cancels pending authorization when closed', async () => {
     const api = bridge();
     const { unmount } = render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
-    await waitFor(() => expect(screen.getByLabelText('Microsoft tenant ID')).toHaveValue(account.tenantId));
-    fireEvent.click(screen.getByLabelText(/understand the Microsoft permissions/));
     fireEvent.click(screen.getByRole('button', { name: 'Connect my Microsoft account' }));
     expect(await screen.findByRole('status', { name: 'Microsoft sign-in' })).toHaveTextContent('ABCD-EFGH');
     fireEvent.click(screen.getByRole('button', { name: 'Open Microsoft sign-in' }));
@@ -54,8 +63,6 @@ describe('Microsoft upload identity setup', () => {
   it('never pairs a draft folder that has not been saved', async () => {
     render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, connected: true, account })} savedFolder="C:/Old" unsavedFolder />);
     await screen.findByText('Zachary Brenner');
-    fireEvent.change(screen.getByLabelText('Microsoft drive ID'), { target: { value: 'drive' } });
-    fireEvent.change(screen.getByLabelText('Microsoft folder ID'), { target: { value: 'folder' } });
     expect(screen.getByRole('button', { name: 'Verify folder pairing' })).toBeDisabled();
     expect(screen.getByText('Save your changed intake folder before pairing it.')).toBeVisible();
   });
@@ -63,11 +70,9 @@ describe('Microsoft upload identity setup', () => {
     const api = bridge({ ...initial, connected: true, account });
     render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
     await screen.findByText('Zachary Brenner');
-    fireEvent.change(screen.getByLabelText('Microsoft drive ID'), { target: { value: 'drive' } });
-    fireEvent.change(screen.getByLabelText('Microsoft folder ID'), { target: { value: 'folder' } });
     fireEvent.click(screen.getByRole('button', { name: 'Verify folder pairing' }));
-    expect(await screen.findByRole('status', { name: 'Microsoft folder pairing' })).toHaveTextContent('https://example.sharepoint.com/Legal/Intake');
-    expect(api.microsoftBindIntake).toHaveBeenCalledWith('drive', 'folder');
+    expect(await screen.findByRole('status', { name: 'Microsoft folder pairing' })).toHaveTextContent('https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox');
+    expect(api.microsoftBindIntake).toHaveBeenCalledWith();
   });
   it('separates the uploader, processor, and unknown holds without an override button', async () => {
     const processor = { ...account, id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', displayName: 'John Smith', email: 'john@example.test' };
@@ -84,8 +89,6 @@ describe('Microsoft upload identity setup', () => {
   it('displays a failed connection without claiming that uploads were verified', async () => {
     const api = { ...bridge(), microsoftSignInStart: vi.fn(async () => { throw new Error('Organization denied consent.'); }) };
     render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
-    await waitFor(() => expect(screen.getByLabelText('Microsoft tenant ID')).toHaveValue(account.tenantId));
-    fireEvent.click(screen.getByLabelText(/understand the Microsoft permissions/));
     fireEvent.click(screen.getByRole('button', { name: 'Connect my Microsoft account' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Organization denied consent.');
     expect(screen.queryByText('Processing for')).not.toBeInTheDocument();
@@ -94,8 +97,6 @@ describe('Microsoft upload identity setup', () => {
     let resolve!: (value: Awaited<ReturnType<MicrosoftIntakeBridge['microsoftSignInStart']>>) => void;
     const api = { ...bridge(), microsoftSignInStart: vi.fn(() => new Promise<Awaited<ReturnType<MicrosoftIntakeBridge['microsoftSignInStart']>>>((done) => { resolve = done; })) };
     const { unmount } = render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
-    await waitFor(() => expect(screen.getByLabelText('Microsoft tenant ID')).toHaveValue(account.tenantId));
-    fireEvent.click(screen.getByLabelText(/understand the Microsoft permissions/));
     const button = screen.getByRole('button', { name: 'Connect my Microsoft account' });
     act(() => { fireEvent.click(button); fireEvent.click(button); });
     expect(api.microsoftSignInStart).toHaveBeenCalledOnce();

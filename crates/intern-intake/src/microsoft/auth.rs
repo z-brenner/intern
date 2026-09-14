@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
-pub const SCOPES: &str = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Files.SelectedOperations.Selected https://graph.microsoft.com/AuditLogsQuery-SharePoint.Read.All https://graph.microsoft.com/AuditLogsQuery-OneDrive.Read.All offline_access";
+pub const SCOPES: &str =
+    "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Files.Read offline_access";
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,15 +192,15 @@ impl MicrosoftClient {
             session.as_ref().map(|session| session.account.clone());
         state.session = session;
     }
-    pub fn begin(&self, config: AuthConfig) -> Result<DevicePrompt, String> {
-        config.validate()?;
+    pub fn begin(&self) -> Result<DevicePrompt, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "Microsoft sign-in state is unavailable.")?;
+        let config = state.config.clone();
+        config.validate()?;
         self.set_session(&mut state, None);
         state.pending = None;
-        state.config = config.clone();
         state.retry_at = 0;
         state.allow_refresh = false;
         let reply = self.transport.request(
@@ -314,20 +315,13 @@ impl MicrosoftClient {
     /// Every metadata request obtains a current delegated session. Refreshing
     /// rechecks /me against the stored tenant-scoped ID before accepting it.
     pub fn metadata(&self, url: Url) -> Result<(Account, Value), String> {
-        self.graph_request(Some(url), None)
+        self.graph_request(url)
     }
-    pub fn start_audit_query(&self, body: &Value) -> Result<(Account, Value), String> {
-        self.graph_request(None, Some(body))
+    pub fn start_audit_query(&self, _body: &Value) -> Result<(Account, Value), String> {
+        Err("Microsoft audit endpoints are not permitted.".into())
     }
-    fn graph_request(
-        &self,
-        url: Option<Url>,
-        body: Option<&Value>,
-    ) -> Result<(Account, Value), String> {
-        if url
-            .as_ref()
-            .is_some_and(|url| !allowed_endpoint(url, false, true))
-        {
+    fn graph_request(&self, url: Url) -> Result<(Account, Value), String> {
+        if !allowed_endpoint(&url, false, true) {
             return Err("Only Microsoft intake metadata may be requested.".into());
         }
         let mut state = self
@@ -391,19 +385,10 @@ impl MicrosoftClient {
                 .session
                 .as_ref()
                 .ok_or("Connect Microsoft before verifying uploads.")?;
-            let reply = if let Some(body) = body {
-                self.transport
-                    .audit_query(body, &session.token)
-                    .map_err(Failure::connection)?
-            } else {
-                self.transport
-                    .request(
-                        url.ok_or("Microsoft metadata URL is missing.")?,
-                        None,
-                        Some(&session.token),
-                    )
-                    .map_err(Failure::connection)?
-            };
+            let reply = self
+                .transport
+                .request(url, None, Some(&session.token))
+                .map_err(Failure::connection)?;
             match reply.status {
                 200 | 201 => Ok((session.account.clone(),reply.body)),
                 401 => { self.set_session(&mut state, None); Err("Microsoft sign-in expired. Reconnect; files remain held.".into()) }
@@ -530,13 +515,15 @@ mod tests {
     }
     struct Fake {
         replies: Mutex<VecDeque<Reply>>,
-        calls: Mutex<Vec<(String, bool)>>,
+        calls: Mutex<Vec<(String, bool, Vec<(String, String)>)>>,
+        audit_calls: Mutex<usize>,
     }
     impl Fake {
         fn new(replies: Vec<Reply>) -> Self {
             Self {
                 replies: Mutex::new(replies.into()),
                 calls: Mutex::new(Vec::new()),
+                audit_calls: Mutex::new(0),
             }
         }
     }
@@ -548,22 +535,19 @@ mod tests {
             bearer: Option<&str>,
         ) -> Result<Reply, String> {
             assert!(allowed_endpoint(&url, form.is_some(), bearer.is_some()));
-            self.calls
-                .lock()
-                .unwrap()
-                .push((url.to_string(), bearer.is_some()));
+            self.calls.lock().unwrap().push((
+                url.to_string(),
+                bearer.is_some(),
+                form.unwrap_or_default()
+                    .iter()
+                    .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                    .collect(),
+            ));
             self.replies
                 .lock()
                 .unwrap()
                 .pop_front()
                 .ok_or("Unexpected request".into())
-        }
-        fn audit_query(&self, _body: &Value, _bearer: &str) -> Result<Reply, String> {
-            self.replies
-                .lock()
-                .unwrap()
-                .pop_front()
-                .ok_or("Unexpected audit request".into())
         }
     }
     fn config() -> AuthConfig {
@@ -620,15 +604,37 @@ mod tests {
     #[test]
     fn device_secrets_never_leave_the_backend_prompt() {
         let (client, _, _, _) = rig(vec![device()]);
-        let prompt = serde_json::to_string(&client.begin(config()).unwrap()).unwrap();
+        let prompt = serde_json::to_string(&client.begin().unwrap()).unwrap();
         assert!(prompt.contains("ABCD-EFGH"));
         assert!(!prompt.contains("private-device-code"));
         assert!(!prompt.contains("private-access-token"));
     }
     #[test]
+    fn device_sign_in_requests_only_profile_file_metadata_and_persistence() {
+        let (client, http, _, _) = rig(vec![device()]);
+
+        client.begin().unwrap();
+
+        let calls = http.calls.lock().unwrap();
+        assert_eq!(
+            calls[0].2,
+            vec![
+                (
+                    "client_id".to_owned(),
+                    "cccccccc-cccc-cccc-cccc-cccccccccccc".to_owned(),
+                ),
+                (
+                    "scope".to_owned(),
+                    "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Files.Read offline_access"
+                        .to_owned(),
+                ),
+            ]
+        );
+    }
+    #[test]
     fn poll_waits_for_microsoft_interval_and_establishes_identity_via_me() {
         let (client, http, store, time) = rig(vec![device(), token(), me()]);
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         assert!(matches!(
             client.poll().unwrap(),
             SignInProgress::Pending { .. }
@@ -647,7 +653,7 @@ mod tests {
     #[test]
     fn disconnected_account_cannot_be_resurrected_from_a_late_refresh() {
         let (client, http, store, time) = rig(vec![device(), token(), me()]);
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         time.0.store(1005, Ordering::SeqCst);
         client.poll().unwrap();
         let old = store.get(&config().key()).unwrap().unwrap();
@@ -660,14 +666,14 @@ mod tests {
     fn incomplete_signin_cannot_fall_back_to_previously_stored_credentials() {
         let (client, http, store, _) = rig(vec![device()]);
         store.set(&config().key(), "old-secret").unwrap();
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         assert!(client.metadata(item()).is_err());
         assert_eq!(http.calls.lock().unwrap().len(), 1);
     }
     #[test]
     fn expiry_and_slow_down_are_respected() {
         let (client, http, _, time) = rig(vec![device(), reply(400, json!({"error":"slow_down"}))]);
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         time.0.store(1005, Ordering::SeqCst);
         assert!(matches!(
             client.poll().unwrap(),
@@ -694,6 +700,18 @@ mod tests {
         }
         assert!(http.calls.lock().unwrap().is_empty());
     }
+    #[test]
+    fn audit_queries_are_not_a_connected_client_capability() {
+        let (client, http, _, time) = rig(vec![device(), token(), me()]);
+        client.begin().unwrap();
+        time.0.store(1005, Ordering::SeqCst);
+        client.poll().unwrap();
+
+        let error = client.start_audit_query(&json!({})).unwrap_err();
+
+        assert_eq!(error, "Microsoft audit endpoints are not permitted.");
+        assert_eq!(*http.audit_calls.lock().unwrap(), 0);
+    }
     /// A file the sync client has not finished uploading yet answers 404, and
     /// that is a verdict about one file. Pausing the whole client for it holds
     /// every other file in the folder behind the slowest one.
@@ -706,7 +724,7 @@ mod tests {
             reply(404, json!({})),
             reply(200, json!({"id": "item"})),
         ]);
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         time.0.store(1005, Ordering::SeqCst);
         client.poll().unwrap();
         assert!(client.metadata(item()).is_err());
@@ -722,7 +740,7 @@ mod tests {
     #[test]
     fn an_unreachable_microsoft_pauses_verification() {
         let (client, http, _, time) = rig(vec![device(), token(), me()]);
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         time.0.store(1005, Ordering::SeqCst);
         client.poll().unwrap();
         assert!(client.metadata(item()).is_err());
@@ -760,9 +778,6 @@ mod tests {
             }
             Ok(reply)
         }
-        fn audit_query(&self, _body: &Value, _bearer: &str) -> Result<Reply, String> {
-            Err("Unexpected audit request".into())
-        }
     }
 
     /// A verification holds the connection state across its HTTP calls, and
@@ -786,7 +801,7 @@ mod tests {
             transport,
             time.clone(),
         ));
-        client.begin(config()).unwrap();
+        client.begin().unwrap();
         time.0.store(1005, Ordering::SeqCst);
         client.poll().unwrap();
 
@@ -809,7 +824,7 @@ mod tests {
             400,
             json!({"error_description":"private-client-secret"}),
         )]);
-        let error = client.begin(config()).unwrap_err();
+        let error = client.begin().unwrap_err();
         assert!(!error.contains("private-client-secret"));
     }
 }

@@ -14,6 +14,7 @@
 
 pub mod cloud;
 pub mod coordination;
+pub mod deployment;
 pub mod descriptions;
 pub mod filed;
 mod fsatomic;
@@ -32,6 +33,7 @@ pub use coordination::{
     MachinePresence, OriginInfo, PRESENCE_ACTIVE_WINDOW_SECONDS, PRESENCE_REFRESH_SECONDS,
     SystemClock, document_key,
 };
+pub use deployment::{DeploymentError, SharePointDeployment};
 pub use descriptions::{DescriptionLedger, DescriptionRecord, FiledDocument, record_key};
 pub use filed::{FILED_RETENTION_SECONDS, FiledIndex, FiledMarker};
 pub use identity::MachineIdentity;

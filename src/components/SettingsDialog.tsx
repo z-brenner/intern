@@ -479,8 +479,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         {/*
           The watched folder may be a OneDrive/SharePoint synced folder shared by
           several machines. Coordination happens through small files the sync
-          client replicates. Microsoft upload verification separately reads account,
-          metadata and audit information after explicit sign-in.
+          client replicates. Microsoft upload verification separately reads account
+          and file metadata after explicit sign-in.
         */}
         <p className="section-lead">Intern can watch a folder — including a OneDrive or SharePoint folder shared with other machines — and process documents that appear in it. Watched intake needs a destination folder outside the intake folder.</p>
         <label className="check-label"><input type="checkbox" checked={next.intakeEnabled} onChange={(event) => setNext({ ...next, intakeEnabled: event.target.checked })} />Watch a folder for new documents</label>

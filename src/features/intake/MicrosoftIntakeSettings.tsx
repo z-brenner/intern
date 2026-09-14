@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DesktopBridge } from '../../lib/bridge';
 import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from './microsoft';
-import { validMicrosoftId } from './microsoft';
 
 function explain(error: unknown): string {
   if (typeof error === 'string' && error.trim()) return error;
@@ -11,11 +10,6 @@ function explain(error: unknown): string {
 
 export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: { bridge: DesktopBridge; savedFolder: string; unsavedFolder: boolean }) {
   const [status, setStatus] = useState<MicrosoftIntakeStatus>();
-  const [tenantId, setTenantId] = useState('');
-  const [clientId, setClientId] = useState('');
-  const [driveId, setDriveId] = useState('');
-  const [folderId, setFolderId] = useState('');
-  const [acknowledged, setAcknowledged] = useState(false);
   const [prompt, setPrompt] = useState<MicrosoftDevicePrompt>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -23,15 +17,14 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
   const inFlight = useRef(false);
   const generation = useRef(0);
   const signingIn = useRef(false);
-  const available = Boolean(bridge.microsoftIntakeStatus && bridge.microsoftSignInStart && bridge.microsoftSignInPoll && bridge.microsoftDisconnect && bridge.microsoftBindIntake);
+  const available = Boolean(bridge.microsoftIntakeStatus && bridge.microsoftSignInStart && bridge.microsoftSignInPoll && bridge.microsoftDisconnect && bridge.microsoftBindIntake && !status?.error);
 
   useEffect(() => {
     mounted.current = true;
     let active = true;
     void bridge.microsoftIntakeStatus?.().then((next) => {
       if (!active) return;
-      setStatus(next); setTenantId(next.tenantId); setClientId(next.clientId);
-      setDriveId(next.binding?.driveId ?? ''); setFolderId(next.binding?.folderId ?? '');
+      setStatus(next);
     }).catch((cause) => { if (active) setError(explain(cause)); });
     return () => {
       active = false; mounted.current = false; generation.current += 1;
@@ -52,11 +45,10 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
     if (next && mounted.current) setStatus(next);
   };
   const begin = () => void run(async () => {
-    if (!acknowledged || !validMicrosoftId(tenantId) || !validMicrosoftId(clientId)) return;
     const version = ++generation.current;
     signingIn.current = true;
     try {
-      const next = await bridge.microsoftSignInStart?.({ tenantId, clientId }, true);
+      const next = await bridge.microsoftSignInStart?.();
       if (mounted.current && generation.current === version) setPrompt(next);
     } catch (cause) { signingIn.current = false; throw cause; }
   });
@@ -117,21 +109,15 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
     <div className="identity-heading"><h4>Microsoft upload identity</h4><span className="identity-policy">Unknown uploader = held</span></div>
     <p className="section-lead">Unverified uploads are never processed. Intern checks the actual upload activity, not a typed name, the computer that synced first, or the document's last editor.</p>
     {!available && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
-    {status?.error && <p className="form-error" role="alert">{status.error}</p>}
+    {status?.error && <p className="form-error" role="status" aria-label="Microsoft connection status">{status.error}</p>}
     {status?.connected ? <div className="identity-account">
       <p className="field-label">Processing for</p>
       <strong>{status.account?.displayName ?? 'Microsoft account awaiting revalidation'}</strong>
-      {status.account && <><span>{status.account.email}</span><details><summary>Verified account identifiers</summary><p>Organization: <code>{status.account.tenantId}</code><br />Account: <code>{status.account.id}</code></p></details></>}
+      {status.account && <span>{status.account.email}</span>}
       <div className="update-actions"><button type="button" disabled={busy} onClick={() => void run(disconnect)}>Disconnect Microsoft</button></div>
     </div> : <>
-      <details className="identity-admin" open><summary>1. Organization setup</summary>
-        <p className="check-hint">An administrator supplies these two public IDs, enables device sign-in, and grants the required read permissions. Do not enter a password or client secret.</p>
-        <label>Microsoft tenant ID<input value={tenantId} disabled={busy || Boolean(prompt)} spellCheck={false} onChange={(event) => setTenantId(event.target.value.trim())} /></label>
-        <label>Microsoft application ID<input value={clientId} disabled={busy || Boolean(prompt)} spellCheck={false} onChange={(event) => setClientId(event.target.value.trim())} /></label>
-        <p className="identity-permissions" role="note">This connection reads your Microsoft profile, selected-folder metadata, and SharePoint/OneDrive audit events. Audit permissions cover the workload, not just this folder. The folder's read grant can also permit file content, although this connector never calls a content-download endpoint. Document analysis stays local unless you separately choose a hosted model.</p>
-        <label className="check-label"><input type="checkbox" checked={acknowledged} disabled={busy || Boolean(prompt)} onChange={(event) => setAcknowledged(event.target.checked)} />I understand the Microsoft permissions and have my organization's approval</label>
-      </details>
-      {!prompt && <div className="update-actions"><button type="button" className="primary" disabled={!available || busy || !acknowledged || !validMicrosoftId(tenantId) || !validMicrosoftId(clientId)} onClick={begin}>Connect my Microsoft account</button></div>}
+      <p className="identity-permissions" role="note">This connection reads your Microsoft profile and file metadata and keeps sign-in available after restart. Intern never downloads SharePoint document content through Microsoft Graph; document analysis stays local unless you separately choose a hosted model.</p>
+      {!prompt && <div className="update-actions"><button type="button" className="primary" disabled={!available || busy} onClick={begin}>Connect my Microsoft account</button></div>}
     </>}
     {prompt && <div className="identity-signin" role="status" aria-label="Microsoft sign-in">
       <p>Open Microsoft's sign-in page and enter this code:</p><strong className="identity-code">{prompt.userCode}</strong>
@@ -141,13 +127,11 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
     </div>}
     <div className="identity-folder">
       <h4>2. Pair the intake folder</h4>
-      <p className="check-hint">Save the local intake folder first. Your administrator provides its Microsoft drive and folder IDs. Matching folder names alone are not proof.</p>
-      <label>Microsoft drive ID<input value={driveId} disabled={busy || !status?.connected} spellCheck={false} onChange={(event) => setDriveId(event.target.value.trim())} /></label>
-      <label>Microsoft folder ID<input value={folderId} disabled={busy || !status?.connected} spellCheck={false} onChange={(event) => setFolderId(event.target.value.trim())} /></label>
+      <p className="check-hint">Save the local intake folder first. Intern verifies it against the provisioned Files/Inbox library; matching folder names alone are not proof.</p>
       {unsavedFolder && <p className="check-hint">Save your changed intake folder before pairing it.</p>}
-      <div className="update-actions"><button type="button" disabled={!available || busy || !status?.connected || !savedFolder || unsavedFolder || !driveId || !folderId} onClick={() => void run(async () => { await bridge.microsoftBindIntake?.(driveId, folderId); await refresh(); })}>Verify folder pairing</button></div>
+      <div className="update-actions"><button type="button" disabled={!available || busy || !status?.connected || !savedFolder || unsavedFolder} onClick={() => void run(async () => { await bridge.microsoftBindIntake?.(); await refresh(); })}>Verify folder pairing</button></div>
       {status?.binding && <p className="check-hint" role="status" aria-label="Microsoft folder pairing">Paired: {status.binding.localFolder}<br /><span>{status.binding.webUrl}</span></p>}
-      <p className="check-hint">Work or school accounts only. New, unchanged uploads are supported; moved, edited, conflicting, and unverified files stay held. Microsoft audit records can arrive late, so processing may not start immediately.</p>
+      <p className="check-hint">Work or school accounts only. New, unchanged uploads are supported; moved, edited, conflicting, and unverified files stay held.</p>
     </div>
     {documents.length > 0 && <section className="identity-documents" aria-label="Upload verification activity">
       <h4>3. Uploads and processing</h4>

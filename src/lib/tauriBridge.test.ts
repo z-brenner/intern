@@ -27,6 +27,19 @@ function fakeTransport(responses: Record<string, unknown> = {}) {
 }
 
 describe('TauriBridge', () => {
+  it('starts managed Microsoft sign-in and fixed Inbox pairing without identifier payloads', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.microsoftSignInStart();
+    await bridge.microsoftBindIntake();
+
+    expect(fake.calls).toEqual([
+      { command: 'microsoft_sign_in_start', args: undefined },
+      { command: 'microsoft_bind_intake', args: undefined },
+    ]);
+  });
+
   it('maps the exact narrow command names and JSON-safe payloads', async () => {
     const fake = fakeTransport({
       queue_list: [],
@@ -41,6 +54,7 @@ describe('TauriBridge', () => {
       cloud_roots: [{ provider: 'sharepoint', displayName: 'Contoso', path: 'C:\\Users\\pat\\Contoso\\Legal - Documents' }],
       descriptions_status: { enabled: true, folder: 'C:\\Filed\\.intern\\descriptions', recordedThisSession: 2, lastRecordedAt: 1716282600, lastError: null },
       descriptions_backfill: { written: 3, failed: 0 },
+      onboarding_status: { currentVersion: 1, completedVersion: 0, required: true },
       history_list: [],
       history_export: 0,
     });
@@ -63,6 +77,8 @@ describe('TauriBridge', () => {
     await bridge.startModelDownload();
     await bridge.setupCancel();
     await bridge.setupChooseExisting({ modelPath: 'C:\\Models\\intern-q4.gguf' });
+    await bridge.getOnboarding();
+    await bridge.completeOnboarding();
     await bridge.clearHistory();
     await bridge.historyList();
     await bridge.historyExport('C:\\Exports\\intern-history.csv');
@@ -91,6 +107,8 @@ describe('TauriBridge', () => {
       { command: 'setup_start', args: undefined },
       { command: 'setup_cancel', args: undefined },
       { command: 'setup_choose_existing', args: { files: { modelPath: 'C:\\Models\\intern-q4.gguf' } } },
+      { command: 'onboarding_status', args: undefined },
+      { command: 'onboarding_complete', args: undefined },
       { command: 'history_clear', args: undefined },
       { command: 'history_list', args: undefined },
       { command: 'history_export', args: { path: 'C:\\Exports\\intern-history.csv' } },

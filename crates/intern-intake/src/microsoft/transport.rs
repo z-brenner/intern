@@ -2,6 +2,9 @@ use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde_json::Value;
 use std::{io::Read, time::Duration};
 
+const PROFILE_SELECT: &str = "id,displayName,mail,userPrincipalName";
+const ITEM_SELECT: &str = "id,name,size,eTag,cTag,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime,file,fileSystemInfo,folder,deleted,pendingOperations,remoteItem,malware,package,bundle,specialFolder,sharepointIds,webUrl,parentReference";
+
 pub struct Reply {
     pub status: u16,
     pub body: Value,
@@ -15,7 +18,6 @@ pub trait Transport: Send + Sync {
         form: Option<&[(&str, &str)]>,
         bearer: Option<&str>,
     ) -> Result<Reply, String>;
-    fn audit_query(&self, body: &Value, bearer: &str) -> Result<Reply, String>;
 }
 
 pub struct MicrosoftTransport {
@@ -56,18 +58,6 @@ impl Transport for MicrosoftTransport {
         let response = request
             .send()
             .map_err(|_| "Microsoft could not be reached. Files remain held.".to_string())?;
-        read_response(response)
-    }
-    fn audit_query(&self, body: &Value, bearer: &str) -> Result<Reply, String> {
-        let response = self
-            .client
-            .post("https://graph.microsoft.com/v1.0/security/auditLog/queries")
-            .bearer_auth(bearer)
-            .json(body)
-            .send()
-            .map_err(|_| {
-                "Microsoft audit verification could not be reached. Files remain held.".to_string()
-            })?;
         read_response(response)
     }
 }
@@ -122,21 +112,26 @@ pub fn allowed_endpoint(url: &Url, form: bool, bearer: bool) -> bool {
         }
         (Some("graph.microsoft.com"), false, true) => {
             if parts == ["v1.0", "me"] {
-                return true;
+                return exact_select(url, PROFILE_SELECT);
             }
             if parts.len() >= 5 && parts[0] == "v1.0" && parts[1] == "drives" && parts[3] == "items"
             {
                 // By-ID metadata or a path beneath a fixed parent ID. No /content,
                 // preview, versions, permissions, or upload endpoint.
-                return parts.len() == 5 || parts[4].ends_with(':');
+                return (parts.len() == 5
+                    || parts[4].ends_with(':')
+                        && !parts[5..].iter().any(|part| part.ends_with(':')))
+                    && exact_select(url, ITEM_SELECT);
             }
-            parts.len() >= 5
-                && parts[..4] == ["v1.0", "security", "auditLog", "queries"]
-                && super::proof::is_guid(parts[4])
-                && (parts.len() == 5 || parts.len() == 6 && parts[5] == "records")
+            false
         }
         _ => false,
     }
+}
+
+fn exact_select(url: &Url, expected: &str) -> bool {
+    let pairs: Vec<_> = url.query_pairs().collect();
+    pairs.len() == 1 && pairs[0].0 == "$select" && pairs[0].1 == expected
 }
 
 pub fn item_url(drive: &str, folder: &str, relative: Option<&str>) -> Result<Url, String> {
@@ -180,7 +175,7 @@ pub fn item_url(drive: &str, folder: &str, relative: Option<&str>) -> Result<Url
             parts.push(folder);
         }
     }
-    url.query_pairs_mut().append_pair("$select", "id,name,size,eTag,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime,file,folder,deleted,pendingOperations,remoteItem,malware,sharepointIds,webUrl,parentReference");
+    url.query_pairs_mut().append_pair("$select", ITEM_SELECT);
     Ok(url)
 }
 
@@ -201,6 +196,65 @@ pub fn sharepoint_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authenticated_allowlist_excludes_audit_and_content_endpoints() {
+        for address in [
+            "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111",
+            "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111/records",
+            "https://graph.microsoft.com/v1.0/drives/drive/items/item/content",
+            "https://graph.microsoft.com/v1.0/drives/drive/items/folder:/agreement.pdf:/content?$select=id",
+        ] {
+            assert!(
+                !allowed_endpoint(&Url::parse(address).unwrap(), false, true),
+                "{address} must never be available through the metadata transport"
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_allowlist_requires_the_exact_bounded_select_query() {
+        let profile = Url::parse(
+            "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
+        )
+        .unwrap();
+        assert!(allowed_endpoint(&profile, false, true));
+        assert!(!allowed_endpoint(
+            &Url::parse("https://graph.microsoft.com/v1.0/me?$select=id,aboutMe").unwrap(),
+            false,
+            true,
+        ));
+
+        let item = item_url("drive", "inbox", Some("agreement.pdf")).unwrap();
+        assert!(allowed_endpoint(&item, false, true));
+        let selected = item
+            .query_pairs()
+            .find_map(|(name, value)| (name == "$select").then(|| value.into_owned()))
+            .unwrap();
+        for required in [
+            "id",
+            "eTag",
+            "cTag",
+            "file",
+            "folder",
+            "package",
+            "bundle",
+            "remoteItem",
+            "pendingOperations",
+            "sharepointIds",
+            "parentReference",
+        ] {
+            assert!(
+                selected.split(',').any(|field| field == required),
+                "{required}"
+            );
+        }
+        let arbitrary = Url::parse(
+            "https://graph.microsoft.com/v1.0/drives/drive/items/item?$expand=permissions",
+        )
+        .unwrap();
+        assert!(!allowed_endpoint(&arbitrary, false, true));
+    }
+
     #[test]
     fn filenames_cannot_escape_the_graph_item_path() {
         let url = item_url("drive!1", "folder-1", Some("Legal/100% # résumé?.pdf")).unwrap();

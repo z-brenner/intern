@@ -1,6 +1,6 @@
 import { GUIDE_URL } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, QueueItem, SetupState } from '../types';
+import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState } from '../types';
 import { leadingDate } from './filenames';
 
 /** Exact size of the single pinned model file this build downloads. */
@@ -44,6 +44,8 @@ export interface InMemoryBridgeOptions {
   downloadStepBytes?: number;
   downloadIntervalMs?: number;
   update?: UpdateStatus;
+  /** Backend-owned progress seeded for browser development and tests. */
+  completedOnboardingVersion?: number;
 }
 
 function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
@@ -132,6 +134,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // The previous value, 3_278_329_184, was a model plus a vision projector that
   // this pipeline does not download.
   let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
+  let completedOnboardingVersion = options.completedOnboardingVersion ?? 0;
+  const microsoftUnavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
   const downloadStepBytes = options.downloadStepBytes ?? Math.max(1, Math.ceil(setup.totalBytes / 4));
   const downloadIntervalMs = options.downloadIntervalMs ?? 40;
   let downloadTimer: ReturnType<typeof setInterval> | undefined;
@@ -196,6 +200,24 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       settings = { ...next };
     },
     getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
+    getOnboarding: async (): Promise<OnboardingStatus> => ({
+      currentVersion: 1,
+      completedVersion: completedOnboardingVersion,
+      required: completedOnboardingVersion < 1,
+    }),
+    completeOnboarding: async () => { completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
+    microsoftIntakeStatus: async () => ({
+      connected: false,
+      account: null,
+      binding: null,
+      documents: [],
+      error: microsoftUnavailable,
+    }),
+    microsoftSignInStart: async () => { throw new Error(microsoftUnavailable); },
+    microsoftSignInPoll: async () => { throw new Error(microsoftUnavailable); },
+    microsoftDisconnect: async () => { /* No credential exists in the disabled browser boundary. */ },
+    microsoftBindIntake: async () => { throw new Error(microsoftUnavailable); },
+    microsoftOpenSignIn: async () => { throw new Error(microsoftUnavailable); },
     startModelDownload: async () => {
       if (setup.state === 'downloading') return;
       setup = { ...setup, state: 'downloading', error: undefined };
