@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, QueueItem, SetupState } from '../types';
+import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -62,6 +62,8 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   getSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
   getSetup(): Promise<SetupState>;
+  getOnboarding(): Promise<OnboardingStatus>;
+  completeOnboarding(): Promise<void>;
   startModelDownload(): Promise<void>;
   setupCancel(): Promise<void>;
   setupChooseExisting(files: ExistingModelFiles): Promise<void>;

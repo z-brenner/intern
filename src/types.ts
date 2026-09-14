@@ -87,6 +87,13 @@ export interface AppSettings {
   hostedModel: string;
 }
 
+/** Versioned backend-owned progress for the guided SharePoint setup. */
+export interface OnboardingStatus {
+  currentVersion: number;
+  completedVersion: number;
+  required: boolean;
+}
+
 /** What Settings shows about the hosted model. The key itself never comes back. */
 export interface HostedModelStatus {
   keyStored: boolean;

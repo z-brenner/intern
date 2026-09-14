@@ -6,6 +6,7 @@ pub mod commands;
 pub mod intake;
 pub mod microsoft_intake;
 pub mod model;
+pub mod onboarding;
 pub mod secrets;
 pub mod tray;
 
@@ -46,6 +47,10 @@ pub fn run() {
             })?;
             let settings = state.settings_snapshot();
             app.manage(state);
+            let data = app.path().app_local_data_dir().map_err(|_| {
+                std::io::Error::other("local application data directory is unavailable")
+            })?;
+            app.manage(onboarding::OnboardingStore::new(data.join("ui-state.json")));
             tray::sync_tray(app.handle(), settings.run_in_background);
             let minimized_launch = std::env::args().any(|argument| argument == "--minimized");
             if tray::window_starts_hidden(
@@ -76,6 +81,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            onboarding::onboarding_status,
+            onboarding::onboarding_complete,
             microsoft_intake::microsoft_intake_status,
             microsoft_intake::microsoft_sign_in_start,
             microsoft_intake::microsoft_sign_in_poll,
