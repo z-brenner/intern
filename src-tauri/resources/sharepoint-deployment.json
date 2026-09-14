@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+  "library_name": "Files",
+  "intake_folder_name": "Inbox",
+  "destination_folder_name": "Filed",
+  "tenant_id": null,
+  "client_id": null,
+  "site_id": null,
+  "web_id": null,
+  "list_id": null,
+  "drive_id": null,
+  "intake_folder_id": null,
+  "destination_folder_id": null
+}
