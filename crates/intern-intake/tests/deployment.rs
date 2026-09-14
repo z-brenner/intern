@@ -31,7 +31,7 @@ fn accepts_the_fixed_site_library_and_folders_and_encodes_odopen_values() {
             .odopen_url("ada+intern@example.com")
             .unwrap()
             .as_str(),
-        "odopen://sync/?siteId=33333333-3333-3333-3333-333333333333&webId=44444444-4444-4444-4444-444444444444&listId=55555555-5555-5555-5555-555555555555&userEmail=ada%2Bintern%40example.com&webUrl=https%3A%2F%2Fteamcontoso.sharepoint.com%2Fsites%2FInternTestSite&listTitle=Files"
+        "odopen://sync/?siteId=%7B33333333-3333-3333-3333-333333333333%7D&webId=%7B44444444-4444-4444-4444-444444444444%7D&listId=%7B55555555-5555-5555-5555-555555555555%7D&userEmail=ada%2Bintern%40example.com&webUrl=https%3A%2F%2Fteamcontoso.sharepoint.com%2Fsites%2FInternTestSite&listTitle=Files"
     );
 }
 

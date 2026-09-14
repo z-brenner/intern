@@ -149,10 +149,13 @@ impl SharePointDeployment {
         }
         let mut url = Url::parse("odopen://sync/")
             .map_err(|error| DeploymentError::invalid(format!("odopen URL: {error}")))?;
+        let site_id = format!("{{{}}}", self.site_id);
+        let web_id = format!("{{{}}}", self.web_id);
+        let list_id = format!("{{{}}}", self.list_id);
         url.query_pairs_mut()
-            .append_pair("siteId", &self.site_id)
-            .append_pair("webId", &self.web_id)
-            .append_pair("listId", &self.list_id)
+            .append_pair("siteId", &site_id)
+            .append_pair("webId", &web_id)
+            .append_pair("listId", &list_id)
             .append_pair("userEmail", email)
             .append_pair("webUrl", self.site_url.as_str())
             .append_pair("listTitle", &self.library_name);
