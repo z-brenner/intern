@@ -2,7 +2,10 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -83,6 +86,7 @@ pub struct OnboardingStore {
     path: PathBuf,
     gate: Arc<Mutex<()>>,
     writer: StateWriter,
+    durability_uncertain: Arc<AtomicBool>,
     #[cfg(test)]
     fail_next_write: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -93,6 +97,7 @@ impl OnboardingStore {
             path,
             gate: Arc::new(Mutex::new(())),
             writer: write_state,
+            durability_uncertain: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_next_write: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -118,12 +123,26 @@ impl OnboardingStore {
         let completed_onboarding_version = state
             .completed_onboarding_version
             .max(CURRENT_ONBOARDING_VERSION);
-        if completed_onboarding_version == state.completed_onboarding_version {
+        if completed_onboarding_version == state.completed_onboarding_version
+            && !self.durability_uncertain.load(Ordering::SeqCst)
+        {
             return Ok(());
         }
-        self.write_state(&UiState {
+        let result = self.write_state(&UiState {
             completed_onboarding_version,
-        })
+        });
+        match result {
+            Ok(()) => {
+                self.durability_uncertain.store(false, Ordering::SeqCst);
+                Ok(())
+            }
+            Err(error) => {
+                if error.code == "ONBOARDING_STATE_DURABILITY_UNCERTAIN" {
+                    self.durability_uncertain.store(true, Ordering::SeqCst);
+                }
+                Err(error)
+            }
+        }
     }
 
     #[cfg(test)]
@@ -138,6 +157,7 @@ impl OnboardingStore {
             path,
             gate: Arc::new(Mutex::new(())),
             writer,
+            durability_uncertain: Arc::new(AtomicBool::new(false)),
             fail_next_write: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -229,6 +249,7 @@ mod tests {
     };
 
     static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+    static RETRY_WRITER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     struct TempDir(PathBuf);
 
@@ -256,6 +277,24 @@ mod tests {
 
     fn state_json(path: &Path) -> String {
         fs::read_to_string(path).expect("read persisted onboarding state")
+    }
+
+    fn publish_uncertain_once_then_confirm(
+        path: &Path,
+        state: &UiState,
+    ) -> Result<(), OnboardingError> {
+        fs::write(
+            path,
+            serde_json::to_vec(state).expect("encode published state"),
+        )
+        .expect("publish state before injected sync failure");
+        if RETRY_WRITER_CALLS.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(OnboardingError::durability_uncertain(
+                std::io::Error::other("injected first sync failure"),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     #[test]
@@ -452,6 +491,41 @@ mod tests {
             store
                 .status()
                 .expect("published state remains readable")
+                .completed_version,
+            CURRENT_ONBOARDING_VERSION
+        );
+    }
+
+    #[test]
+    fn completion_retries_after_durability_uncertainty_even_when_disk_is_current() {
+        RETRY_WRITER_CALLS.store(0, Ordering::SeqCst);
+        let dir = TempDir::new();
+        let store = OnboardingStore::with_writer_for_test(
+            dir.state_path(),
+            publish_uncertain_once_then_confirm,
+        );
+
+        let first = store
+            .complete()
+            .expect_err("first publication is intentionally uncertain");
+        assert_eq!(first.code, "ONBOARDING_STATE_DURABILITY_UNCERTAIN");
+        assert_eq!(
+            store
+                .status()
+                .expect("published state is readable")
+                .completed_version,
+            CURRENT_ONBOARDING_VERSION
+        );
+
+        store
+            .complete()
+            .expect("second completion re-syncs the published state");
+
+        assert_eq!(RETRY_WRITER_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            store
+                .status()
+                .expect("confirmed state remains readable")
                 .completed_version,
             CURRENT_ONBOARDING_VERSION
         );
