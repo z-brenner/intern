@@ -12,6 +12,8 @@ pub const CURRENT_ONBOARDING_VERSION: u32 = 1;
 
 const MAX_UI_STATE_BYTES: u64 = 16 * 1024;
 
+type StateWriter = fn(&Path, &UiState) -> Result<(), OnboardingError>;
+
 /// The only durable UI progress state. It is deliberately separate from
 /// operational settings: a damaged settings file must not dismiss setup.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,6 +65,15 @@ impl OnboardingError {
             message: format!("onboarding completion could not be saved: {error}"),
         }
     }
+
+    fn durability_uncertain(error: std::io::Error) -> Self {
+        Self {
+            code: "ONBOARDING_STATE_DURABILITY_UNCERTAIN".into(),
+            message: format!(
+                "onboarding completion was published but could not be confirmed durable: {error}"
+            ),
+        }
+    }
 }
 
 /// Backend-owned, process-local serialization for the atomic file publisher.
@@ -71,6 +82,7 @@ impl OnboardingError {
 pub struct OnboardingStore {
     path: PathBuf,
     gate: Arc<Mutex<()>>,
+    writer: StateWriter,
     #[cfg(test)]
     fail_next_write: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -80,6 +92,7 @@ impl OnboardingStore {
         Self {
             path,
             gate: Arc::new(Mutex::new(())),
+            writer: write_state,
             #[cfg(test)]
             fail_next_write: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
@@ -119,6 +132,16 @@ impl OnboardingStore {
             .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    #[cfg(test)]
+    fn with_writer_for_test(path: PathBuf, writer: StateWriter) -> Self {
+        Self {
+            path,
+            gate: Arc::new(Mutex::new(())),
+            writer,
+            fail_next_write: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
     fn write_state(&self, state: &UiState) -> Result<(), OnboardingError> {
         #[cfg(test)]
         if self
@@ -130,7 +153,7 @@ impl OnboardingStore {
                 message: "onboarding completion could not be saved: injected write failure".into(),
             });
         }
-        write_state(&self.path, state)
+        (self.writer)(&self.path, state)
     }
 }
 
@@ -182,7 +205,15 @@ fn read_state(path: &Path) -> Result<UiState, OnboardingError> {
 /// primitive. It flushes the temporary bytes and the publication metadata.
 fn write_state(path: &Path, state: &UiState) -> Result<(), OnboardingError> {
     let bytes = serde_json::to_vec(state).map_err(OnboardingError::invalid)?;
-    intern_core::replace_file_durable(path, &bytes).map_err(OnboardingError::write_failed)
+    match intern_core::replace_file_durable(path, &bytes) {
+        Ok(()) => Ok(()),
+        Err(intern_core::DurableReplaceError::NotPublished(error)) => {
+            Err(OnboardingError::write_failed(error))
+        }
+        Err(intern_core::DurableReplaceError::PublishedButNotDurable(error)) => {
+            Err(OnboardingError::durability_uncertain(error))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -193,7 +224,9 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use super::{CURRENT_ONBOARDING_VERSION, OnboardingStore, UiState, write_state};
+    use super::{
+        CURRENT_ONBOARDING_VERSION, OnboardingError, OnboardingStore, UiState, write_state,
+    };
 
     static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -396,5 +429,31 @@ mod tests {
             .expect_err("injected publication failure must fail completion");
 
         assert_eq!(state_json(&path), "{\"completedOnboardingVersion\":0}");
+    }
+
+    #[test]
+    fn post_publication_durability_failure_keeps_completion_visible_in_status() {
+        let dir = TempDir::new();
+        let path = dir.state_path();
+        let store = OnboardingStore::with_writer_for_test(path.clone(), |path, _| {
+            fs::write(path, "{\"completedOnboardingVersion\":1}")
+                .expect("publish state before injected sync failure");
+            Err(OnboardingError::durability_uncertain(
+                std::io::Error::other("injected parent sync failure"),
+            ))
+        });
+
+        let error = store
+            .complete()
+            .expect_err("durability uncertainty must remain visible");
+
+        assert_eq!(error.code, "ONBOARDING_STATE_DURABILITY_UNCERTAIN");
+        assert_eq!(
+            store
+                .status()
+                .expect("published state remains readable")
+                .completed_version,
+            CURRENT_ONBOARDING_VERSION
+        );
     }
 }

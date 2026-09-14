@@ -12,7 +12,7 @@ mod error;
 mod file_ops;
 mod store;
 
-pub use atomic_file::replace_file_durable;
+pub use atomic_file::{DurableReplaceError, replace_file_durable};
 pub use domain::*;
 pub use error::*;
 pub use file_ops::*;
