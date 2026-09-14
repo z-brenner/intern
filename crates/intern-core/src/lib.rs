@@ -6,11 +6,13 @@
 
 #![deny(unsafe_code)]
 
+mod atomic_file;
 mod domain;
 mod error;
 mod file_ops;
 mod store;
 
+pub use atomic_file::replace_file_durable;
 pub use domain::*;
 pub use error::*;
 pub use file_ops::*;

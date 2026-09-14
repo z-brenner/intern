@@ -1,8 +1,7 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs::File,
+    io::Read,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
     sync::{Arc, Mutex},
 };
 
@@ -11,7 +10,7 @@ use tauri::State;
 
 pub const CURRENT_ONBOARDING_VERSION: u32 = 1;
 
-static NEXT_TEMP_FILE: AtomicUsize = AtomicUsize::new(0);
+const MAX_UI_STATE_BYTES: u64 = 16 * 1024;
 
 /// The only durable UI progress state. It is deliberately separate from
 /// operational settings: a damaged settings file must not dismiss setup.
@@ -48,6 +47,13 @@ impl OnboardingError {
         Self {
             code: "ONBOARDING_STATE_UNREADABLE".into(),
             message: format!("onboarding state could not be read: {error}"),
+        }
+    }
+
+    fn too_large() -> Self {
+        Self {
+            code: "ONBOARDING_STATE_TOO_LARGE".into(),
+            message: "onboarding state is too large to read safely".into(),
         }
     }
 
@@ -109,12 +115,16 @@ impl OnboardingStore {
 
     #[cfg(test)]
     fn fail_next_write_for_test(&self) {
-        self.fail_next_write.store(true, Ordering::SeqCst);
+        self.fail_next_write
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn write_state(&self, state: &UiState) -> Result<(), OnboardingError> {
         #[cfg(test)]
-        if self.fail_next_write.swap(false, Ordering::SeqCst) {
+        if self
+            .fail_next_write
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(OnboardingError {
                 code: "ONBOARDING_STATE_WRITE_FAILED".into(),
                 message: "onboarding completion could not be saved: injected write failure".into(),
@@ -145,8 +155,8 @@ fn status_for(completed_version: u32) -> OnboardingStatus {
 }
 
 fn read_state(path: &Path) -> Result<UiState, OnboardingError> {
-    let contents = match fs::read_to_string(path) {
-        Ok(contents) => contents,
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(UiState {
                 completed_onboarding_version: 0,
@@ -154,39 +164,25 @@ fn read_state(path: &Path) -> Result<UiState, OnboardingError> {
         }
         Err(error) => return Err(OnboardingError::unreadable(error)),
     };
-    serde_json::from_str(&contents).map_err(OnboardingError::invalid)
+    let length = file.metadata().map_err(OnboardingError::unreadable)?.len();
+    if length > MAX_UI_STATE_BYTES {
+        return Err(OnboardingError::too_large());
+    }
+    let mut contents = Vec::with_capacity(length as usize);
+    file.take(MAX_UI_STATE_BYTES + 1)
+        .read_to_end(&mut contents)
+        .map_err(OnboardingError::unreadable)?;
+    if contents.len() as u64 > MAX_UI_STATE_BYTES {
+        return Err(OnboardingError::too_large());
+    }
+    serde_json::from_slice(&contents).map_err(OnboardingError::invalid)
 }
 
-/// Publishes a fully synced replacement beside the durable state. `rename`
-/// replaces the old file atomically on the supported desktop platforms.
+/// Publishes with the core's same-directory, write-through replacement
+/// primitive. It flushes the temporary bytes and the publication metadata.
 fn write_state(path: &Path, state: &UiState) -> Result<(), OnboardingError> {
     let bytes = serde_json::to_vec(state).map_err(OnboardingError::invalid)?;
-    let parent = path.parent().ok_or_else(|| OnboardingError {
-        code: "ONBOARDING_STATE_WRITE_FAILED".into(),
-        message: "onboarding completion could not be saved: state path has no parent directory"
-            .into(),
-    })?;
-    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::SeqCst);
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("ui-state.json");
-    let temporary = parent.join(format!("{file_name}.tmp-{}-{sequence}", std::process::id()));
-    let result = (|| -> Result<(), std::io::Error> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)
-    })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&temporary);
-        return Err(OnboardingError::write_failed(error));
-    }
-    Ok(())
+    intern_core::replace_file_durable(path, &bytes).map_err(OnboardingError::write_failed)
 }
 
 #[cfg(test)]
@@ -277,6 +273,18 @@ mod tests {
     }
 
     #[test]
+    fn oversized_state_is_rejected_before_json_parsing() {
+        let dir = TempDir::new();
+        fs::write(dir.state_path(), vec![b'x'; 16 * 1024 + 1]).expect("write oversized state");
+
+        let error = OnboardingStore::new(dir.state_path())
+            .status()
+            .expect_err("oversized state must be visible");
+
+        assert_eq!(error.code, "ONBOARDING_STATE_TOO_LARGE");
+    }
+
+    #[test]
     fn completion_round_trips_through_an_atomic_state_file() {
         let dir = TempDir::new();
         let path = dir.state_path();
@@ -327,6 +335,26 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn completion_replaces_an_existing_state_file_on_windows() {
+        let dir = TempDir::new();
+        let path = dir.state_path();
+        write_state(
+            &path,
+            &UiState {
+                completed_onboarding_version: 0,
+            },
+        )
+        .expect("seed old state");
+
+        OnboardingStore::new(path.clone())
+            .complete()
+            .expect("replace existing state");
+
+        assert_eq!(state_json(&path), "{\"completedOnboardingVersion\":1}");
+    }
+
     #[test]
     fn write_failure_leaves_completion_unclaimed() {
         let dir = TempDir::new();
@@ -347,5 +375,26 @@ mod tests {
             0
         );
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn injected_publication_failure_leaves_existing_state_unchanged() {
+        let dir = TempDir::new();
+        let path = dir.state_path();
+        write_state(
+            &path,
+            &UiState {
+                completed_onboarding_version: 0,
+            },
+        )
+        .expect("seed old state");
+        let store = OnboardingStore::new(path.clone());
+        store.fail_next_write_for_test();
+
+        store
+            .complete()
+            .expect_err("injected publication failure must fail completion");
+
+        assert_eq!(state_json(&path), "{\"completedOnboardingVersion\":0}");
     }
 }
