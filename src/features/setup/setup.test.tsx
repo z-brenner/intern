@@ -146,17 +146,18 @@ describe('setup and queue controls', () => {
       fireEvent.click(trigger);
     };
 
-    it('checks only when asked, and never on its own', async () => {
+    it('checks automatically at launch, and again whenever asked', async () => {
       const checkForUpdate = vi.fn(async () => ({ state: 'current' as const, currentVersion: '0.1.0-alpha.2' }));
       render(<App bridge={{ ...createInMemoryBridge(), checkForUpdate }} />);
+
+      // Once on its own, with nobody touching Settings.
+      await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+
       await openSettings();
-
-      // The whole point of a button: opening Settings must not reach the network.
-      expect(checkForUpdate).not.toHaveBeenCalled();
-
       fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }));
       await waitFor(() => expect(screen.getByRole('status', { name: 'Update status' })).toHaveTextContent(/0\.1\.0-alpha\.2 is the latest release/i));
-      expect(checkForUpdate).toHaveBeenCalledTimes(1);
+      // And again for the button's own, separate request.
+      expect(checkForUpdate).toHaveBeenCalledTimes(2);
     });
 
     it('offers to install a newer version and names both versions', async () => {

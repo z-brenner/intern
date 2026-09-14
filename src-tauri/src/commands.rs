@@ -13,16 +13,16 @@ use intern_core::{
 };
 use intern_engine::HouseRule;
 use intern_engine::{
-    DocumentAnalysis, DocumentSource, Engine, LlamaServer, ModelClient, ModelManifest,
-    ServerOptions, SupervisedWorker, prepare_worker_temp_root,
+    DocumentAnalysis, DocumentSource, Engine, EngineErrorCode, LlamaServer, ModelClient, ModelFile,
+    ModelManifest, ServerOptions, SupervisedWorker, prepare_worker_temp_root,
 };
 use intern_queue::{LearnedRule, ModelSource};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use intern_engine::download::{
-    CancellationToken, Downloader, ReqwestHttpTransport, SetupProgress, SystemDiskSpace,
-    validate_selected_file,
+    CancellationToken, DiskSpace, Downloader, HttpTransport, ReqwestHttpTransport, SetupProgress,
+    SystemDiskSpace, validate_selected_file,
 };
 use intern_engine::setup::{
     ExistingModelSelection, SetupOperationGate, install_existing_model_files, semantic_probes,
@@ -651,7 +651,8 @@ impl SetupManager {
                 let mut completed_before = 0;
                 for file in &manifest.files {
                     let offset = completed_before;
-                    downloader.download(
+                    download_with_retry(
+                        &downloader,
                         file,
                         &self.runtime.model_directory,
                         cancellation,
@@ -706,6 +707,82 @@ impl SetupManager {
 /// The queue runs when either model can answer.
 fn model_ready(local_ready: bool, hosted_active: bool) -> bool {
     local_ready || hosted_active
+}
+
+/// A dropped connection partway through 1.19 GiB is ordinary on an unreliable
+/// network and says nothing about whether the download can succeed - only
+/// that this attempt did not. Each retry calls the same resumable download
+/// again, so it picks the partial file back up rather than starting over; a
+/// person on a flaky connection no longer has to notice the failure and press
+/// "Try download again" themselves. A refused request, a full disk, or a
+/// person canceling are not retried: waiting does not fix them.
+const DOWNLOAD_RETRY_LIMIT: u32 = 5;
+const DOWNLOAD_RETRY_BACKOFF: Duration = Duration::from_secs(5);
+
+fn download_with_retry<H, D, F>(
+    downloader: &Downloader<H, D>,
+    file: &ModelFile,
+    destination_directory: &Path,
+    cancellation: &CancellationToken,
+    progress: F,
+) -> Result<PathBuf, CommandError>
+where
+    H: HttpTransport,
+    D: DiskSpace,
+    F: FnMut(SetupProgress),
+{
+    download_with_retry_backoff(
+        downloader,
+        file,
+        destination_directory,
+        cancellation,
+        progress,
+        DOWNLOAD_RETRY_BACKOFF,
+    )
+}
+
+/// `backoff` is the per-attempt unit in production; tests pass a much smaller
+/// one so exercising every retry does not spend real seconds asleep.
+fn download_with_retry_backoff<H, D, F>(
+    downloader: &Downloader<H, D>,
+    file: &ModelFile,
+    destination_directory: &Path,
+    cancellation: &CancellationToken,
+    mut progress: F,
+    backoff: Duration,
+) -> Result<PathBuf, CommandError>
+where
+    H: HttpTransport,
+    D: DiskSpace,
+    F: FnMut(SetupProgress),
+{
+    let mut attempt = 0;
+    loop {
+        match downloader.download(file, destination_directory, cancellation, &mut progress) {
+            Ok(path) => return Ok(path),
+            Err(error)
+                if attempt < DOWNLOAD_RETRY_LIMIT
+                    && matches!(
+                        error.code(),
+                        EngineErrorCode::DownloadFailed | EngineErrorCode::DownloadInterrupted
+                    ) =>
+            {
+                attempt += 1;
+                sleep_respecting_cancellation(backoff * attempt, cancellation);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn sleep_respecting_cancellation(duration: Duration, cancellation: &CancellationToken) {
+    let step = Duration::from_millis(200);
+    let mut remaining = duration;
+    while remaining > Duration::ZERO && !cancellation.is_canceled() {
+        let slice = remaining.min(step);
+        std::thread::sleep(slice);
+        remaining -= slice;
+    }
 }
 
 enum SetupSource {
@@ -2536,6 +2613,151 @@ mod setup_source_tests {
         // installed - and the window opens on the queue instead of on a
         // download screen for a download that is not happening.
         assert_eq!(setup_progress_status(&SetupSource::Installed), None);
+    }
+}
+
+#[cfg(test)]
+mod download_retry_tests {
+    use std::{
+        io::Cursor,
+        sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Duration,
+    };
+
+    use intern_engine::download::{Downloader, HttpResponse, HttpTransport, SystemDiskSpace};
+    use intern_engine::{EngineError, EngineErrorCode, EngineResult, ModelFile, ModelRole};
+
+    use super::{CancellationToken, download_with_retry_backoff};
+
+    /// Real production backoff would leave these tests asleep for most of a
+    /// minute; the retry logic under test does not care about the unit's
+    /// size, only that it is used, so a near-zero one keeps the suite fast.
+    const TEST_BACKOFF: Duration = Duration::from_millis(1);
+
+    /// Bytes chosen once and hashed offline; the digest below is theirs.
+    const BODY: &[u8] = b"the pinned model bytes";
+    const BODY_SHA256: &str = "b1f81de2183585b9793c38b27cdd46842ab24247c628b6fbbda1200b9a25ce99";
+
+    #[derive(Clone)]
+    struct FlakyTransport {
+        failures_left: Arc<AtomicU32>,
+    }
+
+    impl HttpTransport for FlakyTransport {
+        fn get(
+            &self,
+            _url: &str,
+            _range_start: Option<u64>,
+            _cancellation: &CancellationToken,
+        ) -> EngineResult<HttpResponse> {
+            let due_to_fail = self
+                .failures_left
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    (remaining > 0).then(|| remaining - 1)
+                })
+                .is_ok();
+            if due_to_fail {
+                return Err(EngineError::new(
+                    EngineErrorCode::DownloadInterrupted,
+                    "simulated drop",
+                ));
+            }
+            Ok(HttpResponse {
+                status: 200,
+                content_range: None,
+                body: Box::new(Cursor::new(BODY.to_vec())),
+            })
+        }
+    }
+
+    fn model_file() -> ModelFile {
+        ModelFile {
+            name: "model.gguf".into(),
+            role: ModelRole::Model,
+            url: "https://example.invalid/model.gguf".into(),
+            size: BODY.len() as u64,
+            sha256: BODY_SHA256.into(),
+        }
+    }
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_connection_dropped_twice_is_retried_until_the_file_completes() {
+        let destination = scratch_dir("download-retry-ok");
+        let transport = FlakyTransport {
+            failures_left: Arc::new(AtomicU32::new(2)),
+        };
+        let downloader = Downloader::new(transport, SystemDiskSpace);
+        let cancellation = CancellationToken::new();
+
+        let result = download_with_retry_backoff(
+            &downloader,
+            &model_file(),
+            &destination,
+            &cancellation,
+            |_| {},
+            TEST_BACKOFF,
+        );
+
+        let path = result.expect("two transient drops should be retried, not fatal");
+        assert_eq!(std::fs::read(path).unwrap(), BODY);
+        let _ = std::fs::remove_dir_all(&destination);
+    }
+
+    #[test]
+    fn a_canceled_download_is_never_retried() {
+        let destination = scratch_dir("download-retry-canceled");
+        // Enough scheduled failures that a retry loop bug would spin on them
+        // instead of stopping for the cancellation this test actually checks.
+        let transport = FlakyTransport {
+            failures_left: Arc::new(AtomicU32::new(99)),
+        };
+        let downloader = Downloader::new(transport, SystemDiskSpace);
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let result = download_with_retry_backoff(
+            &downloader,
+            &model_file(),
+            &destination,
+            &cancellation,
+            |_| {},
+            TEST_BACKOFF,
+        );
+
+        assert_eq!(result.unwrap_err().code, "MODEL_DOWNLOAD_CANCELED");
+        let _ = std::fs::remove_dir_all(&destination);
+    }
+
+    #[test]
+    fn failures_past_the_retry_limit_are_reported_instead_of_retried_forever() {
+        let destination = scratch_dir("download-retry-exhausted");
+        let transport = FlakyTransport {
+            failures_left: Arc::new(AtomicU32::new(super::DOWNLOAD_RETRY_LIMIT + 1)),
+        };
+        let downloader = Downloader::new(transport, SystemDiskSpace);
+        let cancellation = CancellationToken::new();
+
+        let result = download_with_retry_backoff(
+            &downloader,
+            &model_file(),
+            &destination,
+            &cancellation,
+            |_| {},
+            TEST_BACKOFF,
+        );
+
+        assert_eq!(result.unwrap_err().code, "MODEL_DOWNLOAD_INTERRUPTED");
+        let _ = std::fs::remove_dir_all(&destination);
     }
 }
 

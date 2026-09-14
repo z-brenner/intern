@@ -556,13 +556,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       <section className="settings-group">
         <h3>Updates</h3>
         {/*
-          Deliberately a button and not a background check. Intern reads private
-          documents; software that contacts a server on its own schedule is
-          software you have to take on trust. Nothing is sent but a request for
-          the release manifest, and nothing is installed unless it is signed by
-          the key this build was compiled with.
+          Intern also checks on its own - once at launch, and again on a fixed
+          interval while it keeps running - so a machine that is never
+          restarted is not left on an old build forever. This button is for
+          checking right now instead of waiting for the next one. Neither path
+          sends anything but a request for the release manifest, and nothing
+          is installed - by either path - unless it is signed by the key this
+          build was compiled with, and never without the separate click below.
         */}
-        <p className="section-lead">Intern checks only when you ask. Updates must be signed by this project's key or they are refused.</p>
+        <p className="section-lead">Intern also checks for updates on its own, at launch and periodically while it runs; this checks right now instead. Updates must be signed by this project's key or they are refused.</p>
         {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
         {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">Updates are available in the installed desktop application.</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}

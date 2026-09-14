@@ -10,7 +10,7 @@ import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
-import type { DesktopBridge, SelectionBoundary, SelectionResult } from './lib/bridge';
+import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { SetupEventSource, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -48,6 +48,12 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
   const actionInFlight = useRef(false);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
+  // The version dismissed from the banner, so "Not now" does not reappear on
+  // every later poll - but a newer release than the one dismissed still does.
+  const [updateDismissed, setUpdateDismissed] = useState<string>();
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateError, setUpdateError] = useState('');
   const narrowInspector = useMediaQuery('(max-width: 1100px)');
 
   useEffect(() => {
@@ -82,6 +88,29 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     timer = window.setTimeout(() => { void poll(); }, 250);
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [bridge, setup?.state]);
+  // Once when Intern starts, and again on this timer for as long as it keeps
+  // running - not a person digging into Settings, which is how a machine that
+  // is never restarted stayed on a build from months ago. Nothing here
+  // installs anything: a found update only ever shows a banner, and only the
+  // click on it downloads and installs - still signed, still refused if it
+  // is not.
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    const check = async () => {
+      try {
+        const status = await bridge.checkForUpdate();
+        if (active) setUpdateStatus(status);
+      } catch {
+        // A missed check says nothing about whether an update exists; the
+        // manual button in Settings still works, and the next scheduled
+        // check tries again on its own.
+      }
+      if (active) timer = window.setTimeout(() => { void check(); }, UPDATE_POLL_INTERVAL_MS);
+    };
+    void check();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [bridge]);
   useEffect(() => {
     if (!seededSelection.current && items.length) {
       seededSelection.current = true;
@@ -213,6 +242,14 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     await bridge.saveSettings(next);
     setSettings(next);
   };
+  const installUpdate = async () => {
+    setUpdateInstalling(true);
+    setUpdateError('');
+    try { await bridge.installUpdate(); }
+    // On success this hands off to the installer and Intern is closed from
+    // outside; there is nothing left to un-set `updateInstalling` for.
+    catch (error) { setUpdateError(describeActionError(error)); setUpdateInstalling(false); }
+  };
   const openSettings = (trigger: HTMLButtonElement) => { focusRestoreVersion.current += 1; settingsTrigger.current = trigger; setSettingsOpen(true); };
   const closeSettings = () => { setSettingsOpen(false); settingsTrigger.current?.focus(); };
   const openHistory = (trigger: HTMLButtonElement) => { focusRestoreVersion.current += 1; historyTrigger.current = trigger; setHistoryOpen(true); };
@@ -310,6 +347,17 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
       reliably spoken. Every other error banner in the app is an alert too.
     */}
     {actionError && <p className="operation-feedback" role="alert" aria-label="Action error">{actionError}</p>}
+    {/* Settings has its own Updates section with the same information and its
+       own Install button; showing both at once would be the same choice
+       offered twice. */}
+    {!settingsOpen && updateStatus?.state === 'available' && updateStatus.version !== updateDismissed && <div className="note note--update" role="status" aria-label="Update available">
+      <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
+      {updateError && <p role="alert">{updateError}</p>}
+      <div className="update-actions">
+        <button type="button" className="primary" disabled={updateInstalling} onClick={() => void installUpdate()}>{updateInstalling ? 'Installing…' : `Install ${updateStatus.version} and restart`}</button>
+        <button type="button" disabled={updateInstalling} onClick={() => setUpdateDismissed(updateStatus.version)}>Not now</button>
+      </div>
+    </div>}
     <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
     <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
@@ -369,6 +417,9 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
 
 /** Views with this many items or fewer are short enough to read; the filter box appears above longer ones. */
 const FILTER_THRESHOLD = 6;
+
+/** How often Intern asks GitHub for the release manifest while it keeps running, on top of the check at launch. */
+export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]

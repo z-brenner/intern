@@ -32,9 +32,13 @@ pub fn run() {
                 .arg("--minimized")
                 .build(),
         )
-        // Updates remain user-initiated and signature-verified. Microsoft
-        // upload verification and hosted inference are separate opt-in network
-        // integrations; see their explicit permissions/privacy notices.
+        // Checking for an update is automatic (at launch and on a timer) as
+        // well as user-initiated from Settings; installing one never is - the
+        // frontend only ever calls the installer after its own click, and the
+        // plugin refuses anything not signed with this build's key regardless
+        // of which path found it. Microsoft upload verification and hosted
+        // inference are separate opt-in network integrations; see their
+        // explicit permissions/privacy notices.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let state = commands::AppState::initialize(app.handle()).map_err(|error| {

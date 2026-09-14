@@ -217,8 +217,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .note { margin: 18px 0 0; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .note--review { border-left: 3px solid var(--review); }
 .note--failed { border-left: 3px solid var(--failed); }
+.note--update { border-left: 3px solid var(--accent); }
 .note h3 { margin-bottom: 6px; }
 .note p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.note p + p { margin-top: 6px; }
+.note .update-actions { margin-top: 10px; }
 .inspector section p { margin: 0; line-height: 1.5; }
 .settled-description { color: var(--text-soft); }
 .copy-description { margin-top: 12px; min-height: 34px; }

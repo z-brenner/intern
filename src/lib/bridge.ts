@@ -85,10 +85,12 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * Ask GitHub whether a newer signed release exists.
    *
    * This is the only network request Intern makes apart from the one-off model
-   * download (and a hosted model, only if a person chose one in Settings),
-   * it happens only when someone presses the button in Settings, and
-   * it sends nothing but a request for the release manifest. No filenames, no
-   * document contents, no identifier of any kind.
+   * download (and a hosted model, only if a person chose one in Settings). It
+   * sends nothing but a request for the release manifest - no filenames, no
+   * document contents, no identifier of any kind - and runs once when Intern
+   * starts, again on a fixed interval for as long as it keeps running, and
+   * whenever someone presses the button in Settings. Nothing is downloaded or
+   * installed by a check on its own; that is always a separate, explicit click.
    */
   checkForUpdate(): Promise<UpdateStatus>;
   /** Download and install the update found by the last check. */
