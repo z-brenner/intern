@@ -68,6 +68,22 @@ fn confines_web_urls_to_the_site_path_boundary_and_rejects_traversal() {
 }
 
 #[test]
+fn the_fixed_inbox_url_does_not_accept_a_sibling_folder_item_or_query() {
+    let deployment = SharePointDeployment::from_slice(VALID_DEPLOYMENT.as_bytes()).unwrap();
+
+    assert!(deployment.is_intake_folder_web_url(
+        "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox"
+    ));
+    for address in [
+        "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Filed",
+        "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/agreement.pdf",
+        "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox?download=1",
+    ] {
+        assert!(!deployment.is_intake_folder_web_url(address), "{address}");
+    }
+}
+
+#[test]
 fn rejects_non_simple_library_and_folder_components() {
     for replacement in [
         (

@@ -123,6 +123,30 @@ impl SharePointDeployment {
         Ok(())
     }
 
+    pub fn tenant_id(&self) -> &str {
+        &self.tenant_id
+    }
+
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    pub fn site_id(&self) -> &str {
+        &self.site_id
+    }
+
+    pub fn list_id(&self) -> &str {
+        &self.list_id
+    }
+
+    pub fn drive_id(&self) -> &str {
+        &self.drive_id
+    }
+
+    pub fn intake_folder_id(&self) -> &str {
+        &self.intake_folder_id
+    }
+
     /// Returns whether a returned SharePoint web URL stays inside the
     /// configured site. The comparison is origin- and path-boundary-aware.
     pub fn contains_web_url(&self, url: &Url) -> bool {
@@ -136,6 +160,26 @@ impl SharePointDeployment {
                     .path()
                     .strip_prefix(SITE_PATH)
                     .is_some_and(|suffix| suffix.starts_with('/')))
+    }
+
+    pub fn is_intake_folder_web_url(&self, value: &str) -> bool {
+        Url::parse(value).is_ok_and(|url| {
+            self.contains_web_url(&url)
+                && url.query().is_none()
+                && url.fragment().is_none()
+                && url.path() == format!("{SITE_PATH}/{LIBRARY_NAME}/{INTAKE_FOLDER_NAME}")
+        })
+    }
+
+    pub fn contains_intake_child_web_url(&self, url: &Url) -> bool {
+        let prefix = format!("{SITE_PATH}/{LIBRARY_NAME}/{INTAKE_FOLDER_NAME}/");
+        self.contains_web_url(url)
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url
+                .path()
+                .strip_prefix(&prefix)
+                .is_some_and(|child| !child.is_empty() && !child.contains('/'))
     }
 
     /// Builds the supported OneDrive library-sync request for a verified

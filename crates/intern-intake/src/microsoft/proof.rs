@@ -1,6 +1,9 @@
 //! Provider metadata validation. Display names and email addresses never authorize a file.
+use crate::{SharePointDeployment, microsoft::hashing::verified_local_hash, relative_to_root};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,9 +39,317 @@ pub struct Candidate {
     pub list_item_id: String,
 }
 
-/// A missing property, a different tenant, an edit, or a non-user identity is
-/// not a weak match. It is no match. This returns a CANDIDATE, not upload proof.
-/// Authorization also requires an actual Microsoft audit upload event.
+/// Narrow dependency used by the proof so tests can script Graph metadata
+/// without weakening the production HTTP boundary.
+pub trait FreshUploadMetadata: Send + Sync {
+    fn metadata(&self, url: Url) -> Result<(Account, Value), String>;
+}
+
+impl FreshUploadMetadata for super::auth::MicrosoftClient {
+    fn metadata(&self, url: Url) -> Result<(Account, Value), String> {
+        super::auth::MicrosoftClient::metadata(self, url)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FreshUploadOutcome {
+    Authorized {
+        local_sha256: String,
+        uploader: Account,
+    },
+    HeldOther {
+        uploader: Account,
+        reason: String,
+    },
+    HeldUnknown {
+        reason: String,
+    },
+    RetryableUnavailable {
+        reason: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FreshFacts {
+    item_id: String,
+    etag: String,
+    content_tag: String,
+    name: String,
+    size: u64,
+    quick_xor: String,
+    created_at: String,
+    modified_at: String,
+    web_url: String,
+    list_item_id: String,
+    creator_id: Option<String>,
+    creator_tenant_id: Option<String>,
+    creator_principal: Option<String>,
+    modifier_id: Option<String>,
+    modifier_tenant_id: Option<String>,
+    modifier_principal: Option<String>,
+}
+
+enum Actor {
+    Me,
+    Other(Account),
+    Unknown,
+}
+
+/// Establishes the only supported admission proof: a new, unchanged file
+/// directly inside the provisioned Inbox, created and last modified by `/me`.
+/// No local file bytes are read until the first metadata response establishes
+/// the fixed boundary and eligible identity.
+pub fn verify_fresh_upload(
+    deployment: &SharePointDeployment,
+    source: &dyn FreshUploadMetadata,
+    local_inbox: &Path,
+    local_file: &Path,
+) -> FreshUploadOutcome {
+    let Some(relative) = relative_to_root(local_file, local_inbox) else {
+        return held_unknown("The local file is outside the verified Inbox.");
+    };
+    if relative.contains('/') {
+        return held_unknown("Only files uploaded directly into the verified Inbox are supported.");
+    }
+    let filename = match local_file.file_name().and_then(|name| name.to_str()) {
+        Some(filename)
+            if filename == relative
+                && !filename.to_ascii_lowercase().contains("conflicted copy") =>
+        {
+            filename
+        }
+        _ => return held_unknown("The local filename or conflict state is ambiguous."),
+    };
+    let url = match super::transport::item_url(
+        deployment.drive_id(),
+        deployment.intake_folder_id(),
+        Some(&relative),
+    ) {
+        Ok(url) => url,
+        Err(reason) => return held_unknown(reason),
+    };
+
+    let (account, first_value) = match source.metadata(url.clone()) {
+        Ok(reply) => reply,
+        Err(reason) => return FreshUploadOutcome::RetryableUnavailable { reason },
+    };
+    if !account_matches_deployment(&account, deployment) {
+        return held_unknown("The connected Microsoft account is outside the provisioned tenant.");
+    }
+    let first = match fresh_facts(&first_value, deployment, filename) {
+        Ok(facts) => facts,
+        Err(reason) => return held_unknown(reason),
+    };
+    match actor(&first, &account, true) {
+        Actor::Me => {}
+        Actor::Other(uploader) => {
+            return FreshUploadOutcome::HeldOther {
+                uploader,
+                reason: "The upload belongs to another Microsoft account.".into(),
+            };
+        }
+        Actor::Unknown => {
+            return held_unknown("Microsoft did not provide an unambiguous creator identity.");
+        }
+    }
+    if !matches!(actor(&first, &account, false), Actor::Me) {
+        return held_unknown("The latest modifier is not the connected Microsoft account.");
+    }
+
+    let local_sha256 = match verified_local_hash(local_file, first.size, &first.quick_xor) {
+        Ok(hash) => hash,
+        Err(_) => {
+            return held_unknown(
+                "The local file does not match the settled Microsoft size and checksum.",
+            );
+        }
+    };
+
+    let (current_account, second_value) = match source.metadata(url) {
+        Ok(reply) => reply,
+        Err(reason) => return FreshUploadOutcome::RetryableUnavailable { reason },
+    };
+    if !same_person(&account, &current_account)
+        || !account_matches_deployment(&current_account, deployment)
+    {
+        return held_unknown("The connected Microsoft account changed during verification.");
+    }
+    let second = match fresh_facts(&second_value, deployment, filename) {
+        Ok(facts) => facts,
+        Err(reason) => return held_unknown(reason),
+    };
+    if first != second
+        || !matches!(actor(&second, &current_account, true), Actor::Me)
+        || !matches!(actor(&second, &current_account, false), Actor::Me)
+    {
+        return held_unknown("The Microsoft item or revision changed during verification.");
+    }
+
+    FreshUploadOutcome::Authorized {
+        local_sha256,
+        uploader: account,
+    }
+}
+
+fn held_unknown(reason: impl Into<String>) -> FreshUploadOutcome {
+    FreshUploadOutcome::HeldUnknown {
+        reason: reason.into(),
+    }
+}
+
+fn account_matches_deployment(account: &Account, deployment: &SharePointDeployment) -> bool {
+    is_guid(&account.id)
+        && account
+            .tenant_id
+            .eq_ignore_ascii_case(deployment.tenant_id())
+}
+
+fn fresh_facts(
+    metadata: &Value,
+    deployment: &SharePointDeployment,
+    filename: &str,
+) -> Result<FreshFacts, &'static str> {
+    for facet in [
+        "deleted",
+        "folder",
+        "remoteItem",
+        "pendingOperations",
+        "malware",
+        "package",
+        "bundle",
+        "specialFolder",
+        "conflict",
+        "conflictBehavior",
+        "@microsoft.graph.conflictBehavior",
+    ] {
+        if metadata.get(facet).is_some_and(|value| !value.is_null()) {
+            return Err("Microsoft reports a shortcut, conflict, non-file, or unsettled item.");
+        }
+    }
+    if !metadata.get("file").is_some_and(Value::is_object)
+        || text(metadata, "/file/mimeType").is_err()
+    {
+        return Err("Microsoft did not report an ordinary file facet.");
+    }
+    if text(metadata, "/name")? != filename {
+        return Err("The Microsoft filename does not match the local file.");
+    }
+    for (pointer, expected) in [
+        ("/sharepointIds/tenantId", deployment.tenant_id()),
+        ("/sharepointIds/siteId", deployment.site_id()),
+        ("/sharepointIds/listId", deployment.list_id()),
+        ("/parentReference/driveId", deployment.drive_id()),
+        ("/parentReference/id", deployment.intake_folder_id()),
+    ] {
+        if !text(metadata, pointer)?.eq_ignore_ascii_case(expected) {
+            return Err(
+                "The Microsoft item is outside the provisioned tenant, site, library, or Inbox.",
+            );
+        }
+    }
+    let web_url = text(metadata, "/webUrl")?;
+    let parsed = Url::parse(web_url).map_err(|_| "The Microsoft item URL is invalid.")?;
+    if !deployment.contains_intake_child_web_url(&parsed) {
+        return Err("The Microsoft item URL is outside the provisioned Inbox.");
+    }
+    let created_at = text(metadata, "/createdDateTime")?;
+    let modified_at = text(metadata, "/lastModifiedDateTime")?;
+    if created_at != modified_at || !valid_timestamp(created_at) {
+        return Err(
+            "The Microsoft creation and modification facts do not show a new unchanged upload.",
+        );
+    }
+    let size = metadata
+        .get("size")
+        .and_then(Value::as_u64)
+        .filter(|size| *size > 0)
+        .ok_or("Microsoft did not provide a settled positive file size.")?;
+    let list_item_id = text(metadata, "/sharepointIds/listItemUniqueId")?;
+    if !is_guid(list_item_id) {
+        return Err("Microsoft did not provide an unambiguous SharePoint item identity.");
+    }
+    Ok(FreshFacts {
+        item_id: text(metadata, "/id")?.to_owned(),
+        etag: text(metadata, "/eTag")?.to_owned(),
+        content_tag: text(metadata, "/cTag")?.to_owned(),
+        name: filename.to_owned(),
+        size,
+        quick_xor: text(metadata, "/file/hashes/quickXorHash")?.to_owned(),
+        created_at: created_at.to_owned(),
+        modified_at: modified_at.to_owned(),
+        web_url: web_url.to_owned(),
+        list_item_id: list_item_id.to_owned(),
+        creator_id: optional_text(metadata, "/createdBy/user/id"),
+        creator_tenant_id: optional_text(metadata, "/createdBy/user/tenantId"),
+        creator_principal: optional_text(metadata, "/createdBy/user/userPrincipalName"),
+        modifier_id: optional_text(metadata, "/lastModifiedBy/user/id"),
+        modifier_tenant_id: optional_text(metadata, "/lastModifiedBy/user/tenantId"),
+        modifier_principal: optional_text(metadata, "/lastModifiedBy/user/userPrincipalName"),
+    })
+}
+
+fn actor(facts: &FreshFacts, account: &Account, creator: bool) -> Actor {
+    let (id, tenant_id, principal) = if creator {
+        (
+            &facts.creator_id,
+            &facts.creator_tenant_id,
+            &facts.creator_principal,
+        )
+    } else {
+        (
+            &facts.modifier_id,
+            &facts.modifier_tenant_id,
+            &facts.modifier_principal,
+        )
+    };
+    if tenant_id.as_ref().is_some_and(|tenant_id| {
+        !is_guid(tenant_id) || !tenant_id.eq_ignore_ascii_case(&account.tenant_id)
+    }) {
+        return Actor::Unknown;
+    }
+    if let Some(id) = id {
+        if !is_guid(id) {
+            return Actor::Unknown;
+        }
+        if id.eq_ignore_ascii_case(&account.id) {
+            if principal.as_ref().is_some_and(|principal| {
+                account.user_principal_name.is_empty()
+                    || !principal.eq_ignore_ascii_case(&account.user_principal_name)
+            }) {
+                return Actor::Unknown;
+            }
+            return Actor::Me;
+        }
+        return Actor::Other(Account {
+            tenant_id: account.tenant_id.clone(),
+            id: id.to_ascii_lowercase(),
+            display_name: String::new(),
+            email: principal.clone().unwrap_or_default(),
+            user_principal_name: principal.clone().unwrap_or_default(),
+        });
+    }
+    if !account.user_principal_name.is_empty()
+        && principal
+            .as_ref()
+            .is_some_and(|principal| principal.eq_ignore_ascii_case(&account.user_principal_name))
+    {
+        Actor::Me
+    } else {
+        Actor::Unknown
+    }
+}
+
+fn optional_text(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty() && text.len() <= 4096)
+        .map(str::to_owned)
+}
+
+/// Legacy first-read parser retained for compatibility with inactive audit
+/// code. It is not an admission proof; production admission uses
+/// [`verify_fresh_upload`].
 pub fn candidate(
     metadata: &Value,
     account: &Account,

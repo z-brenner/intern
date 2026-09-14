@@ -12,3 +12,19 @@ describe('createInMemoryBridge onboarding state', () => {
     expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false });
   });
 });
+
+describe('createInMemoryBridge managed Microsoft boundary', () => {
+  it('exposes no-argument methods that preserve the packaged deployment failure', async () => {
+    const bridge = createInMemoryBridge();
+    const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
+
+    await expect(bridge.microsoftIntakeStatus?.()).resolves.toMatchObject({
+      connected: false,
+      account: null,
+      binding: null,
+      error: unavailable,
+    });
+    await expect(bridge.microsoftSignInStart?.()).rejects.toThrow(unavailable);
+    await expect(bridge.microsoftBindIntake?.()).rejects.toThrow(unavailable);
+  });
+});

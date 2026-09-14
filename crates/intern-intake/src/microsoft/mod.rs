@@ -1,5 +1,4 @@
 //! Explicit, delegated Microsoft metadata connection for strict shared intake.
-pub mod audit;
 pub mod auth;
 pub mod hashing;
 pub mod proof;

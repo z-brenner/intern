@@ -27,6 +27,19 @@ function fakeTransport(responses: Record<string, unknown> = {}) {
 }
 
 describe('TauriBridge', () => {
+  it('starts managed Microsoft sign-in and fixed Inbox pairing without identifier payloads', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.microsoftSignInStart();
+    await bridge.microsoftBindIntake();
+
+    expect(fake.calls).toEqual([
+      { command: 'microsoft_sign_in_start', args: undefined },
+      { command: 'microsoft_bind_intake', args: undefined },
+    ]);
+  });
+
   it('maps the exact narrow command names and JSON-safe payloads', async () => {
     const fake = fakeTransport({
       queue_list: [],

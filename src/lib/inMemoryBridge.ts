@@ -135,6 +135,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // this pipeline does not download.
   let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
   let completedOnboardingVersion = options.completedOnboardingVersion ?? 0;
+  const microsoftUnavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
   const downloadStepBytes = options.downloadStepBytes ?? Math.max(1, Math.ceil(setup.totalBytes / 4));
   const downloadIntervalMs = options.downloadIntervalMs ?? 40;
   let downloadTimer: ReturnType<typeof setInterval> | undefined;
@@ -205,6 +206,18 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       required: completedOnboardingVersion < 1,
     }),
     completeOnboarding: async () => { completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
+    microsoftIntakeStatus: async () => ({
+      connected: false,
+      account: null,
+      binding: null,
+      documents: [],
+      error: microsoftUnavailable,
+    }),
+    microsoftSignInStart: async () => { throw new Error(microsoftUnavailable); },
+    microsoftSignInPoll: async () => { throw new Error(microsoftUnavailable); },
+    microsoftDisconnect: async () => { /* No credential exists in the disabled browser boundary. */ },
+    microsoftBindIntake: async () => { throw new Error(microsoftUnavailable); },
+    microsoftOpenSignIn: async () => { throw new Error(microsoftUnavailable); },
     startModelDownload: async () => {
       if (setup.state === 'downloading') return;
       setup = { ...setup, state: 'downloading', error: undefined };
