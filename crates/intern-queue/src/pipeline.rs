@@ -21,7 +21,7 @@ use intern_engine::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::admission::{AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
@@ -704,7 +704,7 @@ impl Pipeline {
         for path in paths {
             let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
             let fingerprint = self.files.fingerprint(path)?;
-            if verified.as_ref().is_some_and(|hash| hash != &fingerprint) {
+            if verified.verified_hash().is_some_and(|hash| hash != fingerprint) {
                 return Err(PipelineError::new(
                     "FILE_CHANGED",
                     "The file changed after Microsoft verified its uploader.",
@@ -892,7 +892,9 @@ impl Pipeline {
         let Some(item) = self.store.claim_next()? else {
             return Ok(false);
         };
-        if self.authorize_item(&item, AdmissionStage::Extract).is_err() {
+        let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
+            Ok(evidence) => evidence,
+            Err(_) => {
             self.store.transition(
                 item.id,
                 QueueStatus::Extracting,
@@ -901,7 +903,8 @@ impl Pipeline {
             )?;
             self.events.queue_changed();
             return Ok(true);
-        }
+            }
+        };
         self.active_item.store(item.id, Ordering::SeqCst);
         let request_id = format!("queue-{}-{}", item.id, item.processing_failures + 1);
         let phase = Arc::new(Mutex::new(LeasePhase::Extracting));
@@ -947,7 +950,11 @@ impl Pipeline {
         let source =
             match self
                 .worker
-                .extract(&request_id, &item.source_path, &mut forward_progress)
+                .extract(
+                    &request_id,
+                    extraction_evidence.extraction_path(&item.source_path),
+                    &mut forward_progress,
+                )
             {
                 Ok(source) => source,
                 Err(error) => {
@@ -1415,10 +1422,10 @@ impl Pipeline {
         }
     }
 
-    fn authorize_item(&self, item: &QueueItem, stage: AdmissionStage) -> PipelineResult<()> {
+    fn authorize_item(&self, item: &QueueItem, stage: AdmissionStage) -> PipelineResult<AdmissionEvidence> {
         let verified = self.admission.authorize(&item.source_path, stage)?;
         if verified
-            .as_ref()
+            .verified_hash()
             .is_some_and(|hash| hash != &item.source_hash)
         {
             return Err(PipelineError::new(
@@ -1426,7 +1433,7 @@ impl Pipeline {
                 "The current file is not the version whose uploader was verified. Retry after verification.",
             ));
         }
-        Ok(())
+        Ok(verified)
     }
 
     fn apply_if_unchanged(

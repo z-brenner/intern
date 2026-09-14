@@ -2377,12 +2377,15 @@ dependencies = [
 name = "intern-queue"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "base64 0.22.1",
  "intern-core",
  "intern-engine",
+ "intern-intake",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "url",
  "windows-sys 0.61.2",
 ]
 

@@ -5,6 +5,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use intern_core::PrivateSnapshotDirectory;
 use intern_intake::{
     SharePointDeployment,
     microsoft::{
@@ -120,7 +121,9 @@ impl FreshUploadMetadata for ScriptedMetadata {
 }
 
 fn verify(source: &ScriptedMetadata, inbox: &Path, file: &Path) -> FreshUploadOutcome {
-    verify_fresh_upload(&deployment(), source, inbox, file)
+    let snapshots = PrivateSnapshotDirectory::new(inbox.with_extension("private-snapshots"))
+        .unwrap();
+    verify_fresh_upload(&deployment(), source, &snapshots, inbox, file)
 }
 
 fn fresh_file() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -137,13 +140,18 @@ fn exact_account_ids_authorize_only_after_two_fixed_boundary_reads_and_local_bin
 
     let outcome = verify(&source, directory.path(), &file);
 
-    assert_eq!(
-        outcome,
+    match outcome {
         FreshUploadOutcome::Authorized {
-            local_sha256: HELLO_SHA256.into(),
-            uploader: me(),
+            local_sha256,
+            uploader,
+            snapshot,
+        } => {
+            assert_eq!(local_sha256, HELLO_SHA256);
+            assert_eq!(uploader, me());
+            assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"hello");
         }
-    );
+        other => panic!("expected authorized snapshot, got {other:?}"),
+    }
     let urls = source.urls.lock().unwrap();
     assert_eq!(urls.len(), 2);
     assert_eq!(urls[0], urls[1]);
@@ -155,6 +163,32 @@ fn exact_account_ids_authorize_only_after_two_fixed_boundary_reads_and_local_bin
     assert_eq!(urls[0].query_pairs().next().unwrap().0, "$select");
     assert!(!urls[0].path().contains("auditLog"));
     assert!(!urls[0].path().ends_with("/content"));
+}
+
+#[test]
+fn authorized_outcome_owns_the_exact_verified_bytes_until_its_snapshot_is_dropped() {
+    let (directory, file) = fresh_file();
+    let source = ScriptedMetadata::new([Ok((me(), metadata())), Ok((me(), metadata()))]);
+
+    let private_root = directory.path().with_extension("private-snapshots");
+    let outcome = verify(&source, directory.path(), &file);
+    let snapshot_path = match outcome {
+        FreshUploadOutcome::Authorized {
+            local_sha256,
+            snapshot,
+            ..
+        } => {
+            assert_eq!(local_sha256, HELLO_SHA256);
+            assert!(snapshot.path().starts_with(&private_root));
+            assert!(!snapshot.path().starts_with(directory.path()));
+            std::fs::write(&file, b"replacement").unwrap();
+            assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"hello");
+            snapshot.path().to_path_buf()
+        }
+        other => panic!("expected authorized snapshot, got {other:?}"),
+    };
+    assert!(!snapshot_path.exists());
+    assert!(!private_root.exists());
 }
 
 #[test]
@@ -385,21 +419,24 @@ fn remote_size_and_quickxor_must_bind_the_local_file_before_the_second_read() {
 fn transient_graph_failure_on_either_metadata_read_is_retryable_not_an_identity_verdict() {
     let (directory, file) = fresh_file();
     let source = ScriptedMetadata::new([Err("Microsoft requested a slower rate.".into())]);
-    assert_eq!(
+    assert!(matches!(
         verify(&source, directory.path(), &file),
-        FreshUploadOutcome::RetryableUnavailable {
-            reason: "Microsoft requested a slower rate.".into()
-        }
-    );
+        FreshUploadOutcome::RetryableUnavailable { ref reason }
+            if reason == "Microsoft requested a slower rate."
+    ));
 
     let source = ScriptedMetadata::new([
         Ok((me(), metadata())),
         Err("Microsoft could not be reached.".into()),
     ]);
-    assert_eq!(
+    let private_root = directory.path().with_extension("private-snapshots");
+    assert!(matches!(
         verify(&source, directory.path(), &file),
-        FreshUploadOutcome::RetryableUnavailable {
-            reason: "Microsoft could not be reached.".into()
-        }
+        FreshUploadOutcome::RetryableUnavailable { ref reason }
+            if reason == "Microsoft could not be reached."
+    ));
+    assert!(
+        !private_root.exists(),
+        "a snapshot whose second metadata check failed must be cleaned"
     );
 }

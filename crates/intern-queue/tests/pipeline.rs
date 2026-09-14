@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -9,11 +10,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use intern_core::{ErrorCode, OperationReceipt, QueueItem, QueueStatus, QueueStore};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use intern_core::{
+    ErrorCode, OperationReceipt, PrivateSnapshotDirectory, QueueItem, QueueStatus, QueueStore,
+};
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, PageOrigin, ParserWarning, PartyRelation, ProposalStatus,
     SourcePage, distill, engine::finish, fingerprint, validate,
+};
+use intern_intake::{
+    SharePointDeployment,
+    microsoft::{
+        Account,
+        hashing::QuickXor,
+        proof::{FreshUploadMetadata, FreshUploadOutcome, verify_fresh_upload},
+    },
 };
 use intern_queue::{
     pipeline::{
@@ -24,7 +36,9 @@ use intern_queue::{
     settings::{AppSettings, DestinationLayout, SettingsStore},
 };
 use rusqlite::Connection;
+use serde_json::{Value, json};
 use tempfile::tempdir;
+use url::Url;
 
 /// Runs the real distillation, validation, and naming over a canned model
 /// reply, so queue tests still exercise the production evidence rules instead
@@ -2949,14 +2963,242 @@ struct UploaderGuard {
     allowed: AtomicBool,
     hash: Option<String>,
 }
+
+const SNAPSHOT_TENANT: &str = "11111111-1111-1111-1111-111111111111";
+const SNAPSHOT_DRIVE: &str = "66666666-6666-6666-6666-666666666666";
+const SNAPSHOT_INBOX: &str = "77777777-7777-7777-7777-777777777777";
+const SNAPSHOT_ME: &str = "99999999-9999-9999-9999-999999999999";
+const HELLO_SHA256: &str =
+    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+struct ProofSnapshotGuard {
+    source: PathBuf,
+    inbox: PathBuf,
+    snapshots: PrivateSnapshotDirectory,
+    deployment: SharePointDeployment,
+    metadata_calls: AtomicUsize,
+}
+
+impl FreshUploadMetadata for ProofSnapshotGuard {
+    fn metadata(&self, _url: Url) -> Result<(Account, Value), String> {
+        self.metadata_calls.fetch_add(1, Ordering::SeqCst);
+        let mut quick = QuickXor::default();
+        quick.update(b"hello");
+        Ok((
+            Account {
+                tenant_id: SNAPSHOT_TENANT.into(),
+                id: SNAPSHOT_ME.into(),
+                display_name: "Pat Example".into(),
+                email: "pat@example.test".into(),
+                user_principal_name: "pat@example.test".into(),
+            },
+            json!({
+                "id": "item!123",
+                "eTag": "\"fresh,1\"",
+                "cTag": "\"content,1\"",
+                "name": "swap.pdf",
+                "size": 5,
+                "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/swap.pdf",
+                "parentReference": { "driveId": SNAPSHOT_DRIVE, "id": SNAPSHOT_INBOX },
+                "sharepointIds": {
+                    "tenantId": SNAPSHOT_TENANT,
+                    "siteId": "33333333-3333-3333-3333-333333333333",
+                    "listId": "55555555-5555-5555-5555-555555555555",
+                    "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                },
+                "createdBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "lastModifiedBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "createdDateTime": "2026-09-14T16:00:00Z",
+                "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                "file": {
+                    "mimeType": "application/pdf",
+                    "hashes": { "quickXorHash": STANDARD.encode(quick.finish()) }
+                }
+            }),
+        ))
+    }
+}
+
+impl intern_queue::AdmissionGuard for ProofSnapshotGuard {
+    fn authorize(
+        &self,
+        path: &Path,
+        stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        match verify_fresh_upload(
+            &self.deployment,
+            self,
+            &self.snapshots,
+            &self.inbox,
+            path,
+        ) {
+            FreshUploadOutcome::Authorized {
+                local_sha256,
+                snapshot,
+                ..
+            } => {
+                if stage == intern_queue::AdmissionStage::Extract {
+                    fs::write(&self.source, b"replacement bytes").unwrap();
+                }
+                Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+                    local_sha256,
+                    snapshot,
+                ))
+            }
+            other => Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                format!("unexpected proof outcome: {other:?}"),
+            )),
+        }
+    }
+}
+
+struct SnapshotReadingWorker {
+    public_source: PathBuf,
+    read: Mutex<Vec<u8>>,
+}
+
+impl WorkerBoundary for SnapshotReadingWorker {
+    fn extract(
+        &self,
+        _request_id: &str,
+        path: &Path,
+        _progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        *self.read.lock().unwrap() = fs::read(path).unwrap();
+        fs::write(&self.public_source, b"hello").unwrap();
+        Err(WorkerFailure::new("TEST_STOP", false, false))
+    }
+
+    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+}
+
+#[test]
+fn extraction_reads_the_owned_verified_snapshot_across_a_source_swap_and_restore() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    fs::create_dir(&inbox).unwrap();
+    let source_path = source(&inbox, "swap.pdf");
+    fs::write(&source_path, b"hello").unwrap();
+    let private_root = temp.path().join("private-snapshots");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&source_path, HELLO_SHA256);
+    let worker = Arc::new(SnapshotReadingWorker {
+        public_source: source_path.clone(),
+        read: Mutex::new(Vec::new()),
+    });
+    let deployment = SharePointDeployment::from_slice(
+        format!(
+            r#"{{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "{SNAPSHOT_TENANT}",
+              "client_id": "22222222-2222-2222-2222-222222222222",
+              "site_id": "33333333-3333-3333-3333-333333333333",
+              "web_id": "44444444-4444-4444-4444-444444444444",
+              "list_id": "55555555-5555-5555-5555-555555555555",
+              "drive_id": "{SNAPSHOT_DRIVE}",
+              "intake_folder_id": "{SNAPSHOT_INBOX}",
+              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+            }}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let guard = Arc::new(ProofSnapshotGuard {
+        source: source_path.clone(),
+        inbox: inbox.canonicalize().unwrap(),
+        snapshots: PrivateSnapshotDirectory::new(&private_root).unwrap(),
+        deployment,
+        metadata_calls: AtomicUsize::new(0),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+
+    pipeline
+        .enqueue_files(std::slice::from_ref(&source_path))
+        .unwrap();
+    pipeline.run_next().unwrap();
+
+    assert_eq!(&*worker.read.lock().unwrap(), b"hello");
+    assert_eq!(fs::read(&source_path).unwrap(), b"hello");
+    assert_eq!(guard.metadata_calls.load(Ordering::SeqCst), 4);
+    assert!(
+        fs::read_dir(&private_root).unwrap().next().is_none(),
+        "the queue drops and removes each proof-owned snapshot"
+    );
+}
+
+struct HashOnlyGuard;
+
+impl intern_queue::AdmissionGuard for HashOnlyGuard {
+    fn authorize(
+        &self,
+        _path: &Path,
+        _stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        Ok(intern_queue::AdmissionEvidence::verified(
+            "same-bytes".into(),
+        ))
+    }
+}
+
+#[test]
+fn protected_extraction_without_an_owned_snapshot_fails_closed_before_the_worker() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "missing-snapshot.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&path, "same-bytes");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed("private text"))]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(Arc::new(HashOnlyGuard));
+
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+    pipeline.run_next().unwrap();
+
+    assert_eq!(worker.maximum_active.load(Ordering::SeqCst), 0);
+    let item = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::UploaderUnverified));
+}
+
 impl intern_queue::AdmissionGuard for UploaderGuard {
     fn authorize(
         &self,
         _path: &Path,
         _stage: intern_queue::AdmissionStage,
-    ) -> Result<Option<String>, PipelineError> {
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
         if self.allowed.load(Ordering::SeqCst) {
-            Ok(self.hash.clone())
+            Ok(self.hash.clone().map_or_else(
+                intern_queue::AdmissionEvidence::local,
+                intern_queue::AdmissionEvidence::verified,
+            ))
         } else {
             Err(PipelineError::new(
                 "UPLOADER_UNVERIFIED",
