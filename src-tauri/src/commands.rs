@@ -1191,6 +1191,24 @@ impl AppState {
         self.settings.load().unwrap_or_default()
     }
 
+    pub(crate) fn sharepoint_settings_snapshot(&self) -> Result<AppSettings, CommandError> {
+        self.settings.load().map_err(CommandError::from)
+    }
+
+    /// Applies SharePoint's derived settings through the same persistence and
+    /// live-runtime path as the Settings UI. If any watcher, tray, hosted
+    /// runtime, intake event, or autostart step fails, the previous complete
+    /// settings are replayed through that path before the error is returned.
+    pub(crate) fn activate_sharepoint_settings(
+        &self,
+        settings: &AppSettings,
+    ) -> Result<(), CommandError> {
+        let previous = self.settings.load()?;
+        apply_settings_activation(&previous, settings, |candidate| {
+            save_settings_with_microsoft_protection(self, candidate.clone(), false)
+        })
+    }
+
     /// Whether a main-window close should hide to the tray instead of running
     /// the normal exit path. Read fresh on every close so a settings save
     /// takes effect on the very next close, and erring toward `false`: a
@@ -1499,7 +1517,15 @@ pub async fn settings_save(
         .map_err(|_| background_task_failed("settings save"))?
 }
 
-fn save_settings(state: &AppState, mut settings: AppSettings) -> Result<(), CommandError> {
+fn save_settings(state: &AppState, settings: AppSettings) -> Result<(), CommandError> {
+    save_settings_with_microsoft_protection(state, settings, true)
+}
+
+fn save_settings_with_microsoft_protection(
+    state: &AppState,
+    mut settings: AppSettings,
+    protect_microsoft: bool,
+) -> Result<(), CommandError> {
     let previous = state.settings.load().unwrap_or_default();
     validate_intake_settings(&mut settings, &previous.intake_folder, &|path| {
         canonical_folder(path).ok()
@@ -1519,14 +1545,16 @@ fn save_settings(state: &AppState, mut settings: AppSettings) -> Result<(), Comm
     if settings.model_source == ModelSource::Hosted {
         state.hosted.config(&settings)?;
     }
-    state
-        .app
-        .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()
-        .protect_settings(&settings)
-        .map_err(|message| CommandError {
-            code: "UPLOADER_UNVERIFIED".into(),
-            message,
-        })?;
+    if protect_microsoft {
+        state
+            .app
+            .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()
+            .protect_settings(&settings)
+            .map_err(|message| CommandError {
+                code: "UPLOADER_UNVERIFIED".into(),
+                message,
+            })?;
+    }
     save_settings_and_autostart(
         &previous,
         &settings,
@@ -1556,6 +1584,26 @@ fn save_settings(state: &AppState, mut settings: AppSettings) -> Result<(), Comm
     {
         state.restart_intake(&settings)?;
         state.emit_intake_changed()?;
+    }
+    Ok(())
+}
+
+fn apply_settings_activation(
+    previous: &AppSettings,
+    settings: &AppSettings,
+    mut apply: impl FnMut(&AppSettings) -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    if let Err(error) = apply(settings) {
+        return match apply(previous) {
+            Ok(()) => Err(error),
+            Err(restore) => Err(CommandError {
+                code: "ACTIVATION_ROLLBACK_FAILED".into(),
+                message: format!(
+                    "{} Restoring the prior live settings also failed: {}. Activation remains incomplete.",
+                    error.message, restore.message
+                ),
+            }),
+        };
     }
     Ok(())
 }
@@ -2134,7 +2182,8 @@ mod intake_tests {
     use intern_queue::AppSettings;
 
     use super::{
-        save_settings_and_autostart, validate_description_settings, validate_intake_settings,
+        apply_settings_activation, save_settings_and_autostart, validate_description_settings,
+        validate_intake_settings,
     };
     use crate::intake::{CloudProviderDto, item_fate, presence_active, status_dto};
 
@@ -2351,6 +2400,51 @@ mod intake_tests {
         )
         .expect("a save with no login change succeeds");
         assert_eq!(toggles.get(), 0);
+    }
+
+    #[test]
+    fn sharepoint_activation_restores_persisted_watcher_and_tray_state_on_runtime_failure() {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        struct LiveState {
+            persisted: AppSettings,
+            watcher_enabled: bool,
+            tray_enabled: bool,
+        }
+
+        let previous = AppSettings::default();
+        let next = AppSettings {
+            intake_enabled: true,
+            run_in_background: true,
+            ..previous.clone()
+        };
+        let state = std::cell::RefCell::new(LiveState {
+            persisted: previous.clone(),
+            watcher_enabled: false,
+            tray_enabled: false,
+        });
+        let first = std::cell::Cell::new(true);
+
+        let error = apply_settings_activation(&previous, &next, |candidate| {
+            let mut state = state.borrow_mut();
+            state.persisted = candidate.clone();
+            state.watcher_enabled = candidate.intake_enabled;
+            state.tray_enabled = candidate.run_in_background;
+            if first.replace(false) {
+                return Err(failure("WATCHER_START_FAILED"));
+            }
+            Ok(())
+        })
+        .expect_err("runtime activation failure must remain visible");
+
+        assert_eq!(error.code, "WATCHER_START_FAILED");
+        assert_eq!(
+            *state.borrow(),
+            LiveState {
+                persisted: previous,
+                watcher_enabled: false,
+                tray_enabled: false,
+            }
+        );
     }
 
     fn receipt(
