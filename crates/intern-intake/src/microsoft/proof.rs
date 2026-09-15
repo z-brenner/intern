@@ -26,6 +26,8 @@ pub struct FolderBinding {
     pub folder_id: String,
     pub web_url: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub web_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_watermark: Option<i64>,
 }
@@ -235,9 +237,6 @@ fn fresh_facts(
         "package",
         "bundle",
         "specialFolder",
-        "conflict",
-        "conflictBehavior",
-        "@microsoft.graph.conflictBehavior",
     ] {
         if metadata.get(facet).is_some_and(|value| !value.is_null()) {
             return Err("Microsoft reports a shortcut, conflict, non-file, or unsettled item.");
@@ -254,6 +253,7 @@ fn fresh_facts(
     for (pointer, expected) in [
         ("/sharepointIds/tenantId", deployment.tenant_id()),
         ("/sharepointIds/siteId", deployment.site_id()),
+        ("/sharepointIds/webId", deployment.web_id()),
         ("/sharepointIds/listId", deployment.list_id()),
         ("/parentReference/driveId", deployment.drive_id()),
         ("/parentReference/id", deployment.intake_folder_id()),

@@ -3,7 +3,7 @@
 use crate::secrets::{KeyringStore, SecretStore};
 use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use intern_intake::microsoft::{
-    Account, AuthConfig, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
+    Account, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
     proof::{FreshUploadOutcome, verify_fresh_upload},
     transport::item_url,
 };
@@ -133,6 +133,43 @@ fn verified_upload(
     }
 }
 
+fn verified_folder_web_url(
+    deployment: &SharePointDeployment,
+    account: &Account,
+    remote: &serde_json::Value,
+) -> Result<String, String> {
+    if !remote["folder"].is_object()
+        || remote
+            .get("remoteItem")
+            .is_some_and(|value| !value.is_null())
+        || remote["id"].as_str() != Some(deployment.intake_folder_id())
+        || [
+            ("/sharepointIds/tenantId", deployment.tenant_id()),
+            ("/sharepointIds/siteId", deployment.site_id()),
+            ("/sharepointIds/webId", deployment.web_id()),
+            ("/sharepointIds/listId", deployment.list_id()),
+            ("/parentReference/driveId", deployment.drive_id()),
+        ]
+        .into_iter()
+        .any(|(pointer, expected)| {
+            remote
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|value| !value.eq_ignore_ascii_case(expected))
+        })
+        || !account
+            .tenant_id
+            .eq_ignore_ascii_case(deployment.tenant_id())
+    {
+        return Err("Microsoft did not confirm a work/school folder in the connected organization. Personal accounts and shortcut items are not supported.".into());
+    }
+    remote["webUrl"]
+        .as_str()
+        .filter(|url| deployment.is_intake_folder_web_url(url))
+        .map(str::to_owned)
+        .ok_or_else(|| "Microsoft did not return a supported folder address.".into())
+}
+
 impl MicrosoftIntake {
     pub fn new(settings: SettingsStore, data: PathBuf) -> Self {
         let deployment = SharePointDeployment::from_slice(include_bytes!(
@@ -156,16 +193,12 @@ impl MicrosoftIntake {
             Err(error) => (None, Some(error.to_string())),
         };
         let (client, client_error) = match deployment.as_ref() {
-            Some(deployment) => match MicrosoftClient::new(
-                AuthConfig {
-                    tenant_id: deployment.tenant_id().to_owned(),
-                    client_id: deployment.client_id().to_owned(),
-                },
-                Arc::new(CredentialStore),
-            ) {
-                Ok(client) => (Some(client), None),
-                Err(error) => (None, Some(error)),
-            },
+            Some(deployment) => {
+                match MicrosoftClient::new(deployment.clone(), Arc::new(CredentialStore)) {
+                    Ok(client) => (Some(client), None),
+                    Err(error) => (None, Some(error)),
+                }
+            }
             None => (None, None),
         };
         let (snapshot_directory, snapshot_error) =
@@ -280,6 +313,7 @@ impl MicrosoftIntake {
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
                 && binding.activation_watermark.is_some_and(|value| value > 0)
+                && binding.web_id.eq_ignore_ascii_case(deployment.web_id())
                 && binding.drive_id.eq_ignore_ascii_case(deployment.drive_id())
                 && binding
                     .folder_id
@@ -444,38 +478,7 @@ impl MicrosoftIntake {
             deployment.intake_folder_id(),
             None,
         )?)?;
-        if !remote["folder"].is_object()
-            || remote
-                .get("remoteItem")
-                .is_some_and(|value| !value.is_null())
-            || remote["id"].as_str() != Some(deployment.intake_folder_id())
-            || remote
-                .pointer("/sharepointIds/tenantId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|tenant| !tenant.eq_ignore_ascii_case(deployment.tenant_id()))
-            || remote
-                .pointer("/sharepointIds/siteId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|site| !site.eq_ignore_ascii_case(deployment.site_id()))
-            || remote
-                .pointer("/sharepointIds/listId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|list| !list.eq_ignore_ascii_case(deployment.list_id()))
-            || remote
-                .pointer("/parentReference/driveId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|drive| !drive.eq_ignore_ascii_case(deployment.drive_id()))
-            || !account
-                .tenant_id
-                .eq_ignore_ascii_case(deployment.tenant_id())
-        {
-            return Err("Microsoft did not confirm a work/school folder in the connected organization. Personal accounts and shortcut items are not supported.".into());
-        }
-        let web_url = remote["webUrl"]
-            .as_str()
-            .filter(|url| deployment.is_intake_folder_web_url(url))
-            .ok_or("Microsoft did not return a supported folder address.")?
-            .to_owned();
+        let web_url = verified_folder_web_url(&deployment, &account, &remote)?;
         self.persist_verified_binding(&deployment, epoch, &settings, &local, web_url)
     }
     fn persist_verified_binding(
@@ -503,6 +506,7 @@ impl MicrosoftIntake {
             folder_id: deployment.intake_folder_id().to_owned(),
             web_url,
             tenant_id: deployment.tenant_id().to_owned(),
+            web_id: deployment.web_id().to_owned(),
             activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
         };
         let mut next = config.clone();
@@ -829,6 +833,59 @@ mod tests {
             }"#,
         )
         .unwrap()
+    }
+
+    fn account() -> Account {
+        Account {
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            id: "99999999-9999-9999-9999-999999999999".into(),
+            display_name: "Pat Example".into(),
+            email: "pat@example.test".into(),
+            user_principal_name: "pat@example.test".into(),
+        }
+    }
+
+    fn folder_metadata() -> serde_json::Value {
+        serde_json::json!({
+            "id": "77777777-7777-7777-7777-777777777777",
+            "folder": { "childCount": 0 },
+            "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
+            "sharepointIds": {
+                "tenantId": "11111111-1111-1111-1111-111111111111",
+                "siteId": "33333333-3333-3333-3333-333333333333",
+                "webId": "44444444-4444-4444-4444-444444444444",
+                "listId": "55555555-5555-5555-5555-555555555555"
+            },
+            "parentReference": {
+                "driveId": "66666666-6666-6666-6666-666666666666"
+            }
+        })
+    }
+
+    #[test]
+    fn fixed_folder_binding_requires_the_deployment_web_identity() {
+        let deployment = test_deployment();
+        assert!(verified_folder_web_url(&deployment, &account(), &folder_metadata()).is_ok());
+
+        for replacement in [
+            None,
+            Some(serde_json::json!("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        ] {
+            let mut metadata = folder_metadata();
+            match replacement {
+                Some(value) => metadata["sharepointIds"]["webId"] = value,
+                None => {
+                    metadata["sharepointIds"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("webId");
+                }
+            }
+            assert!(
+                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
+                "a missing or different web must not bind"
+            );
+        }
     }
 
     #[test]

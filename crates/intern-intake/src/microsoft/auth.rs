@@ -3,9 +3,12 @@
 //! arbitrary OAuth endpoint is accepted.
 use super::{
     proof::{Account, is_guid, text},
-    transport::{MicrosoftTransport, Transport, allowed_endpoint},
+    transport::{MicrosoftTransport, Transport, deployment_allows_endpoint},
 };
-use crate::coordination::{Clock, SystemClock};
+use crate::{
+    SharePointDeployment,
+    coordination::{Clock, SystemClock},
+};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,6 +136,7 @@ impl From<&str> for Failure {
 }
 
 pub struct MicrosoftClient {
+    deployment: SharePointDeployment,
     transport: Arc<dyn Transport>,
     tokens: Arc<dyn TokenStore>,
     clock: Arc<dyn Clock>,
@@ -143,21 +147,30 @@ pub struct MicrosoftClient {
     connected: Mutex<Option<Account>>,
 }
 impl MicrosoftClient {
-    pub fn new(config: AuthConfig, tokens: Arc<dyn TokenStore>) -> Result<Self, String> {
+    pub fn new(
+        deployment: SharePointDeployment,
+        tokens: Arc<dyn TokenStore>,
+    ) -> Result<Self, String> {
+        let transport = Arc::new(MicrosoftTransport::new(&deployment)?);
         Ok(Self::with_transport(
-            config,
+            deployment,
             tokens,
-            Arc::new(MicrosoftTransport::new()?),
+            transport,
             Arc::new(SystemClock),
         ))
     }
     pub fn with_transport(
-        config: AuthConfig,
+        deployment: SharePointDeployment,
         tokens: Arc<dyn TokenStore>,
         transport: Arc<dyn Transport>,
         clock: Arc<dyn Clock>,
     ) -> Self {
+        let config = AuthConfig {
+            tenant_id: deployment.tenant_id().to_owned(),
+            client_id: deployment.client_id().to_owned(),
+        };
         Self {
+            deployment,
             transport,
             tokens,
             clock,
@@ -321,7 +334,7 @@ impl MicrosoftClient {
         Err("Microsoft audit endpoints are not permitted.".into())
     }
     fn graph_request(&self, url: Url) -> Result<(Account, Value), String> {
-        if !allowed_endpoint(&url, false, true) {
+        if !deployment_allows_endpoint(&self.deployment, &url, false, true) {
             return Err("Only Microsoft intake metadata may be requested.".into());
         }
         let mut state = self
@@ -534,7 +547,6 @@ mod tests {
             form: Option<&[(&str, &str)]>,
             bearer: Option<&str>,
         ) -> Result<Reply, String> {
-            assert!(allowed_endpoint(&url, form.is_some(), bearer.is_some()));
             self.calls.lock().unwrap().push((
                 url.to_string(),
                 bearer.is_some(),
@@ -555,6 +567,27 @@ mod tests {
             tenant_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa".into(),
             client_id: "cccccccc-cccc-cccc-cccc-cccccccccccc".into(),
         }
+    }
+    fn deployment() -> SharePointDeployment {
+        SharePointDeployment::from_slice(
+            br#"{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "client_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+              "site_id": "11111111-1111-1111-1111-111111111111",
+              "web_id": "22222222-2222-2222-2222-222222222222",
+              "list_id": "33333333-3333-3333-3333-333333333333",
+              "drive_id": "44444444-4444-4444-4444-444444444444",
+              "intake_folder_id": "55555555-5555-5555-5555-555555555555",
+              "destination_folder_id": "66666666-6666-6666-6666-666666666666"
+            }"#,
+        )
+        .unwrap()
     }
     fn reply(status: u16, body: Value) -> Reply {
         Reply {
@@ -586,14 +619,24 @@ mod tests {
         let store = Arc::new(Memory::default());
         let clock = Arc::new(Time(AtomicI64::new(1000)));
         (
-            MicrosoftClient::with_transport(config(), store.clone(), http.clone(), clock.clone()),
+            MicrosoftClient::with_transport(
+                deployment(),
+                store.clone(),
+                http.clone(),
+                clock.clone(),
+            ),
             http,
             store,
             clock,
         )
     }
     fn item() -> Url {
-        super::super::transport::item_url("drive", "folder", None).unwrap()
+        super::super::transport::item_url(
+            deployment().drive_id(),
+            deployment().intake_folder_id(),
+            None,
+        )
+        .unwrap()
     }
     #[test]
     fn construction_and_status_make_no_network_calls() {
@@ -700,6 +743,37 @@ mod tests {
         }
         assert!(http.calls.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn a_connected_injected_transport_cannot_escape_the_deployment_item_boundary() {
+        let (client, http, _, time) = rig(vec![device(), token(), me()]);
+        client.begin().unwrap();
+        time.0.store(1005, Ordering::SeqCst);
+        client.poll().unwrap();
+        let connected_calls = http.calls.lock().unwrap().len();
+
+        for url in [
+            super::super::transport::item_url(
+                "99999999-9999-9999-9999-999999999999",
+                "55555555-5555-5555-5555-555555555555",
+                Some("agreement.pdf"),
+            )
+            .unwrap(),
+            super::super::transport::item_url(
+                "44444444-4444-4444-4444-444444444444",
+                "99999999-9999-9999-9999-999999999999",
+                None,
+            )
+            .unwrap(),
+        ] {
+            assert!(client.metadata(url).is_err());
+        }
+        assert_eq!(
+            http.calls.lock().unwrap().len(),
+            connected_calls,
+            "rejected metadata URLs must never reach even an injected transport"
+        );
+    }
     #[test]
     fn audit_queries_are_not_a_connected_client_capability() {
         let (client, http, _, time) = rig(vec![device(), token(), me()]);
@@ -796,7 +870,7 @@ mod tests {
         });
         let time = Arc::new(Time(AtomicI64::new(1000)));
         let client = Arc::new(MicrosoftClient::with_transport(
-            config(),
+            deployment(),
             Arc::new(Memory::default()),
             transport,
             time.clone(),

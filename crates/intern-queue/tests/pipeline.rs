@@ -3318,6 +3318,7 @@ impl FreshUploadMetadata for ProofSnapshotGuard {
                 "sharepointIds": {
                     "tenantId": SNAPSHOT_TENANT,
                     "siteId": "33333333-3333-3333-3333-333333333333",
+                    "webId": "44444444-4444-4444-4444-444444444444",
                     "listId": "55555555-5555-5555-5555-555555555555",
                     "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
                 },

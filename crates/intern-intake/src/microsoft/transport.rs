@@ -1,9 +1,10 @@
+use crate::SharePointDeployment;
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde_json::Value;
 use std::{io::Read, time::Duration};
 
 const PROFILE_SELECT: &str = "id,displayName,mail,userPrincipalName";
-const ITEM_SELECT: &str = "id,name,size,eTag,cTag,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime,file,fileSystemInfo,folder,deleted,pendingOperations,remoteItem,malware,package,bundle,specialFolder,sharepointIds,webUrl,parentReference";
+const ITEM_SELECT: &str = "id,name,size,eTag,cTag,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime,file,folder,deleted,pendingOperations,remoteItem,malware,package,bundle,specialFolder,sharepointIds,webUrl,parentReference";
 
 pub struct Reply {
     pub status: u16,
@@ -22,15 +23,22 @@ pub trait Transport: Send + Sync {
 
 pub struct MicrosoftTransport {
     client: Client,
+    deployment: SharePointDeployment,
 }
 impl MicrosoftTransport {
-    pub fn new() -> Result<Self, String> {
+    pub fn new(deployment: &SharePointDeployment) -> Result<Self, String> {
+        deployment
+            .validate()
+            .map_err(|_| "Microsoft deployment boundary is invalid.")?;
         Client::builder()
             .redirect(Policy::none())
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
             .build()
-            .map(|client| Self { client })
+            .map(|client| Self {
+                client,
+                deployment: deployment.clone(),
+            })
             .map_err(|_| "Microsoft connection could not be initialized.".into())
     }
 }
@@ -42,7 +50,7 @@ impl Transport for MicrosoftTransport {
         form: Option<&[(&str, &str)]>,
         bearer: Option<&str>,
     ) -> Result<Reply, String> {
-        if !allowed_endpoint(&url, form.is_some(), bearer.is_some()) {
+        if !deployment_allows_endpoint(&self.deployment, &url, form.is_some(), bearer.is_some()) {
             return Err("Microsoft endpoint is not allowed.".into());
         }
         let request = if let Some(form) = form {
@@ -91,7 +99,12 @@ fn read_response(response: reqwest::blocking::Response) -> Result<Reply, String>
     })
 }
 
-pub fn allowed_endpoint(url: &Url, form: bool, bearer: bool) -> bool {
+pub fn deployment_allows_endpoint(
+    deployment: &SharePointDeployment,
+    url: &Url,
+    form: bool,
+    bearer: bool,
+) -> bool {
     if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
@@ -104,7 +117,7 @@ pub fn allowed_endpoint(url: &Url, form: bool, bearer: bool) -> bool {
     match (url.host_str(), form, bearer) {
         (Some("login.microsoftonline.com"), true, false) => {
             parts.len() == 4
-                && super::proof::is_guid(parts[0])
+                && parts[0].eq_ignore_ascii_case(deployment.tenant_id())
                 && parts[1] == "oauth2"
                 && parts[2] == "v2.0"
                 && ["devicecode", "token"].contains(&parts[3])
@@ -114,19 +127,39 @@ pub fn allowed_endpoint(url: &Url, form: bool, bearer: bool) -> bool {
             if parts == ["v1.0", "me"] {
                 return exact_select(url, PROFILE_SELECT);
             }
-            if parts.len() >= 5 && parts[0] == "v1.0" && parts[1] == "drives" && parts[3] == "items"
+            if parts.len() >= 5
+                && parts[0] == "v1.0"
+                && parts[1] == "drives"
+                && parts[2].eq_ignore_ascii_case(deployment.drive_id())
+                && parts[3] == "items"
+                && exact_select(url, ITEM_SELECT)
             {
-                // By-ID metadata or a path beneath a fixed parent ID. No /content,
-                // preview, versions, permissions, or upload endpoint.
-                return (parts.len() == 5
-                    || parts[4].ends_with(':')
-                        && !parts[5..].iter().any(|part| part.ends_with(':')))
-                    && exact_select(url, ITEM_SELECT);
+                if parts.len() == 5 {
+                    return parts[4].eq_ignore_ascii_case(deployment.intake_folder_id());
+                }
+                return parts.len() == 6
+                    && parts[4].strip_suffix(':').is_some_and(|folder| {
+                        folder.eq_ignore_ascii_case(deployment.intake_folder_id())
+                    })
+                    && direct_child_segment(parts[5]);
             }
             false
         }
         _ => false,
     }
+}
+
+fn direct_child_segment(value: &str) -> bool {
+    if value.is_empty() || value.contains(['/', '\\', ':', '\0']) {
+        return false;
+    }
+    let folded = value.to_ascii_lowercase();
+    let decoded_dots = folded.replace("%2e", ".");
+    decoded_dots != "."
+        && decoded_dots != ".."
+        && !["%00", "%2f", "%3a", "%5c"]
+            .iter()
+            .any(|encoded| folded.contains(encoded))
 }
 
 fn exact_select(url: &Url, expected: &str) -> bool {
@@ -157,20 +190,16 @@ pub fn item_url(drive: &str, folder: &str, relative: Option<&str>) -> Result<Url
             .push(drive)
             .push("items");
         if let Some(relative) = relative {
-            if relative.is_empty() || relative.len() > 32768 {
+            if relative.is_empty()
+                || relative.len() > 32768
+                || relative == "."
+                || relative == ".."
+                || relative.contains(['/', '\\', '\0', ':'])
+            {
                 return Err("Intake relative path is invalid.".into());
             }
             parts.push(&format!("{folder}:"));
-            for component in relative.split('/') {
-                if component.is_empty()
-                    || component == "."
-                    || component == ".."
-                    || component.contains(['\\', '\0', ':'])
-                {
-                    return Err("Intake relative path is invalid.".into());
-                }
-                parts.push(component);
-            }
+            parts.push(relative);
         } else {
             parts.push(folder);
         }
@@ -196,16 +225,119 @@ pub fn sharepoint_url(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SharePointDeployment;
+
+    const TENANT: &str = "11111111-1111-1111-1111-111111111111";
+    const DRIVE: &str = "66666666-6666-6666-6666-666666666666";
+    const INBOX: &str = "77777777-7777-7777-7777-777777777777";
+
+    fn deployment() -> SharePointDeployment {
+        SharePointDeployment::from_slice(
+            format!(
+                r#"{{
+                  "schema_version": 1,
+                  "enabled": true,
+                  "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+                  "library_name": "Files",
+                  "intake_folder_name": "Inbox",
+                  "destination_folder_name": "Filed",
+                  "tenant_id": "{TENANT}",
+                  "client_id": "22222222-2222-2222-2222-222222222222",
+                  "site_id": "33333333-3333-3333-3333-333333333333",
+                  "web_id": "44444444-4444-4444-4444-444444444444",
+                  "list_id": "55555555-5555-5555-5555-555555555555",
+                  "drive_id": "{DRIVE}",
+                  "intake_folder_id": "{INBOX}",
+                  "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+                }}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn authenticated_allowlist_excludes_audit_and_content_endpoints() {
+    fn deployment_boundary_allows_only_its_oauth_profile_binding_and_direct_child_metadata() {
+        let deployment = deployment();
+        for address in [
+            format!("https://login.microsoftonline.com/{TENANT}/oauth2/v2.0/devicecode"),
+            format!("https://login.microsoftonline.com/{TENANT}/oauth2/v2.0/token"),
+        ] {
+            assert!(deployment_allows_endpoint(
+                &deployment,
+                &Url::parse(&address).unwrap(),
+                true,
+                false,
+            ));
+        }
+        let profile = Url::parse(
+            "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
+        )
+        .unwrap();
+        assert!(deployment_allows_endpoint(
+            &deployment,
+            &profile,
+            false,
+            true,
+        ));
+        assert!(deployment_allows_endpoint(
+            &deployment,
+            &item_url(DRIVE, INBOX, None).unwrap(),
+            false,
+            true,
+        ));
+        assert!(deployment_allows_endpoint(
+            &deployment,
+            &item_url(DRIVE, INBOX, Some("agreement.pdf")).unwrap(),
+            false,
+            true,
+        ));
+    }
+
+    #[test]
+    fn deployment_boundary_rejects_other_tenants_drives_items_and_nested_children() {
+        let deployment = deployment();
+        let selected = format!("?$select={ITEM_SELECT}");
+        for address in [
+            "https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/oauth2/v2.0/devicecode".to_owned(),
+            "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111.evil.example/oauth2/v2.0/token".to_owned(),
+            format!("https://graph.microsoft.com/v1.0/drives/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/items/{INBOX}:/agreement.pdf{selected}"),
+            format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa{selected}"),
+            format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/{INBOX}:/nested/agreement.pdf{selected}"),
+            format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/{INBOX}:/nested%2Fagreement.pdf{selected}"),
+        ] {
+            assert!(
+                !deployment_allows_endpoint(
+                    &deployment,
+                    &Url::parse(&address).unwrap(),
+                    address.contains("login.microsoftonline.com"),
+                    address.contains("graph.microsoft.com"),
+                ),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_boundary_rejects_query_pagination_content_audit_and_arbitrary_graph() {
+        let deployment = deployment();
         for address in [
             "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111",
             "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111/records",
-            "https://graph.microsoft.com/v1.0/drives/drive/items/item/content",
-            "https://graph.microsoft.com/v1.0/drives/drive/items/folder:/agreement.pdf:/content?$select=id",
+            "https://graph.microsoft.com/v1.0/users",
+            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777/content",
+            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf:/content?$select=id",
+            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf?$select=id&$top=1",
+            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf?$select=id&$skiptoken=secret",
+            "https://graph.microsoft.com/v1.0/me?$select=id&$select=displayName",
         ] {
             assert!(
-                !allowed_endpoint(&Url::parse(address).unwrap(), false, true),
+                !deployment_allows_endpoint(
+                    &deployment,
+                    &Url::parse(address).unwrap(),
+                    false,
+                    true,
+                ),
                 "{address} must never be available through the metadata transport"
             );
         }
@@ -213,23 +345,34 @@ mod tests {
 
     #[test]
     fn metadata_allowlist_requires_the_exact_bounded_select_query() {
+        let deployment = deployment();
         let profile = Url::parse(
             "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
         )
         .unwrap();
-        assert!(allowed_endpoint(&profile, false, true));
-        assert!(!allowed_endpoint(
+        assert!(deployment_allows_endpoint(
+            &deployment,
+            &profile,
+            false,
+            true,
+        ));
+        assert!(!deployment_allows_endpoint(
+            &deployment,
             &Url::parse("https://graph.microsoft.com/v1.0/me?$select=id,aboutMe").unwrap(),
             false,
             true,
         ));
 
-        let item = item_url("drive", "inbox", Some("agreement.pdf")).unwrap();
-        assert!(allowed_endpoint(&item, false, true));
+        let item = item_url(DRIVE, INBOX, Some("agreement.pdf")).unwrap();
+        assert!(deployment_allows_endpoint(&deployment, &item, false, true,));
         let selected = item
             .query_pairs()
             .find_map(|(name, value)| (name == "$select").then(|| value.into_owned()))
             .unwrap();
+        assert_eq!(
+            selected,
+            "id,name,size,eTag,cTag,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime,file,folder,deleted,pendingOperations,remoteItem,malware,package,bundle,specialFolder,sharepointIds,webUrl,parentReference"
+        );
         for required in [
             "id",
             "eTag",
@@ -240,8 +383,18 @@ mod tests {
             "bundle",
             "remoteItem",
             "pendingOperations",
+            "malware",
+            "deleted",
+            "specialFolder",
             "sharepointIds",
             "parentReference",
+            "webUrl",
+            "name",
+            "size",
+            "createdBy",
+            "lastModifiedBy",
+            "createdDateTime",
+            "lastModifiedDateTime",
         ] {
             assert!(
                 selected.split(',').any(|field| field == required),
@@ -252,12 +405,17 @@ mod tests {
             "https://graph.microsoft.com/v1.0/drives/drive/items/item?$expand=permissions",
         )
         .unwrap();
-        assert!(!allowed_endpoint(&arbitrary, false, true));
+        assert!(!deployment_allows_endpoint(
+            &deployment,
+            &arbitrary,
+            false,
+            true,
+        ));
     }
 
     #[test]
     fn filenames_cannot_escape_the_graph_item_path() {
-        let url = item_url("drive!1", "folder-1", Some("Legal/100% # résumé?.pdf")).unwrap();
+        let url = item_url("drive!1", "folder-1", Some("100% # résumé?.pdf")).unwrap();
         assert_eq!(url.host_str(), Some("graph.microsoft.com"));
         assert!(
             url.as_str()
@@ -267,6 +425,7 @@ mod tests {
         for path in [
             "../secrets",
             "/absolute",
+            "Legal/agreement.pdf",
             "a//b",
             "a/./b",
             "a\\b",

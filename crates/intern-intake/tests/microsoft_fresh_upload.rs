@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 const TENANT: &str = "11111111-1111-1111-1111-111111111111";
 const CLIENT: &str = "22222222-2222-2222-2222-222222222222";
 const SITE: &str = "33333333-3333-3333-3333-333333333333";
+const WEB: &str = "44444444-4444-4444-4444-444444444444";
 const LIST: &str = "55555555-5555-5555-5555-555555555555";
 const DRIVE: &str = "66666666-6666-6666-6666-666666666666";
 const INBOX: &str = "77777777-7777-7777-7777-777777777777";
@@ -41,7 +42,7 @@ fn deployment() -> SharePointDeployment {
               "tenant_id": "{TENANT}",
               "client_id": "{CLIENT}",
               "site_id": "{SITE}",
-              "web_id": "44444444-4444-4444-4444-444444444444",
+              "web_id": "{WEB}",
               "list_id": "{LIST}",
               "drive_id": "{DRIVE}",
               "intake_folder_id": "{INBOX}",
@@ -81,6 +82,7 @@ fn metadata() -> Value {
         "sharepointIds": {
             "tenantId": TENANT,
             "siteId": SITE,
+            "webId": WEB,
             "listId": LIST,
             "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         },
@@ -443,11 +445,10 @@ fn stale_equal_and_missing_creation_times_hold_before_local_bytes_are_read() {
 }
 
 #[test]
-fn shortcuts_remote_items_conflicts_and_non_files_are_ambiguous() {
+fn shortcuts_remote_items_and_non_files_are_ambiguous() {
     let (directory, file) = fresh_file();
     for (field, replacement) in [
         ("remoteItem", json!({ "id": "remote" })),
-        ("conflict", json!({ "behavior": "rename" })),
         ("folder", json!({ "childCount": 0 })),
         ("bundle", json!({ "childCount": 1 })),
         ("specialFolder", json!({ "name": "documents" })),
@@ -468,6 +469,7 @@ fn every_tenant_site_library_drive_and_folder_boundary_is_required() {
     for (pointer, replacement) in [
         ("/sharepointIds/tenantId", json!(OTHER)),
         ("/sharepointIds/siteId", json!(OTHER)),
+        ("/sharepointIds/webId", json!(OTHER)),
         ("/sharepointIds/listId", json!(OTHER)),
         ("/parentReference/driveId", json!(OTHER)),
         ("/parentReference/id", json!(OTHER)),
@@ -504,6 +506,23 @@ fn every_tenant_site_library_drive_and_folder_boundary_is_required() {
         FreshUploadOutcome::HeldUnknown { .. }
     ));
     assert!(source.urls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn missing_sharepoint_web_identity_never_authorizes_a_file() {
+    let (directory, file) = fresh_file();
+    let mut value = metadata();
+    value["sharepointIds"]
+        .as_object_mut()
+        .unwrap()
+        .remove("webId");
+    let source = ScriptedMetadata::new([Ok((me(), value))]);
+
+    assert!(matches!(
+        verify(&source, directory.path(), &file),
+        FreshUploadOutcome::HeldUnknown { .. }
+    ));
+    assert_eq!(source.urls.lock().unwrap().len(), 1);
 }
 
 #[test]
