@@ -11,7 +11,7 @@ use intern_intake::{
     microsoft::{Account, proof::is_guid},
     paths_overlap, relative_to_root,
 };
-use intern_queue::{AppSettings, SettingsStore};
+use intern_queue::AppSettings;
 use serde::Serialize;
 use std::{
     fs::OpenOptions,
@@ -123,7 +123,9 @@ pub trait RemoteLibraryVerifier {
 /// stage Microsoft protection first and restore their prior state if the
 /// callback fails. A final publication failure may retain that inactive,
 /// protected stage so processing stays fail-closed. A successful return means
-/// the activation watermark and exact fixed Inbox binding are durable.
+/// the activation watermark and exact fixed Inbox binding are durable and
+/// definitive; callers must not add a second fallible confirmation after the
+/// local commit has succeeded.
 pub trait MicrosoftSetup {
     fn connected_account(&self) -> Result<Option<Account>, SharePointSetupError>;
     fn binding_active(
@@ -312,26 +314,6 @@ impl<'a> SharePointSetup<'a> {
             }
             return Err(error);
         }
-        match self
-            .microsoft
-            .binding_active(self.deployment, &resolved.inbox)
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(self.restore_local_activation(
-                    &previous,
-                    previous_autostart,
-                    SharePointSetupError::new(
-                        "MICROSOFT_BINDING_INCOMPLETE",
-                        "Microsoft did not confirm the fixed Inbox binding and activation watermark.",
-                    ),
-                ));
-            }
-            Err(error) => {
-                return Err(self.restore_local_activation(&previous, previous_autostart, error));
-            }
-        }
-
         Ok(self.status_for(SharePointSetupPhase::Active, &account))
     }
 
@@ -686,19 +668,19 @@ impl MicrosoftSetup for ProductionMicrosoft<'_> {
     }
 }
 
-struct ProductionSettings(SettingsStore);
+struct ProductionSettings<'a>(&'a crate::commands::AppState);
 
-impl SetupSettings for ProductionSettings {
+impl SetupSettings for ProductionSettings<'_> {
     fn load(&self) -> Result<AppSettings, SharePointSetupError> {
         self.0
-            .load()
-            .map_err(|error| SharePointSetupError::new(error.code.clone(), error.to_string()))
+            .sharepoint_settings_snapshot()
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
         self.0
-            .save(settings)
-            .map_err(|error| SharePointSetupError::new(error.code.clone(), error.to_string()))
+            .activate_sharepoint_settings(settings)
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 }
 
@@ -755,18 +737,13 @@ fn production_operation(
     // production commands fail with this exact support error and cannot ever
     // activate by a registry display name.
     let deployment = packaged_deployment()?;
-    let data = app.path().app_local_data_dir().map_err(|_| {
-        SharePointSetupError::new(
-            "APP_DATA_UNAVAILABLE",
-            "Local application data is unavailable for SharePoint setup.",
-        )
-    })?;
     let roots = SystemRoots;
     let fs = SystemFileSystem;
     let verifier = UnavailableRemoteVerifier;
     let microsoft_state = app.state::<std::sync::Arc<crate::microsoft_intake::MicrosoftIntake>>();
     let microsoft = ProductionMicrosoft(microsoft_state.as_ref());
-    let settings = ProductionSettings(SettingsStore::new(data.join("settings.json")));
+    let app_state = app.state::<crate::commands::AppState>();
+    let settings = ProductionSettings(&app_state);
     let autostart = ProductionAutostart(app);
     let opener = ProductionOpener;
     let setup = SharePointSetup::new(
@@ -1339,17 +1316,19 @@ mod tests {
     }
 
     #[test]
-    fn binding_confirmation_error_restores_local_activation() {
+    fn a_successful_binding_publication_is_definitive_without_a_second_confirmation() {
         let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
         rig.microsoft.binding_status_fails = true;
-        let previous = rig.settings.saved.lock().unwrap().clone();
 
-        assert_eq!(
-            code(rig.setup().activate()),
-            "MICROSOFT_BINDING_STATUS_FAILED"
-        );
-        assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
-        assert!(!*rig.autostart.enabled.lock().unwrap());
+        let activated = rig
+            .setup()
+            .activate()
+            .expect("durably published binding needs no fallible status re-check");
+
+        assert_eq!(activated.phase, SharePointSetupPhase::Active);
+        assert!(rig.settings.saved.lock().unwrap().intake_enabled);
+        assert!(*rig.autostart.enabled.lock().unwrap());
+        assert!(*rig.microsoft.binding_active.lock().unwrap());
     }
 
     #[test]

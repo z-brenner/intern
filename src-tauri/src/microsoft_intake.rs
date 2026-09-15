@@ -25,7 +25,7 @@ use std::{
 };
 use tauri::State;
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PublicConfig {
     #[serde(default)]
@@ -394,8 +394,20 @@ impl MicrosoftIntake {
         local_inbox: &Path,
         commit: impl FnOnce() -> Result<(), E>,
     ) -> Result<(), FixedBindingActivationError<E>> {
+        let epoch = self.generation.load(Ordering::SeqCst);
+        let current_account = self
+            .client()
+            .map_err(FixedBindingActivationError::Microsoft)?
+            .account()
+            .filter(|current| intern_intake::microsoft::proof::same_person(current, account))
+            .ok_or_else(|| {
+                FixedBindingActivationError::Microsoft(
+                    "The connected Microsoft account changed before activation.".into(),
+                )
+            })?;
         if self.deployment.as_ref() != Some(deployment)
             || !intern_intake::microsoft::proof::is_guid(&account.id)
+            || !intern_intake::microsoft::proof::same_person(&current_account, account)
             || !account
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
@@ -409,32 +421,57 @@ impl MicrosoftIntake {
                 "The verified local Inbox is no longer available.".into(),
             ));
         }
-        let mut config = self.config.lock().map_err(|_| {
-            FixedBindingActivationError::Microsoft("Microsoft configuration is unavailable.".into())
-        })?;
-        if !config.enabled {
-            return Err(FixedBindingActivationError::Microsoft(
-                "Connect Microsoft before activating SharePoint.".into(),
-            ));
-        }
-        let previous = config.clone();
         let local_folder = local_inbox.to_string_lossy().into_owned();
-        let mut staged = previous.clone();
-        staged
-            .bindings
-            .retain(|entry| !same_path(&entry.local_folder, &local_folder));
-        if !staged
-            .protected_roots
-            .iter()
-            .any(|root| same_path(root, &local_folder))
-        {
-            staged.protected_roots.push(local_folder.clone());
-        }
-        self.save(&staged)
-            .map_err(FixedBindingActivationError::Microsoft)?;
-        *config = staged.clone();
+        let (previous, staged) = {
+            let mut config = self.config.lock().map_err(|_| {
+                FixedBindingActivationError::Microsoft(
+                    "Microsoft configuration is unavailable.".into(),
+                )
+            })?;
+            if !config.enabled {
+                return Err(FixedBindingActivationError::Microsoft(
+                    "Connect Microsoft before activating SharePoint.".into(),
+                ));
+            }
+            if self.generation.load(Ordering::SeqCst) != epoch {
+                return Err(FixedBindingActivationError::Microsoft(
+                    "The Microsoft connection changed before activation.".into(),
+                ));
+            }
+            let previous = config.clone();
+            let mut staged = previous.clone();
+            staged
+                .bindings
+                .retain(|entry| !same_path(&entry.local_folder, &local_folder));
+            if !staged
+                .protected_roots
+                .iter()
+                .any(|root| same_path(root, &local_folder))
+            {
+                staged.protected_roots.push(local_folder.clone());
+            }
+            self.save(&staged)
+                .map_err(FixedBindingActivationError::Microsoft)?;
+            *config = staged.clone();
+            (previous, staged)
+        };
 
         if let Err(commit_error) = commit() {
+            let mut config = match self.config.lock() {
+                Ok(config) => config,
+                Err(_) => {
+                    return Err(FixedBindingActivationError::Rollback {
+                        commit: commit_error,
+                        restore: "Microsoft configuration is unavailable.".into(),
+                    });
+                }
+            };
+            if *config != staged || self.generation.load(Ordering::SeqCst) != epoch {
+                return Err(FixedBindingActivationError::Rollback {
+                    commit: commit_error,
+                    restore: "The Microsoft connection or configuration changed during rollback; its newer fail-closed state was preserved.".into(),
+                });
+            }
             if let Err(restore) = self.save(&previous) {
                 return Err(FixedBindingActivationError::Rollback {
                     commit: commit_error,
@@ -443,6 +480,28 @@ impl MicrosoftIntake {
             }
             *config = previous;
             return Err(FixedBindingActivationError::Commit(commit_error));
+        }
+        let mut config = self.config.lock().map_err(|_| {
+            FixedBindingActivationError::Microsoft("Microsoft configuration is unavailable.".into())
+        })?;
+        let connection_unchanged = self.generation.load(Ordering::SeqCst) == epoch
+            && self
+                .client()
+                .ok()
+                .and_then(MicrosoftClient::account)
+                .is_some_and(|current| {
+                    intern_intake::microsoft::proof::same_person(&current, account)
+                })
+            && *config == staged;
+        if !connection_unchanged {
+            if *config == staged {
+                self.save(&previous)
+                    .map_err(FixedBindingActivationError::Microsoft)?;
+                *config = previous;
+            }
+            return Err(FixedBindingActivationError::Microsoft(
+                "The Microsoft connection changed while SharePoint was being activated.".into(),
+            ));
         }
         let binding = FolderBinding {
             local_folder,
@@ -950,8 +1009,19 @@ pub fn microsoft_open_sign_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use intern_intake::microsoft::proof::FreshUploadMetadata;
+    use intern_intake::{
+        Clock,
+        microsoft::{
+            MicrosoftClient, TokenStore,
+            proof::FreshUploadMetadata,
+            transport::{Reply, Transport},
+        },
+    };
     use intern_queue::{WorkerBoundary, WorkerFailure};
+    use std::{
+        collections::{HashMap, VecDeque},
+        sync::atomic::AtomicI64,
+    };
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
     const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
 
@@ -985,6 +1055,114 @@ mod tests {
             email: "pat@example.test".into(),
             user_principal_name: "pat@example.test".into(),
         }
+    }
+
+    #[derive(Default)]
+    struct ReconnectTokens(Mutex<HashMap<String, String>>);
+
+    impl TokenStore for ReconnectTokens {
+        fn get(&self, key: &str) -> Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+
+        fn set(&self, key: &str, value: &str) -> Result<(), String> {
+            self.0.lock().unwrap().insert(key.into(), value.into());
+            Ok(())
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    struct ReconnectTransport(Mutex<VecDeque<Reply>>);
+
+    impl Transport for ReconnectTransport {
+        fn request(
+            &self,
+            _url: url::Url,
+            _form: Option<&[(&str, &str)]>,
+            _bearer: Option<&str>,
+        ) -> Result<Reply, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "unexpected Microsoft request".into())
+        }
+    }
+
+    struct ReconnectClock(AtomicI64);
+
+    impl Clock for ReconnectClock {
+        fn now(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    fn reconnect_reply(status: u16, body: serde_json::Value) -> Reply {
+        Reply {
+            status,
+            body,
+            retry_after: 60,
+        }
+    }
+
+    fn reconnect_client(clock: Arc<ReconnectClock>) -> MicrosoftClient {
+        let device = || {
+            reconnect_reply(
+                200,
+                serde_json::json!({
+                    "device_code": "private-device-code",
+                    "user_code": "ABCD-EFGH",
+                    "verification_uri": "https://microsoft.com/devicelogin",
+                    "expires_in": 900,
+                    "interval": 5
+                }),
+            )
+        };
+        let token = || {
+            reconnect_reply(
+                200,
+                serde_json::json!({
+                    "token_type": "Bearer",
+                    "access_token": "private-access-token",
+                    "refresh_token": "private-refresh-token",
+                    "expires_in": 3600
+                }),
+            )
+        };
+        let profile = |id: &str| {
+            reconnect_reply(
+                200,
+                serde_json::json!({
+                    "id": id,
+                    "displayName": "Pat Example",
+                    "mail": "pat@example.test",
+                    "userPrincipalName": "pat@example.test"
+                }),
+            )
+        };
+        MicrosoftClient::with_transport(
+            test_deployment(),
+            Arc::new(ReconnectTokens::default()),
+            Arc::new(ReconnectTransport(Mutex::new(VecDeque::from([
+                device(),
+                token(),
+                profile("99999999-9999-9999-9999-999999999999"),
+                device(),
+                token(),
+                profile("aaaaaaaa-9999-9999-9999-999999999999"),
+            ])))),
+            clock,
+        )
+    }
+
+    fn connect_next_account(client: &MicrosoftClient, clock: &ReconnectClock, now: i64) {
+        client.begin().unwrap();
+        clock.0.store(now + 5, Ordering::SeqCst);
+        client.poll().unwrap();
     }
 
     fn folder_metadata() -> serde_json::Value {
@@ -1518,11 +1696,15 @@ mod tests {
             br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
         )
         .unwrap();
-        let intake = MicrosoftIntake::with_deployment(
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        let mut intake = MicrosoftIntake::with_deployment(
             SettingsStore::new(data.join("settings.json")),
             data.clone(),
             Ok(test_deployment()),
         );
+        intake.client = Some(client);
         let deployment = intake.deployment().unwrap().clone();
         let staged_closed = std::cell::Cell::new(false);
 
@@ -1558,6 +1740,92 @@ mod tests {
                 .is_some_and(|value| value > 0)
         );
         assert!(intake.fixed_binding_active(&deployment, &inbox));
+        drop(intake);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn reconnect_during_fixed_activation_restores_the_staged_configuration() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-setup-reconnect-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Files").join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        let mut intake = MicrosoftIntake::with_deployment(
+            SettingsStore::new(data.join("settings.json")),
+            data.clone(),
+            Ok(test_deployment()),
+        );
+        intake.client = Some(client);
+        let deployment = intake.deployment().unwrap().clone();
+
+        let error = intake
+            .activate_fixed_binding(&deployment, &account(), &inbox, || {
+                let client = intake.client().unwrap();
+                client.disconnect().unwrap();
+                client.begin().unwrap();
+                clock.0.store(1_010, Ordering::SeqCst);
+                client.poll().unwrap();
+                intake.generation.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, &str>(())
+            })
+            .expect_err("a reconnect must invalidate the stale activation account");
+
+        assert!(matches!(error, FixedBindingActivationError::Microsoft(_)));
+        let restored = read_config(&data.join("microsoft-intake.json")).unwrap();
+        assert!(restored.bindings.is_empty());
+        assert!(restored.protected_roots.is_empty());
+        drop(intake);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn fixed_activation_releases_microsoft_config_for_the_live_settings_commit() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-setup-live-settings-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Files").join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        let mut intake = MicrosoftIntake::with_deployment(
+            SettingsStore::new(data.join("settings.json")),
+            data.clone(),
+            Ok(test_deployment()),
+        );
+        intake.client = Some(client);
+        let deployment = intake.deployment().unwrap().clone();
+        let config_was_available = std::cell::Cell::new(false);
+
+        intake
+            .activate_fixed_binding(&deployment, &account(), &inbox, || {
+                config_was_available.set(intake.config.try_lock().is_ok());
+                Ok::<_, &str>(())
+            })
+            .unwrap();
+
+        assert!(
+            config_was_available.get(),
+            "the AppState settings path must be able to apply Microsoft protection"
+        );
         drop(intake);
         let _ = fs::remove_dir_all(data);
     }
