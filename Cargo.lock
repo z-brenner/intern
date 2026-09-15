@@ -2410,6 +2410,8 @@ dependencies = [
  "calamine",
  "cfb 0.10.0",
  "image",
+ "intern-core",
+ "intern-intake",
  "mailparse",
  "msg_parser",
  "pdfium-render",

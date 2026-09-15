@@ -94,3 +94,35 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use intern_core::PrivateSnapshotDirectory;
+    use intern_intake::microsoft::hashing::{QuickXor, verified_local_snapshot};
+
+    #[test]
+    fn verified_text_snapshot_routes_through_the_actual_worker_dispatch() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("notes.TXT");
+        let contents = b"Verified snapshot routing\n";
+        std::fs::write(&source, contents).unwrap();
+        let snapshots =
+            PrivateSnapshotDirectory::new(temporary.path().join("private-snapshots")).unwrap();
+        let mut quick_xor = QuickXor::default();
+        quick_xor.update(contents);
+        let (_, snapshot) = verified_local_snapshot(
+            &source,
+            contents.len() as u64,
+            &STANDARD.encode(quick_xor.finish()),
+            &snapshots,
+        )
+        .unwrap();
+
+        let document =
+            extract_path(snapshot.path().to_path_buf(), CancellationToken::new()).unwrap();
+
+        assert_eq!(document.pages[0].text, "Verified snapshot routing\n");
+    }
+}

@@ -22,6 +22,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SNAPSHOT_NAME_ATTEMPTS: usize = 8;
 const CONTENT_NAME: &str = "content";
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "pdf", "docx", "pptx", "pptm", "ppsx", "xlsx", "eml", "msg", "txt", "md", "markdown", "png",
+    "jpg", "jpeg", "tif", "tiff",
+];
 
 /// A directory controlled by Intern and kept outside watched or synced roots.
 ///
@@ -64,7 +68,18 @@ impl PrivateSnapshotDirectory {
         })
     }
 
-    pub fn create(&self) -> io::Result<SnapshotWriter> {
+    pub fn create_for_supported_extension(&self, extension: &str) -> io::Result<SnapshotWriter> {
+        let extension = extension.to_ascii_lowercase();
+        if !SUPPORTED_EXTENSIONS.contains(&extension.as_str()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "snapshot source extension is unsupported",
+            ));
+        }
+        self.create_named(&format!("{CONTENT_NAME}.{extension}"))
+    }
+
+    fn create_named(&self, content_name: &str) -> io::Result<SnapshotWriter> {
         for _ in 0..SNAPSHOT_NAME_ATTEMPTS {
             let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let nonce = rand::random::<u64>();
@@ -78,7 +93,7 @@ impl PrivateSnapshotDirectory {
                         let _ = fs::remove_dir(&directory);
                         return Err(error);
                     }
-                    let path = directory.join(CONTENT_NAME);
+                    let path = directory.join(content_name);
                     match open_private_file(&path) {
                         Ok(file) => {
                             return Ok(SnapshotWriter {

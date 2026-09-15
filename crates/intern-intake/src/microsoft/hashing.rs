@@ -93,7 +93,11 @@ pub fn verified_local_snapshot(
     expected_quick_xor: &str,
     snapshots: &PrivateSnapshotDirectory,
 ) -> io::Result<(String, OwnedFileSnapshot)> {
-    let mut snapshot = snapshots.create()?;
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| io::Error::other("The local file extension is unavailable"))?;
+    let mut snapshot = snapshots.create_for_supported_extension(extension)?;
     let hash = verified_local_hash(path, expected_size, expected_quick_xor, &mut snapshot)?;
     Ok((hash, snapshot.finish()?))
 }
@@ -150,5 +154,23 @@ mod tests {
             verified_local_hash(&path, 5, &STANDARD.encode(q.finish()), &mut discarded).unwrap(),
             format!("{:x}", Sha256::digest(b"hello"))
         );
+    }
+
+    #[test]
+    fn snapshot_rejects_an_extension_the_worker_cannot_route() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("document.exe");
+        std::fs::write(&path, b"hello").unwrap();
+        let root = directory.path().join("snapshots");
+        let snapshots = PrivateSnapshotDirectory::new(&root).unwrap();
+        let mut quick_xor = QuickXor::default();
+        quick_xor.update(b"hello");
+
+        let error =
+            verified_local_snapshot(&path, 5, &STANDARD.encode(quick_xor.finish()), &snapshots)
+                .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(std::fs::read_dir(root).unwrap().next().is_none());
     }
 }
