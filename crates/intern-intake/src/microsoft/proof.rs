@@ -26,6 +26,8 @@ pub struct FolderBinding {
     pub folder_id: String,
     pub web_url: String,
     pub tenant_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_watermark: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -79,8 +81,7 @@ struct FreshFacts {
     name: String,
     size: u64,
     quick_xor: String,
-    created_at: String,
-    modified_at: String,
+    created_at: i64,
     web_url: String,
     list_item_id: String,
     creator_id: ActorField,
@@ -111,6 +112,7 @@ enum Actor {
 pub fn verify_fresh_upload(
     deployment: &SharePointDeployment,
     source: &dyn FreshUploadMetadata,
+    activation_watermark: i64,
     snapshots: &PrivateSnapshotDirectory,
     local_inbox: &Path,
     local_file: &Path,
@@ -150,6 +152,9 @@ pub fn verify_fresh_upload(
         Ok(facts) => facts,
         Err(reason) => return held_unknown(reason),
     };
+    if first.created_at <= activation_watermark {
+        return held_unknown("The Microsoft item was not created after this folder was paired.");
+    }
     match actor(&first, &account, true) {
         Actor::Me => {}
         Actor::Other(uploader) => {
@@ -266,11 +271,14 @@ fn fresh_facts(
     }
     let created_at = text(metadata, "/createdDateTime")?;
     let modified_at = text(metadata, "/lastModifiedDateTime")?;
-    if created_at != modified_at || !valid_timestamp(created_at) {
+    if created_at != modified_at {
         return Err(
             "The Microsoft creation and modification facts do not show a new unchanged upload.",
         );
     }
+    let created_at = timestamp_epoch_millis(created_at).ok_or(
+        "The Microsoft creation and modification facts do not show a new unchanged upload.",
+    )?;
     let size = metadata
         .get("size")
         .and_then(Value::as_u64)
@@ -287,8 +295,7 @@ fn fresh_facts(
         name: filename.to_owned(),
         size,
         quick_xor: text(metadata, "/file/hashes/quickXorHash")?.to_owned(),
-        created_at: created_at.to_owned(),
-        modified_at: modified_at.to_owned(),
+        created_at,
         web_url: web_url.to_owned(),
         list_item_id: list_item_id.to_owned(),
         creator_id: actor_guid_field(metadata, "/createdBy/user/id"),
@@ -469,7 +476,13 @@ pub fn is_guid(value: &str) -> bool {
 }
 
 fn valid_timestamp(value: &str) -> bool {
-    chrono::DateTime::parse_from_rfc3339(value).is_ok()
+    timestamp_epoch_millis(value).is_some()
+}
+
+fn timestamp_epoch_millis(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
 }
 
 #[cfg(test)]

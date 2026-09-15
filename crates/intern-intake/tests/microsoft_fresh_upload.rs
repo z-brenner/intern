@@ -25,6 +25,7 @@ const DRIVE: &str = "66666666-6666-6666-6666-666666666666";
 const INBOX: &str = "77777777-7777-7777-7777-777777777777";
 const ME: &str = "99999999-9999-9999-9999-999999999999";
 const OTHER: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const ACTIVATION_WATERMARK: i64 = 1_789_401_599_000;
 const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
 fn deployment() -> SharePointDeployment {
@@ -121,9 +122,25 @@ impl FreshUploadMetadata for ScriptedMetadata {
 }
 
 fn verify(source: &ScriptedMetadata, inbox: &Path, file: &Path) -> FreshUploadOutcome {
+    verify_with_watermark(source, ACTIVATION_WATERMARK, inbox, file)
+}
+
+fn verify_with_watermark(
+    source: &ScriptedMetadata,
+    activation_watermark: i64,
+    inbox: &Path,
+    file: &Path,
+) -> FreshUploadOutcome {
     let snapshots =
         PrivateSnapshotDirectory::new(inbox.with_extension("private-snapshots")).unwrap();
-    verify_fresh_upload(&deployment(), source, &snapshots, inbox, file)
+    verify_fresh_upload(
+        &deployment(),
+        source,
+        activation_watermark,
+        &snapshots,
+        inbox,
+        file,
+    )
 }
 
 fn fresh_file() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -377,6 +394,51 @@ fn creation_and_modification_must_be_valid_and_identical() {
             verify(&source, directory.path(), &file),
             FreshUploadOutcome::HeldUnknown { .. }
         ));
+    }
+}
+
+#[test]
+fn stale_equal_and_missing_creation_times_hold_before_local_bytes_are_read() {
+    let cases = [
+        (
+            "stale",
+            Some("2026-09-14T15:59:58Z"),
+            "The Microsoft item was not created after this folder was paired.",
+        ),
+        (
+            "equal",
+            Some("2026-09-14T15:59:59Z"),
+            "The Microsoft item was not created after this folder was paired.",
+        ),
+        (
+            "missing",
+            None,
+            "Microsoft has not provided complete upload identity metadata.",
+        ),
+    ];
+
+    for (case, created_at, expected_reason) in cases {
+        let (directory, file) = fresh_file();
+        let mut value = metadata();
+        match created_at {
+            Some(created_at) => {
+                value["createdDateTime"] = json!(created_at);
+                value["lastModifiedDateTime"] = json!(created_at);
+            }
+            None => {
+                value.as_object_mut().unwrap().remove("createdDateTime");
+            }
+        }
+        let source = ScriptedMetadata::new([Ok((me(), value))]);
+        std::fs::remove_file(&file).unwrap();
+
+        match verify_with_watermark(&source, ACTIVATION_WATERMARK, directory.path(), &file) {
+            FreshUploadOutcome::HeldUnknown { reason } => {
+                assert_eq!(reason, expected_reason, "{case}");
+            }
+            other => panic!("{case}: expected a held upload, got {other:?}"),
+        }
+        assert_eq!(source.urls.lock().unwrap().len(), 1, "{case}");
     }
 }
 

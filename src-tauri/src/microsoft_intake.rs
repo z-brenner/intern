@@ -256,6 +256,7 @@ impl MicrosoftIntake {
             binding
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
+                && binding.activation_watermark.is_some_and(|value| value > 0)
                 && binding.drive_id.eq_ignore_ascii_case(deployment.drive_id())
                 && binding
                     .folder_id
@@ -452,13 +453,16 @@ impl MicrosoftIntake {
             .filter(|url| deployment.is_intake_folder_web_url(url))
             .ok_or("Microsoft did not return a supported folder address.")?
             .to_owned();
-        let binding = FolderBinding {
-            local_folder: local.to_string_lossy().into_owned(),
-            drive_id: deployment.drive_id().to_owned(),
-            folder_id: deployment.intake_folder_id().to_owned(),
-            web_url,
-            tenant_id: deployment.tenant_id().to_owned(),
-        };
+        self.persist_verified_binding(&deployment, epoch, &settings, &local, web_url)
+    }
+    fn persist_verified_binding(
+        &self,
+        deployment: &SharePointDeployment,
+        epoch: u64,
+        settings: &AppSettings,
+        local: &Path,
+        web_url: String,
+    ) -> Result<FolderBinding, String> {
         let mut config = self
             .config
             .lock()
@@ -470,6 +474,14 @@ impl MicrosoftIntake {
         if current.intake_folder != settings.intake_folder || current.intake_local_only {
             return Err("The saved intake folder changed. Pair it again.".into());
         }
+        let binding = FolderBinding {
+            local_folder: local.to_string_lossy().into_owned(),
+            drive_id: deployment.drive_id().to_owned(),
+            folder_id: deployment.intake_folder_id().to_owned(),
+            web_url,
+            tenant_id: deployment.tenant_id().to_owned(),
+            activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
+        };
         let mut next = config.clone();
         next.bindings
             .retain(|entry| !same_path(&entry.local_folder, &binding.local_folder));
@@ -535,10 +547,14 @@ impl MicrosoftIntake {
         let Some(binding) = self.scope(path, settings)? else {
             return Ok(None);
         };
+        let activation_watermark = binding
+            .activation_watermark
+            .ok_or("Pair the saved intake folder again. Unverified uploads remain held.")?;
         let deployment = self.deployment()?;
         let (hash, uploader, snapshot) = match verify_fresh_upload(
             deployment,
             self.client()?,
+            activation_watermark,
             self.snapshot_directory()?,
             Path::new(&binding.local_folder),
             path,
@@ -770,6 +786,29 @@ pub fn microsoft_open_sign_in(
 mod tests {
     use super::*;
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
+    const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
+
+    fn test_deployment() -> SharePointDeployment {
+        SharePointDeployment::from_slice(
+            br#"{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "11111111-1111-1111-1111-111111111111",
+              "client_id": "22222222-2222-2222-2222-222222222222",
+              "site_id": "33333333-3333-3333-3333-333333333333",
+              "web_id": "44444444-4444-4444-4444-444444444444",
+              "list_id": "55555555-5555-5555-5555-555555555555",
+              "drive_id": "66666666-6666-6666-6666-666666666666",
+              "intake_folder_id": "77777777-7777-7777-7777-777777777777",
+              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+            }"#,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn disabled_packaged_deployment_fails_every_microsoft_operation_closed() {
@@ -925,5 +964,129 @@ mod tests {
         fs::write(&path, b"not json").unwrap();
         assert!(read_config(&path).is_err());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_legacy_binding_without_an_activation_watermark_requires_re_pairing() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-legacy-watermark-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        let local_folder = inbox.canonicalize().unwrap().to_string_lossy().into_owned();
+        let legacy = serde_json::json!({
+            "enabled": true,
+            "bindings": [{
+                "localFolder": local_folder,
+                "driveId": "66666666-6666-6666-6666-666666666666",
+                "folderId": "77777777-7777-7777-7777-777777777777",
+                "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
+                "tenantId": "11111111-1111-1111-1111-111111111111"
+            }],
+            "protectedRoots": [local_folder]
+        });
+        fs::write(
+            data.join("microsoft-intake.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let loaded_binding = intake.config.lock().unwrap().bindings[0].clone();
+        let deployment = intake.deployment().unwrap();
+        assert!(
+            loaded_binding
+                .tenant_id
+                .eq_ignore_ascii_case(deployment.tenant_id())
+        );
+        assert!(
+            loaded_binding
+                .drive_id
+                .eq_ignore_ascii_case(deployment.drive_id())
+        );
+        assert!(
+            loaded_binding
+                .folder_id
+                .eq_ignore_ascii_case(deployment.intake_folder_id())
+        );
+        assert!(deployment.is_intake_folder_web_url(&loaded_binding.web_url));
+        let candidate = Path::new(&loaded_binding.local_folder).join("agreement.pdf");
+        assert!(within(&candidate, &loaded_binding.local_folder));
+
+        assert_eq!(
+            intake.scope(&candidate, &settings).unwrap_err(),
+            PAIR_REQUIRED
+        );
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_successful_fixed_binding_persists_its_activation_watermark_across_restart() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-persisted-watermark-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_path = data.join("settings.json");
+        let settings_store = SettingsStore::new(&settings_path);
+        settings_store.save(&settings).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let deployment = intake.deployment().unwrap().clone();
+        let local = inbox.canonicalize().unwrap();
+        let before = chrono::Utc::now().timestamp_millis();
+
+        let binding = intake
+            .persist_verified_binding(
+                &deployment,
+                intake.generation.load(Ordering::SeqCst),
+                &settings,
+                &local,
+                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            )
+            .unwrap();
+
+        let after = chrono::Utc::now().timestamp_millis();
+        let watermark = binding
+            .activation_watermark
+            .expect("a successful binding has an activation watermark");
+        assert!((before..=after).contains(&watermark));
+        drop(intake);
+
+        let restarted = MicrosoftIntake::with_deployment(
+            SettingsStore::new(settings_path),
+            data.clone(),
+            Ok(test_deployment()),
+        );
+        let candidate = local.join("agreement.pdf");
+        let reloaded = restarted.scope(&candidate, &settings).unwrap().unwrap();
+        assert_eq!(reloaded, binding);
+        assert_eq!(
+            read_config(&data.join("microsoft-intake.json"))
+                .unwrap()
+                .bindings,
+            vec![binding]
+        );
+        drop(restarted);
+        let _ = fs::remove_dir_all(data);
     }
 }

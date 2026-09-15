@@ -3024,7 +3024,14 @@ impl intern_queue::AdmissionGuard for ProofSnapshotGuard {
         path: &Path,
         stage: intern_queue::AdmissionStage,
     ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
-        match verify_fresh_upload(&self.deployment, self, &self.snapshots, &self.inbox, path) {
+        match verify_fresh_upload(
+            &self.deployment,
+            self,
+            1_789_401_599_000,
+            &self.snapshots,
+            &self.inbox,
+            path,
+        ) {
             FreshUploadOutcome::Authorized {
                 local_sha256,
                 snapshot,
