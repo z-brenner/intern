@@ -328,8 +328,10 @@ impl IntakeHost for PipelineIntakeHost {
             .app
             .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>();
         match manager.authorize(path, AdmissionStage::Enqueue) {
-            Ok(Some(_)) => intern_intake::IntakeAdmission::Verified,
-            Ok(None) => intern_intake::IntakeAdmission::LocalOnly,
+            Ok(evidence) if evidence.verified_hash().is_some() => {
+                intern_intake::IntakeAdmission::Verified
+            }
+            Ok(_) => intern_intake::IntakeAdmission::LocalOnly,
             Err(error) if error.code == "UPLOADER_OTHER" => intern_intake::IntakeAdmission::Other,
             Err(_) => intern_intake::IntakeAdmission::Unknown,
         }

@@ -704,7 +704,10 @@ impl Pipeline {
         for path in paths {
             let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
             let fingerprint = self.files.fingerprint(path)?;
-            if verified.verified_hash().is_some_and(|hash| hash != fingerprint) {
+            if verified
+                .verified_hash()
+                .is_some_and(|hash| hash != fingerprint)
+            {
                 return Err(PipelineError::new(
                     "FILE_CHANGED",
                     "The file changed after Microsoft verified its uploader.",
@@ -895,6 +898,17 @@ impl Pipeline {
         let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
             Ok(evidence) => evidence,
             Err(_) => {
+                self.store.transition(
+                    item.id,
+                    QueueStatus::Extracting,
+                    QueueStatus::NeedsReview,
+                    Some(ErrorCode::UploaderUnverified),
+                )?;
+                self.events.queue_changed();
+                return Ok(true);
+            }
+        };
+        let Some(extraction_path) = extraction_evidence.extraction_path(&item.source_path) else {
             self.store.transition(
                 item.id,
                 QueueStatus::Extracting,
@@ -903,7 +917,6 @@ impl Pipeline {
             )?;
             self.events.queue_changed();
             return Ok(true);
-            }
         };
         self.active_item.store(item.id, Ordering::SeqCst);
         let request_id = format!("queue-{}-{}", item.id, item.processing_failures + 1);
@@ -947,52 +960,47 @@ impl Pipeline {
                 total: progress.total,
             });
         };
-        let source =
-            match self
-                .worker
-                .extract(
-                    &request_id,
-                    extraction_evidence.extraction_path(&item.source_path),
-                    &mut forward_progress,
-                )
-            {
-                Ok(source) => source,
-                Err(error) => {
-                    self.active_item.store(0, Ordering::SeqCst);
-                    if self.shutting_down.load(Ordering::SeqCst) {
-                        return Err(PipelineError::new(
-                            "SHUTTING_DOWN",
-                            "pipeline is shutting down",
-                        ));
-                    }
-                    if let Err(lease_error) = lease.check() {
-                        self.paused.store(true, Ordering::SeqCst);
-                        self.events.queue_changed();
-                        return Err(lease_error);
-                    }
-                    if error.canceled {
-                        self.events.queue_changed();
-                        return Ok(true);
-                    }
-                    let restart_failed = error.crashed
-                        && item.processing_failures == 0
-                        && self.worker.restart().is_err();
-                    self.store
-                        .record_processing_failure(item.id, ErrorCode::IoError)?;
-                    // A worker that will not come back cannot read this
-                    // document on a second attempt either, so the failure is
-                    // counted twice and the document fails now rather than
-                    // stalling the queue again. Counted against this item by
-                    // id: reclaiming through the queue would claim whichever
-                    // document is next in line, which is not always this one,
-                    // and leave that one extracting under nobody's lease.
-                    if restart_failed {
-                        self.repository.record_recovered_failure(item.id)?;
-                    }
+        let source = match self
+            .worker
+            .extract(&request_id, extraction_path, &mut forward_progress)
+        {
+            Ok(source) => source,
+            Err(error) => {
+                self.active_item.store(0, Ordering::SeqCst);
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    return Err(PipelineError::new(
+                        "SHUTTING_DOWN",
+                        "pipeline is shutting down",
+                    ));
+                }
+                if let Err(lease_error) = lease.check() {
+                    self.paused.store(true, Ordering::SeqCst);
+                    self.events.queue_changed();
+                    return Err(lease_error);
+                }
+                if error.canceled {
                     self.events.queue_changed();
                     return Ok(true);
                 }
-            };
+                let restart_failed = error.crashed
+                    && item.processing_failures == 0
+                    && self.worker.restart().is_err();
+                self.store
+                    .record_processing_failure(item.id, ErrorCode::IoError)?;
+                // A worker that will not come back cannot read this
+                // document on a second attempt either, so the failure is
+                // counted twice and the document fails now rather than
+                // stalling the queue again. Counted against this item by
+                // id: reclaiming through the queue would claim whichever
+                // document is next in line, which is not always this one,
+                // and leave that one extracting under nobody's lease.
+                if restart_failed {
+                    self.repository.record_recovered_failure(item.id)?;
+                }
+                self.events.queue_changed();
+                return Ok(true);
+            }
+        };
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
             lease.stop_and_check()?;
@@ -1422,7 +1430,11 @@ impl Pipeline {
         }
     }
 
-    fn authorize_item(&self, item: &QueueItem, stage: AdmissionStage) -> PipelineResult<AdmissionEvidence> {
+    fn authorize_item(
+        &self,
+        item: &QueueItem,
+        stage: AdmissionStage,
+    ) -> PipelineResult<AdmissionEvidence> {
         let verified = self.admission.authorize(&item.source_path, stage)?;
         if verified
             .verified_hash()

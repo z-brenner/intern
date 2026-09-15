@@ -2968,8 +2968,7 @@ const SNAPSHOT_TENANT: &str = "11111111-1111-1111-1111-111111111111";
 const SNAPSHOT_DRIVE: &str = "66666666-6666-6666-6666-666666666666";
 const SNAPSHOT_INBOX: &str = "77777777-7777-7777-7777-777777777777";
 const SNAPSHOT_ME: &str = "99999999-9999-9999-9999-999999999999";
-const HELLO_SHA256: &str =
-    "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
 struct ProofSnapshotGuard {
     source: PathBuf,
@@ -3025,13 +3024,7 @@ impl intern_queue::AdmissionGuard for ProofSnapshotGuard {
         path: &Path,
         stage: intern_queue::AdmissionStage,
     ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
-        match verify_fresh_upload(
-            &self.deployment,
-            self,
-            &self.snapshots,
-            &self.inbox,
-            path,
-        ) {
+        match verify_fresh_upload(&self.deployment, self, &self.snapshots, &self.inbox, path) {
             FreshUploadOutcome::Authorized {
                 local_sha256,
                 snapshot,

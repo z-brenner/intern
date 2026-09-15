@@ -121,8 +121,8 @@ impl FreshUploadMetadata for ScriptedMetadata {
 }
 
 fn verify(source: &ScriptedMetadata, inbox: &Path, file: &Path) -> FreshUploadOutcome {
-    let snapshots = PrivateSnapshotDirectory::new(inbox.with_extension("private-snapshots"))
-        .unwrap();
+    let snapshots =
+        PrivateSnapshotDirectory::new(inbox.with_extension("private-snapshots")).unwrap();
     verify_fresh_upload(&deployment(), source, &snapshots, inbox, file)
 }
 

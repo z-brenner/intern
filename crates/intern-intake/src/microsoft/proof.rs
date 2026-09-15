@@ -1,5 +1,6 @@
 //! Provider metadata validation. Display names and email addresses never authorize a file.
-use crate::{SharePointDeployment, microsoft::hashing::verified_local_hash, relative_to_root};
+use crate::{SharePointDeployment, microsoft::hashing::verified_local_snapshot, relative_to_root};
+use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,11 +52,12 @@ impl FreshUploadMetadata for super::auth::MicrosoftClient {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum FreshUploadOutcome {
     Authorized {
         local_sha256: String,
         uploader: Account,
+        snapshot: OwnedFileSnapshot,
     },
     HeldOther {
         uploader: Account,
@@ -102,6 +104,7 @@ enum Actor {
 pub fn verify_fresh_upload(
     deployment: &SharePointDeployment,
     source: &dyn FreshUploadMetadata,
+    snapshots: &PrivateSnapshotDirectory,
     local_inbox: &Path,
     local_file: &Path,
 ) -> FreshUploadOutcome {
@@ -156,14 +159,15 @@ pub fn verify_fresh_upload(
         return held_unknown("The latest modifier is not the connected Microsoft account.");
     }
 
-    let local_sha256 = match verified_local_hash(local_file, first.size, &first.quick_xor) {
-        Ok(hash) => hash,
-        Err(_) => {
-            return held_unknown(
-                "The local file does not match the settled Microsoft size and checksum.",
-            );
-        }
-    };
+    let (local_sha256, snapshot) =
+        match verified_local_snapshot(local_file, first.size, &first.quick_xor, snapshots) {
+            Ok(verified) => verified,
+            Err(_) => {
+                return held_unknown(
+                    "The local file does not match the settled Microsoft size and checksum.",
+                );
+            }
+        };
 
     let (current_account, second_value) = match source.metadata(url) {
         Ok(reply) => reply,
@@ -188,6 +192,7 @@ pub fn verify_fresh_upload(
     FreshUploadOutcome::Authorized {
         local_sha256,
         uploader: account,
+        snapshot,
     }
 }
 

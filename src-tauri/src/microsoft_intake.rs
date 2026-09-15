@@ -1,6 +1,7 @@
 //! Microsoft account connection, upload authorization, and attribution for the
 //! desktop host. Credentials never cross IPC or enter the shared folder.
 use crate::secrets::{KeyringStore, SecretStore};
+use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use intern_intake::microsoft::{
     Account, AuthConfig, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
     proof::{FreshUploadOutcome, verify_fresh_upload},
@@ -8,8 +9,8 @@ use intern_intake::microsoft::{
 };
 use intern_intake::{SharePointDeployment, classify, detect_cloud_roots, relative_to_root};
 use intern_queue::{
-    AdmissionGuard, AdmissionStage, AppSettings, FiledDocument, FilingSink, PipelineError,
-    PipelineResult, SettingsStore,
+    AdmissionEvidence, AdmissionGuard, AdmissionStage, AppSettings, FiledDocument, FilingSink,
+    PipelineError, PipelineResult, SettingsStore,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -88,6 +89,8 @@ pub struct MicrosoftIntake {
     deployment_error: Option<String>,
     client_error: Option<String>,
     client: Option<MicrosoftClient>,
+    snapshot_directory: Option<PrivateSnapshotDirectory>,
+    snapshot_error: Option<String>,
     generation: AtomicU64,
     documents: Mutex<BTreeMap<String, Attribution>>,
     /// The last answer to "is the saved intake folder synced or on a network
@@ -142,6 +145,14 @@ impl MicrosoftIntake {
             },
             None => (None, None),
         };
+        let (snapshot_directory, snapshot_error) =
+            match PrivateSnapshotDirectory::new(data.join("microsoft-upload-snapshots")) {
+                Ok(directory) => (Some(directory), None),
+                Err(_) => (
+                    None,
+                    Some("Private Microsoft upload snapshots are unavailable.".into()),
+                ),
+            };
         let documents = fs::read(data.join("intake-attribution.json"))
             .ok()
             .filter(|bytes| bytes.len() <= 1024 * 1024)
@@ -160,6 +171,8 @@ impl MicrosoftIntake {
             deployment_error,
             client_error,
             client,
+            snapshot_directory,
+            snapshot_error,
             generation: AtomicU64::new(0),
             documents: Mutex::new(documents),
             shared_intake: Mutex::new(None),
@@ -212,6 +225,7 @@ impl MicrosoftIntake {
         self.deployment_error
             .clone()
             .or_else(|| self.client_error.clone())
+            .or_else(|| self.snapshot_error.clone())
             .or_else(|| {
                 self.config_error
                     .lock()
@@ -229,6 +243,12 @@ impl MicrosoftIntake {
         self.client.as_ref().ok_or_else(|| {
             self.unavailable()
                 .unwrap_or_else(|| "Microsoft connection is unavailable.".into())
+        })
+    }
+    fn snapshot_directory(&self) -> Result<&PrivateSnapshotDirectory, String> {
+        self.snapshot_directory.as_ref().ok_or_else(|| {
+            self.unavailable()
+                .unwrap_or_else(|| "Private Microsoft upload snapshots are unavailable.".into())
         })
     }
     fn binding_matches_deployment(&self, binding: &FolderBinding) -> bool {
@@ -510,22 +530,24 @@ impl MicrosoftIntake {
         &self,
         path: &Path,
         settings: &AppSettings,
-    ) -> Result<Option<(String, Account, Account)>, String> {
+    ) -> Result<Option<(String, Account, Account, OwnedFileSnapshot)>, String> {
         let epoch = self.generation.load(Ordering::SeqCst);
         let Some(binding) = self.scope(path, settings)? else {
             return Ok(None);
         };
         let deployment = self.deployment()?;
-        let (hash, uploader) = match verify_fresh_upload(
+        let (hash, uploader, snapshot) = match verify_fresh_upload(
             deployment,
             self.client()?,
+            self.snapshot_directory()?,
             Path::new(&binding.local_folder),
             path,
         ) {
             FreshUploadOutcome::Authorized {
                 local_sha256,
                 uploader,
-            } => (local_sha256, uploader),
+                snapshot,
+            } => (local_sha256, uploader, snapshot),
             FreshUploadOutcome::HeldOther { uploader, reason } => {
                 self.note(path, "other", Some(uploader), None, None, &reason);
                 return Err(format!("UPLOADER_OTHER: {reason}"));
@@ -546,7 +568,7 @@ impl MicrosoftIntake {
         {
             return Err("Intake scope changed during verification. The file remains held.".into());
         }
-        Ok(Some((hash, uploader.clone(), uploader)))
+        Ok(Some((hash, uploader.clone(), uploader, snapshot)))
     }
     fn note(
         &self,
@@ -609,11 +631,11 @@ impl MicrosoftIntake {
     }
 }
 impl AdmissionGuard for MicrosoftIntake {
-    fn authorize(&self, path: &Path, _stage: AdmissionStage) -> PipelineResult<Option<String>> {
+    fn authorize(&self, path: &Path, _stage: AdmissionStage) -> PipelineResult<AdmissionEvidence> {
         let settings = self.settings.load()?;
         match self.verify(path, &settings) {
-            Ok(None) => Ok(None),
-            Ok(Some((hash, uploader, processor))) => {
+            Ok(None) => Ok(AdmissionEvidence::local()),
+            Ok(Some((hash, uploader, processor, snapshot))) => {
                 self.note(
                     path,
                     "verified",
@@ -622,7 +644,7 @@ impl AdmissionGuard for MicrosoftIntake {
                     Some(hash.clone()),
                     "Uploader verified against Microsoft upload activity.",
                 );
-                Ok(Some(hash))
+                Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
             }
             Err(message) => {
                 if !message.starts_with("UPLOADER_OTHER:") {

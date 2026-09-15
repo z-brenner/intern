@@ -20,6 +20,13 @@ fn an_owned_snapshot_lives_in_a_private_child_and_cleans_only_that_child() {
     assert!(snapshot_path.starts_with(&root));
     assert_ne!(owned_directory, root);
     assert_eq!(std::fs::read(&snapshot_path).unwrap(), b"verified bytes");
+    assert!(
+        std::fs::metadata(&snapshot_path)
+            .unwrap()
+            .permissions()
+            .readonly(),
+        "a finished snapshot must reject path-based writes"
+    );
 
     drop(snapshot);
 
@@ -54,9 +61,16 @@ fn snapshot_directories_and_files_are_owner_only() {
     let snapshots = PrivateSnapshotDirectory::new(&root).unwrap();
     let snapshot = snapshots.create().unwrap().finish().unwrap();
 
-    assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
     assert_eq!(
-        std::fs::metadata(snapshot.path()).unwrap().permissions().mode() & 0o777,
-        0o600
+        std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(snapshot.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o400
     );
 }

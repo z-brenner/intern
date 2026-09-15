@@ -4,7 +4,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[cfg(unix)]
@@ -28,7 +31,12 @@ const CONTENT_NAME: &str = "content";
 /// into recursive deletion.
 #[derive(Clone, Debug)]
 pub struct PrivateSnapshotDirectory {
-    root: PathBuf,
+    root: Arc<SnapshotRoot>,
+}
+
+#[derive(Debug)]
+struct SnapshotRoot {
+    path: PathBuf,
 }
 
 impl PrivateSnapshotDirectory {
@@ -50,7 +58,9 @@ impl PrivateSnapshotDirectory {
         }
         make_directory_private(root)?;
         Ok(Self {
-            root: root.to_path_buf(),
+            root: Arc::new(SnapshotRoot {
+                path: root.to_path_buf(),
+            }),
         })
     }
 
@@ -58,7 +68,7 @@ impl PrivateSnapshotDirectory {
         for _ in 0..SNAPSHOT_NAME_ATTEMPTS {
             let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let nonce = rand::random::<u64>();
-            let directory = self.root.join(format!(
+            let directory = self.root.path.join(format!(
                 "snapshot-{}-{nonce:016x}-{sequence}",
                 std::process::id()
             ));
@@ -72,7 +82,7 @@ impl PrivateSnapshotDirectory {
                     match open_private_file(&path) {
                         Ok(file) => {
                             return Ok(SnapshotWriter {
-                                root: self.root.clone(),
+                                root: Arc::clone(&self.root),
                                 directory: Some(directory),
                                 path: Some(path),
                                 file: Some(file),
@@ -95,17 +105,17 @@ impl PrivateSnapshotDirectory {
     }
 }
 
-impl Drop for PrivateSnapshotDirectory {
+impl Drop for SnapshotRoot {
     fn drop(&mut self) {
         // Only succeeds when no snapshot or unexpected file is present.
-        let _ = fs::remove_dir(&self.root);
+        let _ = fs::remove_dir(&self.path);
     }
 }
 
 /// A create-new snapshot being populated. Dropping it cleans partial bytes.
 #[derive(Debug)]
 pub struct SnapshotWriter {
-    root: PathBuf,
+    root: Arc<SnapshotRoot>,
     directory: Option<PathBuf>,
     path: Option<PathBuf>,
     file: Option<File>,
@@ -125,9 +135,10 @@ impl SnapshotWriter {
             .ok_or_else(|| io::Error::other("snapshot writer is unavailable"))?;
         file.flush()?;
         file.sync_all()?;
+        make_file_read_only(file)?;
         file.seek(SeekFrom::Start(0))?;
         Ok(OwnedFileSnapshot {
-            root: self.root.clone(),
+            root: Arc::clone(&self.root),
             directory: self.directory.take(),
             path: self.path.take(),
             file: self.file.take(),
@@ -169,7 +180,7 @@ impl Drop for SnapshotWriter {
 /// or open the snapshot for writing before the evidence is dropped.
 #[derive(Debug)]
 pub struct OwnedFileSnapshot {
-    root: PathBuf,
+    root: Arc<SnapshotRoot>,
     directory: Option<PathBuf>,
     path: Option<PathBuf>,
     file: Option<File>,
@@ -195,22 +206,51 @@ impl Drop for OwnedFileSnapshot {
 }
 
 fn cleanup(
-    root: &Path,
+    _root: &Arc<SnapshotRoot>,
     directory: &mut Option<PathBuf>,
     path: &mut Option<PathBuf>,
     file: &mut Option<File>,
 ) {
     drop(file.take());
     if let Some(path) = path.take() {
+        make_file_writable_for_cleanup(&path);
         let _ = fs::remove_file(path);
     }
     if let Some(directory) = directory.take() {
         let _ = fs::remove_dir(directory);
     }
-    // Multiple snapshots may share the root; only the last empty one removes
-    // it. A sentinel or any unexpected entry is deliberately never deleted.
-    let _ = fs::remove_dir(root);
 }
+
+#[cfg(unix)]
+fn make_file_read_only(file: &File) -> io::Result<()> {
+    file.set_permissions(fs::Permissions::from_mode(0o400))
+}
+
+#[cfg(windows)]
+fn make_file_read_only(file: &File) -> io::Result<()> {
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_file_read_only(file: &File) -> io::Result<()> {
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_readonly(true);
+    file.set_permissions(permissions)
+}
+
+#[cfg(windows)]
+fn make_file_writable_for_cleanup(path: &Path) {
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_readonly(false);
+        let _ = fs::set_permissions(path, permissions);
+    }
+}
+
+#[cfg(not(windows))]
+fn make_file_writable_for_cleanup(_path: &Path) {}
 
 #[cfg(unix)]
 fn make_directory_private(path: &Path) -> io::Result<()> {
