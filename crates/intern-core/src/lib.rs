@@ -10,12 +10,14 @@ mod atomic_file;
 mod domain;
 mod error;
 mod file_ops;
+mod snapshot;
 mod store;
 
 pub use atomic_file::{DurableReplaceError, replace_file_durable};
 pub use domain::*;
 pub use error::*;
 pub use file_ops::*;
+pub use snapshot::*;
 pub use store::*;
 
 pub const APPLICATION_NAME: &str = "Intern";

@@ -903,12 +903,12 @@ fn other_uploads_are_held_and_a_later_revocation_abandons_owned_work() {
     assert!(rig.host.abandoned().contains(&path));
 }
 
-/// Microsoft being briefly unreachable is not the same as an upload having
-/// been revoked. Cancelling the queue item and dropping the claim on a blip
-/// throws away work that was legitimately admitted, and the next scan has to
-/// start the document over.
+/// Microsoft being briefly unreachable is not an uploader verdict. Collapsing
+/// that answer into Unknown makes the watcher report an unknown uploader even
+/// though it learned nothing, while cancelling would throw away work that was
+/// legitimately admitted.
 #[test]
-fn a_transient_verification_error_does_not_cancel_owned_work() {
+fn a_retryable_recheck_keeps_the_owned_claim_without_recording_a_verdict() {
     let rig = Rig::start(false, &[]);
     *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Verified);
     let path = rig.write("contract.pdf", b"a document being processed");
@@ -917,14 +917,20 @@ fn a_transient_verification_error_does_not_cancel_owned_work() {
     assert_eq!(rig.host.enqueued(), vec![path.clone()]);
     let key = facts_for(rig.temp.path(), "contract.pdf").key();
 
-    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Unknown);
+    let owned = rig.read_claim(&key);
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Retryable);
     rig.step();
     assert!(
         rig.host.abandoned().is_empty(),
         "work in flight must survive an unverifiable moment"
     );
-    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
-    assert_eq!(rig.watcher.status().uploader_unknown, 1);
+    let retained = rig.read_claim(&key);
+    assert_eq!(retained.state, ClaimState::Claimed);
+    assert_eq!(retained.machine_id, owned.machine_id);
+    assert!(retained.lease_expires_at >= owned.lease_expires_at);
+    assert_eq!(rig.watcher.status().uploader_unknown, 0);
+    assert_eq!(rig.watcher.status().held_for_others, 0);
+    assert_eq!(rig.watcher.status().error, None);
 
     // A verdict, rather than a blip, still stops the work.
     *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Revoked);

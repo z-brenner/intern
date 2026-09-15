@@ -1,5 +1,6 @@
 //! Provider metadata validation. Display names and email addresses never authorize a file.
-use crate::{SharePointDeployment, microsoft::hashing::verified_local_hash, relative_to_root};
+use crate::{SharePointDeployment, microsoft::hashing::verified_local_snapshot, relative_to_root};
+use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +26,10 @@ pub struct FolderBinding {
     pub folder_id: String,
     pub web_url: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub web_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_watermark: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,11 +56,12 @@ impl FreshUploadMetadata for super::auth::MicrosoftClient {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub enum FreshUploadOutcome {
     Authorized {
         local_sha256: String,
         uploader: Account,
+        snapshot: OwnedFileSnapshot,
     },
     HeldOther {
         uploader: Account,
@@ -77,16 +83,22 @@ struct FreshFacts {
     name: String,
     size: u64,
     quick_xor: String,
-    created_at: String,
-    modified_at: String,
+    created_at: i64,
     web_url: String,
     list_item_id: String,
-    creator_id: Option<String>,
-    creator_tenant_id: Option<String>,
-    creator_principal: Option<String>,
-    modifier_id: Option<String>,
-    modifier_tenant_id: Option<String>,
-    modifier_principal: Option<String>,
+    creator_id: ActorField,
+    creator_tenant_id: ActorField,
+    creator_principal: ActorField,
+    modifier_id: ActorField,
+    modifier_tenant_id: ActorField,
+    modifier_principal: ActorField,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ActorField {
+    Missing,
+    Valid(String),
+    Malformed,
 }
 
 enum Actor {
@@ -102,6 +114,8 @@ enum Actor {
 pub fn verify_fresh_upload(
     deployment: &SharePointDeployment,
     source: &dyn FreshUploadMetadata,
+    activation_watermark: i64,
+    snapshots: &PrivateSnapshotDirectory,
     local_inbox: &Path,
     local_file: &Path,
 ) -> FreshUploadOutcome {
@@ -140,6 +154,9 @@ pub fn verify_fresh_upload(
         Ok(facts) => facts,
         Err(reason) => return held_unknown(reason),
     };
+    if first.created_at <= activation_watermark {
+        return held_unknown("The Microsoft item was not created after this folder was paired.");
+    }
     match actor(&first, &account, true) {
         Actor::Me => {}
         Actor::Other(uploader) => {
@@ -156,14 +173,15 @@ pub fn verify_fresh_upload(
         return held_unknown("The latest modifier is not the connected Microsoft account.");
     }
 
-    let local_sha256 = match verified_local_hash(local_file, first.size, &first.quick_xor) {
-        Ok(hash) => hash,
-        Err(_) => {
-            return held_unknown(
-                "The local file does not match the settled Microsoft size and checksum.",
-            );
-        }
-    };
+    let (local_sha256, snapshot) =
+        match verified_local_snapshot(local_file, first.size, &first.quick_xor, snapshots) {
+            Ok(verified) => verified,
+            Err(_) => {
+                return held_unknown(
+                    "The local file does not match the settled Microsoft size and checksum.",
+                );
+            }
+        };
 
     let (current_account, second_value) = match source.metadata(url) {
         Ok(reply) => reply,
@@ -188,6 +206,7 @@ pub fn verify_fresh_upload(
     FreshUploadOutcome::Authorized {
         local_sha256,
         uploader: account,
+        snapshot,
     }
 }
 
@@ -218,9 +237,6 @@ fn fresh_facts(
         "package",
         "bundle",
         "specialFolder",
-        "conflict",
-        "conflictBehavior",
-        "@microsoft.graph.conflictBehavior",
     ] {
         if metadata.get(facet).is_some_and(|value| !value.is_null()) {
             return Err("Microsoft reports a shortcut, conflict, non-file, or unsettled item.");
@@ -237,6 +253,7 @@ fn fresh_facts(
     for (pointer, expected) in [
         ("/sharepointIds/tenantId", deployment.tenant_id()),
         ("/sharepointIds/siteId", deployment.site_id()),
+        ("/sharepointIds/webId", deployment.web_id()),
         ("/sharepointIds/listId", deployment.list_id()),
         ("/parentReference/driveId", deployment.drive_id()),
         ("/parentReference/id", deployment.intake_folder_id()),
@@ -254,11 +271,14 @@ fn fresh_facts(
     }
     let created_at = text(metadata, "/createdDateTime")?;
     let modified_at = text(metadata, "/lastModifiedDateTime")?;
-    if created_at != modified_at || !valid_timestamp(created_at) {
+    if created_at != modified_at {
         return Err(
             "The Microsoft creation and modification facts do not show a new unchanged upload.",
         );
     }
+    let created_at = timestamp_epoch_millis(created_at).ok_or(
+        "The Microsoft creation and modification facts do not show a new unchanged upload.",
+    )?;
     let size = metadata
         .get("size")
         .and_then(Value::as_u64)
@@ -275,16 +295,15 @@ fn fresh_facts(
         name: filename.to_owned(),
         size,
         quick_xor: text(metadata, "/file/hashes/quickXorHash")?.to_owned(),
-        created_at: created_at.to_owned(),
-        modified_at: modified_at.to_owned(),
+        created_at,
         web_url: web_url.to_owned(),
         list_item_id: list_item_id.to_owned(),
-        creator_id: optional_text(metadata, "/createdBy/user/id"),
-        creator_tenant_id: optional_text(metadata, "/createdBy/user/tenantId"),
-        creator_principal: optional_text(metadata, "/createdBy/user/userPrincipalName"),
-        modifier_id: optional_text(metadata, "/lastModifiedBy/user/id"),
-        modifier_tenant_id: optional_text(metadata, "/lastModifiedBy/user/tenantId"),
-        modifier_principal: optional_text(metadata, "/lastModifiedBy/user/userPrincipalName"),
+        creator_id: actor_guid_field(metadata, "/createdBy/user/id"),
+        creator_tenant_id: actor_guid_field(metadata, "/createdBy/user/tenantId"),
+        creator_principal: actor_field(metadata, "/createdBy/user/userPrincipalName"),
+        modifier_id: actor_guid_field(metadata, "/lastModifiedBy/user/id"),
+        modifier_tenant_id: actor_guid_field(metadata, "/lastModifiedBy/user/tenantId"),
+        modifier_principal: actor_field(metadata, "/lastModifiedBy/user/userPrincipalName"),
     })
 }
 
@@ -302,49 +321,56 @@ fn actor(facts: &FreshFacts, account: &Account, creator: bool) -> Actor {
             &facts.modifier_principal,
         )
     };
-    if tenant_id.as_ref().is_some_and(|tenant_id| {
-        !is_guid(tenant_id) || !tenant_id.eq_ignore_ascii_case(&account.tenant_id)
-    }) {
-        return Actor::Unknown;
-    }
-    if let Some(id) = id {
-        if !is_guid(id) {
+    match tenant_id {
+        ActorField::Malformed => return Actor::Unknown,
+        ActorField::Valid(tenant_id) if !tenant_id.eq_ignore_ascii_case(&account.tenant_id) => {
             return Actor::Unknown;
         }
+        ActorField::Missing | ActorField::Valid(_) => {}
+    }
+    if let ActorField::Valid(id) = id {
         if id.eq_ignore_ascii_case(&account.id) {
-            if principal.as_ref().is_some_and(|principal| {
-                account.user_principal_name.is_empty()
-                    || !principal.eq_ignore_ascii_case(&account.user_principal_name)
-            }) {
-                return Actor::Unknown;
-            }
             return Actor::Me;
         }
+        let principal = match principal {
+            ActorField::Valid(principal) => principal.clone(),
+            ActorField::Missing | ActorField::Malformed => String::new(),
+        };
         return Actor::Other(Account {
             tenant_id: account.tenant_id.clone(),
             id: id.to_ascii_lowercase(),
             display_name: String::new(),
-            email: principal.clone().unwrap_or_default(),
-            user_principal_name: principal.clone().unwrap_or_default(),
+            email: principal.clone(),
+            user_principal_name: principal,
         });
     }
-    if !account.user_principal_name.is_empty()
-        && principal
-            .as_ref()
-            .is_some_and(|principal| principal.eq_ignore_ascii_case(&account.user_principal_name))
-    {
-        Actor::Me
-    } else {
-        Actor::Unknown
+    match (id, principal) {
+        (ActorField::Missing, ActorField::Valid(principal))
+            if !account.user_principal_name.is_empty()
+                && principal.eq_ignore_ascii_case(&account.user_principal_name) =>
+        {
+            Actor::Me
+        }
+        _ => Actor::Unknown,
     }
 }
 
-fn optional_text(value: &Value, pointer: &str) -> Option<String> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty() && text.len() <= 4096)
-        .map(str::to_owned)
+fn actor_guid_field(value: &Value, pointer: &str) -> ActorField {
+    match actor_field(value, pointer) {
+        ActorField::Valid(text) if is_guid(&text) => ActorField::Valid(text),
+        ActorField::Valid(_) => ActorField::Malformed,
+        other => other,
+    }
+}
+
+fn actor_field(value: &Value, pointer: &str) -> ActorField {
+    match value.pointer(pointer) {
+        None => ActorField::Missing,
+        Some(Value::String(text)) if !text.trim().is_empty() && text.len() <= 4096 => {
+            ActorField::Valid(text.clone())
+        }
+        Some(_) => ActorField::Malformed,
+    }
 }
 
 /// Legacy first-read parser retained for compatibility with inactive audit
@@ -450,7 +476,13 @@ pub fn is_guid(value: &str) -> bool {
 }
 
 fn valid_timestamp(value: &str) -> bool {
-    chrono::DateTime::parse_from_rfc3339(value).is_ok()
+    timestamp_epoch_millis(value).is_some()
+}
+
+fn timestamp_epoch_millis(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
 }
 
 #[cfg(test)]

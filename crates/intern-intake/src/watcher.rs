@@ -391,6 +391,7 @@ impl Scanner<'_> {
             IntakeAdmission::Verified => self.attempt_claim(doc, key, &facts.path),
             IntakeAdmission::LocalOnly => self.consider_unclaimed(doc, key, facts),
             IntakeAdmission::Other => self.status.held_for_others += 1,
+            IntakeAdmission::Retryable => {}
             IntakeAdmission::Unknown | IntakeAdmission::Revoked => {
                 self.status.uploader_unknown += 1
             }
@@ -422,6 +423,15 @@ impl Scanner<'_> {
             }
             IntakeAdmission::Unknown => {
                 self.status.uploader_unknown += 1;
+                if self.store.verify(key) {
+                    let _ = self.store.renew(key);
+                } else {
+                    self.owned.remove(key);
+                    self.host.abandon(&facts.path);
+                }
+                return;
+            }
+            IntakeAdmission::Retryable => {
                 if self.store.verify(key) {
                     let _ = self.store.renew(key);
                 } else {

@@ -2326,6 +2326,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "url",
 ]
 
 [[package]]
@@ -2364,6 +2365,7 @@ version = "0.1.0-alpha.9"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "intern-core",
  "reqwest 0.12.15",
  "serde",
  "serde_json",
@@ -2377,12 +2379,15 @@ dependencies = [
 name = "intern-queue"
 version = "0.1.0-alpha.9"
 dependencies = [
+ "base64 0.22.1",
  "intern-core",
  "intern-engine",
+ "intern-intake",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "url",
  "windows-sys 0.61.2",
 ]
 
@@ -2406,6 +2411,8 @@ dependencies = [
  "calamine",
  "cfb 0.10.0",
  "image",
+ "intern-core",
+ "intern-intake",
  "mailparse",
  "msg_parser",
  "pdfium-render",

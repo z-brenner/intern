@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
@@ -9,11 +10,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use intern_core::{ErrorCode, OperationReceipt, QueueItem, QueueStatus, QueueStore};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use intern_core::{
+    ErrorCode, OperationReceipt, PrivateSnapshotDirectory, QueueItem, QueueStatus, QueueStore,
+};
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
     ExtractProgress, ModelProposal, PageOrigin, ParserWarning, PartyRelation, ProposalStatus,
     SourcePage, distill, engine::finish, fingerprint, validate,
+};
+use intern_intake::{
+    SharePointDeployment,
+    microsoft::{
+        Account,
+        hashing::QuickXor,
+        proof::{FreshUploadMetadata, FreshUploadOutcome, verify_fresh_upload},
+    },
 };
 use intern_queue::{
     pipeline::{
@@ -24,7 +36,9 @@ use intern_queue::{
     settings::{AppSettings, DestinationLayout, SettingsStore},
 };
 use rusqlite::Connection;
+use serde_json::{Value, json};
 use tempfile::tempdir;
+use url::Url;
 
 /// Runs the real distillation, validation, and naming over a canned model
 /// reply, so queue tests still exercise the production evidence rules instead
@@ -105,6 +119,7 @@ impl PipelineEventSink for RecordingEvents {
 
 struct FakeWorker {
     responses: Mutex<VecDeque<Result<DocumentSource, WorkerFailure>>>,
+    calls: AtomicUsize,
     active: AtomicUsize,
     maximum_active: AtomicUsize,
     cancellations: AtomicUsize,
@@ -116,6 +131,7 @@ impl FakeWorker {
     fn new(responses: Vec<Result<DocumentSource, WorkerFailure>>) -> Self {
         Self {
             responses: Mutex::new(responses.into()),
+            calls: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             maximum_active: AtomicUsize::new(0),
             cancellations: AtomicUsize::new(0),
@@ -138,6 +154,7 @@ impl WorkerBoundary for FakeWorker {
         _path: &Path,
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum_active.fetch_max(active, Ordering::SeqCst);
         let (lock, wake) = &self.gate;
@@ -419,6 +436,7 @@ impl AnalyzerBoundary for BlockingModel {
 #[derive(Default)]
 struct FakeFiles {
     hashes: Mutex<HashMap<PathBuf, String>>,
+    fingerprint_calls: AtomicUsize,
     applies: Mutex<Vec<i64>>,
     reconciles: Mutex<Vec<i64>>,
     fail_next_apply: AtomicUsize,
@@ -442,6 +460,7 @@ impl FakeFiles {
 
 impl FileActions for FakeFiles {
     fn fingerprint(&self, path: &Path) -> Result<String, PipelineError> {
+        self.fingerprint_calls.fetch_add(1, Ordering::SeqCst);
         self.hashes
             .lock()
             .unwrap()
@@ -2949,14 +2968,554 @@ struct UploaderGuard {
     allowed: AtomicBool,
     hash: Option<String>,
 }
+
+struct RetryableStageGuard {
+    stage: intern_queue::AdmissionStage,
+    retrying: AtomicBool,
+}
+
+impl RetryableStageGuard {
+    fn unavailable_at(stage: intern_queue::AdmissionStage) -> Self {
+        Self {
+            stage,
+            retrying: AtomicBool::new(true),
+        }
+    }
+
+    fn allowed_until(stage: intern_queue::AdmissionStage) -> Self {
+        Self {
+            stage,
+            retrying: AtomicBool::new(false),
+        }
+    }
+
+    fn retry(&self) {
+        self.retrying.store(true, Ordering::SeqCst);
+    }
+
+    fn allow(&self) {
+        self.retrying.store(false, Ordering::SeqCst);
+    }
+}
+
+impl intern_queue::AdmissionGuard for RetryableStageGuard {
+    fn authorize(
+        &self,
+        _path: &Path,
+        stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        if stage == self.stage && self.retrying.load(Ordering::SeqCst) {
+            Err(PipelineError::retryable(
+                "MICROSOFT_UNAVAILABLE",
+                "Microsoft upload verification is temporarily unavailable.",
+            ))
+        } else {
+            Ok(intern_queue::AdmissionEvidence::local())
+        }
+    }
+}
+
+fn automatic_settings() -> AppSettings {
+    AppSettings {
+        automatic_rename: true,
+        ..AppSettings::default()
+    }
+}
+
+const RETRY_DOCUMENT: &str =
+    "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+
+#[test]
+fn retryable_enqueue_stops_before_fingerprinting_or_creating_a_row() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "enqueue-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let files = Arc::new(FakeFiles::default());
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Enqueue,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        model,
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+
+    let error = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap_err();
+
+    assert!(error.is_retryable());
+    assert_eq!(error.code, "MICROSOFT_UNAVAILABLE");
+    assert_eq!(files.fingerprint_calls.load(Ordering::SeqCst), 0);
+    assert!(pipeline.list().unwrap().is_empty());
+
+    files.trust(&path, "enqueue-hash");
+    guard.allow();
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Ready);
+    assert_eq!(files.applies.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn retryable_extract_restores_queued_and_stops_the_current_drain() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "extract-retry-a.pdf");
+    let second = source(temp.path(), "extract-retry-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "extract-a-hash");
+    files.trust(&second, "extract-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Extract,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap();
+    assert!(waiting.iter().all(|item| {
+        item.status == QueueStatus::Queued && item.error_code.is_none() && item.proposal.is_none()
+    }));
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(files.applies.lock().unwrap().is_empty());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        pipeline
+            .list()
+            .unwrap()
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready)
+    );
+    assert_eq!(files.applies.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn retryable_analyze_restores_queued_and_stops_the_current_drain() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "analyze-retry-a.pdf");
+    let second = source(temp.path(), "analyze-retry-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "analyze-a-hash");
+    files.trust(&second, "analyze-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Analyze,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap();
+    assert!(waiting.iter().all(|item| {
+        item.status == QueueStatus::Queued && item.error_code.is_none() && item.proposal.is_none()
+    }));
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(files.applies.lock().unwrap().is_empty());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        pipeline
+            .list()
+            .unwrap()
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready)
+    );
+    assert_eq!(files.applies.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn retryable_automatic_apply_preserves_ready_proposal_without_file_actions() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&filed).unwrap();
+    let path = source(&inbox, "automatic-apply-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Apply,
+    ));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        model.clone(),
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[path]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(waiting.status, QueueStatus::Ready);
+    assert_eq!(waiting.error_code, None);
+    let proposal_before = waiting
+        .proposal
+        .expect("analysis produced a ready proposal");
+    assert!(waiting.receipt.is_none());
+    assert!(waiting.source_path.exists());
+    assert!(fs::read_dir(&filed).unwrap().next().is_none());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    let filed = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(filed.proposal.as_ref(), Some(&proposal_before));
+    assert!(filed.receipt.is_some());
+    assert!(!filed.source_path.exists());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn retryable_apply_during_approval_preserves_ready_proposal() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&filed).unwrap();
+    let path = source(&inbox, "approved-apply-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let guard = Arc::new(RetryableStageGuard::allowed_until(
+        intern_queue::AdmissionStage::Apply,
+    ));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        model.clone(),
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+    pipeline.run_until_idle().unwrap();
+    let ready = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(ready.status, QueueStatus::Ready);
+    let proposal_before = ready.proposal.clone().unwrap();
+
+    guard.retry();
+    let error = pipeline
+        .approve(id, "2024-04-12 Employment Agreement.pdf", "")
+        .unwrap_err();
+
+    assert!(error.is_retryable());
+    let retained = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(retained.status, QueueStatus::Ready);
+    assert_eq!(retained.error_code, None);
+    assert_eq!(retained.proposal.as_ref(), Some(&proposal_before));
+    assert!(retained.receipt.is_none());
+    assert!(retained.source_path.exists());
+    assert!(fs::read_dir(&filed).unwrap().next().is_none());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+
+    guard.allow();
+    pipeline
+        .approve(id, "2024-04-12 Employment Agreement.pdf", "")
+        .unwrap();
+    let completed = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(completed.status, QueueStatus::Completed);
+    assert!(completed.receipt.is_some());
+    assert!(!completed.source_path.exists());
+}
+
+const SNAPSHOT_TENANT: &str = "11111111-1111-1111-1111-111111111111";
+const SNAPSHOT_DRIVE: &str = "66666666-6666-6666-6666-666666666666";
+const SNAPSHOT_INBOX: &str = "77777777-7777-7777-7777-777777777777";
+const SNAPSHOT_ME: &str = "99999999-9999-9999-9999-999999999999";
+const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+struct ProofSnapshotGuard {
+    source: PathBuf,
+    inbox: PathBuf,
+    snapshots: PrivateSnapshotDirectory,
+    deployment: SharePointDeployment,
+    metadata_calls: AtomicUsize,
+}
+
+impl FreshUploadMetadata for ProofSnapshotGuard {
+    fn metadata(&self, _url: Url) -> Result<(Account, Value), String> {
+        self.metadata_calls.fetch_add(1, Ordering::SeqCst);
+        let mut quick = QuickXor::default();
+        quick.update(b"hello");
+        Ok((
+            Account {
+                tenant_id: SNAPSHOT_TENANT.into(),
+                id: SNAPSHOT_ME.into(),
+                display_name: "Pat Example".into(),
+                email: "pat@example.test".into(),
+                user_principal_name: "pat@example.test".into(),
+            },
+            json!({
+                "id": "item!123",
+                "eTag": "\"fresh,1\"",
+                "cTag": "\"content,1\"",
+                "name": "swap.pdf",
+                "size": 5,
+                "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/swap.pdf",
+                "parentReference": { "driveId": SNAPSHOT_DRIVE, "id": SNAPSHOT_INBOX },
+                "sharepointIds": {
+                    "tenantId": SNAPSHOT_TENANT,
+                    "siteId": "33333333-3333-3333-3333-333333333333",
+                    "webId": "44444444-4444-4444-4444-444444444444",
+                    "listId": "55555555-5555-5555-5555-555555555555",
+                    "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                },
+                "createdBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "lastModifiedBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "createdDateTime": "2026-09-14T16:00:00Z",
+                "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                "file": {
+                    "mimeType": "application/pdf",
+                    "hashes": { "quickXorHash": STANDARD.encode(quick.finish()) }
+                }
+            }),
+        ))
+    }
+}
+
+impl intern_queue::AdmissionGuard for ProofSnapshotGuard {
+    fn authorize(
+        &self,
+        path: &Path,
+        stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        match verify_fresh_upload(
+            &self.deployment,
+            self,
+            1_789_401_599_000,
+            &self.snapshots,
+            &self.inbox,
+            path,
+        ) {
+            FreshUploadOutcome::Authorized {
+                local_sha256,
+                snapshot,
+                ..
+            } => {
+                if stage == intern_queue::AdmissionStage::Extract {
+                    fs::write(&self.source, b"replacement bytes").unwrap();
+                }
+                Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+                    local_sha256,
+                    snapshot,
+                ))
+            }
+            other => Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                format!("unexpected proof outcome: {other:?}"),
+            )),
+        }
+    }
+}
+
+struct SnapshotReadingWorker {
+    public_source: PathBuf,
+    read: Mutex<Vec<u8>>,
+}
+
+impl WorkerBoundary for SnapshotReadingWorker {
+    fn extract(
+        &self,
+        _request_id: &str,
+        path: &Path,
+        _progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        *self.read.lock().unwrap() = fs::read(path).unwrap();
+        fs::write(&self.public_source, b"hello").unwrap();
+        Err(WorkerFailure::new("TEST_STOP", false, false))
+    }
+
+    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+}
+
+#[test]
+fn extraction_reads_the_owned_verified_snapshot_across_a_source_swap_and_restore() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    fs::create_dir(&inbox).unwrap();
+    let source_path = source(&inbox, "swap.pdf");
+    fs::write(&source_path, b"hello").unwrap();
+    let private_root = temp.path().join("private-snapshots");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&source_path, HELLO_SHA256);
+    let worker = Arc::new(SnapshotReadingWorker {
+        public_source: source_path.clone(),
+        read: Mutex::new(Vec::new()),
+    });
+    let deployment = SharePointDeployment::from_slice(
+        format!(
+            r#"{{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "{SNAPSHOT_TENANT}",
+              "client_id": "22222222-2222-2222-2222-222222222222",
+              "site_id": "33333333-3333-3333-3333-333333333333",
+              "web_id": "44444444-4444-4444-4444-444444444444",
+              "list_id": "55555555-5555-5555-5555-555555555555",
+              "drive_id": "{SNAPSHOT_DRIVE}",
+              "intake_folder_id": "{SNAPSHOT_INBOX}",
+              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+            }}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let guard = Arc::new(ProofSnapshotGuard {
+        source: source_path.clone(),
+        inbox: inbox.canonicalize().unwrap(),
+        snapshots: PrivateSnapshotDirectory::new(&private_root).unwrap(),
+        deployment,
+        metadata_calls: AtomicUsize::new(0),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+
+    pipeline
+        .enqueue_files(std::slice::from_ref(&source_path))
+        .unwrap();
+    pipeline.run_next().unwrap();
+
+    assert_eq!(&*worker.read.lock().unwrap(), b"hello");
+    assert_eq!(fs::read(&source_path).unwrap(), b"hello");
+    assert_eq!(guard.metadata_calls.load(Ordering::SeqCst), 4);
+    assert!(
+        fs::read_dir(&private_root).unwrap().next().is_none(),
+        "the queue drops and removes each proof-owned snapshot"
+    );
+}
+
+struct HashOnlyGuard;
+
+impl intern_queue::AdmissionGuard for HashOnlyGuard {
+    fn authorize(
+        &self,
+        _path: &Path,
+        _stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        Ok(intern_queue::AdmissionEvidence::verified(
+            "same-bytes".into(),
+        ))
+    }
+}
+
+#[test]
+fn protected_extraction_without_an_owned_snapshot_fails_closed_before_the_worker() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "missing-snapshot.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&path, "same-bytes");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed("private text"))]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    )
+    .with_admission_guard(Arc::new(HashOnlyGuard));
+
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+    pipeline.run_next().unwrap();
+
+    assert_eq!(worker.maximum_active.load(Ordering::SeqCst), 0);
+    let item = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::UploaderUnverified));
+}
+
 impl intern_queue::AdmissionGuard for UploaderGuard {
     fn authorize(
         &self,
         _path: &Path,
         _stage: intern_queue::AdmissionStage,
-    ) -> Result<Option<String>, PipelineError> {
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
         if self.allowed.load(Ordering::SeqCst) {
-            Ok(self.hash.clone())
+            Ok(self.hash.clone().map_or_else(
+                intern_queue::AdmissionEvidence::local,
+                intern_queue::AdmissionEvidence::verified,
+            ))
         } else {
             Err(PipelineError::new(
                 "UPLOADER_UNVERIFIED",

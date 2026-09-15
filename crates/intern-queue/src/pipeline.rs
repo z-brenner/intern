@@ -21,7 +21,7 @@ use intern_engine::{
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::admission::{AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
@@ -181,6 +181,7 @@ pub use intern_engine::ExtractFailure as WorkerFailure;
 pub struct PipelineError {
     pub code: String,
     pub message: String,
+    retryable: bool,
 }
 
 impl PipelineError {
@@ -188,7 +189,20 @@ impl PipelineError {
         Self {
             code: code.into(),
             message: message.into(),
+            retryable: false,
         }
+    }
+
+    pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        self.retryable
     }
 }
 
@@ -704,7 +718,10 @@ impl Pipeline {
         for path in paths {
             let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
             let fingerprint = self.files.fingerprint(path)?;
-            if verified.as_ref().is_some_and(|hash| hash != &fingerprint) {
+            if verified
+                .verified_hash()
+                .is_some_and(|hash| hash != fingerprint)
+            {
                 return Err(PipelineError::new(
                     "FILE_CHANGED",
                     "The file changed after Microsoft verified its uploader.",
@@ -892,7 +909,30 @@ impl Pipeline {
         let Some(item) = self.store.claim_next()? else {
             return Ok(false);
         };
-        if self.authorize_item(&item, AdmissionStage::Extract).is_err() {
+        let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
+            Ok(evidence) => evidence,
+            Err(error) if error.is_retryable() => {
+                self.store.transition(
+                    item.id,
+                    QueueStatus::Extracting,
+                    QueueStatus::Queued,
+                    None,
+                )?;
+                self.events.queue_changed();
+                return Ok(false);
+            }
+            Err(_) => {
+                self.store.transition(
+                    item.id,
+                    QueueStatus::Extracting,
+                    QueueStatus::NeedsReview,
+                    Some(ErrorCode::UploaderUnverified),
+                )?;
+                self.events.queue_changed();
+                return Ok(true);
+            }
+        };
+        let Some(extraction_path) = extraction_evidence.extraction_path(&item.source_path) else {
             self.store.transition(
                 item.id,
                 QueueStatus::Extracting,
@@ -901,7 +941,7 @@ impl Pipeline {
             )?;
             self.events.queue_changed();
             return Ok(true);
-        }
+        };
         self.active_item.store(item.id, Ordering::SeqCst);
         let request_id = format!("queue-{}-{}", item.id, item.processing_failures + 1);
         let phase = Arc::new(Mutex::new(LeasePhase::Extracting));
@@ -944,48 +984,47 @@ impl Pipeline {
                 total: progress.total,
             });
         };
-        let source =
-            match self
-                .worker
-                .extract(&request_id, &item.source_path, &mut forward_progress)
-            {
-                Ok(source) => source,
-                Err(error) => {
-                    self.active_item.store(0, Ordering::SeqCst);
-                    if self.shutting_down.load(Ordering::SeqCst) {
-                        return Err(PipelineError::new(
-                            "SHUTTING_DOWN",
-                            "pipeline is shutting down",
-                        ));
-                    }
-                    if let Err(lease_error) = lease.check() {
-                        self.paused.store(true, Ordering::SeqCst);
-                        self.events.queue_changed();
-                        return Err(lease_error);
-                    }
-                    if error.canceled {
-                        self.events.queue_changed();
-                        return Ok(true);
-                    }
-                    let restart_failed = error.crashed
-                        && item.processing_failures == 0
-                        && self.worker.restart().is_err();
-                    self.store
-                        .record_processing_failure(item.id, ErrorCode::IoError)?;
-                    // A worker that will not come back cannot read this
-                    // document on a second attempt either, so the failure is
-                    // counted twice and the document fails now rather than
-                    // stalling the queue again. Counted against this item by
-                    // id: reclaiming through the queue would claim whichever
-                    // document is next in line, which is not always this one,
-                    // and leave that one extracting under nobody's lease.
-                    if restart_failed {
-                        self.repository.record_recovered_failure(item.id)?;
-                    }
+        let source = match self
+            .worker
+            .extract(&request_id, extraction_path, &mut forward_progress)
+        {
+            Ok(source) => source,
+            Err(error) => {
+                self.active_item.store(0, Ordering::SeqCst);
+                if self.shutting_down.load(Ordering::SeqCst) {
+                    return Err(PipelineError::new(
+                        "SHUTTING_DOWN",
+                        "pipeline is shutting down",
+                    ));
+                }
+                if let Err(lease_error) = lease.check() {
+                    self.paused.store(true, Ordering::SeqCst);
+                    self.events.queue_changed();
+                    return Err(lease_error);
+                }
+                if error.canceled {
                     self.events.queue_changed();
                     return Ok(true);
                 }
-            };
+                let restart_failed = error.crashed
+                    && item.processing_failures == 0
+                    && self.worker.restart().is_err();
+                self.store
+                    .record_processing_failure(item.id, ErrorCode::IoError)?;
+                // A worker that will not come back cannot read this
+                // document on a second attempt either, so the failure is
+                // counted twice and the document fails now rather than
+                // stalling the queue again. Counted against this item by
+                // id: reclaiming through the queue would claim whichever
+                // document is next in line, which is not always this one,
+                // and leave that one extracting under nobody's lease.
+                if restart_failed {
+                    self.repository.record_recovered_failure(item.id)?;
+                }
+                self.events.queue_changed();
+                return Ok(true);
+            }
+        };
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
             lease.stop_and_check()?;
@@ -1013,17 +1052,22 @@ impl Pipeline {
             .unwrap_or_default()
             .to_owned();
         let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
-        if self.authorize_item(&item, AdmissionStage::Analyze).is_err() {
+        if let Err(error) = self.authorize_item(&item, AdmissionStage::Analyze) {
             lease.stop_and_check()?;
-            self.store.transition(
-                item.id,
-                QueueStatus::Analyzing,
-                QueueStatus::NeedsReview,
-                Some(ErrorCode::UploaderUnverified),
-            )?;
+            let (next, code, keep_draining) = if error.is_retryable() {
+                (QueueStatus::Queued, None, false)
+            } else {
+                (
+                    QueueStatus::NeedsReview,
+                    Some(ErrorCode::UploaderUnverified),
+                    true,
+                )
+            };
+            self.store
+                .transition(item.id, QueueStatus::Analyzing, next, code)?;
             self.active_item.store(0, Ordering::SeqCst);
             self.events.queue_changed();
-            return Ok(true);
+            return Ok(keep_draining);
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => analysis,
@@ -1415,10 +1459,14 @@ impl Pipeline {
         }
     }
 
-    fn authorize_item(&self, item: &QueueItem, stage: AdmissionStage) -> PipelineResult<()> {
+    fn authorize_item(
+        &self,
+        item: &QueueItem,
+        stage: AdmissionStage,
+    ) -> PipelineResult<AdmissionEvidence> {
         let verified = self.admission.authorize(&item.source_path, stage)?;
         if verified
-            .as_ref()
+            .verified_hash()
             .is_some_and(|hash| hash != &item.source_hash)
         {
             return Err(PipelineError::new(
@@ -1426,7 +1474,7 @@ impl Pipeline {
                 "The current file is not the version whose uploader was verified. Retry after verification.",
             ));
         }
-        Ok(())
+        Ok(verified)
     }
 
     fn apply_if_unchanged(
@@ -1436,10 +1484,12 @@ impl Pipeline {
         settings: &AppSettings,
     ) -> PipelineResult<()> {
         if let Err(error) = self.authorize_item(item, AdmissionStage::Apply) {
-            let _ = self
-                .repository
-                .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
-            self.events.queue_changed();
+            if !error.is_retryable() {
+                let _ = self
+                    .repository
+                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
+                self.events.queue_changed();
+            }
             return Err(error);
         }
         let fingerprint = match self.files.fingerprint(&item.source_path) {
@@ -1782,10 +1832,12 @@ impl Pipeline {
             ));
         }
         if let Err(error) = self.authorize_item(&item, AdmissionStage::Apply) {
-            let _ = self
-                .repository
-                .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
-            self.events.queue_changed();
+            if !error.is_retryable() {
+                let _ = self
+                    .repository
+                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
+                self.events.queue_changed();
+            }
             return Err(error);
         }
         let proposed = self.repository.load_proposal(id)?;

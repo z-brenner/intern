@@ -1,15 +1,16 @@
 //! Microsoft account connection, upload authorization, and attribution for the
 //! desktop host. Credentials never cross IPC or enter the shared folder.
 use crate::secrets::{KeyringStore, SecretStore};
+use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use intern_intake::microsoft::{
-    Account, AuthConfig, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
-    proof::{FreshUploadOutcome, verify_fresh_upload},
+    Account, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
+    proof::{FreshUploadMetadata, FreshUploadOutcome, verify_fresh_upload},
     transport::item_url,
 };
 use intern_intake::{SharePointDeployment, classify, detect_cloud_roots, relative_to_root};
 use intern_queue::{
-    AdmissionGuard, AdmissionStage, AppSettings, FiledDocument, FilingSink, PipelineError,
-    PipelineResult, SettingsStore,
+    AdmissionEvidence, AdmissionGuard, AdmissionStage, AppSettings, FiledDocument, FilingSink,
+    PipelineError, PipelineResult, SettingsStore,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -88,6 +89,10 @@ pub struct MicrosoftIntake {
     deployment_error: Option<String>,
     client_error: Option<String>,
     client: Option<MicrosoftClient>,
+    #[cfg(test)]
+    fresh_upload_metadata: Option<Arc<dyn FreshUploadMetadata>>,
+    snapshot_directory: Option<PrivateSnapshotDirectory>,
+    snapshot_error: Option<String>,
     generation: AtomicU64,
     documents: Mutex<BTreeMap<String, Attribution>>,
     /// The last answer to "is the saved intake folder synced or on a network
@@ -107,6 +112,66 @@ const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoin
 /// every file of every scan; the answer changes only when someone moves the
 /// folder or starts syncing it, and every save re-asks anyway.
 const SHARED_INTAKE_RECHECK: Duration = Duration::from_secs(30);
+
+fn verified_upload(
+    outcome: FreshUploadOutcome,
+) -> PipelineResult<(String, Account, OwnedFileSnapshot)> {
+    match outcome {
+        FreshUploadOutcome::Authorized {
+            local_sha256,
+            uploader,
+            snapshot,
+        } => Ok((local_sha256, uploader, snapshot)),
+        FreshUploadOutcome::HeldOther { reason, .. } => Err(PipelineError::new(
+            "UPLOADER_OTHER",
+            format!("UPLOADER_OTHER: {reason}"),
+        )),
+        FreshUploadOutcome::HeldUnknown { reason } => {
+            Err(PipelineError::new("UPLOADER_UNVERIFIED", reason))
+        }
+        FreshUploadOutcome::RetryableUnavailable { reason } => {
+            Err(PipelineError::retryable("UPLOADER_UNVERIFIED", reason))
+        }
+    }
+}
+
+fn verified_folder_web_url(
+    deployment: &SharePointDeployment,
+    account: &Account,
+    remote: &serde_json::Value,
+) -> Result<String, String> {
+    if !remote["folder"].is_object()
+        || remote
+            .get("remoteItem")
+            .is_some_and(|value| !value.is_null())
+        || remote["id"].as_str() != Some(deployment.intake_folder_id())
+        || [
+            ("/sharepointIds/tenantId", deployment.tenant_id()),
+            ("/sharepointIds/siteId", deployment.site_id()),
+            ("/sharepointIds/webId", deployment.web_id()),
+            ("/sharepointIds/listId", deployment.list_id()),
+            ("/parentReference/driveId", deployment.drive_id()),
+        ]
+        .into_iter()
+        .any(|(pointer, expected)| {
+            remote
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|value| !value.eq_ignore_ascii_case(expected))
+        })
+        || !account
+            .tenant_id
+            .eq_ignore_ascii_case(deployment.tenant_id())
+    {
+        return Err("Microsoft did not confirm a work/school folder in the connected organization. Personal accounts and shortcut items are not supported.".into());
+    }
+    remote["webUrl"]
+        .as_str()
+        .filter(|url| deployment.is_intake_folder_web_url(url))
+        .map(str::to_owned)
+        .ok_or_else(|| "Microsoft did not return a supported folder address.".into())
+}
+
 impl MicrosoftIntake {
     pub fn new(settings: SettingsStore, data: PathBuf) -> Self {
         let deployment = SharePointDeployment::from_slice(include_bytes!(
@@ -130,18 +195,22 @@ impl MicrosoftIntake {
             Err(error) => (None, Some(error.to_string())),
         };
         let (client, client_error) = match deployment.as_ref() {
-            Some(deployment) => match MicrosoftClient::new(
-                AuthConfig {
-                    tenant_id: deployment.tenant_id().to_owned(),
-                    client_id: deployment.client_id().to_owned(),
-                },
-                Arc::new(CredentialStore),
-            ) {
-                Ok(client) => (Some(client), None),
-                Err(error) => (None, Some(error)),
-            },
+            Some(deployment) => {
+                match MicrosoftClient::new(deployment.clone(), Arc::new(CredentialStore)) {
+                    Ok(client) => (Some(client), None),
+                    Err(error) => (None, Some(error)),
+                }
+            }
             None => (None, None),
         };
+        let (snapshot_directory, snapshot_error) =
+            match PrivateSnapshotDirectory::new(data.join("microsoft-upload-snapshots")) {
+                Ok(directory) => (Some(directory), None),
+                Err(_) => (
+                    None,
+                    Some("Private Microsoft upload snapshots are unavailable.".into()),
+                ),
+            };
         let documents = fs::read(data.join("intake-attribution.json"))
             .ok()
             .filter(|bytes| bytes.len() <= 1024 * 1024)
@@ -160,10 +229,41 @@ impl MicrosoftIntake {
             deployment_error,
             client_error,
             client,
+            #[cfg(test)]
+            fresh_upload_metadata: None,
+            snapshot_directory,
+            snapshot_error,
             generation: AtomicU64::new(0),
             documents: Mutex::new(documents),
             shared_intake: Mutex::new(None),
         }
+    }
+
+    #[cfg(test)]
+    fn with_enabled_metadata(
+        settings: SettingsStore,
+        data: PathBuf,
+        deployment: SharePointDeployment,
+        binding: FolderBinding,
+        metadata: Arc<dyn FreshUploadMetadata>,
+        snapshot_root: PathBuf,
+    ) -> Result<Self, String> {
+        let mut intake = Self::with_deployment(settings, data, Ok(deployment));
+        if !intake.binding_matches_deployment(&binding) {
+            return Err("The test fixture binding is outside the validated deployment.".into());
+        }
+        intake.snapshot_directory = Some(
+            PrivateSnapshotDirectory::new(snapshot_root)
+                .map_err(|_| "The test snapshot directory is unavailable.")?,
+        );
+        intake.snapshot_error = None;
+        intake.fresh_upload_metadata = Some(metadata);
+        intake.config = Mutex::new(PublicConfig {
+            enabled: true,
+            protected_roots: vec![binding.local_folder.clone()],
+            bindings: vec![binding],
+        });
+        Ok(intake)
     }
 
     /// Whether `folder` is a OneDrive, SharePoint, or network folder, from
@@ -212,6 +312,7 @@ impl MicrosoftIntake {
         self.deployment_error
             .clone()
             .or_else(|| self.client_error.clone())
+            .or_else(|| self.snapshot_error.clone())
             .or_else(|| {
                 self.config_error
                     .lock()
@@ -231,11 +332,27 @@ impl MicrosoftIntake {
                 .unwrap_or_else(|| "Microsoft connection is unavailable.".into())
         })
     }
+    fn fresh_upload_metadata(&self) -> Result<&dyn FreshUploadMetadata, String> {
+        #[cfg(test)]
+        if let Some(metadata) = self.fresh_upload_metadata.as_deref() {
+            return Ok(metadata);
+        }
+        self.client()
+            .map(|client| client as &dyn FreshUploadMetadata)
+    }
+    fn snapshot_directory(&self) -> Result<&PrivateSnapshotDirectory, String> {
+        self.snapshot_directory.as_ref().ok_or_else(|| {
+            self.unavailable()
+                .unwrap_or_else(|| "Private Microsoft upload snapshots are unavailable.".into())
+        })
+    }
     fn binding_matches_deployment(&self, binding: &FolderBinding) -> bool {
         self.deployment.as_ref().is_some_and(|deployment| {
             binding
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
+                && binding.activation_watermark.is_some_and(|value| value > 0)
+                && binding.web_id.eq_ignore_ascii_case(deployment.web_id())
                 && binding.drive_id.eq_ignore_ascii_case(deployment.drive_id())
                 && binding
                     .folder_id
@@ -400,45 +517,17 @@ impl MicrosoftIntake {
             deployment.intake_folder_id(),
             None,
         )?)?;
-        if !remote["folder"].is_object()
-            || remote
-                .get("remoteItem")
-                .is_some_and(|value| !value.is_null())
-            || remote["id"].as_str() != Some(deployment.intake_folder_id())
-            || remote
-                .pointer("/sharepointIds/tenantId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|tenant| !tenant.eq_ignore_ascii_case(deployment.tenant_id()))
-            || remote
-                .pointer("/sharepointIds/siteId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|site| !site.eq_ignore_ascii_case(deployment.site_id()))
-            || remote
-                .pointer("/sharepointIds/listId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|list| !list.eq_ignore_ascii_case(deployment.list_id()))
-            || remote
-                .pointer("/parentReference/driveId")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|drive| !drive.eq_ignore_ascii_case(deployment.drive_id()))
-            || !account
-                .tenant_id
-                .eq_ignore_ascii_case(deployment.tenant_id())
-        {
-            return Err("Microsoft did not confirm a work/school folder in the connected organization. Personal accounts and shortcut items are not supported.".into());
-        }
-        let web_url = remote["webUrl"]
-            .as_str()
-            .filter(|url| deployment.is_intake_folder_web_url(url))
-            .ok_or("Microsoft did not return a supported folder address.")?
-            .to_owned();
-        let binding = FolderBinding {
-            local_folder: local.to_string_lossy().into_owned(),
-            drive_id: deployment.drive_id().to_owned(),
-            folder_id: deployment.intake_folder_id().to_owned(),
-            web_url,
-            tenant_id: deployment.tenant_id().to_owned(),
-        };
+        let web_url = verified_folder_web_url(&deployment, &account, &remote)?;
+        self.persist_verified_binding(&deployment, epoch, &settings, &local, web_url)
+    }
+    fn persist_verified_binding(
+        &self,
+        deployment: &SharePointDeployment,
+        epoch: u64,
+        settings: &AppSettings,
+        local: &Path,
+        web_url: String,
+    ) -> Result<FolderBinding, String> {
         let mut config = self
             .config
             .lock()
@@ -450,6 +539,15 @@ impl MicrosoftIntake {
         if current.intake_folder != settings.intake_folder || current.intake_local_only {
             return Err("The saved intake folder changed. Pair it again.".into());
         }
+        let binding = FolderBinding {
+            local_folder: local.to_string_lossy().into_owned(),
+            drive_id: deployment.drive_id().to_owned(),
+            folder_id: deployment.intake_folder_id().to_owned(),
+            web_url,
+            tenant_id: deployment.tenant_id().to_owned(),
+            web_id: deployment.web_id().to_owned(),
+            activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
+        };
         let mut next = config.clone();
         next.bindings
             .retain(|entry| !same_path(&entry.local_folder, &binding.local_folder));
@@ -510,43 +608,54 @@ impl MicrosoftIntake {
         &self,
         path: &Path,
         settings: &AppSettings,
-    ) -> Result<Option<(String, Account, Account)>, String> {
+    ) -> PipelineResult<Option<(String, Account, Account, OwnedFileSnapshot)>> {
         let epoch = self.generation.load(Ordering::SeqCst);
-        let Some(binding) = self.scope(path, settings)? else {
+        let Some(binding) = self
+            .scope(path, settings)
+            .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?
+        else {
             return Ok(None);
         };
-        let deployment = self.deployment()?;
-        let (hash, uploader) = match verify_fresh_upload(
+        let activation_watermark = binding.activation_watermark.ok_or_else(|| {
+            PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "Pair the saved intake folder again. Unverified uploads remain held.",
+            )
+        })?;
+        let deployment = self
+            .deployment()
+            .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?;
+        let outcome = verify_fresh_upload(
             deployment,
-            self.client()?,
+            self.fresh_upload_metadata()
+                .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?,
+            activation_watermark,
+            self.snapshot_directory()
+                .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?,
             Path::new(&binding.local_folder),
             path,
-        ) {
-            FreshUploadOutcome::Authorized {
-                local_sha256,
-                uploader,
-            } => (local_sha256, uploader),
-            FreshUploadOutcome::HeldOther { uploader, reason } => {
-                self.note(path, "other", Some(uploader), None, None, &reason);
-                return Err(format!("UPLOADER_OTHER: {reason}"));
-            }
-            FreshUploadOutcome::HeldUnknown { reason }
-            | FreshUploadOutcome::RetryableUnavailable { reason } => return Err(reason),
-        };
-        if self.generation.load(Ordering::SeqCst) != epoch {
-            return Err(
-                "The Microsoft connection changed during verification. The file remains held."
-                    .into(),
-            );
+        );
+        if let FreshUploadOutcome::HeldOther { uploader, reason } = &outcome {
+            self.note(path, "other", Some(uploader.clone()), None, None, reason);
         }
-        let latest = self.settings.load().map_err(|error| error.to_string())?;
+        let (hash, uploader, snapshot) = verified_upload(outcome)?;
+        if self.generation.load(Ordering::SeqCst) != epoch {
+            return Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "The Microsoft connection changed during verification. The file remains held.",
+            ));
+        }
+        let latest = self.settings.load()?;
         if latest.intake_folder != settings.intake_folder
             || latest.process_others_uploads != settings.process_others_uploads
             || latest.intake_local_only != settings.intake_local_only
         {
-            return Err("Intake scope changed during verification. The file remains held.".into());
+            return Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "Intake scope changed during verification. The file remains held.",
+            ));
         }
-        Ok(Some((hash, uploader.clone(), uploader)))
+        Ok(Some((hash, uploader.clone(), uploader, snapshot)))
     }
     fn note(
         &self,
@@ -609,11 +718,11 @@ impl MicrosoftIntake {
     }
 }
 impl AdmissionGuard for MicrosoftIntake {
-    fn authorize(&self, path: &Path, _stage: AdmissionStage) -> PipelineResult<Option<String>> {
+    fn authorize(&self, path: &Path, _stage: AdmissionStage) -> PipelineResult<AdmissionEvidence> {
         let settings = self.settings.load()?;
         match self.verify(path, &settings) {
-            Ok(None) => Ok(None),
-            Ok(Some((hash, uploader, processor))) => {
+            Ok(None) => Ok(AdmissionEvidence::local()),
+            Ok(Some((hash, uploader, processor, snapshot))) => {
                 self.note(
                     path,
                     "verified",
@@ -622,20 +731,13 @@ impl AdmissionGuard for MicrosoftIntake {
                     Some(hash.clone()),
                     "Uploader verified against Microsoft upload activity.",
                 );
-                Ok(Some(hash))
+                Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
             }
-            Err(message) => {
-                if !message.starts_with("UPLOADER_OTHER:") {
-                    self.note(path, "unknown", None, None, None, &message);
+            Err(error) => {
+                if error.code != "UPLOADER_OTHER" && !error.is_retryable() {
+                    self.note(path, "unknown", None, None, None, &error.message);
                 }
-                Err(PipelineError::new(
-                    if message.starts_with("UPLOADER_OTHER:") {
-                        "UPLOADER_OTHER"
-                    } else {
-                        "UPLOADER_UNVERIFIED"
-                    },
-                    message,
-                ))
+                Err(error)
             }
         }
     }
@@ -747,7 +849,279 @@ pub fn microsoft_open_sign_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use intern_intake::microsoft::proof::FreshUploadMetadata;
+    use intern_queue::{WorkerBoundary, WorkerFailure};
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
+    const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
+
+    fn test_deployment() -> SharePointDeployment {
+        SharePointDeployment::from_slice(
+            br#"{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "11111111-1111-1111-1111-111111111111",
+              "client_id": "22222222-2222-2222-2222-222222222222",
+              "site_id": "33333333-3333-3333-3333-333333333333",
+              "web_id": "44444444-4444-4444-4444-444444444444",
+              "list_id": "55555555-5555-5555-5555-555555555555",
+              "drive_id": "66666666-6666-6666-6666-666666666666",
+              "intake_folder_id": "77777777-7777-7777-7777-777777777777",
+              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn account() -> Account {
+        Account {
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            id: "99999999-9999-9999-9999-999999999999".into(),
+            display_name: "Pat Example".into(),
+            email: "pat@example.test".into(),
+            user_principal_name: "pat@example.test".into(),
+        }
+    }
+
+    fn folder_metadata() -> serde_json::Value {
+        serde_json::json!({
+            "id": "77777777-7777-7777-7777-777777777777",
+            "folder": { "childCount": 0 },
+            "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
+            "sharepointIds": {
+                "tenantId": "11111111-1111-1111-1111-111111111111",
+                "siteId": "33333333-3333-3333-3333-333333333333",
+                "webId": "44444444-4444-4444-4444-444444444444",
+                "listId": "55555555-5555-5555-5555-555555555555"
+            },
+            "parentReference": {
+                "driveId": "66666666-6666-6666-6666-666666666666"
+            }
+        })
+    }
+
+    struct SwappingFreshUploadMetadata {
+        source: PathBuf,
+        calls: AtomicU64,
+    }
+
+    impl FreshUploadMetadata for SwappingFreshUploadMetadata {
+        fn metadata(&self, _url: url::Url) -> Result<(Account, serde_json::Value), String> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 4 {
+                fs::write(&self.source, b"replacement bytes")
+                    .expect("the public source can be swapped after proof snapshots its bytes");
+            }
+            Ok((
+                account(),
+                serde_json::json!({
+                    "id": "item!123",
+                    "eTag": "\"fresh,1\"",
+                    "cTag": "\"content,1\"",
+                    "name": "swap.pdf",
+                    "size": 5,
+                    "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/swap.pdf",
+                    "parentReference": {
+                        "driveId": "66666666-6666-6666-6666-666666666666",
+                        "id": "77777777-7777-7777-7777-777777777777"
+                    },
+                    "sharepointIds": {
+                        "tenantId": "11111111-1111-1111-1111-111111111111",
+                        "siteId": "33333333-3333-3333-3333-333333333333",
+                        "webId": "44444444-4444-4444-4444-444444444444",
+                        "listId": "55555555-5555-5555-5555-555555555555",
+                        "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                    },
+                    "createdBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "lastModifiedBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "createdDateTime": "2026-09-14T16:00:00Z",
+                    "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                    "file": {
+                        "mimeType": "application/pdf",
+                        "hashes": { "quickXorHash": "aCgDG9jwBgAAAAAABQAAAAAAAAA=" }
+                    }
+                }),
+            ))
+        }
+    }
+
+    struct SnapshotReadingBoundary {
+        public_source: PathBuf,
+        snapshot_root: PathBuf,
+        read: Mutex<Vec<u8>>,
+    }
+
+    impl WorkerBoundary for SnapshotReadingBoundary {
+        fn extract(
+            &self,
+            _request_id: &str,
+            path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<intern_engine::DocumentSource, WorkerFailure> {
+            assert!(
+                path.starts_with(&self.snapshot_root),
+                "the extractor receives only the private verified snapshot"
+            );
+            *self.read.lock().unwrap() = fs::read(path).unwrap();
+            fs::write(&self.public_source, b"hello").unwrap();
+            Err(WorkerFailure::new("TEST_STOP", false, false))
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    struct NeverAnalyze;
+
+    impl intern_queue::AnalyzerBoundary for NeverAnalyze {
+        fn analyze(
+            &self,
+            _source: &intern_engine::DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<intern_engine::DocumentAnalysis, intern_queue::ModelFailure> {
+            panic!("the test worker stops after reading the extractor path")
+        }
+    }
+
+    struct NoEvents;
+
+    impl intern_queue::PipelineEventSink for NoEvents {
+        fn queue_changed(&self) {}
+
+        fn progress(&self, _progress: intern_queue::PipelineProgress) {}
+    }
+
+    #[test]
+    fn enabled_injected_manager_admits_only_snapshot_bytes_through_the_real_queue() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-enabled-seam-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let inbox = data.join("Inbox");
+        let snapshot_root = data.join("proof-snapshots");
+        fs::create_dir_all(&inbox).unwrap();
+        let source = inbox.join("swap.pdf");
+        fs::write(&source, b"hello").unwrap();
+        let source = source.canonicalize().unwrap();
+        let local_folder = inbox.canonicalize().unwrap().to_string_lossy().into_owned();
+        let settings = AppSettings {
+            intake_folder: local_folder.clone(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        let binding = FolderBinding {
+            local_folder,
+            drive_id: "66666666-6666-6666-6666-666666666666".into(),
+            folder_id: "77777777-7777-7777-7777-777777777777".into(),
+            web_url: "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            web_id: "44444444-4444-4444-4444-444444444444".into(),
+            activation_watermark: Some(1_789_401_599_000),
+        };
+        let metadata = Arc::new(SwappingFreshUploadMetadata {
+            source: source.clone(),
+            calls: AtomicU64::new(0),
+        });
+        let manager = Arc::new(
+            MicrosoftIntake::with_enabled_metadata(
+                settings_store.clone(),
+                data.clone(),
+                test_deployment(),
+                binding,
+                Arc::clone(&metadata) as Arc<dyn FreshUploadMetadata>,
+                snapshot_root.clone(),
+            )
+            .unwrap(),
+        );
+        let worker = Arc::new(SnapshotReadingBoundary {
+            public_source: source.clone(),
+            snapshot_root: snapshot_root.clone(),
+            read: Mutex::new(Vec::new()),
+        });
+        let pipeline = intern_queue::Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::clone(&worker) as Arc<dyn WorkerBoundary>,
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            settings_store,
+        )
+        .unwrap()
+        .with_admission_guard(Arc::clone(&manager) as Arc<dyn AdmissionGuard>);
+
+        pipeline
+            .enqueue_files(std::slice::from_ref(&source))
+            .unwrap();
+        pipeline.run_next().unwrap();
+
+        assert_eq!(&*worker.read.lock().unwrap(), b"hello");
+        assert_eq!(fs::read(&source).unwrap(), b"hello");
+        assert_eq!(metadata.calls.load(Ordering::SeqCst), 4);
+        assert!(fs::read_dir(&snapshot_root).unwrap().next().is_none());
+        drop(pipeline);
+        drop(manager);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn fixed_folder_binding_requires_the_deployment_web_identity() {
+        let deployment = test_deployment();
+        assert!(verified_folder_web_url(&deployment, &account(), &folder_metadata()).is_ok());
+
+        for replacement in [
+            None,
+            Some(serde_json::json!("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
+        ] {
+            let mut metadata = folder_metadata();
+            match replacement {
+                Some(value) => metadata["sharepointIds"]["webId"] = value,
+                None => {
+                    metadata["sharepointIds"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("webId");
+                }
+            }
+            assert!(
+                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
+                "a missing or different web must not bind"
+            );
+        }
+    }
+
+    #[test]
+    fn retryable_proof_outcome_becomes_a_retryable_pipeline_error() {
+        let outcome = FreshUploadOutcome::RetryableUnavailable {
+            reason: "Microsoft Graph is temporarily unavailable.".into(),
+        };
+
+        let Err(error) = verified_upload(outcome) else {
+            panic!("an unavailable proof cannot authorize bytes");
+        };
+
+        assert_eq!(error.code, "UPLOADER_UNVERIFIED");
+        assert_eq!(error.message, "Microsoft Graph is temporarily unavailable.");
+        assert!(error.is_retryable());
+    }
 
     #[test]
     fn disabled_packaged_deployment_fails_every_microsoft_operation_closed() {
@@ -903,5 +1277,129 @@ mod tests {
         fs::write(&path, b"not json").unwrap();
         assert!(read_config(&path).is_err());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_legacy_binding_without_an_activation_watermark_requires_re_pairing() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-legacy-watermark-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        let local_folder = inbox.canonicalize().unwrap().to_string_lossy().into_owned();
+        let legacy = serde_json::json!({
+            "enabled": true,
+            "bindings": [{
+                "localFolder": local_folder,
+                "driveId": "66666666-6666-6666-6666-666666666666",
+                "folderId": "77777777-7777-7777-7777-777777777777",
+                "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
+                "tenantId": "11111111-1111-1111-1111-111111111111"
+            }],
+            "protectedRoots": [local_folder]
+        });
+        fs::write(
+            data.join("microsoft-intake.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let loaded_binding = intake.config.lock().unwrap().bindings[0].clone();
+        let deployment = intake.deployment().unwrap();
+        assert!(
+            loaded_binding
+                .tenant_id
+                .eq_ignore_ascii_case(deployment.tenant_id())
+        );
+        assert!(
+            loaded_binding
+                .drive_id
+                .eq_ignore_ascii_case(deployment.drive_id())
+        );
+        assert!(
+            loaded_binding
+                .folder_id
+                .eq_ignore_ascii_case(deployment.intake_folder_id())
+        );
+        assert!(deployment.is_intake_folder_web_url(&loaded_binding.web_url));
+        let candidate = Path::new(&loaded_binding.local_folder).join("agreement.pdf");
+        assert!(within(&candidate, &loaded_binding.local_folder));
+
+        assert_eq!(
+            intake.scope(&candidate, &settings).unwrap_err(),
+            PAIR_REQUIRED
+        );
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_successful_fixed_binding_persists_its_activation_watermark_across_restart() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-persisted-watermark-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_path = data.join("settings.json");
+        let settings_store = SettingsStore::new(&settings_path);
+        settings_store.save(&settings).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let deployment = intake.deployment().unwrap().clone();
+        let local = inbox.canonicalize().unwrap();
+        let before = chrono::Utc::now().timestamp_millis();
+
+        let binding = intake
+            .persist_verified_binding(
+                &deployment,
+                intake.generation.load(Ordering::SeqCst),
+                &settings,
+                &local,
+                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            )
+            .unwrap();
+
+        let after = chrono::Utc::now().timestamp_millis();
+        let watermark = binding
+            .activation_watermark
+            .expect("a successful binding has an activation watermark");
+        assert!((before..=after).contains(&watermark));
+        drop(intake);
+
+        let restarted = MicrosoftIntake::with_deployment(
+            SettingsStore::new(settings_path),
+            data.clone(),
+            Ok(test_deployment()),
+        );
+        let candidate = local.join("agreement.pdf");
+        let reloaded = restarted.scope(&candidate, &settings).unwrap().unwrap();
+        assert_eq!(reloaded, binding);
+        assert_eq!(
+            read_config(&data.join("microsoft-intake.json"))
+                .unwrap()
+                .bindings,
+            vec![binding]
+        );
+        drop(restarted);
+        let _ = fs::remove_dir_all(data);
     }
 }

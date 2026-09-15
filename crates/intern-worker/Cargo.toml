@@ -30,4 +30,6 @@ msg_parser = "=0.3.6"
 
 [dev-dependencies]
 cfb = "=0.10.0"
+intern-core = { path = "../intern-core" }
+intern-intake = { path = "../intern-intake" }
 tempfile = "=3.23.0"

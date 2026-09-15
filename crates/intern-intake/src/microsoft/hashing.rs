@@ -1,10 +1,11 @@
 //! OneDrive's documented synchronization checksum plus a local cryptographic binding.
 //! QuickXorHash is deliberately NOT treated as an identity signature.
 use base64::{Engine, engine::general_purpose::STANDARD};
+use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{self, Read},
+    io::{self, Read, Write},
     path::Path,
 };
 
@@ -37,10 +38,11 @@ impl QuickXor {
 
 /// Call only AFTER the provider's identity is eligible. A placeholder is never
 /// hydrated merely to find out that it belonged to somebody else.
-pub fn verified_local_hash(
+fn verified_local_hash(
     path: &Path,
     expected_size: u64,
     expected_quick_xor: &str,
+    destination: &mut dyn Write,
 ) -> io::Result<String> {
     let expected = STANDARD
         .decode(expected_quick_xor)
@@ -66,6 +68,7 @@ pub fn verified_local_hash(
         if total > expected_size {
             return Err(io::Error::other("The local file changed"));
         }
+        destination.write_all(&buffer[..count])?;
         quick.update(&buffer[..count]);
         sha.update(&buffer[..count]);
     }
@@ -80,6 +83,23 @@ pub fn verified_local_hash(
         ));
     }
     Ok(format!("{:x}", sha.finalize()))
+}
+
+/// Copies and hashes one open local-file revision so later extraction never
+/// needs to reopen the public, mutable source path.
+pub fn verified_local_snapshot(
+    path: &Path,
+    expected_size: u64,
+    expected_quick_xor: &str,
+    snapshots: &PrivateSnapshotDirectory,
+) -> io::Result<(String, OwnedFileSnapshot)> {
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .ok_or_else(|| io::Error::other("The local file extension is unavailable"))?;
+    let mut snapshot = snapshots.create_for_supported_extension(extension)?;
+    let hash = verified_local_hash(path, expected_size, expected_quick_xor, &mut snapshot)?;
+    Ok((hash, snapshot.finish()?))
 }
 
 #[cfg(test)]
@@ -123,13 +143,34 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("file");
         std::fs::write(&path, b"hello").unwrap();
-        assert!(verified_local_hash(&path, 5, "").is_err());
-        assert!(verified_local_hash(&path, 5, "AAAAAAAAAAAAAAAAAAAAAAAAAAA=").is_err());
+        let mut discarded = io::sink();
+        assert!(verified_local_hash(&path, 5, "", &mut discarded).is_err());
+        assert!(
+            verified_local_hash(&path, 5, "AAAAAAAAAAAAAAAAAAAAAAAAAAA=", &mut discarded,).is_err()
+        );
         let mut q = QuickXor::default();
         q.update(b"hello");
         assert_eq!(
-            verified_local_hash(&path, 5, &STANDARD.encode(q.finish())).unwrap(),
+            verified_local_hash(&path, 5, &STANDARD.encode(q.finish()), &mut discarded).unwrap(),
             format!("{:x}", Sha256::digest(b"hello"))
         );
+    }
+
+    #[test]
+    fn snapshot_rejects_an_extension_the_worker_cannot_route() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("document.exe");
+        std::fs::write(&path, b"hello").unwrap();
+        let root = directory.path().join("snapshots");
+        let snapshots = PrivateSnapshotDirectory::new(&root).unwrap();
+        let mut quick_xor = QuickXor::default();
+        quick_xor.update(b"hello");
+
+        let error =
+            verified_local_snapshot(&path, 5, &STANDARD.encode(quick_xor.finish()), &snapshots)
+                .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(std::fs::read_dir(root).unwrap().next().is_none());
     }
 }

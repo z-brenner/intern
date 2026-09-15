@@ -7,11 +7,12 @@ to process. The admission guard runs before extraction, inference, or any other
 document-content read, and runs again at every later pipeline boundary.
 
 This release supports one fixed deployment: the `Files` library in
-`teamcontoso.sharepoint.com/sites/InternTestSite`, with new uploads arriving
-directly in `Inbox`. Tenant, application, site, library, drive, and folder
-identifiers come only from the versioned deployment resource bundled with the
-application. They are not settings and never cross the webview IPC boundary as
-sign-in or pairing inputs.
+`teamcontoso.sharepoint.com/sites/InternTestSite`. Users must upload each new
+document directly into `Inbox`; copying or moving an existing item there is
+not a supported intake procedure. Tenant, application, site, library, drive,
+and folder identifiers come only from the versioned deployment resource
+bundled with the application. They are not settings and never cross the
+webview IPC boundary as sign-in or pairing inputs.
 
 The bundled resource is currently disabled because real public identifiers
 have not been supplied. Microsoft connection, pairing, and protected-intake
@@ -48,15 +49,20 @@ For every candidate, Intern performs these checks in order:
    timestamps, size, checksum, URL, and ETag/revision.
 
 An exact match is authorized. A valid different creator is held for the other
-account. Missing, conflicting, copied, moved, edited, shortcut, conflict, or
-otherwise ambiguous evidence is held as unknown. Microsoft unavailability or
-throttling remains retryable and never becomes a negative ownership verdict.
-There is no process-anyway override, including for the legacy
+account. Missing, conflicting, detectably copied or moved, edited, shortcut,
+conflict, or otherwise ambiguous evidence is held as unknown. Microsoft
+unavailability or throttling remains retryable and never becomes a negative
+ownership verdict. There is no process-anyway override, including for the legacy
 `processOthersUploads` setting.
 
 SharePoint `createdBy` does not establish who later copied or moved an existing
-item. For that reason this boundary deliberately admits only direct, new,
-unchanged uploads. It does not claim general uploader attribution.
+item. A same-user copy or move can be indistinguishable from a direct upload
+when all required identity, timestamp, location, size, checksum, and revision
+facts match. In that case metadata-only verification may authorize the item;
+this is an accepted limitation and does not prove that the user performed a
+direct upload. The operating requirement remains direct, new, unchanged
+uploads. Every other hold remains in force, including detectable copy/move,
+editing, shortcut, conflict, identity ambiguity, and revision mismatch.
 
 ## OAuth and network boundary
 
@@ -88,9 +94,11 @@ confinement, no-payload IPC, and disabled deployment behavior.
 
 They do not establish live SharePoint compatibility. Before the deployment is
 enabled, a tenant-backed Windows acceptance run must prove that account A can
-process only A's fresh unchanged upload and holds account B, copied, moved,
-edited, shortcut, conflict, unknown, offline, and changed-revision cases before
-content extraction.
+process only A's fresh unchanged upload and holds account B, detectably copied
+or moved, edited, shortcut, conflict, unknown, offline, and changed-revision
+cases before content extraction. The acceptance record must also call out the
+same-user copy/move indistinguishability limitation rather than claiming those
+operations can always be detected.
 
 ## Primary references
 

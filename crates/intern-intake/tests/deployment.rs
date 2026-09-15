@@ -26,6 +26,7 @@ fn accepts_the_fixed_site_library_and_folders_and_encodes_odopen_values() {
     let deployment = SharePointDeployment::from_slice(VALID_DEPLOYMENT.as_bytes())
         .expect("the documented fixed deployment should be valid");
 
+    assert_eq!(deployment.web_id(), "44444444-4444-4444-4444-444444444444");
     assert_eq!(
         deployment
             .odopen_url("ada+intern@example.com")

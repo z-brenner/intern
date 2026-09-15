@@ -135,6 +135,10 @@ impl SharePointDeployment {
         &self.site_id
     }
 
+    pub fn web_id(&self) -> &str {
+        &self.web_id
+    }
+
     pub fn list_id(&self) -> &str {
         &self.list_id
     }

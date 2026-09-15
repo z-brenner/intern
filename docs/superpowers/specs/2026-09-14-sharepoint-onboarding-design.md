@@ -13,7 +13,7 @@ Each installation processes only new documents whose SharePoint `createdBy` acco
 
 ## Trust and limitations
 
-This version deliberately uses SharePoint drive-item metadata rather than Microsoft audit-log searches. It is suitable only for documents newly uploaded directly into `Files/Inbox`. SharePoint `createdBy` is not proof of the actor who later copied or moved an existing item, so copied, moved, edited, shortcut, conflicting, or otherwise ambiguous items are held.
+This version deliberately uses SharePoint drive-item metadata rather than Microsoft audit-log searches. The supported operating procedure requires each document to be newly uploaded directly into `Files/Inbox`. SharePoint `createdBy` is not proof of the actor who later copied or moved an existing item. A same-user copy or move can therefore be indistinguishable from a direct upload when every required identity, creation/modification, location, size, checksum, and revision fact still matches; accepting that case is a known limitation, not a claim that Intern proved the upload operation. Detectably copied or moved items, and edited, shortcut, conflicting, or otherwise ambiguous items, remain held.
 
 The connected Microsoft account is authoritative. A typed name or email never authorizes a document. The UI may display the verified name and email returned by Microsoft, but it does not ask the user to create an identity.
 
@@ -93,7 +93,7 @@ Before extraction or any other content read, the admission guard:
 6. requires `lastModifiedBy` to identify the same account and creation/modification facts to indicate a new, unchanged upload;
 7. verifies remote size/checksum, local checksum, ETag/revision, and then rechecks metadata so a file cannot change between authorization and processing.
 
-The same guard runs for watcher admission, manual import from the protected Inbox, retries, extraction, inference, and file application. A mismatch produces a held status, not a process-anyway button. Microsoft being unreachable is retryable and does not become a negative ownership verdict.
+The same guard runs for watcher admission, manual import from the protected Inbox, retries, extraction, inference, and file application. A mismatch produces a held status, not a process-anyway button. Microsoft being unreachable is retryable and does not become a negative ownership verdict. Passing these checks does not distinguish a direct upload from every same-user copy or move, so users must upload documents directly into `Inbox`.
 
 ## Settings after onboarding
 
@@ -111,7 +111,7 @@ Advanced model settings, learned spellings, update controls, and help remain ava
 - OneDrive absent: link to install/open OneDrive; never claim sync is active.
 - Sync enrollment delayed: continue rescanning without freezing the window; allow safe exit and resume on next launch.
 - Inbox or Filed missing/unwritable: stop activation and identify the missing location.
-- Metadata missing, identity mismatch, copy/move/edit, conflict, or hydration pending: hold the document without reading it.
+- Metadata missing, identity mismatch, detectable copy/move/edit, conflict, or hydration pending: hold the document without reading it.
 - Microsoft unavailable or throttled: keep the document pending and use bounded retry/backoff.
 - Onboarding-state write failure: show retry and do not enter the main application under a false completed state.
 - Start-at-login or background activation failure: report it on the readiness page and do not describe setup as complete.
@@ -129,7 +129,8 @@ Windows integration tests use a fake OneDrive/Graph boundary for deterministic C
 - existing and missing-library-sync onboarding paths;
 - only account A processes a fresh upload created by account A;
 - account A holds account B's upload before content extraction;
-- copied, moved, edited, conflict, shortcut, unknown, offline, and changed-revision cases remain held;
+- detectably copied or moved, edited, conflict, shortcut, unknown, offline, and changed-revision cases remain held;
+- a same-user copy or move whose available metadata is identical to a direct upload is recorded as an accepted limitation of metadata-only verification;
 - `Inbox` to `Filed` movement syncs successfully;
 - restart, tray operation, start-at-login, update-from-alpha.9, reconnect, and uninstall preserve user documents;
 - signed updater installation still succeeds.
