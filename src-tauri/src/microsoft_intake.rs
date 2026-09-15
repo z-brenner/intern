@@ -113,6 +113,13 @@ const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoin
 /// folder or starts syncing it, and every save re-asks anyway.
 const SHARED_INTAKE_RECHECK: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum FixedBindingActivationError<E> {
+    Microsoft(String),
+    Commit(E),
+    Rollback { commit: E, restore: String },
+}
+
 fn verified_upload(
     outcome: FreshUploadOutcome,
 ) -> PipelineResult<(String, Account, OwnedFileSnapshot)> {
@@ -359,6 +366,100 @@ impl MicrosoftIntake {
                     .eq_ignore_ascii_case(deployment.intake_folder_id())
                 && deployment.is_intake_folder_web_url(&binding.web_url)
         })
+    }
+
+    pub(crate) fn fixed_binding_active(
+        &self,
+        deployment: &SharePointDeployment,
+        local_inbox: &Path,
+    ) -> bool {
+        self.deployment.as_ref() == Some(deployment)
+            && self.config.lock().is_ok_and(|config| {
+                config.bindings.iter().any(|binding| {
+                    self.binding_matches_deployment(binding)
+                        && same_path(&binding.local_folder, &local_inbox.to_string_lossy())
+                })
+            })
+    }
+
+    /// Publishes an inactive but protected Inbox stage before the caller's
+    /// local settings commit, then adds the fixed binding and watermark only
+    /// after that commit succeeds. A failure on either side therefore leaves
+    /// no active binding; a rollback failure keeps the root protected and
+    /// fail-closed.
+    pub(crate) fn activate_fixed_binding<E>(
+        &self,
+        deployment: &SharePointDeployment,
+        account: &Account,
+        local_inbox: &Path,
+        commit: impl FnOnce() -> Result<(), E>,
+    ) -> Result<(), FixedBindingActivationError<E>> {
+        if self.deployment.as_ref() != Some(deployment)
+            || !intern_intake::microsoft::proof::is_guid(&account.id)
+            || !account
+                .tenant_id
+                .eq_ignore_ascii_case(deployment.tenant_id())
+        {
+            return Err(FixedBindingActivationError::Microsoft(
+                "The Microsoft account or deployment changed before activation.".into(),
+            ));
+        }
+        if !local_inbox.is_dir() {
+            return Err(FixedBindingActivationError::Microsoft(
+                "The verified local Inbox is no longer available.".into(),
+            ));
+        }
+        let mut config = self.config.lock().map_err(|_| {
+            FixedBindingActivationError::Microsoft("Microsoft configuration is unavailable.".into())
+        })?;
+        if !config.enabled {
+            return Err(FixedBindingActivationError::Microsoft(
+                "Connect Microsoft before activating SharePoint.".into(),
+            ));
+        }
+        let previous = config.clone();
+        let local_folder = local_inbox.to_string_lossy().into_owned();
+        let mut staged = previous.clone();
+        staged
+            .bindings
+            .retain(|entry| !same_path(&entry.local_folder, &local_folder));
+        if !staged
+            .protected_roots
+            .iter()
+            .any(|root| same_path(root, &local_folder))
+        {
+            staged.protected_roots.push(local_folder.clone());
+        }
+        self.save(&staged)
+            .map_err(FixedBindingActivationError::Microsoft)?;
+        *config = staged.clone();
+
+        if let Err(commit_error) = commit() {
+            if let Err(restore) = self.save(&previous) {
+                return Err(FixedBindingActivationError::Rollback {
+                    commit: commit_error,
+                    restore,
+                });
+            }
+            *config = previous;
+            return Err(FixedBindingActivationError::Commit(commit_error));
+        }
+        let binding = FolderBinding {
+            local_folder,
+            drive_id: deployment.drive_id().to_owned(),
+            folder_id: deployment.intake_folder_id().to_owned(),
+            web_url: deployment.intake_folder_web_url(),
+            tenant_id: deployment.tenant_id().to_owned(),
+            web_id: deployment.web_id().to_owned(),
+            activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
+        };
+        let mut next = staged;
+        next.bindings.push(binding);
+        self.save(&next)
+            .map_err(FixedBindingActivationError::Microsoft)?;
+        *config = next;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
     pub fn status(&self) -> MicrosoftStatus {
         let config = self
@@ -1400,6 +1501,64 @@ mod tests {
             vec![binding]
         );
         drop(restarted);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn setup_binding_is_published_with_a_watermark_and_rolled_back_if_local_commit_fails() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-setup-binding-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Files").join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let intake = MicrosoftIntake::with_deployment(
+            SettingsStore::new(data.join("settings.json")),
+            data.clone(),
+            Ok(test_deployment()),
+        );
+        let deployment = intake.deployment().unwrap().clone();
+        let staged_closed = std::cell::Cell::new(false);
+
+        let error = intake
+            .activate_fixed_binding(&deployment, &account(), &inbox, || {
+                let staged = read_config(&data.join("microsoft-intake.json")).unwrap();
+                staged_closed.set(staged.bindings.is_empty() && staged.protected_roots.len() == 1);
+                Err("local save failed")
+            })
+            .expect_err("failed local activation rolls back Microsoft binding");
+
+        assert!(
+            staged_closed.get(),
+            "the local commit runs with a protected but inactive Microsoft binding"
+        );
+        assert_eq!(
+            error,
+            FixedBindingActivationError::Commit("local save failed")
+        );
+        let rolled_back = read_config(&data.join("microsoft-intake.json")).unwrap();
+        assert!(rolled_back.bindings.is_empty());
+        assert!(rolled_back.protected_roots.is_empty());
+
+        intake
+            .activate_fixed_binding(&deployment, &account(), &inbox, || Ok::<_, &str>(()))
+            .expect("successful local activation commits binding");
+        let committed = read_config(&data.join("microsoft-intake.json")).unwrap();
+        assert_eq!(committed.bindings.len(), 1);
+        assert_eq!(committed.protected_roots.len(), 1);
+        assert!(
+            committed.bindings[0]
+                .activation_watermark
+                .is_some_and(|value| value > 0)
+        );
+        assert!(intake.fixed_binding_active(&deployment, &inbox));
+        drop(intake);
         let _ = fs::remove_dir_all(data);
     }
 }

@@ -158,6 +158,18 @@ pub fn relative_to_root(path: &Path, root: &Path) -> Option<String> {
     (!relative.is_empty()).then_some(relative)
 }
 
+/// Whether two normalized paths are equal or one contains the other.
+///
+/// Sync-root discovery can report a parent and a mounted library below it.
+/// Activation must treat that as ambiguous rather than choosing by display
+/// name or by string prefix. This comparison shares the detector's Windows
+/// case/verbatim-prefix rules and remains component-boundary-aware.
+pub fn paths_overlap(left: &Path, right: &Path) -> bool {
+    let left = path_components(left);
+    let right = path_components(right);
+    !left.is_empty() && !right.is_empty() && (left.starts_with(&right) || right.starts_with(&left))
+}
+
 /// The share a path reaches over the network, as `\\server\share`, when it is
 /// one: a UNC path in either its plain or its verbatim spelling, or on
 /// Windows a drive letter the operating system reports as a network drive.

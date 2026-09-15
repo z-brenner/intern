@@ -11,7 +11,7 @@ use std::{
 
 use intern_intake::{
     CloudProviderKind, CloudRoot, EnvProbe, classify, detect_cloud_roots_with, network_share,
-    relative_to_root, unc_share,
+    paths_overlap, relative_to_root, unc_share,
 };
 
 #[derive(Default)]
@@ -193,6 +193,18 @@ fn classify_matches_case_insensitively_and_only_on_component_boundaries() {
         "a sibling folder sharing the prefix string is not inside the root"
     );
     assert!(classify(Path::new("/somewhere/else.pdf"), &roots).is_none());
+}
+
+#[test]
+fn overlap_is_component_wise_and_folds_windows_path_spelling() {
+    assert!(paths_overlap(
+        Path::new(r"C:\Users\Pat\Contoso\Files"),
+        Path::new(r"\\?\c:\users\pat\contoso\files\Nested")
+    ));
+    assert!(!paths_overlap(
+        Path::new(r"C:\Users\Pat\Contoso\Files"),
+        Path::new(r"C:\Users\Pat\Contoso\Files-Backup")
+    ));
 }
 
 /// `canonicalize` on Windows returns `\\?\C:\...` while the registry records

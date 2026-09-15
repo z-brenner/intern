@@ -48,6 +48,6 @@ tauri-plugin-opener = "=2.5.5"
 # against an npm 2.9.0 that had been pinned exactly - which failed the release
 # with "Found version mismatched Tauri packages". Change both or neither.
 tauri-plugin-updater = "=2.10.1"
+url = "=2.5.8"
 
 [dev-dependencies]
-url = "=2.5.8"

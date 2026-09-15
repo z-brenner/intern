@@ -25,7 +25,8 @@ pub mod watcher;
 
 pub use cloud::{
     CloudLocation, CloudProviderKind, CloudRoot, EnvProbe, SystemEnv, classify, detect_cloud_roots,
-    detect_cloud_roots_with, matching_root, network_share, relative_to_root, unc_share,
+    detect_cloud_roots_with, matching_root, network_share, paths_overlap, relative_to_root,
+    unc_share,
 };
 pub use coordination::{
     AcquireOutcome, CLAIM_LEASE_SECONDS, CLAIM_RENEW_THRESHOLD_SECONDS, COURTESY_DELAY_SECONDS,

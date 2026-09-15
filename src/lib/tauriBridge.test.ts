@@ -40,6 +40,36 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  it('starts fixed SharePoint sync and activation without identifier or path payloads', async () => {
+    const fake = fakeTransport({
+      onboarding_start_sharepoint_sync: {
+        phase: 'enrollment_pending',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
+      onboarding_activate: {
+        phase: 'active',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect((await bridge.startSharePointSync()).phase).toBe('enrollment_pending');
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+
+    expect(fake.calls).toEqual([
+      { command: 'onboarding_start_sharepoint_sync', args: undefined },
+      { command: 'onboarding_activate', args: undefined },
+    ]);
+  });
+
   it('maps the exact narrow command names and JSON-safe payloads', async () => {
     const fake = fakeTransport({
       queue_list: [],

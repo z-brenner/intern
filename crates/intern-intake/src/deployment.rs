@@ -147,6 +147,25 @@ impl SharePointDeployment {
         &self.drive_id
     }
 
+    pub fn library_name(&self) -> &str {
+        &self.library_name
+    }
+
+    pub fn intake_folder_name(&self) -> &str {
+        &self.intake_folder_name
+    }
+
+    pub fn destination_folder_name(&self) -> &str {
+        &self.destination_folder_name
+    }
+
+    pub fn intake_folder_web_url(&self) -> String {
+        format!(
+            "{}/{}/{}",
+            self.site_url, self.library_name, self.intake_folder_name
+        )
+    }
+
     pub fn intake_folder_id(&self) -> &str {
         &self.intake_folder_id
     }
