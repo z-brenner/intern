@@ -205,6 +205,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       completedVersion: completedOnboardingVersion,
       required: completedOnboardingVersion < 1,
     }),
+    startSharePointSync: async () => { throw { code: 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE', message: microsoftUnavailable }; },
+    activateOnboarding: async () => { throw { code: 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE', message: microsoftUnavailable }; },
     completeOnboarding: async () => { completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
     microsoftIntakeStatus: async () => ({
       connected: false,

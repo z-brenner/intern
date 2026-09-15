@@ -8,6 +8,7 @@ pub mod microsoft_intake;
 pub mod model;
 pub mod onboarding;
 pub mod secrets;
+pub mod sharepoint_setup;
 pub mod tray;
 
 pub fn run() {
@@ -83,6 +84,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             onboarding::onboarding_status,
             onboarding::onboarding_complete,
+            sharepoint_setup::onboarding_start_sharepoint_sync,
+            sharepoint_setup::onboarding_activate,
             microsoft_intake::microsoft_intake_status,
             microsoft_intake::microsoft_sign_in_start,
             microsoft_intake::microsoft_sign_in_poll,

@@ -1,7 +1,7 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState } from '../types';
+import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL } from './bridge';
 import type {
   DescriptionsEventSource,
@@ -149,6 +149,8 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
 
   getSetup(): Promise<SetupState> { return this.transport.invoke('setup_get'); }
   getOnboarding(): Promise<OnboardingStatus> { return this.transport.invoke('onboarding_status'); }
+  startSharePointSync(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_start_sharepoint_sync'); }
+  activateOnboarding(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_activate'); }
   completeOnboarding(): Promise<void> { return this.transport.invoke('onboarding_complete'); }
   startModelDownload(): Promise<void> { return this.transport.invoke('setup_start'); }
   setupCancel(): Promise<void> { return this.transport.invoke('setup_cancel'); }

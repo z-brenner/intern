@@ -94,6 +94,21 @@ export interface OnboardingStatus {
   required: boolean;
 }
 
+export type SharePointSetupPhase = 'enrollment_pending' | 'ready_to_activate' | 'active';
+
+/** Fixed-deployment setup status; backend-only identifiers and local paths are omitted. */
+export interface SharePointSetupStatus {
+  phase: SharePointSetupPhase;
+  account: {
+    displayName: string;
+    email: string;
+  };
+  site: 'InternTestSite';
+  library: 'Files';
+  intake: 'Inbox';
+  destination: 'Filed';
+}
+
 /** What Settings shows about the hosted model. The key itself never comes back. */
 export interface HostedModelStatus {
   keyStored: boolean;
