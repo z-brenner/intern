@@ -83,12 +83,19 @@ struct FreshFacts {
     modified_at: String,
     web_url: String,
     list_item_id: String,
-    creator_id: Option<String>,
-    creator_tenant_id: Option<String>,
-    creator_principal: Option<String>,
-    modifier_id: Option<String>,
-    modifier_tenant_id: Option<String>,
-    modifier_principal: Option<String>,
+    creator_id: ActorField,
+    creator_tenant_id: ActorField,
+    creator_principal: ActorField,
+    modifier_id: ActorField,
+    modifier_tenant_id: ActorField,
+    modifier_principal: ActorField,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ActorField {
+    Missing,
+    Valid(String),
+    Malformed,
 }
 
 enum Actor {
@@ -284,12 +291,12 @@ fn fresh_facts(
         modified_at: modified_at.to_owned(),
         web_url: web_url.to_owned(),
         list_item_id: list_item_id.to_owned(),
-        creator_id: optional_text(metadata, "/createdBy/user/id"),
-        creator_tenant_id: optional_text(metadata, "/createdBy/user/tenantId"),
-        creator_principal: optional_text(metadata, "/createdBy/user/userPrincipalName"),
-        modifier_id: optional_text(metadata, "/lastModifiedBy/user/id"),
-        modifier_tenant_id: optional_text(metadata, "/lastModifiedBy/user/tenantId"),
-        modifier_principal: optional_text(metadata, "/lastModifiedBy/user/userPrincipalName"),
+        creator_id: actor_guid_field(metadata, "/createdBy/user/id"),
+        creator_tenant_id: actor_guid_field(metadata, "/createdBy/user/tenantId"),
+        creator_principal: actor_field(metadata, "/createdBy/user/userPrincipalName"),
+        modifier_id: actor_guid_field(metadata, "/lastModifiedBy/user/id"),
+        modifier_tenant_id: actor_guid_field(metadata, "/lastModifiedBy/user/tenantId"),
+        modifier_principal: actor_field(metadata, "/lastModifiedBy/user/userPrincipalName"),
     })
 }
 
@@ -307,49 +314,56 @@ fn actor(facts: &FreshFacts, account: &Account, creator: bool) -> Actor {
             &facts.modifier_principal,
         )
     };
-    if tenant_id.as_ref().is_some_and(|tenant_id| {
-        !is_guid(tenant_id) || !tenant_id.eq_ignore_ascii_case(&account.tenant_id)
-    }) {
-        return Actor::Unknown;
-    }
-    if let Some(id) = id {
-        if !is_guid(id) {
+    match tenant_id {
+        ActorField::Malformed => return Actor::Unknown,
+        ActorField::Valid(tenant_id) if !tenant_id.eq_ignore_ascii_case(&account.tenant_id) => {
             return Actor::Unknown;
         }
+        ActorField::Missing | ActorField::Valid(_) => {}
+    }
+    if let ActorField::Valid(id) = id {
         if id.eq_ignore_ascii_case(&account.id) {
-            if principal.as_ref().is_some_and(|principal| {
-                account.user_principal_name.is_empty()
-                    || !principal.eq_ignore_ascii_case(&account.user_principal_name)
-            }) {
-                return Actor::Unknown;
-            }
             return Actor::Me;
         }
+        let principal = match principal {
+            ActorField::Valid(principal) => principal.clone(),
+            ActorField::Missing | ActorField::Malformed => String::new(),
+        };
         return Actor::Other(Account {
             tenant_id: account.tenant_id.clone(),
             id: id.to_ascii_lowercase(),
             display_name: String::new(),
-            email: principal.clone().unwrap_or_default(),
-            user_principal_name: principal.clone().unwrap_or_default(),
+            email: principal.clone(),
+            user_principal_name: principal,
         });
     }
-    if !account.user_principal_name.is_empty()
-        && principal
-            .as_ref()
-            .is_some_and(|principal| principal.eq_ignore_ascii_case(&account.user_principal_name))
-    {
-        Actor::Me
-    } else {
-        Actor::Unknown
+    match (id, principal) {
+        (ActorField::Missing, ActorField::Valid(principal))
+            if !account.user_principal_name.is_empty()
+                && principal.eq_ignore_ascii_case(&account.user_principal_name) =>
+        {
+            Actor::Me
+        }
+        _ => Actor::Unknown,
     }
 }
 
-fn optional_text(value: &Value, pointer: &str) -> Option<String> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_str)
-        .filter(|text| !text.trim().is_empty() && text.len() <= 4096)
-        .map(str::to_owned)
+fn actor_guid_field(value: &Value, pointer: &str) -> ActorField {
+    match actor_field(value, pointer) {
+        ActorField::Valid(text) if is_guid(&text) => ActorField::Valid(text),
+        ActorField::Valid(_) => ActorField::Malformed,
+        other => other,
+    }
+}
+
+fn actor_field(value: &Value, pointer: &str) -> ActorField {
+    match value.pointer(pointer) {
+        None => ActorField::Missing,
+        Some(Value::String(text)) if !text.trim().is_empty() && text.len() <= 4096 => {
+            ActorField::Valid(text.clone())
+        }
+        Some(_) => ActorField::Malformed,
+    }
 }
 
 /// Legacy first-read parser retained for compatibility with inactive audit

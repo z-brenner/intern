@@ -212,6 +212,80 @@ fn matching_verified_principals_are_a_fallback_only_when_both_ids_are_absent() {
 }
 
 #[test]
+fn malformed_actor_ids_never_fall_back_to_a_matching_principal() {
+    let (directory, file) = fresh_file();
+    let malformed_ids = [
+        ("null", Value::Null),
+        ("blank", json!(" \t")),
+        ("non-string", json!(17)),
+        ("oversize", json!("x".repeat(4097))),
+        ("non-GUID", json!("17")),
+    ];
+
+    for pointer in ["/createdBy/user/id", "/lastModifiedBy/user/id"] {
+        for (case, malformed_id) in &malformed_ids {
+            let mut value = metadata();
+            *value.pointer_mut(pointer).unwrap() = malformed_id.clone();
+            let source = ScriptedMetadata::new([Ok((me(), value.clone())), Ok((me(), value))]);
+
+            assert!(
+                matches!(
+                    verify(&source, directory.path(), &file),
+                    FreshUploadOutcome::HeldUnknown { .. }
+                ),
+                "{pointer}: {case}"
+            );
+            assert_eq!(source.urls.lock().unwrap().len(), 1, "{pointer}: {case}");
+        }
+    }
+}
+
+#[test]
+fn malformed_actor_tenants_hold_even_when_the_object_id_matches() {
+    let (directory, file) = fresh_file();
+    let malformed_tenants = [
+        ("null", Value::Null),
+        ("blank", json!(" \t")),
+        ("non-string", json!(17)),
+        ("oversize", json!("x".repeat(4097))),
+        ("non-GUID", json!("tenant")),
+    ];
+
+    for pointer in ["/createdBy/user/tenantId", "/lastModifiedBy/user/tenantId"] {
+        for (case, malformed_tenant) in &malformed_tenants {
+            let mut value = metadata();
+            value["createdBy"]["user"]["tenantId"] = json!(TENANT);
+            value["lastModifiedBy"]["user"]["tenantId"] = json!(TENANT);
+            *value.pointer_mut(pointer).unwrap() = malformed_tenant.clone();
+            let source = ScriptedMetadata::new([Ok((me(), value.clone())), Ok((me(), value))]);
+
+            assert!(
+                matches!(
+                    verify(&source, directory.path(), &file),
+                    FreshUploadOutcome::HeldUnknown { .. }
+                ),
+                "{pointer}: {case}"
+            );
+            assert_eq!(source.urls.lock().unwrap().len(), 1, "{pointer}: {case}");
+        }
+    }
+}
+
+#[test]
+fn a_valid_matching_object_id_is_authoritative_over_a_conflicting_principal() {
+    let (directory, file) = fresh_file();
+    let mut value = metadata();
+    value["createdBy"]["user"]["userPrincipalName"] = json!("other@example.test");
+    value["lastModifiedBy"]["user"]["userPrincipalName"] = json!("other@example.test");
+    let source = ScriptedMetadata::new([Ok((me(), value.clone())), Ok((me(), value))]);
+
+    assert!(matches!(
+        verify(&source, directory.path(), &file),
+        FreshUploadOutcome::Authorized { .. }
+    ));
+}
+
+#[test]
 fn a_conflicting_creator_id_is_never_overridden_by_a_matching_principal() {
     let (directory, file) = fresh_file();
     let mut value = metadata();
