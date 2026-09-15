@@ -327,14 +327,7 @@ impl IntakeHost for PipelineIntakeHost {
         let manager = self
             .app
             .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>();
-        match manager.authorize(path, AdmissionStage::Enqueue) {
-            Ok(evidence) if evidence.verified_hash().is_some() => {
-                intern_intake::IntakeAdmission::Verified
-            }
-            Ok(_) => intern_intake::IntakeAdmission::LocalOnly,
-            Err(error) if error.code == "UPLOADER_OTHER" => intern_intake::IntakeAdmission::Other,
-            Err(_) => intern_intake::IntakeAdmission::Unknown,
-        }
+        intake_admission(manager.authorize(path, AdmissionStage::Enqueue))
     }
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String> {
         let mut canonical = Vec::with_capacity(paths.len());
@@ -385,6 +378,20 @@ impl IntakeHost for PipelineIntakeHost {
             now_unix(),
         );
         let _ = self.app.emit("intake://changed", dto);
+    }
+}
+
+fn intake_admission(
+    result: intern_queue::PipelineResult<intern_queue::AdmissionEvidence>,
+) -> intern_intake::IntakeAdmission {
+    match result {
+        Ok(evidence) if evidence.verified_hash().is_some() => {
+            intern_intake::IntakeAdmission::Verified
+        }
+        Ok(_) => intern_intake::IntakeAdmission::LocalOnly,
+        Err(error) if error.is_retryable() => intern_intake::IntakeAdmission::Retryable,
+        Err(error) if error.code == "UPLOADER_OTHER" => intern_intake::IntakeAdmission::Other,
+        Err(_) => intern_intake::IntakeAdmission::Unknown,
     }
 }
 
@@ -720,6 +727,19 @@ mod filed_index_tests {
     use intern_intake::FiledMarker;
 
     use super::known_filing;
+
+    #[test]
+    fn retryable_pipeline_admission_reaches_the_watcher_without_collapsing() {
+        let result = Err(intern_queue::PipelineError::retryable(
+            "UPLOADER_UNVERIFIED",
+            "Microsoft Graph is temporarily unavailable.",
+        ));
+
+        assert_eq!(
+            super::intake_admission(result),
+            intern_intake::IntakeAdmission::Retryable
+        );
+    }
 
     fn marker(machine_id: &str) -> FiledMarker {
         FiledMarker {

@@ -119,6 +119,7 @@ impl PipelineEventSink for RecordingEvents {
 
 struct FakeWorker {
     responses: Mutex<VecDeque<Result<DocumentSource, WorkerFailure>>>,
+    calls: AtomicUsize,
     active: AtomicUsize,
     maximum_active: AtomicUsize,
     cancellations: AtomicUsize,
@@ -130,6 +131,7 @@ impl FakeWorker {
     fn new(responses: Vec<Result<DocumentSource, WorkerFailure>>) -> Self {
         Self {
             responses: Mutex::new(responses.into()),
+            calls: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             maximum_active: AtomicUsize::new(0),
             cancellations: AtomicUsize::new(0),
@@ -152,6 +154,7 @@ impl WorkerBoundary for FakeWorker {
         _path: &Path,
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.maximum_active.fetch_max(active, Ordering::SeqCst);
         let (lock, wake) = &self.gate;
@@ -433,6 +436,7 @@ impl AnalyzerBoundary for BlockingModel {
 #[derive(Default)]
 struct FakeFiles {
     hashes: Mutex<HashMap<PathBuf, String>>,
+    fingerprint_calls: AtomicUsize,
     applies: Mutex<Vec<i64>>,
     reconciles: Mutex<Vec<i64>>,
     fail_next_apply: AtomicUsize,
@@ -456,6 +460,7 @@ impl FakeFiles {
 
 impl FileActions for FakeFiles {
     fn fingerprint(&self, path: &Path) -> Result<String, PipelineError> {
+        self.fingerprint_calls.fetch_add(1, Ordering::SeqCst);
         self.hashes
             .lock()
             .unwrap()
@@ -2962,6 +2967,317 @@ fn a_teammates_filing_with_nearly_this_text_is_named_with_their_machine() {
 struct UploaderGuard {
     allowed: AtomicBool,
     hash: Option<String>,
+}
+
+struct RetryableStageGuard {
+    stage: intern_queue::AdmissionStage,
+    retrying: AtomicBool,
+}
+
+impl RetryableStageGuard {
+    fn unavailable_at(stage: intern_queue::AdmissionStage) -> Self {
+        Self {
+            stage,
+            retrying: AtomicBool::new(true),
+        }
+    }
+
+    fn allowed_until(stage: intern_queue::AdmissionStage) -> Self {
+        Self {
+            stage,
+            retrying: AtomicBool::new(false),
+        }
+    }
+
+    fn retry(&self) {
+        self.retrying.store(true, Ordering::SeqCst);
+    }
+
+    fn allow(&self) {
+        self.retrying.store(false, Ordering::SeqCst);
+    }
+}
+
+impl intern_queue::AdmissionGuard for RetryableStageGuard {
+    fn authorize(
+        &self,
+        _path: &Path,
+        stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        if stage == self.stage && self.retrying.load(Ordering::SeqCst) {
+            Err(PipelineError::retryable(
+                "MICROSOFT_UNAVAILABLE",
+                "Microsoft upload verification is temporarily unavailable.",
+            ))
+        } else {
+            Ok(intern_queue::AdmissionEvidence::local())
+        }
+    }
+}
+
+fn automatic_settings() -> AppSettings {
+    AppSettings {
+        automatic_rename: true,
+        ..AppSettings::default()
+    }
+}
+
+const RETRY_DOCUMENT: &str =
+    "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+
+#[test]
+fn retryable_enqueue_stops_before_fingerprinting_or_creating_a_row() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "enqueue-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let files = Arc::new(FakeFiles::default());
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Enqueue,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        model,
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+
+    let error = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap_err();
+
+    assert!(error.is_retryable());
+    assert_eq!(error.code, "MICROSOFT_UNAVAILABLE");
+    assert_eq!(files.fingerprint_calls.load(Ordering::SeqCst), 0);
+    assert!(pipeline.list().unwrap().is_empty());
+
+    files.trust(&path, "enqueue-hash");
+    guard.allow();
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Ready);
+    assert_eq!(files.applies.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn retryable_extract_restores_queued_and_stops_the_current_drain() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "extract-retry-a.pdf");
+    let second = source(temp.path(), "extract-retry-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "extract-a-hash");
+    files.trust(&second, "extract-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Extract,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap();
+    assert!(waiting.iter().all(|item| {
+        item.status == QueueStatus::Queued && item.error_code.is_none() && item.proposal.is_none()
+    }));
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(files.applies.lock().unwrap().is_empty());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        pipeline
+            .list()
+            .unwrap()
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready)
+    );
+    assert_eq!(files.applies.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn retryable_analyze_restores_queued_and_stops_the_current_drain() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "analyze-retry-a.pdf");
+    let second = source(temp.path(), "analyze-retry-b.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+        Ok(parsed(RETRY_DOCUMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "analyze-a-hash");
+    files.trust(&second, "analyze-b-hash");
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Analyze,
+    ));
+    let pipeline = pipeline(
+        temp.path(),
+        worker.clone(),
+        model.clone(),
+        files.clone(),
+        automatic_settings(),
+    )
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap();
+    assert!(waiting.iter().all(|item| {
+        item.status == QueueStatus::Queued && item.error_code.is_none() && item.proposal.is_none()
+    }));
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(files.applies.lock().unwrap().is_empty());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    assert!(
+        pipeline
+            .list()
+            .unwrap()
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready)
+    );
+    assert_eq!(files.applies.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn retryable_automatic_apply_preserves_ready_proposal_without_file_actions() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&filed).unwrap();
+    let path = source(&inbox, "automatic-apply-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let guard = Arc::new(RetryableStageGuard::unavailable_at(
+        intern_queue::AdmissionStage::Apply,
+    ));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        model.clone(),
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+    pipeline.enqueue_files(&[path]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let waiting = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(waiting.status, QueueStatus::Ready);
+    assert_eq!(waiting.error_code, None);
+    let proposal_before = waiting
+        .proposal
+        .expect("analysis produced a ready proposal");
+    assert!(waiting.receipt.is_none());
+    assert!(waiting.source_path.exists());
+    assert!(fs::read_dir(&filed).unwrap().next().is_none());
+
+    guard.allow();
+    pipeline.run_until_idle().unwrap();
+    let filed = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(filed.proposal.as_ref(), Some(&proposal_before));
+    assert!(filed.receipt.is_some());
+    assert!(!filed.source_path.exists());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn retryable_apply_during_approval_preserves_ready_proposal() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&filed).unwrap();
+    let path = source(&inbox, "approved-apply-retry.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let guard = Arc::new(RetryableStageGuard::allowed_until(
+        intern_queue::AdmissionStage::Apply,
+    ));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker.clone(),
+        model.clone(),
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_admission_guard(guard.clone());
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+    pipeline.run_until_idle().unwrap();
+    let ready = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(ready.status, QueueStatus::Ready);
+    let proposal_before = ready.proposal.clone().unwrap();
+
+    guard.retry();
+    let error = pipeline
+        .approve(id, "2024-04-12 Employment Agreement.pdf", "")
+        .unwrap_err();
+
+    assert!(error.is_retryable());
+    let retained = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(retained.status, QueueStatus::Ready);
+    assert_eq!(retained.error_code, None);
+    assert_eq!(retained.proposal.as_ref(), Some(&proposal_before));
+    assert!(retained.receipt.is_none());
+    assert!(retained.source_path.exists());
+    assert!(fs::read_dir(&filed).unwrap().next().is_none());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+
+    guard.allow();
+    pipeline
+        .approve(id, "2024-04-12 Employment Agreement.pdf", "")
+        .unwrap();
+    let completed = pipeline.list().unwrap().pop().unwrap();
+    assert_eq!(completed.status, QueueStatus::Completed);
+    assert!(completed.receipt.is_some());
+    assert!(!completed.source_path.exists());
 }
 
 const SNAPSHOT_TENANT: &str = "11111111-1111-1111-1111-111111111111";

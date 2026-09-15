@@ -181,6 +181,7 @@ pub use intern_engine::ExtractFailure as WorkerFailure;
 pub struct PipelineError {
     pub code: String,
     pub message: String,
+    retryable: bool,
 }
 
 impl PipelineError {
@@ -188,7 +189,20 @@ impl PipelineError {
         Self {
             code: code.into(),
             message: message.into(),
+            retryable: false,
         }
+    }
+
+    pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        self.retryable
     }
 }
 
@@ -897,6 +911,16 @@ impl Pipeline {
         };
         let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
             Ok(evidence) => evidence,
+            Err(error) if error.is_retryable() => {
+                self.store.transition(
+                    item.id,
+                    QueueStatus::Extracting,
+                    QueueStatus::Queued,
+                    None,
+                )?;
+                self.events.queue_changed();
+                return Ok(false);
+            }
             Err(_) => {
                 self.store.transition(
                     item.id,
@@ -1028,17 +1052,22 @@ impl Pipeline {
             .unwrap_or_default()
             .to_owned();
         let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
-        if self.authorize_item(&item, AdmissionStage::Analyze).is_err() {
+        if let Err(error) = self.authorize_item(&item, AdmissionStage::Analyze) {
             lease.stop_and_check()?;
-            self.store.transition(
-                item.id,
-                QueueStatus::Analyzing,
-                QueueStatus::NeedsReview,
-                Some(ErrorCode::UploaderUnverified),
-            )?;
+            let (next, code, keep_draining) = if error.is_retryable() {
+                (QueueStatus::Queued, None, false)
+            } else {
+                (
+                    QueueStatus::NeedsReview,
+                    Some(ErrorCode::UploaderUnverified),
+                    true,
+                )
+            };
+            self.store
+                .transition(item.id, QueueStatus::Analyzing, next, code)?;
             self.active_item.store(0, Ordering::SeqCst);
             self.events.queue_changed();
-            return Ok(true);
+            return Ok(keep_draining);
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => analysis,
@@ -1455,10 +1484,12 @@ impl Pipeline {
         settings: &AppSettings,
     ) -> PipelineResult<()> {
         if let Err(error) = self.authorize_item(item, AdmissionStage::Apply) {
-            let _ = self
-                .repository
-                .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
-            self.events.queue_changed();
+            if !error.is_retryable() {
+                let _ = self
+                    .repository
+                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
+                self.events.queue_changed();
+            }
             return Err(error);
         }
         let fingerprint = match self.files.fingerprint(&item.source_path) {
@@ -1801,10 +1832,12 @@ impl Pipeline {
             ));
         }
         if let Err(error) = self.authorize_item(&item, AdmissionStage::Apply) {
-            let _ = self
-                .repository
-                .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
-            self.events.queue_changed();
+            if !error.is_retryable() {
+                let _ = self
+                    .repository
+                    .mark_needs_review(item.id, "UPLOADER_UNVERIFIED");
+                self.events.queue_changed();
+            }
             return Err(error);
         }
         let proposed = self.repository.load_proposal(id)?;

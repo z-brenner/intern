@@ -110,6 +110,29 @@ const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoin
 /// every file of every scan; the answer changes only when someone moves the
 /// folder or starts syncing it, and every save re-asks anyway.
 const SHARED_INTAKE_RECHECK: Duration = Duration::from_secs(30);
+
+fn verified_upload(
+    outcome: FreshUploadOutcome,
+) -> PipelineResult<(String, Account, OwnedFileSnapshot)> {
+    match outcome {
+        FreshUploadOutcome::Authorized {
+            local_sha256,
+            uploader,
+            snapshot,
+        } => Ok((local_sha256, uploader, snapshot)),
+        FreshUploadOutcome::HeldOther { reason, .. } => Err(PipelineError::new(
+            "UPLOADER_OTHER",
+            format!("UPLOADER_OTHER: {reason}"),
+        )),
+        FreshUploadOutcome::HeldUnknown { reason } => {
+            Err(PipelineError::new("UPLOADER_UNVERIFIED", reason))
+        }
+        FreshUploadOutcome::RetryableUnavailable { reason } => {
+            Err(PipelineError::retryable("UPLOADER_UNVERIFIED", reason))
+        }
+    }
+}
+
 impl MicrosoftIntake {
     pub fn new(settings: SettingsStore, data: PathBuf) -> Self {
         let deployment = SharePointDeployment::from_slice(include_bytes!(
@@ -542,47 +565,52 @@ impl MicrosoftIntake {
         &self,
         path: &Path,
         settings: &AppSettings,
-    ) -> Result<Option<(String, Account, Account, OwnedFileSnapshot)>, String> {
+    ) -> PipelineResult<Option<(String, Account, Account, OwnedFileSnapshot)>> {
         let epoch = self.generation.load(Ordering::SeqCst);
-        let Some(binding) = self.scope(path, settings)? else {
+        let Some(binding) = self
+            .scope(path, settings)
+            .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?
+        else {
             return Ok(None);
         };
-        let activation_watermark = binding
-            .activation_watermark
-            .ok_or("Pair the saved intake folder again. Unverified uploads remain held.")?;
-        let deployment = self.deployment()?;
-        let (hash, uploader, snapshot) = match verify_fresh_upload(
+        let activation_watermark = binding.activation_watermark.ok_or_else(|| {
+            PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "Pair the saved intake folder again. Unverified uploads remain held.",
+            )
+        })?;
+        let deployment = self
+            .deployment()
+            .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?;
+        let outcome = verify_fresh_upload(
             deployment,
-            self.client()?,
+            self.client()
+                .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?,
             activation_watermark,
-            self.snapshot_directory()?,
+            self.snapshot_directory()
+                .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?,
             Path::new(&binding.local_folder),
             path,
-        ) {
-            FreshUploadOutcome::Authorized {
-                local_sha256,
-                uploader,
-                snapshot,
-            } => (local_sha256, uploader, snapshot),
-            FreshUploadOutcome::HeldOther { uploader, reason } => {
-                self.note(path, "other", Some(uploader), None, None, &reason);
-                return Err(format!("UPLOADER_OTHER: {reason}"));
-            }
-            FreshUploadOutcome::HeldUnknown { reason }
-            | FreshUploadOutcome::RetryableUnavailable { reason } => return Err(reason),
-        };
-        if self.generation.load(Ordering::SeqCst) != epoch {
-            return Err(
-                "The Microsoft connection changed during verification. The file remains held."
-                    .into(),
-            );
+        );
+        if let FreshUploadOutcome::HeldOther { uploader, reason } = &outcome {
+            self.note(path, "other", Some(uploader.clone()), None, None, reason);
         }
-        let latest = self.settings.load().map_err(|error| error.to_string())?;
+        let (hash, uploader, snapshot) = verified_upload(outcome)?;
+        if self.generation.load(Ordering::SeqCst) != epoch {
+            return Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "The Microsoft connection changed during verification. The file remains held.",
+            ));
+        }
+        let latest = self.settings.load()?;
         if latest.intake_folder != settings.intake_folder
             || latest.process_others_uploads != settings.process_others_uploads
             || latest.intake_local_only != settings.intake_local_only
         {
-            return Err("Intake scope changed during verification. The file remains held.".into());
+            return Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "Intake scope changed during verification. The file remains held.",
+            ));
         }
         Ok(Some((hash, uploader.clone(), uploader, snapshot)))
     }
@@ -662,18 +690,11 @@ impl AdmissionGuard for MicrosoftIntake {
                 );
                 Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
             }
-            Err(message) => {
-                if !message.starts_with("UPLOADER_OTHER:") {
-                    self.note(path, "unknown", None, None, None, &message);
+            Err(error) => {
+                if error.code != "UPLOADER_OTHER" && !error.is_retryable() {
+                    self.note(path, "unknown", None, None, None, &error.message);
                 }
-                Err(PipelineError::new(
-                    if message.starts_with("UPLOADER_OTHER:") {
-                        "UPLOADER_OTHER"
-                    } else {
-                        "UPLOADER_UNVERIFIED"
-                    },
-                    message,
-                ))
+                Err(error)
             }
         }
     }
@@ -808,6 +829,21 @@ mod tests {
             }"#,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn retryable_proof_outcome_becomes_a_retryable_pipeline_error() {
+        let outcome = FreshUploadOutcome::RetryableUnavailable {
+            reason: "Microsoft Graph is temporarily unavailable.".into(),
+        };
+
+        let Err(error) = verified_upload(outcome) else {
+            panic!("an unavailable proof cannot authorize bytes");
+        };
+
+        assert_eq!(error.code, "UPLOADER_UNVERIFIED");
+        assert_eq!(error.message, "Microsoft Graph is temporarily unavailable.");
+        assert!(error.is_retryable());
     }
 
     #[test]
