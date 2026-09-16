@@ -12,6 +12,8 @@ import { SettingsDialog } from './SettingsDialog';
 
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
 const RESCAN_INTERVAL_MS = 5000;
+/** Codes a rescan can report while OneDrive is still adding the library; the step keeps waiting through them. */
+const TRANSIENT_WHILE_SYNCING = ['SHAREPOINT_SYNC_PENDING', 'SHAREPOINT_ROOT_UNVERIFIED'];
 
 type Step = 'welcome' | 'model' | 'microsoft' | 'sync' | 'activate' | 'finished';
 const STEPS: Array<[Step, string]> = [
@@ -77,7 +79,7 @@ export function OnboardingFlow({ bridge, selection, pendingSettings, pendingSetu
       {step === 'microsoft' && <MicrosoftStep heading={heading} bridge={bridge} onConfirmed={() => setStep('sync')} />}
       {step === 'sync' && <SyncStep heading={heading} bridge={bridge} onLibrary={showLibrary} onSwitchAccount={() => setStep('microsoft')} />}
       {step === 'activate' && library && <ActivateStep heading={heading} bridge={bridge} onLibrary={showLibrary} />}
-      {step === 'finished' && library && <FinishedStep heading={heading} bridge={bridge} library={library} onComplete={onComplete} />}
+      {step === 'finished' && library && <FinishedStep heading={heading} bridge={bridge} library={library} onLibrary={showLibrary} onComplete={onComplete} />}
     </section>
   </main>;
 }
@@ -150,7 +152,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
         <button type="button" ref={hostedTrigger} onClick={() => setHostedOpen(true)} disabled={downloading || busy || !settings}>Use a hosted model instead</button>
       </div>
     </details>
-    {hostedOpen && settings && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeHosted} onSave={async (next) => { await bridge.saveSettings(next); setSettings(next); closeHosted(); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {hostedOpen && settings && <SettingsDialog hideSharePointConnection settings={settings} bridge={bridge} selection={selection} onClose={closeHosted} onSave={async (next) => { await bridge.saveSettings(next); setSettings(next); closeHosted(); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
   </>;
 }
 
@@ -257,7 +259,6 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
 function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: HeadingRef; bridge: DesktopBridge; onLibrary(status: SharePointSetupStatus): void; onSwitchAccount(): void }) {
   const [needsSync, setNeedsSync] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const [requested, setRequested] = useState(false);
   const { busy, problem, setProblem, run, mounted } = useAction();
   const support = useSupportLink(bridge);
 
@@ -274,7 +275,6 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
   });
   const requestSync = () => void run(async () => {
     setWaiting(false);
-    setRequested(true);
     const status = await bridge.startSharePointSync();
     if (mounted.current && !route(status)) setWaiting(true);
   });
@@ -292,8 +292,10 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
       } catch (cause) {
         if (!active) return;
         const next = describeSharePointProblem(cause);
-        // Still syncing is not a failure; keep waiting.
-        if (next.code !== 'SHAREPOINT_SYNC_PENDING') { setWaiting(false); setProblem(next); return; }
+        // Still syncing is not a failure; keep waiting. OneDrive writes the
+        // library's records a piece at a time, so a rescan that lands partway
+        // through can fail to confirm a library that is about to appear.
+        if (!TRANSIENT_WHILE_SYNCING.includes(next.code)) { setWaiting(false); setProblem(next); return; }
       }
       timer = window.setTimeout(() => { void rescan(); }, RESCAN_INTERVAL_MS);
     };
@@ -306,6 +308,9 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
     if (mounted.current) onSwitchAccount();
   });
   const recovery = waiting || problem;
+  // Until setup is active, asking OneDrive to sync is always one click away:
+  // a failed check is often a library that simply has not been synced yet.
+  const offerSync = !waiting && (needsSync || Boolean(problem));
   return <>
     <h1 ref={heading} tabIndex={-1}>Sync the Files library</h1>
     <p>Intern works on your team's Files library through OneDrive, so documents stay on this computer while they are read. Intern asks OneDrive to sync the InternTestSite Files library for you.</p>
@@ -317,10 +322,9 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
     {support.error && <p className="onboarding-alert" role="alert">{support.error}</p>}
     {!waiting && !problem && !needsSync && <p role="status" aria-live="polite" aria-label="Library sync">Looking for the Files library on this computer…</p>}
     <div className="onboarding-actions">
-      {problem?.switchAccount
-        ? <button type="button" className="primary" disabled={busy} onClick={switchAccount}>Use a different account</button>
-        : needsSync && !waiting && !problem && <button type="button" className="primary" disabled={busy} onClick={requestSync}>Sync Files with OneDrive</button>}
-      {recovery && !problem?.switchAccount && <button type="button" className={problem ? 'primary' : undefined} disabled={busy} onClick={requested ? requestSync : check}>Try again</button>}
+      {problem?.switchAccount && <button type="button" className="primary" disabled={busy} onClick={switchAccount}>Use a different account</button>}
+      {offerSync && <button type="button" className={problem?.switchAccount ? undefined : 'primary'} disabled={busy} onClick={requestSync}>Sync Files with OneDrive</button>}
+      {recovery && <button type="button" disabled={busy} onClick={waiting ? requestSync : check}>Try again</button>}
       {recovery && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
       {problem?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
@@ -350,12 +354,21 @@ function ActivateStep({ heading, bridge, onLibrary }: { heading: HeadingRef; bri
   </>;
 }
 
-function FinishedStep({ heading, bridge, library, onComplete }: { heading: HeadingRef; bridge: DesktopBridge; library: SharePointSetupStatus; onComplete(): void }) {
+function FinishedStep({ heading, bridge, library, onLibrary, onComplete }: { heading: HeadingRef; bridge: DesktopBridge; library: SharePointSetupStatus; onLibrary(status: SharePointSetupStatus): void; onComplete(): void }) {
   const { busy, problem, run, mounted } = useAction();
   // Completion is recorded before the app opens; if it cannot be, the app
   // stays closed rather than pretending setup finished.
   const finish = () => void run(async () => {
-    await bridge.completeOnboarding();
+    try { await bridge.completeOnboarding(); }
+    catch (cause) {
+      // Filing stopped being on since this step appeared (an account switch,
+      // say). Asking again takes the person back to the step that fixes it.
+      if (describeSharePointProblem(cause).code !== 'ONBOARDING_SETUP_INCOMPLETE') throw cause;
+      const status = await bridge.getSharePointSetup();
+      if (status.phase === 'active') throw cause;
+      if (mounted.current) onLibrary(status);
+      return;
+    }
     if (mounted.current) onComplete();
   });
   return <>

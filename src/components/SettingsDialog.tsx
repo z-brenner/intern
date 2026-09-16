@@ -59,8 +59,9 @@ function saveFailure(error: unknown): string {
     case 'HOSTED_MODEL_REFUSED': return 'The model declined to read the calibration document, so it cannot be relied on to file yours. (HOSTED_MODEL_REFUSED)';
     case 'MODEL_SELF_TEST_FAILED': return 'The model answered, but not correctly: it did not name the calibration document. Try a more capable model. (MODEL_SELF_TEST_FAILED)';
     case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape Intern needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
-    // The managed-save refusal reads the same here as everywhere else SharePoint setup is explained.
-    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE': return `${describeSharePointProblem(error).action} (SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE)`;
+    // The managed-save refusals read the same here as everywhere else SharePoint setup is explained.
+    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
+    case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
@@ -157,9 +158,10 @@ function isProvider(value: string): value is HostedProvider {
   With the fixed SharePoint deployment these belong to the connection, not to
   the person: the backend derives them at activation and enforces them on
   every save. Settings still sends a whole settings object, so it sends these
-  exactly as they were loaded - never a draft value.
+  exactly as they were loaded - never a draft value. The machine name is not
+  among them: the backend leaves it to the person, so it saves as sent.
 */
-const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'machineLabel', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
+const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
 
 function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings {
   const result = { ...draft };
@@ -183,9 +185,15 @@ interface Props {
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
   onInstallUpdate(): Promise<void>;
+  /**
+   * Leave out the SharePoint connection card. Onboarding opens Settings for
+   * the hosted model before Microsoft is connected, where a card offering to
+   * reconnect Microsoft would skip ahead of the step that does it.
+   */
+  hideSharePointConnection?: boolean;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false }: Props) {
   const [next, setNext] = useState(settings);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -211,9 +219,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [testError, setTestError] = useState('');
   const [rules, setRules] = useState<LearnedRule[]>();
   const [rulesError, setRulesError] = useState('');
-  // Unknown until the backend answers, and treated as unmanaged meanwhile, so a
-  // build without the deployment renders exactly as it always has.
-  const [managed, setManaged] = useState(false);
+  // Unknown (undefined) until the backend answers. The shared-intake and
+  // background controls wait for the answer, so a managed build never flashes
+  // manual pairing; a build without the deployment, or a failed read, shows
+  // them exactly as it always has.
+  const [managed, setManaged] = useState<boolean>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
@@ -253,7 +263,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     let active = true;
     void Promise.resolve().then(() => bridge.getOnboarding())
       .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
-      .catch(() => { /* Without an answer the manual settings stay, and the backend still enforces its policy on save. */ });
+      // Without an answer the manual settings stay, and the backend still enforces its policy on save.
+      .catch(() => { if (active) setManaged(false); });
     return () => { active = false; };
   }, [bridge]);
   // The destination field focused on open is not rendered once the connection
@@ -500,8 +511,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           </div>
         </div>}
       </section>
-      {managed && <SharePointConnection bridge={bridge} settings={settings} />}
-      {!managed && <><section className="settings-group">
+      {managed && !hideSharePointConnection && <SharePointConnection bridge={bridge} settings={settings} />}
+      {managed === undefined && <section className="settings-group">
+        <p className="check-hint" role="status" aria-label="Loading intake settings">Checking how this computer is set up…</p>
+      </section>}
+      {managed === false && <><section className="settings-group">
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>

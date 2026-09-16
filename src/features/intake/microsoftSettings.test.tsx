@@ -21,6 +21,20 @@ function bridge(status = initial) {
   return { ...createInMemoryBridge(), ...microsoft };
 }
 describe('Microsoft upload identity setup', () => {
+  it('explains that manual pairing is off in a build that sets up SharePoint itself, whichever shape the refusal takes', async () => {
+    for (const refusal of [{ code: 'MICROSOFT_MANUAL_PAIRING_DISABLED', message: 'manual pairing is disabled' }, 'Manual folder pairing is disabled for this deployment. (MICROSOFT_MANUAL_PAIRING_DISABLED)']) {
+      const api = bridge({ ...initial, connected: true, account });
+      vi.mocked(api.microsoftBindIntake).mockRejectedValueOnce(refusal);
+      const view = render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
+      const pair = await screen.findByRole('button', { name: 'Verify folder pairing' });
+      await waitFor(() => expect(pair).toBeEnabled());
+      fireEvent.click(pair);
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/use the SharePoint connection/i);
+      expect(alert).toHaveTextContent('(MICROSOFT_MANUAL_PAIRING_DISABLED)');
+      view.unmount();
+    }
+  });
   it('shows a disabled deployment as persistent status rather than masking action alerts', async () => {
     const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
     render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, error: unavailable })} savedFolder="C:/Intake" unsavedFolder={false} />);
@@ -28,6 +42,15 @@ describe('Microsoft upload identity setup', () => {
     expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent(unavailable);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect my Microsoft account' })).toBeDisabled();
+  });
+
+  it('describes the proof as Microsoft metadata about who created and last modified a document', async () => {
+    render(<MicrosoftIntakeSettings bridge={bridge()} savedFolder="C:/Intake" unsavedFolder={false} />);
+    const lead = screen.getByText(/Unverified uploads are never processed/);
+    expect(lead).toHaveTextContent(/created/);
+    expect(lead).toHaveTextContent(/last modified/);
+    expect(lead).not.toHaveTextContent(/upload activity/);
+    await act(async () => {});
   });
 
   it('uses one managed connection action without audit consent or identifier fields', async () => {

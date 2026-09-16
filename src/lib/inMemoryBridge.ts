@@ -64,6 +64,12 @@ export interface FakeSharePointOptions {
   /** A Microsoft account is already connected, as after a relaunch mid-setup. */
   connected?: boolean;
   account?: { displayName: string; email: string };
+  /**
+   * The account device sign-in connects as, when it is not `account`. Signing
+   * in as a different account than the one that turned filing on takes an
+   * active library back to ready_to_activate, as the backend does.
+   */
+  signInAccount?: { displayName: string; email: string };
   /** Polls that report pending before device sign-in connects (at least 1). */
   signInPolls?: number;
   /** The library's starting phase; enrollment_pending until OneDrive is asked to sync. */
@@ -166,10 +172,13 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const fake = options.sharePointFake ?? {};
   const failures = new Map(Object.entries(fake.failures ?? {}).map(([call, errors]) => [call, [...(errors ?? [])]]));
   const failNext = (call: FakeSharePointCall) => { const queued = failures.get(call); if (queued?.length) throw queued.shift(); };
-  const fakeAccount = { tenantId: 'fake-contoso-tenant', id: 'fake-account', ...(fake.account ?? { displayName: 'Pat Lee', email: 'pat.lee@contoso.example' }) };
+  const firstAccount = { tenantId: 'fake-contoso-tenant', id: 'fake-account', ...(fake.account ?? { displayName: 'Pat Lee', email: 'pat.lee@contoso.example' }) };
+  let fakeAccount = firstAccount;
   let microsoftConnected = fake.connected ?? false;
   let signInPollsLeft: number | undefined;
   let libraryPhase: SharePointSetupPhase = fake.phase ?? 'enrollment_pending';
+  // Activation belongs to the account that turned filing on.
+  let activatedFor: string | undefined = libraryPhase === 'active' ? fakeAccount.id : undefined;
   let rescansLeft: number | undefined;
   const libraryRoot = 'C:\\Users\\pat\\Contoso\\InternTestSite - Files';
   const sharePointStatus = (): SharePointSetupStatus => {
@@ -199,11 +208,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       sharePointStatus();
       if (libraryPhase === 'enrollment_pending') throw { code: 'SHAREPOINT_SYNC_PENDING', message: 'OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.' };
       libraryPhase = 'active';
+      activatedFor = fakeAccount.id;
       // The managed values activation derives, as the backend enforces them.
       settings = { ...settings, intakeFolder: `${libraryRoot}\\Inbox`, destination: `${libraryRoot}\\Filed`, intakeEnabled: true, processOthersUploads: false, intakeLocalOnly: false, runInBackground: true, startAtLogin: true, startMinimized: true };
       return sharePointStatus();
     },
-    completeOnboarding: async () => { failNext('completeOnboarding'); completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
+    completeOnboarding: async () => {
+      failNext('completeOnboarding');
+      // The backend records completion only for a library that is actually filing.
+      if (!microsoftConnected || libraryPhase !== 'active') throw { code: 'ONBOARDING_SETUP_INCOMPLETE', message: 'SharePoint setup is not active, so onboarding cannot be completed.' };
+      completedOnboardingVersion = Math.max(completedOnboardingVersion, 1);
+    },
     microsoftIntakeStatus: async () => ({
       connected: microsoftConnected,
       account: microsoftConnected ? { ...fakeAccount } : null,
@@ -223,6 +238,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (signInPollsLeft > 0) return { state: 'pending', intervalSeconds: 5 };
       signInPollsLeft = undefined;
       microsoftConnected = true;
+      if (fake.signInAccount) fakeAccount = { tenantId: firstAccount.tenantId, id: 'fake-account-signed-in', ...fake.signInAccount };
+      if (libraryPhase === 'active' && activatedFor !== fakeAccount.id) libraryPhase = 'ready_to_activate';
       return { state: 'connected', account: { ...fakeAccount } };
     },
     microsoftDisconnect: async () => { failNext('microsoftDisconnect'); microsoftConnected = false; signInPollsLeft = undefined; },

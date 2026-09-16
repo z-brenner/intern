@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DesktopBridge } from '../../lib/bridge';
+import { describeSharePointProblem } from '../sharepoint/sharePointProblems';
 import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from './microsoft';
 
+/** A refusal whose meaning is the same wherever SharePoint setup is explained. */
+const SHARED_CODES = ['MICROSOFT_MANUAL_PAIRING_DISABLED'];
+
 export function explainMicrosoftError(error: unknown): string {
+  const message = typeof error === 'string' ? error : error instanceof Error ? error.message : typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' ? error.message : '';
+  const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  const shared = SHARED_CODES.find((known) => known === code || message.includes(`(${known})`));
+  if (shared) return `${describeSharePointProblem(shared).action} (${shared})`;
   if (typeof error === 'string' && error.trim()) return error;
   if (error instanceof Error && error.message) return error.message;
   return 'Microsoft verification could not complete. Your files remain held.';

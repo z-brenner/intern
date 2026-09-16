@@ -7,7 +7,7 @@ describe('createInMemoryBridge onboarding state', () => {
     const seeded = createInMemoryBridge({ completedOnboardingVersion: 1 });
     expect(await seeded.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false });
 
-    const bridge = createInMemoryBridge({ sharePoint: 'fake' });
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active' } });
     expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: true });
     await bridge.completeOnboarding();
     expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true });
@@ -42,10 +42,34 @@ describe('createInMemoryBridge fake SharePoint deployment', () => {
   });
 
   it('throws injected failures once each, in order', async () => {
-    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, failures: { completeOnboarding: [{ code: 'ONBOARDING_STATE_WRITE_FAILED', message: 'disk full' }] } } });
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', failures: { completeOnboarding: [{ code: 'ONBOARDING_STATE_WRITE_FAILED', message: 'disk full' }] } } });
 
     await expect(bridge.completeOnboarding()).rejects.toMatchObject({ code: 'ONBOARDING_STATE_WRITE_FAILED' });
     await expect(bridge.completeOnboarding()).resolves.toBeUndefined();
+  });
+});
+
+describe('createInMemoryBridge fake SharePoint contract', () => {
+  it('refuses completion until filing is on, as the backend does', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'ready_to_activate' } });
+
+    await expect(bridge.completeOnboarding()).rejects.toMatchObject({ code: 'ONBOARDING_SETUP_INCOMPLETE' });
+    expect((await bridge.getOnboarding()).required).toBe(true);
+    await bridge.activateOnboarding();
+    await expect(bridge.completeOnboarding()).resolves.toBeUndefined();
+    expect((await bridge.getOnboarding()).required).toBe(false);
+  });
+
+  it('needs filing turned on again after signing in as a different account', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', signInAccount: { displayName: 'Sam Roe', email: 'sam@contoso.test' } } });
+
+    await bridge.microsoftSignInStart!();
+    expect(await bridge.microsoftSignInPoll!()).toMatchObject({ state: 'connected', account: { displayName: 'Sam Roe' } });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'ready_to_activate', account: { displayName: 'Sam Roe', email: 'sam@contoso.test' } });
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+    await bridge.microsoftSignInStart!();
+    await bridge.microsoftSignInPoll!();
+    expect((await bridge.getSharePointSetup()).phase).toBe('active');
   });
 });
 
