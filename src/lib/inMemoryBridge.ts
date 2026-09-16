@@ -203,7 +203,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       settings = { ...settings, intakeFolder: `${libraryRoot}\\Inbox`, destination: `${libraryRoot}\\Filed`, intakeEnabled: true, processOthersUploads: false, intakeLocalOnly: false, runInBackground: true, startAtLogin: true, startMinimized: true };
       return sharePointStatus();
     },
-    completeOnboarding: async () => { failNext('completeOnboarding'); completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
+    completeOnboarding: async () => {
+      failNext('completeOnboarding');
+      // The backend records completion only for a library that is actually filing.
+      if (!microsoftConnected || libraryPhase !== 'active') throw { code: 'ONBOARDING_SETUP_INCOMPLETE', message: 'SharePoint setup is not active, so onboarding cannot be completed.' };
+      completedOnboardingVersion = Math.max(completedOnboardingVersion, 1);
+    },
     microsoftIntakeStatus: async () => ({
       connected: microsoftConnected,
       account: microsoftConnected ? { ...fakeAccount } : null,
