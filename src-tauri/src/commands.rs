@@ -924,6 +924,7 @@ pub struct AppState {
     /// The hosted model, when one is chosen: its key in the credential
     /// store, its engine, and its test.
     hosted: Arc<HostedModel>,
+    settings_gate: Mutex<()>,
 }
 
 impl AppState {
@@ -1056,6 +1057,7 @@ impl AppState {
             ledger,
             filed_index,
             hosted,
+            settings_gate: Mutex::new(()),
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -1189,24 +1191,6 @@ impl AppState {
     /// start-hidden). A missing file is the defaults, same as `load`.
     pub(crate) fn settings_snapshot(&self) -> AppSettings {
         self.settings.load().unwrap_or_default()
-    }
-
-    pub(crate) fn sharepoint_settings_snapshot(&self) -> Result<AppSettings, CommandError> {
-        self.settings.load().map_err(CommandError::from)
-    }
-
-    /// Applies SharePoint's derived settings through the same persistence and
-    /// live-runtime path as the Settings UI. If any watcher, tray, hosted
-    /// runtime, intake event, or autostart step fails, the previous complete
-    /// settings are replayed through that path before the error is returned.
-    pub(crate) fn activate_sharepoint_settings(
-        &self,
-        settings: &AppSettings,
-    ) -> Result<(), CommandError> {
-        let previous = self.settings.load()?;
-        apply_settings_activation(&previous, settings, |candidate| {
-            save_settings_with_microsoft_protection(self, candidate.clone(), false)
-        })
     }
 
     /// Whether a main-window close should hide to the tray instead of running
@@ -1535,6 +1519,9 @@ pub(crate) trait SettingsRuntime {
     fn sync_tray(&self, run_in_background: bool);
     fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
+    /// Serializes whole settings applications so a Settings save cannot
+    /// interleave with a SharePoint activation or its rollback.
+    fn settings_gate(&self) -> &Mutex<()>;
 }
 
 impl SettingsRuntime for AppState {
@@ -1593,9 +1580,17 @@ impl SettingsRuntime for AppState {
     fn emit_intake_changed(&self) -> Result<(), CommandError> {
         AppState::emit_intake_changed(self)
     }
+
+    fn settings_gate(&self) -> &Mutex<()> {
+        &self.settings_gate
+    }
 }
 
 fn save_settings(state: &impl SettingsRuntime, settings: AppSettings) -> Result<(), CommandError> {
+    let _gate = state
+        .settings_gate()
+        .lock()
+        .map_err(|_| settings_gate_unavailable())?;
     save_settings_with_microsoft_protection(state, settings, true)
 }
 
@@ -1652,13 +1647,30 @@ fn save_settings_with_microsoft_protection(
     Ok(())
 }
 
-fn apply_settings_activation(
-    previous: &AppSettings,
+fn settings_gate_unavailable() -> CommandError {
+    CommandError {
+        code: "STATE_CONFLICT".into(),
+        message: "settings are being changed elsewhere and are unavailable".into(),
+    }
+}
+
+/// Applies SharePoint's derived settings through the same persistence and
+/// live-runtime path as the Settings UI. If any watcher, tray, hosted
+/// runtime, intake event, or autostart step fails, the settings stored before
+/// the attempt are restored exactly (see `restore_settings_unlocked`), and a
+/// restore that also fails is reported as ACTIVATION_ROLLBACK_FAILED with both
+/// errors. Microsoft protection is the caller's transaction, not this one.
+pub(crate) fn activate_sharepoint_settings(
+    runtime: &impl SettingsRuntime,
     settings: &AppSettings,
-    mut apply: impl FnMut(&AppSettings) -> Result<(), CommandError>,
 ) -> Result<(), CommandError> {
-    if let Err(error) = apply(settings) {
-        return match apply(previous) {
+    let _gate = runtime
+        .settings_gate()
+        .lock()
+        .map_err(|_| settings_gate_unavailable())?;
+    let previous = runtime.load_settings()?;
+    if let Err(error) = save_settings_with_microsoft_protection(runtime, settings.clone(), false) {
+        return match restore_settings_unlocked(runtime, &previous) {
             Ok(()) => Err(error),
             Err(restore) => Err(CommandError {
                 code: "ACTIVATION_ROLLBACK_FAILED".into(),
@@ -1670,6 +1682,65 @@ fn apply_settings_activation(
         };
     }
     Ok(())
+}
+
+/// Restores settings that were stored before a SharePoint activation, and the
+/// live runtime they describe. A failed restore is only ever reported; it
+/// never falls back to re-applying the activated settings.
+pub(crate) fn restore_sharepoint_settings(
+    runtime: &impl SettingsRuntime,
+    previous: &AppSettings,
+) -> Result<(), CommandError> {
+    let _gate = runtime
+        .settings_gate()
+        .lock()
+        .map_err(|_| settings_gate_unavailable())?;
+    restore_settings_unlocked(runtime, previous)
+}
+
+/// Deliberately not the validated save path: `previous` was already the stored
+/// truth, and a folder or hosted-model key that has gone away since must not
+/// refuse the restore and strand the activated settings. Every step is tried
+/// even after one fails, and the tray and watcher are always re-applied because
+/// the live runtime need not match what was persisted when the failure struck.
+fn restore_settings_unlocked(
+    runtime: &impl SettingsRuntime,
+    previous: &AppSettings,
+) -> Result<(), CommandError> {
+    let current = runtime.load_settings().ok();
+    let mut failures = Vec::new();
+    if let Err(error) = runtime.persist_settings(previous) {
+        failures.push(error);
+    }
+    if current
+        .as_ref()
+        .is_none_or(|current| current.start_at_login != previous.start_at_login)
+        && let Err(error) = runtime.set_autostart(previous.start_at_login)
+    {
+        failures.push(error);
+    }
+    runtime.refresh_hosted_active(previous);
+    if let Err(error) = runtime.schedule() {
+        failures.push(error);
+    }
+    runtime.sync_tray(previous.run_in_background);
+    if let Err(error) = runtime.restart_intake(previous) {
+        failures.push(error);
+    }
+    if let Err(error) = runtime.emit_intake_changed() {
+        failures.push(error);
+    }
+    let Some(first) = failures.first() else {
+        return Ok(());
+    };
+    Err(CommandError {
+        code: first.code.clone(),
+        message: failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.code, failure.message))
+            .collect::<Vec<_>>()
+            .join("; "),
+    })
 }
 
 /// Stores the settings and brings the operating system's login entry into
@@ -2246,8 +2317,7 @@ mod intake_tests {
     use intern_queue::AppSettings;
 
     use super::{
-        apply_settings_activation, save_settings_and_autostart, validate_description_settings,
-        validate_intake_settings,
+        save_settings_and_autostart, validate_description_settings, validate_intake_settings,
     };
     use crate::intake::{CloudProviderDto, item_fate, presence_active, status_dto};
 
@@ -2464,51 +2534,6 @@ mod intake_tests {
         )
         .expect("a save with no login change succeeds");
         assert_eq!(toggles.get(), 0);
-    }
-
-    #[test]
-    fn sharepoint_activation_restores_persisted_watcher_and_tray_state_on_runtime_failure() {
-        #[derive(Clone, Debug, Eq, PartialEq)]
-        struct LiveState {
-            persisted: AppSettings,
-            watcher_enabled: bool,
-            tray_enabled: bool,
-        }
-
-        let previous = AppSettings::default();
-        let next = AppSettings {
-            intake_enabled: true,
-            run_in_background: true,
-            ..previous.clone()
-        };
-        let state = std::cell::RefCell::new(LiveState {
-            persisted: previous.clone(),
-            watcher_enabled: false,
-            tray_enabled: false,
-        });
-        let first = std::cell::Cell::new(true);
-
-        let error = apply_settings_activation(&previous, &next, |candidate| {
-            let mut state = state.borrow_mut();
-            state.persisted = candidate.clone();
-            state.watcher_enabled = candidate.intake_enabled;
-            state.tray_enabled = candidate.run_in_background;
-            if first.replace(false) {
-                return Err(failure("WATCHER_START_FAILED"));
-            }
-            Ok(())
-        })
-        .expect_err("runtime activation failure must remain visible");
-
-        assert_eq!(error.code, "WATCHER_START_FAILED");
-        assert_eq!(
-            *state.borrow(),
-            LiveState {
-                persisted: previous,
-                watcher_enabled: false,
-                tray_enabled: false,
-            }
-        );
     }
 
     fn receipt(
@@ -3220,5 +3245,180 @@ mod settings_report_tests {
         // file is still theirs to repair.
         assert!(refused.contains("automatic renaming off"), "{refused}");
         assert!(refused.contains("has not been written over"), "{refused}");
+    }
+}
+
+/// A `SettingsRuntime` over a real settings file whose live effects are
+/// recorded instead of reaching Tauri. Shared by the settings and SharePoint
+/// activation tests so both drive the production application code.
+#[cfg(test)]
+pub(crate) mod test_runtime {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    use intern_queue::{AppSettings, SettingsStore, paths::canonical_folder};
+
+    use super::{CommandError, SettingsRuntime};
+    use crate::microsoft_intake::MicrosoftIntake;
+
+    /// What is running, as opposed to what is persisted.
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct Live {
+        pub tray: bool,
+        pub watcher: Option<String>,
+        pub autostart: bool,
+        pub intake_events: usize,
+    }
+
+    type Predicate = Box<dyn Fn(&AppSettings) -> bool + Send + Sync>;
+    type Hook = Box<dyn Fn(&AppSettings) + Send + Sync>;
+
+    pub(crate) struct RecordingRuntime {
+        pub store: SettingsStore,
+        pub live: Mutex<Live>,
+        pub microsoft: Option<Arc<MicrosoftIntake>>,
+        /// Watcher restarts for these settings fail the way an unreadable
+        /// machine identity does: before the running watcher is stopped.
+        pub fail_intake_restart: Mutex<Option<Predicate>>,
+        pub fail_persist: Mutex<Option<Predicate>>,
+        pub fail_hosted_model: bool,
+        pub fail_intake_events: AtomicBool,
+        pub after_persist: Mutex<Option<Hook>>,
+        gate: Mutex<()>,
+    }
+
+    impl RecordingRuntime {
+        pub(crate) fn new(settings_path: PathBuf) -> Self {
+            Self {
+                store: SettingsStore::new(settings_path),
+                live: Mutex::new(Live::default()),
+                microsoft: None,
+                fail_intake_restart: Mutex::new(None),
+                fail_persist: Mutex::new(None),
+                fail_hosted_model: false,
+                fail_intake_events: AtomicBool::new(false),
+                after_persist: Mutex::new(None),
+                gate: Mutex::new(()),
+            }
+        }
+
+        pub(crate) fn live(&self) -> Live {
+            self.live.lock().unwrap().clone()
+        }
+
+        fn injected(code: &str, message: &str) -> CommandError {
+            CommandError {
+                code: code.into(),
+                message: message.into(),
+            }
+        }
+    }
+
+    impl SettingsRuntime for RecordingRuntime {
+        fn load_settings(&self) -> Result<AppSettings, CommandError> {
+            self.store.load().map_err(CommandError::from)
+        }
+
+        fn persist_settings(&self, settings: &AppSettings) -> Result<(), CommandError> {
+            if self
+                .fail_persist
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|fail| fail(settings))
+            {
+                return Err(Self::injected(
+                    "SETTINGS_WRITE_FAILED",
+                    "injected settings write failure",
+                ));
+            }
+            self.store.save(settings).map_err(CommandError::from)?;
+            if let Some(hook) = self.after_persist.lock().unwrap().as_ref() {
+                hook(settings);
+            }
+            Ok(())
+        }
+
+        fn canonical_folder(&self, path: &Path) -> Result<PathBuf, CommandError> {
+            canonical_folder(path).map_err(CommandError::from)
+        }
+
+        fn check_hosted_model(&self, _settings: &AppSettings) -> Result<(), CommandError> {
+            if self.fail_hosted_model {
+                return Err(Self::injected(
+                    "HOSTED_MODEL_KEY_MISSING",
+                    "no API key is stored for the hosted model",
+                ));
+            }
+            Ok(())
+        }
+
+        fn protect_microsoft(&self, settings: &AppSettings) -> Result<(), CommandError> {
+            match &self.microsoft {
+                Some(microsoft) => {
+                    microsoft
+                        .protect_settings(settings)
+                        .map_err(|message| CommandError {
+                            code: "UPLOADER_UNVERIFIED".into(),
+                            message,
+                        })
+                }
+                None => Ok(()),
+            }
+        }
+
+        fn set_autostart(&self, enabled: bool) -> Result<(), CommandError> {
+            self.live.lock().unwrap().autostart = enabled;
+            Ok(())
+        }
+
+        fn refresh_hosted_active(&self, _settings: &AppSettings) {}
+
+        fn schedule(&self) -> Result<(), CommandError> {
+            Ok(())
+        }
+
+        fn sync_tray(&self, run_in_background: bool) {
+            self.live.lock().unwrap().tray = run_in_background;
+        }
+
+        fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError> {
+            if self
+                .fail_intake_restart
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|fail| fail(settings))
+            {
+                return Err(Self::injected(
+                    "APP_DATA_UNAVAILABLE",
+                    "injected watcher restart failure",
+                ));
+            }
+            self.live.lock().unwrap().watcher = settings
+                .intake_enabled
+                .then(|| settings.intake_folder.clone());
+            Ok(())
+        }
+
+        fn emit_intake_changed(&self) -> Result<(), CommandError> {
+            if self.fail_intake_events.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "STATE_CONFLICT",
+                    "injected intake event failure",
+                ));
+            }
+            self.live.lock().unwrap().intake_events += 1;
+            Ok(())
+        }
+
+        fn settings_gate(&self) -> &Mutex<()> {
+            &self.gate
+        }
     }
 }

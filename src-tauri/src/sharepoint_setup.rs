@@ -6,6 +6,7 @@
 //! deliberately supplies no local-to-remote verifier yet: registry display
 //! names and paths are discovery hints, never authority.
 
+use crate::commands::SettingsRuntime;
 use intern_intake::{
     CloudProviderKind, CloudRoot, SharePointDeployment, detect_cloud_roots,
     microsoft::{Account, proof::is_guid},
@@ -120,9 +121,10 @@ pub trait RemoteLibraryVerifier {
 }
 
 /// The callback is the local settings/autostart commit. Implementations must
-/// stage Microsoft protection first and restore their prior state if the
-/// callback fails. A final publication failure may retain that inactive,
-/// protected stage so processing stays fail-closed. A successful return means
+/// stage Microsoft protection first and restore their prior bindings if the
+/// callback or publication fails, keeping the staged Inbox protection: the
+/// commit may already have watched the Inbox, so an aborted activation must
+/// leave it held rather than unprotected. A successful return means
 /// the activation watermark and exact fixed Inbox binding are durable and
 /// definitive; callers must not add a second fallible confirmation after the
 /// local commit has succeeded.
@@ -145,7 +147,12 @@ pub trait MicrosoftSetup {
 
 pub trait SetupSettings {
     fn load(&self) -> Result<AppSettings, SharePointSetupError>;
+    /// Applies activation settings. A failure has already restored what was
+    /// stored before, or reports ACTIVATION_ROLLBACK_FAILED.
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError>;
+    /// Puts back settings that were stored before activation. Must never fall
+    /// back to re-applying the activation settings when it fails.
+    fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError>;
 }
 
 pub trait AutostartBoundary {
@@ -493,7 +500,7 @@ impl<'a> SharePointSetup<'a> {
         previous_autostart: bool,
         original: SharePointSetupError,
     ) -> SharePointSetupError {
-        let settings = self.settings.save(previous);
+        let settings = self.settings.restore(previous);
         let autostart = self.autostart.set_enabled(previous_autostart);
         match (settings, autostart) {
             (Ok(()), Ok(())) => original,
@@ -549,7 +556,10 @@ fn rollback_error(
 }
 
 fn result_label(result: Result<(), SharePointSetupError>) -> String {
-    result.map_or_else(|error| error.code, |()| "ok".into())
+    result.map_or_else(
+        |error| format!("{} ({})", error.code, error.message),
+        |()| "ok".into(),
+    )
 }
 
 struct SystemRoots;
@@ -668,18 +678,24 @@ impl MicrosoftSetup for ProductionMicrosoft<'_> {
     }
 }
 
-struct ProductionSettings<'a>(&'a crate::commands::AppState);
+/// The settings boundary over the live application runtime (`AppState` in
+/// production). Generic so tests drive this exact adapter.
+struct ProductionSettings<'a, R>(&'a R);
 
-impl SetupSettings for ProductionSettings<'_> {
+impl<R: SettingsRuntime> SetupSettings for ProductionSettings<'_, R> {
     fn load(&self) -> Result<AppSettings, SharePointSetupError> {
         self.0
-            .sharepoint_settings_snapshot()
+            .load_settings()
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
-        self.0
-            .activate_sharepoint_settings(settings)
+        crate::commands::activate_sharepoint_settings(self.0, settings)
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
+    }
+
+    fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError> {
+        crate::commands::restore_sharepoint_settings(self.0, previous)
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 }
@@ -743,7 +759,7 @@ fn production_operation(
     let microsoft_state = app.state::<std::sync::Arc<crate::microsoft_intake::MicrosoftIntake>>();
     let microsoft = ProductionMicrosoft(microsoft_state.as_ref());
     let app_state = app.state::<crate::commands::AppState>();
-    let settings = ProductionSettings(&app_state);
+    let settings = ProductionSettings(app_state.inner());
     let autostart = ProductionAutostart(app);
     let opener = ProductionOpener;
     let setup = SharePointSetup::new(
@@ -998,6 +1014,10 @@ mod tests {
             }
             *self.saved.lock().unwrap() = settings.clone();
             Ok(())
+        }
+
+        fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError> {
+            self.save(previous)
         }
     }
 
@@ -1339,5 +1359,316 @@ mod tests {
         assert!(error.message.contains(
             "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
         ));
+    }
+
+    /// The production settings and Microsoft adapters over a real settings
+    /// file, a real connected `MicrosoftIntake`, real folders, and the real
+    /// settings application code. Only OneDrive discovery, the remote
+    /// verifier, and the Tauri-owned live effects are recorded fakes.
+    mod live {
+        use super::*;
+        use crate::commands::test_runtime::{Live, RecordingRuntime};
+        use crate::microsoft_intake::{MicrosoftIntake, test_support::connected_manager};
+        use intern_queue::{AdmissionGuard, AdmissionStage, SettingsStore};
+
+        struct LiveAutostart<'a>(&'a RecordingRuntime);
+
+        impl AutostartBoundary for LiveAutostart<'_> {
+            fn is_enabled(&self) -> Result<bool, SharePointSetupError> {
+                Ok(self.0.live().autostart)
+            }
+
+            fn set_enabled(&self, enabled: bool) -> Result<(), SharePointSetupError> {
+                self.0
+                    .set_autostart(enabled)
+                    .map_err(|error| SharePointSetupError::new(error.code, error.message))
+            }
+        }
+
+        pub(super) struct LiveRig {
+            pub(super) dir: PathBuf,
+            pub(super) deployment: SharePointDeployment,
+            pub(super) inbox: PathBuf,
+            pub(super) filed: PathBuf,
+            pub(super) legacy: PathBuf,
+            pub(super) previous: AppSettings,
+            roots: FakeRoots,
+            verifier: FakeVerifier,
+            pub(super) microsoft: Arc<MicrosoftIntake>,
+            pub(super) runtime: RecordingRuntime,
+            opener: FakeOpener,
+        }
+
+        impl Drop for LiveRig {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
+
+        pub(super) fn text(path: &Path) -> String {
+            path.to_string_lossy().into_owned()
+        }
+
+        impl LiveRig {
+            pub(super) fn new(name: &str) -> Self {
+                let dir = std::env::temp_dir().join(format!(
+                    "intern-sharepoint-live-{name}-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                for folder in ["Files/Inbox", "Files/Filed", "Legacy", "LegacyFiled"] {
+                    std::fs::create_dir_all(dir.join(folder)).unwrap();
+                }
+                let root = dir.join("Files").canonicalize().unwrap();
+                let inbox = dir.join("Files/Inbox").canonicalize().unwrap();
+                let filed = dir.join("Files/Filed").canonicalize().unwrap();
+                let legacy = dir.join("Legacy").canonicalize().unwrap();
+                let previous = AppSettings {
+                    destination: text(&dir.join("LegacyFiled").canonicalize().unwrap()),
+                    intake_folder: text(&legacy),
+                    intake_enabled: true,
+                    intake_local_only: true,
+                    process_others_uploads: false,
+                    run_in_background: false,
+                    start_at_login: false,
+                    start_minimized: false,
+                    automatic_rename: true,
+                    ..AppSettings::default()
+                };
+                let mut runtime = RecordingRuntime::new(dir.join("settings.json"));
+                runtime.store.save(&previous).unwrap();
+                *runtime.live.lock().unwrap() = Live {
+                    tray: false,
+                    watcher: Some(text(&legacy)),
+                    autostart: false,
+                    intake_events: 0,
+                };
+                let microsoft = Arc::new(connected_manager(
+                    SettingsStore::new(dir.join("settings.json")),
+                    dir.join("app-data"),
+                    deployment(),
+                    &account(),
+                ));
+                runtime.microsoft = Some(Arc::clone(&microsoft));
+                let verifier = FakeVerifier::default();
+                verifier.identities.lock().unwrap().insert(
+                    root.clone(),
+                    RemoteLibraryIdentity {
+                        local_root: root.clone(),
+                        ..identity("")
+                    },
+                );
+                Self {
+                    deployment: deployment(),
+                    roots: FakeRoots {
+                        state: OneDriveState::Available,
+                        roots: vec![CloudRoot {
+                            kind: CloudProviderKind::SharePoint,
+                            display_name: "Contoso - Files".into(),
+                            root,
+                        }],
+                    },
+                    verifier,
+                    microsoft,
+                    runtime,
+                    opener: FakeOpener {
+                        opened: Mutex::new(Vec::new()),
+                        failure: None,
+                    },
+                    dir,
+                    inbox,
+                    filed,
+                    legacy,
+                    previous,
+                }
+            }
+
+            pub(super) fn run<T>(&self, operation: impl FnOnce(&SharePointSetup<'_>) -> T) -> T {
+                let fs = SystemFileSystem;
+                let microsoft = ProductionMicrosoft(self.microsoft.as_ref());
+                let settings = ProductionSettings(&self.runtime);
+                let autostart = LiveAutostart(&self.runtime);
+                operation(&SharePointSetup::new(
+                    &self.deployment,
+                    &self.roots,
+                    &fs,
+                    &self.verifier,
+                    &microsoft,
+                    &settings,
+                    &autostart,
+                    &self.opener,
+                ))
+            }
+
+            pub(super) fn persisted(&self) -> AppSettings {
+                self.runtime.store.load().unwrap()
+            }
+
+            fn binding_active(&self) -> bool {
+                self.microsoft
+                    .fixed_binding_active(&self.deployment, &self.inbox)
+            }
+
+            /// Whether a teammate's new Inbox upload would be admitted
+            /// without Microsoft proof. Every Graph request fails in this
+            /// rig, so only an unprotected path can be admitted.
+            fn inbox_upload_admitted(&self) -> bool {
+                let upload = self.inbox.join("teammate.pdf");
+                std::fs::write(&upload, b"%PDF-1.7 teammate").unwrap();
+                self.microsoft
+                    .authorize(&upload, AdmissionStage::Enqueue)
+                    .is_ok()
+            }
+
+            fn assert_previous_live_state(&self) {
+                assert_eq!(self.persisted(), self.previous);
+                let live = self.runtime.live();
+                assert!(!live.tray, "tray restored");
+                assert!(!live.autostart, "autostart restored");
+            }
+        }
+
+        fn fail_restart_for(rig: &LiveRig, folder: &Path) {
+            let folder = text(folder);
+            *rig.runtime.fail_intake_restart.lock().unwrap() =
+                Some(Box::new(move |settings| settings.intake_folder == folder));
+        }
+
+        /// A concurrent settings save during the local commit changes the
+        /// Microsoft generation, so the binding must not be published.
+        fn reconnect_during_commit(rig: &LiveRig) {
+            let inbox = text(&rig.inbox);
+            let microsoft = Arc::clone(&rig.microsoft);
+            *rig.runtime.after_persist.lock().unwrap() = Some(Box::new(move |settings| {
+                if settings.intake_folder == inbox {
+                    microsoft.protect_settings(&AppSettings::default()).unwrap();
+                }
+            }));
+        }
+
+        #[test]
+        fn activation_applies_every_live_effect_through_the_production_adapter() {
+            let rig = LiveRig::new("success");
+
+            let status = rig.run(|setup| setup.activate()).expect("activate");
+
+            assert_eq!(status.phase, SharePointSetupPhase::Active);
+            let saved = rig.persisted();
+            assert_eq!(saved.intake_folder, text(&rig.inbox));
+            assert_eq!(saved.destination, text(&rig.filed));
+            assert!(saved.intake_enabled && saved.run_in_background && saved.start_at_login);
+            assert!(!saved.intake_local_only && !saved.process_others_uploads);
+            let live = rig.runtime.live();
+            assert!(live.tray && live.autostart);
+            assert_eq!(live.watcher, Some(text(&rig.inbox)));
+            assert_eq!(live.intake_events, 1);
+            assert!(rig.binding_active());
+            assert_eq!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        #[test]
+        fn a_watcher_failure_restores_settings_runtime_and_autostart_and_holds_inbox_uploads() {
+            let rig = LiveRig::new("watcher-failure");
+            fail_restart_for(&rig, &rig.inbox);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE");
+            rig.assert_previous_live_state();
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.legacy)));
+            assert!(!rig.binding_active());
+            assert!(
+                !rig.inbox_upload_admitted(),
+                "an aborted activation must leave the shared Inbox protected"
+            );
+        }
+
+        #[test]
+        fn restoring_prior_settings_does_not_revalidate_folders_that_have_since_gone() {
+            let rig = LiveRig::new("stale-previous");
+            fail_restart_for(&rig, &rig.inbox);
+            std::fs::remove_dir_all(&rig.legacy).unwrap();
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE", "{}", error.message);
+            rig.assert_previous_live_state();
+            assert!(!rig.binding_active());
+        }
+
+        #[test]
+        fn a_failed_runtime_rollback_reports_both_errors_and_stays_fail_closed() {
+            let rig = LiveRig::new("rollback-failure");
+            rig.runtime
+                .fail_intake_events
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            fail_restart_for(&rig, &rig.legacy);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("rollback failed");
+
+            assert_eq!(error.code, "ACTIVATION_ROLLBACK_FAILED");
+            assert!(
+                error.message.contains("injected intake event failure")
+                    && error.message.contains("injected watcher restart failure"),
+                "{}",
+                error.message
+            );
+            // The Inbox watcher could not be stopped, so admission itself must
+            // hold the Inbox whatever the persisted settings say.
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.inbox)));
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+            assert_ne!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        #[test]
+        fn a_publication_failure_restores_prior_settings_and_holds_inbox_uploads() {
+            let rig = LiveRig::new("publication-failure");
+            reconnect_during_commit(&rig);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("publication failed");
+
+            assert_eq!(error.code, "MICROSOFT_BINDING_FAILED");
+            rig.assert_previous_live_state();
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.legacy)));
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+        }
+
+        #[test]
+        fn a_failed_restore_never_reapplies_the_managed_settings() {
+            let rig = LiveRig::new("restore-failure");
+            reconnect_during_commit(&rig);
+            fail_restart_for(&rig, &rig.legacy);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("restore failed");
+
+            assert_eq!(error.code, "ACTIVATION_ROLLBACK_FAILED");
+            assert!(
+                error.message.contains("injected watcher restart failure"),
+                "{}",
+                error.message
+            );
+            assert_eq!(rig.persisted(), rig.previous);
+            assert!(!rig.runtime.live().autostart);
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+        }
     }
 }
