@@ -15,8 +15,17 @@ export interface SharePointProblem {
   action: string;
   /** The raw backend message, for support only. */
   detail?: string;
-  /** Offer to disconnect and sign in with another Microsoft account. */
+  /** Offer to disconnect and sign in with another Microsoft account, as the main way forward. */
   switchAccount?: boolean;
+  /** Offer another Microsoft account only as a secondary choice; the action names the usual fix. */
+  otherAccount?: boolean;
+  /**
+   * Asking OneDrive to sync the library again can help: the library is still
+   * being added, OneDrive's records of it are not usable yet, or the request
+   * never reached OneDrive. Problems it cannot fix (OneDrive missing, the
+   * wrong account) leave it off, because the request would fail the same way.
+   */
+  offerSync?: boolean;
   /** Offer the OneDrive download page. */
   getOneDrive?: boolean;
 }
@@ -35,19 +44,17 @@ const ACTIONS: Record<string, Omit<SharePointProblem, 'code' | 'detail'>> = {
   MICROSOFT_BINDING_STATUS_FAILED: { action: 'Try again in a moment. Intern could not read its Microsoft connection on this computer.' },
   ONEDRIVE_MISSING: { action: 'Install or open OneDrive, then try again. Intern needs OneDrive to keep the Files library on this computer.', getOneDrive: true },
   ONEDRIVE_ACCOUNT_MISSING: { action: 'Open OneDrive and sign in with your work account, then try again.' },
-  ONEDRIVE_ACCOUNT_MISMATCH: { action: 'Sign in to OneDrive with the same work account you connected to Intern, then try again. OneDrive is signed in with a different account, so Intern cannot confirm the Files library is yours. If the connected account is the wrong one, connect a different account instead.', switchAccount: true },
-  ONEDRIVE_OPEN_FAILED: { action: 'Open SharePoint and choose Sync on the Files library, then try again. Intern could not ask OneDrive to start syncing.' },
-  SYNC_OPENER_UNAVAILABLE: { action: 'Open SharePoint and choose Sync on the Files library, then try again. This computer could not hand the sync request to OneDrive.' },
+  ONEDRIVE_ACCOUNT_MISMATCH: { action: 'Sign in to OneDrive with the same work account you connected to Intern, then try again. OneDrive is signed in with a different work account, so Intern cannot confirm the Files library is yours. If Intern is connected to the wrong account, use a different account instead.', otherAccount: true },
+  ONEDRIVE_OPEN_FAILED: { action: 'Open SharePoint and choose Sync on the Files library, then try again. Intern could not ask OneDrive to start syncing.', offerSync: true },
+  SYNC_OPENER_UNAVAILABLE: { action: 'Open SharePoint and choose Sync on the Files library, then try again. This computer could not hand the sync request to OneDrive.', offerSync: true },
   SYNC_PROTOCOL_UNAVAILABLE: { action: 'Repair or reinstall OneDrive, then try again. OneDrive is not set up to receive sync requests on this computer.', getOneDrive: true },
-  SHAREPOINT_SYNC_PENDING: { action: 'Keep OneDrive open and try again in a moment. OneDrive has not finished adding the Files library yet.' },
-  SHAREPOINT_ROOT_UNVERIFIED: { action: 'Let OneDrive finish syncing, then try again. Intern could not confirm that the synced folder is the Contoso Files library.' },
+  SHAREPOINT_SYNC_PENDING: { action: 'Keep OneDrive open and try again in a moment. OneDrive has not finished adding the Files library yet.', offerSync: true },
   SHAREPOINT_ROOT_AMBIGUOUS: { action: 'Remove the extra synced copy of the Files library from OneDrive, then try again. More than one synced folder looks like the Files library, and Intern will not guess which one is right.' },
   SHAREPOINT_ROOT_NESTED: { action: 'Sync the Files library on its own, not inside another synced folder, then try again.' },
   SHAREPOINT_ROOT_UNWRITABLE: { action: 'Make sure OneDrive is running and you can edit files in the Files library, then try again.' },
-  SHAREPOINT_ROOT_RECORD_UNAVAILABLE: { action: 'Make sure OneDrive is running, then try again. Intern could not read OneDrive\'s record of the synced Files library.' },
-  SHAREPOINT_ROOT_RECORD_MALFORMED: { action: 'Restart OneDrive, then try again. If this keeps happening, contact support. OneDrive\'s record of the synced library could not be read, so Intern will not trust it.' },
-  SHAREPOINT_ROOT_RECORD_CONFLICT: { action: 'Contact support. OneDrive\'s records of the synced Files library disagree with each other, and Intern will not guess which one is right.' },
-  SHAREPOINT_ROOT_VERIFIER_UNAVAILABLE: { action: 'Contact support. This version of Intern cannot yet confirm the synced Files library on this computer, so it will not start filing.' },
+  SHAREPOINT_ROOT_RECORD_UNAVAILABLE: { action: 'Make sure OneDrive is running, then try again. Intern could not read OneDrive\'s record of the synced Files library.', offerSync: true },
+  SHAREPOINT_ROOT_RECORD_MALFORMED: { action: 'Restart OneDrive, then try again. If this keeps happening, contact support. OneDrive\'s record of the synced library could not be read, so Intern will not trust it.', offerSync: true },
+  SHAREPOINT_ROOT_RECORD_CONFLICT: { action: 'Contact support. OneDrive\'s records of the synced Files library disagree with each other, and Intern will not guess which one is right.', offerSync: true },
   SHAREPOINT_DEPLOYMENT_UNAVAILABLE: { action: 'Contact support. This copy of Intern is missing its SharePoint setup, so it cannot connect to the shared Inbox.' },
   SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE: { action: 'Restart Intern, then try again. Intern could not confirm its SharePoint folders, so your settings were not saved.' },
   SHAREPOINT_ACTIVATION_IN_PROGRESS: { action: 'Try again in a moment. Intern is still turning on filing, so your settings were not saved yet.' },

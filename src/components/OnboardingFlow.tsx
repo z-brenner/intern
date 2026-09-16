@@ -13,7 +13,7 @@ import { SettingsDialog } from './SettingsDialog';
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
 const RESCAN_INTERVAL_MS = 5000;
 /** Codes a rescan can report while OneDrive is still adding the library; the step keeps waiting through them. */
-const TRANSIENT_WHILE_SYNCING = ['SHAREPOINT_SYNC_PENDING', 'SHAREPOINT_ROOT_UNVERIFIED'];
+const TRANSIENT_WHILE_SYNCING = ['SHAREPOINT_SYNC_PENDING'];
 
 type Step = 'welcome' | 'model' | 'microsoft' | 'sync' | 'activate' | 'finished';
 const STEPS: Array<[Step, string]> = [
@@ -259,11 +259,20 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
 function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: HeadingRef; bridge: DesktopBridge; onLibrary(status: SharePointSetupStatus): void; onSwitchAccount(): void }) {
   const [needsSync, setNeedsSync] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const { busy, problem, setProblem, run, mounted } = useAction();
+  // Why the library is still unconfirmed, when the backend knows: a OneDrive
+  // record problem reported alongside the pending status.
+  const [pendingProblem, setPendingProblem] = useState<SharePointProblem>();
+  const { busy, problem: failure, setProblem, run, mounted } = useAction();
   const support = useSupportLink(bridge);
 
   // Pending libraries stay on this step; anything further along moves on.
   const route = (status: SharePointSetupStatus) => {
+    const reported = status.phase === 'enrollment_pending' && status.problem ? status.problem : undefined;
+    // Rescans repeat the same problem every few seconds; keep the shown one
+    // unless it changed, so the alert is not announced again each time.
+    setPendingProblem((shown) => !reported ? undefined
+      : shown?.code === reported.code && shown.detail === (reported.message.trim() || undefined) ? shown
+        : describeSharePointProblem(reported));
     if (status.phase === 'enrollment_pending') { setNeedsSync(true); return false; }
     onLibrary(status);
     return true;
@@ -307,10 +316,13 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
     await bridge.microsoftDisconnect?.();
     if (mounted.current) onSwitchAccount();
   });
+  const problem = failure ?? pendingProblem;
   const recovery = waiting || problem;
-  // Until setup is active, asking OneDrive to sync is always one click away:
-  // a failed check is often a library that simply has not been synced yet.
-  const offerSync = !waiting && (needsSync || Boolean(problem));
+  // Asking OneDrive to sync is one click away while the library is pending,
+  // unless a problem shows that another request would fail the same way.
+  const offerSync = !waiting && (problem ? Boolean(problem.offerSync) : needsSync);
+  // With nothing else to press, checking again is the way forward.
+  const retryFirst = Boolean(problem) && !problem?.switchAccount && !problem?.getOneDrive && !offerSync;
   return <>
     <h1 ref={heading} tabIndex={-1}>Sync the Files library</h1>
     <p>Intern works on your team's Files library through OneDrive, so documents stay on this computer while they are read. Intern asks OneDrive to sync the InternTestSite Files library for you.</p>
@@ -324,7 +336,8 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
     <div className="onboarding-actions">
       {problem?.switchAccount && <button type="button" className="primary" disabled={busy} onClick={switchAccount}>Use a different account</button>}
       {offerSync && <button type="button" className={problem?.switchAccount ? undefined : 'primary'} disabled={busy} onClick={requestSync}>Sync Files with OneDrive</button>}
-      {recovery && <button type="button" disabled={busy} onClick={waiting ? requestSync : check}>Try again</button>}
+      {recovery && <button type="button" className={retryFirst ? 'primary' : undefined} disabled={busy} onClick={waiting ? requestSync : check}>Try again</button>}
+      {problem?.otherAccount && <button type="button" disabled={busy} onClick={switchAccount}>Use a different account</button>}
       {recovery && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
       {problem?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
