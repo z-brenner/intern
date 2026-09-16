@@ -1,11 +1,26 @@
 import { useMemo, useRef } from 'react';
 import { App } from './App';
-import { createBrowserSelectionBoundary, createFixtureBatchBridge } from './lib/inMemoryBridge';
+import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
 
+/**
+ * `?sharePoint=fake` swaps in the in-memory bridge's simulated SharePoint
+ * deployment so browser development and the Playwright journey can walk guided
+ * onboarding. It is a query parameter rather than a default so that `/` - the
+ * demo app, the exploratory run, and the reviewed QA capture - stays exactly as
+ * it was. It is read only in a Vite dev server (`import.meta.env.DEV`, which a
+ * production build compiles to false and drops), and never in the Tauri
+ * runtime, which always talks to the real backend below.
+ */
+function browserBridge() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('fixtureBatch') === '1') return createFixtureBatchBridge();
+  if (import.meta.env.DEV && params.get('sharePoint') === 'fake') return createInMemoryBridge({ sharePoint: 'fake' });
+  return undefined;
+}
+
 export function BrowserApp() {
-  const fixtureBatch = new URLSearchParams(window.location.search).get('fixtureBatch') === '1';
-  const bridge = useRef(fixtureBatch ? createFixtureBatchBridge() : undefined).current;
+  const bridge = useRef(isTauriRuntime() ? undefined : browserBridge()).current;
   if (isTauriRuntime()) {
     return <TauriApp />;
   }

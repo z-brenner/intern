@@ -24,6 +24,23 @@ describe('BrowserApp', () => {
     window.history.replaceState({}, '', '/');
   });
 
+  it('runs guided onboarding against the fake SharePoint deployment only when asked', async () => {
+    window.history.replaceState({}, '', '/?sharePoint=fake');
+
+    render(<BrowserApp />);
+
+    expect(await screen.findByRole('button', { name: 'Set up Intern' })).toBeVisible();
+    expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('opens the ordinary demo app by default, with no onboarding', async () => {
+    render(<BrowserApp />);
+
+    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
+  });
+
   it('injects the browser selection boundary into the platform-neutral App', async () => {
     render(<BrowserApp />);
 
