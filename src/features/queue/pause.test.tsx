@@ -11,6 +11,7 @@ function desktopTransport() {
     queue_list: [],
     settings_get: settings,
     setup_get: { state: 'ready', downloadedBytes: 0, totalBytes: 0 },
+    onboarding_status: { currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false },
   };
   const transport: TauriTransport = {
     invoke: async <T,>(command: string) => { commands.push(command); return responses[command] as T; },

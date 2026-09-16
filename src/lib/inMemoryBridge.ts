@@ -1,7 +1,8 @@
 import { GUIDE_URL } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState } from '../types';
+import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
+import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 
 /** Exact size of the single pinned model file this build downloads. */
 export const PINNED_MODEL_BYTES = 1_280_835_840;
@@ -46,6 +47,29 @@ export interface InMemoryBridgeOptions {
   update?: UpdateStatus;
   /** Backend-owned progress seeded for browser development and tests. */
   completedOnboardingVersion?: number;
+  /**
+   * The packaged SharePoint deployment. `unavailable` (the default) mirrors
+   * the shipping build, whose deployment resource is disabled; `fake`
+   * simulates an enabled deployment so guided onboarding can be exercised.
+   */
+  sharePoint?: 'unavailable' | 'fake';
+  sharePointFake?: FakeSharePointOptions;
+}
+
+export type FakeSharePointCall = 'microsoftSignInStart' | 'microsoftSignInPoll' | 'microsoftOpenSignIn' | 'microsoftDisconnect' | 'getSharePointSetup' | 'startSharePointSync' | 'activateOnboarding' | 'completeOnboarding';
+
+export interface FakeSharePointOptions {
+  /** A Microsoft account is already connected, as after a relaunch mid-setup. */
+  connected?: boolean;
+  account?: { displayName: string; email: string };
+  /** Polls that report pending before device sign-in connects (at least 1). */
+  signInPolls?: number;
+  /** The library's starting phase; enrollment_pending until OneDrive is asked to sync. */
+  phase?: SharePointSetupPhase;
+  /** Rescans that still report pending after a sync request before the library appears. */
+  pendingRescans?: number;
+  /** Errors each call throws, one per call in order, before it behaves normally again. */
+  failures?: Partial<Record<FakeSharePointCall, unknown[]>>;
 }
 
 function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
@@ -136,6 +160,73 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
   let completedOnboardingVersion = options.completedOnboardingVersion ?? 0;
   const microsoftUnavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
+  const sharePointEnabled = options.sharePoint === 'fake';
+  const fake = options.sharePointFake ?? {};
+  const failures = new Map(Object.entries(fake.failures ?? {}).map(([call, errors]) => [call, [...(errors ?? [])]]));
+  const failNext = (call: FakeSharePointCall) => { const queued = failures.get(call); if (queued?.length) throw queued.shift(); };
+  const fakeAccount = { tenantId: 'fake-contoso-tenant', id: 'fake-account', ...(fake.account ?? { displayName: 'Pat Lee', email: 'pat.lee@contoso.example' }) };
+  let microsoftConnected = fake.connected ?? false;
+  let signInPollsLeft: number | undefined;
+  let libraryPhase: SharePointSetupPhase = fake.phase ?? 'enrollment_pending';
+  let rescansLeft: number | undefined;
+  const libraryRoot = 'C:\\Users\\pat\\Contoso\\InternTestSite - Files';
+  const sharePointStatus = (): SharePointSetupStatus => {
+    if (!microsoftConnected) throw { code: 'MICROSOFT_ACCOUNT_MISSING', message: 'Connect the Microsoft account before setting up the Files library.' };
+    return { phase: libraryPhase, account: { displayName: fakeAccount.displayName, email: fakeAccount.email }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' };
+  };
+  // A simulated enabled deployment: device sign-in, OneDrive enrollment that
+  // takes a few rescans to appear, and activation to the managed settings.
+  const fakeSharePoint: Pick<DesktopBridge, 'getSharePointSetup' | 'startSharePointSync' | 'activateOnboarding' | 'completeOnboarding'> & MicrosoftIntakeBridge = {
+    getSharePointSetup: async () => {
+      failNext('getSharePointSetup');
+      const status = sharePointStatus();
+      if (libraryPhase !== 'enrollment_pending' || rescansLeft === undefined) return status;
+      if (rescansLeft > 0) { rescansLeft -= 1; return status; }
+      libraryPhase = 'ready_to_activate';
+      rescansLeft = undefined;
+      return sharePointStatus();
+    },
+    startSharePointSync: async () => {
+      failNext('startSharePointSync');
+      const status = sharePointStatus();
+      if (libraryPhase === 'enrollment_pending') rescansLeft = fake.pendingRescans ?? 2;
+      return status;
+    },
+    activateOnboarding: async () => {
+      failNext('activateOnboarding');
+      sharePointStatus();
+      if (libraryPhase === 'enrollment_pending') throw { code: 'SHAREPOINT_SYNC_PENDING', message: 'OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.' };
+      libraryPhase = 'active';
+      // The managed values activation derives, as the backend enforces them.
+      settings = { ...settings, intakeFolder: `${libraryRoot}\\Inbox`, destination: `${libraryRoot}\\Filed`, intakeEnabled: true, processOthersUploads: false, intakeLocalOnly: false, runInBackground: true, startAtLogin: true, startMinimized: true };
+      return sharePointStatus();
+    },
+    completeOnboarding: async () => { failNext('completeOnboarding'); completedOnboardingVersion = Math.max(completedOnboardingVersion, 1); },
+    microsoftIntakeStatus: async () => ({
+      connected: microsoftConnected,
+      account: microsoftConnected ? { ...fakeAccount } : null,
+      binding: microsoftConnected && libraryPhase === 'active' ? { localFolder: `${libraryRoot}\\Inbox`, driveId: 'fake-drive', folderId: 'fake-inbox', webUrl: 'https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox', tenantId: fakeAccount.tenantId } : null,
+      documents: [],
+      error: null,
+    }),
+    microsoftSignInStart: async () => {
+      failNext('microsoftSignInStart');
+      signInPollsLeft = Math.max(1, fake.signInPolls ?? 1);
+      return { userCode: 'ABCD-EFGH', verificationUri: 'https://microsoft.com/devicelogin', intervalSeconds: 5, expiresAt: Math.floor(Date.now() / 1000) + 900 };
+    },
+    microsoftSignInPoll: async () => {
+      failNext('microsoftSignInPoll');
+      if (signInPollsLeft === undefined) throw new Error('Microsoft sign-in changed or was canceled. Files remain held.');
+      signInPollsLeft -= 1;
+      if (signInPollsLeft > 0) return { state: 'pending', intervalSeconds: 5 };
+      signInPollsLeft = undefined;
+      microsoftConnected = true;
+      return { state: 'connected', account: { ...fakeAccount } };
+    },
+    microsoftDisconnect: async () => { failNext('microsoftDisconnect'); microsoftConnected = false; signInPollsLeft = undefined; },
+    microsoftBindIntake: async () => { throw new Error('The fixed deployment binds the Files library during activation.'); },
+    microsoftOpenSignIn: async () => { failNext('microsoftOpenSignIn'); },
+  };
   const downloadStepBytes = options.downloadStepBytes ?? Math.max(1, Math.ceil(setup.totalBytes / 4));
   const downloadIntervalMs = options.downloadIntervalMs ?? 40;
   let downloadTimer: ReturnType<typeof setInterval> | undefined;
@@ -203,8 +294,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     getOnboarding: async (): Promise<OnboardingStatus> => ({
       currentVersion: 1,
       completedVersion: completedOnboardingVersion,
-      required: completedOnboardingVersion < 1,
-      sharePointAvailable: false,
+      // Mirrors the backend: onboarding is only required for an enabled deployment.
+      required: sharePointEnabled && completedOnboardingVersion < 1,
+      sharePointAvailable: sharePointEnabled,
     }),
     getSharePointSetup: async () => { throw { code: 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE', message: microsoftUnavailable }; },
     startSharePointSync: async () => { throw { code: 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE', message: microsoftUnavailable }; },
@@ -222,6 +314,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     microsoftDisconnect: async () => { /* No credential exists in the disabled browser boundary. */ },
     microsoftBindIntake: async () => { throw new Error(microsoftUnavailable); },
     microsoftOpenSignIn: async () => { throw new Error(microsoftUnavailable); },
+    ...(sharePointEnabled ? fakeSharePoint : {}),
     startModelDownload: async () => {
       if (setup.state === 'downloading') return;
       setup = { ...setup, state: 'downloading', error: undefined };
