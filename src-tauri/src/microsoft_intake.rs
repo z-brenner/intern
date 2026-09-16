@@ -368,6 +368,52 @@ impl MicrosoftIntake {
         })
     }
 
+    /// The Inbox and Filed paths that settings saves must keep, once a fixed
+    /// SharePoint binding is active: the binding for the saved intake folder,
+    /// and the deployment's Filed sibling of it. `Ok(None)` means nothing is
+    /// managed. When a binding is active but the configuration cannot be read
+    /// or no binding matches `stored_intake`, which paths are managed is
+    /// unknown, so this is an error and the caller must not save.
+    pub(crate) fn managed_paths(
+        &self,
+        stored_intake: Option<&str>,
+    ) -> Result<Option<(String, String)>, String> {
+        let Some(deployment) = self.deployment.as_ref() else {
+            return Ok(None);
+        };
+        let unreadable = self
+            .config_error
+            .lock()
+            .map(|error| error.clone())
+            .unwrap_or_else(|_| Some("Microsoft configuration is unavailable.".into()));
+        if let Some(error) = unreadable {
+            return Err(error);
+        }
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| "Microsoft configuration is unavailable.")?;
+        let mut active = config
+            .bindings
+            .iter()
+            .filter(|binding| self.binding_matches_deployment(binding))
+            .peekable();
+        if active.peek().is_none() {
+            return Ok(None);
+        }
+        let inbox = active
+            .find(|binding| {
+                stored_intake.is_some_and(|stored| same_path(&binding.local_folder, stored))
+            })
+            .map(|binding| binding.local_folder.clone())
+            .ok_or("Intern's SharePoint connection no longer matches the saved settings. Run SharePoint setup again; settings were not changed.")?;
+        let destination = Path::new(&inbox)
+            .parent()
+            .map(|library| library.join(deployment.destination_folder_name()))
+            .ok_or("The SharePoint Inbox has no library folder. Run SharePoint setup again; settings were not changed.")?;
+        Ok(Some((inbox, destination.to_string_lossy().into_owned())))
+    }
+
     pub(crate) fn fixed_binding_active(
         &self,
         deployment: &SharePointDeployment,
@@ -385,8 +431,8 @@ impl MicrosoftIntake {
     /// Publishes an inactive but protected Inbox stage before the caller's
     /// local settings commit, then adds the fixed binding and watermark only
     /// after that commit succeeds. A failure on either side therefore leaves
-    /// no active binding; a rollback failure keeps the root protected and
-    /// fail-closed.
+    /// no active binding, and the Inbox stays a protected root either way so
+    /// processing remains fail-closed.
     pub(crate) fn activate_fixed_binding<E>(
         &self,
         deployment: &SharePointDeployment,
@@ -472,13 +518,14 @@ impl MicrosoftIntake {
                     restore: "The Microsoft connection or configuration changed during rollback; its newer fail-closed state was preserved.".into(),
                 });
             }
-            if let Err(restore) = self.save(&previous) {
+            let restored = previous_keeping_protection(&previous, &staged);
+            if let Err(restore) = self.save(&restored) {
                 return Err(FixedBindingActivationError::Rollback {
                     commit: commit_error,
                     restore,
                 });
             }
-            *config = previous;
+            *config = restored;
             return Err(FixedBindingActivationError::Commit(commit_error));
         }
         let mut config = self.config.lock().map_err(|_| {
@@ -495,9 +542,10 @@ impl MicrosoftIntake {
             && *config == staged;
         if !connection_unchanged {
             if *config == staged {
-                self.save(&previous)
+                let restored = previous_keeping_protection(&previous, &staged);
+                self.save(&restored)
                     .map_err(FixedBindingActivationError::Microsoft)?;
-                *config = previous;
+                *config = restored;
             }
             return Err(FixedBindingActivationError::Microsoft(
                 "The Microsoft connection changed while SharePoint was being activated.".into(),
@@ -939,6 +987,16 @@ impl FilingSink for MicrosoftIntake {
         self.persist_attribution();
     }
 }
+/// The configuration an aborted fixed activation returns to: the prior
+/// bindings and enablement, but never fewer protected roots than the stage.
+/// The local commit may already have watched the Inbox, and its rollback may
+/// not have stopped that watcher or may itself have failed, so the shared
+/// Inbox stays held rather than becoming an ordinary local folder.
+fn previous_keeping_protection(previous: &PublicConfig, staged: &PublicConfig) -> PublicConfig {
+    let mut restored = previous.clone();
+    restored.protected_roots = staged.protected_roots.clone();
+    restored
+}
 fn within(path: &Path, root: &str) -> bool {
     !root.trim().is_empty()
         && (same_path(&path.to_string_lossy(), root)
@@ -1007,21 +1065,142 @@ pub fn microsoft_open_sign_in(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
     use intern_intake::{
         Clock,
         microsoft::{
-            MicrosoftClient, TokenStore,
-            proof::FreshUploadMetadata,
+            TokenStore,
             transport::{Reply, Transport},
         },
     };
-    use intern_queue::{WorkerBoundary, WorkerFailure};
     use std::{
         collections::{HashMap, VecDeque},
         sync::atomic::AtomicI64,
     };
+
+    #[derive(Default)]
+    pub(crate) struct ReconnectTokens(pub(crate) Mutex<HashMap<String, String>>);
+
+    impl TokenStore for ReconnectTokens {
+        fn get(&self, key: &str) -> Result<Option<String>, String> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+
+        fn set(&self, key: &str, value: &str) -> Result<(), String> {
+            self.0.lock().unwrap().insert(key.into(), value.into());
+            Ok(())
+        }
+
+        fn delete(&self, key: &str) -> Result<(), String> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    pub(crate) struct ReconnectTransport(pub(crate) Mutex<VecDeque<Reply>>);
+
+    impl Transport for ReconnectTransport {
+        fn request(
+            &self,
+            _url: url::Url,
+            _form: Option<&[(&str, &str)]>,
+            _bearer: Option<&str>,
+        ) -> Result<Reply, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "unexpected Microsoft request".into())
+        }
+    }
+
+    pub(crate) struct ReconnectClock(pub(crate) AtomicI64);
+
+    impl Clock for ReconnectClock {
+        fn now(&self) -> i64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    pub(crate) fn reconnect_reply(status: u16, body: serde_json::Value) -> Reply {
+        Reply {
+            status,
+            body,
+            retry_after: 60,
+        }
+    }
+
+    /// A manager with `deployment`, a persisted enabled configuration in
+    /// `data`, and `account` signed in through a scripted device flow. No
+    /// further Microsoft request is answered, so any verification that would
+    /// need Graph fails rather than authorizes.
+    pub(crate) fn connected_manager(
+        settings: SettingsStore,
+        data: PathBuf,
+        deployment: SharePointDeployment,
+        account: &Account,
+    ) -> MicrosoftIntake {
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = MicrosoftClient::with_transport(
+            deployment.clone(),
+            Arc::new(ReconnectTokens::default()),
+            Arc::new(ReconnectTransport(Mutex::new(VecDeque::from([
+                reconnect_reply(
+                    200,
+                    serde_json::json!({
+                        "device_code": "private-device-code",
+                        "user_code": "ABCD-EFGH",
+                        "verification_uri": "https://microsoft.com/devicelogin",
+                        "expires_in": 900,
+                        "interval": 5
+                    }),
+                ),
+                reconnect_reply(
+                    200,
+                    serde_json::json!({
+                        "token_type": "Bearer",
+                        "access_token": "private-access-token",
+                        "refresh_token": "private-refresh-token",
+                        "expires_in": 3600
+                    }),
+                ),
+                reconnect_reply(
+                    200,
+                    serde_json::json!({
+                        "id": account.id,
+                        "displayName": account.display_name,
+                        "mail": account.email,
+                        "userPrincipalName": account.user_principal_name
+                    }),
+                ),
+            ])))),
+            Arc::clone(&clock) as Arc<dyn Clock>,
+        );
+        client.begin().unwrap();
+        clock.0.store(1_005, Ordering::SeqCst);
+        client.poll().unwrap();
+        let mut intake = MicrosoftIntake::with_deployment(settings, data, Ok(deployment));
+        intake.client = Some(client);
+        intake
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{
+        ReconnectClock, ReconnectTokens, ReconnectTransport, reconnect_reply,
+    };
+    use super::*;
+    use intern_intake::microsoft::{MicrosoftClient, proof::FreshUploadMetadata};
+    use intern_queue::{WorkerBoundary, WorkerFailure};
+    use std::{collections::VecDeque, sync::atomic::AtomicI64};
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
     const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
 
@@ -1054,58 +1233,6 @@ mod tests {
             display_name: "Pat Example".into(),
             email: "pat@example.test".into(),
             user_principal_name: "pat@example.test".into(),
-        }
-    }
-
-    #[derive(Default)]
-    struct ReconnectTokens(Mutex<HashMap<String, String>>);
-
-    impl TokenStore for ReconnectTokens {
-        fn get(&self, key: &str) -> Result<Option<String>, String> {
-            Ok(self.0.lock().unwrap().get(key).cloned())
-        }
-
-        fn set(&self, key: &str, value: &str) -> Result<(), String> {
-            self.0.lock().unwrap().insert(key.into(), value.into());
-            Ok(())
-        }
-
-        fn delete(&self, key: &str) -> Result<(), String> {
-            self.0.lock().unwrap().remove(key);
-            Ok(())
-        }
-    }
-
-    struct ReconnectTransport(Mutex<VecDeque<Reply>>);
-
-    impl Transport for ReconnectTransport {
-        fn request(
-            &self,
-            _url: url::Url,
-            _form: Option<&[(&str, &str)]>,
-            _bearer: Option<&str>,
-        ) -> Result<Reply, String> {
-            self.0
-                .lock()
-                .unwrap()
-                .pop_front()
-                .ok_or_else(|| "unexpected Microsoft request".into())
-        }
-    }
-
-    struct ReconnectClock(AtomicI64);
-
-    impl Clock for ReconnectClock {
-        fn now(&self) -> i64 {
-            self.0.load(Ordering::SeqCst)
-        }
-    }
-
-    fn reconnect_reply(status: u16, body: serde_json::Value) -> Reply {
-        Reply {
-            status,
-            body,
-            retry_after: 60,
         }
     }
 
@@ -1726,7 +1853,11 @@ mod tests {
         );
         let rolled_back = read_config(&data.join("microsoft-intake.json")).unwrap();
         assert!(rolled_back.bindings.is_empty());
-        assert!(rolled_back.protected_roots.is_empty());
+        assert_eq!(
+            rolled_back.protected_roots.len(),
+            1,
+            "an aborted activation leaves the shared Inbox protected"
+        );
 
         intake
             .activate_fixed_binding(&deployment, &account(), &inbox, || Ok::<_, &str>(()))
@@ -1784,7 +1915,11 @@ mod tests {
         assert!(matches!(error, FixedBindingActivationError::Microsoft(_)));
         let restored = read_config(&data.join("microsoft-intake.json")).unwrap();
         assert!(restored.bindings.is_empty());
-        assert!(restored.protected_roots.is_empty());
+        assert_eq!(
+            restored.protected_roots.len(),
+            1,
+            "an aborted activation leaves the shared Inbox protected"
+        );
         drop(intake);
         let _ = fs::remove_dir_all(data);
     }

@@ -7,10 +7,11 @@
 //! verifies roots from OneDrive's own sync records
 //! (`sharepoint_root_verifier`).
 
+use crate::commands::SettingsRuntime;
 use intern_intake::{
-    CloudProviderKind, CloudRoot, SharePointDeployment, detect_cloud_roots,
+    CloudProviderKind, CloudRoot, RegistryHive, SharePointDeployment, detect_cloud_roots,
     microsoft::{Account, proof::is_guid},
-    paths_overlap, relative_to_root,
+    paths_overlap, registry_string, registry_subkeys, relative_to_root,
 };
 use intern_queue::AppSettings;
 use serde::Serialize;
@@ -83,7 +84,9 @@ pub enum DirectoryFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncOpenFailure {
-    OneDriveUnavailable,
+    /// No `odopen:` protocol handler is registered, so OneDrive cannot
+    /// receive the sync request even if the OS opener launches it.
+    ProtocolUnavailable,
     OpenerUnavailable,
     Other(String),
 }
@@ -121,9 +124,10 @@ pub trait RemoteLibraryVerifier {
 }
 
 /// The callback is the local settings/autostart commit. Implementations must
-/// stage Microsoft protection first and restore their prior state if the
-/// callback fails. A final publication failure may retain that inactive,
-/// protected stage so processing stays fail-closed. A successful return means
+/// stage Microsoft protection first and restore their prior bindings if the
+/// callback or publication fails, keeping the staged Inbox protection: the
+/// commit may already have watched the Inbox, so an aborted activation must
+/// leave it held rather than unprotected. A successful return means
 /// the activation watermark and exact fixed Inbox binding are durable and
 /// definitive; callers must not add a second fallible confirmation after the
 /// local commit has succeeded.
@@ -146,7 +150,12 @@ pub trait MicrosoftSetup {
 
 pub trait SetupSettings {
     fn load(&self) -> Result<AppSettings, SharePointSetupError>;
+    /// Applies activation settings. A failure has already restored what was
+    /// stored before, or reports ACTIVATION_ROLLBACK_FAILED.
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError>;
+    /// Puts back settings that were stored before activation. Must never fall
+    /// back to re-applying the activation settings when it fails.
+    fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError>;
 }
 
 pub trait AutostartBoundary {
@@ -156,6 +165,13 @@ pub trait AutostartBoundary {
 
 pub trait SyncOpener {
     fn open(&self, url: &Url) -> Result<(), SyncOpenFailure>;
+}
+
+/// Whether resolution may prove writability by creating a probe file.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WriteProbe {
+    Require,
+    Skip,
 }
 
 struct ResolvedLibrary {
@@ -200,10 +216,15 @@ impl<'a> SharePointSetup<'a> {
     }
 
     /// Rescans every time. Command adapters must run this blocking discovery
-    /// away from the IPC thread, as the two production actions below do.
+    /// away from the IPC thread, as the production commands below do.
+    ///
+    /// Side-effect free: it never launches OneDrive or writes settings or
+    /// autostart, and it skips the write probes, which would create and
+    /// delete files inside the synced SharePoint library on every poll.
+    /// Writability is proven again by `start_sync` and `activate`.
     pub fn status(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let Some(resolved) = self.resolve(&account)? else {
+        let Some(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
             return Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account));
         };
         let settings = self.settings.load()?;
@@ -225,7 +246,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn start_sync(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        if let Some(resolved) = self.resolve(&account)? {
+        if let Some(resolved) = self.resolve(&account, WriteProbe::Require)? {
             let settings = self.settings.load()?;
             let active = managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
                 && self.autostart.is_enabled()?
@@ -251,9 +272,9 @@ impl<'a> SharePointSetup<'a> {
                 )
             })?;
         self.opener.open(&url).map_err(|failure| match failure {
-            SyncOpenFailure::OneDriveUnavailable => SharePointSetupError::new(
-                "ONEDRIVE_MISSING",
-                "OneDrive could not handle the fixed SharePoint sync request. Install or open OneDrive, then try again.",
+            SyncOpenFailure::ProtocolUnavailable => SharePointSetupError::new(
+                "SYNC_PROTOCOL_UNAVAILABLE",
+                "OneDrive is not registered to receive SharePoint sync requests on this computer. Repair or reinstall OneDrive, then try again.",
             ),
             SyncOpenFailure::OpenerUnavailable => SharePointSetupError::new(
                 "SYNC_OPENER_UNAVAILABLE",
@@ -269,7 +290,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn activate(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let resolved = self.resolve(&account)?.ok_or_else(|| {
+        let resolved = self.resolve(&account, WriteProbe::Require)?.ok_or_else(|| {
             SharePointSetupError::new(
                 "SHAREPOINT_SYNC_PENDING",
                 "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
@@ -323,13 +344,13 @@ impl<'a> SharePointSetup<'a> {
             OneDriveState::Missing => {
                 return Err(SharePointSetupError::new(
                     "ONEDRIVE_MISSING",
-                    "OneDrive is not available on this computer.",
+                    "OneDrive is not installed on this computer. Install OneDrive, sign in with your work account, then try again.",
                 ));
             }
             OneDriveState::AccountMissing => {
                 return Err(SharePointSetupError::new(
                     "ONEDRIVE_ACCOUNT_MISSING",
-                    "OneDrive is not signed in to a work or school account.",
+                    "OneDrive is installed but not signed in to a work or school account. Sign in to OneDrive with your work account, then try again.",
                 ));
             }
             OneDriveState::Available => {}
@@ -353,7 +374,11 @@ impl<'a> SharePointSetup<'a> {
         Ok(account)
     }
 
-    fn resolve(&self, account: &Account) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
+    fn resolve(
+        &self,
+        account: &Account,
+        probe: WriteProbe,
+    ) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
         let mut candidates = Vec::new();
         for detected in self.roots.detect()? {
             if detected.kind != CloudProviderKind::SharePoint {
@@ -405,7 +430,7 @@ impl<'a> SharePointSetup<'a> {
                 ));
             }
         };
-        if !self.fs.is_writable_directory(&identity.local_root) {
+        if probe == WriteProbe::Require && !self.fs.is_writable_directory(&identity.local_root) {
             return Err(SharePointSetupError::new(
                 "SHAREPOINT_ROOT_UNWRITABLE",
                 "The verified Files library is not writable.",
@@ -415,11 +440,13 @@ impl<'a> SharePointSetup<'a> {
             &identity.local_root,
             self.deployment.intake_folder_name(),
             "INBOX",
+            probe,
         )?;
         let destination = self.fixed_child(
             &identity.local_root,
             self.deployment.destination_folder_name(),
             "FILED",
+            probe,
         )?;
         if paths_overlap(&inbox, &destination) {
             return Err(SharePointSetupError::new(
@@ -439,6 +466,7 @@ impl<'a> SharePointSetup<'a> {
         root: &Path,
         name: &str,
         code: &str,
+        probe: WriteProbe,
     ) -> Result<PathBuf, SharePointSetupError> {
         let joined = root.join(name);
         let child = self.fs.canonicalize_directory(&joined).map_err(|failure| {
@@ -460,7 +488,7 @@ impl<'a> SharePointSetup<'a> {
                 format!("The fixed {name} path does not resolve directly under Files."),
             ));
         }
-        if !self.fs.is_writable_directory(&child) {
+        if probe == WriteProbe::Require && !self.fs.is_writable_directory(&child) {
             return Err(SharePointSetupError::new(
                 format!("{code}_UNWRITABLE"),
                 format!("The fixed {name} folder is not writable."),
@@ -494,7 +522,7 @@ impl<'a> SharePointSetup<'a> {
         previous_autostart: bool,
         original: SharePointSetupError,
     ) -> SharePointSetupError {
-        let settings = self.settings.save(previous);
+        let settings = self.settings.restore(previous);
         let autostart = self.autostart.set_enabled(previous_autostart);
         match (settings, autostart) {
             (Ok(()), Ok(())) => original,
@@ -550,16 +578,116 @@ fn rollback_error(
 }
 
 fn result_label(result: Result<(), SharePointSetupError>) -> String {
-    result.map_or_else(|error| error.code, |()| "ok".into())
+    result.map_or_else(
+        |error| format!("{} ({})", error.code, error.message),
+        |()| "ok".into(),
+    )
 }
 
-struct SystemRoots;
+/// Read-only machine facts the production OneDrive checks consult. Nothing
+/// here ever writes the registry; tests substitute a fake machine.
+trait MachineFacts {
+    fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String>;
+    fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String>;
+    fn env_var(&self, name: &str) -> Option<String>;
+    fn is_file(&self, path: &Path) -> bool;
+}
 
-impl RootDetector for SystemRoots {
+struct SystemMachine;
+
+impl MachineFacts for SystemMachine {
+    fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String> {
+        registry_string(hive, key, value)
+    }
+
+    fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String> {
+        registry_subkeys(hive, key)
+    }
+
+    fn env_var(&self, name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+}
+
+const ONEDRIVE_ACCOUNTS_KEY: &str = r"Software\Microsoft\OneDrive\Accounts";
+
+/// Installed means a OneDrive program actually exists: the per-user trigger
+/// OneDrive records, or the per-user and per-machine install locations. A
+/// registry value left behind by an uninstall is not an installation.
+fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
+    let mut candidates = Vec::new();
+    if let Some(trigger) = machine.registry_string(
+        RegistryHive::CurrentUser,
+        r"Software\Microsoft\OneDrive",
+        "OneDriveTrigger",
+    ) {
+        candidates.push(PathBuf::from(trigger));
+    }
+    for (variable, relative) in [
+        ("LOCALAPPDATA", r"Microsoft\OneDrive\OneDrive.exe"),
+        ("ProgramFiles", r"Microsoft OneDrive\OneDrive.exe"),
+        ("ProgramFiles(x86)", r"Microsoft OneDrive\OneDrive.exe"),
+    ] {
+        if let Some(base) = machine.env_var(variable) {
+            candidates.push(PathBuf::from(base).join(relative));
+        }
+    }
+    candidates
+        .iter()
+        .any(|candidate| machine.is_file(candidate))
+}
+
+/// OneDrive keeps an `Accounts\Business<N>` key per work or school account
+/// slot, and records `UserEmail` only once someone has signed in to it.
+fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+    machine
+        .registry_subkeys(RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY)
+        .iter()
+        .filter(|name| name.to_ascii_lowercase().starts_with("business"))
+        .any(|name| {
+            machine
+                .registry_string(
+                    RegistryHive::CurrentUser,
+                    &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
+                    "UserEmail",
+                )
+                .is_some()
+        })
+}
+
+fn one_drive_state(machine: &dyn MachineFacts) -> OneDriveState {
+    if !one_drive_client_installed(machine) {
+        OneDriveState::Missing
+    } else if !one_drive_work_account_signed_in(machine) {
+        OneDriveState::AccountMissing
+    } else {
+        OneDriveState::Available
+    }
+}
+
+/// `HKEY_CLASSES_ROOT` merges the per-user and per-machine class
+/// registrations, which is what the shell resolves `odopen:` against.
+fn sync_protocol_registered(machine: &dyn MachineFacts) -> bool {
+    machine
+        .registry_string(RegistryHive::ClassesRoot, r"odopen\shell\open\command", "")
+        .is_some()
+}
+
+struct SystemRoots<'a> {
+    machine: &'a dyn MachineFacts,
+}
+
+impl RootDetector for SystemRoots<'_> {
     fn one_drive_state(&self) -> OneDriveState {
         // Root absence is the normal pre-enrollment state, not evidence that
-        // OneDrive is absent. The odopen handler is the OS authority for that.
-        OneDriveState::Available
+        // OneDrive is absent, so only the client and account are checked.
+        one_drive_state(self.machine)
     }
 
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -653,18 +781,24 @@ impl MicrosoftSetup for ProductionMicrosoft<'_> {
     }
 }
 
-struct ProductionSettings<'a>(&'a crate::commands::AppState);
+/// The settings boundary over the live application runtime (`AppState` in
+/// production). Generic so tests drive this exact adapter.
+struct ProductionSettings<'a, R>(&'a R);
 
-impl SetupSettings for ProductionSettings<'_> {
+impl<R: SettingsRuntime> SetupSettings for ProductionSettings<'_, R> {
     fn load(&self) -> Result<AppSettings, SharePointSetupError> {
         self.0
-            .sharepoint_settings_snapshot()
+            .load_settings()
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
-        self.0
-            .activate_sharepoint_settings(settings)
+        crate::commands::activate_sharepoint_settings(self.0, settings)
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
+    }
+
+    fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError> {
+        crate::commands::restore_sharepoint_settings(self.0, previous)
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 }
@@ -697,20 +831,44 @@ impl AutostartBoundary for ProductionAutostart<'_> {
     }
 }
 
-struct ProductionOpener;
+type Launch<'a> = &'a dyn Fn(&str) -> Result<(), tauri_plugin_opener::Error>;
 
-impl SyncOpener for ProductionOpener {
+struct ProductionOpener<'a> {
+    machine: &'a dyn MachineFacts,
+    launch: Launch<'a>,
+}
+
+impl SyncOpener for ProductionOpener<'_> {
+    /// The OS opener only reports whether a launcher process started; it
+    /// cannot tell that nothing handles `odopen:`, so that is checked first.
     fn open(&self, url: &Url) -> Result<(), SyncOpenFailure> {
-        tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
-            .map_err(|_| SyncOpenFailure::OneDriveUnavailable)
+        if !sync_protocol_registered(self.machine) {
+            return Err(SyncOpenFailure::ProtocolUnavailable);
+        }
+        (self.launch)(url.as_str()).map_err(|error| match error {
+            tauri_plugin_opener::Error::UnsupportedPlatform => SyncOpenFailure::OpenerUnavailable,
+            tauri_plugin_opener::Error::Io(error)
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                SyncOpenFailure::OpenerUnavailable
+            }
+            tauri_plugin_opener::Error::Io(error) => SyncOpenFailure::Other(error.to_string()),
+            other => SyncOpenFailure::Other(other.to_string()),
+        })
     }
 }
 
-fn packaged_deployment() -> Result<SharePointDeployment, SharePointSetupError> {
-    SharePointDeployment::from_slice(include_bytes!("../resources/sharepoint-deployment.json"))
-        .map_err(|error| {
-            SharePointSetupError::new("SHAREPOINT_DEPLOYMENT_UNAVAILABLE", error.to_string())
-        })
+fn launch_url(url: &str) -> Result<(), tauri_plugin_opener::Error> {
+    tauri_plugin_opener::open_url(url, None::<&str>)
+}
+
+/// The deployment resource compiled into this build.
+pub const PACKAGED_DEPLOYMENT: &[u8] = include_bytes!("../resources/sharepoint-deployment.json");
+
+pub(crate) fn packaged_deployment() -> Result<SharePointDeployment, SharePointSetupError> {
+    SharePointDeployment::from_slice(PACKAGED_DEPLOYMENT).map_err(|error| {
+        SharePointSetupError::new("SHAREPOINT_DEPLOYMENT_UNAVAILABLE", error.to_string())
+    })
 }
 
 fn production_operation(
@@ -722,15 +880,19 @@ fn production_operation(
     // production commands fail with this exact support error and cannot ever
     // activate by a registry display name.
     let deployment = packaged_deployment()?;
-    let roots = SystemRoots;
+    let machine = SystemMachine;
+    let roots = SystemRoots { machine: &machine };
     let fs = SystemFileSystem;
     let verifier = crate::sharepoint_root_verifier::OneDriveRecordVerifier::current_user();
     let microsoft_state = app.state::<std::sync::Arc<crate::microsoft_intake::MicrosoftIntake>>();
     let microsoft = ProductionMicrosoft(microsoft_state.as_ref());
     let app_state = app.state::<crate::commands::AppState>();
-    let settings = ProductionSettings(&app_state);
+    let settings = ProductionSettings(app_state.inner());
     let autostart = ProductionAutostart(app);
-    let opener = ProductionOpener;
+    let opener = ProductionOpener {
+        machine: &machine,
+        launch: &launch_url,
+    };
     let setup = SharePointSetup::new(
         &deployment,
         &roots,
@@ -742,6 +904,23 @@ fn production_operation(
         &opener,
     );
     operation(&setup)
+}
+
+/// No-payload, side-effect-free IPC command for polling setup progress: it
+/// rescans and reads, but never launches OneDrive, writes settings or
+/// autostart, or probes the synced library with a write.
+#[tauri::command]
+pub async fn onboarding_sharepoint_status(
+    app: AppHandle,
+) -> Result<SharePointSetupStatus, SharePointSetupError> {
+    tauri::async_runtime::spawn_blocking(move || production_operation(&app, |setup| setup.status()))
+        .await
+        .map_err(|_| {
+            SharePointSetupError::new(
+                "SHAREPOINT_SETUP_TASK_FAILED",
+                "The SharePoint setup status could not be read.",
+            )
+        })?
 }
 
 /// No-payload IPC command. Work that can touch OneDrive/registry state runs
@@ -868,6 +1047,7 @@ mod tests {
     struct FakeFileSystem {
         canonical: HashMap<PathBuf, PathBuf>,
         writable: HashSet<PathBuf>,
+        write_probes: Mutex<usize>,
     }
 
     impl SetupFileSystem for FakeFileSystem {
@@ -879,6 +1059,7 @@ mod tests {
         }
 
         fn is_writable_directory(&self, path: &Path) -> bool {
+            *self.write_probes.lock().unwrap() += 1;
             self.writable.contains(path)
         }
     }
@@ -983,6 +1164,10 @@ mod tests {
             }
             *self.saved.lock().unwrap() = settings.clone();
             Ok(())
+        }
+
+        fn restore(&self, previous: &AppSettings) -> Result<(), SharePointSetupError> {
+            self.save(previous)
         }
     }
 
@@ -1139,6 +1324,44 @@ mod tests {
     }
 
     #[test]
+    fn status_never_launches_writes_or_probes_the_synced_library() {
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        let previous = rig.settings.saved.lock().unwrap().clone();
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::ReadyToActivate
+        );
+        rig.setup().activate().expect("activate");
+        let events = rig.settings.events.lock().unwrap().clone();
+        let activated = rig.settings.saved.lock().unwrap().clone();
+        assert_ne!(activated, previous);
+        *rig.fs.write_probes.lock().unwrap() = 0;
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::Active
+        );
+
+        assert!(rig.opener.opened.lock().unwrap().is_empty());
+        assert_eq!(*rig.settings.events.lock().unwrap(), events);
+        assert_eq!(*rig.settings.saved.lock().unwrap(), activated);
+        assert_eq!(
+            *rig.fs.write_probes.lock().unwrap(),
+            0,
+            "a status poll must not create probe files in the synced SharePoint library"
+        );
+    }
+
+    #[test]
+    fn setup_commands_do_not_run_on_the_ipc_thread() {
+        fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
+        leaves_the_ipc_thread(onboarding_sharepoint_status);
+        leaves_the_ipc_thread(onboarding_start_sharepoint_sync);
+        leaves_the_ipc_thread(onboarding_activate);
+    }
+
+    #[test]
     fn enrollment_uses_only_the_connected_account_and_encoded_deployment_url() {
         let rig = Rig::empty();
 
@@ -1173,6 +1396,238 @@ mod tests {
         rig.opener.failure = Some(SyncOpenFailure::OpenerUnavailable);
 
         assert_eq!(code(rig.setup().start_sync()), "SYNC_OPENER_UNAVAILABLE");
+    }
+
+    #[test]
+    fn every_opener_failure_has_its_own_code() {
+        let mut rig = Rig::empty();
+        rig.opener.failure = Some(SyncOpenFailure::ProtocolUnavailable);
+        assert_eq!(code(rig.setup().start_sync()), "SYNC_PROTOCOL_UNAVAILABLE");
+
+        let mut rig = Rig::empty();
+        rig.opener.failure = Some(SyncOpenFailure::Other("access is denied".into()));
+        let error = rig.setup().start_sync().expect_err("launch failed");
+        assert_eq!(error.code, "ONEDRIVE_OPEN_FAILED");
+        assert!(error.message.contains("access is denied"));
+    }
+
+    /// Registry values, environment, and files the production OneDrive
+    /// checks read, with nothing present unless a test adds it.
+    #[derive(Default)]
+    struct FakeMachine {
+        strings: HashMap<(RegistryHive, String, String), String>,
+        subkeys: HashMap<(RegistryHive, String), Vec<String>>,
+        env: HashMap<String, String>,
+        files: HashSet<PathBuf>,
+    }
+
+    impl FakeMachine {
+        fn string(mut self, hive: RegistryHive, key: &str, value: &str, data: &str) -> Self {
+            self.strings
+                .insert((hive, key.into(), value.into()), data.into());
+            self
+        }
+
+        fn accounts(mut self, names: &[&str]) -> Self {
+            self.subkeys.insert(
+                (RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY.into()),
+                names.iter().map(|name| (*name).to_owned()).collect(),
+            );
+            self
+        }
+
+        fn installed(mut self) -> Self {
+            self.env
+                .insert("ProgramFiles".into(), r"C:\Program Files".into());
+            self.files.insert(PathBuf::from(
+                r"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
+            ));
+            self
+        }
+
+        fn work_account(self) -> Self {
+            self.accounts(&["Business1", "Personal"]).string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business1"),
+                "UserEmail",
+                "pat@contoso.com",
+            )
+        }
+
+        fn odopen(self) -> Self {
+            self.string(
+                RegistryHive::ClassesRoot,
+                r"odopen\shell\open\command",
+                "",
+                r#""C:\Program Files\Microsoft OneDrive\OneDrive.exe" /url:"%1""#,
+            )
+        }
+    }
+
+    impl MachineFacts for FakeMachine {
+        fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String> {
+            self.strings.get(&(hive, key.into(), value.into())).cloned()
+        }
+
+        fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String> {
+            self.subkeys
+                .get(&(hive, key.into()))
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn env_var(&self, name: &str) -> Option<String> {
+            self.env.get(name).cloned()
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.files.contains(path)
+        }
+    }
+
+    #[test]
+    fn production_onedrive_state_distinguishes_client_and_work_account() {
+        assert_eq!(
+            one_drive_state(&FakeMachine::default()),
+            OneDriveState::Missing
+        );
+        // A stale trigger value without the program is not an installation.
+        let stale = FakeMachine::default().string(
+            RegistryHive::CurrentUser,
+            r"Software\Microsoft\OneDrive",
+            "OneDriveTrigger",
+            r"C:\Gone\OneDrive.exe",
+        );
+        assert_eq!(one_drive_state(&stale), OneDriveState::Missing);
+        let per_user = FakeMachine::default()
+            .string(
+                RegistryHive::CurrentUser,
+                r"Software\Microsoft\OneDrive",
+                "OneDriveTrigger",
+                r"C:\Users\pat\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+            )
+            .work_account();
+        let mut per_user = per_user;
+        per_user.files.insert(PathBuf::from(
+            r"C:\Users\pat\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+        ));
+        assert_eq!(one_drive_state(&per_user), OneDriveState::Available);
+
+        assert_eq!(
+            one_drive_state(&FakeMachine::default().installed()),
+            OneDriveState::AccountMissing
+        );
+        // An account slot OneDrive created but never signed in, and a
+        // personal account, are not a work account.
+        let unsigned = FakeMachine::default()
+            .installed()
+            .accounts(&["Business1", "Personal"])
+            .string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Personal"),
+                "UserEmail",
+                "pat@outlook.com",
+            );
+        assert_eq!(one_drive_state(&unsigned), OneDriveState::AccountMissing);
+        assert_eq!(
+            one_drive_state(&FakeMachine::default().installed().work_account()),
+            OneDriveState::Available
+        );
+    }
+
+    #[test]
+    fn production_onedrive_checks_block_sync_before_any_launch() {
+        let launches = std::cell::Cell::new(0);
+        let launch = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+        for (machine, expected) in [
+            (FakeMachine::default(), "ONEDRIVE_MISSING"),
+            (
+                FakeMachine::default().installed().odopen(),
+                "ONEDRIVE_ACCOUNT_MISSING",
+            ),
+        ] {
+            let rig = Rig::empty();
+            let roots = SystemRoots { machine: &machine };
+            let opener = ProductionOpener {
+                machine: &machine,
+                launch: &launch,
+            };
+            let setup = SharePointSetup::new(
+                &rig.deployment,
+                &roots,
+                &rig.fs,
+                &rig.verifier,
+                &rig.microsoft,
+                &rig.settings,
+                &rig.autostart,
+                &opener,
+            );
+            assert_eq!(code(setup.start_sync()), expected);
+        }
+        assert_eq!(launches.get(), 0);
+    }
+
+    #[test]
+    fn production_opener_distinguishes_protocol_opener_and_launch_failures() {
+        let url = Url::parse("odopen://sync/?userEmail=pat%40contoso.com").unwrap();
+        let unregistered = FakeMachine::default().installed().work_account();
+        let registered = FakeMachine::default().installed().work_account().odopen();
+        let launches = std::cell::Cell::new(0);
+        let succeed = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+
+        let opener = ProductionOpener {
+            machine: &unregistered,
+            launch: &succeed,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::ProtocolUnavailable));
+        assert_eq!(launches.get(), 0, "no launch without an odopen handler");
+
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &succeed,
+        };
+        assert_eq!(opener.open(&url), Ok(()));
+        assert_eq!(launches.get(), 1);
+
+        let missing_launcher = |_: &str| {
+            Err(tauri_plugin_opener::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "program not found",
+            )))
+        };
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &missing_launcher,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::OpenerUnavailable));
+
+        let unsupported = |_: &str| Err(tauri_plugin_opener::Error::UnsupportedPlatform);
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &unsupported,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::OpenerUnavailable));
+
+        let denied = |_: &str| {
+            Err(tauri_plugin_opener::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "access is denied",
+            )))
+        };
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &denied,
+        };
+        assert_eq!(
+            opener.open(&url),
+            Err(SyncOpenFailure::Other("access is denied".into()))
+        );
     }
 
     #[test]
@@ -1324,5 +1779,398 @@ mod tests {
         assert!(error.message.contains(
             "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
         ));
+    }
+
+    /// The production settings and Microsoft adapters over a real settings
+    /// file, a real connected `MicrosoftIntake`, real folders, and the real
+    /// settings application code. Only OneDrive discovery, the remote
+    /// verifier, and the Tauri-owned live effects are recorded fakes.
+    mod live {
+        use super::*;
+        use crate::commands::test_runtime::{Live, RecordingRuntime};
+        use crate::microsoft_intake::{MicrosoftIntake, test_support::connected_manager};
+        use intern_queue::{AdmissionGuard, AdmissionStage, SettingsStore};
+
+        struct LiveAutostart<'a>(&'a RecordingRuntime);
+
+        impl AutostartBoundary for LiveAutostart<'_> {
+            fn is_enabled(&self) -> Result<bool, SharePointSetupError> {
+                Ok(self.0.live().autostart)
+            }
+
+            fn set_enabled(&self, enabled: bool) -> Result<(), SharePointSetupError> {
+                self.0
+                    .set_autostart(enabled)
+                    .map_err(|error| SharePointSetupError::new(error.code, error.message))
+            }
+        }
+
+        pub(super) struct LiveRig {
+            pub(super) dir: PathBuf,
+            pub(super) deployment: SharePointDeployment,
+            pub(super) inbox: PathBuf,
+            pub(super) filed: PathBuf,
+            pub(super) legacy: PathBuf,
+            pub(super) previous: AppSettings,
+            roots: FakeRoots,
+            verifier: FakeVerifier,
+            pub(super) microsoft: Arc<MicrosoftIntake>,
+            pub(super) runtime: RecordingRuntime,
+            opener: FakeOpener,
+        }
+
+        impl Drop for LiveRig {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
+
+        pub(super) fn text(path: &Path) -> String {
+            path.to_string_lossy().into_owned()
+        }
+
+        impl LiveRig {
+            pub(super) fn new(name: &str) -> Self {
+                let dir = std::env::temp_dir().join(format!(
+                    "intern-sharepoint-live-{name}-{}",
+                    std::process::id()
+                ));
+                let _ = std::fs::remove_dir_all(&dir);
+                for folder in ["Files/Inbox", "Files/Filed", "Legacy", "LegacyFiled"] {
+                    std::fs::create_dir_all(dir.join(folder)).unwrap();
+                }
+                let root = dir.join("Files").canonicalize().unwrap();
+                let inbox = dir.join("Files/Inbox").canonicalize().unwrap();
+                let filed = dir.join("Files/Filed").canonicalize().unwrap();
+                let legacy = dir.join("Legacy").canonicalize().unwrap();
+                let previous = AppSettings {
+                    destination: text(&dir.join("LegacyFiled").canonicalize().unwrap()),
+                    intake_folder: text(&legacy),
+                    intake_enabled: true,
+                    intake_local_only: true,
+                    process_others_uploads: false,
+                    run_in_background: false,
+                    start_at_login: false,
+                    start_minimized: false,
+                    automatic_rename: true,
+                    ..AppSettings::default()
+                };
+                let mut runtime = RecordingRuntime::new(dir.join("settings.json"));
+                runtime.store.save(&previous).unwrap();
+                *runtime.live.lock().unwrap() = Live {
+                    tray: false,
+                    watcher: Some(text(&legacy)),
+                    autostart: false,
+                    intake_events: 0,
+                };
+                let microsoft = Arc::new(connected_manager(
+                    SettingsStore::new(dir.join("settings.json")),
+                    dir.join("app-data"),
+                    deployment(),
+                    &account(),
+                ));
+                runtime.microsoft = Some(Arc::clone(&microsoft));
+                let verifier = FakeVerifier::default();
+                verifier.identities.lock().unwrap().insert(
+                    root.clone(),
+                    RemoteLibraryIdentity {
+                        local_root: root.clone(),
+                        ..identity("")
+                    },
+                );
+                Self {
+                    deployment: deployment(),
+                    roots: FakeRoots {
+                        state: OneDriveState::Available,
+                        roots: vec![CloudRoot {
+                            kind: CloudProviderKind::SharePoint,
+                            display_name: "Contoso - Files".into(),
+                            root,
+                        }],
+                    },
+                    verifier,
+                    microsoft,
+                    runtime,
+                    opener: FakeOpener {
+                        opened: Mutex::new(Vec::new()),
+                        failure: None,
+                    },
+                    dir,
+                    inbox,
+                    filed,
+                    legacy,
+                    previous,
+                }
+            }
+
+            pub(super) fn run<T>(&self, operation: impl FnOnce(&SharePointSetup<'_>) -> T) -> T {
+                let fs = SystemFileSystem;
+                let microsoft = ProductionMicrosoft(self.microsoft.as_ref());
+                let settings = ProductionSettings(&self.runtime);
+                let autostart = LiveAutostart(&self.runtime);
+                operation(&SharePointSetup::new(
+                    &self.deployment,
+                    &self.roots,
+                    &fs,
+                    &self.verifier,
+                    &microsoft,
+                    &settings,
+                    &autostart,
+                    &self.opener,
+                ))
+            }
+
+            pub(super) fn persisted(&self) -> AppSettings {
+                self.runtime.store.load().unwrap()
+            }
+
+            fn binding_active(&self) -> bool {
+                self.microsoft
+                    .fixed_binding_active(&self.deployment, &self.inbox)
+            }
+
+            /// Whether a teammate's new Inbox upload would be admitted
+            /// without Microsoft proof. Every Graph request fails in this
+            /// rig, so only an unprotected path can be admitted.
+            fn inbox_upload_admitted(&self) -> bool {
+                let upload = self.inbox.join("teammate.pdf");
+                std::fs::write(&upload, b"%PDF-1.7 teammate").unwrap();
+                self.microsoft
+                    .authorize(&upload, AdmissionStage::Enqueue)
+                    .is_ok()
+            }
+
+            fn assert_previous_live_state(&self) {
+                assert_eq!(self.persisted(), self.previous);
+                let live = self.runtime.live();
+                assert!(!live.tray, "tray restored");
+                assert!(!live.autostart, "autostart restored");
+            }
+        }
+
+        fn fail_restart_for(rig: &LiveRig, folder: &Path) {
+            let folder = text(folder);
+            *rig.runtime.fail_intake_restart.lock().unwrap() =
+                Some(Box::new(move |settings| settings.intake_folder == folder));
+        }
+
+        /// A concurrent settings save during the local commit changes the
+        /// Microsoft generation, so the binding must not be published.
+        fn reconnect_during_commit(rig: &LiveRig) {
+            let inbox = text(&rig.inbox);
+            let microsoft = Arc::clone(&rig.microsoft);
+            *rig.runtime.after_persist.lock().unwrap() = Some(Box::new(move |settings| {
+                if settings.intake_folder == inbox {
+                    microsoft.protect_settings(&AppSettings::default()).unwrap();
+                }
+            }));
+        }
+
+        #[test]
+        fn activation_applies_every_live_effect_through_the_production_adapter() {
+            let rig = LiveRig::new("success");
+
+            let status = rig.run(|setup| setup.activate()).expect("activate");
+
+            assert_eq!(status.phase, SharePointSetupPhase::Active);
+            let saved = rig.persisted();
+            assert_eq!(saved.intake_folder, text(&rig.inbox));
+            assert_eq!(saved.destination, text(&rig.filed));
+            assert!(saved.intake_enabled && saved.run_in_background && saved.start_at_login);
+            assert!(!saved.intake_local_only && !saved.process_others_uploads);
+            let live = rig.runtime.live();
+            assert!(live.tray && live.autostart);
+            assert_eq!(live.watcher, Some(text(&rig.inbox)));
+            assert_eq!(live.intake_events, 1);
+            assert!(rig.binding_active());
+            assert_eq!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        /// Everything the Settings dialog could send after activation, with
+        /// every managed field pointed back at the legacy intake and every
+        /// unrelated field changed.
+        fn tampered_payload(rig: &LiveRig) -> AppSettings {
+            let mut payload = rig.persisted();
+            payload.intake_folder = text(&rig.legacy);
+            payload.destination = rig.previous.destination.clone();
+            payload.intake_enabled = false;
+            payload.process_others_uploads = true;
+            payload.intake_local_only = true;
+            payload.run_in_background = false;
+            payload.start_at_login = false;
+            payload.start_minimized = false;
+            payload.model_source = intern_queue::ModelSource::Hosted;
+            payload.hosted_base_url = "https://api.example.test".into();
+            payload.hosted_model = "model-v2".into();
+            payload.destination_layout = intern_queue::DestinationLayout::YearType;
+            payload.automatic_rename = !payload.automatic_rename;
+            payload.record_descriptions = !payload.record_descriptions;
+            payload.machine_label = "Front desk".into();
+            payload
+        }
+
+        #[test]
+        fn settings_saves_after_activation_keep_managed_paths_and_flags() {
+            let rig = LiveRig::new("managed-save");
+            rig.run(|setup| setup.activate()).expect("activate");
+            let managed = rig.persisted();
+            let payload = tampered_payload(&rig);
+
+            crate::commands::save_settings(&rig.runtime, payload.clone())
+                .expect("unrelated settings still save");
+
+            let saved = rig.persisted();
+            assert_eq!(saved.intake_folder, managed.intake_folder);
+            assert_eq!(saved.destination, managed.destination);
+            assert!(saved.intake_enabled);
+            assert!(!saved.process_others_uploads);
+            assert!(!saved.intake_local_only);
+            assert!(saved.run_in_background && saved.start_at_login && saved.start_minimized);
+            assert_eq!(saved.model_source, payload.model_source);
+            assert_eq!(saved.hosted_model, payload.hosted_model);
+            assert_eq!(saved.destination_layout, payload.destination_layout);
+            assert_eq!(saved.automatic_rename, payload.automatic_rename);
+            assert_eq!(saved.record_descriptions, payload.record_descriptions);
+            assert_eq!(saved.machine_label, payload.machine_label);
+            let live = rig.runtime.live();
+            assert_eq!(live.watcher, Some(text(&rig.inbox)));
+            assert!(live.tray && live.autostart);
+            assert_eq!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        #[test]
+        fn settings_saves_before_activation_are_not_managed() {
+            let rig = LiveRig::new("unmanaged-save");
+            let mut payload = rig.previous.clone();
+            payload.intake_enabled = false;
+            payload.run_in_background = true;
+
+            crate::commands::save_settings(&rig.runtime, payload.clone()).expect("ordinary save");
+
+            assert_eq!(rig.persisted(), payload);
+        }
+
+        #[test]
+        fn a_managed_binding_that_no_longer_matches_saved_settings_refuses_saves() {
+            let rig = LiveRig::new("managed-mismatch");
+            rig.run(|setup| setup.activate()).expect("activate");
+            let mut edited = rig.persisted();
+            edited.intake_folder = text(&rig.legacy);
+            rig.runtime.store.save(&edited).unwrap();
+
+            let error = crate::commands::save_settings(&rig.runtime, tampered_payload(&rig))
+                .expect_err("cannot tell which paths are managed");
+
+            assert_eq!(error.code, "SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE");
+            assert_eq!(rig.persisted(), edited);
+        }
+
+        #[test]
+        fn a_watcher_failure_restores_settings_runtime_and_autostart_and_holds_inbox_uploads() {
+            let rig = LiveRig::new("watcher-failure");
+            fail_restart_for(&rig, &rig.inbox);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE");
+            rig.assert_previous_live_state();
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.legacy)));
+            assert!(!rig.binding_active());
+            assert!(
+                !rig.inbox_upload_admitted(),
+                "an aborted activation must leave the shared Inbox protected"
+            );
+        }
+
+        #[test]
+        fn restoring_prior_settings_does_not_revalidate_folders_that_have_since_gone() {
+            let rig = LiveRig::new("stale-previous");
+            fail_restart_for(&rig, &rig.inbox);
+            std::fs::remove_dir_all(&rig.legacy).unwrap();
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE", "{}", error.message);
+            rig.assert_previous_live_state();
+            assert!(!rig.binding_active());
+        }
+
+        #[test]
+        fn a_failed_runtime_rollback_reports_both_errors_and_stays_fail_closed() {
+            let rig = LiveRig::new("rollback-failure");
+            rig.runtime
+                .fail_intake_events
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            fail_restart_for(&rig, &rig.legacy);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("rollback failed");
+
+            assert_eq!(error.code, "ACTIVATION_ROLLBACK_FAILED");
+            assert!(
+                error.message.contains("injected intake event failure")
+                    && error.message.contains("injected watcher restart failure"),
+                "{}",
+                error.message
+            );
+            // The Inbox watcher could not be stopped, so admission itself must
+            // hold the Inbox whatever the persisted settings say.
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.inbox)));
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+            assert_ne!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        #[test]
+        fn a_publication_failure_restores_prior_settings_and_holds_inbox_uploads() {
+            let rig = LiveRig::new("publication-failure");
+            reconnect_during_commit(&rig);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("publication failed");
+
+            assert_eq!(error.code, "MICROSOFT_BINDING_FAILED");
+            rig.assert_previous_live_state();
+            assert_eq!(rig.runtime.live().watcher, Some(text(&rig.legacy)));
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+        }
+
+        #[test]
+        fn a_failed_restore_never_reapplies_the_managed_settings() {
+            let rig = LiveRig::new("restore-failure");
+            reconnect_during_commit(&rig);
+            fail_restart_for(&rig, &rig.legacy);
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("restore failed");
+
+            assert_eq!(error.code, "ACTIVATION_ROLLBACK_FAILED");
+            assert!(
+                error.message.contains("injected watcher restart failure"),
+                "{}",
+                error.message
+            );
+            assert_eq!(rig.persisted(), rig.previous);
+            assert!(!rig.runtime.live().autostart);
+            assert!(!rig.binding_active());
+            assert!(!rig.inbox_upload_admitted());
+        }
     }
 }
