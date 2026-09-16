@@ -449,7 +449,7 @@ impl MicrosoftClient {
             match reply.status {
                 200 | 201 => Ok((session.account.clone(),reply.body)),
                 401 => { self.set_session(&mut state, None); Err("Microsoft sign-in expired. Reconnect; files remain held.".into()) }
-                403 => Err("Microsoft denied access to this folder. Ask your administrator to grant the app read access to the selected intake folder.".into()),
+                403 => Err("Microsoft denied access to the SharePoint Files/Inbox folder. Ask your administrator to give your account and Intern read access to Files/Inbox; files remain held.".into()),
                 404 => Err("This file is not available in the SharePoint Inbox yet.".into()),
                 429 | 503 => { state.retry_at=self.clock.now()+reply.retry_after as i64; Err("Microsoft requested a slower verification rate. Files remain held until retry.".into()) }
                 _ => Err("Microsoft could not verify this upload. Files remain held.".into()),
@@ -853,6 +853,19 @@ mod tests {
             "the next file must still be checked"
         );
         assert_eq!(http.calls.lock().unwrap().len(), 5);
+    }
+
+    /// The Inbox is fixed by the deployment, so a refusal names it rather
+    /// than a folder the person selected.
+    #[test]
+    fn a_403_names_the_fixed_sharepoint_inbox() {
+        let (client, _, _, time) = rig(vec![device(), token(), me(), reply(403, json!({}))]);
+        client.begin().unwrap();
+        time.0.store(1005, Ordering::SeqCst);
+        client.poll().unwrap();
+        let message = client.metadata(item()).unwrap_err();
+        assert!(message.contains("Files/Inbox"), "{message}");
+        assert!(!message.contains("selected"), "{message}");
     }
 
     /// Microsoft being unreachable is not a verdict about any one file, so the
