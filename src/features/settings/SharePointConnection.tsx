@@ -118,7 +118,11 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
   const busy = checking || microsoft.busy || Boolean(finishing);
   // SharePoint's own Sync button is the manual way to finish a library that has not synced.
   const offerSharePoint = Boolean(failure) || setup?.phase === 'enrollment_pending';
+  // The OneDrive record problem keeping a pending library from being confirmed.
+  const pendingProblem = setup?.phase === 'enrollment_pending' && setup.problem ? describeSharePointProblem(setup.problem) : undefined;
   const problem = failure ?? finishFailure;
+  // Another sync request is offered unless the last one failed in a way it would again.
+  const offerSync = setup?.phase === 'enrollment_pending' && (!finishFailure || Boolean(finishFailure.offerSync));
 
   return <section className="settings-group sharepoint-connection" aria-labelledby="sharepoint-connection-heading">
     <h3 id="sharepoint-connection-heading">SharePoint connection</h3>
@@ -138,6 +142,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <p role="status" aria-label="Background status">Runs in the background: {onOff(settings.runInBackground)} · Starts when you sign in: {onOff(settings.startAtLogin)}</p>
     </div>
     {failure && <p className="form-error" role="alert">{failure.action}</p>}
+    {pendingProblem && !finishFailure && <p className="form-error" role="alert">{pendingProblem.action}</p>}
     {finishFailure && <p className="form-error" role="alert">{finishFailure.action}</p>}
     {microsoft.error && <p className="form-error" role="alert">{microsoft.error}</p>}
     {support.error && <p className="form-error" role="alert">{support.error}</p>}
@@ -152,7 +157,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <p className="check-hint">Sign in with your work account. Documents stay untouched until the sign-in finishes and the connection is checked.</p>
     </div>}
     <div className="update-actions">
-      {setup?.phase === 'enrollment_pending' && !microsoft.prompt && <button type="button" className="primary" disabled={busy} onClick={() => void finish('sync')}>{finishing === 'sync' ? 'Asking OneDrive…' : 'Sync Files with OneDrive'}</button>}
+      {offerSync && !microsoft.prompt && <button type="button" className="primary" disabled={busy} onClick={() => void finish('sync')}>{finishing === 'sync' ? 'Asking OneDrive…' : 'Sync Files with OneDrive'}</button>}
       {setup?.phase === 'ready_to_activate' && !microsoft.prompt && <button type="button" className="primary" disabled={busy} onClick={() => void finish('activate')}>{finishing === 'activate' ? 'Turning on filing…' : 'Turn on filing'}</button>}
       <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check again'}</button>
       {!microsoft.prompt && <button type="button" disabled={busy || !bridge.microsoftSignInStart} onClick={reconnect}>Reconnect Microsoft</button>}
@@ -165,6 +170,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <dl>
         <div><dt>{failure ? 'Error code' : 'Setup phase'}</dt><dd><code>{failure ? failure.code : setup?.phase ?? 'checking'}</code></dd></div>
         {failure?.detail && <div><dt>Setup message</dt><dd>{failure.detail}</dd></div>}
+        {pendingProblem && <div><dt>OneDrive records</dt><dd><code>{pendingProblem.code}</code>{pendingProblem.detail && <> · {pendingProblem.detail}</>}</dd></div>}
         {finishFailure && <div><dt>Last setup action</dt><dd><code>{finishFailure.code}</code>{finishFailure.detail && <> · {finishFailure.detail}</>}</dd></div>}
         {microsoft.status?.error && <div><dt>Microsoft status</dt><dd>{microsoft.status.error}</dd></div>}
         {account && <div><dt>Account ID</dt><dd><code>{account.id}</code></dd></div>}

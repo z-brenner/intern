@@ -66,6 +66,10 @@ pub struct SharePointSetupStatus {
     pub library: String,
     pub intake: String,
     pub destination: String,
+    /// While enrollment is pending, the record problem that kept a registered
+    /// root from verifying, so waiting on OneDrive is never silent when
+    /// OneDrive's records are the reason. `null` otherwise.
+    pub problem: Option<SharePointSetupError>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,8 +258,11 @@ impl<'a> SharePointSetup<'a> {
     /// Writability is proven again by `start_sync` and `activate`.
     pub fn status(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
-            return Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account));
+        let resolved = match self.resolve(&account, WriteProbe::Skip)? {
+            Resolution::Resolved(resolved) => resolved,
+            Resolution::Pending { verifier_error } => {
+                return Ok(self.pending_status(&account, verifier_error));
+            }
         };
         let settings = self.settings.load()?;
         let autostart = self.autostart.is_enabled()?;
@@ -276,22 +283,26 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn start_sync(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        if let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Require)? {
-            let settings = self.settings.load()?;
-            let active = managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
-                && self.autostart.is_enabled()?
-                && self
-                    .microsoft
-                    .binding_active(self.deployment, &resolved.inbox)?;
-            return Ok(self.status_for(
-                if active {
-                    SharePointSetupPhase::Active
-                } else {
-                    SharePointSetupPhase::ReadyToActivate
-                },
-                &account,
-            ));
-        }
+        let verifier_error = match self.resolve(&account, WriteProbe::Require)? {
+            Resolution::Pending { verifier_error } => verifier_error,
+            Resolution::Resolved(resolved) => {
+                let settings = self.settings.load()?;
+                let active =
+                    managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
+                        && self.autostart.is_enabled()?
+                        && self
+                            .microsoft
+                            .binding_active(self.deployment, &resolved.inbox)?;
+                return Ok(self.status_for(
+                    if active {
+                        SharePointSetupPhase::Active
+                    } else {
+                        SharePointSetupPhase::ReadyToActivate
+                    },
+                    &account,
+                ));
+            }
+        };
         let url = self
             .deployment
             .odopen_url(&account.email)
@@ -315,7 +326,7 @@ impl<'a> SharePointSetup<'a> {
                 format!("OneDrive sync could not be opened: {message}"),
             ),
         })?;
-        Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account))
+        Ok(self.pending_status(&account, verifier_error))
     }
 
     pub fn activate(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
@@ -430,9 +441,10 @@ impl<'a> SharePointSetup<'a> {
     /// ours, so it never blocks enrollment, and overlap is only checked
     /// between roots that verified. A verifier error for one root does not
     /// stop the scan either. It fails closed for that root only: the root
-    /// never verifies, and when nothing else does the error is kept for
-    /// `activate` to report, while status and sync still see enrollment as
-    /// pending so OneDrive can be asked to sync the library.
+    /// never verifies, and when nothing else does the error is kept: `activate`
+    /// reports it, while status and sync still see enrollment as pending, so
+    /// OneDrive can be asked to sync the library, and carry the error as the
+    /// status `problem`.
     fn resolve(
         &self,
         account: &Account,
@@ -609,6 +621,19 @@ impl<'a> SharePointSetup<'a> {
             library: self.deployment.library_name().into(),
             intake: self.deployment.intake_folder_name().into(),
             destination: self.deployment.destination_folder_name().into(),
+            problem: None,
+        }
+    }
+
+    /// Enrollment is pending; a record problem from the scan rides along.
+    fn pending_status(
+        &self,
+        account: &Account,
+        problem: Option<SharePointSetupError>,
+    ) -> SharePointSetupStatus {
+        SharePointSetupStatus {
+            problem,
+            ..self.status_for(SharePointSetupPhase::EnrollmentPending, account)
         }
     }
 }
@@ -1859,12 +1884,12 @@ mod tests {
     fn other_synced_sharepoint_libraries_do_not_block_enrollment() {
         let rig = Rig::empty().with_unverified_root(r"C:\Sync\Team Site - Documents");
 
-        assert_eq!(
-            rig.setup().status().unwrap().phase,
-            SharePointSetupPhase::EnrollmentPending
-        );
+        let status = rig.setup().status().unwrap();
+        assert_eq!(status.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(status.problem, None);
         let started = rig.setup().start_sync().expect("launch sync");
         assert_eq!(started.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(started.problem, None);
         assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
         assert_eq!(code(rig.setup().activate()), "SHAREPOINT_SYNC_PENDING");
     }
@@ -1905,14 +1930,16 @@ mod tests {
             SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_MALFORMED", "unreadable record"),
         );
 
-        assert_eq!(
-            rig.setup().status().unwrap().phase,
-            SharePointSetupPhase::EnrollmentPending
-        );
-        assert_eq!(
-            rig.setup().start_sync().unwrap().phase,
-            SharePointSetupPhase::EnrollmentPending
-        );
+        let problem = Some(SharePointSetupError::new(
+            "SHAREPOINT_ROOT_RECORD_MALFORMED",
+            "unreadable record",
+        ));
+        let status = rig.setup().status().unwrap();
+        assert_eq!(status.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(status.problem, problem, "waiting is never silent");
+        let started = rig.setup().start_sync().unwrap();
+        assert_eq!(started.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(started.problem, problem);
         assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
         let previous = rig.settings.saved.lock().unwrap().clone();
         assert_eq!(
@@ -1920,6 +1947,41 @@ mod tests {
             "SHAREPOINT_ROOT_RECORD_MALFORMED"
         );
         assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
+    }
+
+    #[test]
+    fn a_verified_library_carries_no_problem_from_another_candidate() {
+        let rig = Rig::empty()
+            .with_unverified_root(r"C:\Sync\Broken")
+            .with_verified_root(r"C:\Sync\Files");
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Broken"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_CONFLICT", "records disagree"),
+        );
+
+        assert_eq!(rig.setup().status().unwrap().problem, None);
+        assert_eq!(rig.setup().activate().unwrap().problem, None);
+    }
+
+    #[test]
+    fn the_status_problem_serializes_as_a_code_and_message_or_null() {
+        let rig = Rig::empty().with_unverified_root(r"C:\Sync\Files");
+        let plain = serde_json::to_value(rig.setup().status().unwrap()).unwrap();
+        assert_eq!(plain["problem"], serde_json::Value::Null);
+
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Files"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_CONFLICT", "records disagree"),
+        );
+        let waiting = serde_json::to_value(rig.setup().status().unwrap()).unwrap();
+        assert_eq!(waiting["phase"], "enrollment_pending");
+        assert_eq!(
+            waiting["problem"],
+            serde_json::json!({
+                "code": "SHAREPOINT_ROOT_RECORD_CONFLICT",
+                "message": "records disagree"
+            })
+        );
     }
 
     #[test]

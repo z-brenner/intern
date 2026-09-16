@@ -150,9 +150,15 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
 
   getSetup(): Promise<SetupState> { return this.transport.invoke('setup_get'); }
   getOnboarding(): Promise<OnboardingStatus> { return this.transport.invoke('onboarding_status'); }
-  getSharePointSetup(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_sharepoint_status'); }
-  startSharePointSync(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_start_sharepoint_sync'); }
-  activateOnboarding(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_activate'); }
+  getSharePointSetup(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_sharepoint_status'); }
+  startSharePointSync(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_start_sharepoint_sync'); }
+  activateOnboarding(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_activate'); }
+
+  /** An absent problem (from an older backend) reads as null, never undefined. */
+  private async sharePointSetup(command: string): Promise<SharePointSetupStatus> {
+    const status = await this.transport.invoke<SharePointSetupStatus>(command);
+    return { ...status, problem: status.problem ?? null };
+  }
   completeOnboarding(): Promise<void> { return this.transport.invoke('onboarding_complete'); }
   startModelDownload(): Promise<void> { return this.transport.invoke('setup_start'); }
   setupCancel(): Promise<void> { return this.transport.invoke('setup_cancel'); }

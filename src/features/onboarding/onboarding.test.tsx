@@ -306,7 +306,7 @@ describe('guided onboarding steps', () => {
     await confirmAccount();
     fireEvent.click(await screen.findByRole('button', { name: 'Sync Files with OneDrive' }));
     await screen.findByRole('status', { name: 'Library sync' });
-    rescan.mockRejectedValueOnce({ code: 'SHAREPOINT_ROOT_UNVERIFIED', message: 'records not written yet' });
+    rescan.mockRejectedValueOnce({ code: 'SHAREPOINT_SYNC_PENDING', message: 'records not written yet' });
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -318,13 +318,13 @@ describe('guided onboarding steps', () => {
   });
 
   it('keeps the sync request reachable when the library check reports a problem', async () => {
-    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { getSharePointSetup: [{ code: 'SHAREPOINT_ROOT_UNVERIFIED', message: 'another library is synced' }] } });
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { getSharePointSetup: [{ code: 'SHAREPOINT_ROOT_RECORD_UNAVAILABLE', message: 'records unreadable' }] } });
     const sync = vi.spyOn(bridge, 'startSharePointSync');
     render(<App bridge={bridge} />);
 
     await begin();
     await confirmAccount();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Let OneDrive finish syncing/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Make sure OneDrive is running/);
     fireEvent.click(screen.getByRole('button', { name: 'Sync Files with OneDrive' }));
 
     await waitFor(() => expect(sync).toHaveBeenCalledOnce());
@@ -332,7 +332,7 @@ describe('guided onboarding steps', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('keeps the sync request reachable after a rescan stops on a real problem', async () => {
+  it('stops offering the sync request after a rescan stops on a problem syncing cannot fix', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', pendingRescans: 5 });
     const rescan = vi.spyOn(bridge, 'getSharePointSetup');
@@ -346,11 +346,54 @@ describe('guided onboarding steps', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/you can edit files/i);
-    expect(screen.getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
   });
 
-  it('offers both a different account and the sync request when OneDrive uses another account', async () => {
+  it('shows a OneDrive record problem while it keeps waiting, with the support code, instead of waiting silently', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', pendingRescans: 99, pendingProblem: problem });
+    const rescan = vi.spyOn(bridge, 'getSharePointSetup');
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    // The first check already knows why the library is not confirmed.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Contact support\. OneDrive's records/);
+    expect(screen.getByText('SHAREPOINT_ROOT_RECORD_CONFLICT')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Sync Files with OneDrive' }));
+
+    expect(await screen.findByRole('status', { name: 'Library sync' })).toHaveTextContent(/waiting for OneDrive/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Contact support/);
+    const before = rescan.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    await waitFor(() => expect(rescan.mock.calls.length).toBeGreaterThan(before));
+    expect(screen.getByRole('status', { name: 'Library sync' })).toHaveTextContent(/waiting for OneDrive/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/^Contact support/);
+    expect(screen.getByText('SHAREPOINT_ROOT_RECORD_CONFLICT')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Support details'));
+    expect(screen.getByText(problem.message)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+  });
+
+  it('clears the record problem once a check no longer reports it', async () => {
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_MALFORMED', message: 'unreadable record' };
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', pendingProblem: problem });
+    const pending = await bridge.getSharePointSetup();
+    const status = vi.spyOn(bridge, 'getSharePointSetup');
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Restart OneDrive/);
+    status.mockResolvedValueOnce({ ...pending, problem: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+  });
+
+  it('asks for OneDrive to use the same work account and checks again, when OneDrive uses another account', async () => {
     const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { startSharePointSync: [{ code: 'ONEDRIVE_ACCOUNT_MISMATCH', message: 'OneDrive is signed in as someone else' }] } });
     render(<App bridge={bridge} />);
 
@@ -360,8 +403,52 @@ describe('guided onboarding steps', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/^Sign in to OneDrive with the same work account/);
     expect(screen.getByText('ONEDRIVE_ACCOUNT_MISMATCH')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use a different account' })).toBeEnabled();
+    // Another sync request would fail the same way; signing OneDrive in is the fix.
+    expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
+    const retry = screen.getByRole('button', { name: 'Try again' });
+    expect(retry).toHaveClass('primary');
+    expect(screen.getByRole('button', { name: 'Use a different account' })).not.toHaveClass('primary');
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Sync Files with OneDrive' }));
+    expect(await screen.findByRole('status', { name: 'Library sync' })).toHaveTextContent(/waiting for OneDrive/i);
+  });
+
+  it('asks for the Contoso account instead of offering sync when the connected account is from another organization', async () => {
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { getSharePointSetup: [{ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'outside the tenant' }] } });
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/work account/);
+    expect(screen.getByRole('button', { name: 'Use a different account' })).toHaveClass('primary');
+    expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
+  });
+
+  it('offers repairing OneDrive rather than another sync request when OneDrive cannot receive one', async () => {
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { startSharePointSync: [{ code: 'SYNC_PROTOCOL_UNAVAILABLE', message: 'no odopen handler' }] } });
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync Files with OneDrive' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Repair or reinstall OneDrive/);
+    expect(screen.getByRole('button', { name: 'Get OneDrive' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the sync request one click away when the request never reached OneDrive', async () => {
+    const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { startSharePointSync: [{ code: 'ONEDRIVE_OPEN_FAILED', message: 'launch failed' }] } });
+    const sync = vi.spyOn(bridge, 'startSharePointSync');
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync Files with OneDrive' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Open SharePoint and choose Sync/);
+    fireEvent.click(screen.getByRole('button', { name: 'Sync Files with OneDrive' }));
+    await waitFor(() => expect(sync).toHaveBeenCalledTimes(2));
     expect(await screen.findByRole('status', { name: 'Library sync' })).toHaveTextContent(/waiting for OneDrive/i);
   });
 
@@ -470,6 +557,7 @@ describe('guided onboarding failures', () => {
     expect(alert).toHaveTextContent(/^Install or open OneDrive/);
     expect(screen.getByText('ONEDRIVE_MISSING')).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Library sync' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Get OneDrive' }));
     await waitFor(() => expect(openSupportLink).toHaveBeenCalledWith('onedrive-download'));
     expect(screen.getByRole('alert')).toBe(alert);
@@ -547,8 +635,8 @@ describe('guided onboarding failures', () => {
     expect(screen.getByText('SOMETHING_NEW')).toBeInTheDocument();
   });
 
-  it('keeps the verifier gap honest instead of pretending the library is ready', async () => {
-    const bridge = enabledBridge({ connected: true, failures: { getSharePointSetup: [{ code: 'SHAREPOINT_ROOT_VERIFIER_UNAVAILABLE', message: 'verifier unavailable' }] } });
+  it('keeps an unconfirmed library honest instead of pretending it is ready', async () => {
+    const bridge = enabledBridge({ connected: true, failures: { getSharePointSetup: [{ code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: 'records disagree' }] } });
     render(<App bridge={bridge} />);
 
     await begin();

@@ -80,6 +80,21 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  it('carries a pending setup problem and reports its absence as null', async () => {
+    const status = { phase: 'enrollment_pending', account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' };
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const fake = fakeTransport({
+      onboarding_sharepoint_status: { ...status, problem },
+      onboarding_start_sharepoint_sync: { ...status, problem: null },
+      onboarding_activate: { ...status, phase: 'active' },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect((await bridge.getSharePointSetup()).problem).toEqual(problem);
+    expect((await bridge.startSharePointSync()).problem).toBeNull();
+    expect((await bridge.activateOnboarding()).problem).toBeNull();
+  });
+
   it('maps the exact narrow command names and JSON-safe payloads', async () => {
     const fake = fakeTransport({
       queue_list: [],

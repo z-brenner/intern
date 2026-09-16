@@ -73,7 +73,10 @@ impl RecordError {
 /// folder, every identifier equals the packaged deployment, the sync engine's
 /// registry scope cache maps the same scope to the same folder, and the
 /// OneDrive account holding the record is signed in as one of `signed_in_as`
-/// (the connected Microsoft account's mail and principal name).
+/// (the connected Microsoft account's mail and principal name). The library
+/// mounted at more than one folder conflicts only when those mounts belong to
+/// OneDrive accounts signed in as the connected account; another person's
+/// OneDrive account on the same computer may sync the same library.
 ///
 /// Only records the registry cache corroborates take part, so a settings
 /// folder left behind by an unlinked account neither verifies nor conflicts.
@@ -98,6 +101,13 @@ pub fn verify_library_root(
     let folder_key = |recorded: &str| {
         let recorded = Path::new(recorded);
         path_components(&canonicalize(recorded).unwrap_or_else(|| recorded.to_path_buf()))
+    };
+    let signed_in_as_connected = |account: &str| -> Result<bool, RecordError> {
+        Ok(records.user_email(account)?.is_some_and(|email| {
+            signed_in_as.iter().any(|wanted| {
+                !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
+            })
+        }))
     };
     let mut at_candidate = Vec::new();
     let mut deployment_mounts = 0usize;
@@ -144,7 +154,9 @@ pub fn verify_library_root(
             }) {
                 continue;
             }
-            if scope.ids == wanted {
+            // Only the connected person's own syncs can make theirs ambiguous;
+            // another OneDrive account on this computer may sync the same library.
+            if scope.ids == wanted && signed_in_as_connected(&account)? {
                 deployment_mounts += 1;
             }
             if mount == candidate_key {
@@ -160,18 +172,13 @@ pub fn verify_library_root(
     if scope.ids != wanted {
         return Ok(None);
     }
-    if deployment_mounts > 1 {
-        return Err(RecordError::Conflict("library records"));
-    }
     // A library synced by a different OneDrive work account than the one
     // connected to Intern is not this person's enrollment.
-    let signed_in = records.user_email(&account)?.is_some_and(|email| {
-        signed_in_as.iter().any(|wanted| {
-            !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
-        })
-    });
-    if !signed_in {
+    if !signed_in_as_connected(&account)? {
         return Ok(None);
+    }
+    if deployment_mounts > 1 {
+        return Err(RecordError::Conflict("library records"));
     }
 
     // No other scope may map to this folder, and this scope nowhere else.
@@ -1138,6 +1145,50 @@ mod tests {
             verify(&fixture, ROOT),
             Err(RecordError::Conflict("library records"))
         );
+
+        let second = "abcdefabcdefabcdefabcdefabcdefab";
+        let elsewhere = r"D:\Contoso\InternTestSite - Files";
+        let mut one_account = Fixture::default();
+        one_account.account(
+            "Business1",
+            CID,
+            &[
+                library_line(ROOT),
+                scope_line(2, second, TENANT, (SITE, WEB, LIST), elsewhere),
+            ],
+            &[(SCOPE, ROOT), (second, elsewhere)],
+        );
+        assert_eq!(
+            verify(&one_account, ROOT),
+            Err(RecordError::Conflict("library records"))
+        );
+    }
+
+    #[test]
+    fn another_person_syncing_the_library_does_not_conflict_with_the_connected_one() {
+        // A second OneDrive work account on this computer, signed in as
+        // someone else, also syncs the library. Their sync is not this
+        // person's enrollment, so it neither verifies nor conflicts.
+        let elsewhere = r"D:\Sam\Contoso\InternTestSite - Files";
+        let mut fixture = Fixture::standard();
+        fixture.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[scope_line(
+                0,
+                "abcdefabcdefabcdefabcdefabcdefab",
+                TENANT,
+                (SITE, WEB, LIST),
+                elsewhere,
+            )],
+            &[("abcdefabcdefabcdefabcdefabcdefab", elsewhere)],
+        );
+        fixture
+            .emails
+            .insert("Business2".into(), "sam@contoso.com".into());
+
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+        assert_eq!(verify(&fixture, elsewhere), Ok(None));
     }
 
     #[test]

@@ -112,6 +112,17 @@ export interface SharePointSetupStatus {
   library: 'Files';
   intake: 'Inbox';
   destination: 'Filed';
+  /**
+   * While enrollment is pending, the stable `{ code, message }` for the
+   * OneDrive record problem that kept the library from being confirmed, so
+   * waiting is never silent when the records are the reason. Null otherwise.
+   */
+  problem?: SharePointSetupProblem | null;
+}
+
+export interface SharePointSetupProblem {
+  code: string;
+  message: string;
 }
 
 /** What Settings shows about the hosted model. The key itself never comes back. */

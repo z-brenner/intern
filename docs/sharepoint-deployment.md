@@ -152,16 +152,24 @@ Intern and finish later.
 
 - If OneDrive is not installed, cannot receive sync links, or has no work
   account signed in, the step says what to do. It offers **Get OneDrive**
-  (Microsoft's download page) where relevant.
+  (Microsoft's download page) where relevant, and does not offer another sync
+  request, which would fail the same way.
 - If OneDrive is signed in with a different work account than the Microsoft
   account connected to Intern, setup stops with `ONEDRIVE_ACCOUNT_MISMATCH`.
-  The step asks the user to sign in to OneDrive with the same work account,
-  and also offers **Use a different account** for when the account connected
-  to Intern is the wrong one.
+  The step asks the user to sign in to OneDrive with the same work account
+  and then choose **Try again**. It also offers **Use a different account**,
+  as a secondary choice, for when the account connected to Intern is the
+  wrong one.
+- If the connected Microsoft account belongs to another organization
+  (`MICROSOFT_ACCOUNT_WRONG_TENANT`), the step offers **Use a different
+  account** instead of a sync request.
 - Other SharePoint or Teams libraries already synced on the computer do not
-  block setup. Until the `Files` library itself is synced, setup reports that
-  enrollment is pending, and **Sync Files with OneDrive** stays available. A
-  check that lands while OneDrive is still adding the library keeps waiting
+  block setup, and neither does another person's OneDrive account on the same
+  computer syncing the same library. Until the `Files` library itself is
+  synced, setup reports that enrollment is pending, and **Sync Files with
+  OneDrive** stays available. It is also offered after a sync request that
+  never reached OneDrive (`ONEDRIVE_OPEN_FAILED`, `SYNC_OPENER_UNAVAILABLE`).
+  A check that lands while OneDrive is still adding the library keeps waiting
   rather than stopping.
 - **Open SharePoint** opens the site, so the user can choose **Sync** on the
   library themselves.
@@ -176,9 +184,13 @@ client's own records for the candidate folder:
 - the matching `ScopeIdToMountPointPathCache` registry entry.
 
 It requires exactly one record for that folder, with tenant, site, web, and
-list IDs equal to the deployment's. Malformed, conflicting, or unreadable
-records stop setup with `SHAREPOINT_ROOT_RECORD_MALFORMED`,
+list IDs equal to the deployment's, held by the OneDrive account signed in as
+the connected Microsoft account. Malformed, conflicting, or unreadable records
+keep the library from verifying: `SHAREPOINT_ROOT_RECORD_MALFORMED`,
 `SHAREPOINT_ROOT_RECORD_CONFLICT`, or `SHAREPOINT_ROOT_RECORD_UNAVAILABLE`.
+While setup waits for the library, the onboarding sync step and the Settings
+SharePoint card show that problem in plain language with its support code,
+so the wait is never silent. **Turn on filing** reports the same code.
 
 These record formats come from public sources and synthetic fixtures. No
 team-site record has been observed yet. **A tenant-backed Windows run must
@@ -223,7 +235,10 @@ onboarding.
 
 The card also offers **Sync Files with OneDrive** if the library is no longer
 synced on the computer, so setup can be finished again without reinstalling
-or re-running onboarding.
+or re-running onboarding. It shows a OneDrive record problem that keeps the
+library from verifying, with its code under **Support details**. After a sync
+request fails in a way another request cannot fix, such as OneDrive missing,
+the card offers **Check again** (and **Get OneDrive** where relevant) instead.
 
 ## Which documents are filed
 
@@ -263,6 +278,9 @@ two Contoso test accounts (A and B):
       already syncs another SharePoint or Teams library.
 - [ ] OneDrive signed in as account B while Intern is connected as account A
       reports `ONEDRIVE_ACCOUNT_MISMATCH`.
+- [ ] With OneDrive signed in to both A and B on the same Windows profile, and
+      both syncing the library, A's setup verifies A's folder and reports no
+      `SHAREPOINT_ROOT_RECORD_CONFLICT`.
 - [ ] After activation as A, reconnecting Microsoft as B shows **Turn on
       filing**, and B's uploads made before B turns filing on stay held.
 - [ ] Only account A processes a fresh upload created by account A.

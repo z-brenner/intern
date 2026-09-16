@@ -241,6 +241,18 @@ mod tests {
     }
 
     #[test]
+    fn onedrive_signed_in_with_the_principal_name_verifies() {
+        let mut connected = account();
+        connected.email = "pat.contoso@contoso.com".into();
+        assert!(
+            verifier(Some(scope_line(LIBRARY)))
+                .verify(&connected, Path::new(ROOT), &deployment(), &AsWritten)
+                .expect("verification")
+                .is_some()
+        );
+    }
+
+    #[test]
     fn a_library_synced_by_another_onedrive_account_does_not_verify() {
         let mut verifier = verifier(Some(scope_line(LIBRARY)));
         verifier.records.user_email = "sam@contoso.com";

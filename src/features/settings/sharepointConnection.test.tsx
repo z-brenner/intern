@@ -257,7 +257,7 @@ describe('SharePoint connection in Settings', () => {
     expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('keeps the sync action and explains a failed sync request', async () => {
+  it('explains a failed sync request and offers OneDrive instead of a sync request that would fail again', async () => {
     const pending: SharePointSetupStatus = { ...active, phase: 'enrollment_pending' };
     const openSupportLink = vi.fn(async () => {});
     const bridge = managedBridge({ openSupportLink, getSharePointSetup: vi.fn(async () => pending), startSharePointSync: vi.fn(async () => { throw { code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }; }) });
@@ -267,9 +267,42 @@ describe('SharePoint connection in Settings', () => {
     fireEvent.click(await within(card).findByRole('button', { name: 'Sync Files with OneDrive' }));
 
     expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem('ONEDRIVE_MISSING').action);
-    expect(within(card).getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+    expect(within(card).queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Check again' })).toBeEnabled();
     fireEvent.click(within(card).getByRole('button', { name: 'Get OneDrive' }));
     await waitFor(() => expect(openSupportLink).toHaveBeenCalledWith('onedrive-download'));
+
+    // Checking again clears the failed request, and the sync action returns.
+    fireEvent.click(within(card).getByRole('button', { name: 'Check again' }));
+    expect(await within(card).findByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+  });
+
+  it('keeps the sync action when the request never reached OneDrive', async () => {
+    const pending: SharePointSetupStatus = { ...active, phase: 'enrollment_pending' };
+    const bridge = managedBridge({ getSharePointSetup: vi.fn(async () => pending), startSharePointSync: vi.fn(async () => { throw { code: 'ONEDRIVE_OPEN_FAILED', message: 'launch failed' }; }) });
+    renderDialog(bridge);
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Sync Files with OneDrive' }));
+
+    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem('ONEDRIVE_OPEN_FAILED').action);
+    expect(within(card).getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+  });
+
+  it('shows a OneDrive record problem that keeps the library pending, with its code for support', async () => {
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const pending: SharePointSetupStatus = { ...active, phase: 'enrollment_pending', problem };
+    renderDialog(managedBridge({ getSharePointSetup: vi.fn(async () => pending) }));
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem(problem).action);
+    expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/needs attention/i);
+    expect(within(card).getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+    expect(within(card).getByRole('button', { name: 'Open SharePoint' })).toBeVisible();
+
+    const details = within(card).getByRole('group', { name: 'Support details' });
+    fireEvent.click(within(details).getByText('Support details'));
+    expect(within(details).getByText('SHAREPOINT_ROOT_RECORD_CONFLICT').closest('dd')).toHaveTextContent(problem.message);
   });
 
   it('turns on filing from Settings when setup is ready but not active, then checks again', async () => {
