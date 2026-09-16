@@ -2004,6 +2004,88 @@ mod tests {
             );
         }
 
+        /// Everything the Settings dialog could send after activation, with
+        /// every managed field pointed back at the legacy intake and every
+        /// unrelated field changed.
+        fn tampered_payload(rig: &LiveRig) -> AppSettings {
+            let mut payload = rig.persisted();
+            payload.intake_folder = text(&rig.legacy);
+            payload.destination = rig.previous.destination.clone();
+            payload.intake_enabled = false;
+            payload.process_others_uploads = true;
+            payload.intake_local_only = true;
+            payload.run_in_background = false;
+            payload.start_at_login = false;
+            payload.start_minimized = false;
+            payload.model_source = intern_queue::ModelSource::Hosted;
+            payload.hosted_base_url = "https://api.example.test".into();
+            payload.hosted_model = "model-v2".into();
+            payload.destination_layout = intern_queue::DestinationLayout::YearType;
+            payload.automatic_rename = !payload.automatic_rename;
+            payload.record_descriptions = !payload.record_descriptions;
+            payload.machine_label = "Front desk".into();
+            payload
+        }
+
+        #[test]
+        fn settings_saves_after_activation_keep_managed_paths_and_flags() {
+            let rig = LiveRig::new("managed-save");
+            rig.run(|setup| setup.activate()).expect("activate");
+            let managed = rig.persisted();
+            let payload = tampered_payload(&rig);
+
+            crate::commands::save_settings(&rig.runtime, payload.clone())
+                .expect("unrelated settings still save");
+
+            let saved = rig.persisted();
+            assert_eq!(saved.intake_folder, managed.intake_folder);
+            assert_eq!(saved.destination, managed.destination);
+            assert!(saved.intake_enabled);
+            assert!(!saved.process_others_uploads);
+            assert!(!saved.intake_local_only);
+            assert!(saved.run_in_background && saved.start_at_login && saved.start_minimized);
+            assert_eq!(saved.model_source, payload.model_source);
+            assert_eq!(saved.hosted_model, payload.hosted_model);
+            assert_eq!(saved.destination_layout, payload.destination_layout);
+            assert_eq!(saved.automatic_rename, payload.automatic_rename);
+            assert_eq!(saved.record_descriptions, payload.record_descriptions);
+            assert_eq!(saved.machine_label, payload.machine_label);
+            let live = rig.runtime.live();
+            assert_eq!(live.watcher, Some(text(&rig.inbox)));
+            assert!(live.tray && live.autostart);
+            assert_eq!(
+                rig.run(|setup| setup.status()).unwrap().phase,
+                SharePointSetupPhase::Active
+            );
+        }
+
+        #[test]
+        fn settings_saves_before_activation_are_not_managed() {
+            let rig = LiveRig::new("unmanaged-save");
+            let mut payload = rig.previous.clone();
+            payload.intake_enabled = false;
+            payload.run_in_background = true;
+
+            crate::commands::save_settings(&rig.runtime, payload.clone()).expect("ordinary save");
+
+            assert_eq!(rig.persisted(), payload);
+        }
+
+        #[test]
+        fn a_managed_binding_that_no_longer_matches_saved_settings_refuses_saves() {
+            let rig = LiveRig::new("managed-mismatch");
+            rig.run(|setup| setup.activate()).expect("activate");
+            let mut edited = rig.persisted();
+            edited.intake_folder = text(&rig.legacy);
+            rig.runtime.store.save(&edited).unwrap();
+
+            let error = crate::commands::save_settings(&rig.runtime, tampered_payload(&rig))
+                .expect_err("cannot tell which paths are managed");
+
+            assert_eq!(error.code, "SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE");
+            assert_eq!(rig.persisted(), edited);
+        }
+
         #[test]
         fn a_watcher_failure_restores_settings_runtime_and_autostart_and_holds_inbox_uploads() {
             let rig = LiveRig::new("watcher-failure");

@@ -1519,6 +1519,11 @@ pub(crate) trait SettingsRuntime {
     fn sync_tray(&self, run_in_background: bool);
     fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
+    /// The paths a completed SharePoint activation owns, if one is active.
+    fn managed_sharepoint(
+        &self,
+        stored: Option<&AppSettings>,
+    ) -> Result<Option<ManagedSharePoint>, CommandError>;
     /// Serializes whole settings applications so a Settings save cannot
     /// interleave with a SharePoint activation or its rollback.
     fn settings_gate(&self) -> &Mutex<()>;
@@ -1581,17 +1586,73 @@ impl SettingsRuntime for AppState {
         AppState::emit_intake_changed(self)
     }
 
+    fn managed_sharepoint(
+        &self,
+        stored: Option<&AppSettings>,
+    ) -> Result<Option<ManagedSharePoint>, CommandError> {
+        managed_sharepoint_for(
+            &self
+                .app
+                .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>(),
+            stored,
+        )
+    }
+
     fn settings_gate(&self) -> &Mutex<()> {
         &self.settings_gate
     }
 }
 
-fn save_settings(state: &impl SettingsRuntime, settings: AppSettings) -> Result<(), CommandError> {
+pub(crate) fn save_settings(
+    state: &impl SettingsRuntime,
+    mut settings: AppSettings,
+) -> Result<(), CommandError> {
     let _gate = state
         .settings_gate()
         .lock()
         .map_err(|_| settings_gate_unavailable())?;
+    let stored = state.load_settings();
+    if let Some(managed) = state.managed_sharepoint(stored.as_ref().ok())? {
+        managed.apply(&mut settings);
+    }
     save_settings_with_microsoft_protection(state, settings, true)
+}
+
+/// The Inbox and Filed paths a completed fixed SharePoint activation owns.
+pub(crate) struct ManagedSharePoint {
+    pub inbox: String,
+    pub destination: String,
+}
+
+impl ManagedSharePoint {
+    /// Normalizes rather than rejects. The Settings dialog sends back every
+    /// field it loaded, in display spelling, so comparing a payload against
+    /// the managed values would refuse harmless saves, while overwriting holds
+    /// the invariant whatever the webview sends. Hiding controls is not the
+    /// enforcement; this is. Every unrelated field is saved as sent.
+    fn apply(&self, settings: &mut AppSettings) {
+        settings.intake_folder = self.inbox.clone();
+        settings.destination = self.destination.clone();
+        settings.intake_enabled = true;
+        settings.process_others_uploads = false;
+        settings.intake_local_only = false;
+        settings.run_in_background = true;
+        settings.start_at_login = true;
+        settings.start_minimized = true;
+    }
+}
+
+fn managed_sharepoint_for(
+    microsoft: &crate::microsoft_intake::MicrosoftIntake,
+    stored: Option<&AppSettings>,
+) -> Result<Option<ManagedSharePoint>, CommandError> {
+    microsoft
+        .managed_paths(stored.map(|settings| settings.intake_folder.as_str()))
+        .map(|paths| paths.map(|(inbox, destination)| ManagedSharePoint { inbox, destination }))
+        .map_err(|message| CommandError {
+            code: "SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE".into(),
+            message,
+        })
 }
 
 fn save_settings_with_microsoft_protection(
@@ -3263,7 +3324,7 @@ pub(crate) mod test_runtime {
 
     use intern_queue::{AppSettings, SettingsStore, paths::canonical_folder};
 
-    use super::{CommandError, SettingsRuntime};
+    use super::{CommandError, ManagedSharePoint, SettingsRuntime, managed_sharepoint_for};
     use crate::microsoft_intake::MicrosoftIntake;
 
     /// What is running, as opposed to what is persisted.
@@ -3415,6 +3476,16 @@ pub(crate) mod test_runtime {
             }
             self.live.lock().unwrap().intake_events += 1;
             Ok(())
+        }
+
+        fn managed_sharepoint(
+            &self,
+            stored: Option<&AppSettings>,
+        ) -> Result<Option<ManagedSharePoint>, CommandError> {
+            match &self.microsoft {
+                Some(microsoft) => managed_sharepoint_for(microsoft, stored),
+                None => Ok(None),
+            }
         }
 
         fn settings_gate(&self) -> &Mutex<()> {

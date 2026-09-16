@@ -368,6 +368,52 @@ impl MicrosoftIntake {
         })
     }
 
+    /// The Inbox and Filed paths that settings saves must keep, once a fixed
+    /// SharePoint binding is active: the binding for the saved intake folder,
+    /// and the deployment's Filed sibling of it. `Ok(None)` means nothing is
+    /// managed. When a binding is active but the configuration cannot be read
+    /// or no binding matches `stored_intake`, which paths are managed is
+    /// unknown, so this is an error and the caller must not save.
+    pub(crate) fn managed_paths(
+        &self,
+        stored_intake: Option<&str>,
+    ) -> Result<Option<(String, String)>, String> {
+        let Some(deployment) = self.deployment.as_ref() else {
+            return Ok(None);
+        };
+        let unreadable = self
+            .config_error
+            .lock()
+            .map(|error| error.clone())
+            .unwrap_or_else(|_| Some("Microsoft configuration is unavailable.".into()));
+        if let Some(error) = unreadable {
+            return Err(error);
+        }
+        let config = self
+            .config
+            .lock()
+            .map_err(|_| "Microsoft configuration is unavailable.")?;
+        let mut active = config
+            .bindings
+            .iter()
+            .filter(|binding| self.binding_matches_deployment(binding))
+            .peekable();
+        if active.peek().is_none() {
+            return Ok(None);
+        }
+        let inbox = active
+            .find(|binding| {
+                stored_intake.is_some_and(|stored| same_path(&binding.local_folder, stored))
+            })
+            .map(|binding| binding.local_folder.clone())
+            .ok_or("Intern's SharePoint connection no longer matches the saved settings. Run SharePoint setup again; settings were not changed.")?;
+        let destination = Path::new(&inbox)
+            .parent()
+            .map(|library| library.join(deployment.destination_folder_name()))
+            .ok_or("The SharePoint Inbox has no library folder. Run SharePoint setup again; settings were not changed.")?;
+        Ok(Some((inbox, destination.to_string_lossy().into_owned())))
+    }
+
     pub(crate) fn fixed_binding_active(
         &self,
         deployment: &SharePointDeployment,
