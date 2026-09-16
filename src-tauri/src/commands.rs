@@ -925,6 +925,7 @@ pub struct AppState {
     /// store, its engine, and its test.
     hosted: Arc<HostedModel>,
     settings_gate: Mutex<()>,
+    sharepoint_activation: AtomicBool,
 }
 
 impl AppState {
@@ -1058,6 +1059,7 @@ impl AppState {
             filed_index,
             hosted,
             settings_gate: Mutex::new(()),
+            sharepoint_activation: AtomicBool::new(false),
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -1527,6 +1529,9 @@ pub(crate) trait SettingsRuntime {
     /// Serializes whole settings applications so a Settings save cannot
     /// interleave with a SharePoint activation or its rollback.
     fn settings_gate(&self) -> &Mutex<()>;
+    /// Set, under the settings gate, while a SharePoint activation is between
+    /// reading the settings it may restore and finishing.
+    fn sharepoint_activation(&self) -> &AtomicBool;
 }
 
 impl SettingsRuntime for AppState {
@@ -1601,6 +1606,10 @@ impl SettingsRuntime for AppState {
     fn settings_gate(&self) -> &Mutex<()> {
         &self.settings_gate
     }
+
+    fn sharepoint_activation(&self) -> &AtomicBool {
+        &self.sharepoint_activation
+    }
 }
 
 pub(crate) fn save_settings(
@@ -1611,6 +1620,11 @@ pub(crate) fn save_settings(
         .settings_gate()
         .lock()
         .map_err(|_| settings_gate_unavailable())?;
+    // An activation that fails puts back the settings it read when it began,
+    // so a save accepted meanwhile would be reported saved and then undone.
+    if state.sharepoint_activation().load(Ordering::SeqCst) {
+        return Err(sharepoint_activation_in_progress());
+    }
     let stored = state.load_settings();
     if let Some(managed) = state.managed_sharepoint(stored.as_ref().ok())? {
         managed.apply(&mut settings);
@@ -1706,6 +1720,40 @@ fn save_settings_with_microsoft_protection(
         state.emit_intake_changed()?;
     }
     Ok(())
+}
+
+fn sharepoint_activation_in_progress() -> CommandError {
+    CommandError {
+        code: "SHAREPOINT_ACTIVATION_IN_PROGRESS".into(),
+        message: "SharePoint setup is being activated, so settings were not changed. Try again when it finishes.".into(),
+    }
+}
+
+/// Starts a SharePoint activation: under the settings gate, marks it running
+/// (refusing a second one) and returns the settings stored at that moment,
+/// which a failed activation restores. Until `end_sharepoint_activation`,
+/// `save_settings` refuses with SHAREPOINT_ACTIVATION_IN_PROGRESS.
+pub(crate) fn begin_sharepoint_activation(
+    runtime: &impl SettingsRuntime,
+) -> Result<AppSettings, CommandError> {
+    let _gate = runtime
+        .settings_gate()
+        .lock()
+        .map_err(|_| settings_gate_unavailable())?;
+    if runtime.sharepoint_activation().swap(true, Ordering::SeqCst) {
+        return Err(sharepoint_activation_in_progress());
+    }
+    runtime.load_settings().inspect_err(|_| {
+        runtime
+            .sharepoint_activation()
+            .store(false, Ordering::SeqCst)
+    })
+}
+
+pub(crate) fn end_sharepoint_activation(runtime: &impl SettingsRuntime) {
+    runtime
+        .sharepoint_activation()
+        .store(false, Ordering::SeqCst);
 }
 
 fn settings_gate_unavailable() -> CommandError {
@@ -3351,6 +3399,7 @@ pub(crate) mod test_runtime {
         pub fail_intake_events: AtomicBool,
         pub after_persist: Mutex<Option<Hook>>,
         gate: Mutex<()>,
+        activation: AtomicBool,
     }
 
     impl RecordingRuntime {
@@ -3365,6 +3414,7 @@ pub(crate) mod test_runtime {
                 fail_intake_events: AtomicBool::new(false),
                 after_persist: Mutex::new(None),
                 gate: Mutex::new(()),
+                activation: AtomicBool::new(false),
             }
         }
 
@@ -3490,6 +3540,10 @@ pub(crate) mod test_runtime {
 
         fn settings_gate(&self) -> &Mutex<()> {
             &self.gate
+        }
+
+        fn sharepoint_activation(&self) -> &AtomicBool {
+            &self.activation
         }
     }
 }

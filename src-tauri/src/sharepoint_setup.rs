@@ -156,6 +156,12 @@ pub trait MicrosoftSetup {
 
 pub trait SetupSettings {
     fn load(&self) -> Result<AppSettings, SharePointSetupError>;
+    /// Marks an activation as running and returns the settings stored at that
+    /// moment. Until `end_activation`, ordinary settings saves are refused
+    /// (SHAREPOINT_ACTIVATION_IN_PROGRESS), so a failed activation's restore
+    /// cannot silently undo one.
+    fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError>;
+    fn end_activation(&self);
     /// Applies activation settings. A failure has already restored what was
     /// stored before, or reports ACTIVATION_ROLLBACK_FAILED.
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError>;
@@ -184,6 +190,15 @@ struct ResolvedLibrary {
     identity: RemoteLibraryIdentity,
     inbox: PathBuf,
     destination: PathBuf,
+}
+
+/// Ends the activation on every exit from `activate`.
+struct ActivationRunning<'a>(&'a dyn SetupSettings);
+
+impl Drop for ActivationRunning<'_> {
+    fn drop(&mut self) {
+        self.0.end_activation();
+    }
 }
 
 enum Resolution {
@@ -321,7 +336,8 @@ impl<'a> SharePointSetup<'a> {
                 ));
             }
         };
-        let previous = self.settings.load()?;
+        let previous = self.settings.begin_activation()?;
+        let _running = ActivationRunning(self.settings);
         let previous_autostart = self.autostart.is_enabled()?;
         let mut next = previous.clone();
         next.intake_folder = resolved.inbox.to_string_lossy().into_owned();
@@ -854,6 +870,15 @@ impl<R: SettingsRuntime> SetupSettings for ProductionSettings<'_, R> {
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
     }
 
+    fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError> {
+        crate::commands::begin_sharepoint_activation(self.0)
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
+    }
+
+    fn end_activation(&self) {
+        crate::commands::end_sharepoint_activation(self.0);
+    }
+
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
         crate::commands::activate_sharepoint_settings(self.0, settings)
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
@@ -1221,6 +1246,9 @@ mod tests {
         saved: Mutex<AppSettings>,
         fail_next: Mutex<bool>,
         events: Arc<Mutex<Vec<&'static str>>>,
+        activating: Mutex<bool>,
+        /// Whether an activation was marked running at each save.
+        saved_while_activating: Mutex<Vec<bool>>,
     }
 
     impl SetupSettings for FakeSettings {
@@ -1228,7 +1256,27 @@ mod tests {
             Ok(self.saved.lock().unwrap().clone())
         }
 
+        fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError> {
+            let mut activating = self.activating.lock().unwrap();
+            if *activating {
+                return Err(SharePointSetupError::new(
+                    "SHAREPOINT_ACTIVATION_IN_PROGRESS",
+                    "already activating",
+                ));
+            }
+            *activating = true;
+            self.load()
+        }
+
+        fn end_activation(&self) {
+            *self.activating.lock().unwrap() = false;
+        }
+
         fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
+            self.saved_while_activating
+                .lock()
+                .unwrap()
+                .push(*self.activating.lock().unwrap());
             self.events.lock().unwrap().push("settings");
             let mut fail = self.fail_next.lock().unwrap();
             if *fail {
@@ -1338,6 +1386,8 @@ mod tests {
                     saved: Mutex::new(previous),
                     fail_next: Mutex::new(false),
                     events: Arc::clone(&events),
+                    activating: Mutex::new(false),
+                    saved_while_activating: Mutex::new(Vec::new()),
                 },
                 autostart: FakeAutostart {
                     enabled: Mutex::new(false),
@@ -1985,6 +2035,35 @@ mod tests {
     }
 
     #[test]
+    fn activation_is_marked_running_for_its_whole_transaction_and_always_ended() {
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        rig.setup().activate().expect("activate");
+        assert_eq!(*rig.settings.saved_while_activating.lock().unwrap(), [true]);
+        assert!(!*rig.settings.activating.lock().unwrap());
+
+        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        rig.microsoft.activation_mode = ActivationMode::FailAfter;
+        assert_eq!(code(rig.setup().activate()), "MICROSOFT_BINDING_FAILED");
+        assert_eq!(
+            *rig.settings.saved_while_activating.lock().unwrap(),
+            [true, true],
+            "the commit and its restore"
+        );
+        assert!(!*rig.settings.activating.lock().unwrap());
+
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        *rig.settings.activating.lock().unwrap() = true;
+        assert_eq!(
+            code(rig.setup().activate()),
+            "SHAREPOINT_ACTIVATION_IN_PROGRESS"
+        );
+        assert!(
+            *rig.settings.activating.lock().unwrap(),
+            "a refused activation does not end the one already running"
+        );
+    }
+
+    #[test]
     fn binding_stage_failure_never_touches_autostart_or_settings() {
         let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
         rig.microsoft.activation_mode = ActivationMode::FailBefore;
@@ -2031,15 +2110,23 @@ mod tests {
         use crate::microsoft_intake::{MicrosoftIntake, test_support::connected_manager};
         use intern_queue::{AdmissionGuard, AdmissionStage, SettingsStore};
 
-        struct LiveAutostart<'a>(&'a RecordingRuntime);
+        struct LiveAutostart<'a>(&'a LiveRig);
 
         impl AutostartBoundary for LiveAutostart<'_> {
             fn is_enabled(&self) -> Result<bool, SharePointSetupError> {
-                Ok(self.0.live().autostart)
+                Ok(self.0.runtime.live().autostart)
             }
 
+            /// Enabling autostart is the first step of the activation commit,
+            /// outside the settings gate: where a Settings save can race it.
             fn set_enabled(&self, enabled: bool) -> Result<(), SharePointSetupError> {
+                if enabled && let Some(payload) = self.0.racing_save.lock().unwrap().take() {
+                    let result = crate::commands::save_settings(&self.0.runtime, payload)
+                        .map_err(|error| error.code);
+                    *self.0.racing_result.lock().unwrap() = Some(result);
+                }
                 self.0
+                    .runtime
                     .set_autostart(enabled)
                     .map_err(|error| SharePointSetupError::new(error.code, error.message))
             }
@@ -2057,6 +2144,9 @@ mod tests {
             pub(super) microsoft: Arc<MicrosoftIntake>,
             pub(super) runtime: RecordingRuntime,
             opener: FakeOpener,
+            /// A Settings save to make while activation is under way.
+            racing_save: Mutex<Option<AppSettings>>,
+            racing_result: Mutex<Option<Result<(), String>>>,
         }
 
         impl Drop for LiveRig {
@@ -2136,6 +2226,8 @@ mod tests {
                         opened: Mutex::new(Vec::new()),
                         failure: None,
                     },
+                    racing_save: Mutex::new(None),
+                    racing_result: Mutex::new(None),
                     dir,
                     inbox,
                     filed,
@@ -2148,7 +2240,7 @@ mod tests {
                 let fs = SystemFileSystem;
                 let microsoft = ProductionMicrosoft(self.microsoft.as_ref());
                 let settings = ProductionSettings(&self.runtime);
-                let autostart = LiveAutostart(&self.runtime);
+                let autostart = LiveAutostart(self);
                 operation(&SharePointSetup::new(
                     &self.deployment,
                     &self.roots,
@@ -2412,6 +2504,48 @@ mod tests {
             assert!(!rig.runtime.live().autostart);
             assert!(!rig.binding_active());
             assert!(!rig.inbox_upload_admitted());
+        }
+
+        #[test]
+        fn a_settings_save_racing_activation_fails_instead_of_being_silently_undone() {
+            let rig = LiveRig::new("racing-save");
+            fail_restart_for(&rig, &rig.inbox);
+            let racing = AppSettings {
+                machine_label: "Front desk".into(),
+                ..rig.previous.clone()
+            };
+            *rig.racing_save.lock().unwrap() = Some(racing.clone());
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE");
+            assert_eq!(
+                *rig.racing_result.lock().unwrap(),
+                Some(Err("SHAREPOINT_ACTIVATION_IN_PROGRESS".into())),
+                "the racing save was refused rather than reported saved and then rolled back"
+            );
+            rig.assert_previous_live_state();
+
+            crate::commands::save_settings(&rig.runtime, racing.clone())
+                .expect("the same save goes through once activation is over");
+            assert_eq!(rig.persisted(), racing);
+        }
+
+        #[test]
+        fn a_successful_activation_also_releases_settings_saves() {
+            let rig = LiveRig::new("racing-success");
+            *rig.racing_save.lock().unwrap() = Some(rig.previous.clone());
+
+            rig.run(|setup| setup.activate()).expect("activate");
+
+            assert_eq!(
+                *rig.racing_result.lock().unwrap(),
+                Some(Err("SHAREPOINT_ACTIVATION_IN_PROGRESS".into()))
+            );
+            crate::commands::save_settings(&rig.runtime, tampered_payload(&rig))
+                .expect("saves work after activation");
         }
     }
 }
