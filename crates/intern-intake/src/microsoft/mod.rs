@@ -4,4 +4,4 @@ pub mod hashing;
 pub mod proof;
 pub mod transport;
 pub use auth::{AuthConfig, DevicePrompt, MicrosoftClient, SignInProgress, TokenStore};
-pub use proof::{Account, FolderBinding};
+pub use proof::{Account, ActivatingAccount, FolderBinding};
