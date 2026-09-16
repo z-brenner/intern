@@ -8,7 +8,9 @@
 //! (`parentReference.driveId` together with `sharepointIds`). See
 //! `docs/sharepoint-root-verification.md`.
 
-use crate::sharepoint_setup::{RemoteLibraryIdentity, RemoteLibraryVerifier, SharePointSetupError};
+use crate::sharepoint_setup::{
+    RemoteLibraryIdentity, RemoteLibraryVerifier, SetupFileSystem, SharePointSetupError,
+};
 use intern_intake::{
     SharePointDeployment,
     microsoft::Account,
@@ -29,14 +31,24 @@ impl OneDriveRecordVerifier {
 }
 
 impl<R: OneDriveRecords> RemoteLibraryVerifier for OneDriveRecordVerifier<R> {
+    /// Only records of the OneDrive account signed in as the connected
+    /// Microsoft account count, and recorded folders are canonicalized through
+    /// the same `fs` that canonicalized `candidate`.
     fn verify(
         &self,
-        _account: &Account,
+        account: &Account,
         candidate: &Path,
         deployment: &SharePointDeployment,
+        fs: &dyn SetupFileSystem,
     ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError> {
-        let library = verify_library_root(&self.records, candidate, deployment)
-            .map_err(|error| SharePointSetupError::new(error.code(), error.message()))?;
+        let library = verify_library_root(
+            &self.records,
+            candidate,
+            deployment,
+            &[&account.email, &account.user_principal_name],
+            &|path| fs.canonicalize_directory(path).ok(),
+        )
+        .map_err(|error| SharePointSetupError::new(error.code(), error.message()))?;
         Ok(library.map(|library| RemoteLibraryIdentity {
             local_root: candidate.to_path_buf(),
             tenant_id: library.tenant_id,
@@ -50,6 +62,7 @@ impl<R: OneDriveRecords> RemoteLibraryVerifier for OneDriveRecordVerifier<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sharepoint_setup::DirectoryFailure;
     use intern_intake::onedrive_identity::RecordError;
     use std::path::PathBuf;
 
@@ -97,7 +110,41 @@ mod tests {
 
     struct Records {
         scope_ini: Option<String>,
+        user_email: &'static str,
     }
+
+    /// Leaves every path exactly as written.
+    struct AsWritten;
+
+    impl SetupFileSystem for AsWritten {
+        fn canonicalize_directory(&self, _path: &Path) -> Result<PathBuf, DirectoryFailure> {
+            Err(DirectoryFailure::Missing)
+        }
+
+        fn is_writable_directory(&self, _path: &Path) -> bool {
+            false
+        }
+    }
+
+    /// Canonicalizes only the recorded C: profile path, to its D: junction
+    /// target; everything else is left as written.
+    struct JunctionedProfile;
+
+    impl SetupFileSystem for JunctionedProfile {
+        fn canonicalize_directory(&self, path: &Path) -> Result<PathBuf, DirectoryFailure> {
+            if path == Path::new(ROOT) {
+                Ok(PathBuf::from(JUNCTION_TARGET))
+            } else {
+                Err(DirectoryFailure::Missing)
+            }
+        }
+
+        fn is_writable_directory(&self, _path: &Path) -> bool {
+            false
+        }
+    }
+
+    const JUNCTION_TARGET: &str = r"\\?\D:\Users\Pat\Contoso\InternTestSite - Files";
 
     impl OneDriveRecords for Records {
         fn business_accounts(&self) -> Result<Vec<String>, RecordError> {
@@ -119,6 +166,10 @@ mod tests {
         fn scope_mount_points(&self, _account: &str) -> Result<Vec<(String, String)>, RecordError> {
             Ok(vec![(SCOPE.into(), ROOT.into())])
         }
+
+        fn user_email(&self, _account: &str) -> Result<Option<String>, RecordError> {
+            Ok(Some(self.user_email.into()))
+        }
     }
 
     fn scope_line(list: &str) -> String {
@@ -133,15 +184,20 @@ mod tests {
 
     fn verifier(scope_ini: Option<String>) -> OneDriveRecordVerifier<Records> {
         OneDriveRecordVerifier {
-            records: Records { scope_ini },
+            records: Records {
+                scope_ini,
+                user_email: "PAT@contoso.com",
+            },
         }
     }
+
+    const LIBRARY: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
     #[test]
     fn a_verified_record_returns_the_full_identity_for_the_candidate() {
         let candidate = PathBuf::from(r"\\?\C:\Users\Pat\Contoso\InternTestSite - Files");
-        let identity = verifier(Some(scope_line("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")))
-            .verify(&account(), &candidate, &deployment())
+        let identity = verifier(Some(scope_line(LIBRARY)))
+            .verify(&account(), &candidate, &deployment(), &AsWritten)
             .expect("verification")
             .expect("verified identity");
         assert_eq!(
@@ -160,7 +216,7 @@ mod tests {
     fn unmatched_or_absent_records_do_not_verify() {
         for scope_ini in [None, Some(scope_line("abababababababababababababababab"))] {
             assert_eq!(
-                verifier(scope_ini).verify(&account(), Path::new(ROOT), &deployment()),
+                verifier(scope_ini).verify(&account(), Path::new(ROOT), &deployment(), &AsWritten),
                 Ok(None)
             );
         }
@@ -169,8 +225,28 @@ mod tests {
     #[test]
     fn broken_records_surface_a_stable_setup_code() {
         let error = verifier(Some("libraryScope = 1 \"unterminated\r\n".into()))
-            .verify(&account(), Path::new(ROOT), &deployment())
+            .verify(&account(), Path::new(ROOT), &deployment(), &AsWritten)
             .unwrap_err();
         assert_eq!(error.code, "SHAREPOINT_ROOT_RECORD_MALFORMED");
+    }
+
+    #[test]
+    fn a_junctioned_profile_verifies_through_the_setup_filesystem() {
+        let candidate = PathBuf::from(JUNCTION_TARGET);
+        let identity = verifier(Some(scope_line(LIBRARY)))
+            .verify(&account(), &candidate, &deployment(), &JunctionedProfile)
+            .expect("verification")
+            .expect("the recorded C: folder canonicalizes to the candidate");
+        assert_eq!(identity.local_root, candidate);
+    }
+
+    #[test]
+    fn a_library_synced_by_another_onedrive_account_does_not_verify() {
+        let mut verifier = verifier(Some(scope_line(LIBRARY)));
+        verifier.records.user_email = "sam@contoso.com";
+        assert_eq!(
+            verifier.verify(&account(), Path::new(ROOT), &deployment(), &AsWritten),
+            Ok(None)
+        );
     }
 }

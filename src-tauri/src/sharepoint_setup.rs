@@ -106,6 +106,9 @@ pub struct RemoteLibraryIdentity {
 
 pub trait RootDetector {
     fn one_drive_state(&self) -> OneDriveState;
+    /// Whether a OneDrive work or school account is signed in as `account`
+    /// (its mail or principal name), rather than as someone else.
+    fn one_drive_signed_in_as(&self, account: &Account) -> bool;
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError>;
 }
 
@@ -115,11 +118,14 @@ pub trait SetupFileSystem {
 }
 
 pub trait RemoteLibraryVerifier {
+    /// `fs` is the boundary that canonicalized `candidate`; recorded folders
+    /// must be compared through it too.
     fn verify(
         &self,
         account: &Account,
         candidate: &Path,
         deployment: &SharePointDeployment,
+        fs: &dyn SetupFileSystem,
     ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError>;
 }
 
@@ -390,6 +396,15 @@ impl<'a> SharePointSetup<'a> {
                 "The connected Microsoft account is outside the provisioned Contoso tenant.",
             ));
         }
+        if !self.roots.one_drive_signed_in_as(&account) {
+            return Err(SharePointSetupError::new(
+                "ONEDRIVE_ACCOUNT_MISMATCH",
+                format!(
+                    "OneDrive is signed in to a different work or school account. Sign in to OneDrive as {}, then try again.",
+                    account.email
+                ),
+            ));
+        }
         Ok(account)
     }
 
@@ -422,7 +437,10 @@ impl<'a> SharePointSetup<'a> {
         let mut verified = Vec::new();
         let mut verifier_error = None;
         for candidate in &candidates {
-            match self.verifier.verify(account, candidate, self.deployment) {
+            match self
+                .verifier
+                .verify(account, candidate, self.deployment, self.fs)
+            {
                 Ok(Some(identity)) if self.identity_matches(candidate, &identity) => {
                     verified.push(identity);
                 }
@@ -671,20 +689,34 @@ fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
 
 /// OneDrive keeps an `Accounts\Business<N>` key per work or school account
 /// slot, and records `UserEmail` only once someone has signed in to it.
-fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+fn one_drive_work_account_emails(machine: &dyn MachineFacts) -> Vec<String> {
     machine
         .registry_subkeys(RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY)
         .iter()
         .filter(|name| name.to_ascii_lowercase().starts_with("business"))
-        .any(|name| {
-            machine
-                .registry_string(
-                    RegistryHive::CurrentUser,
-                    &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
-                    "UserEmail",
-                )
-                .is_some()
+        .filter_map(|name| {
+            machine.registry_string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
+                "UserEmail",
+            )
         })
+        .filter(|email| !email.trim().is_empty())
+        .collect()
+}
+
+fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+    !one_drive_work_account_emails(machine).is_empty()
+}
+
+fn one_drive_signed_in_as(machine: &dyn MachineFacts, account: &Account) -> bool {
+    one_drive_work_account_emails(machine).iter().any(|email| {
+        [&account.email, &account.user_principal_name]
+            .iter()
+            .any(|wanted| {
+                !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
+            })
+    })
 }
 
 fn one_drive_state(machine: &dyn MachineFacts) -> OneDriveState {
@@ -714,6 +746,10 @@ impl RootDetector for SystemRoots<'_> {
         // Root absence is the normal pre-enrollment state, not evidence that
         // OneDrive is absent, so only the client and account are checked.
         one_drive_state(self.machine)
+    }
+
+    fn one_drive_signed_in_as(&self, account: &Account) -> bool {
+        one_drive_signed_in_as(self.machine, account)
     }
 
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -1054,12 +1090,17 @@ mod tests {
 
     struct FakeRoots {
         state: OneDriveState,
+        signed_in_as_connected: bool,
         roots: Vec<CloudRoot>,
     }
 
     impl RootDetector for FakeRoots {
         fn one_drive_state(&self) -> OneDriveState {
             self.state
+        }
+
+        fn one_drive_signed_in_as(&self, _account: &Account) -> bool {
+            self.signed_in_as_connected
         }
 
         fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -1101,6 +1142,7 @@ mod tests {
             _account: &Account,
             candidate: &Path,
             _deployment: &SharePointDeployment,
+            _fs: &dyn SetupFileSystem,
         ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError> {
             self.seen.lock().unwrap().push(candidate.to_path_buf());
             if let Some(error) = self.errors.lock().unwrap().get(candidate) {
@@ -1275,6 +1317,7 @@ mod tests {
                 deployment: deployment(),
                 roots: FakeRoots {
                     state: OneDriveState::Available,
+                    signed_in_as_connected: true,
                     roots: Vec::new(),
                 },
                 fs: FakeFileSystem::default(),
@@ -1425,6 +1468,12 @@ mod tests {
         let mut rig = Rig::empty();
         rig.roots.state = OneDriveState::Missing;
         assert_eq!(code(rig.setup().start_sync()), "ONEDRIVE_MISSING");
+
+        let mut rig = Rig::empty();
+        rig.roots.signed_in_as_connected = false;
+        assert_eq!(code(rig.setup().start_sync()), "ONEDRIVE_ACCOUNT_MISMATCH");
+        assert_eq!(code(rig.setup().status()), "ONEDRIVE_ACCOUNT_MISMATCH");
+        assert!(rig.opener.opened.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1585,6 +1634,11 @@ mod tests {
                 FakeMachine::default().installed().odopen(),
                 "ONEDRIVE_ACCOUNT_MISSING",
             ),
+            // Signed in, but as pat@ while Intern is connected as pat+intern@.
+            (
+                FakeMachine::default().installed().work_account().odopen(),
+                "ONEDRIVE_ACCOUNT_MISMATCH",
+            ),
         ] {
             let rig = Rig::empty();
             let roots = SystemRoots { machine: &machine };
@@ -1605,6 +1659,57 @@ mod tests {
             assert_eq!(code(setup.start_sync()), expected);
         }
         assert_eq!(launches.get(), 0);
+    }
+
+    #[test]
+    fn production_onedrive_account_matches_the_connected_mail_or_principal_name() {
+        let launches = std::cell::Cell::new(0);
+        let launch = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+        for signed_in in ["PAT+Intern@Contoso.com", "pat.principal@contoso.com"] {
+            let machine = FakeMachine::default().installed().odopen().string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business2"),
+                "UserEmail",
+                signed_in,
+            );
+            let machine = machine.accounts(&["Business1", "Business2"]).string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business1"),
+                "UserEmail",
+                "someone.else@contoso.com",
+            );
+            let rig = Rig::empty();
+            rig.microsoft
+                .account
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .user_principal_name = "pat.principal@contoso.com".into();
+            let roots = SystemRoots { machine: &machine };
+            let opener = ProductionOpener {
+                machine: &machine,
+                launch: &launch,
+            };
+            let setup = SharePointSetup::new(
+                &rig.deployment,
+                &roots,
+                &rig.fs,
+                &rig.verifier,
+                &rig.microsoft,
+                &rig.settings,
+                &rig.autostart,
+                &opener,
+            );
+            assert_eq!(
+                setup.start_sync().expect(signed_in).phase,
+                SharePointSetupPhase::EnrollmentPending
+            );
+        }
+        assert_eq!(launches.get(), 2);
     }
 
     #[test]
@@ -2011,6 +2116,7 @@ mod tests {
                     deployment: deployment(),
                     roots: FakeRoots {
                         state: OneDriveState::Available,
+                        signed_in_as_connected: true,
                         roots: vec![CloudRoot {
                             kind: CloudProviderKind::SharePoint,
                             display_name: "Contoso - Files".into(),
