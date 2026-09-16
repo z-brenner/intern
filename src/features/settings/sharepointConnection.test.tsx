@@ -235,6 +235,91 @@ describe('SharePoint connection in Settings', () => {
     expect(within(card).getByRole('button', { name: 'Reconnect Microsoft' })).toBeEnabled();
   });
 
+  it('asks OneDrive to sync the library from Settings when it is not synced yet, then checks again', async () => {
+    const pending: SharePointSetupStatus = { ...active, phase: 'enrollment_pending' };
+    let finishSync!: () => void;
+    const startSharePointSync = vi.fn(() => new Promise<SharePointSetupStatus>((done) => { finishSync = () => done(pending); }));
+    const bridge = managedBridge({ getSharePointSetup: vi.fn(async () => pending), startSharePointSync });
+    renderDialog(bridge);
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    const sync = await within(card).findByRole('button', { name: 'Sync Files with OneDrive' });
+    expect(within(card).queryByRole('button', { name: 'Turn on filing' })).not.toBeInTheDocument();
+    const setupCalls = vi.mocked(bridge.getSharePointSetup).mock.calls.length;
+
+    fireEvent.click(sync);
+    expect(await within(card).findByRole('button', { name: 'Asking OneDrive…' })).toBeDisabled();
+    fireEvent.click(within(card).getByRole('button', { name: 'Asking OneDrive…' }));
+    await act(async () => { finishSync(); });
+
+    expect(startSharePointSync).toHaveBeenCalledOnce();
+    await waitFor(() => expect(vi.mocked(bridge.getSharePointSetup).mock.calls.length).toBeGreaterThan(setupCalls));
+    expect(await within(card).findByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+    expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the sync action and explains a failed sync request', async () => {
+    const pending: SharePointSetupStatus = { ...active, phase: 'enrollment_pending' };
+    const openSupportLink = vi.fn(async () => {});
+    const bridge = managedBridge({ openSupportLink, getSharePointSetup: vi.fn(async () => pending), startSharePointSync: vi.fn(async () => { throw { code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }; }) });
+    renderDialog(bridge);
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Sync Files with OneDrive' }));
+
+    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem('ONEDRIVE_MISSING').action);
+    expect(within(card).getByRole('button', { name: 'Sync Files with OneDrive' })).toBeEnabled();
+    fireEvent.click(within(card).getByRole('button', { name: 'Get OneDrive' }));
+    await waitFor(() => expect(openSupportLink).toHaveBeenCalledWith('onedrive-download'));
+  });
+
+  it('turns on filing from Settings when setup is ready but not active, then checks again', async () => {
+    let phase: SharePointSetupStatus['phase'] = 'ready_to_activate';
+    const activateOnboarding = vi.fn(async () => { phase = 'active'; return { ...active, phase }; });
+    const bridge = managedBridge({ getSharePointSetup: vi.fn(async () => ({ ...active, phase })), activateOnboarding });
+    renderDialog(bridge);
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    expect(within(card).queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Turn on filing' }));
+
+    expect(await within(card).findByText(/Active\./)).toBeVisible();
+    expect(activateOnboarding).toHaveBeenCalledOnce();
+    expect(within(card).queryByRole('button', { name: 'Turn on filing' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('reports a failed activation and leaves the action to try again', async () => {
+    const bridge = managedBridge({ getSharePointSetup: vi.fn(async () => ({ ...active, phase: 'ready_to_activate' as const })), activateOnboarding: vi.fn(async () => { throw { code: 'FILED_UNWRITABLE', message: 'Filed is read-only' }; }) });
+    renderDialog(bridge);
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Turn on filing' }));
+
+    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem('FILED_UNWRITABLE').action);
+    expect(within(card).getByRole('button', { name: 'Turn on filing' })).toBeEnabled();
+    fireEvent.click(within(card).getByText('Support details'));
+    expect(within(card).getByText('FILED_UNWRITABLE')).toBeVisible();
+  });
+
+  it('offers to turn filing on again after reconnecting as a different account', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', account: { displayName: 'Pat Doe', email: 'pat@contoso.test' }, signInAccount: { displayName: 'Sam Roe', email: 'sam@contoso.test' } } });
+    renderDialog(bridge);
+    await act(async () => {});
+    const card = screen.getByRole('region', { name: 'SharePoint connection' });
+    expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/active/i);
+
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: 'Reconnect Microsoft' })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+    expect(within(card).getByText('Sam Roe')).toBeVisible();
+    expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/needs attention/i);
+    expect(within(card).getByRole('button', { name: 'Turn on filing' })).toBeEnabled();
+
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: 'Turn on filing' })); });
+    expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/active/i);
+  });
+
   it('saves unrelated settings with the managed paths and flags exactly as loaded', async () => {
     const { onSave } = renderDialog(managedBridge());
     await screen.findByRole('region', { name: 'SharePoint connection' });

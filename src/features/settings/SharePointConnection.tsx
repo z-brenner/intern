@@ -20,8 +20,8 @@ function setupSentence(setup: SharePointSetupStatus | undefined, failure: ShareP
   if (!setup) return 'Checking the SharePoint connection…';
   switch (setup.phase) {
     case 'active': return `Active. Intern watches ${INBOX} and files into ${FILED}.`;
-    case 'ready_to_activate': return 'Needs attention. Setup has not been finished on this computer.';
-    case 'enrollment_pending': return `Needs attention. Keep OneDrive running while the ${LIBRARY} library syncs, then check again.`;
+    case 'ready_to_activate': return 'Needs attention. Filing is not on for this computer and Microsoft account. Turn on filing to finish setup.';
+    case 'enrollment_pending': return `Needs attention. The ${LIBRARY} library is not synced on this computer yet. Sync it with OneDrive, keep OneDrive running while it syncs, then check again.`;
   }
 }
 
@@ -43,9 +43,12 @@ function plural(count: number, one: string, many: string): string {
 /**
  * The read-only SharePoint connection card shown in Settings when this build
  * carries the fixed deployment. It offers no way to point Intern elsewhere:
- * the only actions re-check the connection or sign in to Microsoft again, and
- * a reconnect is always followed by the backend's own setup check, so a
- * different organization's account is reported rather than adopted.
+ * the actions re-check the connection, sign in to Microsoft again, or finish
+ * the fixed setup (ask OneDrive to sync, turn on filing) when the backend
+ * says it is unfinished. A reconnect is always followed by the backend's own
+ * setup check, so a different organization's account is reported rather than
+ * adopted, and a different account from the same one is asked to turn filing
+ * on for itself.
  */
 export function SharePointConnection({ bridge, settings }: { bridge: DesktopBridge; settings: AppSettings }) {
   const [setup, setSetup] = useState<SharePointSetupStatus>();
@@ -53,6 +56,8 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
   const [intake, setIntake] = useState<IntakeStatus>();
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState('');
+  const [finishing, setFinishing] = useState<'sync' | 'activate'>();
+  const [finishFailure, setFinishFailure] = useState<SharePointProblem>();
   const support = useSupportLink(bridge);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -82,22 +87,38 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
 
   const runCheck = async () => {
     if (checking) return;
-    setChecking(true); setChecked('');
+    setChecking(true); setChecked(''); setFinishFailure(undefined);
     try {
       await Promise.all([check(), microsoft.refresh().catch(() => {})]);
       if (mounted.current) setChecked('Checked just now.');
     } finally { if (mounted.current) setChecking(false); }
   };
-  const reconnect = () => { setChecked(''); microsoft.begin(); };
+  // Finishing setup here runs the same backend steps onboarding does, then
+  // asks again, so the card shows where setup really stands afterwards.
+  const finishInFlight = useRef(false);
+  const finish = async (kind: 'sync' | 'activate') => {
+    if (finishInFlight.current || busy) return;
+    finishInFlight.current = true;
+    setFinishing(kind); setFinishFailure(undefined); setChecked('');
+    try { await (kind === 'sync' ? bridge.startSharePointSync() : bridge.activateOnboarding()); }
+    catch (cause) { if (mounted.current) setFinishFailure(describeSharePointProblem(cause)); }
+    finally {
+      await check();
+      finishInFlight.current = false;
+      if (mounted.current) setFinishing(undefined);
+    }
+  };
+  const reconnect = () => { setChecked(''); setFinishFailure(undefined); microsoft.begin(); };
   const cancel = () => void microsoft.run(async () => { await microsoft.disconnect(); await check(); });
 
   const account = microsoft.status?.connected ? microsoft.status.account : null;
   const documents = microsoft.status?.documents ?? [];
   const verified = documents.filter((item) => ['verified', 'processed', 'filed'].includes(item.state)).length;
   const held = documents.filter((item) => item.state === 'other' || item.state === 'unknown').length;
-  const busy = checking || microsoft.busy;
+  const busy = checking || microsoft.busy || Boolean(finishing);
   // SharePoint's own Sync button is the manual way to finish a library that has not synced.
   const offerSharePoint = Boolean(failure) || setup?.phase === 'enrollment_pending';
+  const problem = failure ?? finishFailure;
 
   return <section className="settings-group sharepoint-connection" aria-labelledby="sharepoint-connection-heading">
     <h3 id="sharepoint-connection-heading">SharePoint connection</h3>
@@ -117,6 +138,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <p role="status" aria-label="Background status">Runs in the background: {onOff(settings.runInBackground)} · Starts when you sign in: {onOff(settings.startAtLogin)}</p>
     </div>
     {failure && <p className="form-error" role="alert">{failure.action}</p>}
+    {finishFailure && <p className="form-error" role="alert">{finishFailure.action}</p>}
     {microsoft.error && <p className="form-error" role="alert">{microsoft.error}</p>}
     {support.error && <p className="form-error" role="alert">{support.error}</p>}
     {checked && <p className="check-hint" role="status" aria-label="Connection check">{checked}</p>}
@@ -130,10 +152,12 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <p className="check-hint">Sign in with your work account. Documents stay untouched until the sign-in finishes and the connection is checked.</p>
     </div>}
     <div className="update-actions">
+      {setup?.phase === 'enrollment_pending' && !microsoft.prompt && <button type="button" className="primary" disabled={busy} onClick={() => void finish('sync')}>{finishing === 'sync' ? 'Asking OneDrive…' : 'Sync Files with OneDrive'}</button>}
+      {setup?.phase === 'ready_to_activate' && !microsoft.prompt && <button type="button" className="primary" disabled={busy} onClick={() => void finish('activate')}>{finishing === 'activate' ? 'Turning on filing…' : 'Turn on filing'}</button>}
       <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check again'}</button>
       {!microsoft.prompt && <button type="button" disabled={busy || !bridge.microsoftSignInStart} onClick={reconnect}>Reconnect Microsoft</button>}
       {offerSharePoint && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
-      {failure?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
+      {problem?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
     {!microsoft.prompt && <p className="check-hint">Reconnecting signs out the current Microsoft account until the new sign-in finishes.</p>}
     <details className="support-details" role="group" aria-label="Support details">
@@ -141,6 +165,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <dl>
         <div><dt>{failure ? 'Error code' : 'Setup phase'}</dt><dd><code>{failure ? failure.code : setup?.phase ?? 'checking'}</code></dd></div>
         {failure?.detail && <div><dt>Setup message</dt><dd>{failure.detail}</dd></div>}
+        {finishFailure && <div><dt>Last setup action</dt><dd><code>{finishFailure.code}</code>{finishFailure.detail && <> · {finishFailure.detail}</>}</dd></div>}
         {microsoft.status?.error && <div><dt>Microsoft status</dt><dd>{microsoft.status.error}</dd></div>}
         {account && <div><dt>Account ID</dt><dd><code>{account.id}</code></dd></div>}
         {account && <div><dt>Tenant ID</dt><dd><code>{account.tenantId}</code></dd></div>}

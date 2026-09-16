@@ -59,6 +59,18 @@ describe('createInMemoryBridge fake SharePoint contract', () => {
     await expect(bridge.completeOnboarding()).resolves.toBeUndefined();
     expect((await bridge.getOnboarding()).required).toBe(false);
   });
+
+  it('needs filing turned on again after signing in as a different account', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', signInAccount: { displayName: 'Sam Roe', email: 'sam@contoso.test' } } });
+
+    await bridge.microsoftSignInStart!();
+    expect(await bridge.microsoftSignInPoll!()).toMatchObject({ state: 'connected', account: { displayName: 'Sam Roe' } });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'ready_to_activate', account: { displayName: 'Sam Roe', email: 'sam@contoso.test' } });
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+    await bridge.microsoftSignInStart!();
+    await bridge.microsoftSignInPoll!();
+    expect((await bridge.getSharePointSetup()).phase).toBe('active');
+  });
 });
 
 describe('createInMemoryBridge managed Microsoft boundary', () => {
