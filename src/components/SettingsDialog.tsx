@@ -1,5 +1,6 @@
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
+import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
@@ -58,6 +59,8 @@ function saveFailure(error: unknown): string {
     case 'HOSTED_MODEL_REFUSED': return 'The model declined to read the calibration document, so it cannot be relied on to file yours. (HOSTED_MODEL_REFUSED)';
     case 'MODEL_SELF_TEST_FAILED': return 'The model answered, but not correctly: it did not name the calibration document. Try a more capable model. (MODEL_SELF_TEST_FAILED)';
     case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape Intern needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
+    // The managed-save refusal reads the same here as everywhere else SharePoint setup is explained.
+    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE': return `${describeSharePointProblem(error).action} (SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE)`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();

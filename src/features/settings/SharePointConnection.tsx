@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DesktopBridge } from '../../lib/bridge';
 import type { AppSettings, IntakeStatus, SharePointSetupStatus } from '../../types';
 import { useMicrosoftSignIn } from '../intake/useMicrosoftSignIn';
-import { sharePointFailure } from './sharepointErrors';
-import type { SharePointFailure } from './sharepointErrors';
+import { describeSharePointProblem } from '../sharepoint/sharePointProblems';
+import type { SharePointProblem } from '../sharepoint/sharePointProblems';
 
 /*
   The library is fixed for this deployment, so these are facts to show rather
@@ -14,8 +14,8 @@ const LIBRARY: SharePointSetupStatus['library'] = 'Files';
 const INBOX: SharePointSetupStatus['intake'] = 'Inbox';
 const FILED: SharePointSetupStatus['destination'] = 'Filed';
 
-function setupSentence(setup: SharePointSetupStatus | undefined, failure: SharePointFailure | undefined): string {
-  if (failure) return `Needs attention. ${failure.message}`;
+function setupSentence(setup: SharePointSetupStatus | undefined, failure: SharePointProblem | undefined): string {
+  if (failure) return `Needs attention. ${failure.action}`;
   if (!setup) return 'Checking the SharePoint connection…';
   switch (setup.phase) {
     case 'active': return `Active. Intern watches ${INBOX} and files into ${FILED}.`;
@@ -48,7 +48,7 @@ function plural(count: number, one: string, many: string): string {
  */
 export function SharePointConnection({ bridge, settings }: { bridge: DesktopBridge; settings: AppSettings }) {
   const [setup, setSetup] = useState<SharePointSetupStatus>();
-  const [failure, setFailure] = useState<SharePointFailure>();
+  const [failure, setFailure] = useState<SharePointProblem>();
   const [intake, setIntake] = useState<IntakeStatus>();
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState('');
@@ -57,13 +57,13 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
 
   // Each check replaces the last; the latest one started is the one shown.
   const checkGeneration = useRef(0);
-  const check = useCallback(async (): Promise<SharePointFailure | undefined> => {
+  const check = useCallback(async (): Promise<SharePointProblem | undefined> => {
     const version = ++checkGeneration.current;
     const [setupResult, intakeResult] = await Promise.allSettled([bridge.getSharePointSetup(), bridge.intakeStatus()]);
     if (!mounted.current || checkGeneration.current !== version) return undefined;
     if (intakeResult.status === 'fulfilled') setIntake(intakeResult.value);
     if (setupResult.status === 'fulfilled') { setSetup(setupResult.value); setFailure(undefined); return undefined; }
-    const next = sharePointFailure(setupResult.reason);
+    const next = describeSharePointProblem(setupResult.reason);
     setSetup(undefined); setFailure(next);
     return next;
   }, [bridge]);
@@ -112,7 +112,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
       <p role="status" aria-label="Watcher health" aria-live="polite">{watcherSentence(intake)}</p>
       <p role="status" aria-label="Background status">Runs in the background: {onOff(settings.runInBackground)} · Starts when you sign in: {onOff(settings.startAtLogin)}</p>
     </div>
-    {failure && <p className="form-error" role="alert">{failure.message}</p>}
+    {failure && <p className="form-error" role="alert">{failure.action}</p>}
     {microsoft.error && <p className="form-error" role="alert">{microsoft.error}</p>}
     {checked && <p className="check-hint" role="status" aria-label="Connection check">{checked}</p>}
     {microsoft.prompt && <div className="identity-signin" role="status" aria-label="Microsoft sign-in">
@@ -132,7 +132,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
     <details className="support-details" role="group" aria-label="Support details">
       <summary>Support details</summary>
       <dl>
-        <div><dt>{failure ? 'Error code' : 'Setup phase'}</dt><dd><code>{failure ? failure.code ?? 'none' : setup?.phase ?? 'checking'}</code></dd></div>
+        <div><dt>{failure ? 'Error code' : 'Setup phase'}</dt><dd><code>{failure ? failure.code : setup?.phase ?? 'checking'}</code></dd></div>
         {failure?.detail && <div><dt>Setup message</dt><dd>{failure.detail}</dd></div>}
         {microsoft.status?.error && <div><dt>Microsoft status</dt><dd>{microsoft.status.error}</dd></div>}
         {account && <div><dt>Account ID</dt><dd><code>{account.id}</code></dd></div>}

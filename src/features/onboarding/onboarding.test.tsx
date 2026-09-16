@@ -338,6 +338,22 @@ describe('guided onboarding failures', () => {
     expect(screen.getByRole('button', { name: 'Connect Microsoft account' })).toBeEnabled();
   });
 
+  it('recognizes the backend consent-blocked token in a sign-in failure', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const message = 'Your Microsoft organization has blocked Intern from connecting. Ask your IT administrator to allow Intern. (MICROSOFT_CONSENT_BLOCKED)';
+    const bridge = enabledBridge({ failures: { microsoftSignInPoll: [message] } });
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await connect();
+    await screen.findByRole('status', { name: 'Microsoft sign-in' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/organization blocked/i);
+    expect(screen.getByText('MICROSOFT_CONSENT_BLOCKED')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect Microsoft account' })).toBeEnabled();
+  });
+
   it('maps an explicit consent-blocked code to the organization explanation', async () => {
     const bridge = enabledBridge({ failures: { microsoftSignInStart: [{ code: 'MICROSOFT_CONSENT_BLOCKED', message: 'AADSTS65001' }] } });
     render(<App bridge={bridge} />);
