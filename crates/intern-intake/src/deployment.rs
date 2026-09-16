@@ -73,14 +73,22 @@ impl SharePointDeployment {
             library_name: raw.library_name,
             intake_folder_name: raw.intake_folder_name,
             destination_folder_name: raw.destination_folder_name,
-            tenant_id: required_id("tenant_id", raw.tenant_id)?,
-            client_id: required_id("client_id", raw.client_id)?,
-            site_id: required_id("site_id", raw.site_id)?,
-            web_id: required_id("web_id", raw.web_id)?,
-            list_id: required_id("list_id", raw.list_id)?,
-            drive_id: required_id("drive_id", raw.drive_id)?,
-            intake_folder_id: required_id("intake_folder_id", raw.intake_folder_id)?,
-            destination_folder_id: required_id("destination_folder_id", raw.destination_folder_id)?,
+            tenant_id: required_id("tenant_id", raw.tenant_id, IdKind::Guid)?,
+            client_id: required_id("client_id", raw.client_id, IdKind::Guid)?,
+            site_id: required_id("site_id", raw.site_id, IdKind::Guid)?,
+            web_id: required_id("web_id", raw.web_id, IdKind::Guid)?,
+            list_id: required_id("list_id", raw.list_id, IdKind::Guid)?,
+            drive_id: required_id("drive_id", raw.drive_id, IdKind::Drive)?,
+            intake_folder_id: required_id(
+                "intake_folder_id",
+                raw.intake_folder_id,
+                IdKind::DriveItem,
+            )?,
+            destination_folder_id: required_id(
+                "destination_folder_id",
+                raw.destination_folder_id,
+                IdKind::DriveItem,
+            )?,
         };
         deployment.validate()?;
         Ok(deployment)
@@ -104,21 +112,25 @@ impl SharePointDeployment {
             &self.destination_folder_name,
             DESTINATION_FOLDER_NAME,
         )?;
-        for (name, value) in [
-            ("tenant_id", &self.tenant_id),
-            ("client_id", &self.client_id),
-            ("site_id", &self.site_id),
-            ("web_id", &self.web_id),
-            ("list_id", &self.list_id),
-            ("drive_id", &self.drive_id),
-            ("intake_folder_id", &self.intake_folder_id),
-            ("destination_folder_id", &self.destination_folder_id),
+        for (name, value, kind) in [
+            ("tenant_id", &self.tenant_id, IdKind::Guid),
+            ("client_id", &self.client_id, IdKind::Guid),
+            ("site_id", &self.site_id, IdKind::Guid),
+            ("web_id", &self.web_id, IdKind::Guid),
+            ("list_id", &self.list_id, IdKind::Guid),
+            ("drive_id", &self.drive_id, IdKind::Drive),
+            (
+                "intake_folder_id",
+                &self.intake_folder_id,
+                IdKind::DriveItem,
+            ),
+            (
+                "destination_folder_id",
+                &self.destination_folder_id,
+                IdKind::DriveItem,
+            ),
         ] {
-            if !is_guid(value) {
-                return Err(DeploymentError::invalid(format!(
-                    "{name} must be a GUID-shaped public identifier"
-                )));
-            }
+            kind.validate(name, value)?;
         }
         Ok(())
     }
@@ -305,13 +317,48 @@ fn parse_fixed_site_url(value: &str) -> Result<Url, DeploymentError> {
     Ok(url)
 }
 
-fn required_id(name: &str, value: Option<String>) -> Result<String, DeploymentError> {
-    let value = value.ok_or_else(|| DeploymentError::invalid(format!("missing {name}")))?;
-    if !is_guid(&value) {
-        return Err(DeploymentError::invalid(format!(
-            "{name} must be a GUID-shaped public identifier"
-        )));
+/// The public identifier shapes a schema-1 deployment may carry. Every shape
+/// is a bounded ASCII alphabet with no URL delimiters (`/ \ ? # % & :`),
+/// whitespace, or `.`, so a validated value can never leave a single Graph
+/// path segment or alter a query.
+#[derive(Clone, Copy)]
+enum IdKind {
+    /// Entra tenant/application and SharePoint site/web/list GUIDs.
+    Guid,
+    /// A SharePoint document-library drive ID as Microsoft Graph returns it:
+    /// `b!` followed by the unpadded base64url encoding of the 48-byte
+    /// site, web, and list GUIDs (64 characters). Base64url is
+    /// case-sensitive, so consumers must compare it exactly.
+    Drive,
+    /// A SharePoint driveItem ID as Microsoft Graph returns it: `01`
+    /// followed by 32 upper-case RFC 4648 base32 characters.
+    DriveItem,
+}
+
+impl IdKind {
+    fn validate(self, name: &str, value: &str) -> Result<(), DeploymentError> {
+        let (valid, shape) = match self {
+            Self::Guid => (is_guid(value), "a GUID-shaped public identifier"),
+            Self::Drive => (
+                is_drive_id(value),
+                "a SharePoint drive ID (`b!` and 64 base64url characters)",
+            ),
+            Self::DriveItem => (
+                is_drive_item_id(value),
+                "a SharePoint driveItem ID (`01` and 32 upper-case base32 characters)",
+            ),
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(DeploymentError::invalid(format!("{name} must be {shape}")))
+        }
     }
+}
+
+fn required_id(name: &str, value: Option<String>, kind: IdKind) -> Result<String, DeploymentError> {
+    let value = value.ok_or_else(|| DeploymentError::invalid(format!("missing {name}")))?;
+    kind.validate(name, &value)?;
     Ok(value)
 }
 
@@ -350,6 +397,24 @@ fn is_guid(value: &str) -> bool {
             matches!(index, 8 | 13 | 18 | 23) && byte == b'-'
                 || !matches!(index, 8 | 13 | 18 | 23) && byte.is_ascii_hexdigit()
         })
+}
+
+fn is_drive_id(value: &str) -> bool {
+    value.strip_prefix("b!").is_some_and(|encoded| {
+        encoded.len() == 64
+            && encoded
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    })
+}
+
+fn is_drive_item_id(value: &str) -> bool {
+    value.strip_prefix("01").is_some_and(|encoded| {
+        encoded.len() == 32
+            && encoded
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || matches!(byte, b'2'..=b'7'))
+    })
 }
 
 fn is_valid_email(value: &str) -> bool {

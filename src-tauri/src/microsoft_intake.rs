@@ -151,13 +151,17 @@ fn verified_folder_web_url(
         || remote
             .get("remoteItem")
             .is_some_and(|value| !value.is_null())
+        // The driveItem and base64url drive IDs are matched exactly (the drive
+        // ID is case-sensitive; the item ID is Graph's canonical form). Only
+        // the GUIDs fold case.
         || remote["id"].as_str() != Some(deployment.intake_folder_id())
+        || remote.pointer("/parentReference/driveId").and_then(serde_json::Value::as_str)
+            != Some(deployment.drive_id())
         || [
             ("/sharepointIds/tenantId", deployment.tenant_id()),
             ("/sharepointIds/siteId", deployment.site_id()),
             ("/sharepointIds/webId", deployment.web_id()),
             ("/sharepointIds/listId", deployment.list_id()),
-            ("/parentReference/driveId", deployment.drive_id()),
         ]
         .into_iter()
         .any(|(pointer, expected)| {
@@ -360,10 +364,9 @@ impl MicrosoftIntake {
                 .eq_ignore_ascii_case(deployment.tenant_id())
                 && binding.activation_watermark.is_some_and(|value| value > 0)
                 && binding.web_id.eq_ignore_ascii_case(deployment.web_id())
-                && binding.drive_id.eq_ignore_ascii_case(deployment.drive_id())
-                && binding
-                    .folder_id
-                    .eq_ignore_ascii_case(deployment.intake_folder_id())
+                // Drive and driveItem IDs are not GUIDs and never fold case.
+                && binding.drive_id == deployment.drive_id()
+                && binding.folder_id == deployment.intake_folder_id()
                 && deployment.is_intake_folder_web_url(&binding.web_url)
         })
     }
@@ -1200,7 +1203,10 @@ mod tests {
     use super::*;
     use intern_intake::microsoft::{MicrosoftClient, proof::FreshUploadMetadata};
     use intern_queue::{WorkerBoundary, WorkerFailure};
-    use std::{collections::VecDeque, sync::atomic::AtomicI64};
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicBool, AtomicI64},
+    };
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
     const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
 
@@ -1218,9 +1224,9 @@ mod tests {
               "site_id": "33333333-3333-3333-3333-333333333333",
               "web_id": "44444444-4444-4444-4444-444444444444",
               "list_id": "55555555-5555-5555-5555-555555555555",
-              "drive_id": "66666666-6666-6666-6666-666666666666",
-              "intake_folder_id": "77777777-7777-7777-7777-777777777777",
-              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+              "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+              "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }"#,
         )
         .unwrap()
@@ -1294,7 +1300,7 @@ mod tests {
 
     fn folder_metadata() -> serde_json::Value {
         serde_json::json!({
-            "id": "77777777-7777-7777-7777-777777777777",
+            "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
             "folder": { "childCount": 0 },
             "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
             "sharepointIds": {
@@ -1304,7 +1310,7 @@ mod tests {
                 "listId": "55555555-5555-5555-5555-555555555555"
             },
             "parentReference": {
-                "driveId": "66666666-6666-6666-6666-666666666666"
+                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO"
             }
         })
     }
@@ -1324,15 +1330,15 @@ mod tests {
             Ok((
                 account(),
                 serde_json::json!({
-                    "id": "item!123",
+                    "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
                     "eTag": "\"fresh,1\"",
                     "cTag": "\"content,1\"",
                     "name": "swap.pdf",
                     "size": 5,
                     "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/swap.pdf",
                     "parentReference": {
-                        "driveId": "66666666-6666-6666-6666-666666666666",
-                        "id": "77777777-7777-7777-7777-777777777777"
+                        "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                        "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA"
                     },
                     "sharepointIds": {
                         "tenantId": "11111111-1111-1111-1111-111111111111",
@@ -1437,8 +1443,8 @@ mod tests {
         settings_store.save(&settings).unwrap();
         let binding = FolderBinding {
             local_folder,
-            drive_id: "66666666-6666-6666-6666-666666666666".into(),
-            folder_id: "77777777-7777-7777-7777-777777777777".into(),
+            drive_id: "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO".into(),
+            folder_id: "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA".into(),
             web_url: "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
             web_id: "44444444-4444-4444-4444-444444444444".into(),
@@ -1488,6 +1494,238 @@ mod tests {
         let _ = fs::remove_dir_all(data);
     }
 
+    /// Graph metadata for whichever Inbox file is asked about, created by the
+    /// signed-in person, reported to a connected account that can be switched.
+    struct SwitchableAccountMetadata {
+        connected_is_uploader: AtomicBool,
+        calls: AtomicU64,
+    }
+
+    impl FreshUploadMetadata for SwitchableAccountMetadata {
+        fn metadata(&self, url: url::Url) -> Result<(Account, serde_json::Value), String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let name = url.path_segments().unwrap().next_back().unwrap().to_owned();
+            let connected = if self.connected_is_uploader.load(Ordering::SeqCst) {
+                account()
+            } else {
+                Account {
+                    id: "aaaaaaaa-9999-9999-9999-999999999999".into(),
+                    ..account()
+                }
+            };
+            Ok((
+                connected,
+                serde_json::json!({
+                    "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
+                    "eTag": "\"fresh,1\"",
+                    "cTag": "\"content,1\"",
+                    "name": name,
+                    "size": 5,
+                    "webUrl": format!("https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/{name}"),
+                    "parentReference": {
+                        "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                        "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA"
+                    },
+                    "sharepointIds": {
+                        "tenantId": "11111111-1111-1111-1111-111111111111",
+                        "siteId": "33333333-3333-3333-3333-333333333333",
+                        "webId": "44444444-4444-4444-4444-444444444444",
+                        "listId": "55555555-5555-5555-5555-555555555555",
+                        "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                    },
+                    "createdBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "lastModifiedBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "createdDateTime": "2026-09-14T16:00:00Z",
+                    "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                    "file": {
+                        "mimeType": "application/pdf",
+                        "hashes": { "quickXorHash": "aCgDG9jwBgAAAAAABQAAAAAAAAA=" }
+                    }
+                }),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingBoundary {
+        calls: AtomicU64,
+    }
+
+    impl WorkerBoundary for CountingBoundary {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<intern_engine::DocumentSource, WorkerFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(WorkerFailure::new("TEST_STOP", false, false))
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    /// The real manager as the queue's admission guard: a disconnect, a
+    /// sign-in as someone else, and an intake folder change must each leave
+    /// the Inbox protected and keep the extractor from reading any file until
+    /// the connected account again proves it uploaded that file.
+    #[test]
+    fn protected_inbox_files_stay_unread_across_disconnect_account_and_folder_changes() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-bypass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let inbox = data.join("Inbox");
+        let elsewhere = data.join("Elsewhere");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let first = inbox.join("agreement.pdf");
+        fs::write(&first, b"hello").unwrap();
+        let first = first.canonicalize().unwrap();
+        let local_folder = inbox.canonicalize().unwrap().to_string_lossy().into_owned();
+        let settings = AppSettings {
+            intake_folder: local_folder.clone(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        let binding = FolderBinding {
+            local_folder: local_folder.clone(),
+            drive_id: "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO".into(),
+            folder_id: "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA".into(),
+            web_url: "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            web_id: "44444444-4444-4444-4444-444444444444".into(),
+            activation_watermark: Some(1_789_401_599_000),
+        };
+        let metadata = Arc::new(SwitchableAccountMetadata {
+            connected_is_uploader: AtomicBool::new(true),
+            calls: AtomicU64::new(0),
+        });
+        let mut manager = MicrosoftIntake::with_enabled_metadata(
+            settings_store.clone(),
+            data.clone(),
+            test_deployment(),
+            binding,
+            Arc::clone(&metadata) as Arc<dyn FreshUploadMetadata>,
+            data.join("proof-snapshots"),
+        )
+        .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        manager.client = Some(client);
+        let manager = Arc::new(manager);
+        let worker = Arc::new(CountingBoundary::default());
+        let pipeline = intern_queue::Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::clone(&worker) as Arc<dyn WorkerBoundary>,
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            settings_store.clone(),
+        )
+        .unwrap()
+        .with_admission_guard(Arc::clone(&manager) as Arc<dyn AdmissionGuard>);
+        let protects_inbox = |manager: &MicrosoftIntake| {
+            manager
+                .config
+                .lock()
+                .unwrap()
+                .protected_roots
+                .iter()
+                .any(|root| same_path(root, &local_folder))
+        };
+
+        // Proven at admission, then disconnected before extraction.
+        let id = pipeline
+            .enqueue_files(std::slice::from_ref(&first))
+            .unwrap()[0]
+            .id;
+        manager.disconnect().unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+        let held = pipeline.list().unwrap().pop().unwrap();
+        assert_eq!(held.status, intern_core::QueueStatus::NeedsReview);
+        assert!(
+            protects_inbox(&manager),
+            "a disconnect keeps the Inbox held"
+        );
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+        // Starting sign-in again, and finishing it as a different person.
+        manager.begin().unwrap();
+        assert!(
+            protects_inbox(&manager),
+            "a sign-in retry keeps the Inbox held"
+        );
+        clock.0.store(1_010, Ordering::SeqCst);
+        manager.poll().unwrap();
+        metadata
+            .connected_is_uploader
+            .store(false, Ordering::SeqCst);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+        assert!(protects_inbox(&manager));
+
+        // Moving intake elsewhere keeps the old Inbox protected, so a manual
+        // add from it is still held for proof.
+        let moved = AppSettings {
+            intake_folder: elsewhere
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            ..settings.clone()
+        };
+        manager.protect_settings(&moved).unwrap();
+        settings_store.save(&moved).unwrap();
+        assert!(
+            protects_inbox(&manager),
+            "a folder change keeps the Inbox held"
+        );
+        let second = inbox.join("second.pdf");
+        fs::write(&second, b"hello").unwrap();
+        let second = second.canonicalize().unwrap();
+        let error = pipeline
+            .enqueue_files(std::slice::from_ref(&second))
+            .unwrap_err();
+        assert!(error.code.starts_with("UPLOADER_"), "{error:?}");
+        assert_eq!(pipeline.list().unwrap().len(), 1);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+        // Only a complete proof for the connected uploader reaches the reader.
+        metadata.connected_is_uploader.store(true, Ordering::SeqCst);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        // The stub reader then fails, and the queue's own failure retry may
+        // read again; what matters is that the proof now lets it read.
+        assert!(worker.calls.load(Ordering::SeqCst) > 0);
+        drop(pipeline);
+        drop(manager);
+        let _ = fs::remove_dir_all(data);
+    }
+
     #[test]
     fn fixed_folder_binding_requires_the_deployment_web_identity() {
         let deployment = test_deployment();
@@ -1510,6 +1748,27 @@ mod tests {
             assert!(
                 verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
                 "a missing or different web must not bind"
+            );
+        }
+
+        // The base64url drive ID is case-sensitive and the driveItem ID is
+        // held in Graph's canonical form, so neither may match by folding case.
+        for (pointer, value) in [
+            (
+                "/parentReference/driveId",
+                deployment.drive_id().to_ascii_lowercase(),
+            ),
+            (
+                "/parentReference/driveId",
+                deployment.drive_id().to_ascii_uppercase(),
+            ),
+            ("/id", deployment.intake_folder_id().to_ascii_lowercase()),
+        ] {
+            let mut metadata = folder_metadata();
+            *metadata.pointer_mut(pointer).unwrap() = value.clone().into();
+            assert!(
+                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
+                "{pointer} {value} must not bind"
             );
         }
     }
@@ -1705,8 +1964,8 @@ mod tests {
             "enabled": true,
             "bindings": [{
                 "localFolder": local_folder,
-                "driveId": "66666666-6666-6666-6666-666666666666",
-                "folderId": "77777777-7777-7777-7777-777777777777",
+                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                "folderId": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
                 "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
                 "tenantId": "11111111-1111-1111-1111-111111111111"
             }],
@@ -1726,16 +1985,8 @@ mod tests {
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
         );
-        assert!(
-            loaded_binding
-                .drive_id
-                .eq_ignore_ascii_case(deployment.drive_id())
-        );
-        assert!(
-            loaded_binding
-                .folder_id
-                .eq_ignore_ascii_case(deployment.intake_folder_id())
-        );
+        assert_eq!(loaded_binding.drive_id, deployment.drive_id());
+        assert_eq!(loaded_binding.folder_id, deployment.intake_folder_id());
         assert!(deployment.is_intake_folder_web_url(&loaded_binding.web_url));
         let candidate = Path::new(&loaded_binding.local_folder).join("agreement.pdf");
         assert!(within(&candidate, &loaded_binding.local_folder));
@@ -1806,6 +2057,65 @@ mod tests {
             vec![binding]
         );
         drop(restarted);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_binding_whose_drive_or_folder_id_differs_only_in_case_requires_re_pairing() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-binding-case-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let deployment = intake.deployment().unwrap().clone();
+        let local = inbox.canonicalize().unwrap();
+        let binding = intake
+            .persist_verified_binding(
+                &deployment,
+                intake.generation.load(Ordering::SeqCst),
+                &settings,
+                &local,
+                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            )
+            .unwrap();
+        let candidate = local.join("agreement.pdf");
+        assert_eq!(
+            intake.scope(&candidate, &settings).unwrap(),
+            Some(binding.clone())
+        );
+
+        for altered in [
+            FolderBinding {
+                drive_id: binding.drive_id.to_ascii_lowercase(),
+                ..binding.clone()
+            },
+            FolderBinding {
+                folder_id: binding.folder_id.to_ascii_lowercase(),
+                ..binding.clone()
+            },
+        ] {
+            intake.config.lock().unwrap().bindings = vec![altered];
+            assert_eq!(
+                intake.scope(&candidate, &settings).unwrap_err(),
+                PAIR_REQUIRED
+            );
+        }
+        drop(intake);
         let _ = fs::remove_dir_all(data);
     }
 
