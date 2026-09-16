@@ -443,16 +443,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .onboarding-list { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.7; color: var(--text-soft); }
 
 .onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 24px 0 8px; }
-.onboarding button, .onboarding-link {
+.onboarding button {
   min-height: 44px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
   font: inherit; font-size: 14px; font-weight: 500; text-decoration: none; transition: background-color .12s ease, border-color .12s ease;
 }
-.onboarding button:hover:not(:disabled), .onboarding-link:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
+.onboarding button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .onboarding button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
 .onboarding button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .onboarding button:disabled { opacity: .55; cursor: default; }
-.onboarding-link:focus-visible, .onboarding summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.onboarding summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .onboarding-account { display: grid; gap: 4px; margin: 8px 0 18px; padding: 16px 18px; border-left: 3px solid var(--brand-navy); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
 .onboarding-account strong { font-size: 18px; color: var(--text); }
@@ -495,6 +495,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
   .onboarding-panel h1 { font-size: 24px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .onboarding button, .onboarding-link { transition: none; }
+  .onboarding button { transition: none; }
 }
 /* ======================= end guided onboarding ========================== */

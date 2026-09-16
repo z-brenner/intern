@@ -10,7 +10,11 @@
     "dialog:allow-save",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://zgbrenner.github.io/intern/*" }]
+      "allow": [
+        { "url": "https://zgbrenner.github.io/intern/*" },
+        { "url": "https://teamcontoso.sharepoint.com/sites/InternTestSite" },
+        { "url": "https://www.microsoft.com/microsoft-365/onedrive/download" }
+      ]
     },
     "updater:default"
   ]

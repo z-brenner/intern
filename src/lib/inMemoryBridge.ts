@@ -1,4 +1,4 @@
-import { GUIDE_URL } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
@@ -393,6 +393,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // Already in a browser, so the guide opens the way any other link would.
     // noopener keeps the new tab from reaching back into this document.
     openGuide: async () => { window.open(GUIDE_URL, '_blank', 'noopener,noreferrer'); },
+    openSupportLink: async (target) => { window.open(SUPPORT_LINKS[target], '_blank', 'noopener,noreferrer'); },
     hostedModelStatus: async () => hostedModelStatus(),
     hostedModelSetKey: async (key) => {
       if (!key.trim()) throw { code: 'HOSTED_MODEL_KEY_EMPTY', message: 'the API key is empty' };

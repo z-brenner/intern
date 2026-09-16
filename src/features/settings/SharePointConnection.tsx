@@ -4,6 +4,7 @@ import type { AppSettings, IntakeStatus, SharePointSetupStatus } from '../../typ
 import { useMicrosoftSignIn } from '../intake/useMicrosoftSignIn';
 import { describeSharePointProblem } from '../sharepoint/sharePointProblems';
 import type { SharePointProblem } from '../sharepoint/sharePointProblems';
+import { useSupportLink } from '../sharepoint/useSupportLink';
 
 /*
   The library is fixed for this deployment, so these are facts to show rather
@@ -52,6 +53,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
   const [intake, setIntake] = useState<IntakeStatus>();
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState('');
+  const support = useSupportLink(bridge);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
@@ -94,6 +96,8 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
   const verified = documents.filter((item) => ['verified', 'processed', 'filed'].includes(item.state)).length;
   const held = documents.filter((item) => item.state === 'other' || item.state === 'unknown').length;
   const busy = checking || microsoft.busy;
+  // SharePoint's own Sync button is the manual way to finish a library that has not synced.
+  const offerSharePoint = Boolean(failure) || setup?.phase === 'enrollment_pending';
 
   return <section className="settings-group sharepoint-connection" aria-labelledby="sharepoint-connection-heading">
     <h3 id="sharepoint-connection-heading">SharePoint connection</h3>
@@ -114,6 +118,7 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
     </div>
     {failure && <p className="form-error" role="alert">{failure.action}</p>}
     {microsoft.error && <p className="form-error" role="alert">{microsoft.error}</p>}
+    {support.error && <p className="form-error" role="alert">{support.error}</p>}
     {checked && <p className="check-hint" role="status" aria-label="Connection check">{checked}</p>}
     {microsoft.prompt && <div className="identity-signin" role="status" aria-label="Microsoft sign-in">
       <p>Open Microsoft's sign-in page and enter this code:</p><strong className="identity-code">{microsoft.prompt.userCode}</strong>
@@ -127,6 +132,8 @@ export function SharePointConnection({ bridge, settings }: { bridge: DesktopBrid
     <div className="update-actions">
       <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check again'}</button>
       {!microsoft.prompt && <button type="button" disabled={busy || !bridge.microsoftSignInStart} onClick={reconnect}>Reconnect Microsoft</button>}
+      {offerSharePoint && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
+      {failure?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
     {!microsoft.prompt && <p className="check-hint">Reconnecting signs out the current Microsoft account until the new sign-in finishes.</p>}
     <details className="support-details" role="group" aria-label="Support details">

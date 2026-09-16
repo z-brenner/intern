@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
+import { GUIDE_URL, SUPPORT_LINKS } from '../src/lib/bridge';
 
 const exec = promisify(execFile);
 
@@ -78,4 +79,24 @@ it('keeps the release verifier outside Tauri binary discovery and invokes its wo
   expect(verifier.targets.filter((target: { kind: string[] }) => target.kind.includes('bin')).map((target: { name: string }) => target.name)).toEqual(['intern-release-verifier']);
   expect(release).toContain('cargo run --locked -p intern-release-verifier --');
   expect(release).not.toContain('-p intern-app --bin verify-updater-artifact');
+});
+
+// The webview may ask the shell to open a URL only through the opener plugin,
+// and the capability scope is what actually confines it. It names exactly the
+// addresses the bridge hands over - the guide and the two fixed support links -
+// so a new link cannot be added on one side without the other.
+it('scopes the opener capability to the guide and the fixed support links only', async () => {
+  const capability = JSON.parse(await readFile('src-tauri/capabilities/default.json', 'utf8'));
+  const opener = (capability.permissions as Array<string | { identifier: string; allow?: Array<{ url: string }> }>)
+    .filter((permission) => (typeof permission === 'string' ? permission : permission.identifier).startsWith('opener:'));
+
+  expect(opener).toEqual([{
+    identifier: 'opener:allow-open-url',
+    allow: [
+      { url: 'https://zgbrenner.github.io/intern/*' },
+      { url: SUPPORT_LINKS['sharepoint-site'] },
+      { url: SUPPORT_LINKS['onedrive-download'] },
+    ],
+  }]);
+  expect(GUIDE_URL.startsWith('https://zgbrenner.github.io/intern/')).toBe(true);
 });

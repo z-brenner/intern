@@ -4,14 +4,12 @@ import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import { byteCount, byteSize } from '../lib/format';
 import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from '../features/intake/microsoft';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
+import { useSupportLink } from '../features/sharepoint/useSupportLink';
 import type { SharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { modelReady, useModelSetup } from '../features/setup/useModelSetup';
 import type { AppSettings, SetupState, SharePointSetupStatus } from '../types';
 import { SettingsDialog } from './SettingsDialog';
 
-/** The fixed deployment's site, for the person to finish a sync by hand. */
-export const SHAREPOINT_SITE_URL = 'https://teamcontoso.sharepoint.com/sites/InternTestSite';
-const ONEDRIVE_DOWNLOAD_URL = 'https://www.microsoft.com/microsoft-365/onedrive/download';
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
 const RESCAN_INTERVAL_MS = 5000;
 
@@ -261,6 +259,7 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
   const [waiting, setWaiting] = useState(false);
   const [requested, setRequested] = useState(false);
   const { busy, problem, setProblem, run, mounted } = useAction();
+  const support = useSupportLink(bridge);
 
   // Pending libraries stay on this step; anything further along moves on.
   const route = (status: SharePointSetupStatus) => {
@@ -315,14 +314,15 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
       <p>OneDrive may ask you to confirm. If it does, choose Sync.</p>
       <p className="onboarding-waiting" role="status" aria-live="polite" aria-label="Library sync">Waiting for OneDrive to add the Files library. Intern checks again every few seconds. You can close Intern and finish later.</p>
     </>}
+    {support.error && <p className="onboarding-alert" role="alert">{support.error}</p>}
     {!waiting && !problem && !needsSync && <p role="status" aria-live="polite" aria-label="Library sync">Looking for the Files library on this computer…</p>}
     <div className="onboarding-actions">
       {problem?.switchAccount
         ? <button type="button" className="primary" disabled={busy} onClick={switchAccount}>Use a different account</button>
         : needsSync && !waiting && !problem && <button type="button" className="primary" disabled={busy} onClick={requestSync}>Sync Files with OneDrive</button>}
       {recovery && !problem?.switchAccount && <button type="button" className={problem ? 'primary' : undefined} disabled={busy} onClick={requested ? requestSync : check}>Try again</button>}
-      {recovery && <a className="onboarding-link" href={SHAREPOINT_SITE_URL} target="_blank" rel="noreferrer">Open SharePoint</a>}
-      {problem?.getOneDrive && <a className="onboarding-link" href={ONEDRIVE_DOWNLOAD_URL} target="_blank" rel="noreferrer">Get OneDrive</a>}
+      {recovery && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
+      {problem?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
   </>;
 }

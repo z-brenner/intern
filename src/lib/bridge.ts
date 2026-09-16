@@ -41,11 +41,26 @@ export interface SelectionBoundary {
  * The published user guide. It lives here, on the bridge, rather than in a
  * component: the desktop build hands this exact string to the operating
  * system's browser, and the Tauri capability in
- * `src-tauri/capabilities/default.json` is scoped to this origin alone. One
+ * `src-tauri/capabilities/default.json` is scoped to this site and the fixed `SUPPORT_LINKS`. One
  * constant keeps the two in step, and keeps every caller from being able to
  * ask the shell to open something else.
  */
 export const GUIDE_URL = 'https://zgbrenner.github.io/intern/guide.html';
+
+/** The fixed recovery destinations SharePoint setup can send a person to. */
+export type SupportLinkTarget = 'sharepoint-site' | 'onedrive-download';
+
+/**
+ * Where each support link goes. Like `GUIDE_URL`, these are the exact
+ * addresses `src-tauri/capabilities/default.json` admits for the opener, so
+ * the webview can open these and nothing else. The OneDrive address is
+ * Microsoft's own download page; without a locale it redirects to the
+ * visitor's language.
+ */
+export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
+  'sharepoint-site': 'https://teamcontoso.sharepoint.com/sites/InternTestSite',
+  'onedrive-download': 'https://www.microsoft.com/microsoft-365/onedrive/download',
+};
 
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
@@ -136,6 +151,12 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * capability for the sake of one help link.
    */
   openGuide(): Promise<void>;
+  /**
+   * Open one of the fixed SharePoint setup support links (`SUPPORT_LINKS`) in
+   * the user's own browser. Takes a name, not a URL, for the same reason
+   * `openGuide` takes nothing.
+   */
+  openSupportLink(target: SupportLinkTarget): Promise<void>;
   /** Whether a hosted-model key is stored, and each provider's defaults. */
   hostedModelStatus(): Promise<HostedModelStatus>;
   /**

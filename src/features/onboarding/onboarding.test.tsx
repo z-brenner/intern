@@ -246,6 +246,7 @@ describe('guided onboarding steps', () => {
     const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', pendingRescans: 2 });
     const sync = vi.spyOn(bridge, 'startSharePointSync');
     const rescan = vi.spyOn(bridge, 'getSharePointSetup');
+    const openSupportLink = vi.spyOn(bridge, 'openSupportLink').mockResolvedValue();
     render(<App bridge={bridge} />);
 
     await begin();
@@ -258,7 +259,10 @@ describe('guided onboarding steps', () => {
     expect(status).toHaveTextContent(/waiting for OneDrive/i);
     expect(screen.getByText(/OneDrive may ask you to confirm/i)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Open SharePoint' })).toHaveAttribute('href', 'https://teamcontoso.sharepoint.com/sites/InternTestSite');
+    // A link would do nothing inside the desktop app; the bridge hands the fixed site to the shell.
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open SharePoint' }));
+    await waitFor(() => expect(openSupportLink).toHaveBeenCalledWith('sharepoint-site'));
 
     const before = rescan.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
@@ -366,6 +370,7 @@ describe('guided onboarding failures', () => {
 
   it('tells the person to install or open OneDrive and never claims sync is active', async () => {
     const bridge = enabledBridge({ connected: true, failures: { startSharePointSync: [{ code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }] } });
+    const openSupportLink = vi.spyOn(bridge, 'openSupportLink').mockResolvedValue();
     render(<App bridge={bridge} />);
 
     await begin();
@@ -375,7 +380,22 @@ describe('guided onboarding failures', () => {
     expect(alert).toHaveTextContent(/^Install or open OneDrive/);
     expect(screen.getByText('ONEDRIVE_MISSING')).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Library sync' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Get OneDrive' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Get OneDrive' }));
+    await waitFor(() => expect(openSupportLink).toHaveBeenCalledWith('onedrive-download'));
+    expect(screen.getByRole('alert')).toBe(alert);
+  });
+
+  it('gives the address to type when the system browser cannot be opened', async () => {
+    const bridge = enabledBridge({ connected: true, failures: { startSharePointSync: [{ code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }] } });
+    vi.spyOn(bridge, 'openSupportLink').mockRejectedValue(new Error('opener denied'));
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await confirmAccount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync Files with OneDrive' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Get OneDrive' }));
+    expect(await screen.findByText(/could not be opened.*https:\/\/www\.microsoft\.com\/microsoft-365\/onedrive\/download/)).toBeVisible();
+    expect(screen.getByText('ONEDRIVE_MISSING')).toBeInTheDocument();
   });
 
   it('reports activation failure plainly and lets the person try again', async () => {

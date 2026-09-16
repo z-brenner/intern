@@ -132,6 +132,27 @@ describe('SharePoint connection in Settings', () => {
     expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/needs attention/i);
   });
 
+  it('offers SharePoint and the OneDrive download through the desktop shell when setup needs attention', async () => {
+    const openSupportLink = vi.fn(async () => {});
+    renderDialog(managedBridge({ openSupportLink, getSharePointSetup: vi.fn(async () => { throw { code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }; }) }));
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    await within(card).findByRole('alert');
+
+    expect(within(card).queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Open SharePoint' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Get OneDrive' }));
+    await waitFor(() => expect(openSupportLink.mock.calls).toEqual([['sharepoint-site'], ['onedrive-download']]));
+  });
+
+  it('keeps the recovery links out of the way while the connection is healthy', async () => {
+    renderDialog(managedBridge());
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    await within(card).findByText(/Active\./);
+
+    expect(within(card).queryByRole('button', { name: 'Open SharePoint' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Get OneDrive' })).not.toBeInTheDocument();
+  });
+
   it('falls back to a generic message for codes it does not know', () => {
     const generic = describeSharePointProblem('SOMETHING_NEW').action;
     expect(generic).toMatch(/try again/i);
