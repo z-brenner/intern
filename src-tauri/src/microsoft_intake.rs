@@ -151,13 +151,17 @@ fn verified_folder_web_url(
         || remote
             .get("remoteItem")
             .is_some_and(|value| !value.is_null())
+        // The driveItem and base64url drive IDs are matched exactly (the drive
+        // ID is case-sensitive; the item ID is Graph's canonical form). Only
+        // the GUIDs fold case.
         || remote["id"].as_str() != Some(deployment.intake_folder_id())
+        || remote.pointer("/parentReference/driveId").and_then(serde_json::Value::as_str)
+            != Some(deployment.drive_id())
         || [
             ("/sharepointIds/tenantId", deployment.tenant_id()),
             ("/sharepointIds/siteId", deployment.site_id()),
             ("/sharepointIds/webId", deployment.web_id()),
             ("/sharepointIds/listId", deployment.list_id()),
-            ("/parentReference/driveId", deployment.drive_id()),
         ]
         .into_iter()
         .any(|(pointer, expected)| {
@@ -360,10 +364,9 @@ impl MicrosoftIntake {
                 .eq_ignore_ascii_case(deployment.tenant_id())
                 && binding.activation_watermark.is_some_and(|value| value > 0)
                 && binding.web_id.eq_ignore_ascii_case(deployment.web_id())
-                && binding.drive_id.eq_ignore_ascii_case(deployment.drive_id())
-                && binding
-                    .folder_id
-                    .eq_ignore_ascii_case(deployment.intake_folder_id())
+                // Drive and driveItem IDs are not GUIDs and never fold case.
+                && binding.drive_id == deployment.drive_id()
+                && binding.folder_id == deployment.intake_folder_id()
                 && deployment.is_intake_folder_web_url(&binding.web_url)
         })
     }
@@ -1218,9 +1221,9 @@ mod tests {
               "site_id": "33333333-3333-3333-3333-333333333333",
               "web_id": "44444444-4444-4444-4444-444444444444",
               "list_id": "55555555-5555-5555-5555-555555555555",
-              "drive_id": "66666666-6666-6666-6666-666666666666",
-              "intake_folder_id": "77777777-7777-7777-7777-777777777777",
-              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+              "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+              "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }"#,
         )
         .unwrap()
@@ -1294,7 +1297,7 @@ mod tests {
 
     fn folder_metadata() -> serde_json::Value {
         serde_json::json!({
-            "id": "77777777-7777-7777-7777-777777777777",
+            "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
             "folder": { "childCount": 0 },
             "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
             "sharepointIds": {
@@ -1304,7 +1307,7 @@ mod tests {
                 "listId": "55555555-5555-5555-5555-555555555555"
             },
             "parentReference": {
-                "driveId": "66666666-6666-6666-6666-666666666666"
+                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO"
             }
         })
     }
@@ -1324,15 +1327,15 @@ mod tests {
             Ok((
                 account(),
                 serde_json::json!({
-                    "id": "item!123",
+                    "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
                     "eTag": "\"fresh,1\"",
                     "cTag": "\"content,1\"",
                     "name": "swap.pdf",
                     "size": 5,
                     "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/swap.pdf",
                     "parentReference": {
-                        "driveId": "66666666-6666-6666-6666-666666666666",
-                        "id": "77777777-7777-7777-7777-777777777777"
+                        "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                        "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA"
                     },
                     "sharepointIds": {
                         "tenantId": "11111111-1111-1111-1111-111111111111",
@@ -1437,8 +1440,8 @@ mod tests {
         settings_store.save(&settings).unwrap();
         let binding = FolderBinding {
             local_folder,
-            drive_id: "66666666-6666-6666-6666-666666666666".into(),
-            folder_id: "77777777-7777-7777-7777-777777777777".into(),
+            drive_id: "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO".into(),
+            folder_id: "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA".into(),
             web_url: "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
             web_id: "44444444-4444-4444-4444-444444444444".into(),
@@ -1510,6 +1513,27 @@ mod tests {
             assert!(
                 verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
                 "a missing or different web must not bind"
+            );
+        }
+
+        // The base64url drive ID is case-sensitive and the driveItem ID is
+        // held in Graph's canonical form, so neither may match by folding case.
+        for (pointer, value) in [
+            (
+                "/parentReference/driveId",
+                deployment.drive_id().to_ascii_lowercase(),
+            ),
+            (
+                "/parentReference/driveId",
+                deployment.drive_id().to_ascii_uppercase(),
+            ),
+            ("/id", deployment.intake_folder_id().to_ascii_lowercase()),
+        ] {
+            let mut metadata = folder_metadata();
+            *metadata.pointer_mut(pointer).unwrap() = value.clone().into();
+            assert!(
+                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
+                "{pointer} {value} must not bind"
             );
         }
     }
@@ -1705,8 +1729,8 @@ mod tests {
             "enabled": true,
             "bindings": [{
                 "localFolder": local_folder,
-                "driveId": "66666666-6666-6666-6666-666666666666",
-                "folderId": "77777777-7777-7777-7777-777777777777",
+                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                "folderId": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
                 "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
                 "tenantId": "11111111-1111-1111-1111-111111111111"
             }],
@@ -1726,16 +1750,8 @@ mod tests {
                 .tenant_id
                 .eq_ignore_ascii_case(deployment.tenant_id())
         );
-        assert!(
-            loaded_binding
-                .drive_id
-                .eq_ignore_ascii_case(deployment.drive_id())
-        );
-        assert!(
-            loaded_binding
-                .folder_id
-                .eq_ignore_ascii_case(deployment.intake_folder_id())
-        );
+        assert_eq!(loaded_binding.drive_id, deployment.drive_id());
+        assert_eq!(loaded_binding.folder_id, deployment.intake_folder_id());
         assert!(deployment.is_intake_folder_web_url(&loaded_binding.web_url));
         let candidate = Path::new(&loaded_binding.local_folder).join("agreement.pdf");
         assert!(within(&candidate, &loaded_binding.local_folder));
@@ -1806,6 +1822,65 @@ mod tests {
             vec![binding]
         );
         drop(restarted);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    #[test]
+    fn a_binding_whose_drive_or_folder_id_differs_only_in_case_requires_re_pairing() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-binding-case-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        let inbox = data.join("Inbox");
+        fs::create_dir_all(&inbox).unwrap();
+        let settings = AppSettings {
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let intake =
+            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+        let deployment = intake.deployment().unwrap().clone();
+        let local = inbox.canonicalize().unwrap();
+        let binding = intake
+            .persist_verified_binding(
+                &deployment,
+                intake.generation.load(Ordering::SeqCst),
+                &settings,
+                &local,
+                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            )
+            .unwrap();
+        let candidate = local.join("agreement.pdf");
+        assert_eq!(
+            intake.scope(&candidate, &settings).unwrap(),
+            Some(binding.clone())
+        );
+
+        for altered in [
+            FolderBinding {
+                drive_id: binding.drive_id.to_ascii_lowercase(),
+                ..binding.clone()
+            },
+            FolderBinding {
+                folder_id: binding.folder_id.to_ascii_lowercase(),
+                ..binding.clone()
+            },
+        ] {
+            intake.config.lock().unwrap().bindings = vec![altered];
+            assert_eq!(
+                intake.scope(&candidate, &settings).unwrap_err(),
+                PAIR_REQUIRED
+            );
+        }
+        drop(intake);
         let _ = fs::remove_dir_all(data);
     }
 

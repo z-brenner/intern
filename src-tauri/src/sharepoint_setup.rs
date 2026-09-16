@@ -511,9 +511,8 @@ impl<'a> SharePointSetup<'a> {
             && identity
                 .list_id
                 .eq_ignore_ascii_case(self.deployment.list_id())
-            && identity
-                .drive_id
-                .eq_ignore_ascii_case(self.deployment.drive_id())
+            // A base64url drive ID is case-sensitive.
+            && identity.drive_id == self.deployment.drive_id()
     }
 
     fn restore_local_activation(
@@ -975,7 +974,7 @@ mod tests {
     const SITE_ID: &str = "cccccccc-cccc-cccc-cccc-cccccccccccc";
     const WEB_ID: &str = "dddddddd-dddd-dddd-dddd-dddddddddddd";
     const LIST_ID: &str = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
-    const DRIVE_ID: &str = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    const DRIVE_ID: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
 
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -991,9 +990,9 @@ mod tests {
                 "site_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
                 "web_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
                 "list_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
-                "drive_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
-                "intake_folder_id": "11111111-1111-1111-1111-111111111111",
-                "destination_folder_id": "22222222-2222-2222-2222-222222222222"
+                "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+                "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }"#,
         )
         .expect("enabled test deployment")
@@ -1642,6 +1641,20 @@ mod tests {
             PathBuf::from(r"C:\Sync\Files-A"),
             RemoteLibraryIdentity {
                 site_id: "99999999-9999-9999-9999-999999999999".into(),
+                ..identity(r"C:\Sync\Files-A")
+            },
+        );
+
+        assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_UNVERIFIED");
+    }
+
+    #[test]
+    fn a_drive_id_differing_only_in_case_is_a_different_library() {
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files-A");
+        rig.verifier.identities.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Files-A"),
+            RemoteLibraryIdentity {
+                drive_id: DRIVE_ID.to_ascii_lowercase(),
                 ..identity(r"C:\Sync\Files-A")
             },
         );

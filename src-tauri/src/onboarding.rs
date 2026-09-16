@@ -274,9 +274,9 @@ mod tests {
         "site_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
         "web_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
         "list_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
-        "drive_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
-        "intake_folder_id": "11111111-1111-1111-1111-111111111111",
-        "destination_folder_id": "22222222-2222-2222-2222-222222222222"
+        "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+        "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+        "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
     }"#;
 
     fn deployment(enabled: bool) -> Vec<u8> {

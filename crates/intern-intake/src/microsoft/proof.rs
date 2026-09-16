@@ -250,15 +250,24 @@ fn fresh_facts(
     if text(metadata, "/name")? != filename {
         return Err("The Microsoft filename does not match the local file.");
     }
-    for (pointer, expected) in [
-        ("/sharepointIds/tenantId", deployment.tenant_id()),
-        ("/sharepointIds/siteId", deployment.site_id()),
-        ("/sharepointIds/webId", deployment.web_id()),
-        ("/sharepointIds/listId", deployment.list_id()),
-        ("/parentReference/driveId", deployment.drive_id()),
-        ("/parentReference/id", deployment.intake_folder_id()),
+    // GUIDs compare case-insensitively. The base64url drive ID is
+    // case-sensitive and the opaque driveItem ID is held in the canonical form
+    // Graph returns, so both must match exactly.
+    for (pointer, expected, exact) in [
+        ("/sharepointIds/tenantId", deployment.tenant_id(), false),
+        ("/sharepointIds/siteId", deployment.site_id(), false),
+        ("/sharepointIds/webId", deployment.web_id(), false),
+        ("/sharepointIds/listId", deployment.list_id(), false),
+        ("/parentReference/driveId", deployment.drive_id(), true),
+        ("/parentReference/id", deployment.intake_folder_id(), true),
     ] {
-        if !text(metadata, pointer)?.eq_ignore_ascii_case(expected) {
+        let actual = text(metadata, pointer)?;
+        let matches = if exact {
+            actual == expected
+        } else {
+            actual.eq_ignore_ascii_case(expected)
+        };
+        if !matches {
             return Err(
                 "The Microsoft item is outside the provisioned tenant, site, library, or Inbox.",
             );

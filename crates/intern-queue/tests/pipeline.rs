@@ -3280,9 +3280,10 @@ fn retryable_apply_during_approval_preserves_ready_proposal() {
     assert!(!completed.source_path.exists());
 }
 
+// Synthetic identifiers shaped like real Microsoft Graph values; none are real.
 const SNAPSHOT_TENANT: &str = "11111111-1111-1111-1111-111111111111";
-const SNAPSHOT_DRIVE: &str = "66666666-6666-6666-6666-666666666666";
-const SNAPSHOT_INBOX: &str = "77777777-7777-7777-7777-777777777777";
+const SNAPSHOT_DRIVE: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
+const SNAPSHOT_INBOX: &str = "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA";
 const SNAPSHOT_ME: &str = "99999999-9999-9999-9999-999999999999";
 const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
@@ -3308,7 +3309,7 @@ impl FreshUploadMetadata for ProofSnapshotGuard {
                 user_principal_name: "pat@example.test".into(),
             },
             json!({
-                "id": "item!123",
+                "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
                 "eTag": "\"fresh,1\"",
                 "cTag": "\"content,1\"",
                 "name": "swap.pdf",
@@ -3426,7 +3427,7 @@ fn extraction_reads_the_owned_verified_snapshot_across_a_source_swap_and_restore
               "list_id": "55555555-5555-5555-5555-555555555555",
               "drive_id": "{SNAPSHOT_DRIVE}",
               "intake_folder_id": "{SNAPSHOT_INBOX}",
-              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }}"#
         )
         .as_bytes(),
