@@ -526,9 +526,11 @@ mod tests {
             self.0.load(Ordering::SeqCst)
         }
     }
+    /// One recorded request: URL, whether it was a POST, and its form fields.
+    type Call = (String, bool, Vec<(String, String)>);
     struct Fake {
         replies: Mutex<VecDeque<Reply>>,
-        calls: Mutex<Vec<(String, bool, Vec<(String, String)>)>>,
+        calls: Mutex<Vec<Call>>,
         audit_calls: Mutex<usize>,
     }
     impl Fake {

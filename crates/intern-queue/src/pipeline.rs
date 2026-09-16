@@ -1467,7 +1467,7 @@ impl Pipeline {
         let verified = self.admission.authorize(&item.source_path, stage)?;
         if verified
             .verified_hash()
-            .is_some_and(|hash| hash != &item.source_hash)
+            .is_some_and(|hash| *hash != item.source_hash)
         {
             return Err(PipelineError::new(
                 "UPLOADER_UNVERIFIED",
