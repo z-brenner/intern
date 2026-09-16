@@ -65,8 +65,10 @@ acceptance" below).
 - The layout has changed over time. Parsers handle both
   `ClientPolicy_<list><site>.ini` and `ClientPolicy_<list>_<site>.ini`, and
   version 23.184 replaced `<cid>.dat` with `SyncEngineDatabase.db`. Our parser
-  is strict: a `libraryScope` line it cannot fully parse makes the whole
-  source fail closed (`SHAREPOINT_ROOT_RECORD_MALFORMED`). It never guesses.
+  is strict about each line and never guesses at a field, but it is lenient
+  about lines it cannot parse: such a line is set aside, and it blocks
+  verification (`SHAREPOINT_ROOT_RECORD_MALFORMED`) only when it could be the
+  candidate's own record. See "Verification rules" below.
 
 ### 2. `HKCU\Software\Microsoft\OneDrive\Accounts\Business<N>\ScopeIdToMountPointPathCache` (chosen, as corroboration)
 
@@ -167,52 +169,175 @@ We did not widen Graph confinement.
   drive, and `sharepointIds.{tenantId,siteId,webId,listId}` must equal the
   packaged IDs in the same response. A setup-time call would only repeat
   that check, and it would need a new allowlisted endpoint.
-- The sync records have no Graph drive ID. The verifier therefore takes
-  `drive_id` from the packaged deployment, and only after tenant, site, web,
-  and list are proven locally. That is explicit in
-  `src-tauri/src/sharepoint_root_verifier.rs`.
+- The sync records have no Graph drive ID, so the verifier returns none: the
+  local identity (`RemoteLibraryIdentity`) is tenant, site, web, and list
+  only. The packaged drive is proven per item by Graph at admission
+  (`parentReference.driveId` together with `sharepointIds`). That is explicit
+  in `src-tauri/src/sharepoint_root_verifier.rs`.
 
 ## Verification rules (implemented)
 
-`intern_intake::onedrive_identity::verify_library_root`:
+### Record checks
 
-1. Read only `Business1` to `Business9` accounts. Take the single `cid` from
-   `global.ini`; it must be `[A-Za-z0-9-]{1,64}`, so it cannot name another
-   file. If `global.ini` or `<cid>.ini` is missing, or `cid` is empty, the
-   account has nothing enrolled and the result is `Ok(None)`.
-2. Parse every `libraryScope` line strictly: UTF-16LE with an optional BOM,
-   quoted fields, at least 13 fields, a numeric index, a 32-hex scope ID, a
-   dashed or braced GUID for the tenant, and 32 hex digits for site, web, and
-   list (the scope ID may carry a `+<digits>` suffix, which is ignored). Any
-   failure returns `SHAREPOINT_ROOT_RECORD_MALFORMED`.
-3. Ignore records with an empty mount (subfolder-only syncs). Compare mounts
-   with the candidate component by component, case-insensitively, reusing
-   `cloud::path_components`.
-4. No record at the candidate returns `Ok(None)`. More than one record at
-   the candidate, across all accounts, returns
-   `SHAREPOINT_ROOT_RECORD_CONFLICT`.
-5. The record's tenant, site, web, and list must all equal the deployment's.
-   GUIDs are compared case-, dash-, and brace-insensitively; otherwise the
-   result is `Ok(None)`. Titles and URLs are never consulted.
-6. If the provisioned library is mounted at more than one folder, the result
-   is `SHAREPOINT_ROOT_RECORD_CONFLICT`.
-7. The account's `ScopeIdToMountPointPathCache` must map this scope ID to the
-   same folder. If the scope is absent, the result is `Ok(None)` (sync not
-   settled). If the scope maps to another folder, or another scope maps to
-   this folder, the result is `SHAREPOINT_ROOT_RECORD_CONFLICT`.
-8. A source that exists but cannot be read returns
-   `SHAREPOINT_ROOT_RECORD_UNAVAILABLE`. A settings file over 4 MiB is
-   malformed.
+`intern_intake::onedrive_identity::verify_library_root` decides for one
+candidate folder. The candidate has already been canonicalized by the setup
+service. The function takes the connected Microsoft account's mail and user
+principal name, plus the setup service's canonicalizer.
 
-The setup service then applies its own checks: the canonical `local_root`
-must equal the candidate and every identifier must match; more than one
-verified root is ambiguous; and the Inbox and Filed folders are resolved
-under the verified root.
+1. **Deployment IDs.** The deployment's tenant, site, web, and list are
+   normalized to 32 lowercase hex digits. Dashed, braced, and bare GUIDs are
+   accepted. A deployment ID that cannot be normalized returns
+   `SHAREPOINT_ROOT_RECORD_MALFORMED`.
+2. **Accounts.** Only `Business1` to `Business9` are read.
+   - The settings folder not existing means no accounts.
+   - A settings folder that cannot be listed returns
+     `SHAREPOINT_ROOT_RECORD_UNAVAILABLE`.
+3. **Each account's records.**
+   - **Nothing enrolled yet.** The account is skipped with no registry read
+     when `global.ini` is absent, it has no `cid = ` line, the `cid` is empty,
+     or `<cid>.ini` is absent.
+   - **Unreadable file.** A file that exists but cannot be read returns
+     `SHAREPOINT_ROOT_RECORD_UNAVAILABLE` for the whole check.
+   - **The whole account is malformed** when any of these hold. Nothing in it
+     is trusted, and the malformed-record rule below decides whether that
+     matters.
+     - a file is not valid UTF-16LE (an optional byte-order mark is allowed);
+     - a file is over 4 MiB;
+     - there are two `cid` lines;
+     - the `cid` is not `[A-Za-z0-9-]{1,64}`, so it cannot name another file.
+   - **Line parsing.** Every `libraryScope = ` line is parsed strictly:
+     - space- or tab-separated fields, where a quoted field runs to the next
+       `"`, and no stray or unterminated quotes;
+     - at least 13 fields, with a numeric index;
+     - a scope ID of 32 hex digits, optionally with a `+<digits>` suffix that
+       is dropped;
+     - a tenant written as a dashed or braced GUID;
+     - site, web, and list of exactly 32 hex digits.
+
+     A line that fails is set aside as malformed (kept lowercased) rather
+     than failing the account. It may belong to any library the person
+     syncs.
+4. **Registry corroboration.** The account's `ScopeIdToMountPointPathCache`
+   is read.
+   - Each value name is normalized as a scope ID. One that cannot be
+     normalized is kept as "unknown scope".
+   - Each path is canonicalized through the setup filesystem, or compared as
+     written if it does not canonicalize.
+   - **Folder comparison.** All folder comparisons use `cloud::path_components`
+     on both sides: case-insensitive, component by component, with `\\?\`
+     and `\\.\` prefixes removed. This is why a junctioned or redirected
+     profile folder recorded as `C:\…` matches a candidate that canonicalized
+     to `\\?\D:\…`.
+5. **Malformed records fail closed only when they could be the candidate's.**
+   If the account has malformed input, and its cache maps any scope to the
+   candidate folder, the result is `SHAREPOINT_ROOT_RECORD_MALFORMED` in
+   these cases:
+   - the scope ID is unknown;
+   - the whole account is malformed;
+   - a malformed line contains that scope ID;
+   - no well-formed record has that scope ID.
+
+   Otherwise the malformed input belongs to some other library and is ignored.
+6. **Which records take part.** A well-formed record takes part only when
+   both of these hold:
+   - its mount is not empty. An empty mount is a subfolder-only sync on
+     separate `libraryFolder` lines, not the library root.
+   - the same account's cache maps the same scope ID to the same folder.
+
+   An uncorroborated record, such as one left behind by an unlinked account,
+   neither verifies nor conflicts.
+7. **Records at the candidate.** No corroborated record at the candidate
+   returns `Ok(None)`. More than one, across all accounts and whatever their
+   IDs, returns `SHAREPOINT_ROOT_RECORD_CONFLICT` ("folder records").
+8. **Identifiers.** The record's tenant, site, web, and list must all equal
+   the deployment's after normalization. Otherwise the result is `Ok(None)`.
+   Titles and URLs are never consulted.
+9. **Account slot.** The OneDrive account holding the record must be signed in
+   as the connected account. Its `Accounts\Business<N>\UserEmail`, trimmed
+   and non-empty, must equal the connected mail or UPN, ignoring case.
+   Otherwise the result is `Ok(None)`: a library synced by someone else's
+   OneDrive account on this computer is not this person's enrollment.
+10. **One sync of the library.** Corroborated records of the provisioned
+    library are counted only in slots signed in as the connected account. If
+    there are more than one, the library is synced at two folders and the
+    result is `SHAREPOINT_ROOT_RECORD_CONFLICT` ("library records"). Another
+    person's OneDrive account syncing the same library does not count.
+11. **Scope cache consistency.** In the holding account's cache, no other
+    scope may map to the candidate, and this scope may map nowhere else.
+    Either case returns `SHAREPOINT_ROOT_RECORD_CONFLICT` ("scope cache
+    path").
+12. Otherwise the tenant, site, web, and list are returned as dashed GUIDs.
+
+`OneDriveRecordVerifier` (`src-tauri/src/sharepoint_root_verifier.rs`) is the
+production adapter.
+- It passes the connected account's mail and UPN, and canonicalizes recorded
+  folders through the same `SetupFileSystem` that canonicalized the
+  candidate.
+- It maps a `RecordError` to its stable `{ code, message }`.
+- It returns the candidate itself as `local_root`, with no drive.
+
+### Setup service
+
+`src-tauri/src/sharepoint_setup.rs` then applies its own checks.
+
+- **Before any record is read**, these are required, in order:
+  - OneDrive is installed (a real `OneDrive.exe`), else `ONEDRIVE_MISSING`.
+  - Some `Business<N>` slot has a `UserEmail`, else `ONEDRIVE_ACCOUNT_MISSING`.
+  - A Microsoft account is connected, else `MICROSOFT_ACCOUNT_MISSING`.
+  - That account has a GUID object ID in the deployment tenant, else
+    `MICROSOFT_ACCOUNT_WRONG_TENANT`.
+  - Some `Business<N>` slot's `UserEmail` equals its mail or UPN, compared the
+    same way as rule 9, else `ONEDRIVE_ACCOUNT_MISMATCH`.
+- **Candidates** are the SharePoint roots `detect_cloud_roots` found. Each is
+  canonicalized; ones that do not canonicalize are dropped, and duplicates
+  are removed.
+- **Per-candidate errors.** A verifier error for one candidate fails closed
+  for that candidate only. The scan continues, and the first error is kept.
+  Another synced SharePoint or Teams library that does not verify never
+  blocks setup.
+- **Verified candidates.** A verified identity must name the candidate and
+  match every deployment ID again.
+  - Overlapping verified roots return `SHAREPOINT_ROOT_NESTED`.
+  - More than one verified root returns `SHAREPOINT_ROOT_AMBIGUOUS`.
+  - With exactly one, `Files/Inbox` and `Files/Filed` are resolved as direct,
+    separate children of it.
+  - `start_sync` and `activate` also probe writability; `status` never writes.
+- **No verified root.**
+  - `status` and `start_sync` report `enrollment_pending`, and `start_sync`
+    still asks OneDrive to sync through `odopen://`.
+  - When a kept verifier error is the reason, that status carries it as
+    `problem: { code, message }`; otherwise `problem` is `null`. Onboarding's
+    sync step and the Settings SharePoint card show that problem in plain
+    language with its support code while they keep waiting and rescanning.
+    Persistent record trouble is therefore never a silent wait.
+  - `activate` returns the kept error, or `SHAREPOINT_SYNC_PENDING` when there
+    is none.
 
 Every test fixture is synthetic. Each follows the layout above, and the
 fixtures are labelled as synthetic in the code. The parser was also run once,
 ad hoc, against this machine's real Personal `libraryScope` line. It parsed
 the line and produced the site and list IDs that `ClientPolicy.ini` records.
+
+### Not yet confirmed on a real tenant
+
+- **Record format.** The Business `libraryScope` layout, field positions, and
+  tenant spelling (see the table above).
+- **Scope ID spelling.** The `+<digits>` scope-ID suffix, and whether the
+  registry value name carries it.
+- **Removal.** Whether unsyncing removes both the `.ini` line and the registry
+  cache entry, and in what order.
+- **`UserEmail` values.** Whether `UserEmail` holds the mail or the UPN for
+  accounts where they differ.
+- **Renamed accounts (review finding N3).** A UPN change can leave OneDrive's
+  cached `UserEmail` on the old name. The string comparison then reports
+  `ONEDRIVE_ACCOUNT_MISMATCH` from `status` even after activation, and
+  onboarding completion is refused.
+  - This fails closed. Admission is unaffected, because it compares Graph
+    object IDs.
+  - No change is made until pilot telemetry shows it happens.
+- **Two OneDrive accounts.** Two OneDrive work accounts on one Windows profile
+  both syncing the library. The rules above let the connected person's sync
+  verify; this has not been exercised against the real client.
 
 ## Release acceptance (required before enabling the deployment)
 
