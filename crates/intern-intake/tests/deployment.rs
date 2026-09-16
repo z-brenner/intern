@@ -1,5 +1,16 @@
 use intern_intake::SharePointDeployment;
 
+const ID_FIELDS: [&str; 8] = [
+    "tenant_id",
+    "client_id",
+    "site_id",
+    "web_id",
+    "list_id",
+    "drive_id",
+    "intake_folder_id",
+    "destination_folder_id",
+];
+
 // These identifiers are synthetic test data shaped like real Microsoft Graph
 // values (GUIDs, a `b!` base64url drive ID, and `01` base32 driveItem IDs).
 // They are not tenant, application, or SharePoint identifiers and cannot
@@ -246,17 +257,38 @@ fn rejects_invalid_emails_for_onedrive_sync() {
     }
 }
 
+/// Guards the packaged resource itself: it must either stay disabled, or be
+/// enabled with identifiers that pass full validation. A future edit that
+/// enables it with a missing or malformed identifier fails here, not in a
+/// shipped build.
 #[test]
-fn disabled_bundled_configuration_reports_that_identifiers_are_unavailable() {
-    let error = SharePointDeployment::from_slice(include_bytes!(
-        "../../../src-tauri/resources/sharepoint-deployment.json"
-    ))
-    .unwrap_err();
+fn the_packaged_deployment_is_disabled_or_fully_valid() {
+    let packaged: &[u8] = include_bytes!("../../../src-tauri/resources/sharepoint-deployment.json");
+    let raw: serde_json::Value = serde_json::from_slice(packaged).unwrap();
 
-    assert_eq!(
-        error.to_string(),
-        "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
-    );
+    match raw["enabled"].as_bool() {
+        Some(false) => {
+            assert_eq!(
+                SharePointDeployment::from_slice(packaged)
+                    .unwrap_err()
+                    .to_string(),
+                "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
+            );
+            // Flipping only the switch cannot enable a resource whose
+            // identifiers were never provisioned.
+            if ID_FIELDS.iter().any(|field| raw[*field].is_null()) {
+                let mut enabled = raw.clone();
+                enabled["enabled"] = true.into();
+                assert!(SharePointDeployment::from_slice(enabled.to_string().as_bytes()).is_err());
+            }
+        }
+        Some(true) => {
+            let deployment = SharePointDeployment::from_slice(packaged)
+                .expect("an enabled packaged deployment must pass validation");
+            deployment.validate().unwrap();
+        }
+        None => panic!("the packaged deployment must declare enabled as a boolean"),
+    }
 }
 
 #[test]
