@@ -22,8 +22,9 @@ anything is unsupported, the document goes to review instead of being renamed.
 
 With local inference selected, document text, extracted pages, OCR output and
 model prompts stay on the machine. There is no telemetry or automatic cloud
-inference fallback. Optional Microsoft upload verification uses account, file
-metadata and audit APIs, not remote document analysis.
+inference fallback. Microsoft upload verification, in builds provisioned for
+the SharePoint deployment, reads account and file metadata only, never
+document content.
 
 Without either optional integration enabled, Intern has two network features,
 neither carrying document information:
@@ -50,11 +51,14 @@ system's credential store rather than in any Intern file, and **Test
 connection** sends only Intern's own calibration document. If the promise
 above is why you use Intern, leave hosted inference off.
 
-**Microsoft upload verification** is a separate, opt-in account and audit
-connection for shared intake. It sends Microsoft item paths and time ranges
-and reads identity/metadata, never document text. It requires administrator
-setup and broader audit permissions than a folder-only metadata lookup.
-Unknown uploaders stay held. See [setup and limitations](docs/microsoft-upload-verification.md).
+**Microsoft upload verification** is the account connection for the
+SharePoint deployment. It exists only in builds an administrator has
+provisioned with the deployment's public identifiers. It uses delegated
+`User.Read`, `Files.Read`, and `offline_access` permissions to read the
+connected account and each Inbox file's metadata, never document text, and it
+does not search audit logs. Unknown uploaders stay held. See
+[upload verification](docs/microsoft-upload-verification.md) and the
+[administrator guide](docs/sharepoint-deployment.md).
 
 Intern reads documents as text: native PDF text first, OCR when a page has none,
 and no vision model. The projector for this model is 668,227,264 bytes — 637 MiB,
@@ -138,19 +142,33 @@ folder** to watch: documents that appear in it are analyzed and, once approved
 destination folder under their new name.
 
 Files continue to move through the **Microsoft sync client**. Shared intake
-now defaults to strict Microsoft uploader verification rather than assuming
-that a file first seen on this machine was uploaded by its user. Unknown
-uploaders stay out of the processing queue, including manual imports from the
-protected folder. Ordinary manual documents outside intake stay local.
+uses strict Microsoft uploader verification rather than assuming that a file
+first seen on this machine was uploaded by its user. Unknown uploaders stay out
+of the processing queue, including manual imports from the protected folder.
+Ordinary manual documents outside intake stay local.
 
-In Settings, connect your Microsoft work/school account and pair the saved
-intake with its Microsoft drive/folder IDs. Your authenticated name/email is
-shown; the underlying tenant and account IDs decide ownership. Only actual,
-unambiguous upload-event evidence permits processing. The first connector
-supports new unchanged uploads, not arbitrary edits/moves/overwrites or
-personal OneDrive. Account setup requires an administrator, and Microsoft
-may delay upload audit records. Read the [pilot setup and limitations](docs/microsoft-upload-verification.md)
-before enabling it. No live tenant compatibility is implied by unit tests.
+Intern supports one shared library: `Files` on
+`teamcontoso.sharepoint.com/sites/InternTestSite`, watching `Files/Inbox` and
+filing into `Files/Filed`. In a build provisioned for it, Intern opens with a
+short guided setup. It downloads the model if needed, connects your Microsoft
+work account (you confirm the name and email Microsoft returns), asks OneDrive
+to sync the library, and turns on filing, running in the background and at
+sign-in. Nothing asks for a folder, tenant, or identifier. Afterwards Settings
+shows a read-only **SharePoint connection** card.
+
+Only documents you upload directly into `Files/Inbox` after setup, unchanged,
+are filed. Documents uploaded by anyone else, or that cannot be verified, stay
+untouched in the Inbox. SharePoint metadata cannot always tell a copy or move
+by the same person from a direct upload, so upload directly. If your
+organization blocks the Microsoft connection, setup says so and asks you to
+contact your IT administrator.
+
+The build published here has no deployment identifiers, so it shows no guided
+setup, and a folder in a OneDrive or SharePoint sync root cannot be saved as a
+watched intake. The [administrator guide](docs/sharepoint-deployment.md) lists
+what a provisioned build needs, and the tenant-backed acceptance run required
+before any live SharePoint compatibility is claimed. No live tenant
+compatibility is implied by unit tests.
 
 Several machines can coordinate using `.intern/` claim files and the existing
 filed index. Sync-based leases are best-effort, not an exactly-once guarantee.

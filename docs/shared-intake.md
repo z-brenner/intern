@@ -17,19 +17,36 @@ library synced with **Sync** or **Add shortcut to OneDrive**. Intern detects
 sync roots and labels the folder in Settings ("Synced with OneDrive – Contoso",
 "Synced with SharePoint – Contoso") so you can see what you picked.
 
-Shared upload identity is now verified through the opt-in Microsoft connector.
-This changes the older sync-only design: the app contacts Microsoft for
-account/file metadata and actual upload audit events. It never sends document
-text through that connector, but it sends paths/time ranges, creates audit
-searches and requires administrator-approved audit scopes. The precise setup,
-privacy costs and supported initial-upload cases are in
-[Microsoft upload verification](microsoft-upload-verification.md).
+Shared upload identity is verified through Microsoft, and only for the one
+SharePoint library a build is provisioned for: `Files/Inbox` on the
+`InternTestSite` site. Intern reads the connected account and each file's
+drive-item metadata (who created and last modified it, when, its size,
+checksum, and revision). It does not search audit logs, and it never sends
+document text to Microsoft. The checks are in
+[Microsoft upload verification](microsoft-upload-verification.md). How an
+administrator enables a build, and what users see, is in
+[SharePoint deployment](sharepoint-deployment.md).
+
+In a build with the deployment enabled, guided onboarding connects the
+Microsoft account, has OneDrive sync the library, verifies the synced folder
+from OneDrive's own records, and then sets the watched intake to `Files/Inbox`
+and the destination to `Files/Filed`. Settings shows a read-only SharePoint
+connection card instead of the folder controls described below, and Intern
+enforces those values on every save. Users must upload each document directly
+into `Files/Inbox`; documents from anyone else, or that cannot be verified,
+stay where they are.
+
+In a build without the deployment (the shipped default), Microsoft
+verification is unavailable. Settings accepts a watched intake folder only when
+it is private and local; a folder in a OneDrive or SharePoint sync root, or on
+a network share, cannot be saved as an intake, and documents in one saved
+earlier stay held.
 
 Files On-Demand are not read by Intern until uploader verification succeeds.
 Once permitted, the sync client may hydrate a file for the local/cloud checksum
 comparison. An unavailable file remains held, never inferred from who synced
-it first. Personal OneDrive and unpaired/ambiguous roots stay unverified in this
-initial connector.
+it first. Personal OneDrive and any library other than the provisioned one stay
+unverified.
 
 A failure while the content is still in the cloud is not a verdict on the
 document, because nothing ever read it. Intern holds the claim open in that
@@ -43,6 +60,10 @@ recorded as one. A laptop that spends a trip offline therefore returns to a
 folder it can still work on, instead of one full of tombstones.
 
 ## Watching a folder
+
+The rest of this document describes the watcher and the shared-folder protocol
+underneath both modes. With the SharePoint deployment enabled, onboarding
+chooses the folders and these Settings controls are hidden.
 
 Enable **Watch a folder** in Settings and pick the intake folder. The watcher
 scans on a short interval — polling, not filesystem events, because sync
@@ -107,8 +128,8 @@ several machines watching the same share coordinate through exactly the same
 filesystem, so claim creation is genuinely exclusive there, and the
 eventual-consistency caveats below do not apply. What the share does not do is
 hydrate anything; every file on it is already local to every machine.
-The network share alone does not establish a Microsoft uploader, so strict
-mode holds its files unless a supported Microsoft pairing and evidence exist.
+The network share alone does not establish a Microsoft uploader, so a share
+cannot be saved as a watched intake, and files in one saved earlier are held.
 
 ## Several machines, one intake folder
 
@@ -188,11 +209,13 @@ exact-bytes check.
 
 ### Whose documents are they?
 
-In strict shared-intake mode, Microsoft's authenticated account and upload
-event establish identity before any claim or content read. Only matching
-verified uploads are eligible by default. Other verified people are held;
-unknowns remain held even when team-worker mode is selected. Existing queued
-items, retries and manual imports from protected roots obey the same gate.
+In strict shared-intake mode, Microsoft's authenticated account and the file's
+drive-item metadata establish identity before any claim or content read. Only
+fresh, unchanged uploads created by the connected account after filing was
+turned on are eligible. Other verified people are held; unknowns remain held
+even when team-worker mode is selected. Existing queued items, retries and
+manual imports from protected roots obey the same gate. A held document stays
+untouched in the folder and is checked again on later scans.
 
 Origin markers are retained only for coordination and the explicit private
 local-folder mode. They do not identify a Microsoft uploader. In particular,
@@ -200,7 +223,7 @@ seeing a new local file with no marker proves nothing about who uploaded it.
 The separate `uploaderUnknown` count and per-file reasons expose unresolved
 identity instead of silently crediting the current machine. Local attribution
 keeps uploader, actual analysis processor and applied filename distinct; it is
-not a cross-machine Microsoft audit dashboard.
+not a cross-machine record of Microsoft activity.
 
 ### What the shared folder learns about you
 
