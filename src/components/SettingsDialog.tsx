@@ -219,9 +219,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [testError, setTestError] = useState('');
   const [rules, setRules] = useState<LearnedRule[]>();
   const [rulesError, setRulesError] = useState('');
-  // Unknown until the backend answers, and treated as unmanaged meanwhile, so a
-  // build without the deployment renders exactly as it always has.
-  const [managed, setManaged] = useState(false);
+  // Unknown (undefined) until the backend answers. The shared-intake and
+  // background controls wait for the answer, so a managed build never flashes
+  // manual pairing; a build without the deployment, or a failed read, shows
+  // them exactly as it always has.
+  const [managed, setManaged] = useState<boolean>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
@@ -261,7 +263,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     let active = true;
     void Promise.resolve().then(() => bridge.getOnboarding())
       .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
-      .catch(() => { /* Without an answer the manual settings stay, and the backend still enforces its policy on save. */ });
+      // Without an answer the manual settings stay, and the backend still enforces its policy on save.
+      .catch(() => { if (active) setManaged(false); });
     return () => { active = false; };
   }, [bridge]);
   // The destination field focused on open is not rendered once the connection
@@ -509,7 +512,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         </div>}
       </section>
       {managed && !hideSharePointConnection && <SharePointConnection bridge={bridge} settings={settings} />}
-      {!managed && <><section className="settings-group">
+      {managed === undefined && <section className="settings-group">
+        <p className="check-hint" role="status" aria-label="Loading intake settings">Checking how this computer is set up…</p>
+      </section>}
+      {managed === false && <><section className="settings-group">
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>

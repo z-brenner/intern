@@ -355,13 +355,12 @@ describe('SharePoint connection in Settings', () => {
     expect(alert).toHaveTextContent('(SHAREPOINT_ACTIVATION_IN_PROGRESS)');
   });
 
-  it('never sends managed values that differ from what was loaded, and sends the machine name as edited', async () => {
+  it('never sends managed values that differ from what was loaded', async () => {
     // A draft edited before the deployment status arrived must not leak through.
     let resolveOnboarding!: (value: OnboardingStatus) => void;
     const bridge = managedBridge({ getOnboarding: vi.fn(() => new Promise<OnboardingStatus>((done) => { resolveOnboarding = done; })) });
     const { onSave } = renderDialog(bridge);
-    fireEvent.change(screen.getByLabelText('Intake folder'), { target: { value: 'C:\\Elsewhere' } });
-    fireEvent.change(screen.getByLabelText("This machine's name"), { target: { value: 'Changed' } });
+    fireEvent.change(screen.getByLabelText('Destination folder'), { target: { value: 'C:\\Elsewhere' } });
     await waitFor(() => expect(bridge.getOnboarding).toHaveBeenCalled());
     await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
     await screen.findByRole('region', { name: 'SharePoint connection' });
@@ -369,8 +368,38 @@ describe('SharePoint connection in Settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
-    // The backend does not manage the machine name, so it is not reset.
-    expect(onSave).toHaveBeenCalledWith({ ...managedSettings, machineLabel: 'Changed' });
+    expect(onSave).toHaveBeenCalledWith(managedSettings);
+  });
+
+  it('shows no shared-intake or pairing controls until it knows whether this build is managed', async () => {
+    let resolveOnboarding!: (value: OnboardingStatus) => void;
+    const bridge = managedBridge({ getOnboarding: vi.fn(() => new Promise<OnboardingStatus>((done) => { resolveOnboarding = done; })) });
+    renderDialog(bridge);
+    await waitFor(() => expect(bridge.getOnboarding).toHaveBeenCalled());
+
+    expect(screen.getByRole('status', { name: 'Loading intake settings' })).toBeVisible();
+    expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Watch a folder for new documents')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("This machine's name")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Run in background')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect my Microsoft account' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
+
+    await act(async () => { resolveOnboarding({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true }); });
+    expect(await screen.findByRole('region', { name: 'SharePoint connection' })).toBeVisible();
+    expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
+  });
+
+  it('keeps the manual controls when the onboarding status cannot be read', async () => {
+    const bridge = managedBridge({ getOnboarding: vi.fn(async () => { throw { code: 'ONBOARDING_STATE_UNREADABLE', message: 'corrupt' }; }) });
+    renderDialog(bridge);
+
+    expect(await screen.findByLabelText('Intake folder')).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeVisible();
+    expect(screen.queryByRole('status', { name: 'Loading intake settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
   });
 
   it('leaves Settings unchanged when this build has no SharePoint deployment', async () => {
