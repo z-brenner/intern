@@ -355,7 +355,7 @@ describe('SharePoint connection in Settings', () => {
     expect(alert).toHaveTextContent('(SHAREPOINT_ACTIVATION_IN_PROGRESS)');
   });
 
-  it('never sends managed values that differ from what was loaded', async () => {
+  it('never sends managed values that differ from what was loaded, and sends the machine name as edited', async () => {
     // A draft edited before the deployment status arrived must not leak through.
     let resolveOnboarding!: (value: OnboardingStatus) => void;
     const bridge = managedBridge({ getOnboarding: vi.fn(() => new Promise<OnboardingStatus>((done) => { resolveOnboarding = done; })) });
@@ -369,7 +369,8 @@ describe('SharePoint connection in Settings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
-    expect(onSave).toHaveBeenCalledWith(managedSettings);
+    // The backend does not manage the machine name, so it is not reset.
+    expect(onSave).toHaveBeenCalledWith({ ...managedSettings, machineLabel: 'Changed' });
   });
 
   it('leaves Settings unchanged when this build has no SharePoint deployment', async () => {

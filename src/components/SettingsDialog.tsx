@@ -158,9 +158,10 @@ function isProvider(value: string): value is HostedProvider {
   With the fixed SharePoint deployment these belong to the connection, not to
   the person: the backend derives them at activation and enforces them on
   every save. Settings still sends a whole settings object, so it sends these
-  exactly as they were loaded - never a draft value.
+  exactly as they were loaded - never a draft value. The machine name is not
+  among them: the backend leaves it to the person, so it saves as sent.
 */
-const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'machineLabel', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
+const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
 
 function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings {
   const result = { ...draft };
@@ -184,9 +185,15 @@ interface Props {
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
   onInstallUpdate(): Promise<void>;
+  /**
+   * Leave out the SharePoint connection card. Onboarding opens Settings for
+   * the hosted model before Microsoft is connected, where a card offering to
+   * reconnect Microsoft would skip ahead of the step that does it.
+   */
+  hideSharePointConnection?: boolean;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false }: Props) {
   const [next, setNext] = useState(settings);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -501,7 +508,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           </div>
         </div>}
       </section>
-      {managed && <SharePointConnection bridge={bridge} settings={settings} />}
+      {managed && !hideSharePointConnection && <SharePointConnection bridge={bridge} settings={settings} />}
       {!managed && <><section className="settings-group">
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>

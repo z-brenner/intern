@@ -172,6 +172,27 @@ describe('guided onboarding steps', () => {
     await expectFocused(await screen.findByRole('heading', { name: 'Connect your Microsoft account' }, { timeout: 3000 }));
   });
 
+  it('offers the hosted model without the SharePoint connection card before Microsoft is connected', async () => {
+    render(<App bridge={enabledBridge({}, { setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES } })} />);
+
+    await begin();
+    await screen.findByRole('heading', { name: 'Get the local model' });
+    fireEvent.click(screen.getByText('Other ways to get the model'));
+    const hosted = screen.getByRole('button', { name: 'Use a hosted model instead' });
+    await waitFor(() => expect(hosted).toBeEnabled());
+    fireEvent.click(hosted);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByLabelText('Hosted model with my API key')).toBeVisible();
+    // Let the dialog learn this build is managed before looking for what it hides.
+    await act(async () => {});
+    await waitFor(() => expect(within(dialog).queryByLabelText('Destination folder')).not.toBeInTheDocument());
+    expect(within(dialog).queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Reconnect Microsoft' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('Intake folder')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+  });
+
   it('resumes a partial model download', async () => {
     render(<App bridge={enabledBridge({}, { setup: { state: 'required', downloadedBytes: PINNED_MODEL_BYTES / 2, totalBytes: PINNED_MODEL_BYTES } })} />);
 
