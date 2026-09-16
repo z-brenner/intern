@@ -1203,7 +1203,10 @@ mod tests {
     use super::*;
     use intern_intake::microsoft::{MicrosoftClient, proof::FreshUploadMetadata};
     use intern_queue::{WorkerBoundary, WorkerFailure};
-    use std::{collections::VecDeque, sync::atomic::AtomicI64};
+    use std::{
+        collections::VecDeque,
+        sync::atomic::{AtomicBool, AtomicI64},
+    };
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
     const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
 
@@ -1486,6 +1489,238 @@ mod tests {
         assert_eq!(fs::read(&source).unwrap(), b"hello");
         assert_eq!(metadata.calls.load(Ordering::SeqCst), 4);
         assert!(fs::read_dir(&snapshot_root).unwrap().next().is_none());
+        drop(pipeline);
+        drop(manager);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    /// Graph metadata for whichever Inbox file is asked about, created by the
+    /// signed-in person, reported to a connected account that can be switched.
+    struct SwitchableAccountMetadata {
+        connected_is_uploader: AtomicBool,
+        calls: AtomicU64,
+    }
+
+    impl FreshUploadMetadata for SwitchableAccountMetadata {
+        fn metadata(&self, url: url::Url) -> Result<(Account, serde_json::Value), String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let name = url.path_segments().unwrap().next_back().unwrap().to_owned();
+            let connected = if self.connected_is_uploader.load(Ordering::SeqCst) {
+                account()
+            } else {
+                Account {
+                    id: "aaaaaaaa-9999-9999-9999-999999999999".into(),
+                    ..account()
+                }
+            };
+            Ok((
+                connected,
+                serde_json::json!({
+                    "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
+                    "eTag": "\"fresh,1\"",
+                    "cTag": "\"content,1\"",
+                    "name": name,
+                    "size": 5,
+                    "webUrl": format!("https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/{name}"),
+                    "parentReference": {
+                        "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                        "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA"
+                    },
+                    "sharepointIds": {
+                        "tenantId": "11111111-1111-1111-1111-111111111111",
+                        "siteId": "33333333-3333-3333-3333-333333333333",
+                        "webId": "44444444-4444-4444-4444-444444444444",
+                        "listId": "55555555-5555-5555-5555-555555555555",
+                        "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                    },
+                    "createdBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "lastModifiedBy": { "user": {
+                        "id": "99999999-9999-9999-9999-999999999999",
+                        "userPrincipalName": "pat@example.test"
+                    }},
+                    "createdDateTime": "2026-09-14T16:00:00Z",
+                    "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                    "file": {
+                        "mimeType": "application/pdf",
+                        "hashes": { "quickXorHash": "aCgDG9jwBgAAAAAABQAAAAAAAAA=" }
+                    }
+                }),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingBoundary {
+        calls: AtomicU64,
+    }
+
+    impl WorkerBoundary for CountingBoundary {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<intern_engine::DocumentSource, WorkerFailure> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(WorkerFailure::new("TEST_STOP", false, false))
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    /// The real manager as the queue's admission guard: a disconnect, a
+    /// sign-in as someone else, and an intake folder change must each leave
+    /// the Inbox protected and keep the extractor from reading any file until
+    /// the connected account again proves it uploaded that file.
+    #[test]
+    fn protected_inbox_files_stay_unread_across_disconnect_account_and_folder_changes() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-bypass-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let inbox = data.join("Inbox");
+        let elsewhere = data.join("Elsewhere");
+        fs::create_dir_all(&inbox).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        let first = inbox.join("agreement.pdf");
+        fs::write(&first, b"hello").unwrap();
+        let first = first.canonicalize().unwrap();
+        let local_folder = inbox.canonicalize().unwrap().to_string_lossy().into_owned();
+        let settings = AppSettings {
+            intake_folder: local_folder.clone(),
+            ..AppSettings::default()
+        };
+        let settings_store = SettingsStore::new(data.join("settings.json"));
+        settings_store.save(&settings).unwrap();
+        let binding = FolderBinding {
+            local_folder: local_folder.clone(),
+            drive_id: "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO".into(),
+            folder_id: "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA".into(),
+            web_url: "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            web_id: "44444444-4444-4444-4444-444444444444".into(),
+            activation_watermark: Some(1_789_401_599_000),
+        };
+        let metadata = Arc::new(SwitchableAccountMetadata {
+            connected_is_uploader: AtomicBool::new(true),
+            calls: AtomicU64::new(0),
+        });
+        let mut manager = MicrosoftIntake::with_enabled_metadata(
+            settings_store.clone(),
+            data.clone(),
+            test_deployment(),
+            binding,
+            Arc::clone(&metadata) as Arc<dyn FreshUploadMetadata>,
+            data.join("proof-snapshots"),
+        )
+        .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        manager.client = Some(client);
+        let manager = Arc::new(manager);
+        let worker = Arc::new(CountingBoundary::default());
+        let pipeline = intern_queue::Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::clone(&worker) as Arc<dyn WorkerBoundary>,
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            settings_store.clone(),
+        )
+        .unwrap()
+        .with_admission_guard(Arc::clone(&manager) as Arc<dyn AdmissionGuard>);
+        let protects_inbox = |manager: &MicrosoftIntake| {
+            manager
+                .config
+                .lock()
+                .unwrap()
+                .protected_roots
+                .iter()
+                .any(|root| same_path(root, &local_folder))
+        };
+
+        // Proven at admission, then disconnected before extraction.
+        let id = pipeline
+            .enqueue_files(std::slice::from_ref(&first))
+            .unwrap()[0]
+            .id;
+        manager.disconnect().unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+        let held = pipeline.list().unwrap().pop().unwrap();
+        assert_eq!(held.status, intern_core::QueueStatus::NeedsReview);
+        assert!(
+            protects_inbox(&manager),
+            "a disconnect keeps the Inbox held"
+        );
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+        // Starting sign-in again, and finishing it as a different person.
+        manager.begin().unwrap();
+        assert!(
+            protects_inbox(&manager),
+            "a sign-in retry keeps the Inbox held"
+        );
+        clock.0.store(1_010, Ordering::SeqCst);
+        manager.poll().unwrap();
+        metadata
+            .connected_is_uploader
+            .store(false, Ordering::SeqCst);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+        assert!(protects_inbox(&manager));
+
+        // Moving intake elsewhere keeps the old Inbox protected, so a manual
+        // add from it is still held for proof.
+        let moved = AppSettings {
+            intake_folder: elsewhere
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            ..settings.clone()
+        };
+        manager.protect_settings(&moved).unwrap();
+        settings_store.save(&moved).unwrap();
+        assert!(
+            protects_inbox(&manager),
+            "a folder change keeps the Inbox held"
+        );
+        let second = inbox.join("second.pdf");
+        fs::write(&second, b"hello").unwrap();
+        let second = second.canonicalize().unwrap();
+        let error = pipeline
+            .enqueue_files(std::slice::from_ref(&second))
+            .unwrap_err();
+        assert!(error.code.starts_with("UPLOADER_"), "{error:?}");
+        assert_eq!(pipeline.list().unwrap().len(), 1);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(worker.calls.load(Ordering::SeqCst), 0);
+
+        // Only a complete proof for the connected uploader reaches the reader.
+        metadata.connected_is_uploader.store(true, Ordering::SeqCst);
+        pipeline.retry(id).unwrap();
+        pipeline.run_until_idle().unwrap();
+        // The stub reader then fails, and the queue's own failure retry may
+        // read again; what matters is that the proof now lets it read.
+        assert!(worker.calls.load(Ordering::SeqCst) > 0);
         drop(pipeline);
         drop(manager);
         let _ = fs::remove_dir_all(data);

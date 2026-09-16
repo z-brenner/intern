@@ -3674,3 +3674,378 @@ fn uploader_guard_rechecks_at_apply_and_never_renames_after_disconnect() {
     assert!(path.exists());
     assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::NeedsReview);
 }
+
+/// What the connected Microsoft account and Graph report while a
+/// [`ScriptedProofGuard`] runs the real fresh-upload proof.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ProofScenario {
+    /// The connected account created the unchanged upload: a complete proof.
+    Proven,
+    /// Microsoft is disconnected, so no proof can be attempted.
+    Disconnected,
+    /// A different person is now the connected account.
+    AccountChanged,
+    /// The connected account changes between the proof's two metadata reads.
+    AccountChangesDuringProof,
+    /// The item's revision changes between the proof's two metadata reads.
+    RevisionChanges,
+}
+
+const BYPASS_SCENARIOS: [ProofScenario; 4] = [
+    ProofScenario::Disconnected,
+    ProofScenario::AccountChanged,
+    ProofScenario::AccountChangesDuringProof,
+    ProofScenario::RevisionChanges,
+];
+
+const SNAPSHOT_OTHER: &str = "aaaaaaaa-9999-9999-9999-999999999999";
+
+/// An admission guard that runs the real `verify_fresh_upload` against
+/// scripted Graph metadata. Stages before `deny_from` see a complete proof;
+/// `deny_from` and every later stage see `scenario`.
+struct ScriptedProofGuard {
+    inbox: PathBuf,
+    snapshots: PrivateSnapshotDirectory,
+    deployment: SharePointDeployment,
+    deny_from: Mutex<Option<(intern_queue::AdmissionStage, ProofScenario)>>,
+    active: Mutex<ProofScenario>,
+    /// Metadata reads within the current proof.
+    reads: AtomicUsize,
+}
+
+impl ScriptedProofGuard {
+    fn new(root: &Path, inbox: &Path) -> Arc<Self> {
+        Arc::new(Self {
+            inbox: inbox.canonicalize().unwrap(),
+            snapshots: PrivateSnapshotDirectory::new(root.join("private-snapshots")).unwrap(),
+            deployment: snapshot_deployment(),
+            deny_from: Mutex::new(None),
+            active: Mutex::new(ProofScenario::Proven),
+            reads: AtomicUsize::new(0),
+        })
+    }
+
+    fn deny_from(&self, stage: intern_queue::AdmissionStage, scenario: ProofScenario) {
+        *self.deny_from.lock().unwrap() = Some((stage, scenario));
+    }
+
+    fn prove(&self) {
+        *self.deny_from.lock().unwrap() = None;
+    }
+}
+
+fn stage_rank(stage: intern_queue::AdmissionStage) -> u8 {
+    match stage {
+        intern_queue::AdmissionStage::Enqueue => 0,
+        intern_queue::AdmissionStage::Extract => 1,
+        intern_queue::AdmissionStage::Analyze => 2,
+        intern_queue::AdmissionStage::Apply => 3,
+    }
+}
+
+fn snapshot_deployment() -> SharePointDeployment {
+    SharePointDeployment::from_slice(
+        format!(
+            r#"{{
+              "schema_version": 1,
+              "enabled": true,
+              "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+              "library_name": "Files",
+              "intake_folder_name": "Inbox",
+              "destination_folder_name": "Filed",
+              "tenant_id": "{SNAPSHOT_TENANT}",
+              "client_id": "22222222-2222-2222-2222-222222222222",
+              "site_id": "33333333-3333-3333-3333-333333333333",
+              "web_id": "44444444-4444-4444-4444-444444444444",
+              "list_id": "55555555-5555-5555-5555-555555555555",
+              "drive_id": "{SNAPSHOT_DRIVE}",
+              "intake_folder_id": "{SNAPSHOT_INBOX}",
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
+            }}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap()
+}
+
+impl FreshUploadMetadata for ScriptedProofGuard {
+    fn metadata(&self, url: Url) -> Result<(Account, Value), String> {
+        let second_read = self.reads.fetch_add(1, Ordering::SeqCst) > 0;
+        let scenario = *self.active.lock().unwrap();
+        let connected = match scenario {
+            ProofScenario::AccountChanged => SNAPSHOT_OTHER,
+            ProofScenario::AccountChangesDuringProof if second_read => SNAPSHOT_OTHER,
+            _ => SNAPSHOT_ME,
+        };
+        let etag = if scenario == ProofScenario::RevisionChanges && second_read {
+            "\"fresh,2\""
+        } else {
+            "\"fresh,1\""
+        };
+        let name = url.path_segments().unwrap().next_back().unwrap().to_owned();
+        let mut quick = QuickXor::default();
+        quick.update(b"hello");
+        Ok((
+            Account {
+                tenant_id: SNAPSHOT_TENANT.into(),
+                id: connected.into(),
+                display_name: "Pat Example".into(),
+                email: "pat@example.test".into(),
+                user_principal_name: "pat@example.test".into(),
+            },
+            json!({
+                "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
+                "eTag": etag,
+                "cTag": "\"content,1\"",
+                "name": name,
+                "size": 5,
+                "webUrl": format!("https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/{name}"),
+                "parentReference": { "driveId": SNAPSHOT_DRIVE, "id": SNAPSHOT_INBOX },
+                "sharepointIds": {
+                    "tenantId": SNAPSHOT_TENANT,
+                    "siteId": "33333333-3333-3333-3333-333333333333",
+                    "webId": "44444444-4444-4444-4444-444444444444",
+                    "listId": "55555555-5555-5555-5555-555555555555",
+                    "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                },
+                "createdBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "lastModifiedBy": { "user": { "id": SNAPSHOT_ME, "userPrincipalName": "pat@example.test" } },
+                "createdDateTime": "2026-09-14T16:00:00Z",
+                "lastModifiedDateTime": "2026-09-14T16:00:00Z",
+                "file": {
+                    "mimeType": "application/pdf",
+                    "hashes": { "quickXorHash": STANDARD.encode(quick.finish()) }
+                }
+            }),
+        ))
+    }
+}
+
+impl intern_queue::AdmissionGuard for ScriptedProofGuard {
+    fn authorize(
+        &self,
+        path: &Path,
+        stage: intern_queue::AdmissionStage,
+    ) -> Result<intern_queue::AdmissionEvidence, PipelineError> {
+        let scenario = match *self.deny_from.lock().unwrap() {
+            Some((from, scenario)) if stage_rank(stage) >= stage_rank(from) => scenario,
+            _ => ProofScenario::Proven,
+        };
+        if scenario == ProofScenario::Disconnected {
+            return Err(PipelineError::new(
+                "UPLOADER_UNVERIFIED",
+                "Microsoft is disconnected. Unverified uploads are never processed.",
+            ));
+        }
+        *self.active.lock().unwrap() = scenario;
+        self.reads.store(0, Ordering::SeqCst);
+        // The same outcome mapping the desktop Microsoft intake manager uses.
+        match verify_fresh_upload(
+            &self.deployment,
+            self,
+            1_789_401_599_000,
+            &self.snapshots,
+            &self.inbox,
+            path,
+        ) {
+            FreshUploadOutcome::Authorized {
+                local_sha256,
+                snapshot,
+                ..
+            } => Ok(intern_queue::AdmissionEvidence::verified_snapshot(
+                local_sha256,
+                snapshot,
+            )),
+            FreshUploadOutcome::HeldOther { reason, .. } => Err(PipelineError::new(
+                "UPLOADER_OTHER",
+                format!("UPLOADER_OTHER: {reason}"),
+            )),
+            FreshUploadOutcome::HeldUnknown { reason } => {
+                Err(PipelineError::new("UPLOADER_UNVERIFIED", reason))
+            }
+            FreshUploadOutcome::RetryableUnavailable { reason } => {
+                Err(PipelineError::retryable("UPLOADER_UNVERIFIED", reason))
+            }
+        }
+    }
+}
+
+struct ProofRig {
+    _temp: tempfile::TempDir,
+    path: PathBuf,
+    guard: Arc<ScriptedProofGuard>,
+    worker: Arc<FakeWorker>,
+    model: Arc<FakeModel>,
+    files: Arc<FakeFiles>,
+    pipeline: Pipeline,
+}
+
+impl ProofRig {
+    fn new(settings: AppSettings) -> Self {
+        let temp = tempdir().unwrap();
+        let inbox = temp.path().join("Inbox");
+        fs::create_dir(&inbox).unwrap();
+        let path = inbox.join("agreement.pdf");
+        fs::write(&path, b"hello").unwrap();
+        let path = path.canonicalize().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        files.trust(&path, HELLO_SHA256);
+        let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(RETRY_DOCUMENT))]));
+        let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+        let guard = ScriptedProofGuard::new(temp.path(), &inbox);
+        let pipeline = pipeline(
+            temp.path(),
+            worker.clone(),
+            model.clone(),
+            files.clone(),
+            settings,
+        )
+        .with_admission_guard(guard.clone());
+        Self {
+            _temp: temp,
+            path,
+            guard,
+            worker,
+            model,
+            files,
+            pipeline,
+        }
+    }
+
+    /// Extractor calls, model calls, and completed file actions.
+    fn counters(&self) -> (usize, usize, usize) {
+        (
+            self.worker.calls.load(Ordering::SeqCst),
+            self.model.calls.load(Ordering::SeqCst),
+            self.files.applies.lock().unwrap().len(),
+        )
+    }
+}
+
+#[test]
+fn microsoft_proof_gates_watcher_and_manual_admission_before_any_file_read() {
+    // The watcher's admission check and a manual add of a file in a protected
+    // folder both reach the queue through `enqueue_files` at the Enqueue stage.
+    for scenario in BYPASS_SCENARIOS {
+        let rig = ProofRig::new(automatic_settings());
+        rig.guard
+            .deny_from(intern_queue::AdmissionStage::Enqueue, scenario);
+
+        let error = rig
+            .pipeline
+            .enqueue_files(std::slice::from_ref(&rig.path))
+            .unwrap_err();
+
+        assert!(
+            error.code.starts_with("UPLOADER_"),
+            "{scenario:?}: {error:?}"
+        );
+        assert!(rig.pipeline.list().unwrap().is_empty(), "{scenario:?}");
+        assert_eq!(
+            rig.files.fingerprint_calls.load(Ordering::SeqCst),
+            0,
+            "{scenario:?}"
+        );
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.counters(), (0, 0, 0), "{scenario:?}");
+    }
+}
+
+#[test]
+fn microsoft_proof_gates_extraction_and_retry_until_the_same_account_proves_the_upload() {
+    for scenario in BYPASS_SCENARIOS {
+        let rig = ProofRig::new(automatic_settings());
+        let id = rig
+            .pipeline
+            .enqueue_files(std::slice::from_ref(&rig.path))
+            .unwrap()[0]
+            .id;
+        rig.guard
+            .deny_from(intern_queue::AdmissionStage::Extract, scenario);
+
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.counters(), (0, 0, 0), "{scenario:?}");
+        let held = rig.pipeline.list().unwrap().pop().unwrap();
+        assert_eq!(held.status, QueueStatus::NeedsReview, "{scenario:?}");
+        assert_eq!(
+            held.error_code,
+            Some(ErrorCode::UploaderUnverified),
+            "{scenario:?}"
+        );
+
+        // Retrying while the proof is still incomplete reads nothing.
+        rig.pipeline.retry(id).unwrap();
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.counters(), (0, 0, 0), "{scenario:?}");
+
+        rig.guard.prove();
+        rig.pipeline.retry(id).unwrap();
+        rig.pipeline.run_until_idle().unwrap();
+        assert_eq!(rig.counters(), (1, 1, 1), "{scenario:?}");
+    }
+}
+
+#[test]
+fn microsoft_proof_gates_inference_after_a_proven_extraction() {
+    for scenario in BYPASS_SCENARIOS {
+        let rig = ProofRig::new(automatic_settings());
+        rig.pipeline
+            .enqueue_files(std::slice::from_ref(&rig.path))
+            .unwrap();
+        rig.guard
+            .deny_from(intern_queue::AdmissionStage::Analyze, scenario);
+
+        rig.pipeline.run_until_idle().unwrap();
+
+        assert_eq!(rig.counters(), (1, 0, 0), "{scenario:?}");
+        let held = rig.pipeline.list().unwrap().pop().unwrap();
+        assert_eq!(held.status, QueueStatus::NeedsReview, "{scenario:?}");
+        assert!(held.proposal.is_none(), "{scenario:?}");
+    }
+}
+
+#[test]
+fn microsoft_proof_gates_automatic_and_approved_apply() {
+    for scenario in BYPASS_SCENARIOS {
+        let automatic = ProofRig::new(automatic_settings());
+        automatic
+            .pipeline
+            .enqueue_files(std::slice::from_ref(&automatic.path))
+            .unwrap();
+        automatic
+            .guard
+            .deny_from(intern_queue::AdmissionStage::Apply, scenario);
+        automatic.pipeline.run_until_idle().unwrap();
+        assert_eq!(automatic.counters(), (1, 1, 0), "{scenario:?}");
+        assert_ne!(
+            automatic.pipeline.list().unwrap()[0].status,
+            QueueStatus::Completed,
+            "{scenario:?}"
+        );
+
+        let reviewed = ProofRig::new(AppSettings::default());
+        let id = reviewed
+            .pipeline
+            .enqueue_files(std::slice::from_ref(&reviewed.path))
+            .unwrap()[0]
+            .id;
+        reviewed.pipeline.run_until_idle().unwrap();
+        assert_eq!(
+            reviewed.pipeline.list().unwrap()[0].status,
+            QueueStatus::Ready,
+            "{scenario:?}"
+        );
+        reviewed
+            .guard
+            .deny_from(intern_queue::AdmissionStage::Apply, scenario);
+        let error = reviewed
+            .pipeline
+            .approve(id, "2024-04-12 Employment Agreement.pdf", "")
+            .unwrap_err();
+        assert!(
+            error.code.starts_with("UPLOADER_"),
+            "{scenario:?}: {error:?}"
+        );
+        assert_eq!(reviewed.counters(), (1, 1, 0), "{scenario:?}");
+    }
+}
