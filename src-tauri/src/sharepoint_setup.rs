@@ -2,9 +2,10 @@
 //!
 //! All decisions live behind injected boundaries so tests can prove the
 //! deployment URL, remote identity, filesystem, Microsoft binding, settings,
-//! and autostart transaction without OneDrive, Graph, or Tauri. Production
-//! deliberately supplies no local-to-remote verifier yet: registry display
-//! names and paths are discovery hints, never authority.
+//! and autostart transaction without OneDrive, Graph, or Tauri. Registry
+//! display names and paths are discovery hints, never authority; production
+//! verifies roots from OneDrive's own sync records
+//! (`sharepoint_root_verifier`).
 
 use intern_intake::{
     CloudProviderKind, CloudRoot, SharePointDeployment, detect_cloud_roots,
@@ -601,22 +602,6 @@ impl SetupFileSystem for SystemFileSystem {
     }
 }
 
-struct UnavailableRemoteVerifier;
-
-impl RemoteLibraryVerifier for UnavailableRemoteVerifier {
-    fn verify(
-        &self,
-        _account: &Account,
-        _candidate: &Path,
-        _deployment: &SharePointDeployment,
-    ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError> {
-        Err(SharePointSetupError::new(
-            "SHAREPOINT_ROOT_VERIFIER_UNAVAILABLE",
-            "This build cannot authoritatively map a registered local OneDrive root to the provisioned tenant, site, web, list, and drive. Sync enrollment remains pending; activation is disabled.",
-        ))
-    }
-}
-
 struct ProductionMicrosoft<'a>(&'a crate::microsoft_intake::MicrosoftIntake);
 
 impl MicrosoftSetup for ProductionMicrosoft<'_> {
@@ -739,7 +724,7 @@ fn production_operation(
     let deployment = packaged_deployment()?;
     let roots = SystemRoots;
     let fs = SystemFileSystem;
-    let verifier = UnavailableRemoteVerifier;
+    let verifier = crate::sharepoint_root_verifier::OneDriveRecordVerifier::current_user();
     let microsoft_state = app.state::<std::sync::Arc<crate::microsoft_intake::MicrosoftIntake>>();
     let microsoft = ProductionMicrosoft(microsoft_state.as_ref());
     let app_state = app.state::<crate::commands::AppState>();

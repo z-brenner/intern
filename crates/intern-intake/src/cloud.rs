@@ -408,7 +408,7 @@ mod windows_network {
 /// `windows_file` module: raw Win32 registry reads to discover OneDrive
 /// accounts and SharePoint/Teams library mounts.
 #[cfg(windows)]
-mod windows_registry {
+pub(crate) mod windows_registry {
     #![allow(unsafe_code)]
 
     use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::PathBuf};
@@ -625,6 +625,21 @@ mod windows_registry {
                 }
             }
         }
+    }
+
+    /// Every string value directly under `HKCU\<subkey>` as (name, data);
+    /// empty when the key does not exist. Non-string values are skipped.
+    pub(crate) fn current_user_string_values(subkey: &str) -> Vec<(String, String)> {
+        let Some(key) = RegKey::open(HKEY_CURRENT_USER, subkey) else {
+            return Vec::new();
+        };
+        key.value_names()
+            .into_iter()
+            .filter_map(|name| {
+                let data = key.string_value(&name)?;
+                Some((name, data))
+            })
+            .collect()
     }
 
     fn wide(value: &str) -> Vec<u16> {

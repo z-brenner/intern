@@ -8,6 +8,7 @@ pub mod microsoft_intake;
 pub mod model;
 pub mod onboarding;
 pub mod secrets;
+pub mod sharepoint_root_verifier;
 pub mod sharepoint_setup;
 pub mod tray;
 
