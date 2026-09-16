@@ -3,15 +3,13 @@ import type { RefObject } from 'react';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import { byteCount, byteSize } from '../lib/format';
 import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from '../features/intake/microsoft';
-import { describeOnboardingProblem } from '../features/onboarding/onboardingErrors';
-import type { OnboardingProblem } from '../features/onboarding/onboardingErrors';
+import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
+import { useSupportLink } from '../features/sharepoint/useSupportLink';
+import type { SharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { modelReady, useModelSetup } from '../features/setup/useModelSetup';
 import type { AppSettings, SetupState, SharePointSetupStatus } from '../types';
 import { SettingsDialog } from './SettingsDialog';
 
-/** The fixed deployment's site, for the person to finish a sync by hand. */
-export const SHAREPOINT_SITE_URL = 'https://teamcontoso.sharepoint.com/sites/InternTestSite';
-const ONEDRIVE_DOWNLOAD_URL = 'https://www.microsoft.com/microsoft-365/onedrive/download';
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
 const RESCAN_INTERVAL_MS = 5000;
 
@@ -85,7 +83,7 @@ export function OnboardingFlow({ bridge, selection, pendingSettings, pendingSetu
 }
 
 /** A failure: the plain-language action as an alert, the stable code beside it for support. */
-export function OnboardingProblemNotice({ problem }: { problem: OnboardingProblem }) {
+export function OnboardingProblemNotice({ problem }: { problem: SharePointProblem }) {
   return <div className="onboarding-problem">
     <p role="alert">{problem.action}</p>
     <p className="onboarding-support">Support code <code>{problem.code}</code></p>
@@ -98,7 +96,7 @@ type HeadingRef = RefObject<HTMLHeadingElement | null>;
 /** One action at a time: a second click while a call is in flight is ignored. */
 function useAction() {
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<OnboardingProblem>();
+  const [problem, setProblem] = useState<SharePointProblem>();
   const mounted = useRef(true);
   const inFlight = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -106,7 +104,7 @@ function useAction() {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setProblem(undefined);
     try { await action(); }
-    catch (cause) { if (mounted.current) setProblem(describeOnboardingProblem(cause)); }
+    catch (cause) { if (mounted.current) setProblem(describeSharePointProblem(cause)); }
     finally { inFlight.current = false; if (mounted.current) setBusy(false); }
   };
   return { busy, problem, setProblem, run, mounted };
@@ -168,15 +166,15 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
     const next = await bridge.microsoftIntakeStatus?.();
     if (!next || !mounted.current) return;
     setStatus(next);
-    if (next.error) setProblem(describeOnboardingProblem(next.error));
+    if (next.error) setProblem(describeSharePointProblem(next.error));
   };
   useEffect(() => {
     let active = true;
     void bridge.microsoftIntakeStatus?.().then((next) => {
       if (!active) return;
       setStatus(next);
-      if (next.error) setProblem(describeOnboardingProblem(next.error));
-    }).catch((cause) => { if (active) setProblem(describeOnboardingProblem(cause)); });
+      if (next.error) setProblem(describeSharePointProblem(next.error));
+    }).catch((cause) => { if (active) setProblem(describeSharePointProblem(cause)); });
     return () => {
       active = false; generation.current += 1;
       // Leaving during a pending sign-in must not silently connect later.
@@ -204,11 +202,11 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
     const version = generation.current;
     let active = true;
     let timer: number | undefined;
-    const stop = (next?: OnboardingProblem) => { signingIn.current = false; setPrompt(undefined); if (next) setProblem(next); };
+    const stop = (next?: SharePointProblem) => { signingIn.current = false; setPrompt(undefined); if (next) setProblem(next); };
     const poll = async () => {
       if (!active || generation.current !== version) return;
       if (Date.now() >= prompt.expiresAt * 1000) {
-        stop(describeOnboardingProblem({ code: 'MICROSOFT_SIGN_IN_EXPIRED' }));
+        stop(describeSharePointProblem({ code: 'MICROSOFT_SIGN_IN_EXPIRED' }));
         void bridge.microsoftDisconnect?.().catch(() => {});
         return;
       }
@@ -218,7 +216,7 @@ function MicrosoftStep({ heading, bridge, onConfirmed }: { heading: HeadingRef; 
         if (result.state === 'connected') { stop(); await refresh(); }
         else timer = window.setTimeout(() => { void poll(); }, Math.max(5, result.intervalSeconds) * 1000);
       } catch (cause) {
-        if (active) stop(describeOnboardingProblem(cause));
+        if (active) stop(describeSharePointProblem(cause));
       }
     };
     timer = window.setTimeout(() => { void poll(); }, Math.max(5, prompt.intervalSeconds) * 1000);
@@ -261,6 +259,7 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
   const [waiting, setWaiting] = useState(false);
   const [requested, setRequested] = useState(false);
   const { busy, problem, setProblem, run, mounted } = useAction();
+  const support = useSupportLink(bridge);
 
   // Pending libraries stay on this step; anything further along moves on.
   const route = (status: SharePointSetupStatus) => {
@@ -292,7 +291,7 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
         if (route(status)) return;
       } catch (cause) {
         if (!active) return;
-        const next = describeOnboardingProblem(cause);
+        const next = describeSharePointProblem(cause);
         // Still syncing is not a failure; keep waiting.
         if (next.code !== 'SHAREPOINT_SYNC_PENDING') { setWaiting(false); setProblem(next); return; }
       }
@@ -315,14 +314,15 @@ function SyncStep({ heading, bridge, onLibrary, onSwitchAccount }: { heading: He
       <p>OneDrive may ask you to confirm. If it does, choose Sync.</p>
       <p className="onboarding-waiting" role="status" aria-live="polite" aria-label="Library sync">Waiting for OneDrive to add the Files library. Intern checks again every few seconds. You can close Intern and finish later.</p>
     </>}
+    {support.error && <p className="onboarding-alert" role="alert">{support.error}</p>}
     {!waiting && !problem && !needsSync && <p role="status" aria-live="polite" aria-label="Library sync">Looking for the Files library on this computer…</p>}
     <div className="onboarding-actions">
       {problem?.switchAccount
         ? <button type="button" className="primary" disabled={busy} onClick={switchAccount}>Use a different account</button>
         : needsSync && !waiting && !problem && <button type="button" className="primary" disabled={busy} onClick={requestSync}>Sync Files with OneDrive</button>}
       {recovery && !problem?.switchAccount && <button type="button" className={problem ? 'primary' : undefined} disabled={busy} onClick={requested ? requestSync : check}>Try again</button>}
-      {recovery && <a className="onboarding-link" href={SHAREPOINT_SITE_URL} target="_blank" rel="noreferrer">Open SharePoint</a>}
-      {problem?.getOneDrive && <a className="onboarding-link" href={ONEDRIVE_DOWNLOAD_URL} target="_blank" rel="noreferrer">Get OneDrive</a>}
+      {recovery && <button type="button" onClick={() => support.open('sharepoint-site')}>Open SharePoint</button>}
+      {problem?.getOneDrive && <button type="button" onClick={() => support.open('onedrive-download')}>Get OneDrive</button>}
     </div>
   </>;
 }

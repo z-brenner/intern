@@ -2,7 +2,7 @@ import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgr
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
-import { GUIDE_URL } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
@@ -12,6 +12,7 @@ import type {
   IntakeEventSource,
   SelectionBoundary,
   SelectionResult,
+  SupportLinkTarget,
   UpdateStatus,
 } from './bridge';
 import { humanizeReason } from './reasons';
@@ -227,6 +228,11 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
    */
   async openGuide(): Promise<void> {
     await this.transport.invoke('plugin:opener|open_url', { url: GUIDE_URL });
+  }
+
+  /** The same path as `openGuide`, for the fixed SharePoint setup links. */
+  async openSupportLink(target: SupportLinkTarget): Promise<void> {
+    await this.transport.invoke('plugin:opener|open_url', { url: SUPPORT_LINKS[target] });
   }
 
   // The updater plugin is loaded lazily so that importing this module never

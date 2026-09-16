@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { SUPPORT_LINKS } from './bridge';
 import { createInMemoryBridge } from './inMemoryBridge';
 
 describe('createInMemoryBridge onboarding state', () => {
@@ -61,5 +62,21 @@ describe('createInMemoryBridge managed Microsoft boundary', () => {
     });
     await expect(bridge.microsoftSignInStart?.()).rejects.toThrow(unavailable);
     await expect(bridge.microsoftBindIntake?.()).rejects.toThrow(unavailable);
+  });
+});
+
+describe('createInMemoryBridge support links', () => {
+  it('opens the fixed support links in a new tab, the way the guide opens', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const bridge = createInMemoryBridge();
+
+    await bridge.openSupportLink('sharepoint-site');
+    await bridge.openSupportLink('onedrive-download');
+
+    expect(open.mock.calls).toEqual([
+      [SUPPORT_LINKS['sharepoint-site'], '_blank', 'noopener,noreferrer'],
+      [SUPPORT_LINKS['onedrive-download'], '_blank', 'noopener,noreferrer'],
+    ]);
+    open.mockRestore();
   });
 });

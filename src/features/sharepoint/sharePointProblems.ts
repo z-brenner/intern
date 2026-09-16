@@ -1,11 +1,15 @@
 /**
- * Plain-language, action-first explanations for guided SharePoint setup.
+ * SharePoint setup failures in plain language, for guided onboarding and the
+ * Settings connection card alike, so each code reads the same wherever it
+ * appears.
  *
- * Every message starts with what the person should do. The stable code stays
- * beside it for support; the backend's own message is support detail too,
- * never the headline, because it is written for engineers.
+ * The backend (`src-tauri/src/sharepoint_setup.rs` and the root verifier)
+ * rejects with a stable `{ code, message }`. Every sentence here starts with
+ * what the person should do. The code and the backend's own message stay
+ * beside it for support, never as the headline, because they are written for
+ * engineers. A code this build does not know still gets a usable sentence.
  */
-export interface OnboardingProblem {
+export interface SharePointProblem {
   code: string;
   /** What to do, then why. */
   action: string;
@@ -17,29 +21,33 @@ export interface OnboardingProblem {
   getOneDrive?: boolean;
 }
 
-const ACTIONS: Record<string, Omit<OnboardingProblem, 'code' | 'detail'>> = {
+const ACTIONS: Record<string, Omit<SharePointProblem, 'code' | 'detail'>> = {
   MICROSOFT_CONSENT_BLOCKED: { action: 'Ask your IT administrator to allow Intern to connect to Microsoft. Your organization blocked the connection, so Intern cannot safely watch the shared Inbox.' },
   MICROSOFT_SIGN_IN_DECLINED: { action: 'Connect again and finish signing in. Microsoft sign-in was declined, expired, or blocked by your organization. If your organization blocked it, ask your IT administrator to allow Intern; without this connection Intern cannot safely watch the shared Inbox.' },
   MICROSOFT_SIGN_IN_EXPIRED: { action: 'Connect again. Microsoft sign-in expired before it finished.' },
   MICROSOFT_SIGN_IN_FAILED: { action: 'Connect again. Microsoft sign-in did not finish, so Intern has not connected an account.' },
   MICROSOFT_ACCOUNT_WRONG_TENANT: { action: 'Sign in with your work account. The connected Microsoft account belongs to a different organization.', switchAccount: true },
-  MICROSOFT_ACCOUNT_MISSING: { action: 'Connect your Microsoft account again. Intern could not find a connected account.', switchAccount: true },
+  MICROSOFT_ACCOUNT_MISSING: { action: 'Connect your work Microsoft account. Intern could not find a connected account, so documents stay untouched.', switchAccount: true },
   MICROSOFT_ACCOUNT_INVALID: { action: 'Connect your Microsoft account again. Intern could not confirm the connected account.', switchAccount: true },
   MICROSOFT_CONNECTION_UNAVAILABLE: { action: 'Check your internet connection, then try again. Intern could not reach Microsoft.' },
   MICROSOFT_BINDING_FAILED: { action: 'Check your internet connection, then try again. Intern could not confirm the Files library with Microsoft.' },
-  MICROSOFT_BINDING_STATUS_FAILED: { action: 'Check your internet connection, then try again. Intern could not confirm the Files library with Microsoft.' },
+  MICROSOFT_BINDING_STATUS_FAILED: { action: 'Try again in a moment. Intern could not read its Microsoft connection on this computer.' },
   ONEDRIVE_MISSING: { action: 'Install or open OneDrive, then try again. Intern needs OneDrive to keep the Files library on this computer.', getOneDrive: true },
   ONEDRIVE_ACCOUNT_MISSING: { action: 'Open OneDrive and sign in with your work account, then try again.' },
   ONEDRIVE_OPEN_FAILED: { action: 'Open SharePoint and choose Sync on the Files library, then try again. Intern could not ask OneDrive to start syncing.' },
   SYNC_OPENER_UNAVAILABLE: { action: 'Open SharePoint and choose Sync on the Files library, then try again. This computer could not hand the sync request to OneDrive.' },
-  SYNC_PROTOCOL_UNAVAILABLE: { action: 'Open SharePoint and choose Sync on the Files library, then try again. This computer could not hand the sync request to OneDrive.' },
+  SYNC_PROTOCOL_UNAVAILABLE: { action: 'Repair or reinstall OneDrive, then try again. OneDrive is not set up to receive sync requests on this computer.', getOneDrive: true },
   SHAREPOINT_SYNC_PENDING: { action: 'Keep OneDrive open and try again in a moment. OneDrive has not finished adding the Files library yet.' },
   SHAREPOINT_ROOT_UNVERIFIED: { action: 'Let OneDrive finish syncing, then try again. Intern could not confirm that the synced folder is the Contoso Files library.' },
-  SHAREPOINT_ROOT_AMBIGUOUS: { action: 'Contact support. More than one synced folder looks like the Files library, and Intern will not guess which one is right.' },
-  SHAREPOINT_ROOT_NESTED: { action: 'Contact support. The Files library is synced inside another synced folder, and Intern will not guess which one is right.' },
+  SHAREPOINT_ROOT_AMBIGUOUS: { action: 'Remove the extra synced copy of the Files library from OneDrive, then try again. More than one synced folder looks like the Files library, and Intern will not guess which one is right.' },
+  SHAREPOINT_ROOT_NESTED: { action: 'Sync the Files library on its own, not inside another synced folder, then try again.' },
   SHAREPOINT_ROOT_UNWRITABLE: { action: 'Make sure OneDrive is running and you can edit files in the Files library, then try again.' },
+  SHAREPOINT_ROOT_RECORD_UNAVAILABLE: { action: 'Make sure OneDrive is running, then try again. Intern could not read OneDrive\'s record of the synced Files library.' },
+  SHAREPOINT_ROOT_RECORD_MALFORMED: { action: 'Restart OneDrive, then try again. If this keeps happening, contact support. OneDrive\'s record of the synced library could not be read, so Intern will not trust it.' },
+  SHAREPOINT_ROOT_RECORD_CONFLICT: { action: 'Contact support. OneDrive\'s records of the synced Files library disagree with each other, and Intern will not guess which one is right.' },
   SHAREPOINT_ROOT_VERIFIER_UNAVAILABLE: { action: 'Contact support. This version of Intern cannot yet confirm the synced Files library on this computer, so it will not start filing.' },
   SHAREPOINT_DEPLOYMENT_UNAVAILABLE: { action: 'Contact support. This copy of Intern is missing its SharePoint setup, so it cannot connect to the shared Inbox.' },
+  SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE: { action: 'Restart Intern, then try again. Intern could not confirm its SharePoint folders, so your settings were not saved.' },
   SHAREPOINT_SETUP_TASK_FAILED: { action: 'Try again. The setup check stopped before it finished.' },
   INBOX_MISSING: { action: 'Ask your SharePoint site owner to check that Files/Inbox exists, then try again. Intern could not find the Inbox folder in the synced library.' },
   FILED_UNWRITABLE: { action: 'Ask your SharePoint site owner to let you edit Files/Filed, then try again. Intern cannot save documents there.' },
@@ -54,11 +62,19 @@ const ACTIONS: Record<string, Omit<OnboardingProblem, 'code' | 'detail'>> = {
   ONBOARDING_STATE_TOO_LARGE: { action: 'Contact support. Intern\'s setup record is damaged, so it has not opened yet.' },
 };
 
-const FALLBACK = 'Try again. If this keeps happening, contact support and mention the code below.';
+const FALLBACK = 'Try again. If this keeps happening, contact support and give them the support code.';
 
 /**
- * Microsoft device sign-in reports plain sentences rather than codes, so
- * those few are classified here to keep the same copy and support code.
+ * The backend appends this literal token to a Microsoft sign-in failure when
+ * the organization refused consent. It is matched before any code, because a
+ * refusal can surface from a call whose code only says the account failed.
+ */
+const CONSENT_BLOCKED_TOKEN = '(MICROSOFT_CONSENT_BLOCKED)';
+
+/**
+ * Microsoft device sign-in reports sentences rather than codes, so those are
+ * classified here to keep the same copy and support code. The phrases are a
+ * fallback for backends that predate the consent token.
  */
 function classifyMessage(message: string) {
   if (/deployment configuration is unavailable/i.test(message)) return 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE';
@@ -68,15 +84,19 @@ function classifyMessage(message: string) {
   return 'UNKNOWN';
 }
 
-export function describeOnboardingProblem(error: unknown): OnboardingProblem {
+/** Normalizes a rejected call - `{ code, message }`, an Error, a bare code, or a sentence - into a problem to show. */
+export function describeSharePointProblem(error: unknown): SharePointProblem {
   let code: string | undefined;
   let detail: string | undefined;
-  if (typeof error === 'string') detail = error;
-  else if (error instanceof Error) detail = error.message;
+  if (typeof error === 'string') {
+    if (/^[A-Z][A-Z0-9_]+$/.test(error.trim())) code = error.trim();
+    else detail = error;
+  } else if (error instanceof Error) detail = error.message;
   else if (typeof error === 'object' && error) {
     if ('code' in error && typeof error.code === 'string' && error.code.trim()) code = error.code.trim();
     if ('message' in error && typeof error.message === 'string') detail = error.message;
   }
+  if (detail?.includes(CONSENT_BLOCKED_TOKEN)) code = 'MICROSOFT_CONSENT_BLOCKED';
   code ??= classifyMessage(detail ?? '');
   const known = ACTIONS[code];
   return { code, detail: detail?.trim() || undefined, ...(known ?? { action: FALLBACK }) };

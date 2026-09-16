@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GUIDE_URL } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
@@ -346,6 +346,25 @@ describe('TauriBridge', () => {
       { command: 'plugin:opener|open_url', args: { url: GUIDE_URL } },
     ]);
     expect(GUIDE_URL).toBe('https://zgbrenner.github.io/intern/guide.html');
+  });
+
+  // The same reasoning as the guide: onboarding's recovery links must reach
+  // the shell, and only through the fixed addresses the capability admits.
+  it('opens the fixed support links in the system browser through the opener plugin', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.openSupportLink('sharepoint-site');
+    await bridge.openSupportLink('onedrive-download');
+
+    expect(fake.calls).toEqual([
+      { command: 'plugin:opener|open_url', args: { url: 'https://teamcontoso.sharepoint.com/sites/InternTestSite' } },
+      { command: 'plugin:opener|open_url', args: { url: 'https://www.microsoft.com/microsoft-365/onedrive/download' } },
+    ]);
+    expect(SUPPORT_LINKS).toEqual({
+      'sharepoint-site': 'https://teamcontoso.sharepoint.com/sites/InternTestSite',
+      'onedrive-download': 'https://www.microsoft.com/microsoft-365/onedrive/download',
+    });
   });
 
   it('reports an absent cloud classification as null, never undefined', async () => {

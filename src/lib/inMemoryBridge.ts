@@ -1,4 +1,4 @@
-import { GUIDE_URL } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
@@ -37,6 +37,8 @@ const seedHistory: HistoryEntry[] = [
 
 export interface InMemoryBridgeOptions {
   items?: QueueItem[];
+  /** Settings already saved, such as an earlier release's manual intake folders. */
+  settings?: Partial<AppSettings>;
   setup?: Partial<SetupState>;
   /** A hosted-model key already in the (fake) credential store. */
   hostedKey?: string;
@@ -97,7 +99,7 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' };
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -393,6 +395,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // Already in a browser, so the guide opens the way any other link would.
     // noopener keeps the new tab from reaching back into this document.
     openGuide: async () => { window.open(GUIDE_URL, '_blank', 'noopener,noreferrer'); },
+    openSupportLink: async (target) => { window.open(SUPPORT_LINKS[target], '_blank', 'noopener,noreferrer'); },
     hostedModelStatus: async () => hostedModelStatus(),
     hostedModelSetKey: async (key) => {
       if (!key.trim()) throw { code: 'HOSTED_MODEL_KEY_EMPTY', message: 'the API key is empty' };

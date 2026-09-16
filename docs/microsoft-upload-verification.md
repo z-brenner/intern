@@ -21,7 +21,13 @@ admission therefore fail closed with:
 > SharePoint deployment configuration is unavailable: provisioned identifiers
 > are not available in this build.
 
-No client secret is or should be packaged.
+No client secret is or should be packaged. The identifiers an administrator
+must supply, how to find them, what users see during guided onboarding, and the
+tenant-backed acceptance checklist are in
+[SharePoint deployment: administrator guide](sharepoint-deployment.md).
+
+Intern does not search Microsoft audit logs. Every decision below is made from
+drive-item metadata alone.
 
 ## Fresh-upload proof
 
@@ -42,7 +48,10 @@ For every candidate, Intern performs these checks in order:
    and only when it exactly matches the verified `/me` principal. A conflicting
    ID is never overridden.
 5. Require valid and identical creation/modification timestamps, a positive
-   remote size, QuickXorHash, ETag, and SharePoint item identity.
+   remote size, QuickXorHash, ETag, and SharePoint item identity. The creation
+   time must be strictly later than the moment filing was turned on (the
+   activation watermark), so documents already in `Inbox` before activation
+   are never processed.
 6. Only after those metadata and identity checks, read the local file to match
    its size and QuickXorHash and compute the queue's SHA-256 binding.
 7. Fetch metadata again and require the same account, item, identities,
@@ -54,6 +63,12 @@ conflict, or otherwise ambiguous evidence is held as unknown. Microsoft
 unavailability or throttling remains retryable and never becomes a negative
 ownership verdict. There is no process-anyway override, including for the legacy
 `processOthersUploads` setting.
+
+A held document stays where it is in `Inbox`: it is not read, claimed, renamed,
+or moved. Scans count held documents (for another account, or with an
+unverified uploader) in Settings > SharePoint connection > Support details, and
+they are checked again on later scans. A document already in the queue that
+fails a later check goes to review with `UPLOADER_UNVERIFIED`.
 
 SharePoint `createdBy` does not establish who later copied or moved an existing
 item. A same-user copy or move can be indistinguishable from a direct upload
@@ -67,8 +82,11 @@ editing, shortcut, conflict, identity ambiguity, and revision mismatch.
 ## OAuth and network boundary
 
 Managed device sign-in accepts no tenant/client IDs and no audit
-acknowledgment. It requests only delegated `User.Read`, `Files.Read`, and
-`offline_access`. Refresh credentials remain in the operating-system credential
+acknowledgment. It signs in against the configured tenant's authority and
+requests only delegated `User.Read`, `Files.Read`, and `offline_access`, which
+users can consent to themselves where tenant policy allows. When the
+organization blocks that consent, sign-in fails with the
+`MICROSOFT_CONSENT_BLOCKED` explanation and nothing weaker is attempted. Refresh credentials remain in the operating-system credential
 store; access tokens and device codes never enter settings, attribution files,
 shared folders, or IPC responses.
 

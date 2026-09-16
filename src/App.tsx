@@ -15,15 +15,15 @@ import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } 
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
-import { describeOnboardingProblem } from './features/onboarding/onboardingErrors';
-import type { OnboardingProblem } from './features/onboarding/onboardingErrors';
+import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
+import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
 import type { AppSettings, QueueItem, QueueView, SetupState } from './types';
 
 type Gate =
   | { kind: 'loading' }
-  | { kind: 'failed'; problem: OnboardingProblem }
+  | { kind: 'failed'; problem: SharePointProblem }
   | { kind: 'onboarding' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
@@ -49,7 +49,7 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
       // nothing to connect to, and a required flag alone must not strand anyone.
       setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined });
     }).catch((error: unknown) => {
-      if (active) setGate({ kind: 'failed', problem: describeOnboardingProblem(error) });
+      if (active) setGate({ kind: 'failed', problem: describeSharePointProblem(error) });
     });
     return () => { active = false; };
   }, [bridge, suppliedBridge, attempt]);

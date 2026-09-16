@@ -5,7 +5,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { DesktopBridge } from '../../lib/bridge';
 import type { AppSettings, IntakeStatus, OnboardingStatus, SharePointSetupStatus } from '../../types';
 import type { MicrosoftAccount, MicrosoftIntakeStatus } from '../intake/microsoft';
-import { describeSharePointError } from './sharepointErrors';
+import { describeSharePointProblem } from '../sharepoint/sharePointProblems';
 
 const account: MicrosoftAccount = { tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', displayName: 'Pat Doe', email: 'pat@contoso.test' };
 const active: SharePointSetupStatus = { phase: 'active', account: { displayName: 'Pat Doe', email: 'pat@contoso.test' }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' };
@@ -127,17 +127,38 @@ describe('SharePoint connection in Settings', () => {
     renderDialog(managedBridge({ getSharePointSetup: vi.fn(async () => { throw { code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }; }) }));
     const card = await screen.findByRole('region', { name: 'SharePoint connection' });
     const alert = await within(card).findByRole('alert');
-    expect(alert).toHaveTextContent(describeSharePointError('ONEDRIVE_MISSING'));
+    expect(alert).toHaveTextContent(describeSharePointProblem('ONEDRIVE_MISSING').action);
     expect(alert).not.toHaveTextContent('ONEDRIVE_MISSING');
     expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/needs attention/i);
   });
 
+  it('offers SharePoint and the OneDrive download through the desktop shell when setup needs attention', async () => {
+    const openSupportLink = vi.fn(async () => {});
+    renderDialog(managedBridge({ openSupportLink, getSharePointSetup: vi.fn(async () => { throw { code: 'ONEDRIVE_MISSING', message: 'OneDrive is not installed.' }; }) }));
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    await within(card).findByRole('alert');
+
+    expect(within(card).queryByRole('link')).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole('button', { name: 'Open SharePoint' }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Get OneDrive' }));
+    await waitFor(() => expect(openSupportLink.mock.calls).toEqual([['sharepoint-site'], ['onedrive-download']]));
+  });
+
+  it('keeps the recovery links out of the way while the connection is healthy', async () => {
+    renderDialog(managedBridge());
+    const card = await screen.findByRole('region', { name: 'SharePoint connection' });
+    await within(card).findByText(/Active\./);
+
+    expect(within(card).queryByRole('button', { name: 'Open SharePoint' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Get OneDrive' })).not.toBeInTheDocument();
+  });
+
   it('falls back to a generic message for codes it does not know', () => {
-    const generic = describeSharePointError('SOMETHING_NEW');
-    expect(generic).toMatch(/check again/i);
+    const generic = describeSharePointProblem('SOMETHING_NEW').action;
+    expect(generic).toMatch(/try again/i);
     expect(generic).not.toContain('SOMETHING_NEW');
-    expect(describeSharePointError('MICROSOFT_ACCOUNT_WRONG_TENANT')).toMatch(/work account/);
-    expect(describeSharePointError('SHAREPOINT_SYNC_PENDING')).not.toBe(generic);
+    expect(describeSharePointProblem('MICROSOFT_ACCOUNT_WRONG_TENANT').action).toMatch(/work account/);
+    expect(describeSharePointProblem('SHAREPOINT_SYNC_PENDING').action).not.toBe(generic);
   });
 
   it('checks the setup and watcher again on request', async () => {
@@ -189,7 +210,7 @@ describe('SharePoint connection in Settings', () => {
     await act(async () => { fireEvent.click(within(card).getByRole('button', { name: 'Reconnect Microsoft' })); });
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
 
-    expect(within(card).getByRole('alert')).toHaveTextContent(describeSharePointError('MICROSOFT_ACCOUNT_WRONG_TENANT'));
+    expect(within(card).getByRole('alert')).toHaveTextContent(describeSharePointProblem('MICROSOFT_ACCOUNT_WRONG_TENANT').action);
     expect(bridge.microsoftDisconnect).toHaveBeenCalledOnce();
     expect(within(card).getByRole('status', { name: 'SharePoint setup' })).toHaveTextContent(/needs attention/i);
     expect(within(card).getByText('MICROSOFT_ACCOUNT_WRONG_TENANT')).not.toBeVisible();
@@ -210,7 +231,7 @@ describe('SharePoint connection in Settings', () => {
 
     await waitFor(() => expect(within(card).queryByRole('status', { name: 'Microsoft sign-in' })).not.toBeInTheDocument());
     expect(bridge.microsoftDisconnect).toHaveBeenCalledOnce();
-    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointError('MICROSOFT_ACCOUNT_MISSING'));
+    expect(await within(card).findByRole('alert')).toHaveTextContent(describeSharePointProblem('MICROSOFT_ACCOUNT_MISSING').action);
     expect(within(card).getByRole('button', { name: 'Reconnect Microsoft' })).toBeEnabled();
   });
 
@@ -224,6 +245,18 @@ describe('SharePoint connection in Settings', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
     expect(onSave).toHaveBeenCalledWith({ ...managedSettings, destinationLayout: 'year', automaticRename: true });
+  });
+
+  it('explains a refused managed save with the same sentence onboarding uses', async () => {
+    const onSave = vi.fn(async () => { throw { code: 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE', message: 'the managed binding could not be read' }; });
+    renderDialog(managedBridge(), managedSettings, onSave);
+    await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+
+    const alert = await screen.findByText(describeSharePointProblem('SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE').action, { exact: false });
+    expect(alert).toHaveTextContent('(SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE)');
+    expect(alert).not.toHaveTextContent('the managed binding could not be read');
   });
 
   it('never sends managed values that differ from what was loaded', async () => {
