@@ -20,6 +20,7 @@ pub mod filed;
 mod fsatomic;
 pub mod identity;
 pub mod microsoft;
+pub mod onedrive_identity;
 pub mod scan;
 pub mod watcher;
 
