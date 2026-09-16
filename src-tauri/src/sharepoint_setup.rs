@@ -91,7 +91,8 @@ pub enum SyncOpenFailure {
     Other(String),
 }
 
-/// Full authoritative identity returned for one exact canonical local root.
+/// The recorded remote identity for one exact canonical local root: tenant,
+/// site, web, and list. There is no drive; the sync records do not carry one.
 /// A verifier result is still checked here; returning a display name or path
 /// alone can never satisfy the service.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,7 +102,6 @@ pub struct RemoteLibraryIdentity {
     pub site_id: String,
     pub web_id: String,
     pub list_id: String,
-    pub drive_id: String,
 }
 
 pub trait RootDetector {
@@ -521,6 +521,11 @@ impl<'a> SharePointSetup<'a> {
         Ok(child)
     }
 
+    /// Re-checks the recorded identifiers against the deployment. No drive is
+    /// compared: OneDrive's records carry no Graph drive ID, and the drive is
+    /// proven per item by Graph at admission instead. The production verifier
+    /// echoes the candidate as `local_root`, so that comparison can only catch
+    /// a verifier implementation that reports some other folder.
     fn identity_matches(&self, candidate: &Path, identity: &RemoteLibraryIdentity) -> bool {
         identity.local_root == candidate
             && identity
@@ -535,8 +540,6 @@ impl<'a> SharePointSetup<'a> {
             && identity
                 .list_id
                 .eq_ignore_ascii_case(self.deployment.list_id())
-            // A base64url drive ID is case-sensitive.
-            && identity.drive_id == self.deployment.drive_id()
     }
 
     fn restore_local_activation(
@@ -998,7 +1001,6 @@ mod tests {
     const SITE_ID: &str = "cccccccc-cccc-cccc-cccc-cccccccccccc";
     const WEB_ID: &str = "dddddddd-dddd-dddd-dddd-dddddddddddd";
     const LIST_ID: &str = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
-    const DRIVE_ID: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
 
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -1047,7 +1049,6 @@ mod tests {
             site_id: SITE_ID.into(),
             web_id: WEB_ID.into(),
             list_id: LIST_ID.into(),
-            drive_id: DRIVE_ID.into(),
         }
     }
 

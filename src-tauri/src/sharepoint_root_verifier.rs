@@ -2,9 +2,9 @@
 //!
 //! The OneDrive sync client's own per-account records must name exactly one
 //! whole-library sync at the candidate folder with the provisioned tenant,
-//! site, web, and list. The records carry no Graph drive identifier; the
-//! returned drive is the packaged one, whose binding to that site, web, and
-//! list is proven by Microsoft Graph on every admitted item
+//! site, web, and list. The records carry no Graph drive identifier, so none
+//! is returned; the packaged drive's binding to that site, web, and list is
+//! proven by Microsoft Graph on every admitted item
 //! (`parentReference.driveId` together with `sharepointIds`). See
 //! `docs/sharepoint-root-verification.md`.
 
@@ -43,7 +43,6 @@ impl<R: OneDriveRecords> RemoteLibraryVerifier for OneDriveRecordVerifier<R> {
             site_id: library.site_id,
             web_id: library.web_id,
             list_id: library.list_id,
-            drive_id: deployment.drive_id().to_owned(),
         }))
     }
 }
@@ -153,8 +152,6 @@ mod tests {
                 site_id: "cccccccc-cccc-cccc-cccc-cccccccccccc".into(),
                 web_id: "dddddddd-dddd-dddd-dddd-dddddddddddd".into(),
                 list_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee".into(),
-                drive_id: "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO"
-                    .into(),
             }
         );
     }
