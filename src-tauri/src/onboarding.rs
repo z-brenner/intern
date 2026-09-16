@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use crate::sharepoint_setup::{SharePointSetupError, SharePointSetupPhase};
 use intern_intake::SharePointDeployment;
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -126,7 +127,35 @@ impl OnboardingStore {
 
     /// Records the current flow only after its final readiness check. A newer
     /// stored version belongs to a newer app and must survive this build.
-    pub fn complete(&self) -> Result<(), OnboardingError> {
+    ///
+    /// When the SharePoint deployment is available, the backend itself checks
+    /// `setup_phase` is Active first, rather than trusting the webview's last
+    /// step; otherwise it is never consulted.
+    pub fn complete(
+        &self,
+        setup_phase: impl FnOnce() -> Result<SharePointSetupPhase, SharePointSetupError>,
+    ) -> Result<(), OnboardingError> {
+        if self.share_point_available {
+            let incomplete = |message: String| OnboardingError {
+                code: "ONBOARDING_SETUP_INCOMPLETE".into(),
+                message,
+            };
+            match setup_phase() {
+                Ok(SharePointSetupPhase::Active) => {}
+                Ok(_) => {
+                    return Err(incomplete(
+                        "SharePoint setup is not active yet, so onboarding was not completed."
+                            .into(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(incomplete(format!(
+                        "SharePoint setup could not be confirmed, so onboarding was not completed: {} ({})",
+                        error.message, error.code
+                    )));
+                }
+            }
+        }
         let _guard = self.gate.lock().map_err(|_| OnboardingError {
             code: "ONBOARDING_STATE_UNAVAILABLE".into(),
             message: "onboarding state is unavailable".into(),
@@ -198,8 +227,17 @@ pub fn onboarding_status(
 }
 
 #[tauri::command]
-pub fn onboarding_complete(store: State<'_, OnboardingStore>) -> Result<(), OnboardingError> {
-    store.complete()
+pub async fn onboarding_complete(app: tauri::AppHandle) -> Result<(), OnboardingError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Manager;
+        app.state::<OnboardingStore>()
+            .complete(|| crate::sharepoint_setup::current_phase(&app))
+    })
+    .await
+    .map_err(|_| OnboardingError {
+        code: "ONBOARDING_STATE_UNAVAILABLE".into(),
+        message: "onboarding completion could not finish".into(),
+    })?
 }
 
 fn status_for(completed_version: u32, share_point_available: bool) -> OnboardingStatus {
@@ -261,6 +299,11 @@ mod tests {
     use super::{
         CURRENT_ONBOARDING_VERSION, OnboardingError, OnboardingStore, UiState, write_state,
     };
+    use crate::sharepoint_setup::{SharePointSetupError, SharePointSetupPhase};
+
+    fn active() -> Result<SharePointSetupPhase, SharePointSetupError> {
+        Ok(SharePointSetupPhase::Active)
+    }
 
     const DEPLOYMENT: &str = r#"{
         "schema_version": 1,
@@ -389,7 +432,7 @@ mod tests {
             })
         );
 
-        store.complete().expect("complete onboarding");
+        store.complete(active).expect("complete onboarding");
         let status = store.status().expect("read completed state");
         assert!(status.share_point_available);
         assert!(!status.required);
@@ -473,7 +516,7 @@ mod tests {
         let path = dir.state_path();
         let store = OnboardingStore::new(path.clone(), &deployment(true));
 
-        store.complete().expect("complete onboarding");
+        store.complete(active).expect("complete onboarding");
 
         assert_eq!(
             OnboardingStore::new(path.clone(), &deployment(true))
@@ -506,7 +549,7 @@ mod tests {
         .expect("seed future state");
 
         OnboardingStore::new(path.clone(), &deployment(true))
-            .complete()
+            .complete(active)
             .expect("complete from future state");
 
         assert_eq!(
@@ -532,7 +575,7 @@ mod tests {
         .expect("seed old state");
 
         OnboardingStore::new(path.clone(), &deployment(true))
-            .complete()
+            .complete(active)
             .expect("replace existing state");
 
         assert_eq!(state_json(&path), "{\"completedOnboardingVersion\":1}");
@@ -546,7 +589,7 @@ mod tests {
         store.fail_next_write_for_test();
 
         let error = store
-            .complete()
+            .complete(active)
             .expect_err("failed state publication must fail completion");
 
         assert_eq!(error.code, "ONBOARDING_STATE_WRITE_FAILED");
@@ -575,7 +618,7 @@ mod tests {
         store.fail_next_write_for_test();
 
         store
-            .complete()
+            .complete(active)
             .expect_err("injected publication failure must fail completion");
 
         assert_eq!(state_json(&path), "{\"completedOnboardingVersion\":0}");
@@ -594,7 +637,7 @@ mod tests {
         });
 
         let error = store
-            .complete()
+            .complete(active)
             .expect_err("durability uncertainty must remain visible");
 
         assert_eq!(error.code, "ONBOARDING_STATE_DURABILITY_UNCERTAIN");
@@ -617,7 +660,7 @@ mod tests {
         );
 
         let first = store
-            .complete()
+            .complete(active)
             .expect_err("first publication is intentionally uncertain");
         assert_eq!(first.code, "ONBOARDING_STATE_DURABILITY_UNCERTAIN");
         assert_eq!(
@@ -629,7 +672,7 @@ mod tests {
         );
 
         store
-            .complete()
+            .complete(active)
             .expect("second completion re-syncs the published state");
 
         assert_eq!(RETRY_WRITER_CALLS.load(Ordering::SeqCst), 2);
@@ -640,5 +683,61 @@ mod tests {
                 .completed_version,
             CURRENT_ONBOARDING_VERSION
         );
+    }
+
+    #[test]
+    fn completion_requires_active_sharepoint_setup_when_the_deployment_is_enabled() {
+        let dir = TempDir::new();
+        let store = OnboardingStore::new(dir.state_path(), &deployment(true));
+
+        for phase in [
+            SharePointSetupPhase::EnrollmentPending,
+            SharePointSetupPhase::ReadyToActivate,
+        ] {
+            let error = store
+                .complete(|| Ok(phase))
+                .expect_err("setup is not active");
+            assert_eq!(error.code, "ONBOARDING_SETUP_INCOMPLETE");
+        }
+        let error = store
+            .complete(|| {
+                Err(SharePointSetupError::new(
+                    "ONEDRIVE_MISSING",
+                    "OneDrive is not installed on this computer.",
+                ))
+            })
+            .expect_err("setup could not be confirmed");
+        assert_eq!(error.code, "ONBOARDING_SETUP_INCOMPLETE");
+        assert!(
+            error.message.contains("ONEDRIVE_MISSING"),
+            "{}",
+            error.message
+        );
+        assert!(!dir.state_path().exists(), "nothing was recorded");
+        assert!(store.status().unwrap().required);
+
+        store.complete(active).expect("active setup completes");
+        assert!(!store.status().unwrap().required);
+    }
+
+    #[test]
+    fn completion_without_an_available_deployment_never_consults_sharepoint() {
+        let dir = TempDir::new();
+        let store = OnboardingStore::new(dir.state_path(), &deployment(false));
+
+        store
+            .complete(|| panic!("SharePoint setup is not part of this build"))
+            .expect("complete as before");
+
+        assert_eq!(
+            store.status().unwrap().completed_version,
+            CURRENT_ONBOARDING_VERSION
+        );
+    }
+
+    #[test]
+    fn completion_does_not_run_on_the_ipc_thread() {
+        fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
+        leaves_the_ipc_thread(super::onboarding_complete);
     }
 }

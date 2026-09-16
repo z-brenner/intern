@@ -968,6 +968,12 @@ fn production_operation(
     operation(&setup)
 }
 
+/// The current setup phase, read the way `onboarding_sharepoint_status` reads
+/// it. Blocking: callers must run it away from the IPC thread.
+pub(crate) fn current_phase(app: &AppHandle) -> Result<SharePointSetupPhase, SharePointSetupError> {
+    production_operation(app, |setup| setup.status()).map(|status| status.phase)
+}
+
 /// No-payload, side-effect-free IPC command for polling setup progress: it
 /// rescans and reads, but never launches OneDrive, writes settings or
 /// autostart, or probes the synced library with a write.
