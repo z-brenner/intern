@@ -391,3 +391,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .identity-documents li > strong { display: block; font-size: 13px; }
 .identity-documents li p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; }
 .identity-state { display: block; font-size: 11px; font-weight: 600; margin: 5px 0; color: var(--text-muted); }
+
+/* ── lane settings-ui: SharePoint connection card (managed deployment) ── */
+.sharepoint-connection .connection-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.sharepoint-connection .connection-facts > div { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); overflow-wrap: anywhere; }
+.sharepoint-connection .connection-facts dt { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-soft); }
+.sharepoint-connection .connection-facts dd { margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+.sharepoint-connection .connection-account { grid-column: 1 / -1; }
+.sharepoint-connection .connection-account dd { display: grid; gap: 2px; }
+.sharepoint-connection .connection-account dd span { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.sharepoint-connection .connection-health { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; }
+.sharepoint-connection .connection-health p { margin: 0; }
+.sharepoint-connection .identity-signin { margin: 12px 0; }
+.support-details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.support-details summary { font-weight: 600; font-size: 13px; cursor: pointer; }
+.support-details summary:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+.support-details dl { display: grid; gap: 6px; margin: 12px 0 0; }
+.support-details dl > div { display: grid; grid-template-columns: minmax(110px, 30%) 1fr; gap: 10px; }
+.support-details dt { color: var(--text-soft); }
+.support-details dd { margin: 0; }
+.support-documents { list-style: none; margin: 10px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.support-documents li { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border); }
+@media (max-width: 640px) { .support-details dl > div { grid-template-columns: 1fr; gap: 2px; } }
+/* ── end lane settings-ui ── */
