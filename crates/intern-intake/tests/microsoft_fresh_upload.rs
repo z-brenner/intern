@@ -22,8 +22,10 @@ const CLIENT: &str = "22222222-2222-2222-2222-222222222222";
 const SITE: &str = "33333333-3333-3333-3333-333333333333";
 const WEB: &str = "44444444-4444-4444-4444-444444444444";
 const LIST: &str = "55555555-5555-5555-5555-555555555555";
-const DRIVE: &str = "66666666-6666-6666-6666-666666666666";
-const INBOX: &str = "77777777-7777-7777-7777-777777777777";
+// Synthetic identifiers shaped like real Microsoft Graph values (GUIDs, a
+// `b!` base64url drive ID, `01` base32 driveItem IDs); none are real.
+const DRIVE: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
+const INBOX: &str = "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA";
 const ME: &str = "99999999-9999-9999-9999-999999999999";
 const OTHER: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const ACTIVATION_WATERMARK: i64 = 1_789_401_599_000;
@@ -46,7 +48,7 @@ fn deployment() -> SharePointDeployment {
               "list_id": "{LIST}",
               "drive_id": "{DRIVE}",
               "intake_folder_id": "{INBOX}",
-              "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }}"#
         )
         .as_bytes(),
@@ -72,7 +74,7 @@ fn quick_xor(bytes: &[u8]) -> String {
 
 fn metadata() -> Value {
     json!({
-        "id": "item!123",
+        "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
         "eTag": "\"fresh,1\"",
         "cTag": "\"content,1\"",
         "name": "agreement.pdf",
@@ -405,12 +407,12 @@ fn stale_equal_and_missing_creation_times_hold_before_local_bytes_are_read() {
         (
             "stale",
             Some("2026-09-14T15:59:58Z"),
-            "The Microsoft item was not created after this folder was paired.",
+            "The file was uploaded before SharePoint was set up on this computer.",
         ),
         (
             "equal",
             Some("2026-09-14T15:59:59Z"),
-            "The Microsoft item was not created after this folder was paired.",
+            "The file was uploaded before SharePoint was set up on this computer.",
         ),
         (
             "missing",
@@ -473,6 +475,17 @@ fn every_tenant_site_library_drive_and_folder_boundary_is_required() {
         ("/sharepointIds/listId", json!(OTHER)),
         ("/parentReference/driveId", json!(OTHER)),
         ("/parentReference/id", json!(OTHER)),
+        // Base64url drive IDs are case-sensitive, and driveItem IDs are held
+        // in the canonical form Graph returns; neither folds case.
+        (
+            "/parentReference/driveId",
+            json!(DRIVE.to_ascii_lowercase()),
+        ),
+        (
+            "/parentReference/driveId",
+            json!(DRIVE.to_ascii_uppercase()),
+        ),
+        ("/parentReference/id", json!(INBOX.to_ascii_lowercase())),
         (
             "/webUrl",
             json!("https://teamcontoso.sharepoint.com/sites/OtherSite/Files/Inbox/agreement.pdf"),

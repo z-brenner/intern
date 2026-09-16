@@ -1,7 +1,20 @@
 use intern_intake::SharePointDeployment;
 
-// These GUIDs are synthetic test data. They are not tenant, application, or
-// SharePoint identifiers and cannot authenticate against Microsoft services.
+const ID_FIELDS: [&str; 8] = [
+    "tenant_id",
+    "client_id",
+    "site_id",
+    "web_id",
+    "list_id",
+    "drive_id",
+    "intake_folder_id",
+    "destination_folder_id",
+];
+
+// These identifiers are synthetic test data shaped like real Microsoft Graph
+// values (GUIDs, a `b!` base64url drive ID, and `01` base32 driveItem IDs).
+// They are not tenant, application, or SharePoint identifiers and cannot
+// authenticate against Microsoft services.
 const VALID_DEPLOYMENT: &str = r#"
 {
   "schema_version": 1,
@@ -15,9 +28,9 @@ const VALID_DEPLOYMENT: &str = r#"
   "site_id": "33333333-3333-3333-3333-333333333333",
   "web_id": "44444444-4444-4444-4444-444444444444",
   "list_id": "55555555-5555-5555-5555-555555555555",
-  "drive_id": "66666666-6666-6666-6666-666666666666",
-  "intake_folder_id": "77777777-7777-7777-7777-777777777777",
-  "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+  "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+  "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+  "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
 }
 "#;
 
@@ -135,6 +148,94 @@ fn rejects_missing_and_non_guid_public_identifiers() {
 }
 
 #[test]
+fn accepts_the_graph_identifier_shapes_published_by_microsoft() {
+    // Response examples from the Microsoft Graph v1.0 "Get drive" and
+    // "Get driveItem" reference pages.
+    let mut documented: serde_json::Value = serde_json::from_str(VALID_DEPLOYMENT).unwrap();
+    documented["drive_id"] =
+        "b!t18F8ybsHUq1z3LTz8xvZqP8zaSWjkFNhsME-Fepo75dTf9vQKfeRblBZjoSQrd7".into();
+    documented["intake_folder_id"] = "01NKDM7HMOJTVYMDOSXFDK2QJDXCDI3WUK".into();
+    let deployment = SharePointDeployment::from_slice(documented.to_string().as_bytes())
+        .expect("documented Graph identifiers should be accepted");
+
+    assert_eq!(
+        deployment.drive_id(),
+        "b!t18F8ybsHUq1z3LTz8xvZqP8zaSWjkFNhsME-Fepo75dTf9vQKfeRblBZjoSQrd7"
+    );
+    assert_eq!(
+        deployment.intake_folder_id(),
+        "01NKDM7HMOJTVYMDOSXFDK2QJDXCDI3WUK"
+    );
+}
+
+#[test]
+fn rejects_drive_and_item_ids_that_are_not_graph_shaped_or_could_escape_a_url() {
+    const DRIVE_BODY: &str = "TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
+    const ITEM_BODY: &str = "SYNTHETICINBOXFOLDERAAAAAAAAAAAA";
+    let mut invalid_drives = vec![
+        "66666666-6666-6666-6666-666666666666".to_owned(),
+        DRIVE_BODY.to_owned(),
+        format!("B!{DRIVE_BODY}"),
+        format!("b!{}", &DRIVE_BODY[1..]),
+        format!("b!{DRIVE_BODY}A"),
+        format!("b%21{DRIVE_BODY}"),
+        format!("b!{DRIVE_BODY}").repeat(8),
+    ];
+    let mut invalid_items = vec![
+        "77777777-7777-7777-7777-777777777777".to_owned(),
+        format!("b!{DRIVE_BODY}"),
+        format!("02{ITEM_BODY}"),
+        format!("01{}", ITEM_BODY.to_ascii_lowercase()),
+        format!("01{}", &ITEM_BODY[1..]),
+        format!("01{ITEM_BODY}A"),
+        // `0`, `1`, `8` and `9` are outside the base32 alphabet.
+        format!("01{}0", &ITEM_BODY[1..]),
+        format!("01{}8", &ITEM_BODY[1..]),
+    ];
+    for escape in ['/', '\\', '?', '#', '%', '&', ':', ' ', '+', '=', '.', '\n'] {
+        invalid_drives.push(format!("b!{}{escape}", &DRIVE_BODY[1..]));
+        invalid_items.push(format!("01{}{escape}", &ITEM_BODY[1..]));
+    }
+
+    for (fields, values) in [
+        (&["drive_id"][..], &invalid_drives),
+        (
+            &["intake_folder_id", "destination_folder_id"][..],
+            &invalid_items,
+        ),
+    ] {
+        for field in fields {
+            for value in values {
+                let mut invalid: serde_json::Value =
+                    serde_json::from_str(VALID_DEPLOYMENT).unwrap();
+                invalid[*field] = value.as_str().into();
+                assert!(
+                    SharePointDeployment::from_slice(invalid.to_string().as_bytes()).is_err(),
+                    "{field} must reject {value:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn guid_identifiers_still_reject_graph_drive_and_item_shapes() {
+    for field in ["tenant_id", "client_id", "site_id", "web_id", "list_id"] {
+        for value in [
+            "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+            "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+        ] {
+            let mut invalid: serde_json::Value = serde_json::from_str(VALID_DEPLOYMENT).unwrap();
+            invalid[field] = value.into();
+            assert!(
+                SharePointDeployment::from_slice(invalid.to_string().as_bytes()).is_err(),
+                "{field} must reject {value:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn rejects_secrets_passwords_and_tokens_in_the_public_resource() {
     for field in ["client_secret", "password", "access_token"] {
         let mut invalid: serde_json::Value = serde_json::from_str(VALID_DEPLOYMENT).unwrap();
@@ -156,17 +257,38 @@ fn rejects_invalid_emails_for_onedrive_sync() {
     }
 }
 
+/// Guards the packaged resource itself: it must either stay disabled, or be
+/// enabled with identifiers that pass full validation. A future edit that
+/// enables it with a missing or malformed identifier fails here, not in a
+/// shipped build.
 #[test]
-fn disabled_bundled_configuration_reports_that_identifiers_are_unavailable() {
-    let error = SharePointDeployment::from_slice(include_bytes!(
-        "../../../src-tauri/resources/sharepoint-deployment.json"
-    ))
-    .unwrap_err();
+fn the_packaged_deployment_is_disabled_or_fully_valid() {
+    let packaged: &[u8] = include_bytes!("../../../src-tauri/resources/sharepoint-deployment.json");
+    let raw: serde_json::Value = serde_json::from_slice(packaged).unwrap();
 
-    assert_eq!(
-        error.to_string(),
-        "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
-    );
+    match raw["enabled"].as_bool() {
+        Some(false) => {
+            assert_eq!(
+                SharePointDeployment::from_slice(packaged)
+                    .unwrap_err()
+                    .to_string(),
+                "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build."
+            );
+            // Flipping only the switch cannot enable a resource whose
+            // identifiers were never provisioned.
+            if ID_FIELDS.iter().any(|field| raw[*field].is_null()) {
+                let mut enabled = raw.clone();
+                enabled["enabled"] = true.into();
+                assert!(SharePointDeployment::from_slice(enabled.to_string().as_bytes()).is_err());
+            }
+        }
+        Some(true) => {
+            let deployment = SharePointDeployment::from_slice(packaged)
+                .expect("an enabled packaged deployment must pass validation");
+            deployment.validate().unwrap();
+        }
+        None => panic!("the packaged deployment must declare enabled as a boolean"),
+    }
 }
 
 #[test]

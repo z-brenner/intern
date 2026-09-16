@@ -1,15 +1,90 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { SUPPORT_LINKS } from './bridge';
 import { createInMemoryBridge } from './inMemoryBridge';
 
 describe('createInMemoryBridge onboarding state', () => {
   it('seeds the completed version and retains completion for later reads', async () => {
     const seeded = createInMemoryBridge({ completedOnboardingVersion: 1 });
-    expect(await seeded.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false });
+    expect(await seeded.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false });
 
-    const bridge = createInMemoryBridge();
-    expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: true });
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active' } });
+    expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: true });
     await bridge.completeOnboarding();
-    expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false });
+    expect(await bridge.getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: true });
+  });
+
+  it('never requires onboarding while the packaged deployment is unavailable', async () => {
+    expect(await createInMemoryBridge().getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: false, sharePointAvailable: false });
+  });
+});
+
+describe('createInMemoryBridge fake SharePoint deployment', () => {
+  it('connects Microsoft after a poll, stays pending for the configured rescans, then activates managed settings', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { signInPolls: 2, pendingRescans: 2, account: { displayName: 'Pat Lee', email: 'pat@contoso.test' } } });
+
+    expect(await bridge.microsoftIntakeStatus?.()).toMatchObject({ connected: false, account: null, error: null });
+    await expect(bridge.getSharePointSetup()).rejects.toMatchObject({ code: 'MICROSOFT_ACCOUNT_MISSING' });
+    expect((await bridge.microsoftSignInStart!()).userCode).toBeTruthy();
+    expect(await bridge.microsoftSignInPoll!()).toMatchObject({ state: 'pending' });
+    expect(await bridge.microsoftSignInPoll!()).toMatchObject({ state: 'connected' });
+    expect(await bridge.microsoftIntakeStatus?.()).toMatchObject({ connected: true, account: { displayName: 'Pat Lee', email: 'pat@contoso.test' } });
+
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'enrollment_pending', account: { displayName: 'Pat Lee', email: 'pat@contoso.test' }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' });
+    expect((await bridge.startSharePointSync()).phase).toBe('enrollment_pending');
+    expect((await bridge.getSharePointSetup()).phase).toBe('enrollment_pending');
+    expect((await bridge.getSharePointSetup()).phase).toBe('enrollment_pending');
+    expect((await bridge.getSharePointSetup()).phase).toBe('ready_to_activate');
+
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+    expect(await bridge.getSettings()).toMatchObject({ intakeEnabled: true, processOthersUploads: false, intakeLocalOnly: false, runInBackground: true, startAtLogin: true, startMinimized: true });
+    expect((await bridge.getSettings()).intakeFolder).toMatch(/Inbox$/);
+    expect((await bridge.getSettings()).destination).toMatch(/Filed$/);
+  });
+
+  it('reports an injected record problem while the library is pending, and none once it appears', async () => {
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, pendingRescans: 1, pendingProblem: problem } });
+
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.startSharePointSync()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'ready_to_activate', problem: null });
+  });
+
+  it('reports no problem by default', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true } });
+    expect((await bridge.getSharePointSetup()).problem).toBeNull();
+  });
+
+  it('throws injected failures once each, in order', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', failures: { completeOnboarding: [{ code: 'ONBOARDING_STATE_WRITE_FAILED', message: 'disk full' }] } } });
+
+    await expect(bridge.completeOnboarding()).rejects.toMatchObject({ code: 'ONBOARDING_STATE_WRITE_FAILED' });
+    await expect(bridge.completeOnboarding()).resolves.toBeUndefined();
+  });
+});
+
+describe('createInMemoryBridge fake SharePoint contract', () => {
+  it('refuses completion until filing is on, as the backend does', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'ready_to_activate' } });
+
+    await expect(bridge.completeOnboarding()).rejects.toMatchObject({ code: 'ONBOARDING_SETUP_INCOMPLETE' });
+    expect((await bridge.getOnboarding()).required).toBe(true);
+    await bridge.activateOnboarding();
+    await expect(bridge.completeOnboarding()).resolves.toBeUndefined();
+    expect((await bridge.getOnboarding()).required).toBe(false);
+  });
+
+  it('needs filing turned on again after signing in as a different account', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', signInAccount: { displayName: 'Sam Roe', email: 'sam@contoso.test' } } });
+
+    await bridge.microsoftSignInStart!();
+    expect(await bridge.microsoftSignInPoll!()).toMatchObject({ state: 'connected', account: { displayName: 'Sam Roe' } });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'ready_to_activate', account: { displayName: 'Sam Roe', email: 'sam@contoso.test' } });
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+    await bridge.microsoftSignInStart!();
+    await bridge.microsoftSignInPoll!();
+    expect((await bridge.getSharePointSetup()).phase).toBe('active');
   });
 });
 
@@ -26,5 +101,21 @@ describe('createInMemoryBridge managed Microsoft boundary', () => {
     });
     await expect(bridge.microsoftSignInStart?.()).rejects.toThrow(unavailable);
     await expect(bridge.microsoftBindIntake?.()).rejects.toThrow(unavailable);
+  });
+});
+
+describe('createInMemoryBridge support links', () => {
+  it('opens the fixed support links in a new tab, the way the guide opens', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const bridge = createInMemoryBridge();
+
+    await bridge.openSupportLink('sharepoint-site');
+    await bridge.openSupportLink('onedrive-download');
+
+    expect(open.mock.calls).toEqual([
+      [SUPPORT_LINKS['sharepoint-site'], '_blank', 'noopener,noreferrer'],
+      [SUPPORT_LINKS['onedrive-download'], '_blank', 'noopener,noreferrer'],
+    ]);
+    open.mockRestore();
   });
 });

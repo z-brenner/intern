@@ -17,6 +17,41 @@ use std::sync::{Arc, Mutex};
 pub const SCOPES: &str =
     "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Files.Read offline_access";
 
+/// Shown when the organization's consent policy stops sign-in. The UI detects
+/// the trailing token, so both the opening sentence and the token are stable.
+const CONSENT_BLOCKED: &str = "Your Microsoft organization has blocked Intern from connecting. Ask your Microsoft administrator to approve Intern for your organization, then connect again. Files remain held. (MICROSOFT_CONSENT_BLOCKED)";
+
+/// Microsoft Entra ID sign-in errors that mean consent, not the person or the
+/// network, is what stopped the connection (Microsoft Learn, "Microsoft Entra
+/// authentication and authorization error codes" and "Unexpected error when
+/// performing consent to an application"):
+/// - 65001 DelegationDoesNotExist: nobody has consented to the application.
+/// - 90093 the user is not authorized to grant the requested permissions.
+/// - 90094 AdminConsentRequired.
+/// - 90095 AdminConsentRequiredRequestAccess (admin consent workflow).
+/// - 900941 AdminConsentRequiredDueToRiskyApp.
+const CONSENT_BLOCKED_CODES: [u64; 5] = [65001, 90093, 90094, 90095, 900941];
+
+/// Whether an OAuth error body reports a consent block, from the numeric
+/// `error_codes` list or the `AADSTS<code>:` prefix of the description. The
+/// description is only inspected, never echoed.
+fn consent_blocked(body: &Value) -> bool {
+    let listed = body["error_codes"].as_array().is_some_and(|codes| {
+        codes
+            .iter()
+            .filter_map(Value::as_u64)
+            .any(|code| CONSENT_BLOCKED_CODES.contains(&code))
+    });
+    let described = body["error_description"]
+        .as_str()
+        .and_then(|description| description.strip_prefix("AADSTS"))
+        .and_then(|rest| rest.split_once(':'))
+        .filter(|(code, _)| !code.is_empty() && code.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|(code, _)| code.parse::<u64>().ok())
+        .is_some_and(|code| CONSENT_BLOCKED_CODES.contains(&code));
+    listed || described
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthConfig {
@@ -222,6 +257,9 @@ impl MicrosoftClient {
             None,
         )?;
         if reply.status != 200 {
+            if consent_blocked(&reply.body) {
+                return Err(CONSENT_BLOCKED.into());
+            }
             return Err("Microsoft sign-in could not start. Check the application registration, public-client setting, and organization consent.".into());
         }
         let code = text(&reply.body, "/device_code")?.to_owned();
@@ -300,6 +338,9 @@ impl MicrosoftClient {
                 }
                 _ => {
                     state.pending = None;
+                    if consent_blocked(&reply.body) {
+                        return Err(CONSENT_BLOCKED.into());
+                    }
                     return Err("Microsoft sign-in was declined, expired, or blocked by organization policy. Files remain held.".into());
                 }
             }
@@ -387,6 +428,9 @@ impl MicrosoftClient {
                     )
                     .map_err(Failure::connection)?;
                 if reply.status != 200 {
+                    if consent_blocked(&reply.body) {
+                        return Err(Failure::connection(CONSENT_BLOCKED.into()));
+                    }
                     return Err(Failure::connection("Microsoft sign-in needs attention. Reconnect your account; files remain held.".into()));
                 }
                 let session = self
@@ -405,8 +449,8 @@ impl MicrosoftClient {
             match reply.status {
                 200 | 201 => Ok((session.account.clone(),reply.body)),
                 401 => { self.set_session(&mut state, None); Err("Microsoft sign-in expired. Reconnect; files remain held.".into()) }
-                403 => Err("Microsoft denied access to this folder. Ask your administrator to grant the app read access to the selected intake folder.".into()),
-                404 => Err("This file is not yet available in the paired Microsoft folder.".into()),
+                403 => Err("Microsoft denied access to the SharePoint Files/Inbox folder. Ask your administrator to give your account and Intern read access to Files/Inbox; files remain held.".into()),
+                404 => Err("This file is not available in the SharePoint Inbox yet.".into()),
                 429 | 503 => { state.retry_at=self.clock.now()+reply.retry_after as i64; Err("Microsoft requested a slower verification rate. Files remain held until retry.".into()) }
                 _ => Err("Microsoft could not verify this upload. Files remain held.".into()),
             }
@@ -526,9 +570,11 @@ mod tests {
             self.0.load(Ordering::SeqCst)
         }
     }
+    /// One recorded request: URL, whether it was a POST, and its form fields.
+    type Call = (String, bool, Vec<(String, String)>);
     struct Fake {
         replies: Mutex<VecDeque<Reply>>,
-        calls: Mutex<Vec<(String, bool, Vec<(String, String)>)>>,
+        calls: Mutex<Vec<Call>>,
         audit_calls: Mutex<usize>,
     }
     impl Fake {
@@ -582,9 +628,9 @@ mod tests {
               "site_id": "11111111-1111-1111-1111-111111111111",
               "web_id": "22222222-2222-2222-2222-222222222222",
               "list_id": "33333333-3333-3333-3333-333333333333",
-              "drive_id": "44444444-4444-4444-4444-444444444444",
-              "intake_folder_id": "55555555-5555-5555-5555-555555555555",
-              "destination_folder_id": "66666666-6666-6666-6666-666666666666"
+              "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+              "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+              "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
             }"#,
         )
         .unwrap()
@@ -809,6 +855,19 @@ mod tests {
         assert_eq!(http.calls.lock().unwrap().len(), 5);
     }
 
+    /// The Inbox is fixed by the deployment, so a refusal names it rather
+    /// than a folder the person selected.
+    #[test]
+    fn a_403_names_the_fixed_sharepoint_inbox() {
+        let (client, _, _, time) = rig(vec![device(), token(), me(), reply(403, json!({}))]);
+        client.begin().unwrap();
+        time.0.store(1005, Ordering::SeqCst);
+        client.poll().unwrap();
+        let message = client.metadata(item()).unwrap_err();
+        assert!(message.contains("Files/Inbox"), "{message}");
+        assert!(!message.contains("selected"), "{message}");
+    }
+
     /// Microsoft being unreachable is not a verdict about any one file, so the
     /// client does back off before trying again.
     #[test]
@@ -892,6 +951,85 @@ mod tests {
         verifying.join().unwrap().unwrap();
     }
 
+    const CONSENT_PREFIX: &str = "Your Microsoft organization has blocked Intern from connecting.";
+    const CONSENT_TOKEN: &str = "(MICROSOFT_CONSENT_BLOCKED)";
+    /// Entra ID consent failures as Microsoft reports them: the numeric
+    /// `error_codes` list and an `AADSTS` prefix on the description.
+    fn consent_failures() -> Vec<Value> {
+        let mut failures = Vec::new();
+        for code in [65001, 90093, 90094, 90095, 900941] {
+            failures.push(json!({
+                "error": "invalid_grant",
+                "error_codes": [code],
+                "error_description": format!("AADSTS{code}: private-provider-detail
+            Trace ID: 1")
+            }));
+            failures.push(json!({
+                "error": "invalid_client",
+                "error_description": format!("AADSTS{code}: private-provider-detail")
+            }));
+        }
+        failures
+    }
+    fn assert_consent_blocked(error: &str) {
+        assert!(error.starts_with(CONSENT_PREFIX), "{error}");
+        assert!(error.contains(CONSENT_TOKEN), "{error}");
+        assert!(!error.contains("private-provider-detail"), "{error}");
+    }
+    #[test]
+    fn a_consent_blocked_device_code_request_names_the_organization_block() {
+        for failure in consent_failures() {
+            let (client, _, _, _) = rig(vec![reply(400, failure.clone())]);
+            assert_consent_blocked(&client.begin().unwrap_err());
+        }
+    }
+    #[test]
+    fn a_consent_blocked_token_poll_names_the_organization_block() {
+        for failure in consent_failures() {
+            let (client, _, _, time) = rig(vec![device(), reply(400, failure.clone())]);
+            client.begin().unwrap();
+            time.0.store(1005, Ordering::SeqCst);
+            assert_consent_blocked(&client.poll().unwrap_err());
+            assert!(
+                client.poll().is_err(),
+                "a blocked sign-in must be started again"
+            );
+        }
+    }
+    #[test]
+    fn a_consent_blocked_refresh_names_the_organization_block() {
+        for failure in consent_failures() {
+            let (client, _, _, time) = rig(vec![device(), token(), me(), reply(400, failure)]);
+            client.begin().unwrap();
+            time.0.store(1005, Ordering::SeqCst);
+            client.poll().unwrap();
+            time.0.store(1005 + 3600, Ordering::SeqCst);
+            assert_consent_blocked(&client.metadata(item()).unwrap_err());
+        }
+    }
+    #[test]
+    fn other_sign_in_failures_are_not_reported_as_consent_blocks() {
+        for failure in [
+            json!({"error": "expired_token", "error_codes": [70020]}),
+            json!({"error": "access_denied", "error_codes": [65004], "error_description": "AADSTS65004: declined"}),
+            json!({"error": "invalid_grant", "error_description": "AADSTS650010: not 65001"}),
+            json!({"error": "invalid_grant", "error_description": "See AADSTS65001 elsewhere"}),
+            json!({"error": "invalid_grant", "error_codes": ["65001"]}),
+            json!({}),
+        ] {
+            let (client, _, _, time) = rig(vec![
+                reply(400, failure.clone()),
+                device(),
+                reply(400, failure.clone()),
+            ]);
+            let error = client.begin().unwrap_err();
+            assert!(!error.contains(CONSENT_TOKEN), "{failure}: {error}");
+            client.begin().unwrap();
+            time.0.store(1005, Ordering::SeqCst);
+            let error = client.poll().unwrap_err();
+            assert!(!error.contains(CONSENT_TOKEN), "{failure}: {error}");
+        }
+    }
     #[test]
     fn authentication_failure_does_not_echo_provider_response_or_tokens() {
         let (client, _, _, _) = rig(vec![reply(

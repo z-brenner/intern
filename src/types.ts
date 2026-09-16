@@ -92,6 +92,37 @@ export interface OnboardingStatus {
   currentVersion: number;
   completedVersion: number;
   required: boolean;
+  /**
+   * Whether this build carries an enabled fixed SharePoint deployment. When
+   * false, onboarding covers only the local model and the manual settings stay.
+   */
+  sharePointAvailable: boolean;
+}
+
+export type SharePointSetupPhase = 'enrollment_pending' | 'ready_to_activate' | 'active';
+
+/** Fixed-deployment setup status; backend-only identifiers and local paths are omitted. */
+export interface SharePointSetupStatus {
+  phase: SharePointSetupPhase;
+  account: {
+    displayName: string;
+    email: string;
+  };
+  site: 'InternTestSite';
+  library: 'Files';
+  intake: 'Inbox';
+  destination: 'Filed';
+  /**
+   * While enrollment is pending, the stable `{ code, message }` for the
+   * OneDrive record problem that kept the library from being confirmed, so
+   * waiting is never silent when the records are the reason. Null otherwise.
+   */
+  problem?: SharePointSetupProblem | null;
+}
+
+export interface SharePointSetupProblem {
+  code: string;
+  message: string;
 }
 
 /** What Settings shows about the hosted model. The key itself never comes back. */

@@ -127,20 +127,23 @@ pub fn deployment_allows_endpoint(
             if parts == ["v1.0", "me"] {
                 return exact_select(url, PROFILE_SELECT);
             }
+            // Drive IDs are case-sensitive base64url. DriveItem IDs are opaque;
+            // the deployment holds the canonical form Graph returns, so the
+            // item is also matched exactly and any other spelling fails closed.
             if parts.len() >= 5
                 && parts[0] == "v1.0"
                 && parts[1] == "drives"
-                && parts[2].eq_ignore_ascii_case(deployment.drive_id())
+                && parts[2] == deployment.drive_id()
                 && parts[3] == "items"
                 && exact_select(url, ITEM_SELECT)
             {
                 if parts.len() == 5 {
-                    return parts[4].eq_ignore_ascii_case(deployment.intake_folder_id());
+                    return parts[4] == deployment.intake_folder_id();
                 }
                 return parts.len() == 6
-                    && parts[4].strip_suffix(':').is_some_and(|folder| {
-                        folder.eq_ignore_ascii_case(deployment.intake_folder_id())
-                    })
+                    && parts[4]
+                        .strip_suffix(':')
+                        .is_some_and(|folder| folder == deployment.intake_folder_id())
                     && direct_child_segment(parts[5]);
             }
             false
@@ -227,9 +230,11 @@ mod tests {
     use super::*;
     use crate::SharePointDeployment;
 
+    // Synthetic identifiers shaped like real Microsoft Graph values; they do
+    // not name any real tenant, drive, or item.
     const TENANT: &str = "11111111-1111-1111-1111-111111111111";
-    const DRIVE: &str = "66666666-6666-6666-6666-666666666666";
-    const INBOX: &str = "77777777-7777-7777-7777-777777777777";
+    const DRIVE: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
+    const INBOX: &str = "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA";
 
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -248,7 +253,7 @@ mod tests {
                   "list_id": "55555555-5555-5555-5555-555555555555",
                   "drive_id": "{DRIVE}",
                   "intake_folder_id": "{INBOX}",
-                  "destination_folder_id": "88888888-8888-8888-8888-888888888888"
+                  "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
                 }}"#
             )
             .as_bytes(),
@@ -301,8 +306,8 @@ mod tests {
         for address in [
             "https://login.microsoftonline.com/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/oauth2/v2.0/devicecode".to_owned(),
             "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111.evil.example/oauth2/v2.0/token".to_owned(),
-            format!("https://graph.microsoft.com/v1.0/drives/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/items/{INBOX}:/agreement.pdf{selected}"),
-            format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa{selected}"),
+            format!("https://graph.microsoft.com/v1.0/drives/b!OTHERDSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO/items/{INBOX}:/agreement.pdf{selected}"),
+            format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/01SYNTHETICOTHERFOLDERAAAAAAAAAAA{selected}"),
             format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/{INBOX}:/nested/agreement.pdf{selected}"),
             format!("https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/{INBOX}:/nested%2Fagreement.pdf{selected}"),
         ] {
@@ -325,10 +330,10 @@ mod tests {
             "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111",
             "https://graph.microsoft.com/v1.0/security/auditLog/queries/11111111-1111-1111-1111-111111111111/records",
             "https://graph.microsoft.com/v1.0/users",
-            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777/content",
-            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf:/content?$select=id",
-            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf?$select=id&$top=1",
-            "https://graph.microsoft.com/v1.0/drives/66666666-6666-6666-6666-666666666666/items/77777777-7777-7777-7777-777777777777:/agreement.pdf?$select=id&$skiptoken=secret",
+            "https://graph.microsoft.com/v1.0/drives/b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO/items/01SYNTHETICINBOXFOLDERAAAAAAAAAAAA/content",
+            "https://graph.microsoft.com/v1.0/drives/b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO/items/01SYNTHETICINBOXFOLDERAAAAAAAAAAAA:/agreement.pdf:/content?$select=id",
+            "https://graph.microsoft.com/v1.0/drives/b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO/items/01SYNTHETICINBOXFOLDERAAAAAAAAAAAA:/agreement.pdf?$select=id&$top=1",
+            "https://graph.microsoft.com/v1.0/drives/b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO/items/01SYNTHETICINBOXFOLDERAAAAAAAAAAAA:/agreement.pdf?$select=id&$skiptoken=secret",
             "https://graph.microsoft.com/v1.0/me?$select=id&$select=displayName",
         ] {
             assert!(
@@ -411,6 +416,48 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn a_base64url_drive_id_reaches_graph_unencoded_and_matches_only_exactly() {
+        let deployment = deployment();
+        let item = item_url(DRIVE, INBOX, Some("agreement.pdf")).unwrap();
+        assert!(
+            item.as_str().starts_with(&format!(
+                "https://graph.microsoft.com/v1.0/drives/{DRIVE}/items/{INBOX}:/agreement.pdf?"
+            )),
+            "{item}"
+        );
+        assert!(deployment_allows_endpoint(&deployment, &item, false, true));
+
+        let selected = format!("?$select={ITEM_SELECT}");
+        let percent_encoded = DRIVE.replacen('!', "%21", 1);
+        // Base64url drive IDs are case-sensitive. Graph driveItem IDs are
+        // opaque, and Graph returns them upper-case; the deployment stores that
+        // canonical form, so any other spelling is treated as a different item.
+        for (drive, folder) in [
+            (DRIVE.to_ascii_lowercase(), INBOX.to_owned()),
+            (DRIVE.to_ascii_uppercase(), INBOX.to_owned()),
+            (percent_encoded, INBOX.to_owned()),
+            (DRIVE.to_owned(), INBOX.to_ascii_lowercase()),
+        ] {
+            for address in [
+                format!("https://graph.microsoft.com/v1.0/drives/{drive}/items/{folder}{selected}"),
+                format!(
+                    "https://graph.microsoft.com/v1.0/drives/{drive}/items/{folder}:/agreement.pdf{selected}"
+                ),
+            ] {
+                assert!(
+                    !deployment_allows_endpoint(
+                        &deployment,
+                        &Url::parse(&address).unwrap(),
+                        false,
+                        true,
+                    ),
+                    "{address}"
+                );
+            }
+        }
     }
 
     #[test]

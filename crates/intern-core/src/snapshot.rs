@@ -255,7 +255,10 @@ fn make_file_read_only(file: &File) -> io::Result<()> {
     file.set_permissions(permissions)
 }
 
+// Windows-only: clearing the read-only attribute cannot make the file world
+// writable there, which is the Unix hazard this lint guards against.
 #[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
 fn make_file_writable_for_cleanup(path: &Path) {
     if let Ok(metadata) = fs::metadata(path) {
         let mut permissions = metadata.permissions();

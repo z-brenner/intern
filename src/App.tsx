@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { HistoryDialog } from './components/HistoryDialog';
+import { OnboardingFlow, OnboardingProblemNotice } from './components/OnboardingFlow';
 import { QueueTable } from './components/QueueTable';
 import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -12,19 +13,69 @@ import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
-import type { SetupEventSource, TauriSelectionBoundary } from './lib/tauriBridge';
+import type { TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
+import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
+import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
+import { modelReady, useModelSetup } from './features/setup/useModelSetup';
 import type { AppSettings, QueueItem, QueueView, SetupState } from './types';
+
+type Gate =
+  | { kind: 'loading' }
+  | { kind: 'failed'; problem: SharePointProblem }
+  | { kind: 'onboarding' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
   const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge());
+  const bridge = suppliedBridge ?? bridgeRef.current;
+  // The built-in demo bridge carries no SharePoint deployment, so it opens
+  // straight into the app exactly as it always has.
+  const [gate, setGate] = useState<Gate>(suppliedBridge ? { kind: 'loading' } : { kind: 'app' });
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!suppliedBridge) return;
+    let active = true;
+    // Settings and setup are read alongside the onboarding check rather than
+    // after it; whichever screen opens picks up the same reads.
+    const pendingSettings = bridge.getSettings();
+    const pendingSetup = bridge.getSetup();
+    // Each consumer reports its own failure; settling here only waits for it,
+    // so the first screen shown already knows the model's state.
+    const settled = Promise.allSettled([pendingSettings, pendingSetup]);
+    void Promise.all([bridge.getOnboarding(), settled]).then(([status, [, setup]]) => {
+      if (!active) return;
+      // Onboarding exists only for an enabled deployment; without one there is
+      // nothing to connect to, and a required flag alone must not strand anyone.
+      setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined });
+    }).catch((error: unknown) => {
+      if (active) setGate({ kind: 'failed', problem: describeSharePointProblem(error) });
+    });
+    return () => { active = false; };
+  }, [bridge, suppliedBridge, attempt]);
+
+  // Its own landmark name: the screen that follows may be setup or the app, and
+  // this placeholder must not be mistaken for either.
+  if (gate.kind === 'loading') return <main className="setup-screen" aria-label="Starting Intern"><section><p role="status" aria-label="Loading setup" aria-live="polite">Loading setup</p></section></main>;
+  if (gate.kind === 'failed') return <main className="setup-screen" aria-label="Intern setup"><section>
+    <h1>Intern could not open</h1>
+    <OnboardingProblemNotice problem={gate.problem} />
+    <div className="setup-actions"><button type="button" className="primary" onClick={() => { setGate({ kind: 'loading' }); setAttempt((count) => count + 1); }}>Try again</button></div>
+  </section></main>;
+  // The queue and its subscriptions are not mounted until onboarding is recorded as complete.
+  if (gate.kind === 'onboarding') return <OnboardingFlow bridge={bridge} selection={selection} pendingSettings={gate.pendingSettings} pendingSetup={gate.pendingSetup} initialSetup={gate.initialSetup} onComplete={() => setGate({ kind: 'app' })} />;
+  // A model that still needs setup is shown at once. A ready one is read again
+  // by the app itself, as it always was, so the queue's first snapshot arrives
+  // before the queue screen replaces the loading state.
+  return <MainApp bridge={bridge} selection={selection} demo={!suppliedBridge} pendingSettings={gate.pendingSettings} initialSetup={modelReady(gate.initialSetup) ? undefined : gate.initialSetup} />;
+}
+
+function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { bridge: DesktopBridge; selection?: SelectionBoundary; demo: boolean; pendingSettings?: Promise<AppSettings>; initialSetup?: SetupState }) {
   const seededSelection = useRef(false);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const historyTrigger = useRef<HTMLElement | null>(null);
   const reviewTrigger = useRef<{ element: HTMLButtonElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
-  const bridge = suppliedBridge ?? bridgeRef.current;
   const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
   const [view, setView] = useState<QueueView>('queue');
   const [filter, setFilter] = useState('');
@@ -41,9 +92,7 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
   // folder, and a machine name with defaults.
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settings, setSettings] = useState<AppSettings>({ destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '' });
-  const [setup, setSetup] = useState<SetupState | undefined>(suppliedBridge ? undefined : { state: 'ready', downloadedBytes: 0, totalBytes: 0 });
-  const [setupAction, setSetupAction] = useState<'start' | 'cancel' | 'choose'>();
-  const [setupError, setSetupError] = useState('');
+  const model = useModelSetup(bridge, selection, { initial: demo ? DEMO_SETUP : initialSetup });
   const [actionPending, setActionPending] = useState(false);
   const actionInFlight = useRef(false);
   const [actionMessage, setActionMessage] = useState('');
@@ -57,37 +106,8 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
   const narrowInspector = useMediaQuery('(max-width: 1100px)');
 
   useEffect(() => {
-    void bridge.getSettings().then((loaded) => { setSettings(loaded); setSettingsLoaded(true); }).catch(() => setSettingsLoaded(false));
-    void bridge.getSetup().then(setSetup).catch((error) => setSetupError(describeSetupError(error)));
-  }, [bridge]);
-  useEffect(() => {
-    const source = bridge as DesktopBridge & Partial<SetupEventSource>;
-    if (!source.subscribeSetup) return;
-    let active = true;
-    let stop: (() => void) | undefined;
-    void source.subscribeSetup((next) => { if (active) setSetup(next); }).then((unsubscribe) => {
-      if (active) stop = unsubscribe;
-      else unsubscribe();
-    });
-    return () => { active = false; stop?.(); };
-  }, [bridge]);
-  useEffect(() => {
-    if (setup?.state !== 'downloading') return;
-    let active = true;
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const next = await bridge.getSetup();
-        if (!active) return;
-        setSetup(next);
-        if (next.state === 'downloading') timer = window.setTimeout(() => { void poll(); }, 250);
-      } catch (error) {
-        if (active) setSetupError(describeSetupError(error));
-      }
-    };
-    timer = window.setTimeout(() => { void poll(); }, 250);
-    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [bridge, setup?.state]);
+    void (pendingSettings ?? bridge.getSettings()).then((loaded) => { setSettings(loaded); setSettingsLoaded(true); }).catch(() => setSettingsLoaded(false));
+  }, [bridge, pendingSettings]);
   // Once when Intern starts, and again on this timer for as long as it keeps
   // running - not a person digging into Settings, which is how a machine that
   // is never restarted stayed on a build from months ago. Nothing here
@@ -305,38 +325,20 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     }).catch(() => { /* No drop stream in this runtime; the pickers still work. */ });
     return () => { active = false; stop?.(); };
   }, [selection]);
-  const runSetupAction = async (action: 'start' | 'cancel' | 'choose', run: () => Promise<boolean | void>) => {
-    if (setupAction) return;
-    setSetupAction(action);
-    setSetupError('');
-    try {
-      if (await run() === false) return;
-      setSetup(await bridge.getSetup());
-    } catch (error) {
-      setSetupError(describeSetupError(error));
-    } finally {
-      setSetupAction(undefined);
-    }
-  };
-  const chooseExistingModel = () => void runSetupAction('choose', async () => {
-    const files = await selection?.pickExistingModelFiles();
-    if (!files) return false;
-    await bridge.setupChooseExisting(files);
-  });
   // A hosted model, once chosen and configured, stands in for the local one:
   // the download can be skipped entirely, or finished later from Settings.
-  if (!setup || (setup.state !== 'ready' && !setup.hostedModelReady)) return <>
+  if (!modelReady(model.setup)) return <>
     <SetupScreen
-      setup={setup}
-      busy={setupAction !== undefined}
-      canChooseExisting={Boolean(selection)}
-      operationError={setupError || (setup?.state === 'failed' ? describeSetupError(setup.error) : undefined)}
-      onStart={() => void runSetupAction('start', () => bridge.startModelDownload())}
-      onCancel={() => void runSetupAction('cancel', () => bridge.setupCancel())}
-      onChooseExisting={chooseExistingModel}
+      setup={model.setup}
+      busy={model.busy}
+      canChooseExisting={model.canChooseExisting}
+      operationError={model.operationError}
+      onStart={model.start}
+      onCancel={model.cancel}
+      onChooseExisting={model.chooseExisting}
       onUseHostedModel={() => setSettingsOpen(true)}
     />
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); setSetup(await bridge.getSetup()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
   </>;
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
@@ -418,6 +420,9 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
 /** Views with this many items or fewer are short enough to read; the filter box appears above longer ones. */
 const FILTER_THRESHOLD = 6;
 
+/** The demo bridge's model is ready from the first render. */
+const DEMO_SETUP: SetupState = { state: 'ready', downloadedBytes: 0, totalBytes: 0 };
+
 /** How often Intern asks GitHub for the release manifest while it keeps running, on top of the check at launch. */
 export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -431,30 +436,6 @@ function describeActionError(error: unknown) {
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
   return 'The operation could not be completed.';
-}
-
-function describeSetupError(error: unknown) {
-  const code = typeof error === 'string'
-    ? error
-    : typeof error === 'object' && error && 'code' in error && typeof error.code === 'string'
-      ? error.code
-      : undefined;
-  switch (code) {
-    case 'SETUP_BUSY': return 'Another model setup operation is already active. Wait for it to finish or cancel it. (SETUP_BUSY)';
-    // These used to name files this build does not use: "the matching Q4 or Q8
-    // model and mmproj GGUF files", and an "image self-test". Intern pins one
-    // model file and has no vision projector, so the advice sent people looking
-    // for something that does not exist. Name the file the manifest actually
-    // pins instead.
-    case 'MODEL_FILE_INVALID':
-    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match the model Intern pins. Choose the exact Qwen3.5-2B-Q4_K_M.gguf file, or let Intern download it. (MODEL_FILE_INVALID)';
-    case 'MODEL_SELF_TEST_FAILED': return 'Intern installed the model, but its local self-test failed. Try the download again or choose a verified model file. (MODEL_SELF_TEST_FAILED)';
-    case 'INSUFFICIENT_DISK': return 'There is not enough free disk space to install the local model. Free space and try again. (INSUFFICIENT_DISK)';
-  }
-  if (error instanceof Error && error.message.trim()) return error.message.trim();
-  if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
-  if (typeof error === 'string' && error.trim()) return error.trim();
-  return 'The local model could not be prepared.';
 }
 
 function queueStatusAnnouncement(items: QueueItem[], paused: boolean) {

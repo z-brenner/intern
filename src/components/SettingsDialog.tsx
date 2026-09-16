@@ -1,4 +1,6 @@
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
+import { SharePointConnection } from '../features/settings/SharePointConnection';
+import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
@@ -57,6 +59,9 @@ function saveFailure(error: unknown): string {
     case 'HOSTED_MODEL_REFUSED': return 'The model declined to read the calibration document, so it cannot be relied on to file yours. (HOSTED_MODEL_REFUSED)';
     case 'MODEL_SELF_TEST_FAILED': return 'The model answered, but not correctly: it did not name the calibration document. Try a more capable model. (MODEL_SELF_TEST_FAILED)';
     case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape Intern needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
+    // The managed-save refusals read the same here as everywhere else SharePoint setup is explained.
+    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
+    case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
@@ -149,6 +154,24 @@ function isProvider(value: string): value is HostedProvider {
   return PROVIDERS.some((provider) => provider.value === value);
 }
 
+/*
+  With the fixed SharePoint deployment these belong to the connection, not to
+  the person: the backend derives them at activation and enforces them on
+  every save. Settings still sends a whole settings object, so it sends these
+  exactly as they were loaded - never a draft value. The machine name is not
+  among them: the backend leaves it to the person, so it saves as sent.
+*/
+const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
+
+function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings {
+  const result = { ...draft };
+  for (const key of MANAGED_KEYS) {
+    if (key in loaded) Object.assign(result, { [key]: loaded[key] });
+    else delete result[key as 'intakeLocalOnly'];
+  }
+  return result;
+}
+
 function formatScanTime(lastScanAt: number | null): string {
   if (lastScanAt === null) return 'not yet';
   return new Date(lastScanAt * 1000).toLocaleTimeString();
@@ -162,9 +185,15 @@ interface Props {
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
   onInstallUpdate(): Promise<void>;
+  /**
+   * Leave out the SharePoint connection card. Onboarding opens Settings for
+   * the hosted model before Microsoft is connected, where a card offering to
+   * reconnect Microsoft would skip ahead of the step that does it.
+   */
+  hideSharePointConnection?: boolean;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false }: Props) {
   const [next, setNext] = useState(settings);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -190,9 +219,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [testError, setTestError] = useState('');
   const [rules, setRules] = useState<LearnedRule[]>();
   const [rulesError, setRulesError] = useState('');
+  // Unknown (undefined) until the backend answers. The shared-intake and
+  // background controls wait for the answer, so a managed build never flashes
+  // manual pairing; a build without the deployment, or a failed read, shows
+  // them exactly as it always has.
+  const [managed, setManaged] = useState<boolean>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
+  const layout = useRef<HTMLSelectElement>(null);
   // Escape has to reach the latest onClose without the focus effect below
   // depending on its identity.
   const close = useRef(onClose);
@@ -224,6 +259,19 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     const stop = source.subscribeDescriptions?.((current) => { if (active) setDescriptions(current); });
     return () => { active = false; stop?.(); };
   }, [bridge]);
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => bridge.getOnboarding())
+      .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
+      // Without an answer the manual settings stay, and the backend still enforces its policy on save.
+      .catch(() => { if (active) setManaged(false); });
+    return () => { active = false; };
+  }, [bridge]);
+  // The destination field focused on open is not rendered once the connection
+  // is managed; keep focus inside the dialog rather than dropping it on the page.
+  useEffect(() => {
+    if (managed && !dialog.current?.contains(document.activeElement)) layout.current?.focus();
+  }, [managed]);
   useEffect(() => {
     let active = true;
     void Promise.resolve().then(() => bridge.hostedModelStatus())
@@ -267,7 +315,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaveError('');
     try {
       await storeKeyDraft();
-      await onSave(next);
+      await onSave(managed ? withManagedValues(next, settings) : next);
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -356,7 +404,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }
       if (event.key !== 'Tab') return;
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []);
+      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary') ?? []);
       if (!focusable.length) return;
       const current = document.activeElement;
       const index = focusable.indexOf(current as HTMLElement);
@@ -393,17 +441,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       <section className="settings-group">
         <h3>Filing</h3>
         <p className="section-lead">Where renamed documents are put, and when Intern may file one without asking.</p>
-        <div className="folder-row">
+        {!managed && <><div className="folder-row">
           <label>Destination folder<input ref={destination} value={next.destination} onChange={(event) => setNext({ ...next, destination: event.target.value })} /></label>
           {selection && <button type="button" aria-label="Browse for destination folder" onClick={() => void browse((path) => setNext((current) => ({ ...current, destination: path })))}>Browse…</button>}
         </div>
-        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}
+        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}</>}
         {/*
           A year of contracts in one folder is a thousand files nobody can
           scan. Each layout names its folders from facts the filename already
           carries, so nothing is filed anywhere the name does not explain.
         */}
-        <label>Arrange filed documents<select value={next.destinationLayout} onChange={(event) => { const value = event.target.value; if (isLayout(value)) setNext({ ...next, destinationLayout: value }); }}>
+        <label>Arrange filed documents<select ref={layout} value={next.destinationLayout} onChange={(event) => { const value = event.target.value; if (isLayout(value)) setNext({ ...next, destinationLayout: value }); }}>
           {LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
         </select></label>
         <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder, never loose in the root. Undo removes a folder it empties.'}</p>
@@ -463,7 +511,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           </div>
         </div>}
       </section>
-      <section className="settings-group">
+      {managed && !hideSharePointConnection && <SharePointConnection bridge={bridge} settings={settings} />}
+      {managed === undefined && <section className="settings-group">
+        <p className="check-hint" role="status" aria-label="Loading intake settings">Checking how this computer is set up…</p>
+      </section>}
+      {managed === false && <><section className="settings-group">
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>
@@ -524,7 +576,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           {(intakeError || (intake?.error && !settingsFileProblem)) && <p className="form-error" role="alert">{intakeError || intake?.error}</p>}
           <button type="button" disabled={scanning} onClick={() => void runScanNow()}>{scanning ? 'Scanning…' : 'Scan now'}</button>
         </div>}
-      </section>
+      </section></>}
       <section className="settings-group">
         <h3>Descriptions for SharePoint</h3>
         {/*

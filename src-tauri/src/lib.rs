@@ -8,6 +8,8 @@ pub mod microsoft_intake;
 pub mod model;
 pub mod onboarding;
 pub mod secrets;
+pub mod sharepoint_root_verifier;
+pub mod sharepoint_setup;
 pub mod tray;
 
 pub fn run() {
@@ -20,9 +22,11 @@ pub fn run() {
             commands::second_instance_launched,
         ))
         .plugin(tauri_plugin_dialog::init())
-        // Opens the published user guide in the system browser. A webview
-        // <a target="_blank"> has nowhere to go inside Tauri, and the scope in
-        // capabilities/default.json admits only the guide's own origin.
+        // Opens the published user guide and the two SharePoint support links
+        // (the provisioned site and the OneDrive download page) in the system
+        // browser. A webview <a target="_blank"> has nowhere to go inside
+        // Tauri, and the scope in capabilities/default.json admits only those
+        // addresses.
         .plugin(tauri_plugin_opener::init())
         // Autostart entries launch Intern with "--minimized" so a sign-in
         // launch can go straight to the tray (when background mode allows it)
@@ -50,7 +54,10 @@ pub fn run() {
             let data = app.path().app_local_data_dir().map_err(|_| {
                 std::io::Error::other("local application data directory is unavailable")
             })?;
-            app.manage(onboarding::OnboardingStore::new(data.join("ui-state.json")));
+            app.manage(onboarding::OnboardingStore::new(
+                data.join("ui-state.json"),
+                sharepoint_setup::PACKAGED_DEPLOYMENT,
+            ));
             tray::sync_tray(app.handle(), settings.run_in_background);
             let minimized_launch = std::env::args().any(|argument| argument == "--minimized");
             if tray::window_starts_hidden(
@@ -83,6 +90,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             onboarding::onboarding_status,
             onboarding::onboarding_complete,
+            sharepoint_setup::onboarding_sharepoint_status,
+            sharepoint_setup::onboarding_start_sharepoint_sync,
+            sharepoint_setup::onboarding_activate,
             microsoft_intake::microsoft_intake_status,
             microsoft_intake::microsoft_sign_in_start,
             microsoft_intake::microsoft_sign_in_poll,

@@ -1,103 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
 import type { DesktopBridge } from '../../lib/bridge';
-import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from './microsoft';
-
-function explain(error: unknown): string {
-  if (typeof error === 'string' && error.trim()) return error;
-  if (error instanceof Error && error.message) return error.message;
-  return 'Microsoft verification could not complete. Your files remain held.';
-}
+import { useMicrosoftSignIn } from './useMicrosoftSignIn';
 
 export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: { bridge: DesktopBridge; savedFolder: string; unsavedFolder: boolean }) {
-  const [status, setStatus] = useState<MicrosoftIntakeStatus>();
-  const [prompt, setPrompt] = useState<MicrosoftDevicePrompt>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const mounted = useRef(true);
-  const inFlight = useRef(false);
-  const generation = useRef(0);
-  const signingIn = useRef(false);
+  const { status, prompt, busy, error, run, refresh, begin, disconnect } = useMicrosoftSignIn(bridge);
   const available = Boolean(bridge.microsoftIntakeStatus && bridge.microsoftSignInStart && bridge.microsoftSignInPoll && bridge.microsoftDisconnect && bridge.microsoftBindIntake && !status?.error);
-
-  useEffect(() => {
-    mounted.current = true;
-    let active = true;
-    void bridge.microsoftIntakeStatus?.().then((next) => {
-      if (!active) return;
-      setStatus(next);
-    }).catch((cause) => { if (active) setError(explain(cause)); });
-    return () => {
-      active = false; mounted.current = false; generation.current += 1;
-      // Closing during a pending sign-in must not silently connect later.
-      if (signingIn.current) { signingIn.current = false; void bridge.microsoftDisconnect?.().catch(() => {}); }
-    };
-  }, [bridge]);
-
-  const run = async (action: () => Promise<void>) => {
-    if (inFlight.current) return;
-    inFlight.current = true; setBusy(true); setError('');
-    try { await action(); }
-    catch (cause) { if (mounted.current) setError(explain(cause)); }
-    finally { inFlight.current = false; if (mounted.current) setBusy(false); }
-  };
-  const refresh = async () => {
-    const next = await bridge.microsoftIntakeStatus?.();
-    if (next && mounted.current) setStatus(next);
-  };
-  const begin = () => void run(async () => {
-    const version = ++generation.current;
-    signingIn.current = true;
-    try {
-      const next = await bridge.microsoftSignInStart?.();
-      if (mounted.current && generation.current === version) setPrompt(next);
-    } catch (cause) { signingIn.current = false; throw cause; }
-  });
-  const disconnect = async () => {
-    generation.current += 1; signingIn.current = false; setPrompt(undefined);
-    await bridge.microsoftDisconnect?.(); await refresh();
-  };
-
-  useEffect(() => {
-    if (!prompt) return;
-    const version = generation.current;
-    let active = true;
-    let timer: number | undefined;
-    const poll = async () => {
-      if (!active || !mounted.current || generation.current !== version) return;
-      if (Date.now() >= prompt.expiresAt * 1000) {
-        signingIn.current = false; setPrompt(undefined); setError('Microsoft sign-in expired. Start again; your files remain held.');
-        void bridge.microsoftDisconnect?.().catch(() => {}); return;
-      }
-      try {
-        const result = await bridge.microsoftSignInPoll?.();
-        if (!active || !mounted.current || generation.current !== version) return;
-        if (result?.state === 'connected') {
-          signingIn.current = false; setPrompt(undefined); await refresh();
-        } else {
-          timer = window.setTimeout(() => { void poll(); }, Math.max(5, result?.intervalSeconds ?? prompt.intervalSeconds) * 1000);
-        }
-      } catch (cause) {
-        if (active && mounted.current) { signingIn.current = false; setPrompt(undefined); setError(explain(cause)); }
-      }
-    };
-    timer = window.setTimeout(() => { void poll(); }, Math.max(5, prompt.intervalSeconds) * 1000);
-    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [bridge, prompt]);
-
-  // This reads local application state only. Microsoft's own calls happen in
-  // the backend and remain subject to its polling, consent, and retry limits.
-  useEffect(() => {
-    if (!status?.connected) return;
-    let active = true;
-    let timer: number | undefined;
-    const poll = async () => {
-      try { const next = await bridge.microsoftIntakeStatus?.(); if (active && next) setStatus(next); }
-      catch { /* Keep the last status, without claiming any new verification. */ }
-      if (active) timer = window.setTimeout(() => { void poll(); }, 5000);
-    };
-    timer = window.setTimeout(() => { void poll(); }, 5000);
-    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [bridge, status?.connected]);
 
   const documents = status?.documents ?? [];
   const counts = {
@@ -107,7 +13,7 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
   };
   return <div className="microsoft-intake" role="group" aria-label="Microsoft upload identity">
     <div className="identity-heading"><h4>Microsoft upload identity</h4><span className="identity-policy">Unknown uploader = held</span></div>
-    <p className="section-lead">Unverified uploads are never processed. Intern checks the actual upload activity, not a typed name, the computer that synced first, or the document's last editor.</p>
+    <p className="section-lead">Unverified uploads are never processed. Intern checks Microsoft's own file metadata for who created the document and who last modified it, never a typed name or the computer that synced it first.</p>
     {!available && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
     {status?.error && <p className="form-error" role="status" aria-label="Microsoft connection status">{status.error}</p>}
     {status?.connected ? <div className="identity-account">

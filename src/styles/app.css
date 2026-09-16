@@ -391,3 +391,110 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .identity-documents li > strong { display: block; font-size: 13px; }
 .identity-documents li p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; }
 .identity-state { display: block; font-size: 11px; font-weight: 600; margin: 5px 0; color: var(--text-muted); }
+
+/* ── lane settings-ui: SharePoint connection card (managed deployment) ── */
+.sharepoint-connection .connection-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.sharepoint-connection .connection-facts > div { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); overflow-wrap: anywhere; }
+.sharepoint-connection .connection-facts dt { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-soft); }
+.sharepoint-connection .connection-facts dd { margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+.sharepoint-connection .connection-account { grid-column: 1 / -1; }
+.sharepoint-connection .connection-account dd { display: grid; gap: 2px; }
+.sharepoint-connection .connection-account dd span { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+.sharepoint-connection .connection-health { display: grid; gap: 6px; margin-bottom: 12px; font-size: 13px; }
+.sharepoint-connection .connection-health p { margin: 0; }
+.sharepoint-connection .identity-signin { margin: 12px 0; }
+.support-details { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.support-details summary { font-weight: 600; font-size: 13px; cursor: pointer; }
+.support-details summary:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+.support-details dl { display: grid; gap: 6px; margin: 12px 0 0; }
+.support-details dl > div { display: grid; grid-template-columns: minmax(110px, 30%) 1fr; gap: 10px; }
+.support-details dt { color: var(--text-soft); }
+.support-details dd { margin: 0; }
+.support-documents { list-style: none; margin: 10px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.support-documents li { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border); }
+@media (max-width: 640px) { .support-details dl > div { grid-template-columns: 1fr; gap: 2px; } }
+/* ── end lane settings-ui ── */
+
+/* ==========================================================================
+   Guided onboarding (fixed SharePoint deployment)
+   A step rail beside one left-aligned column. Everything below is scoped to
+   .onboarding so no existing surface changes.
+   ========================================================================== */
+.onboarding { min-height: 100vh; display: grid; grid-template-columns: 260px minmax(0, 1fr); background: var(--surface); color: var(--text); }
+.onboarding-rail { background: var(--surface-subtle); border-right: 1px solid var(--border); padding: 32px 24px; }
+.onboarding-wordmark { margin: 0 0 36px; font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -.8px; line-height: 1; color: var(--brand-navy); }
+.onboarding-rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.onboarding-rail li { position: relative; display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 14px; color: var(--text-muted); }
+/* The line joining each step to the next: filled once that step is done. */
+.onboarding-rail li:not(:last-child)::after { content: ""; position: absolute; left: 13px; top: 36px; width: 2px; height: 16px; background: var(--border); }
+.onboarding-rail li.done:not(:last-child)::after { background: var(--brand-navy); }
+.onboarding-rail-mark { flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.onboarding-rail li.done { color: var(--text-soft); }
+.onboarding-rail li.done .onboarding-rail-mark { border-color: var(--brand-navy); background: var(--brand-navy); color: #fff; }
+.onboarding-rail li.current { color: var(--brand-navy); font-weight: 600; }
+.onboarding-rail li.current .onboarding-rail-mark { border-color: var(--brand-navy); color: var(--brand-navy); background: var(--brand-tint); }
+
+.onboarding-panel { width: min(600px, 100%); padding: min(14vh, 112px) 48px 64px; }
+.onboarding-panel h1 { margin: 0 0 16px; font-family: var(--font-display); font-size: 30px; font-weight: 700; letter-spacing: -.5px; line-height: 1.2; color: var(--text); }
+/* Headings take focus only so each step is announced from its start; they are not controls. */
+.onboarding-panel h1:focus { outline: none; }
+.onboarding-panel h1.onboarding-finished { font-size: 28px; color: var(--brand-navy); }
+.onboarding-panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; color: var(--text-soft); max-width: 62ch; }
+.onboarding-list { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.7; color: var(--text-soft); }
+
+.onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 24px 0 8px; }
+.onboarding button {
+  min-height: 44px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text);
+  font: inherit; font-size: 14px; font-weight: 500; text-decoration: none; transition: background-color .12s ease, border-color .12s ease;
+}
+.onboarding button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
+.onboarding button.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.onboarding button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+.onboarding button:disabled { opacity: .55; cursor: default; }
+.onboarding summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.onboarding-account { display: grid; gap: 4px; margin: 8px 0 18px; padding: 16px 18px; border-left: 3px solid var(--brand-navy); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
+.onboarding-account strong { font-size: 18px; color: var(--text); }
+.onboarding-account span { font-size: 14px; color: var(--text-muted); }
+
+.onboarding-signin { margin: 8px 0 12px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-subtle); }
+.onboarding-signin p { margin-bottom: 8px; }
+.onboarding-code { display: block; font-family: var(--font-mono); font-size: 28px; letter-spacing: .12em; color: var(--brand-navy); user-select: all; }
+.onboarding-panel .onboarding-waiting { font-size: 14px; color: var(--text-muted); }
+
+.onboarding-progress progress { width: 100%; accent-color: var(--accent); }
+.onboarding-progress p { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.onboarding-problem { margin: 12px 0 4px; padding: 12px 14px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); background: #fff5f3; }
+.onboarding-panel .onboarding-problem [role="alert"], .onboarding-panel .onboarding-alert { margin: 0; color: #8f231a; font-size: 14px; line-height: 1.55; }
+.onboarding-panel .onboarding-alert { padding: 12px 14px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); background: #fff5f3; }
+.onboarding-support, .onboarding-panel .onboarding-support { margin: 8px 0 0; font-size: 12px; color: var(--text-muted); }
+.onboarding-support code { font-family: var(--font-mono); font-size: 12px; }
+.onboarding-support summary { cursor: pointer; }
+.onboarding-support details p, details.onboarding-support p { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+
+.onboarding-advanced { margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border); }
+.onboarding-advanced summary { display: list-item; padding: 12px 0; line-height: 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--text-soft); }
+.onboarding-advanced .onboarding-actions { margin: 8px 0 16px; }
+.onboarding-panel .onboarding-advanced p { font-size: 13px; }
+
+/* The recovery screen when onboarding status cannot be read reuses the setup layout. */
+.setup-screen .onboarding-problem { text-align: left; }
+.setup-screen .onboarding-problem [role="alert"] { margin: 0; color: #8f231a; }
+
+@media (max-width: 760px) {
+  .onboarding { grid-template-columns: 1fr; align-content: start; }
+  .onboarding-rail { border-right: 0; border-bottom: 1px solid var(--border); padding: 20px 16px; }
+  .onboarding-wordmark { margin-bottom: 16px; font-size: 24px; }
+  .onboarding-rail ol { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .onboarding-rail li { min-height: 32px; font-size: 13px; }
+  .onboarding-rail li:not(:last-child)::after { display: none; }
+  .onboarding-rail-mark { width: 24px; height: 24px; }
+  .onboarding-panel { padding: 28px 16px 48px; }
+  .onboarding-panel h1 { font-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboarding button { transition: none; }
+}
+/* ======================= end guided onboarding ========================== */

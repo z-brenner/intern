@@ -1,0 +1,1344 @@
+//! Local-to-remote proof that a synced folder is the provisioned SharePoint
+//! library, read from the OneDrive sync client's own per-account records.
+//!
+//! See `docs/sharepoint-root-verification.md` for the evidence behind the
+//! record layout. The OS reads sit behind [`OneDriveRecords`]; everything that
+//! decides lives in [`verify_library_root`] and is fixture-tested.
+
+use std::{
+    fs::File,
+    io::{ErrorKind, Read},
+    path::{Path, PathBuf},
+};
+
+use crate::{SharePointDeployment, cloud::path_components};
+
+/// Read-only access to one Windows user's OneDrive sync-client records.
+pub trait OneDriveRecords {
+    /// Business account names, such as `Business1`.
+    fn business_accounts(&self) -> Result<Vec<String>, RecordError>;
+    /// Raw bytes of `settings\<account>\<name>`, or `None` when absent.
+    fn settings_file(&self, account: &str, name: &str) -> Result<Option<Vec<u8>>, RecordError>;
+    /// `Accounts\<account>\ScopeIdToMountPointPathCache` as (scope id, path).
+    fn scope_mount_points(&self, account: &str) -> Result<Vec<(String, String)>, RecordError>;
+    /// `Accounts\<account>\UserEmail`: who is signed in to that slot, if anyone.
+    fn user_email(&self, account: &str) -> Result<Option<String>, RecordError>;
+}
+
+/// The remote identifiers the sync client records for the verified root,
+/// spelled as lowercase dashed GUIDs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedLibrary {
+    pub tenant_id: String,
+    pub site_id: String,
+    pub web_id: String,
+    pub list_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RecordError {
+    /// A record source exists but could not be read.
+    Unavailable,
+    /// A record source could not be parsed; nothing in it is trusted.
+    Malformed(&'static str),
+    /// Records disagree or more than one record claims the same thing.
+    Conflict(&'static str),
+}
+
+impl RecordError {
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Unavailable => "SHAREPOINT_ROOT_RECORD_UNAVAILABLE",
+            Self::Malformed(_) => "SHAREPOINT_ROOT_RECORD_MALFORMED",
+            Self::Conflict(_) => "SHAREPOINT_ROOT_RECORD_CONFLICT",
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::Unavailable => {
+                "OneDrive's sync records could not be read, so the Files library cannot be verified."
+                    .into()
+            }
+            Self::Malformed(detail) => {
+                format!("OneDrive's sync records are not in a recognised format ({detail}).")
+            }
+            Self::Conflict(detail) => format!("OneDrive's sync records disagree ({detail})."),
+        }
+    }
+}
+
+/// Returns the recorded remote identity for `candidate` only when exactly one
+/// OneDrive `libraryScope` record mounts the whole library at that exact
+/// folder, every identifier equals the packaged deployment, the sync engine's
+/// registry scope cache maps the same scope to the same folder, and the
+/// OneDrive account holding the record is signed in as one of `signed_in_as`
+/// (the connected Microsoft account's mail and principal name). The library
+/// mounted at more than one folder conflicts only when those mounts belong to
+/// OneDrive accounts signed in as the connected account; another person's
+/// OneDrive account on the same computer may sync the same library.
+///
+/// Only records the registry cache corroborates take part, so a settings
+/// folder left behind by an unlinked account neither verifies nor conflicts.
+/// Recorded folders are compared after `canonicalize`, the same filesystem
+/// boundary that produced `candidate`, so junctioned or redirected profiles
+/// match; a recorded folder that does not canonicalize is compared as written.
+///
+/// A record line or settings file that cannot be parsed is skipped, because
+/// it may belong to any library the person syncs. It still fails closed with
+/// `Malformed` whenever it could be the candidate's own record: its account's
+/// cache maps a scope to the candidate and that scope has no well-formed
+/// record, or an unparseable line names that scope.
+pub fn verify_library_root(
+    records: &dyn OneDriveRecords,
+    candidate: &Path,
+    deployment: &SharePointDeployment,
+    signed_in_as: &[&str],
+    canonicalize: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Result<Option<VerifiedLibrary>, RecordError> {
+    let wanted = DeploymentIds::from(deployment)?;
+    let candidate_key = path_components(candidate);
+    let folder_key = |recorded: &str| {
+        let recorded = Path::new(recorded);
+        path_components(&canonicalize(recorded).unwrap_or_else(|| recorded.to_path_buf()))
+    };
+    let signed_in_as_connected = |account: &str| -> Result<bool, RecordError> {
+        Ok(records.user_email(account)?.is_some_and(|email| {
+            signed_in_as.iter().any(|wanted| {
+                !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
+            })
+        }))
+    };
+    let mut at_candidate = Vec::new();
+    let mut deployment_mounts = 0usize;
+    for account in records.business_accounts()? {
+        if !is_business_account(&account) {
+            continue;
+        }
+        let scopes = account_scopes(records, &account)?;
+        if scopes.records.is_empty() && scopes.malformed.is_none() {
+            continue;
+        }
+        let cache: Vec<(Option<String>, Vec<String>)> = records
+            .scope_mount_points(&account)?
+            .iter()
+            .map(|(scope_id, path)| (normalize_scope_id(scope_id), folder_key(path)))
+            .collect();
+        if let Some(malformed) = &scopes.malformed {
+            let could_be_candidates =
+                cache
+                    .iter()
+                    .filter(|(_, path)| *path == candidate_key)
+                    .any(|(scope_id, _)| {
+                        scope_id.as_deref().is_none_or(|scope_id| {
+                            malformed.names_scope(scope_id)
+                                || !scopes
+                                    .records
+                                    .iter()
+                                    .any(|record| record.scope_id == scope_id)
+                        })
+                    });
+            if could_be_candidates {
+                return Err(RecordError::Malformed(malformed.detail));
+            }
+        }
+        for scope in scopes.records {
+            // An empty mount means only folders inside the library are synced
+            // (recorded on separate libraryFolder lines): not the library root.
+            if scope.mount.is_empty() {
+                continue;
+            }
+            let mount = folder_key(&scope.mount);
+            if !cache.iter().any(|(scope_id, path)| {
+                scope_id.as_ref() == Some(&scope.scope_id) && *path == mount
+            }) {
+                continue;
+            }
+            // Only the connected person's own syncs can make theirs ambiguous;
+            // another OneDrive account on this computer may sync the same library.
+            if scope.ids == wanted && signed_in_as_connected(&account)? {
+                deployment_mounts += 1;
+            }
+            if mount == candidate_key {
+                at_candidate.push((account.clone(), cache.clone(), scope));
+            }
+        }
+    }
+    let (account, cache, scope) = match at_candidate.len() {
+        0 => return Ok(None),
+        1 => at_candidate.pop().expect("one record"),
+        _ => return Err(RecordError::Conflict("folder records")),
+    };
+    if scope.ids != wanted {
+        return Ok(None);
+    }
+    // A library synced by a different OneDrive work account than the one
+    // connected to Intern is not this person's enrollment.
+    if !signed_in_as_connected(&account)? {
+        return Ok(None);
+    }
+    if deployment_mounts > 1 {
+        return Err(RecordError::Conflict("library records"));
+    }
+
+    // No other scope may map to this folder, and this scope nowhere else.
+    for (scope_id, path) in &cache {
+        let same_scope = scope_id.as_ref() == Some(&scope.scope_id);
+        if same_scope != (*path == candidate_key) {
+            return Err(RecordError::Conflict("scope cache path"));
+        }
+    }
+    Ok(Some(VerifiedLibrary {
+        tenant_id: dashed(&scope.ids.tenant),
+        site_id: dashed(&scope.ids.site),
+        web_id: dashed(&scope.ids.web),
+        list_id: dashed(&scope.ids.list),
+    }))
+}
+
+/// Settings `.ini` files are a few kilobytes; never buffer an arbitrary file.
+const MAX_SETTINGS_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The current Windows user's OneDrive records: files under
+/// `%LOCALAPPDATA%\Microsoft\OneDrive\settings` and the per-account
+/// `ScopeIdToMountPointPathCache` registry key. Elsewhere there are none.
+#[derive(Clone, Debug)]
+pub struct SystemOneDriveRecords {
+    settings: Option<PathBuf>,
+}
+
+impl SystemOneDriveRecords {
+    pub fn current_user() -> Self {
+        let settings = cfg!(windows)
+            .then(|| std::env::var_os("LOCALAPPDATA"))
+            .flatten()
+            .filter(|base| !base.is_empty())
+            .map(|base| {
+                PathBuf::from(base)
+                    .join("Microsoft")
+                    .join("OneDrive")
+                    .join("settings")
+            });
+        Self { settings }
+    }
+
+    #[cfg(test)]
+    fn at(settings: &Path) -> Self {
+        Self {
+            settings: Some(settings.to_path_buf()),
+        }
+    }
+}
+
+impl OneDriveRecords for SystemOneDriveRecords {
+    fn business_accounts(&self) -> Result<Vec<String>, RecordError> {
+        let Some(settings) = &self.settings else {
+            return Ok(Vec::new());
+        };
+        let entries = match std::fs::read_dir(settings) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(_) => return Err(RecordError::Unavailable),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|_| RecordError::Unavailable)?;
+            let is_dir = entry
+                .file_type()
+                .map_err(|_| RecordError::Unavailable)?
+                .is_dir();
+            if let Some(name) = entry.file_name().to_str()
+                && is_dir
+                && is_business_account(name)
+            {
+                names.push(name.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    fn settings_file(&self, account: &str, name: &str) -> Result<Option<Vec<u8>>, RecordError> {
+        if !is_business_account(account)
+            || name.is_empty()
+            || name.starts_with('.')
+            || name.contains(['/', '\\', ':'])
+        {
+            return Err(RecordError::Malformed("settings file name"));
+        }
+        let Some(settings) = &self.settings else {
+            return Ok(None);
+        };
+        let file = match File::open(settings.join(account).join(name)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(RecordError::Unavailable),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_SETTINGS_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| RecordError::Unavailable)?;
+        if bytes.len() as u64 > MAX_SETTINGS_FILE_BYTES {
+            return Err(RecordError::Malformed("settings file size"));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn scope_mount_points(&self, account: &str) -> Result<Vec<(String, String)>, RecordError> {
+        if !is_business_account(account) {
+            return Err(RecordError::Malformed("account name"));
+        }
+        #[cfg(windows)]
+        {
+            Ok(crate::cloud::windows_registry::current_user_string_values(
+                &format!(
+                    r"Software\Microsoft\OneDrive\Accounts\{account}\ScopeIdToMountPointPathCache"
+                ),
+            ))
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    fn user_email(&self, account: &str) -> Result<Option<String>, RecordError> {
+        if !is_business_account(account) {
+            return Err(RecordError::Malformed("account name"));
+        }
+        Ok(crate::registry_string(
+            crate::RegistryHive::CurrentUser,
+            &format!(r"Software\Microsoft\OneDrive\Accounts\{account}"),
+            "UserEmail",
+        )
+        .filter(|email| !email.trim().is_empty()))
+    }
+}
+
+/// Tenant, site, web, and list identifiers as 32 lowercase hex digits.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeploymentIds {
+    tenant: String,
+    site: String,
+    web: String,
+    list: String,
+}
+
+impl DeploymentIds {
+    fn from(deployment: &SharePointDeployment) -> Result<Self, RecordError> {
+        let id = |value: &str| {
+            normalize_hex32(value).ok_or(RecordError::Malformed("deployment identifier"))
+        };
+        Ok(Self {
+            tenant: id(deployment.tenant_id())?,
+            site: id(deployment.site_id())?,
+            web: id(deployment.web_id())?,
+            list: id(deployment.list_id())?,
+        })
+    }
+}
+
+struct ScopeRecord {
+    scope_id: String,
+    ids: DeploymentIds,
+    mount: String,
+}
+
+fn is_business_account(name: &str) -> bool {
+    name.strip_prefix("Business")
+        .is_some_and(|digit| digit.len() == 1 && matches!(digit.as_bytes()[0], b'1'..=b'9'))
+}
+
+#[derive(Default)]
+struct AccountScopes {
+    records: Vec<ScopeRecord>,
+    malformed: Option<MalformedRecords>,
+}
+
+/// What of one account's records could not be parsed.
+struct MalformedRecords {
+    detail: &'static str,
+    /// The account's settings could not be read as records at all.
+    whole_account: bool,
+    /// Unparseable `libraryScope` lines, lowercased.
+    lines: Vec<String>,
+}
+
+impl MalformedRecords {
+    fn whole_account(detail: &'static str) -> Self {
+        Self {
+            detail,
+            whole_account: true,
+            lines: Vec::new(),
+        }
+    }
+
+    /// Whether an unparseable record could be the one for `scope_id`.
+    fn names_scope(&self, scope_id: &str) -> bool {
+        self.whole_account || self.lines.iter().any(|line| line.contains(scope_id))
+    }
+}
+
+/// Every well-formed `libraryScope` record of one signed-in business account,
+/// and what could not be parsed. A missing `global.ini`, an empty `cid`, or a
+/// missing `<cid>.ini` means the account has nothing enrolled yet. Only an
+/// unreadable source is an error here; see [`verify_library_root`] for when a
+/// malformed one is.
+fn account_scopes(
+    records: &dyn OneDriveRecords,
+    account: &str,
+) -> Result<AccountScopes, RecordError> {
+    let unparsed = |detail| AccountScopes {
+        records: Vec::new(),
+        malformed: Some(MalformedRecords::whole_account(detail)),
+    };
+    let global = match records.settings_file(account, "global.ini") {
+        Ok(Some(global)) => global,
+        Ok(None) => return Ok(AccountScopes::default()),
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let global = match decode_utf16(&global) {
+        Ok(global) => global,
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let mut cids = global
+        .lines()
+        .filter_map(|line| line.strip_prefix("cid = "));
+    let cid = match (cids.next(), cids.next()) {
+        (None, _) => return Ok(AccountScopes::default()),
+        (Some(cid), None) => cid,
+        (Some(_), Some(_)) => return Ok(unparsed("duplicate cid")),
+    };
+    if cid.is_empty() {
+        return Ok(AccountScopes::default());
+    }
+    if cid.len() > 64
+        || !cid
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Ok(unparsed("account cid"));
+    }
+    let scopes = match records.settings_file(account, &format!("{cid}.ini")) {
+        Ok(Some(scopes)) => scopes,
+        Ok(None) => return Ok(AccountScopes::default()),
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let scopes = match decode_utf16(&scopes) {
+        Ok(scopes) => scopes,
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let mut parsed = AccountScopes::default();
+    for line in scopes
+        .lines()
+        .filter_map(|line| line.strip_prefix("libraryScope = "))
+    {
+        match parse_scope(line) {
+            Ok(record) => parsed.records.push(record),
+            Err(RecordError::Malformed(detail)) => {
+                parsed
+                    .malformed
+                    .get_or_insert(MalformedRecords {
+                        detail,
+                        whole_account: false,
+                        lines: Vec::new(),
+                    })
+                    .lines
+                    .push(line.to_lowercase());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(parsed)
+}
+
+/// Field positions in a `libraryScope` record, after the tag.
+const SCOPE_INDEX: usize = 0;
+const SCOPE_ID: usize = 1;
+const SCOPE_TENANT: usize = 7;
+const SCOPE_SITE: usize = 8;
+const SCOPE_WEB: usize = 9;
+const SCOPE_LIST: usize = 10;
+const SCOPE_MOUNT: usize = 12;
+
+fn parse_scope(fields: &str) -> Result<ScopeRecord, RecordError> {
+    let tokens = tokenize(fields)?;
+    if tokens.len() <= SCOPE_MOUNT {
+        return Err(RecordError::Malformed("libraryScope field count"));
+    }
+    if tokens[SCOPE_INDEX].is_empty() || !tokens[SCOPE_INDEX].bytes().all(|b| b.is_ascii_digit()) {
+        return Err(RecordError::Malformed("libraryScope index"));
+    }
+    let hex = |index: usize, what: &'static str| {
+        let token = tokens[index];
+        (token.len() == 32)
+            .then(|| normalize_hex32(token))
+            .flatten()
+            .ok_or(RecordError::Malformed(what))
+    };
+    let scope_id = normalize_scope_id(tokens[SCOPE_ID])
+        .ok_or(RecordError::Malformed("libraryScope scope id"))?;
+    let tenant = normalize_hex32(tokens[SCOPE_TENANT])
+        .filter(|_| tokens[SCOPE_TENANT].len() >= 36)
+        .ok_or(RecordError::Malformed("libraryScope tenant id"))?;
+    Ok(ScopeRecord {
+        scope_id,
+        ids: DeploymentIds {
+            tenant,
+            site: hex(SCOPE_SITE, "libraryScope site id")?,
+            web: hex(SCOPE_WEB, "libraryScope web id")?,
+            list: hex(SCOPE_LIST, "libraryScope list id")?,
+        },
+        mount: tokens[SCOPE_MOUNT].to_owned(),
+    })
+}
+
+/// Splits a record into space-separated fields; a field starting with `"`
+/// runs to the next `"` (Windows paths cannot contain one).
+fn tokenize(line: &str) -> Result<Vec<&str>, RecordError> {
+    const SEPARATORS: [char; 2] = [' ', '\t'];
+    let mut tokens = Vec::new();
+    let mut rest = line;
+    loop {
+        rest = rest.trim_start_matches(SEPARATORS);
+        if rest.is_empty() {
+            return Ok(tokens);
+        }
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let end = quoted
+                .find('"')
+                .ok_or(RecordError::Malformed("unterminated quoted field"))?;
+            rest = &quoted[end + 1..];
+            if !(rest.is_empty() || rest.starts_with(SEPARATORS)) {
+                return Err(RecordError::Malformed("quoted field boundary"));
+            }
+            tokens.push(&quoted[..end]);
+        } else {
+            let end = rest.find(SEPARATORS).unwrap_or(rest.len());
+            if rest[..end].contains('"') {
+                return Err(RecordError::Malformed("stray quote"));
+            }
+            tokens.push(&rest[..end]);
+            rest = &rest[end..];
+        }
+    }
+}
+
+/// OneDrive writes its settings `.ini` files as UTF-16LE, usually without a
+/// byte-order mark.
+fn decode_utf16(bytes: &[u8]) -> Result<String, RecordError> {
+    let bytes = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
+    if bytes.len() % 2 != 0 {
+        return Err(RecordError::Malformed("UTF-16 length"));
+    }
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16(&units).map_err(|_| RecordError::Malformed("UTF-16 text"))
+}
+
+/// A scope ID as 32 lowercase hex digits. Business records have been seen
+/// with a `+<number>` suffix (`<32 hex>+1`); the suffix only distinguishes
+/// entries and is dropped so the settings and registry spellings compare.
+fn normalize_scope_id(value: &str) -> Option<String> {
+    let hex = match value.split_once('+') {
+        Some((hex, number))
+            if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            hex
+        }
+        Some(_) => return None,
+        None => value,
+    };
+    (hex.len() == 32 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
+}
+
+/// A GUID as 32 lowercase hex digits, accepting the dashed, braced, and bare
+/// spellings the sync client and deployment use.
+fn normalize_hex32(value: &str) -> Option<String> {
+    let inner = value
+        .strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or(value);
+    let hex: String = match inner.len() {
+        32 => inner.to_owned(),
+        36 if inner
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) == (byte == b'-')) =>
+        {
+            inner.replace('-', "")
+        }
+        _ => return None,
+    };
+    (hex.len() == 32 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| hex.to_ascii_lowercase())
+}
+
+fn dashed(hex: &str) -> String {
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    // Synthetic fixtures. The layout follows the sync client's
+    // `libraryScope` record as documented in
+    // docs/sharepoint-root-verification.md; every identifier, path, and URL
+    // below is invented. A tenant-backed Windows run must confirm the real
+    // record before release.
+    const TENANT: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const SITE: &str = "cccccccccccccccccccccccccccccccc";
+    const WEB: &str = "dddddddddddddddddddddddddddddddd";
+    const LIST: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const SCOPE: &str = "0123456789abcdef0123456789abcdef";
+    const MYSITE_SCOPE: &str = "fedcba9876543210fedcba9876543210";
+    const ROOT: &str = r"C:\Users\Pat\Contoso\InternTestSite - Files";
+    const CID: &str = "9f8e7d6c-5b4a-4938-8271-605f4e3d2c1b";
+    /// The connected Microsoft account's mail and principal name.
+    const CONNECTED_MAIL: &str = "pat.contoso@contoso.com";
+    const SIGNED_IN: &str = "pat@contoso.com";
+
+    fn deployment() -> SharePointDeployment {
+        SharePointDeployment::from_slice(
+            br#"{
+                "schema_version": 1,
+                "enabled": true,
+                "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+                "library_name": "Files",
+                "intake_folder_name": "Inbox",
+                "destination_folder_name": "Filed",
+                "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "client_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                "site_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "web_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+                "list_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+                "drive_id": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                "intake_folder_id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+                "destination_folder_id": "01SYNTHETICFILEDFOLDERAAAAAAAAAAAA"
+            }"#,
+        )
+        .expect("enabled test deployment")
+    }
+
+    fn scope_line(
+        index: u32,
+        scope: &str,
+        tenant: &str,
+        ids: (&str, &str, &str),
+        mount: &str,
+    ) -> String {
+        format!(
+            "libraryScope = {index} {scope} 5 \"InternTestSite\" \"Files\" 4 \
+             \"https://teamcontoso.sharepoint.com/sites/InternTestSite\" \"{tenant}\" \
+             {} {} {} 1760590648 \"{mount}\" 1 a547d3cb-8666-43cd-aa14-02270f7cee87  - \
+             8725724278134823 3167371729 00000000-0000-0000-0000-000000000000 ",
+            ids.0, ids.1, ids.2
+        )
+    }
+
+    fn library_line(mount: &str) -> String {
+        scope_line(1, SCOPE, TENANT, (SITE, WEB, LIST), mount)
+    }
+
+    fn mysite_line() -> String {
+        format!(
+            "libraryScope = 0 {MYSITE_SCOPE} 5 \"MySite\" \"ODB\" 2 \
+             \"https://teamcontoso-my.sharepoint.com/personal/pat_contoso_com\" \"{TENANT}\" \
+             11111111111111111111111111111111 22222222222222222222222222222222 \
+             33333333333333333333333333333333 1760590648 \"C:\\Users\\Pat\\OneDrive - Contoso\" 1 \
+             a547d3cb-8666-43cd-aa14-02270f7cee87  - 0 0 00000000-0000-0000-0000-000000000000 "
+        )
+    }
+
+    fn utf16(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[derive(Default)]
+    struct Fixture {
+        accounts: Vec<String>,
+        files: HashMap<(String, String), Vec<u8>>,
+        caches: HashMap<String, Vec<(String, String)>>,
+        emails: HashMap<String, String>,
+        /// Recorded spelling to canonical folder, as a junction or redirected
+        /// profile resolves; anything absent does not canonicalize.
+        canonical: HashMap<String, String>,
+        unavailable: bool,
+    }
+
+    impl Fixture {
+        /// One Business1 account with a personal OneDrive scope and the
+        /// provisioned library mounted at `ROOT`.
+        fn standard() -> Self {
+            let mut fixture = Self::default();
+            fixture.account(
+                "Business1",
+                CID,
+                &[mysite_line(), library_line(ROOT)],
+                &[
+                    (MYSITE_SCOPE, r"C:\Users\Pat\OneDrive - Contoso"),
+                    (SCOPE, ROOT),
+                ],
+            );
+            fixture
+        }
+
+        fn account(&mut self, name: &str, cid: &str, lines: &[String], cache: &[(&str, &str)]) {
+            self.accounts.push(name.into());
+            self.emails.insert(name.into(), SIGNED_IN.into());
+            self.files.insert(
+                (name.into(), "global.ini".into()),
+                utf16(&format!("mode = 1\r\ncid = {cid}\r\n")),
+            );
+            self.files.insert(
+                (name.into(), format!("{cid}.ini")),
+                utf16(&(lines.join("\r\n") + "\r\n")),
+            );
+            self.caches.insert(
+                name.into(),
+                cache
+                    .iter()
+                    .map(|(scope, path)| ((*scope).into(), (*path).into()))
+                    .collect(),
+            );
+        }
+
+        fn set_scope_ini(&mut self, account: &str, bytes: Vec<u8>) {
+            self.files
+                .insert((account.into(), format!("{CID}.ini")), bytes);
+        }
+    }
+
+    impl OneDriveRecords for Fixture {
+        fn business_accounts(&self) -> Result<Vec<String>, RecordError> {
+            if self.unavailable {
+                return Err(RecordError::Unavailable);
+            }
+            Ok(self.accounts.clone())
+        }
+
+        fn settings_file(&self, account: &str, name: &str) -> Result<Option<Vec<u8>>, RecordError> {
+            Ok(self.files.get(&(account.into(), name.into())).cloned())
+        }
+
+        fn scope_mount_points(&self, account: &str) -> Result<Vec<(String, String)>, RecordError> {
+            Ok(self.caches.get(account).cloned().unwrap_or_default())
+        }
+
+        fn user_email(&self, account: &str) -> Result<Option<String>, RecordError> {
+            Ok(self.emails.get(account).cloned())
+        }
+    }
+
+    fn verify(fixture: &Fixture, candidate: &str) -> Result<Option<VerifiedLibrary>, RecordError> {
+        verify_library_root(
+            fixture,
+            Path::new(candidate),
+            &deployment(),
+            &[CONNECTED_MAIL, SIGNED_IN],
+            &|path| {
+                fixture
+                    .canonical
+                    .get(path.to_string_lossy().as_ref())
+                    .map(PathBuf::from)
+            },
+        )
+    }
+
+    fn expected() -> VerifiedLibrary {
+        VerifiedLibrary {
+            tenant_id: TENANT.into(),
+            site_id: "cccccccc-cccc-cccc-cccc-cccccccccccc".into(),
+            web_id: "dddddddd-dddd-dddd-dddd-dddddddddddd".into(),
+            list_id: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee".into(),
+        }
+    }
+
+    #[test]
+    fn an_exact_library_scope_record_verifies_the_canonical_root() {
+        let fixture = Fixture::standard();
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+        assert_eq!(
+            verify(&fixture, r"\\?\c:\users\pat\CONTOSO\InternTestSite - Files"),
+            Ok(Some(expected())),
+            "the canonical verbatim spelling and case are the same folder"
+        );
+    }
+
+    #[test]
+    fn identifiers_compare_case_insensitively_without_dashes_or_braces() {
+        let mut fixture = Fixture::default();
+        let upper = scope_line(
+            1,
+            &SCOPE.to_ascii_uppercase(),
+            &format!("{{{}}}", TENANT.to_ascii_uppercase()),
+            (
+                &SITE.to_ascii_uppercase(),
+                &WEB.to_ascii_uppercase(),
+                &LIST.to_ascii_uppercase(),
+            ),
+            ROOT,
+        );
+        fixture.account("Business1", CID, &[upper], &[(SCOPE, ROOT)]);
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn a_numbered_scope_id_matches_its_registry_cache_entry() {
+        let mut fixture = Fixture::default();
+        fixture.account(
+            "Business1",
+            CID,
+            &[scope_line(
+                1,
+                &format!("{SCOPE}+1"),
+                TENANT,
+                (SITE, WEB, LIST),
+                ROOT,
+            )],
+            &[(SCOPE, ROOT)],
+        );
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn a_leading_byte_order_mark_is_accepted() {
+        let mut fixture = Fixture::standard();
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(utf16(&(library_line(ROOT) + "\r\n")));
+        fixture.set_scope_ini("Business1", bytes);
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn any_mismatched_identifier_does_not_verify() {
+        let other = "99999999999999999999999999999999";
+        let variants = [
+            scope_line(
+                1,
+                SCOPE,
+                "99999999-9999-9999-9999-999999999999",
+                (SITE, WEB, LIST),
+                ROOT,
+            ),
+            scope_line(1, SCOPE, TENANT, (other, WEB, LIST), ROOT),
+            scope_line(1, SCOPE, TENANT, (SITE, other, LIST), ROOT),
+            scope_line(1, SCOPE, TENANT, (SITE, WEB, other), ROOT),
+        ];
+        for line in variants {
+            let mut fixture = Fixture::default();
+            fixture.account("Business1", CID, &[line.clone()], &[(SCOPE, ROOT)]);
+            assert_eq!(verify(&fixture, ROOT), Ok(None), "{line}");
+        }
+    }
+
+    #[test]
+    fn site_url_and_titles_never_authorize_a_different_list() {
+        // Same site URL, same "Files" title, same folder name; only the list
+        // identifier differs, as for a second library with a copied title.
+        let line = scope_line(
+            1,
+            SCOPE,
+            TENANT,
+            (SITE, WEB, "abababababababababababababababab"),
+            ROOT,
+        );
+        let mut fixture = Fixture::default();
+        fixture.account("Business1", CID, &[line], &[(SCOPE, ROOT)]);
+        assert_eq!(verify(&fixture, ROOT), Ok(None));
+    }
+
+    #[test]
+    fn a_different_or_nested_folder_does_not_verify() {
+        let fixture = Fixture::standard();
+        for candidate in [
+            r"C:\Users\Pat\Contoso",
+            r"C:\Users\Pat\Contoso\InternTestSite - Files\Inbox",
+            r"C:\Users\Pat\Contoso\InternTestSite - Files2",
+            r"C:\Users\Pat\OneDrive - Contoso",
+        ] {
+            assert_eq!(verify(&fixture, candidate), Ok(None), "{candidate}");
+        }
+    }
+
+    #[test]
+    fn a_subfolder_sync_is_not_the_library_root() {
+        // Syncing a folder inside the library leaves the scope's mount empty
+        // and records the folder on a separate libraryFolder line.
+        let mut fixture = Fixture::default();
+        fixture.account(
+            "Business1",
+            CID,
+            &[
+                library_line(""),
+                format!(
+                    "libraryFolder = 3 1 {SCOPE}+1 1656974198 \"{ROOT}\" 1 \"Inbox\" \
+                     68da3f5f-721e-4b7d-86cb-904988ac670f 32932572275197086 1017134003 \
+                     00000000-0000-0000-0000-000000000000 "
+                ),
+            ],
+            &[(SCOPE, ROOT)],
+        );
+        assert_eq!(verify(&fixture, ROOT), Ok(None));
+    }
+
+    #[test]
+    fn missing_accounts_or_settings_files_are_not_yet_enrolled() {
+        assert_eq!(verify(&Fixture::default(), ROOT), Ok(None));
+
+        let mut no_scope_file = Fixture::standard();
+        no_scope_file
+            .files
+            .remove(&("Business1".into(), format!("{CID}.ini")));
+        assert_eq!(verify(&no_scope_file, ROOT), Ok(None));
+
+        let mut no_global = Fixture::standard();
+        no_global
+            .files
+            .remove(&("Business1".into(), "global.ini".into()));
+        assert_eq!(verify(&no_global, ROOT), Ok(None));
+
+        let mut signed_out = Fixture::standard();
+        signed_out.files.insert(
+            ("Business1".into(), "global.ini".into()),
+            utf16("mode = 1\r\ncid = \r\n"),
+        );
+        assert_eq!(verify(&signed_out, ROOT), Ok(None));
+    }
+
+    #[test]
+    fn the_registry_scope_cache_must_corroborate_the_record() {
+        let mut missing = Fixture::standard();
+        missing.caches.insert(
+            "Business1".into(),
+            vec![(
+                MYSITE_SCOPE.into(),
+                r"C:\Users\Pat\OneDrive - Contoso".into(),
+            )],
+        );
+        assert_eq!(verify(&missing, ROOT), Ok(None));
+
+        // A record the cache maps somewhere else is uncorroborated, so it
+        // neither verifies nor conflicts.
+        let mut elsewhere = Fixture::standard();
+        elsewhere.caches.insert(
+            "Business1".into(),
+            vec![(SCOPE.into(), r"C:\Users\Pat\Elsewhere".into())],
+        );
+        assert_eq!(verify(&elsewhere, ROOT), Ok(None));
+
+        let mut other_scope = Fixture::standard();
+        other_scope.caches.insert(
+            "Business1".into(),
+            vec![
+                (SCOPE.into(), ROOT.into()),
+                (MYSITE_SCOPE.into(), ROOT.to_ascii_lowercase()),
+            ],
+        );
+        assert_eq!(
+            verify(&other_scope, ROOT),
+            Err(RecordError::Conflict("scope cache path"))
+        );
+    }
+
+    #[test]
+    fn only_the_onedrive_account_signed_in_as_the_connected_account_verifies() {
+        let mut other = Fixture::standard();
+        other
+            .emails
+            .insert("Business1".into(), "sam@contoso.com".into());
+        assert_eq!(verify(&other, ROOT), Ok(None));
+
+        let mut unsigned = Fixture::standard();
+        unsigned.emails.clear();
+        assert_eq!(verify(&unsigned, ROOT), Ok(None));
+
+        for email in ["PAT@Contoso.com", " pat.contoso@CONTOSO.com "] {
+            let mut fixture = Fixture::standard();
+            fixture.emails.insert("Business1".into(), email.into());
+            assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())), "{email}");
+        }
+    }
+
+    #[test]
+    fn stale_uncorroborated_records_neither_verify_nor_conflict() {
+        // A settings folder left behind by an unlinked account still names
+        // the library, here and in another folder, but its registry cache no
+        // longer maps either scope.
+        let mut fixture = Fixture::standard();
+        fixture.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[
+                scope_line(
+                    0,
+                    "abcdefabcdefabcdefabcdefabcdefab",
+                    TENANT,
+                    (SITE, WEB, LIST),
+                    ROOT,
+                ),
+                scope_line(
+                    1,
+                    "bcdefabcdefabcdefabcdefabcdefabc",
+                    TENANT,
+                    (SITE, WEB, LIST),
+                    r"D:\Contoso\InternTestSite - Files",
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+
+        let mut stale_only = Fixture::default();
+        stale_only.account("Business1", CID, &[library_line(ROOT)], &[]);
+        assert_eq!(verify(&stale_only, ROOT), Ok(None));
+    }
+
+    #[test]
+    fn a_malformed_record_for_another_library_does_not_block_a_corroborated_root() {
+        let broken = format!("libraryScope = 7 {MYSITE_SCOPE} 5 \"Other\" \"unterminated");
+        let mut same_account = Fixture::default();
+        same_account.account(
+            "Business1",
+            CID,
+            &[broken, library_line(ROOT)],
+            &[
+                (MYSITE_SCOPE, r"C:\Users\Pat\OneDrive - Contoso"),
+                (SCOPE, ROOT),
+            ],
+        );
+        assert_eq!(verify(&same_account, ROOT), Ok(Some(expected())));
+
+        let mut other_account = Fixture::standard();
+        let other_cid = "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e";
+        other_account.account(
+            "Business2",
+            other_cid,
+            &[],
+            &[(MYSITE_SCOPE, r"D:\Elsewhere")],
+        );
+        let mut odd = utf16("libraryScope = 1 x\r\n");
+        odd.push(0);
+        other_account
+            .files
+            .insert(("Business2".into(), format!("{other_cid}.ini")), odd);
+        assert_eq!(verify(&other_account, ROOT), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn a_malformed_record_that_could_be_the_candidates_fails_closed() {
+        // A second, unparseable record for the candidate's own scope.
+        let duplicate = format!("libraryScope = 2 {SCOPE} 5 \"InternTestSite\" \"Files");
+        let mut fixture = Fixture::default();
+        fixture.account(
+            "Business1",
+            CID,
+            &[library_line(ROOT), duplicate],
+            &[(SCOPE, ROOT)],
+        );
+        assert!(matches!(
+            verify(&fixture, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+
+        // An unreadable settings file in an account whose cache maps a scope
+        // to the candidate: its record could be the one that is unreadable.
+        let mut unreadable = Fixture::standard();
+        let other_cid = "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e";
+        unreadable.account(
+            "Business2",
+            other_cid,
+            &[],
+            &[("abcdefabcdefabcdefabcdefabcdefab", ROOT)],
+        );
+        let mut odd = utf16("libraryScope = 1 x\r\n");
+        odd.push(0);
+        unreadable
+            .files
+            .insert(("Business2".into(), format!("{other_cid}.ini")), odd);
+        assert!(matches!(
+            verify(&unreadable, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn recorded_paths_compare_after_canonicalization() {
+        // The profile is a junction to D:, so OneDrive recorded C: while the
+        // candidate canonicalized to D:.
+        let canonical = r"\\?\D:\Users\Pat\Contoso\InternTestSite - Files";
+        let mut fixture = Fixture::standard();
+        assert_eq!(verify(&fixture, canonical), Ok(None));
+
+        fixture.canonical.insert(ROOT.into(), canonical.into());
+        assert_eq!(verify(&fixture, canonical), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn two_records_for_the_same_folder_fail_closed() {
+        let mut same_account = Fixture::default();
+        same_account.account(
+            "Business1",
+            CID,
+            &[library_line(ROOT), library_line(&ROOT.to_ascii_uppercase())],
+            &[(SCOPE, ROOT)],
+        );
+        assert_eq!(
+            verify(&same_account, ROOT),
+            Err(RecordError::Conflict("folder records"))
+        );
+
+        let mut two_accounts = Fixture::standard();
+        two_accounts.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[scope_line(
+                0,
+                "abcdefabcdefabcdefabcdefabcdefab",
+                TENANT,
+                ("12121212121212121212121212121212", WEB, LIST),
+                ROOT,
+            )],
+            &[("abcdefabcdefabcdefabcdefabcdefab", ROOT)],
+        );
+        assert_eq!(
+            verify(&two_accounts, ROOT),
+            Err(RecordError::Conflict("folder records"))
+        );
+    }
+
+    #[test]
+    fn the_library_synced_to_two_folders_fails_closed() {
+        let mut fixture = Fixture::standard();
+        fixture.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[scope_line(
+                0,
+                "abcdefabcdefabcdefabcdefabcdefab",
+                TENANT,
+                (SITE, WEB, LIST),
+                r"D:\Contoso\InternTestSite - Files",
+            )],
+            &[(
+                "abcdefabcdefabcdefabcdefabcdefab",
+                r"D:\Contoso\InternTestSite - Files",
+            )],
+        );
+        assert_eq!(
+            verify(&fixture, ROOT),
+            Err(RecordError::Conflict("library records"))
+        );
+
+        let second = "abcdefabcdefabcdefabcdefabcdefab";
+        let elsewhere = r"D:\Contoso\InternTestSite - Files";
+        let mut one_account = Fixture::default();
+        one_account.account(
+            "Business1",
+            CID,
+            &[
+                library_line(ROOT),
+                scope_line(2, second, TENANT, (SITE, WEB, LIST), elsewhere),
+            ],
+            &[(SCOPE, ROOT), (second, elsewhere)],
+        );
+        assert_eq!(
+            verify(&one_account, ROOT),
+            Err(RecordError::Conflict("library records"))
+        );
+    }
+
+    #[test]
+    fn another_person_syncing_the_library_does_not_conflict_with_the_connected_one() {
+        // A second OneDrive work account on this computer, signed in as
+        // someone else, also syncs the library. Their sync is not this
+        // person's enrollment, so it neither verifies nor conflicts.
+        let elsewhere = r"D:\Sam\Contoso\InternTestSite - Files";
+        let mut fixture = Fixture::standard();
+        fixture.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[scope_line(
+                0,
+                "abcdefabcdefabcdefabcdefabcdefab",
+                TENANT,
+                (SITE, WEB, LIST),
+                elsewhere,
+            )],
+            &[("abcdefabcdefabcdefabcdefabcdefab", elsewhere)],
+        );
+        fixture
+            .emails
+            .insert("Business2".into(), "sam@contoso.com".into());
+
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+        assert_eq!(verify(&fixture, elsewhere), Ok(None));
+    }
+
+    #[test]
+    fn malformed_records_fail_closed() {
+        let unterminated = library_line(ROOT).replace("\"Files\"", "\"Files");
+        let short = format!("libraryScope = 1 {SCOPE} 5 \"InternTestSite\"");
+        let bad_scope = scope_line(1, "not-a-scope", TENANT, (SITE, WEB, LIST), ROOT);
+        let bad_suffix = scope_line(1, &format!("{SCOPE}+x"), TENANT, (SITE, WEB, LIST), ROOT);
+        let bad_tenant = scope_line(1, SCOPE, "tenant", (SITE, WEB, LIST), ROOT);
+        let bad_site = scope_line(1, SCOPE, TENANT, ("c0ffee", WEB, LIST), ROOT);
+        let bad_index = scope_line(1, SCOPE, TENANT, (SITE, WEB, LIST), ROOT).replacen(
+            "libraryScope = 1",
+            "libraryScope = x",
+            1,
+        );
+        for line in [
+            unterminated,
+            short,
+            bad_scope,
+            bad_suffix,
+            bad_tenant,
+            bad_site,
+            bad_index,
+        ] {
+            let mut fixture = Fixture::default();
+            fixture.account("Business1", CID, &[line.clone()], &[(SCOPE, ROOT)]);
+            assert!(
+                matches!(verify(&fixture, ROOT), Err(RecordError::Malformed(_))),
+                "{line}"
+            );
+        }
+
+        let mut odd = Fixture::standard();
+        let mut bytes = utf16(&library_line(ROOT));
+        bytes.push(0);
+        odd.set_scope_ini("Business1", bytes);
+        assert!(matches!(verify(&odd, ROOT), Err(RecordError::Malformed(_))));
+
+        let mut unpaired = Fixture::standard();
+        let mut bytes = utf16(&library_line(ROOT));
+        bytes.extend([0x00, 0xD8]);
+        unpaired.set_scope_ini("Business1", bytes);
+        assert!(matches!(
+            verify(&unpaired, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn a_settings_cid_cannot_name_another_file() {
+        for cid in [r"..\Business2\x", "a/b", "..", "a b", "a:b"] {
+            let mut fixture = Fixture::standard();
+            fixture.files.insert(
+                ("Business1".into(), "global.ini".into()),
+                utf16(&format!("cid = {cid}\r\n")),
+            );
+            let result = verify(&fixture, ROOT);
+            assert!(
+                matches!(result, Err(RecordError::Malformed(_))),
+                "{cid}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_cid_lines_fail_closed() {
+        let mut fixture = Fixture::standard();
+        fixture.files.insert(
+            ("Business1".into(), "global.ini".into()),
+            utf16(&format!(
+                "cid = {CID}\r\ncid = 0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e\r\n"
+            )),
+        );
+        assert!(matches!(
+            verify(&fixture, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn system_records_read_only_business_settings_files() {
+        let settings = tempfile::tempdir().expect("settings directory");
+        for directory in ["Business1", "Business2", "Personal", "Business10"] {
+            std::fs::create_dir(settings.path().join(directory)).expect("account");
+        }
+        std::fs::write(settings.path().join("Business12"), b"not a folder").expect("file");
+        std::fs::write(
+            settings.path().join("Business1").join("global.ini"),
+            utf16("cid = x\r\n"),
+        )
+        .expect("global.ini");
+        let records = SystemOneDriveRecords::at(settings.path());
+
+        assert_eq!(
+            records.business_accounts(),
+            Ok(vec!["Business1".to_owned(), "Business2".to_owned()])
+        );
+        assert_eq!(
+            records.settings_file("Business1", "global.ini"),
+            Ok(Some(utf16("cid = x\r\n")))
+        );
+        assert_eq!(records.settings_file("Business2", "global.ini"), Ok(None));
+        for (account, name) in [
+            ("Personal", "global.ini"),
+            ("Business1", r"..\Personal\global.ini"),
+            ("Business1", "../global.ini"),
+            ("Business1", "C:global.ini"),
+            ("Business1", ""),
+        ] {
+            assert!(
+                matches!(
+                    records.settings_file(account, name),
+                    Err(RecordError::Malformed(_))
+                ),
+                "{account} {name}"
+            );
+        }
+
+        let missing = SystemOneDriveRecords::at(&settings.path().join("absent"));
+        assert_eq!(missing.business_accounts(), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn system_records_refuse_oversized_settings_files() {
+        let settings = tempfile::tempdir().expect("settings directory");
+        std::fs::create_dir(settings.path().join("Business1")).expect("account");
+        let file = File::create(settings.path().join("Business1").join("big.ini")).expect("file");
+        file.set_len(MAX_SETTINGS_FILE_BYTES + 2).expect("size");
+        let records = SystemOneDriveRecords::at(settings.path());
+        assert_eq!(
+            records.settings_file("Business1", "big.ini"),
+            Err(RecordError::Malformed("settings file size"))
+        );
+    }
+
+    #[test]
+    fn unreadable_sources_fail_closed_with_a_stable_code() {
+        let fixture = Fixture {
+            unavailable: true,
+            ..Fixture::standard()
+        };
+        let error = verify(&fixture, ROOT).unwrap_err();
+        assert_eq!(error.code(), "SHAREPOINT_ROOT_RECORD_UNAVAILABLE");
+        assert_eq!(
+            RecordError::Malformed("x").code(),
+            "SHAREPOINT_ROOT_RECORD_MALFORMED"
+        );
+        assert_eq!(
+            RecordError::Conflict("x").code(),
+            "SHAREPOINT_ROOT_RECORD_CONFLICT"
+        );
+    }
+}

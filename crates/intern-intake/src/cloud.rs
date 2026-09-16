@@ -158,6 +158,18 @@ pub fn relative_to_root(path: &Path, root: &Path) -> Option<String> {
     (!relative.is_empty()).then_some(relative)
 }
 
+/// Whether two normalized paths are equal or one contains the other.
+///
+/// Sync-root discovery can report a parent and a mounted library below it.
+/// Activation must treat that as ambiguous rather than choosing by display
+/// name or by string prefix. This comparison shares the detector's Windows
+/// case/verbatim-prefix rules and remains component-boundary-aware.
+pub fn paths_overlap(left: &Path, right: &Path) -> bool {
+    let left = path_components(left);
+    let right = path_components(right);
+    !left.is_empty() && !right.is_empty() && (left.starts_with(&right) || right.starts_with(&left))
+}
+
 /// The share a path reaches over the network, as `\\server\share`, when it is
 /// one: a UNC path in either its plain or its verbatim spelling, or on
 /// Windows a drive letter the operating system reports as a network drive.
@@ -392,11 +404,48 @@ mod windows_network {
     }
 }
 
+/// A registry hive the desktop host may read facts about OneDrive from.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RegistryHive {
+    ClassesRoot,
+    CurrentUser,
+    LocalMachine,
+}
+
+/// One string value, where `value` `""` names the key's default value. Opens
+/// with read access only. `None` off Windows, and for an absent key, a
+/// missing, empty, or non-string value.
+pub fn registry_string(hive: RegistryHive, key: &str, value: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        windows_registry::string(hive, key, value)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hive, key, value);
+        None
+    }
+}
+
+/// The names of a key's direct subkeys, read-only; empty off Windows or when
+/// the key is absent.
+pub fn registry_subkeys(hive: RegistryHive, key: &str) -> Vec<String> {
+    #[cfg(windows)]
+    {
+        windows_registry::subkeys(hive, key)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (hive, key);
+        Vec::new()
+    }
+}
+
 /// The one unsafe island in this crate, mirroring `intern-core`'s
 /// `windows_file` module: raw Win32 registry reads to discover OneDrive
 /// accounts and SharePoint/Teams library mounts.
 #[cfg(windows)]
-mod windows_registry {
+pub(crate) mod windows_registry {
     #![allow(unsafe_code)]
 
     use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::PathBuf};
@@ -404,8 +453,9 @@ mod windows_registry {
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
         System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
-            RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW,
+            HKEY, HKEY_CLASSES_ROOT, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_DWORD,
+            REG_EXPAND_SZ, REG_SZ, RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW,
+            RegQueryValueExW,
         },
     };
 
@@ -615,6 +665,39 @@ mod windows_registry {
         }
     }
 
+    /// Every string value directly under `HKCU\<subkey>` as (name, data);
+    /// empty when the key does not exist. Non-string values are skipped.
+    pub(crate) fn current_user_string_values(subkey: &str) -> Vec<(String, String)> {
+        let Some(key) = RegKey::open(HKEY_CURRENT_USER, subkey) else {
+            return Vec::new();
+        };
+        key.value_names()
+            .into_iter()
+            .filter_map(|name| {
+                let data = key.string_value(&name)?;
+                Some((name, data))
+            })
+            .collect()
+    }
+
+    fn hive_key(hive: super::RegistryHive) -> HKEY {
+        match hive {
+            super::RegistryHive::ClassesRoot => HKEY_CLASSES_ROOT,
+            super::RegistryHive::CurrentUser => HKEY_CURRENT_USER,
+            super::RegistryHive::LocalMachine => HKEY_LOCAL_MACHINE,
+        }
+    }
+
+    pub(super) fn string(hive: super::RegistryHive, key: &str, value: &str) -> Option<String> {
+        RegKey::open(hive_key(hive), key)?.string_value(value)
+    }
+
+    pub(super) fn subkeys(hive: super::RegistryHive, key: &str) -> Vec<String> {
+        RegKey::open(hive_key(hive), key)
+            .map(|key| key.subkey_names())
+            .unwrap_or_default()
+    }
+
     fn wide(value: &str) -> Vec<u16> {
         OsStr::new(value).encode_wide().chain(Some(0)).collect()
     }
@@ -697,6 +780,23 @@ mod tests {
                 Path::new("/home/pat/OneDrive")
             ),
             None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn registry_reads_values_defaults_and_subkeys_without_inventing_any() {
+        let key = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+        assert!(registry_string(RegistryHive::LocalMachine, key, "CurrentBuild").is_some());
+        assert!(registry_string(RegistryHive::LocalMachine, key, "InternNoSuchValue").is_none());
+        // Every `.txt` association names its class in the default value.
+        assert!(registry_string(RegistryHive::ClassesRoot, ".txt", "").is_some());
+        assert!(
+            registry_string(RegistryHive::CurrentUser, r"Software\InternNoSuchKey", "").is_none()
+        );
+        assert!(!registry_subkeys(RegistryHive::LocalMachine, r"SOFTWARE\Microsoft").is_empty());
+        assert!(
+            registry_subkeys(RegistryHive::CurrentUser, r"Software\InternNoSuchKey").is_empty()
         );
     }
 }

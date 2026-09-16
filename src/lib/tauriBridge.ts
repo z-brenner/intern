@@ -1,8 +1,8 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState } from '../types';
-import { GUIDE_URL } from './bridge';
+import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
@@ -12,6 +12,7 @@ import type {
   IntakeEventSource,
   SelectionBoundary,
   SelectionResult,
+  SupportLinkTarget,
   UpdateStatus,
 } from './bridge';
 import { humanizeReason } from './reasons';
@@ -149,6 +150,15 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
 
   getSetup(): Promise<SetupState> { return this.transport.invoke('setup_get'); }
   getOnboarding(): Promise<OnboardingStatus> { return this.transport.invoke('onboarding_status'); }
+  getSharePointSetup(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_sharepoint_status'); }
+  startSharePointSync(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_start_sharepoint_sync'); }
+  activateOnboarding(): Promise<SharePointSetupStatus> { return this.sharePointSetup('onboarding_activate'); }
+
+  /** An absent problem (from an older backend) reads as null, never undefined. */
+  private async sharePointSetup(command: string): Promise<SharePointSetupStatus> {
+    const status = await this.transport.invoke<SharePointSetupStatus>(command);
+    return { ...status, problem: status.problem ?? null };
+  }
   completeOnboarding(): Promise<void> { return this.transport.invoke('onboarding_complete'); }
   startModelDownload(): Promise<void> { return this.transport.invoke('setup_start'); }
   setupCancel(): Promise<void> { return this.transport.invoke('setup_cancel'); }
@@ -224,6 +234,11 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
    */
   async openGuide(): Promise<void> {
     await this.transport.invoke('plugin:opener|open_url', { url: GUIDE_URL });
+  }
+
+  /** The same path as `openGuide`, for the fixed SharePoint setup links. */
+  async openSupportLink(target: SupportLinkTarget): Promise<void> {
+    await this.transport.invoke('plugin:opener|open_url', { url: SUPPORT_LINKS[target] });
   }
 
   // The updater plugin is loaded lazily so that importing this module never

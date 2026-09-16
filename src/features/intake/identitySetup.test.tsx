@@ -7,6 +7,7 @@ it('explains that unverified shared uploads stay untouched and separates Microso
   render(<App bridge={createInMemoryBridge()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
   const dialog = screen.getByRole('dialog', { name: 'Settings' });
-  expect(within(dialog).getByText(/unverified uploads are never processed/i)).toBeVisible();
+  // The shared-intake section appears once Settings knows this build is not managed.
+  expect(await within(dialog).findByText(/unverified uploads are never processed/i)).toBeVisible();
   expect(within(dialog).getByRole('group', { name: 'Microsoft upload identity' })).toBeVisible();
 });

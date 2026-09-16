@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GUIDE_URL } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
@@ -40,6 +40,61 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  it('starts fixed SharePoint sync and activation without identifier or path payloads', async () => {
+    const fake = fakeTransport({
+      onboarding_sharepoint_status: {
+        phase: 'enrollment_pending',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
+      onboarding_start_sharepoint_sync: {
+        phase: 'enrollment_pending',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
+      onboarding_activate: {
+        phase: 'active',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect((await bridge.getSharePointSetup()).phase).toBe('enrollment_pending');
+    expect((await bridge.startSharePointSync()).phase).toBe('enrollment_pending');
+    expect((await bridge.activateOnboarding()).phase).toBe('active');
+
+    expect(fake.calls).toEqual([
+      { command: 'onboarding_sharepoint_status', args: undefined },
+      { command: 'onboarding_start_sharepoint_sync', args: undefined },
+      { command: 'onboarding_activate', args: undefined },
+    ]);
+  });
+
+  it('carries a pending setup problem and reports its absence as null', async () => {
+    const status = { phase: 'enrollment_pending', account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' };
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const fake = fakeTransport({
+      onboarding_sharepoint_status: { ...status, problem },
+      onboarding_start_sharepoint_sync: { ...status, problem: null },
+      onboarding_activate: { ...status, phase: 'active' },
+    });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect((await bridge.getSharePointSetup()).problem).toEqual(problem);
+    expect((await bridge.startSharePointSync()).problem).toBeNull();
+    expect((await bridge.activateOnboarding()).problem).toBeNull();
+  });
+
   it('maps the exact narrow command names and JSON-safe payloads', async () => {
     const fake = fakeTransport({
       queue_list: [],
@@ -54,7 +109,7 @@ describe('TauriBridge', () => {
       cloud_roots: [{ provider: 'sharepoint', displayName: 'Contoso', path: 'C:\\Users\\pat\\Contoso\\Legal - Documents' }],
       descriptions_status: { enabled: true, folder: 'C:\\Filed\\.intern\\descriptions', recordedThisSession: 2, lastRecordedAt: 1716282600, lastError: null },
       descriptions_backfill: { written: 3, failed: 0 },
-      onboarding_status: { currentVersion: 1, completedVersion: 0, required: true },
+      onboarding_status: { currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: false },
       history_list: [],
       history_export: 0,
     });
@@ -306,6 +361,25 @@ describe('TauriBridge', () => {
       { command: 'plugin:opener|open_url', args: { url: GUIDE_URL } },
     ]);
     expect(GUIDE_URL).toBe('https://zgbrenner.github.io/intern/guide.html');
+  });
+
+  // The same reasoning as the guide: onboarding's recovery links must reach
+  // the shell, and only through the fixed addresses the capability admits.
+  it('opens the fixed support links in the system browser through the opener plugin', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.openSupportLink('sharepoint-site');
+    await bridge.openSupportLink('onedrive-download');
+
+    expect(fake.calls).toEqual([
+      { command: 'plugin:opener|open_url', args: { url: 'https://teamcontoso.sharepoint.com/sites/InternTestSite' } },
+      { command: 'plugin:opener|open_url', args: { url: 'https://www.microsoft.com/microsoft-365/onedrive/download' } },
+    ]);
+    expect(SUPPORT_LINKS).toEqual({
+      'sharepoint-site': 'https://teamcontoso.sharepoint.com/sites/InternTestSite',
+      'onedrive-download': 'https://www.microsoft.com/microsoft-365/onedrive/download',
+    });
   });
 
   it('reports an absent cloud classification as null, never undefined', async () => {
