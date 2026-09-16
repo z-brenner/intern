@@ -63,6 +63,8 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   saveSettings(settings: AppSettings): Promise<void>;
   getSetup(): Promise<SetupState>;
   getOnboarding(): Promise<OnboardingStatus>;
+  /** Rescans sync roots and reports fixed-library setup without side effects. */
+  getSharePointSetup(): Promise<SharePointSetupStatus>;
   startSharePointSync(): Promise<SharePointSetupStatus>;
   activateOnboarding(): Promise<SharePointSetupStatus>;
   completeOnboarding(): Promise<void>;

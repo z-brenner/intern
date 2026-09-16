@@ -149,6 +149,7 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
 
   getSetup(): Promise<SetupState> { return this.transport.invoke('setup_get'); }
   getOnboarding(): Promise<OnboardingStatus> { return this.transport.invoke('onboarding_status'); }
+  getSharePointSetup(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_sharepoint_status'); }
   startSharePointSync(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_start_sharepoint_sync'); }
   activateOnboarding(): Promise<SharePointSetupStatus> { return this.transport.invoke('onboarding_activate'); }
   completeOnboarding(): Promise<void> { return this.transport.invoke('onboarding_complete'); }

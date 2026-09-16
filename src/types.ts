@@ -92,6 +92,11 @@ export interface OnboardingStatus {
   currentVersion: number;
   completedVersion: number;
   required: boolean;
+  /**
+   * Whether this build carries an enabled fixed SharePoint deployment. When
+   * false, onboarding covers only the local model and the manual settings stay.
+   */
+  sharePointAvailable: boolean;
 }
 
 export type SharePointSetupPhase = 'enrollment_pending' | 'ready_to_activate' | 'active';

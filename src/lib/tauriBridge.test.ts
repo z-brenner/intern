@@ -42,6 +42,14 @@ describe('TauriBridge', () => {
 
   it('starts fixed SharePoint sync and activation without identifier or path payloads', async () => {
     const fake = fakeTransport({
+      onboarding_sharepoint_status: {
+        phase: 'enrollment_pending',
+        account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
+        site: 'InternTestSite',
+        library: 'Files',
+        intake: 'Inbox',
+        destination: 'Filed',
+      },
       onboarding_start_sharepoint_sync: {
         phase: 'enrollment_pending',
         account: { displayName: 'Pat Contoso', email: 'pat@contoso.com' },
@@ -61,10 +69,12 @@ describe('TauriBridge', () => {
     });
     const bridge = new TauriBridge(fake.transport);
 
+    expect((await bridge.getSharePointSetup()).phase).toBe('enrollment_pending');
     expect((await bridge.startSharePointSync()).phase).toBe('enrollment_pending');
     expect((await bridge.activateOnboarding()).phase).toBe('active');
 
     expect(fake.calls).toEqual([
+      { command: 'onboarding_sharepoint_status', args: undefined },
       { command: 'onboarding_start_sharepoint_sync', args: undefined },
       { command: 'onboarding_activate', args: undefined },
     ]);
@@ -84,7 +94,7 @@ describe('TauriBridge', () => {
       cloud_roots: [{ provider: 'sharepoint', displayName: 'Contoso', path: 'C:\\Users\\pat\\Contoso\\Legal - Documents' }],
       descriptions_status: { enabled: true, folder: 'C:\\Filed\\.intern\\descriptions', recordedThisSession: 2, lastRecordedAt: 1716282600, lastError: null },
       descriptions_backfill: { written: 3, failed: 0 },
-      onboarding_status: { currentVersion: 1, completedVersion: 0, required: true },
+      onboarding_status: { currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: false },
       history_list: [],
       history_export: 0,
     });
