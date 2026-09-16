@@ -1,14 +1,83 @@
-# Intern alpha.9 rendered-fidelity ledger
+# Intern alpha.10 rendered-fidelity ledger
 
-**Rendered sign-off status: accepted for alpha.9.**
+**Rendered sign-off status: accepted for alpha.10.**
 `docs/qa/rendered-fidelity-signoff.json` is bound to release-input digest
-`c4db219b6db91a98eab8f9fae4e359860825a0f7dacf86772f1c44cb5d5471fd` and to the
+`5e0cc31c1184aaa033a7066e65c336394787aa65889c72792a819e660ac73885` and to the
 1536x1024 capture `docs/qa/latest-implementation.png`, SHA-256
 `ee46abcfe76433b6ed25b6f7a53c80056bf36918b8b44009ae8f5511c54167a4`, taken by
-Whole-product QA evidence run 34538797800 at commit
-`a9a96a482b099c4b848a00df8ee66bb4013caf18`.
+Whole-product QA evidence run 35084991785 at commit
+`f7fd55c56ade21b2fac8091b76993aa51f104245`.
 
-## alpha.9 record
+## alpha.10 record
+
+Run 35084991785 passed every gate on Windows:
+
+- frontend checks, and the browser QA suite including its contrast assertions;
+- `cargo fmt --check`, workspace clippy with warnings denied, and the Rust
+  workspace tests;
+- native fixture parsing with the pinned assets, and the verified pinned runtime;
+- an NSIS build, and installer and uninstall smoke with user data retained;
+- an accepted whole-corpus evaluation with real inference.
+
+That evaluation reproduces alpha.9's naming and date scores exactly: date role
+14/14, type 18/18, description specific 19/19, parties 16/19, review rate 42.1%,
+and nothing filed under a date the corpus marks as a trap. Descriptions covered
+the expected facts for 16 of 18 documents, one more than alpha.9's 15. This
+release changes no naming behaviour, and the numbers show it did not.
+
+The capture is byte-identical to the accepted alpha.9 frame, with the same SHA-256.
+That is expected. The visible additions in this release are the guided SharePoint
+setup and the managed SharePoint connection card in Settings, and both appear
+only in a build provisioned with a SharePoint deployment. This build is not
+provisioned. The model-download retry and the automatic update check add nothing
+to this frame. The frame was re-taken because the release inputs changed, not
+because it was expected to look different.
+
+The onboarding screens are covered by automated gates rather than this frame:
+
+- unit tests;
+- the Playwright fake-deployment journey, which asserts heading focus, visible
+  focus rings, no identifier or path inputs, and no horizontal overflow at every
+  step.
+
+The capture was inspected against the accepted concept:
+
+- Sidebar counts, the queue table and the review drawer read as three distinct
+  planes.
+- The header states the privacy posture beside the brand tag.
+- Date-first proposed filenames, right-aligned confidence and em-dashes for
+  absent values stay consistent down the column.
+- Ready, Needs review, Processing and Waiting are each distinguishable by icon as
+  well as colour.
+- Evidence stays attributed under DATE, TYPE and PARTIES headings, with each
+  party on its own line.
+- The approve and keep actions sit in a pinned bar at the foot of the panel.
+- No clipping, collisions, illegible copy, excessive density or ambiguous focus
+  were observed.
+
+### Reviewer
+
+Reviewed by the maintainer, Zachary Brenner, who accepted the capture named
+above. Claude Opus 5 (Claude Code) inspected it first and wrote this record and
+the sign-off at the maintainer's direction.
+
+### Freshness boundary
+
+The sign-off is accepted only for the digest and screenshot named above.
+`scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
+release inputs. Any relevant source change invalidates this record and requires
+a new capture and review. Exact-main validation and the deliberately dispatched
+release workflow must still reproduce and accept their own evidence before a tag
+or publication is allowed.
+
+## Superseded alpha.9 record
+
+The alpha.9 sign-off was bound to release-input digest
+`c4db219b6db91a98eab8f9fae4e359860825a0f7dacf86772f1c44cb5d5471fd` at commit
+`a9a96a482b099c4b848a00df8ee66bb4013caf18`. Pull requests #37 through #40 and the
+alpha.10 version bump have changed the non-QA release inputs since, so that
+digest no longer describes what would ship. Its record is kept below for history.
+
 
 Run 34538797800 passed every gate on Windows: frontend checks, the browser QA
 suite including its contrast assertions, `cargo fmt --check`, workspace clippy
@@ -55,14 +124,14 @@ differ where supported behaviour requires it. The native title bar, the
 automated browser and installed-app gates rather than by a claim that one frame
 captures every state.
 
-### Reviewer
+#### Reviewer
 
 Reviewed by the maintainer, Zachary Brenner, who inspected the capture named
 above and accepted it. Claude Opus 5 (Claude Code) inspected it first and wrote
 this record and the sign-off at the maintainer's direction, the same standing
 under which the alpha.6 and alpha.8 records were written.
 
-### Freshness boundary
+#### Freshness boundary
 
 The sign-off is accepted only for the digest and screenshot named above.
 `scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
