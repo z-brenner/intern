@@ -8,9 +8,9 @@
 
 use crate::commands::SettingsRuntime;
 use intern_intake::{
-    CloudProviderKind, CloudRoot, SharePointDeployment, detect_cloud_roots,
+    CloudProviderKind, CloudRoot, RegistryHive, SharePointDeployment, detect_cloud_roots,
     microsoft::{Account, proof::is_guid},
-    paths_overlap, relative_to_root,
+    paths_overlap, registry_string, registry_subkeys, relative_to_root,
 };
 use intern_queue::AppSettings;
 use serde::Serialize;
@@ -83,7 +83,9 @@ pub enum DirectoryFailure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncOpenFailure {
-    OneDriveUnavailable,
+    /// No `odopen:` protocol handler is registered, so OneDrive cannot
+    /// receive the sync request even if the OS opener launches it.
+    ProtocolUnavailable,
     OpenerUnavailable,
     Other(String),
 }
@@ -257,9 +259,9 @@ impl<'a> SharePointSetup<'a> {
                 )
             })?;
         self.opener.open(&url).map_err(|failure| match failure {
-            SyncOpenFailure::OneDriveUnavailable => SharePointSetupError::new(
-                "ONEDRIVE_MISSING",
-                "OneDrive could not handle the fixed SharePoint sync request. Install or open OneDrive, then try again.",
+            SyncOpenFailure::ProtocolUnavailable => SharePointSetupError::new(
+                "SYNC_PROTOCOL_UNAVAILABLE",
+                "OneDrive is not registered to receive SharePoint sync requests on this computer. Repair or reinstall OneDrive, then try again.",
             ),
             SyncOpenFailure::OpenerUnavailable => SharePointSetupError::new(
                 "SYNC_OPENER_UNAVAILABLE",
@@ -329,13 +331,13 @@ impl<'a> SharePointSetup<'a> {
             OneDriveState::Missing => {
                 return Err(SharePointSetupError::new(
                     "ONEDRIVE_MISSING",
-                    "OneDrive is not available on this computer.",
+                    "OneDrive is not installed on this computer. Install OneDrive, sign in with your work account, then try again.",
                 ));
             }
             OneDriveState::AccountMissing => {
                 return Err(SharePointSetupError::new(
                     "ONEDRIVE_ACCOUNT_MISSING",
-                    "OneDrive is not signed in to a work or school account.",
+                    "OneDrive is installed but not signed in to a work or school account. Sign in to OneDrive with your work account, then try again.",
                 ));
             }
             OneDriveState::Available => {}
@@ -562,13 +564,110 @@ fn result_label(result: Result<(), SharePointSetupError>) -> String {
     )
 }
 
-struct SystemRoots;
+/// Read-only machine facts the production OneDrive checks consult. Nothing
+/// here ever writes the registry; tests substitute a fake machine.
+trait MachineFacts {
+    fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String>;
+    fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String>;
+    fn env_var(&self, name: &str) -> Option<String>;
+    fn is_file(&self, path: &Path) -> bool;
+}
 
-impl RootDetector for SystemRoots {
+struct SystemMachine;
+
+impl MachineFacts for SystemMachine {
+    fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String> {
+        registry_string(hive, key, value)
+    }
+
+    fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String> {
+        registry_subkeys(hive, key)
+    }
+
+    fn env_var(&self, name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+}
+
+const ONEDRIVE_ACCOUNTS_KEY: &str = r"Software\Microsoft\OneDrive\Accounts";
+
+/// Installed means a OneDrive program actually exists: the per-user trigger
+/// OneDrive records, or the per-user and per-machine install locations. A
+/// registry value left behind by an uninstall is not an installation.
+fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
+    let mut candidates = Vec::new();
+    if let Some(trigger) = machine.registry_string(
+        RegistryHive::CurrentUser,
+        r"Software\Microsoft\OneDrive",
+        "OneDriveTrigger",
+    ) {
+        candidates.push(PathBuf::from(trigger));
+    }
+    for (variable, relative) in [
+        ("LOCALAPPDATA", r"Microsoft\OneDrive\OneDrive.exe"),
+        ("ProgramFiles", r"Microsoft OneDrive\OneDrive.exe"),
+        ("ProgramFiles(x86)", r"Microsoft OneDrive\OneDrive.exe"),
+    ] {
+        if let Some(base) = machine.env_var(variable) {
+            candidates.push(PathBuf::from(base).join(relative));
+        }
+    }
+    candidates
+        .iter()
+        .any(|candidate| machine.is_file(candidate))
+}
+
+/// OneDrive keeps an `Accounts\Business<N>` key per work or school account
+/// slot, and records `UserEmail` only once someone has signed in to it.
+fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+    machine
+        .registry_subkeys(RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY)
+        .iter()
+        .filter(|name| name.to_ascii_lowercase().starts_with("business"))
+        .any(|name| {
+            machine
+                .registry_string(
+                    RegistryHive::CurrentUser,
+                    &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
+                    "UserEmail",
+                )
+                .is_some()
+        })
+}
+
+fn one_drive_state(machine: &dyn MachineFacts) -> OneDriveState {
+    if !one_drive_client_installed(machine) {
+        OneDriveState::Missing
+    } else if !one_drive_work_account_signed_in(machine) {
+        OneDriveState::AccountMissing
+    } else {
+        OneDriveState::Available
+    }
+}
+
+/// `HKEY_CLASSES_ROOT` merges the per-user and per-machine class
+/// registrations, which is what the shell resolves `odopen:` against.
+fn sync_protocol_registered(machine: &dyn MachineFacts) -> bool {
+    machine
+        .registry_string(RegistryHive::ClassesRoot, r"odopen\shell\open\command", "")
+        .is_some()
+}
+
+struct SystemRoots<'a> {
+    machine: &'a dyn MachineFacts,
+}
+
+impl RootDetector for SystemRoots<'_> {
     fn one_drive_state(&self) -> OneDriveState {
         // Root absence is the normal pre-enrollment state, not evidence that
-        // OneDrive is absent. The odopen handler is the OS authority for that.
-        OneDriveState::Available
+        // OneDrive is absent, so only the client and account are checked.
+        one_drive_state(self.machine)
     }
 
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -728,13 +827,35 @@ impl AutostartBoundary for ProductionAutostart<'_> {
     }
 }
 
-struct ProductionOpener;
+type Launch<'a> = &'a dyn Fn(&str) -> Result<(), tauri_plugin_opener::Error>;
 
-impl SyncOpener for ProductionOpener {
+struct ProductionOpener<'a> {
+    machine: &'a dyn MachineFacts,
+    launch: Launch<'a>,
+}
+
+impl SyncOpener for ProductionOpener<'_> {
+    /// The OS opener only reports whether a launcher process started; it
+    /// cannot tell that nothing handles `odopen:`, so that is checked first.
     fn open(&self, url: &Url) -> Result<(), SyncOpenFailure> {
-        tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
-            .map_err(|_| SyncOpenFailure::OneDriveUnavailable)
+        if !sync_protocol_registered(self.machine) {
+            return Err(SyncOpenFailure::ProtocolUnavailable);
+        }
+        (self.launch)(url.as_str()).map_err(|error| match error {
+            tauri_plugin_opener::Error::UnsupportedPlatform => SyncOpenFailure::OpenerUnavailable,
+            tauri_plugin_opener::Error::Io(error)
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                SyncOpenFailure::OpenerUnavailable
+            }
+            tauri_plugin_opener::Error::Io(error) => SyncOpenFailure::Other(error.to_string()),
+            other => SyncOpenFailure::Other(other.to_string()),
+        })
     }
+}
+
+fn launch_url(url: &str) -> Result<(), tauri_plugin_opener::Error> {
+    tauri_plugin_opener::open_url(url, None::<&str>)
 }
 
 fn packaged_deployment() -> Result<SharePointDeployment, SharePointSetupError> {
@@ -753,7 +874,8 @@ fn production_operation(
     // production commands fail with this exact support error and cannot ever
     // activate by a registry display name.
     let deployment = packaged_deployment()?;
-    let roots = SystemRoots;
+    let machine = SystemMachine;
+    let roots = SystemRoots { machine: &machine };
     let fs = SystemFileSystem;
     let verifier = UnavailableRemoteVerifier;
     let microsoft_state = app.state::<std::sync::Arc<crate::microsoft_intake::MicrosoftIntake>>();
@@ -761,7 +883,10 @@ fn production_operation(
     let app_state = app.state::<crate::commands::AppState>();
     let settings = ProductionSettings(app_state.inner());
     let autostart = ProductionAutostart(app);
-    let opener = ProductionOpener;
+    let opener = ProductionOpener {
+        machine: &machine,
+        launch: &launch_url,
+    };
     let setup = SharePointSetup::new(
         &deployment,
         &roots,
@@ -1208,6 +1333,238 @@ mod tests {
         rig.opener.failure = Some(SyncOpenFailure::OpenerUnavailable);
 
         assert_eq!(code(rig.setup().start_sync()), "SYNC_OPENER_UNAVAILABLE");
+    }
+
+    #[test]
+    fn every_opener_failure_has_its_own_code() {
+        let mut rig = Rig::empty();
+        rig.opener.failure = Some(SyncOpenFailure::ProtocolUnavailable);
+        assert_eq!(code(rig.setup().start_sync()), "SYNC_PROTOCOL_UNAVAILABLE");
+
+        let mut rig = Rig::empty();
+        rig.opener.failure = Some(SyncOpenFailure::Other("access is denied".into()));
+        let error = rig.setup().start_sync().expect_err("launch failed");
+        assert_eq!(error.code, "ONEDRIVE_OPEN_FAILED");
+        assert!(error.message.contains("access is denied"));
+    }
+
+    /// Registry values, environment, and files the production OneDrive
+    /// checks read, with nothing present unless a test adds it.
+    #[derive(Default)]
+    struct FakeMachine {
+        strings: HashMap<(RegistryHive, String, String), String>,
+        subkeys: HashMap<(RegistryHive, String), Vec<String>>,
+        env: HashMap<String, String>,
+        files: HashSet<PathBuf>,
+    }
+
+    impl FakeMachine {
+        fn string(mut self, hive: RegistryHive, key: &str, value: &str, data: &str) -> Self {
+            self.strings
+                .insert((hive, key.into(), value.into()), data.into());
+            self
+        }
+
+        fn accounts(mut self, names: &[&str]) -> Self {
+            self.subkeys.insert(
+                (RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY.into()),
+                names.iter().map(|name| (*name).to_owned()).collect(),
+            );
+            self
+        }
+
+        fn installed(mut self) -> Self {
+            self.env
+                .insert("ProgramFiles".into(), r"C:\Program Files".into());
+            self.files.insert(PathBuf::from(
+                r"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
+            ));
+            self
+        }
+
+        fn work_account(self) -> Self {
+            self.accounts(&["Business1", "Personal"]).string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business1"),
+                "UserEmail",
+                "pat@contoso.com",
+            )
+        }
+
+        fn odopen(self) -> Self {
+            self.string(
+                RegistryHive::ClassesRoot,
+                r"odopen\shell\open\command",
+                "",
+                r#""C:\Program Files\Microsoft OneDrive\OneDrive.exe" /url:"%1""#,
+            )
+        }
+    }
+
+    impl MachineFacts for FakeMachine {
+        fn registry_string(&self, hive: RegistryHive, key: &str, value: &str) -> Option<String> {
+            self.strings.get(&(hive, key.into(), value.into())).cloned()
+        }
+
+        fn registry_subkeys(&self, hive: RegistryHive, key: &str) -> Vec<String> {
+            self.subkeys
+                .get(&(hive, key.into()))
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn env_var(&self, name: &str) -> Option<String> {
+            self.env.get(name).cloned()
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.files.contains(path)
+        }
+    }
+
+    #[test]
+    fn production_onedrive_state_distinguishes_client_and_work_account() {
+        assert_eq!(
+            one_drive_state(&FakeMachine::default()),
+            OneDriveState::Missing
+        );
+        // A stale trigger value without the program is not an installation.
+        let stale = FakeMachine::default().string(
+            RegistryHive::CurrentUser,
+            r"Software\Microsoft\OneDrive",
+            "OneDriveTrigger",
+            r"C:\Gone\OneDrive.exe",
+        );
+        assert_eq!(one_drive_state(&stale), OneDriveState::Missing);
+        let per_user = FakeMachine::default()
+            .string(
+                RegistryHive::CurrentUser,
+                r"Software\Microsoft\OneDrive",
+                "OneDriveTrigger",
+                r"C:\Users\pat\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+            )
+            .work_account();
+        let mut per_user = per_user;
+        per_user.files.insert(PathBuf::from(
+            r"C:\Users\pat\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+        ));
+        assert_eq!(one_drive_state(&per_user), OneDriveState::Available);
+
+        assert_eq!(
+            one_drive_state(&FakeMachine::default().installed()),
+            OneDriveState::AccountMissing
+        );
+        // An account slot OneDrive created but never signed in, and a
+        // personal account, are not a work account.
+        let unsigned = FakeMachine::default()
+            .installed()
+            .accounts(&["Business1", "Personal"])
+            .string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Personal"),
+                "UserEmail",
+                "pat@outlook.com",
+            );
+        assert_eq!(one_drive_state(&unsigned), OneDriveState::AccountMissing);
+        assert_eq!(
+            one_drive_state(&FakeMachine::default().installed().work_account()),
+            OneDriveState::Available
+        );
+    }
+
+    #[test]
+    fn production_onedrive_checks_block_sync_before_any_launch() {
+        let launches = std::cell::Cell::new(0);
+        let launch = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+        for (machine, expected) in [
+            (FakeMachine::default(), "ONEDRIVE_MISSING"),
+            (
+                FakeMachine::default().installed().odopen(),
+                "ONEDRIVE_ACCOUNT_MISSING",
+            ),
+        ] {
+            let rig = Rig::empty();
+            let roots = SystemRoots { machine: &machine };
+            let opener = ProductionOpener {
+                machine: &machine,
+                launch: &launch,
+            };
+            let setup = SharePointSetup::new(
+                &rig.deployment,
+                &roots,
+                &rig.fs,
+                &rig.verifier,
+                &rig.microsoft,
+                &rig.settings,
+                &rig.autostart,
+                &opener,
+            );
+            assert_eq!(code(setup.start_sync()), expected);
+        }
+        assert_eq!(launches.get(), 0);
+    }
+
+    #[test]
+    fn production_opener_distinguishes_protocol_opener_and_launch_failures() {
+        let url = Url::parse("odopen://sync/?userEmail=pat%40contoso.com").unwrap();
+        let unregistered = FakeMachine::default().installed().work_account();
+        let registered = FakeMachine::default().installed().work_account().odopen();
+        let launches = std::cell::Cell::new(0);
+        let succeed = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+
+        let opener = ProductionOpener {
+            machine: &unregistered,
+            launch: &succeed,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::ProtocolUnavailable));
+        assert_eq!(launches.get(), 0, "no launch without an odopen handler");
+
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &succeed,
+        };
+        assert_eq!(opener.open(&url), Ok(()));
+        assert_eq!(launches.get(), 1);
+
+        let missing_launcher = |_: &str| {
+            Err(tauri_plugin_opener::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "program not found",
+            )))
+        };
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &missing_launcher,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::OpenerUnavailable));
+
+        let unsupported = |_: &str| Err(tauri_plugin_opener::Error::UnsupportedPlatform);
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &unsupported,
+        };
+        assert_eq!(opener.open(&url), Err(SyncOpenFailure::OpenerUnavailable));
+
+        let denied = |_: &str| {
+            Err(tauri_plugin_opener::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "access is denied",
+            )))
+        };
+        let opener = ProductionOpener {
+            machine: &registered,
+            launch: &denied,
+        };
+        assert_eq!(
+            opener.open(&url),
+            Err(SyncOpenFailure::Other("access is denied".into()))
+        );
     }
 
     #[test]
