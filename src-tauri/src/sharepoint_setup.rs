@@ -166,6 +166,13 @@ pub trait SyncOpener {
     fn open(&self, url: &Url) -> Result<(), SyncOpenFailure>;
 }
 
+/// Whether resolution may prove writability by creating a probe file.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WriteProbe {
+    Require,
+    Skip,
+}
+
 struct ResolvedLibrary {
     identity: RemoteLibraryIdentity,
     inbox: PathBuf,
@@ -208,10 +215,15 @@ impl<'a> SharePointSetup<'a> {
     }
 
     /// Rescans every time. Command adapters must run this blocking discovery
-    /// away from the IPC thread, as the two production actions below do.
+    /// away from the IPC thread, as the production commands below do.
+    ///
+    /// Side-effect free: it never launches OneDrive or writes settings or
+    /// autostart, and it skips the write probes, which would create and
+    /// delete files inside the synced SharePoint library on every poll.
+    /// Writability is proven again by `start_sync` and `activate`.
     pub fn status(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let Some(resolved) = self.resolve(&account)? else {
+        let Some(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
             return Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account));
         };
         let settings = self.settings.load()?;
@@ -233,7 +245,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn start_sync(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        if let Some(resolved) = self.resolve(&account)? {
+        if let Some(resolved) = self.resolve(&account, WriteProbe::Require)? {
             let settings = self.settings.load()?;
             let active = managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
                 && self.autostart.is_enabled()?
@@ -277,7 +289,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn activate(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let resolved = self.resolve(&account)?.ok_or_else(|| {
+        let resolved = self.resolve(&account, WriteProbe::Require)?.ok_or_else(|| {
             SharePointSetupError::new(
                 "SHAREPOINT_SYNC_PENDING",
                 "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
@@ -361,7 +373,11 @@ impl<'a> SharePointSetup<'a> {
         Ok(account)
     }
 
-    fn resolve(&self, account: &Account) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
+    fn resolve(
+        &self,
+        account: &Account,
+        probe: WriteProbe,
+    ) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
         let mut candidates = Vec::new();
         for detected in self.roots.detect()? {
             if detected.kind != CloudProviderKind::SharePoint {
@@ -413,7 +429,7 @@ impl<'a> SharePointSetup<'a> {
                 ));
             }
         };
-        if !self.fs.is_writable_directory(&identity.local_root) {
+        if probe == WriteProbe::Require && !self.fs.is_writable_directory(&identity.local_root) {
             return Err(SharePointSetupError::new(
                 "SHAREPOINT_ROOT_UNWRITABLE",
                 "The verified Files library is not writable.",
@@ -423,11 +439,13 @@ impl<'a> SharePointSetup<'a> {
             &identity.local_root,
             self.deployment.intake_folder_name(),
             "INBOX",
+            probe,
         )?;
         let destination = self.fixed_child(
             &identity.local_root,
             self.deployment.destination_folder_name(),
             "FILED",
+            probe,
         )?;
         if paths_overlap(&inbox, &destination) {
             return Err(SharePointSetupError::new(
@@ -447,6 +465,7 @@ impl<'a> SharePointSetup<'a> {
         root: &Path,
         name: &str,
         code: &str,
+        probe: WriteProbe,
     ) -> Result<PathBuf, SharePointSetupError> {
         let joined = root.join(name);
         let child = self.fs.canonicalize_directory(&joined).map_err(|failure| {
@@ -468,7 +487,7 @@ impl<'a> SharePointSetup<'a> {
                 format!("The fixed {name} path does not resolve directly under Files."),
             ));
         }
-        if !self.fs.is_writable_directory(&child) {
+        if probe == WriteProbe::Require && !self.fs.is_writable_directory(&child) {
             return Err(SharePointSetupError::new(
                 format!("{code}_UNWRITABLE"),
                 format!("The fixed {name} folder is not writable."),
@@ -900,6 +919,23 @@ fn production_operation(
     operation(&setup)
 }
 
+/// No-payload, side-effect-free IPC command for polling setup progress: it
+/// rescans and reads, but never launches OneDrive, writes settings or
+/// autostart, or probes the synced library with a write.
+#[tauri::command]
+pub async fn onboarding_sharepoint_status(
+    app: AppHandle,
+) -> Result<SharePointSetupStatus, SharePointSetupError> {
+    tauri::async_runtime::spawn_blocking(move || production_operation(&app, |setup| setup.status()))
+        .await
+        .map_err(|_| {
+            SharePointSetupError::new(
+                "SHAREPOINT_SETUP_TASK_FAILED",
+                "The SharePoint setup status could not be read.",
+            )
+        })?
+}
+
 /// No-payload IPC command. Work that can touch OneDrive/registry state runs
 /// away from WebView2's invoke thread.
 #[tauri::command]
@@ -1024,6 +1060,7 @@ mod tests {
     struct FakeFileSystem {
         canonical: HashMap<PathBuf, PathBuf>,
         writable: HashSet<PathBuf>,
+        write_probes: Mutex<usize>,
     }
 
     impl SetupFileSystem for FakeFileSystem {
@@ -1035,6 +1072,7 @@ mod tests {
         }
 
         fn is_writable_directory(&self, path: &Path) -> bool {
+            *self.write_probes.lock().unwrap() += 1;
             self.writable.contains(path)
         }
     }
@@ -1296,6 +1334,44 @@ mod tests {
             *rig.verifier.seen.lock().unwrap(),
             vec![PathBuf::from(r"C:\Sync\Files")]
         );
+    }
+
+    #[test]
+    fn status_never_launches_writes_or_probes_the_synced_library() {
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        let previous = rig.settings.saved.lock().unwrap().clone();
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::ReadyToActivate
+        );
+        rig.setup().activate().expect("activate");
+        let events = rig.settings.events.lock().unwrap().clone();
+        let activated = rig.settings.saved.lock().unwrap().clone();
+        assert_ne!(activated, previous);
+        *rig.fs.write_probes.lock().unwrap() = 0;
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::Active
+        );
+
+        assert!(rig.opener.opened.lock().unwrap().is_empty());
+        assert_eq!(*rig.settings.events.lock().unwrap(), events);
+        assert_eq!(*rig.settings.saved.lock().unwrap(), activated);
+        assert_eq!(
+            *rig.fs.write_probes.lock().unwrap(),
+            0,
+            "a status poll must not create probe files in the synced SharePoint library"
+        );
+    }
+
+    #[test]
+    fn setup_commands_do_not_run_on_the_ipc_thread() {
+        fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
+        leaves_the_ipc_thread(onboarding_sharepoint_status);
+        leaves_the_ipc_thread(onboarding_start_sharepoint_sync);
+        leaves_the_ipc_thread(onboarding_activate);
     }
 
     #[test]

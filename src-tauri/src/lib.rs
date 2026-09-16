@@ -84,6 +84,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             onboarding::onboarding_status,
             onboarding::onboarding_complete,
+            sharepoint_setup::onboarding_sharepoint_status,
             sharepoint_setup::onboarding_start_sharepoint_sync,
             sharepoint_setup::onboarding_activate,
             microsoft_intake::microsoft_intake_status,
