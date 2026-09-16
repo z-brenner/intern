@@ -51,7 +51,10 @@ pub fn run() {
             let data = app.path().app_local_data_dir().map_err(|_| {
                 std::io::Error::other("local application data directory is unavailable")
             })?;
-            app.manage(onboarding::OnboardingStore::new(data.join("ui-state.json")));
+            app.manage(onboarding::OnboardingStore::new(
+                data.join("ui-state.json"),
+                sharepoint_setup::PACKAGED_DEPLOYMENT,
+            ));
             tray::sync_tray(app.handle(), settings.run_in_background);
             let minimized_launch = std::env::args().any(|argument| argument == "--minimized");
             if tray::window_starts_hidden(

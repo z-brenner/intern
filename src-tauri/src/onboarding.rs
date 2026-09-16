@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use intern_intake::SharePointDeployment;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -30,7 +31,11 @@ pub struct UiState {
 pub struct OnboardingStatus {
     pub current_version: u32,
     pub completed_version: u32,
+    /// Required only when the managed SharePoint experience exists. Without
+    /// it the app keeps its ordinary setup and manual intake settings.
     pub required: bool,
+    /// The packaged SharePoint deployment parses, validates, and is enabled.
+    pub share_point_available: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -84,6 +89,7 @@ impl OnboardingError {
 #[derive(Clone)]
 pub struct OnboardingStore {
     path: PathBuf,
+    share_point_available: bool,
     gate: Arc<Mutex<()>>,
     writer: StateWriter,
     durability_uncertain: Arc<AtomicBool>,
@@ -92,9 +98,12 @@ pub struct OnboardingStore {
 }
 
 impl OnboardingStore {
-    pub fn new(path: PathBuf) -> Self {
+    /// `deployment` is the packaged deployment resource. It is compiled into
+    /// the binary, so its availability is decided once.
+    pub fn new(path: PathBuf, deployment: &[u8]) -> Self {
         Self {
             path,
+            share_point_available: SharePointDeployment::from_slice(deployment).is_ok(),
             gate: Arc::new(Mutex::new(())),
             writer: write_state,
             durability_uncertain: Arc::new(AtomicBool::new(false)),
@@ -109,7 +118,10 @@ impl OnboardingStore {
             message: "onboarding state is unavailable".into(),
         })?;
         let state = read_state(&self.path)?;
-        Ok(status_for(state.completed_onboarding_version))
+        Ok(status_for(
+            state.completed_onboarding_version,
+            self.share_point_available,
+        ))
     }
 
     /// Records the current flow only after its final readiness check. A newer
@@ -155,6 +167,7 @@ impl OnboardingStore {
     fn with_writer_for_test(path: PathBuf, writer: StateWriter) -> Self {
         Self {
             path,
+            share_point_available: true,
             gate: Arc::new(Mutex::new(())),
             writer,
             durability_uncertain: Arc::new(AtomicBool::new(false)),
@@ -189,11 +202,12 @@ pub fn onboarding_complete(store: State<'_, OnboardingStore>) -> Result<(), Onbo
     store.complete()
 }
 
-fn status_for(completed_version: u32) -> OnboardingStatus {
+fn status_for(completed_version: u32, share_point_available: bool) -> OnboardingStatus {
     OnboardingStatus {
         current_version: CURRENT_ONBOARDING_VERSION,
         completed_version,
-        required: completed_version < CURRENT_ONBOARDING_VERSION,
+        required: share_point_available && completed_version < CURRENT_ONBOARDING_VERSION,
+        share_point_available,
     }
 }
 
@@ -248,6 +262,29 @@ mod tests {
         CURRENT_ONBOARDING_VERSION, OnboardingError, OnboardingStore, UiState, write_state,
     };
 
+    const DEPLOYMENT: &str = r#"{
+        "schema_version": 1,
+        "enabled": ENABLED,
+        "site_url": "https://teamcontoso.sharepoint.com/sites/InternTestSite",
+        "library_name": "Files",
+        "intake_folder_name": "Inbox",
+        "destination_folder_name": "Filed",
+        "tenant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "client_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "site_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "web_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "list_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        "drive_id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "intake_folder_id": "11111111-1111-1111-1111-111111111111",
+        "destination_folder_id": "22222222-2222-2222-2222-222222222222"
+    }"#;
+
+    fn deployment(enabled: bool) -> Vec<u8> {
+        DEPLOYMENT
+            .replace("ENABLED", if enabled { "true" } else { "false" })
+            .into_bytes()
+    }
+
     static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
     static RETRY_WRITER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -300,7 +337,7 @@ mod tests {
     #[test]
     fn missing_state_requires_the_current_onboarding() {
         let dir = TempDir::new();
-        let status = OnboardingStore::new(dir.state_path())
+        let status = OnboardingStore::new(dir.state_path(), &deployment(true))
             .status()
             .expect("read missing state");
 
@@ -324,7 +361,9 @@ mod tests {
             )
             .expect("seed onboarding state");
 
-            let status = OnboardingStore::new(path).status().expect("read state");
+            let status = OnboardingStore::new(path, &deployment(true))
+                .status()
+                .expect("read state");
 
             assert_eq!(status.current_version, CURRENT_ONBOARDING_VERSION);
             assert_eq!(status.completed_version, completed_version);
@@ -333,11 +372,83 @@ mod tests {
     }
 
     #[test]
+    fn an_enabled_deployment_is_available_and_requires_onboarding_until_completed() {
+        let dir = TempDir::new();
+        let store = OnboardingStore::new(dir.state_path(), &deployment(true));
+
+        let status = store.status().expect("read missing state");
+        assert!(status.share_point_available);
+        assert!(status.required);
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!({
+                "currentVersion": CURRENT_ONBOARDING_VERSION,
+                "completedVersion": 0,
+                "required": true,
+                "sharePointAvailable": true
+            })
+        );
+
+        store.complete().expect("complete onboarding");
+        let status = store.status().expect("read completed state");
+        assert!(status.share_point_available);
+        assert!(!status.required);
+    }
+
+    #[test]
+    fn a_disabled_or_invalid_deployment_never_requires_onboarding() {
+        for source in [
+            deployment(false),
+            b"{not json".to_vec(),
+            // Enabled, but outside the fixed site: validation must fail.
+            String::from_utf8(deployment(true))
+                .unwrap()
+                .replace("InternTestSite", "OtherSite")
+                .into_bytes(),
+        ] {
+            for completed_version in [0, CURRENT_ONBOARDING_VERSION, 9] {
+                let dir = TempDir::new();
+                let path = dir.state_path();
+                write_state(
+                    &path,
+                    &UiState {
+                        completed_onboarding_version: completed_version,
+                    },
+                )
+                .expect("seed onboarding state");
+
+                let status = OnboardingStore::new(path, &source)
+                    .status()
+                    .expect("read state");
+
+                assert!(!status.share_point_available);
+                assert!(!status.required);
+                assert_eq!(
+                    status.completed_version, completed_version,
+                    "stored progress, including a future version, is reported unchanged"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn state_errors_are_reported_even_without_an_available_deployment() {
+        let dir = TempDir::new();
+        fs::write(dir.state_path(), "{not json").expect("write corrupt state");
+
+        let error = OnboardingStore::new(dir.state_path(), &deployment(false))
+            .status()
+            .expect_err("corrupt state must stay visible");
+
+        assert_eq!(error.code, "ONBOARDING_STATE_UNREADABLE");
+    }
+
+    #[test]
     fn corrupt_state_is_reported_instead_of_restarting_onboarding() {
         let dir = TempDir::new();
         fs::write(dir.state_path(), "{not json").expect("write corrupt state");
 
-        let error = OnboardingStore::new(dir.state_path())
+        let error = OnboardingStore::new(dir.state_path(), &deployment(true))
             .status()
             .expect_err("corrupt state must be visible");
 
@@ -349,7 +460,7 @@ mod tests {
         let dir = TempDir::new();
         fs::write(dir.state_path(), vec![b'x'; 16 * 1024 + 1]).expect("write oversized state");
 
-        let error = OnboardingStore::new(dir.state_path())
+        let error = OnboardingStore::new(dir.state_path(), &deployment(true))
             .status()
             .expect_err("oversized state must be visible");
 
@@ -360,12 +471,12 @@ mod tests {
     fn completion_round_trips_through_an_atomic_state_file() {
         let dir = TempDir::new();
         let path = dir.state_path();
-        let store = OnboardingStore::new(path.clone());
+        let store = OnboardingStore::new(path.clone(), &deployment(true));
 
         store.complete().expect("complete onboarding");
 
         assert_eq!(
-            OnboardingStore::new(path.clone())
+            OnboardingStore::new(path.clone(), &deployment(true))
                 .status()
                 .expect("reload state")
                 .completed_version,
@@ -394,12 +505,12 @@ mod tests {
         )
         .expect("seed future state");
 
-        OnboardingStore::new(path.clone())
+        OnboardingStore::new(path.clone(), &deployment(true))
             .complete()
             .expect("complete from future state");
 
         assert_eq!(
-            OnboardingStore::new(path)
+            OnboardingStore::new(path, &deployment(true))
                 .status()
                 .expect("reload future state")
                 .completed_version,
@@ -420,7 +531,7 @@ mod tests {
         )
         .expect("seed old state");
 
-        OnboardingStore::new(path.clone())
+        OnboardingStore::new(path.clone(), &deployment(true))
             .complete()
             .expect("replace existing state");
 
@@ -431,7 +542,7 @@ mod tests {
     fn write_failure_leaves_completion_unclaimed() {
         let dir = TempDir::new();
         let path = dir.state_path();
-        let store = OnboardingStore::new(path.clone());
+        let store = OnboardingStore::new(path.clone(), &deployment(true));
         store.fail_next_write_for_test();
 
         let error = store
@@ -460,7 +571,7 @@ mod tests {
             },
         )
         .expect("seed old state");
-        let store = OnboardingStore::new(path.clone());
+        let store = OnboardingStore::new(path.clone(), &deployment(true));
         store.fail_next_write_for_test();
 
         store

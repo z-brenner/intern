@@ -877,11 +877,13 @@ fn launch_url(url: &str) -> Result<(), tauri_plugin_opener::Error> {
     tauri_plugin_opener::open_url(url, None::<&str>)
 }
 
-fn packaged_deployment() -> Result<SharePointDeployment, SharePointSetupError> {
-    SharePointDeployment::from_slice(include_bytes!("../resources/sharepoint-deployment.json"))
-        .map_err(|error| {
-            SharePointSetupError::new("SHAREPOINT_DEPLOYMENT_UNAVAILABLE", error.to_string())
-        })
+/// The deployment resource compiled into this build.
+pub const PACKAGED_DEPLOYMENT: &[u8] = include_bytes!("../resources/sharepoint-deployment.json");
+
+pub(crate) fn packaged_deployment() -> Result<SharePointDeployment, SharePointSetupError> {
+    SharePointDeployment::from_slice(PACKAGED_DEPLOYMENT).map_err(|error| {
+        SharePointSetupError::new("SHAREPOINT_DEPLOYMENT_UNAVAILABLE", error.to_string())
+    })
 }
 
 fn production_operation(
