@@ -1647,7 +1647,7 @@ fn managed_sharepoint_for(
     stored: Option<&AppSettings>,
 ) -> Result<Option<ManagedSharePoint>, CommandError> {
     microsoft
-        .managed_paths(stored.map(|settings| settings.intake_folder.as_str()))
+        .managed_paths(stored)
         .map(|paths| paths.map(|(inbox, destination)| ManagedSharePoint { inbox, destination }))
         .map_err(|message| CommandError {
             code: "SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE".into(),

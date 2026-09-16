@@ -364,15 +364,24 @@ impl MicrosoftIntake {
     }
 
     /// The Inbox and Filed paths that settings saves must keep, once a fixed
-    /// SharePoint binding is active: the binding for the saved intake folder,
-    /// and the deployment's Filed sibling of it. `Ok(None)` means nothing is
-    /// managed. When a binding is active but the configuration cannot be read
-    /// or no binding matches `stored_intake`, which paths are managed is
-    /// unknown, so this is an error and the caller must not save.
+    /// SharePoint binding exists: the binding for the saved intake folder, and
+    /// the deployment's Filed sibling of it. `Ok(None)` means nothing is
+    /// managed. When a fixed binding exists but no binding matches the stored
+    /// intake folder, which paths are managed is unknown, so this is an error
+    /// and the caller must not save.
+    ///
+    /// When the configuration cannot be read, whether a fixed binding exists is
+    /// unknown. It is an error only if one could be in play: the stored
+    /// settings are unreadable or still have the shape activation writes (a
+    /// shared Inbox folder with its Filed sibling). Any other save, such as
+    /// one before activation, goes on to `protect_settings`, which still
+    /// refuses to name a shared intake folder while the configuration is
+    /// unreadable.
     pub(crate) fn managed_paths(
         &self,
-        stored_intake: Option<&str>,
+        stored: Option<&AppSettings>,
     ) -> Result<Option<(String, String)>, String> {
+        let stored_intake = stored.map(|settings| settings.intake_folder.as_str());
         let Some(deployment) = self.deployment.as_ref() else {
             return Ok(None);
         };
@@ -382,7 +391,11 @@ impl MicrosoftIntake {
             .map(|error| error.clone())
             .unwrap_or_else(|_| Some("Microsoft configuration is unavailable.".into()));
         if let Some(error) = unreadable {
-            return Err(error);
+            return if stored.is_none_or(|settings| has_activation_shape(settings, deployment)) {
+                Err(error)
+            } else {
+                Ok(None)
+            };
         }
         let config = self
             .config
@@ -939,6 +952,23 @@ fn previous_keeping_protection(previous: &PublicConfig, staged: &PublicConfig) -
     let mut restored = previous.clone();
     restored.protected_roots = staged.protected_roots.clone();
     restored
+}
+/// Whether `settings` name a shared intake folder with the deployment's Inbox
+/// name and its Filed sibling as the destination, as fixed activation writes.
+fn has_activation_shape(settings: &AppSettings, deployment: &SharePointDeployment) -> bool {
+    let intake = Path::new(settings.intake_folder.trim());
+    !settings.intake_local_only
+        && intake
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(deployment.intake_folder_name()))
+        && intake.parent().is_some_and(|library| {
+            same_path(
+                &settings.destination,
+                &library
+                    .join(deployment.destination_folder_name())
+                    .to_string_lossy(),
+            )
+        })
 }
 fn within(path: &Path, root: &str) -> bool {
     !root.trim().is_empty()
@@ -2349,7 +2379,10 @@ mod tests {
 
         assert!(!intake.fixed_binding_active(&deployment, &rig.inbox));
         assert!(intake.status().binding.is_none());
-        assert_eq!(intake.managed_paths(Some(&local_folder)), Ok(None));
+        assert_eq!(
+            intake.managed_paths(Some(&intake.settings.load().unwrap())),
+            Ok(None)
+        );
         let upload = rig
             .uploads
             .upload(&rig.inbox, "upload.pdf", 2_000_000_000_000, &account());
@@ -2368,5 +2401,70 @@ mod tests {
             "{error}"
         );
         assert!(*rig.intake.config.lock().unwrap() == before);
+    }
+
+    #[test]
+    fn an_unreadable_config_only_blocks_saves_a_fixed_binding_could_manage() {
+        let rig = switching("unreadable-managed");
+        fs::write(rig.data.join("microsoft-intake.json"), b"not json").unwrap();
+        let intake = MicrosoftIntake::with_deployment(
+            SettingsStore::new(rig.data.join("settings.json")),
+            rig.data.clone(),
+            Ok(test_deployment()),
+        );
+        assert!(intake.status().error.is_some(), "the trouble is reported");
+
+        // Before any activation: no intake, a private local one, or an
+        // ordinary shared folder that SharePoint setup never writes.
+        for stored in [
+            AppSettings::default(),
+            AppSettings {
+                intake_folder: rig.inbox.to_string_lossy().into_owned(),
+                destination: rig.data.join("Filed").to_string_lossy().into_owned(),
+                intake_local_only: true,
+                ..AppSettings::default()
+            },
+            AppSettings {
+                intake_folder: rig.data.join("Scans").to_string_lossy().into_owned(),
+                destination: rig
+                    .data
+                    .join("Files")
+                    .join("Filed")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..AppSettings::default()
+            },
+        ] {
+            assert_eq!(intake.managed_paths(Some(&stored)), Ok(None), "{stored:?}");
+        }
+
+        // Settings that activation writes, or settings that cannot be read,
+        // may belong to a fixed binding nobody can see: refuse.
+        let activated = AppSettings {
+            intake_folder: rig.inbox.to_string_lossy().into_owned(),
+            destination: rig
+                .inbox
+                .parent()
+                .unwrap()
+                .join("Filed")
+                .to_string_lossy()
+                .into_owned(),
+            ..AppSettings::default()
+        };
+        assert!(intake.managed_paths(Some(&activated)).is_err());
+        assert!(intake.managed_paths(None).is_err());
+
+        // And an ordinary save before activation goes through the real
+        // settings path, as protect_settings intends.
+        let mut runtime =
+            crate::commands::test_runtime::RecordingRuntime::new(rig.data.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        runtime.microsoft = Some(Arc::new(intake));
+        let payload = AppSettings {
+            machine_label: "Front desk".into(),
+            ..AppSettings::default()
+        };
+        crate::commands::save_settings(&runtime, payload).expect("an unrelated save");
+        assert_eq!(runtime.store.load().unwrap().machine_label, "Front desk");
     }
 }
