@@ -450,7 +450,7 @@ impl MicrosoftClient {
                 200 | 201 => Ok((session.account.clone(),reply.body)),
                 401 => { self.set_session(&mut state, None); Err("Microsoft sign-in expired. Reconnect; files remain held.".into()) }
                 403 => Err("Microsoft denied access to this folder. Ask your administrator to grant the app read access to the selected intake folder.".into()),
-                404 => Err("This file is not yet available in the paired Microsoft folder.".into()),
+                404 => Err("This file is not available in the SharePoint Inbox yet.".into()),
                 429 | 503 => { state.retry_at=self.clock.now()+reply.retry_after as i64; Err("Microsoft requested a slower verification rate. Files remain held until retry.".into()) }
                 _ => Err("Microsoft could not verify this upload. Files remain held.".into()),
             }

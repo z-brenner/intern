@@ -105,7 +105,7 @@ pub struct MicrosoftIntake {
 /// because a folder that started syncing after it was configured is an
 /// ordinary thing to happen and the person has to be able to find out why
 /// their documents stopped moving.
-const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoint, or network folder, although it was saved as a private local intake. Uploads to it are verified through Microsoft: connect Microsoft and pair the folder, or point intake at a folder that is not shared.";
+const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoint, or network folder, although it was saved as a private local intake. Files in a shared folder are held until Microsoft confirms who uploaded them, so choose a folder that is not shared.";
 
 /// How long an answer about the intake folder is reused. Deciding it reads
 /// the Windows registry and the network drive table, and `scope` asks about
@@ -770,12 +770,9 @@ impl MicrosoftIntake {
         else {
             return Ok(None);
         };
-        let activation_watermark = binding.activation_watermark.ok_or_else(|| {
-            PipelineError::new(
-                "UPLOADER_UNVERIFIED",
-                "Pair the saved intake folder again. Unverified uploads remain held.",
-            )
-        })?;
+        let activation_watermark = binding
+            .activation_watermark
+            .ok_or_else(|| PipelineError::new("UPLOADER_UNVERIFIED", SETUP_REQUIRED))?;
         let deployment = self
             .deployment()
             .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?;
@@ -893,7 +890,7 @@ impl AdmissionGuard for MicrosoftIntake {
                     Some(uploader),
                     Some(processor),
                     Some(hash.clone()),
-                    "Uploader verified against Microsoft upload activity.",
+                    "Microsoft confirmed that the connected account uploaded this file.",
                 );
                 Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
             }
@@ -1025,7 +1022,7 @@ pub async fn microsoft_bind_intake(
     let manager = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || manager.bind())
         .await
-        .map_err(|_| "Microsoft folder pairing could not finish.")?
+        .map_err(|_| "Intern could not finish that request.")?
 }
 #[tauri::command]
 pub fn microsoft_open_sign_in(

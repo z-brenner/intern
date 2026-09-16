@@ -186,7 +186,9 @@ pub fn verify_fresh_upload(
         Err(reason) => return held_unknown(reason),
     };
     if first.created_at <= activation_watermark {
-        return held_unknown("The Microsoft item was not created after this folder was paired.");
+        return held_unknown(
+            "The file was uploaded before SharePoint was set up on this computer.",
+        );
     }
     match actor(&first, &account, true) {
         Actor::Me => {}

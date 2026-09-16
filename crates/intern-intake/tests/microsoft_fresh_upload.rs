@@ -407,12 +407,12 @@ fn stale_equal_and_missing_creation_times_hold_before_local_bytes_are_read() {
         (
             "stale",
             Some("2026-09-14T15:59:58Z"),
-            "The Microsoft item was not created after this folder was paired.",
+            "The file was uploaded before SharePoint was set up on this computer.",
         ),
         (
             "equal",
             Some("2026-09-14T15:59:59Z"),
-            "The Microsoft item was not created after this folder was paired.",
+            "The file was uploaded before SharePoint was set up on this computer.",
         ),
         (
             "missing",
