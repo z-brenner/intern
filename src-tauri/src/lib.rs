@@ -22,9 +22,11 @@ pub fn run() {
             commands::second_instance_launched,
         ))
         .plugin(tauri_plugin_dialog::init())
-        // Opens the published user guide in the system browser. A webview
-        // <a target="_blank"> has nowhere to go inside Tauri, and the scope in
-        // capabilities/default.json admits only the guide's own origin.
+        // Opens the published user guide and the two SharePoint support links
+        // (the provisioned site and the OneDrive download page) in the system
+        // browser. A webview <a target="_blank"> has nowhere to go inside
+        // Tauri, and the scope in capabilities/default.json admits only those
+        // addresses.
         .plugin(tauri_plugin_opener::init())
         // Autostart entries launch Intern with "--minimized" so a sign-in
         // launch can go straight to the tray (when background mode allows it)

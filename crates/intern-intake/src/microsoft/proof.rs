@@ -30,6 +30,37 @@ pub struct FolderBinding {
     pub web_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activation_watermark: Option<i64>,
+    /// The Microsoft account whose fixed SharePoint activation created this
+    /// binding and its watermark. Absent on bindings stored by older versions
+    /// or by manual pairing, which are therefore never active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activated_by: Option<ActivatingAccount>,
+}
+
+/// The tenant and object ID of the account that completed an activation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivatingAccount {
+    pub tenant_id: String,
+    pub id: String,
+}
+
+impl ActivatingAccount {
+    pub fn of(account: &Account) -> Self {
+        Self {
+            tenant_id: account.tenant_id.clone(),
+            id: account.id.clone(),
+        }
+    }
+
+    /// Whether `account` is the same person, by tenant and object ID.
+    pub fn is(&self, account: &Account) -> bool {
+        is_guid(&self.id)
+            && is_guid(&self.tenant_id)
+            && is_guid(&account.id)
+            && self.id.eq_ignore_ascii_case(&account.id)
+            && self.tenant_id.eq_ignore_ascii_case(&account.tenant_id)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,7 +186,9 @@ pub fn verify_fresh_upload(
         Err(reason) => return held_unknown(reason),
     };
     if first.created_at <= activation_watermark {
-        return held_unknown("The Microsoft item was not created after this folder was paired.");
+        return held_unknown(
+            "The file was uploaded before SharePoint was set up on this computer.",
+        );
     }
     match actor(&first, &account, true) {
         Actor::Me => {}

@@ -3,9 +3,9 @@
 use crate::secrets::{KeyringStore, SecretStore};
 use intern_core::{OwnedFileSnapshot, PrivateSnapshotDirectory};
 use intern_intake::microsoft::{
-    Account, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress, TokenStore,
+    Account, ActivatingAccount, DevicePrompt, FolderBinding, MicrosoftClient, SignInProgress,
+    TokenStore,
     proof::{FreshUploadMetadata, FreshUploadOutcome, verify_fresh_upload},
-    transport::item_url,
 };
 use intern_intake::{SharePointDeployment, classify, detect_cloud_roots, relative_to_root};
 use intern_queue::{
@@ -105,13 +105,17 @@ pub struct MicrosoftIntake {
 /// because a folder that started syncing after it was configured is an
 /// ordinary thing to happen and the person has to be able to find out why
 /// their documents stopped moving.
-const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoint, or network folder, although it was saved as a private local intake. Uploads to it are verified through Microsoft: connect Microsoft and pair the folder, or point intake at a folder that is not shared.";
+const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoint, or network folder, although it was saved as a private local intake. Files in a shared folder are held until Microsoft confirms who uploaded them, so choose a folder that is not shared.";
 
 /// How long an answer about the intake folder is reused. Deciding it reads
 /// the Windows registry and the network drive table, and `scope` asks about
 /// every file of every scan; the answer changes only when someone moves the
 /// folder or starts syncing it, and every save re-asks anyway.
 const SHARED_INTAKE_RECHECK: Duration = Duration::from_secs(30);
+
+/// Why a protected Inbox file is held when no SharePoint activation by the
+/// connected account covers it.
+const SETUP_REQUIRED: &str = "SharePoint setup has not been completed on this computer for the connected Microsoft account. Files in the shared Inbox stay held until it is.";
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum FixedBindingActivationError<E> {
@@ -140,47 +144,6 @@ fn verified_upload(
             Err(PipelineError::retryable("UPLOADER_UNVERIFIED", reason))
         }
     }
-}
-
-fn verified_folder_web_url(
-    deployment: &SharePointDeployment,
-    account: &Account,
-    remote: &serde_json::Value,
-) -> Result<String, String> {
-    if !remote["folder"].is_object()
-        || remote
-            .get("remoteItem")
-            .is_some_and(|value| !value.is_null())
-        // The driveItem and base64url drive IDs are matched exactly (the drive
-        // ID is case-sensitive; the item ID is Graph's canonical form). Only
-        // the GUIDs fold case.
-        || remote["id"].as_str() != Some(deployment.intake_folder_id())
-        || remote.pointer("/parentReference/driveId").and_then(serde_json::Value::as_str)
-            != Some(deployment.drive_id())
-        || [
-            ("/sharepointIds/tenantId", deployment.tenant_id()),
-            ("/sharepointIds/siteId", deployment.site_id()),
-            ("/sharepointIds/webId", deployment.web_id()),
-            ("/sharepointIds/listId", deployment.list_id()),
-        ]
-        .into_iter()
-        .any(|(pointer, expected)| {
-            remote
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|value| !value.eq_ignore_ascii_case(expected))
-        })
-        || !account
-            .tenant_id
-            .eq_ignore_ascii_case(deployment.tenant_id())
-    {
-        return Err("Microsoft did not confirm a work/school folder in the connected organization. Personal accounts and shortcut items are not supported.".into());
-    }
-    remote["webUrl"]
-        .as_str()
-        .filter(|url| deployment.is_intake_folder_web_url(url))
-        .map(str::to_owned)
-        .ok_or_else(|| "Microsoft did not return a supported folder address.".into())
 }
 
 impl MicrosoftIntake {
@@ -260,7 +223,7 @@ impl MicrosoftIntake {
         snapshot_root: PathBuf,
     ) -> Result<Self, String> {
         let mut intake = Self::with_deployment(settings, data, Ok(deployment));
-        if !intake.binding_matches_deployment(&binding) {
+        if !intake.fixed_binding(&binding) {
             return Err("The test fixture binding is outside the validated deployment.".into());
         }
         intake.snapshot_directory = Some(
@@ -371,16 +334,54 @@ impl MicrosoftIntake {
         })
     }
 
+    /// A binding fixed SharePoint activation created for this deployment.
+    /// Bindings without an activating account (older versions, manual
+    /// pairing) never count, so they fail closed.
+    fn fixed_binding(&self, binding: &FolderBinding) -> bool {
+        self.binding_matches_deployment(binding) && binding.activated_by.is_some()
+    }
+
+    /// The signed-in account, while Microsoft is connected.
+    fn connected_account(&self, config: &PublicConfig) -> Option<Account> {
+        if !config.enabled {
+            return None;
+        }
+        self.client.as_ref().and_then(MicrosoftClient::account)
+    }
+
+    /// A fixed binding is active only for the account that activated it. After
+    /// someone else signs in it is inactive, although its Inbox stays a
+    /// protected root, until that person activates and gets a watermark of
+    /// their own.
+    fn binding_active_for(&self, binding: &FolderBinding, account: Option<&Account>) -> bool {
+        self.fixed_binding(binding)
+            && account.is_some_and(|account| {
+                binding
+                    .activated_by
+                    .as_ref()
+                    .is_some_and(|activator| activator.is(account))
+            })
+    }
+
     /// The Inbox and Filed paths that settings saves must keep, once a fixed
-    /// SharePoint binding is active: the binding for the saved intake folder,
-    /// and the deployment's Filed sibling of it. `Ok(None)` means nothing is
-    /// managed. When a binding is active but the configuration cannot be read
-    /// or no binding matches `stored_intake`, which paths are managed is
-    /// unknown, so this is an error and the caller must not save.
+    /// SharePoint binding exists: the binding for the saved intake folder, and
+    /// the deployment's Filed sibling of it. `Ok(None)` means nothing is
+    /// managed. When a fixed binding exists but no binding matches the stored
+    /// intake folder, which paths are managed is unknown, so this is an error
+    /// and the caller must not save.
+    ///
+    /// When the configuration cannot be read, whether a fixed binding exists is
+    /// unknown. It is an error only if one could be in play: the stored
+    /// settings are unreadable or still have the shape activation writes (a
+    /// shared Inbox folder with its Filed sibling). Any other save, such as
+    /// one before activation, goes on to `protect_settings`, which still
+    /// refuses to name a shared intake folder while the configuration is
+    /// unreadable.
     pub(crate) fn managed_paths(
         &self,
-        stored_intake: Option<&str>,
+        stored: Option<&AppSettings>,
     ) -> Result<Option<(String, String)>, String> {
+        let stored_intake = stored.map(|settings| settings.intake_folder.as_str());
         let Some(deployment) = self.deployment.as_ref() else {
             return Ok(None);
         };
@@ -390,7 +391,11 @@ impl MicrosoftIntake {
             .map(|error| error.clone())
             .unwrap_or_else(|_| Some("Microsoft configuration is unavailable.".into()));
         if let Some(error) = unreadable {
-            return Err(error);
+            return if stored.is_none_or(|settings| has_activation_shape(settings, deployment)) {
+                Err(error)
+            } else {
+                Ok(None)
+            };
         }
         let config = self
             .config
@@ -399,7 +404,7 @@ impl MicrosoftIntake {
         let mut active = config
             .bindings
             .iter()
-            .filter(|binding| self.binding_matches_deployment(binding))
+            .filter(|binding| self.fixed_binding(binding))
             .peekable();
         if active.peek().is_none() {
             return Ok(None);
@@ -424,8 +429,9 @@ impl MicrosoftIntake {
     ) -> bool {
         self.deployment.as_ref() == Some(deployment)
             && self.config.lock().is_ok_and(|config| {
+                let account = self.connected_account(&config);
                 config.bindings.iter().any(|binding| {
-                    self.binding_matches_deployment(binding)
+                    self.binding_active_for(binding, account.as_ref())
                         && same_path(&binding.local_folder, &local_inbox.to_string_lossy())
                 })
             })
@@ -562,6 +568,7 @@ impl MicrosoftIntake {
             tenant_id: deployment.tenant_id().to_owned(),
             web_id: deployment.web_id().to_owned(),
             activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
+            activated_by: Some(ActivatingAccount::of(account)),
         };
         let mut next = staged;
         next.bindings.push(binding);
@@ -578,15 +585,11 @@ impl MicrosoftIntake {
             .map(|value| value.clone())
             .unwrap_or_default();
         let settings = self.settings.load().unwrap_or_default();
-        let account = if config.enabled {
-            self.client.as_ref().and_then(MicrosoftClient::account)
-        } else {
-            None
-        };
+        let account = self.connected_account(&config);
         let binding = config
             .bindings
             .iter()
-            .filter(|binding| self.binding_matches_deployment(binding))
+            .filter(|binding| self.binding_active_for(binding, account.as_ref()))
             .find(|binding| same_path(&binding.local_folder, &settings.intake_folder))
             .cloned();
         let documents = self
@@ -702,78 +705,13 @@ impl MicrosoftIntake {
         persist?;
         credentials
     }
+    /// Manual pairing is gone: the Inbox binding is created only by SharePoint
+    /// setup, after OneDrive's own records prove the local folder. Without a
+    /// packaged deployment nothing could be paired anyway. The command stays so
+    /// a caller gets a stable answer.
     pub fn bind(&self) -> Result<FolderBinding, String> {
-        let deployment = self.deployment()?.clone();
-        let epoch = self.generation.load(Ordering::SeqCst);
-        let settings = self.settings.load().map_err(|error| error.to_string())?;
-        if settings.intake_folder.trim().is_empty() || settings.intake_local_only {
-            return Err("Save a Microsoft intake folder in Settings before pairing it.".into());
-        }
-        if !self
-            .config
-            .lock()
-            .map_err(|_| "Microsoft configuration is unavailable.")?
-            .enabled
-        {
-            return Err("Connect Microsoft before pairing a folder.".into());
-        }
-        let local = Path::new(&settings.intake_folder)
-            .canonicalize()
-            .map_err(|_| "The saved intake folder could not be found.")?;
-        if !local.is_dir() {
-            return Err("The saved intake path is not a folder.".into());
-        }
-        let (account, remote) = self.client()?.metadata(item_url(
-            deployment.drive_id(),
-            deployment.intake_folder_id(),
-            None,
-        )?)?;
-        let web_url = verified_folder_web_url(&deployment, &account, &remote)?;
-        self.persist_verified_binding(&deployment, epoch, &settings, &local, web_url)
-    }
-    fn persist_verified_binding(
-        &self,
-        deployment: &SharePointDeployment,
-        epoch: u64,
-        settings: &AppSettings,
-        local: &Path,
-        web_url: String,
-    ) -> Result<FolderBinding, String> {
-        let mut config = self
-            .config
-            .lock()
-            .map_err(|_| "Microsoft configuration is unavailable.")?;
-        if self.generation.load(Ordering::SeqCst) != epoch || !config.enabled {
-            return Err("Microsoft connection changed while the folder was being paired.".into());
-        }
-        let current = self.settings.load().map_err(|error| error.to_string())?;
-        if current.intake_folder != settings.intake_folder || current.intake_local_only {
-            return Err("The saved intake folder changed. Pair it again.".into());
-        }
-        let binding = FolderBinding {
-            local_folder: local.to_string_lossy().into_owned(),
-            drive_id: deployment.drive_id().to_owned(),
-            folder_id: deployment.intake_folder_id().to_owned(),
-            web_url,
-            tenant_id: deployment.tenant_id().to_owned(),
-            web_id: deployment.web_id().to_owned(),
-            activation_watermark: Some(chrono::Utc::now().timestamp_millis()),
-        };
-        let mut next = config.clone();
-        next.bindings
-            .retain(|entry| !same_path(&entry.local_folder, &binding.local_folder));
-        next.bindings.push(binding.clone());
-        if !next
-            .protected_roots
-            .iter()
-            .any(|root| same_path(root, &binding.local_folder))
-        {
-            next.protected_roots.push(binding.local_folder.clone());
-        }
-        self.save(&next)?;
-        *config = next;
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        Ok(binding)
+        self.deployment()?;
+        Err("Folders are no longer paired by hand. Finish SharePoint setup to connect the shared Inbox. (MICROSOFT_MANUAL_PAIRING_DISABLED)".into())
     }
     fn scope(&self, path: &Path, settings: &AppSettings) -> Result<Option<FolderBinding>, String> {
         let config = self
@@ -811,8 +749,13 @@ impl MicrosoftIntake {
                 "Microsoft is disconnected. Unverified uploads are never processed.".into(),
             );
         }
-        let binding=config.bindings.iter().filter(|binding|self.binding_matches_deployment(binding) && within(path,&binding.local_folder)).max_by_key(|binding|binding.local_folder.len()).cloned()
-            .ok_or("Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.")?;
+        let binding = config
+            .bindings
+            .iter()
+            .filter(|binding| self.fixed_binding(binding) && within(path, &binding.local_folder))
+            .max_by_key(|binding| binding.local_folder.len())
+            .cloned()
+            .ok_or(SETUP_REQUIRED)?;
         Ok(Some(binding))
     }
     fn verify(
@@ -827,12 +770,9 @@ impl MicrosoftIntake {
         else {
             return Ok(None);
         };
-        let activation_watermark = binding.activation_watermark.ok_or_else(|| {
-            PipelineError::new(
-                "UPLOADER_UNVERIFIED",
-                "Pair the saved intake folder again. Unverified uploads remain held.",
-            )
-        })?;
+        let activation_watermark = binding
+            .activation_watermark
+            .ok_or_else(|| PipelineError::new("UPLOADER_UNVERIFIED", SETUP_REQUIRED))?;
         let deployment = self
             .deployment()
             .map_err(|message| PipelineError::new("UPLOADER_UNVERIFIED", message))?;
@@ -850,6 +790,16 @@ impl MicrosoftIntake {
             self.note(path, "other", Some(uploader.clone()), None, None, reason);
         }
         let (hash, uploader, snapshot) = verified_upload(outcome)?;
+        // The proof shows the connected account uploaded the file after the
+        // watermark; the watermark only means anything for the account that
+        // activated it.
+        if !binding
+            .activated_by
+            .as_ref()
+            .is_some_and(|activator| activator.is(&uploader))
+        {
+            return Err(PipelineError::new("UPLOADER_UNVERIFIED", SETUP_REQUIRED));
+        }
         if self.generation.load(Ordering::SeqCst) != epoch {
             return Err(PipelineError::new(
                 "UPLOADER_UNVERIFIED",
@@ -940,7 +890,7 @@ impl AdmissionGuard for MicrosoftIntake {
                     Some(uploader),
                     Some(processor),
                     Some(hash.clone()),
-                    "Uploader verified against Microsoft upload activity.",
+                    "Microsoft confirmed that the connected account uploaded this file.",
                 );
                 Ok(AdmissionEvidence::verified_snapshot(hash, snapshot))
             }
@@ -1000,6 +950,23 @@ fn previous_keeping_protection(previous: &PublicConfig, staged: &PublicConfig) -
     restored.protected_roots = staged.protected_roots.clone();
     restored
 }
+/// Whether `settings` name a shared intake folder with the deployment's Inbox
+/// name and its Filed sibling as the destination, as fixed activation writes.
+fn has_activation_shape(settings: &AppSettings, deployment: &SharePointDeployment) -> bool {
+    let intake = Path::new(settings.intake_folder.trim());
+    !settings.intake_local_only
+        && intake
+            .file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(deployment.intake_folder_name()))
+        && intake.parent().is_some_and(|library| {
+            same_path(
+                &settings.destination,
+                &library
+                    .join(deployment.destination_folder_name())
+                    .to_string_lossy(),
+            )
+        })
+}
 fn within(path: &Path, root: &str) -> bool {
     !root.trim().is_empty()
         && (same_path(&path.to_string_lossy(), root)
@@ -1055,7 +1022,7 @@ pub async fn microsoft_bind_intake(
     let manager = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || manager.bind())
         .await
-        .map_err(|_| "Microsoft folder pairing could not finish.")?
+        .map_err(|_| "Intern could not finish that request.")?
 }
 #[tauri::command]
 pub fn microsoft_open_sign_in(
@@ -1208,7 +1175,6 @@ mod tests {
         sync::atomic::{AtomicBool, AtomicI64},
     };
     const DEPLOYMENT_UNAVAILABLE: &str = "SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.";
-    const PAIR_REQUIRED: &str = "Pair the saved intake folder with its Microsoft drive and folder IDs. Unverified uploads remain held.";
 
     fn test_deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -1296,23 +1262,6 @@ mod tests {
         client.begin().unwrap();
         clock.0.store(now + 5, Ordering::SeqCst);
         client.poll().unwrap();
-    }
-
-    fn folder_metadata() -> serde_json::Value {
-        serde_json::json!({
-            "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
-            "folder": { "childCount": 0 },
-            "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
-            "sharepointIds": {
-                "tenantId": "11111111-1111-1111-1111-111111111111",
-                "siteId": "33333333-3333-3333-3333-333333333333",
-                "webId": "44444444-4444-4444-4444-444444444444",
-                "listId": "55555555-5555-5555-5555-555555555555"
-            },
-            "parentReference": {
-                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO"
-            }
-        })
     }
 
     struct SwappingFreshUploadMetadata {
@@ -1449,6 +1398,7 @@ mod tests {
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
             web_id: "44444444-4444-4444-4444-444444444444".into(),
             activation_watermark: Some(1_789_401_599_000),
+            activated_by: Some(ActivatingAccount::of(&account())),
         };
         let metadata = Arc::new(SwappingFreshUploadMetadata {
             source: source.clone(),
@@ -1613,6 +1563,7 @@ mod tests {
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
             web_id: "44444444-4444-4444-4444-444444444444".into(),
             activation_watermark: Some(1_789_401_599_000),
+            activated_by: Some(ActivatingAccount::of(&account())),
         };
         let metadata = Arc::new(SwitchableAccountMetadata {
             connected_is_uploader: AtomicBool::new(true),
@@ -1724,53 +1675,6 @@ mod tests {
         drop(pipeline);
         drop(manager);
         let _ = fs::remove_dir_all(data);
-    }
-
-    #[test]
-    fn fixed_folder_binding_requires_the_deployment_web_identity() {
-        let deployment = test_deployment();
-        assert!(verified_folder_web_url(&deployment, &account(), &folder_metadata()).is_ok());
-
-        for replacement in [
-            None,
-            Some(serde_json::json!("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")),
-        ] {
-            let mut metadata = folder_metadata();
-            match replacement {
-                Some(value) => metadata["sharepointIds"]["webId"] = value,
-                None => {
-                    metadata["sharepointIds"]
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("webId");
-                }
-            }
-            assert!(
-                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
-                "a missing or different web must not bind"
-            );
-        }
-
-        // The base64url drive ID is case-sensitive and the driveItem ID is
-        // held in Graph's canonical form, so neither may match by folding case.
-        for (pointer, value) in [
-            (
-                "/parentReference/driveId",
-                deployment.drive_id().to_ascii_lowercase(),
-            ),
-            (
-                "/parentReference/driveId",
-                deployment.drive_id().to_ascii_uppercase(),
-            ),
-            ("/id", deployment.intake_folder_id().to_ascii_lowercase()),
-        ] {
-            let mut metadata = folder_metadata();
-            *metadata.pointer_mut(pointer).unwrap() = value.clone().into();
-            assert!(
-                verified_folder_web_url(&deployment, &account(), &metadata).is_err(),
-                "{pointer} {value} must not bind"
-            );
-        }
     }
 
     #[test]
@@ -1993,107 +1897,61 @@ mod tests {
 
         assert_eq!(
             intake.scope(&candidate, &settings).unwrap_err(),
-            PAIR_REQUIRED
+            SETUP_REQUIRED
         );
         let _ = fs::remove_dir_all(data);
     }
 
     #[test]
     fn a_successful_fixed_binding_persists_its_activation_watermark_across_restart() {
-        let data = std::env::temp_dir().join(format!(
-            "intern-microsoft-persisted-watermark-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&data);
-        let inbox = data.join("Inbox");
-        fs::create_dir_all(&inbox).unwrap();
-        let settings = AppSettings {
-            intake_folder: inbox.to_string_lossy().into_owned(),
-            ..AppSettings::default()
-        };
-        let settings_path = data.join("settings.json");
-        let settings_store = SettingsStore::new(&settings_path);
-        settings_store.save(&settings).unwrap();
-        fs::write(
-            data.join("microsoft-intake.json"),
-            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
-        )
-        .unwrap();
-        let intake =
-            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
-        let deployment = intake.deployment().unwrap().clone();
-        let local = inbox.canonicalize().unwrap();
+        let rig = switching("persisted-watermark");
+        let deployment = rig.intake.deployment().unwrap().clone();
         let before = chrono::Utc::now().timestamp_millis();
 
-        let binding = intake
-            .persist_verified_binding(
-                &deployment,
-                intake.generation.load(Ordering::SeqCst),
-                &settings,
-                &local,
-                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
-            )
+        rig.intake
+            .activate_fixed_binding(&deployment, &account(), &rig.inbox, || Ok::<_, &str>(()))
             .unwrap();
 
         let after = chrono::Utc::now().timestamp_millis();
+        let binding = rig.intake.config.lock().unwrap().bindings[0].clone();
         let watermark = binding
             .activation_watermark
             .expect("a successful binding has an activation watermark");
         assert!((before..=after).contains(&watermark));
-        drop(intake);
+        assert_eq!(
+            binding.activated_by,
+            Some(ActivatingAccount::of(&account()))
+        );
 
+        let settings_path = rig.data.join("settings.json");
         let restarted = MicrosoftIntake::with_deployment(
-            SettingsStore::new(settings_path),
-            data.clone(),
+            SettingsStore::new(&settings_path),
+            rig.data.clone(),
             Ok(test_deployment()),
         );
-        let candidate = local.join("agreement.pdf");
+        let settings = SettingsStore::new(settings_path).load().unwrap();
+        let candidate = rig.inbox.join("agreement.pdf");
         let reloaded = restarted.scope(&candidate, &settings).unwrap().unwrap();
         assert_eq!(reloaded, binding);
         assert_eq!(
-            read_config(&data.join("microsoft-intake.json"))
+            read_config(&rig.data.join("microsoft-intake.json"))
                 .unwrap()
                 .bindings,
             vec![binding]
         );
-        drop(restarted);
-        let _ = fs::remove_dir_all(data);
     }
 
     #[test]
-    fn a_binding_whose_drive_or_folder_id_differs_only_in_case_requires_re_pairing() {
-        let data = std::env::temp_dir().join(format!(
-            "intern-microsoft-binding-case-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&data);
-        let inbox = data.join("Inbox");
-        fs::create_dir_all(&inbox).unwrap();
-        let settings = AppSettings {
-            intake_folder: inbox.to_string_lossy().into_owned(),
-            ..AppSettings::default()
-        };
-        let settings_store = SettingsStore::new(data.join("settings.json"));
-        settings_store.save(&settings).unwrap();
-        fs::write(
-            data.join("microsoft-intake.json"),
-            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
-        )
-        .unwrap();
-        let intake =
-            MicrosoftIntake::with_deployment(settings_store, data.clone(), Ok(test_deployment()));
+    fn a_binding_whose_drive_or_folder_id_differs_only_in_case_requires_setup_again() {
+        let rig = switching("binding-case");
+        let intake = &rig.intake;
         let deployment = intake.deployment().unwrap().clone();
-        let local = inbox.canonicalize().unwrap();
-        let binding = intake
-            .persist_verified_binding(
-                &deployment,
-                intake.generation.load(Ordering::SeqCst),
-                &settings,
-                &local,
-                "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox".into(),
-            )
+        intake
+            .activate_fixed_binding(&deployment, &account(), &rig.inbox, || Ok::<_, &str>(()))
             .unwrap();
-        let candidate = local.join("agreement.pdf");
+        let binding = intake.config.lock().unwrap().bindings[0].clone();
+        let settings = intake.settings.load().unwrap();
+        let candidate = rig.inbox.join("agreement.pdf");
         assert_eq!(
             intake.scope(&candidate, &settings).unwrap(),
             Some(binding.clone())
@@ -2112,11 +1970,9 @@ mod tests {
             intake.config.lock().unwrap().bindings = vec![altered];
             assert_eq!(
                 intake.scope(&candidate, &settings).unwrap_err(),
-                PAIR_REQUIRED
+                SETUP_REQUIRED
             );
         }
-        drop(intake);
-        let _ = fs::remove_dir_all(data);
     }
 
     #[test]
@@ -2273,5 +2129,339 @@ mod tests {
         );
         drop(intake);
         let _ = fs::remove_dir_all(data);
+    }
+
+    /// Graph metadata for Inbox files whose creation time and creator a test
+    /// sets, reported to whichever account the test says is connected.
+    struct ScriptedUploads {
+        connected: Mutex<Account>,
+        uploads: Mutex<std::collections::HashMap<String, (i64, Account)>>,
+    }
+
+    impl ScriptedUploads {
+        fn upload(&self, inbox: &Path, name: &str, created: i64, by: &Account) -> PathBuf {
+            let path = inbox.join(name);
+            fs::write(&path, b"hello").unwrap();
+            self.uploads
+                .lock()
+                .unwrap()
+                .insert(name.into(), (created, by.clone()));
+            path
+        }
+    }
+
+    impl FreshUploadMetadata for ScriptedUploads {
+        fn metadata(&self, url: url::Url) -> Result<(Account, serde_json::Value), String> {
+            let name = url.path_segments().unwrap().next_back().unwrap().to_owned();
+            let (created, by) = self.uploads.lock().unwrap()[&name].clone();
+            let created = chrono::DateTime::from_timestamp_millis(created)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            Ok((
+                self.connected.lock().unwrap().clone(),
+                serde_json::json!({
+                    "id": "01SYNTHETICAGREEMENTFILEAAAAAAAAAA",
+                    "eTag": "\"fresh,1\"",
+                    "cTag": "\"content,1\"",
+                    "name": name,
+                    "size": 5,
+                    "webUrl": format!("https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox/{name}"),
+                    "parentReference": {
+                        "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                        "id": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA"
+                    },
+                    "sharepointIds": {
+                        "tenantId": "11111111-1111-1111-1111-111111111111",
+                        "siteId": "33333333-3333-3333-3333-333333333333",
+                        "webId": "44444444-4444-4444-4444-444444444444",
+                        "listId": "55555555-5555-5555-5555-555555555555",
+                        "listItemUniqueId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+                    },
+                    "createdBy": { "user": {
+                        "id": by.id,
+                        "userPrincipalName": by.user_principal_name
+                    }},
+                    "lastModifiedBy": { "user": {
+                        "id": by.id,
+                        "userPrincipalName": by.user_principal_name
+                    }},
+                    "createdDateTime": created,
+                    "lastModifiedDateTime": created,
+                    "file": {
+                        "mimeType": "application/pdf",
+                        "hashes": { "quickXorHash": "aCgDG9jwBgAAAAAABQAAAAAAAAA=" }
+                    }
+                }),
+            ))
+        }
+    }
+
+    /// The second account `reconnect_client` signs in: same tenant, another
+    /// person.
+    fn second_account() -> Account {
+        Account {
+            id: "aaaaaaaa-9999-9999-9999-999999999999".into(),
+            ..account()
+        }
+    }
+
+    struct Switching {
+        data: PathBuf,
+        inbox: PathBuf,
+        clock: Arc<ReconnectClock>,
+        uploads: Arc<ScriptedUploads>,
+        intake: MicrosoftIntake,
+    }
+
+    impl Drop for Switching {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.data);
+        }
+    }
+
+    /// A connected manager for the first account, with the Inbox saved as
+    /// the intake folder and Graph metadata scripted per file.
+    fn switching(name: &str) -> Switching {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-switch-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(data.join("Files").join("Inbox")).unwrap();
+        let inbox = data.join("Files").join("Inbox").canonicalize().unwrap();
+        fs::write(
+            data.join("microsoft-intake.json"),
+            br#"{"enabled":true,"bindings":[],"protectedRoots":[]}"#,
+        )
+        .unwrap();
+        let settings = SettingsStore::new(data.join("settings.json"));
+        settings
+            .save(&AppSettings {
+                intake_folder: inbox.to_string_lossy().into_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let clock = Arc::new(ReconnectClock(AtomicI64::new(1_000)));
+        let client = reconnect_client(Arc::clone(&clock));
+        connect_next_account(&client, &clock, 1_000);
+        let uploads = Arc::new(ScriptedUploads {
+            connected: Mutex::new(account()),
+            uploads: Mutex::new(std::collections::HashMap::new()),
+        });
+        let mut intake =
+            MicrosoftIntake::with_deployment(settings, data.clone(), Ok(test_deployment()));
+        intake.client = Some(client);
+        intake.fresh_upload_metadata = Some(Arc::clone(&uploads) as Arc<dyn FreshUploadMetadata>);
+        intake.snapshot_directory =
+            Some(PrivateSnapshotDirectory::new(data.join("proof-snapshots")).unwrap());
+        intake.snapshot_error = None;
+        Switching {
+            data,
+            inbox,
+            clock,
+            uploads,
+            intake,
+        }
+    }
+
+    fn watermark(intake: &MicrosoftIntake) -> i64 {
+        let config = intake.config.lock().unwrap();
+        assert_eq!(config.bindings.len(), 1);
+        config.bindings[0].activation_watermark.unwrap()
+    }
+
+    fn admitted(intake: &MicrosoftIntake, path: &Path) -> bool {
+        intake.authorize(path, AdmissionStage::Enqueue).is_ok()
+    }
+
+    #[test]
+    fn a_same_tenant_account_switch_never_inherits_the_previous_activation() {
+        let rig = switching("same-tenant");
+        let intake = &rig.intake;
+        let deployment = intake.deployment().unwrap().clone();
+        let (first, second) = (account(), second_account());
+
+        intake
+            .activate_fixed_binding(&deployment, &first, &rig.inbox, || Ok::<_, &str>(()))
+            .unwrap();
+        let first_watermark = watermark(intake);
+        assert!(intake.fixed_binding_active(&deployment, &rig.inbox));
+
+        // "Reconnect Microsoft" finishes as someone else in the same tenant.
+        intake.begin().unwrap();
+        rig.clock.0.store(1_010, Ordering::SeqCst);
+        intake.poll().unwrap();
+        *rig.uploads.connected.lock().unwrap() = second.clone();
+        assert!(
+            !intake.fixed_binding_active(&deployment, &rig.inbox),
+            "the first account's activation is not the second account's"
+        );
+        assert!(intake.status().binding.is_none());
+        assert!(
+            intake
+                .config
+                .lock()
+                .unwrap()
+                .protected_roots
+                .iter()
+                .any(|root| same_path(root, &rig.inbox.to_string_lossy())),
+            "the Inbox stays protected"
+        );
+
+        // Uploaded by the second person after the first activation but before
+        // the second person ever activated here.
+        let before = rig
+            .uploads
+            .upload(&rig.inbox, "before.pdf", first_watermark + 1, &second);
+        assert!(!admitted(intake, &before));
+
+        std::thread::sleep(Duration::from_millis(5));
+        intake
+            .activate_fixed_binding(&deployment, &second, &rig.inbox, || Ok::<_, &str>(()))
+            .unwrap();
+        let second_watermark = watermark(intake);
+        assert!(second_watermark > first_watermark + 1);
+        assert!(intake.fixed_binding_active(&deployment, &rig.inbox));
+
+        assert!(!admitted(intake, &before), "created before this activation");
+        let by_first = rig
+            .uploads
+            .upload(&rig.inbox, "first.pdf", second_watermark + 1, &first);
+        assert!(!admitted(intake, &by_first), "not the connected uploader");
+        let after = rig
+            .uploads
+            .upload(&rig.inbox, "after.pdf", second_watermark + 1, &second);
+        assert!(admitted(intake, &after));
+    }
+
+    #[test]
+    fn a_binding_activated_by_someone_else_never_admits_even_when_proof_passes() {
+        let rig = switching("other-activator");
+        let intake = &rig.intake;
+        let deployment = intake.deployment().unwrap().clone();
+        intake
+            .activate_fixed_binding(&deployment, &account(), &rig.inbox, || Ok::<_, &str>(()))
+            .unwrap();
+        let later = watermark(intake) + 1;
+        // Graph answers for the second account, whose own upload would pass
+        // every per-item check.
+        *rig.uploads.connected.lock().unwrap() = second_account();
+        let upload = rig
+            .uploads
+            .upload(&rig.inbox, "upload.pdf", later, &second_account());
+
+        assert!(!admitted(intake, &upload));
+    }
+
+    #[test]
+    fn a_persisted_binding_without_an_activating_account_is_never_active_or_managed() {
+        let rig = switching("migrated");
+        let intake = &rig.intake;
+        let deployment = intake.deployment().unwrap().clone();
+        let local_folder = rig.inbox.to_string_lossy().into_owned();
+        let stored = serde_json::json!({
+            "enabled": true,
+            "bindings": [{
+                "localFolder": local_folder,
+                "driveId": "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO",
+                "folderId": "01SYNTHETICINBOXFOLDERAAAAAAAAAAAA",
+                "webUrl": "https://teamcontoso.sharepoint.com/sites/InternTestSite/Files/Inbox",
+                "tenantId": "11111111-1111-1111-1111-111111111111",
+                "webId": "44444444-4444-4444-4444-444444444444",
+                "activationWatermark": 1_000
+            }],
+            "protectedRoots": [local_folder]
+        });
+        *intake.config.lock().unwrap() = serde_json::from_value(stored).unwrap();
+
+        assert!(!intake.fixed_binding_active(&deployment, &rig.inbox));
+        assert!(intake.status().binding.is_none());
+        assert_eq!(
+            intake.managed_paths(Some(&intake.settings.load().unwrap())),
+            Ok(None)
+        );
+        let upload = rig
+            .uploads
+            .upload(&rig.inbox, "upload.pdf", 2_000_000_000_000, &account());
+        assert!(!admitted(intake, &upload), "the Inbox stays held");
+    }
+
+    #[test]
+    fn manual_pairing_is_refused_with_a_stable_code_when_the_deployment_is_enabled() {
+        let rig = switching("manual-pairing");
+        let before = rig.intake.config.lock().unwrap().clone();
+
+        let error = rig.intake.bind().expect_err("manual pairing is disabled");
+
+        assert!(
+            error.contains("(MICROSOFT_MANUAL_PAIRING_DISABLED)"),
+            "{error}"
+        );
+        assert!(*rig.intake.config.lock().unwrap() == before);
+    }
+
+    #[test]
+    fn an_unreadable_config_only_blocks_saves_a_fixed_binding_could_manage() {
+        let rig = switching("unreadable-managed");
+        fs::write(rig.data.join("microsoft-intake.json"), b"not json").unwrap();
+        let intake = MicrosoftIntake::with_deployment(
+            SettingsStore::new(rig.data.join("settings.json")),
+            rig.data.clone(),
+            Ok(test_deployment()),
+        );
+        assert!(intake.status().error.is_some(), "the trouble is reported");
+
+        // Before any activation: no intake, a private local one, or an
+        // ordinary shared folder that SharePoint setup never writes.
+        for stored in [
+            AppSettings::default(),
+            AppSettings {
+                intake_folder: rig.inbox.to_string_lossy().into_owned(),
+                destination: rig.data.join("Filed").to_string_lossy().into_owned(),
+                intake_local_only: true,
+                ..AppSettings::default()
+            },
+            AppSettings {
+                intake_folder: rig.data.join("Scans").to_string_lossy().into_owned(),
+                destination: rig
+                    .data
+                    .join("Files")
+                    .join("Filed")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..AppSettings::default()
+            },
+        ] {
+            assert_eq!(intake.managed_paths(Some(&stored)), Ok(None), "{stored:?}");
+        }
+
+        // Settings that activation writes, or settings that cannot be read,
+        // may belong to a fixed binding nobody can see: refuse.
+        let activated = AppSettings {
+            intake_folder: rig.inbox.to_string_lossy().into_owned(),
+            destination: rig
+                .inbox
+                .parent()
+                .unwrap()
+                .join("Filed")
+                .to_string_lossy()
+                .into_owned(),
+            ..AppSettings::default()
+        };
+        assert!(intake.managed_paths(Some(&activated)).is_err());
+        assert!(intake.managed_paths(None).is_err());
+
+        // And an ordinary save before activation goes through the real
+        // settings path, as protect_settings intends.
+        let mut runtime =
+            crate::commands::test_runtime::RecordingRuntime::new(rig.data.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        runtime.microsoft = Some(Arc::new(intake));
+        let payload = AppSettings {
+            machine_label: "Front desk".into(),
+            ..AppSettings::default()
+        };
+        crate::commands::save_settings(&runtime, payload).expect("an unrelated save");
+        assert_eq!(runtime.store.load().unwrap().machine_label, "Front desk");
     }
 }

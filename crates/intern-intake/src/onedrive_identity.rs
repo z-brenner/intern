@@ -21,6 +21,8 @@ pub trait OneDriveRecords {
     fn settings_file(&self, account: &str, name: &str) -> Result<Option<Vec<u8>>, RecordError>;
     /// `Accounts\<account>\ScopeIdToMountPointPathCache` as (scope id, path).
     fn scope_mount_points(&self, account: &str) -> Result<Vec<(String, String)>, RecordError>;
+    /// `Accounts\<account>\UserEmail`: who is signed in to that slot, if anyone.
+    fn user_email(&self, account: &str) -> Result<Option<String>, RecordError>;
 }
 
 /// The remote identifiers the sync client records for the verified root,
@@ -68,36 +70,89 @@ impl RecordError {
 
 /// Returns the recorded remote identity for `candidate` only when exactly one
 /// OneDrive `libraryScope` record mounts the whole library at that exact
-/// folder, every identifier equals the packaged deployment, and the sync
-/// engine's registry scope cache maps the same scope to the same folder.
+/// folder, every identifier equals the packaged deployment, the sync engine's
+/// registry scope cache maps the same scope to the same folder, and the
+/// OneDrive account holding the record is signed in as one of `signed_in_as`
+/// (the connected Microsoft account's mail and principal name).
+///
+/// Only records the registry cache corroborates take part, so a settings
+/// folder left behind by an unlinked account neither verifies nor conflicts.
+/// Recorded folders are compared after `canonicalize`, the same filesystem
+/// boundary that produced `candidate`, so junctioned or redirected profiles
+/// match; a recorded folder that does not canonicalize is compared as written.
+///
+/// A record line or settings file that cannot be parsed is skipped, because
+/// it may belong to any library the person syncs. It still fails closed with
+/// `Malformed` whenever it could be the candidate's own record: its account's
+/// cache maps a scope to the candidate and that scope has no well-formed
+/// record, or an unparseable line names that scope.
 pub fn verify_library_root(
     records: &dyn OneDriveRecords,
     candidate: &Path,
     deployment: &SharePointDeployment,
+    signed_in_as: &[&str],
+    canonicalize: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> Result<Option<VerifiedLibrary>, RecordError> {
     let wanted = DeploymentIds::from(deployment)?;
     let candidate_key = path_components(candidate);
+    let folder_key = |recorded: &str| {
+        let recorded = Path::new(recorded);
+        path_components(&canonicalize(recorded).unwrap_or_else(|| recorded.to_path_buf()))
+    };
     let mut at_candidate = Vec::new();
     let mut deployment_mounts = 0usize;
     for account in records.business_accounts()? {
         if !is_business_account(&account) {
             continue;
         }
-        for scope in account_scopes(records, &account)? {
+        let scopes = account_scopes(records, &account)?;
+        if scopes.records.is_empty() && scopes.malformed.is_none() {
+            continue;
+        }
+        let cache: Vec<(Option<String>, Vec<String>)> = records
+            .scope_mount_points(&account)?
+            .iter()
+            .map(|(scope_id, path)| (normalize_scope_id(scope_id), folder_key(path)))
+            .collect();
+        if let Some(malformed) = &scopes.malformed {
+            let could_be_candidates =
+                cache
+                    .iter()
+                    .filter(|(_, path)| *path == candidate_key)
+                    .any(|(scope_id, _)| {
+                        scope_id.as_deref().is_none_or(|scope_id| {
+                            malformed.names_scope(scope_id)
+                                || !scopes
+                                    .records
+                                    .iter()
+                                    .any(|record| record.scope_id == scope_id)
+                        })
+                    });
+            if could_be_candidates {
+                return Err(RecordError::Malformed(malformed.detail));
+            }
+        }
+        for scope in scopes.records {
             // An empty mount means only folders inside the library are synced
             // (recorded on separate libraryFolder lines): not the library root.
             if scope.mount.is_empty() {
                 continue;
             }
+            let mount = folder_key(&scope.mount);
+            if !cache.iter().any(|(scope_id, path)| {
+                scope_id.as_ref() == Some(&scope.scope_id) && *path == mount
+            }) {
+                continue;
+            }
             if scope.ids == wanted {
                 deployment_mounts += 1;
             }
-            if path_components(Path::new(&scope.mount)) == candidate_key {
-                at_candidate.push((account.clone(), scope));
+            if mount == candidate_key {
+                at_candidate.push((account.clone(), cache.clone(), scope));
             }
         }
     }
-    let (account, scope) = match at_candidate.len() {
+    let (account, cache, scope) = match at_candidate.len() {
         0 => return Ok(None),
         1 => at_candidate.pop().expect("one record"),
         _ => return Err(RecordError::Conflict("folder records")),
@@ -108,21 +163,25 @@ pub fn verify_library_root(
     if deployment_mounts > 1 {
         return Err(RecordError::Conflict("library records"));
     }
+    // A library synced by a different OneDrive work account than the one
+    // connected to Intern is not this person's enrollment.
+    let signed_in = records.user_email(&account)?.is_some_and(|email| {
+        signed_in_as.iter().any(|wanted| {
+            !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
+        })
+    });
+    if !signed_in {
+        return Ok(None);
+    }
 
-    // The sync engine's registry cache must independently map this scope to
-    // this folder, and no other scope to it. A stale settings line alone
-    // does not verify.
-    let mut corroborated = false;
-    for (scope_id, path) in records.scope_mount_points(&account)? {
-        let same_scope = normalize_scope_id(&scope_id).as_deref() == Some(scope.scope_id.as_str());
-        let same_path = path_components(Path::new(&path)) == candidate_key;
-        match (same_scope, same_path) {
-            (true, true) => corroborated = true,
-            (false, false) => {}
-            _ => return Err(RecordError::Conflict("scope cache path")),
+    // No other scope may map to this folder, and this scope nowhere else.
+    for (scope_id, path) in &cache {
+        let same_scope = scope_id.as_ref() == Some(&scope.scope_id);
+        if same_scope != (*path == candidate_key) {
+            return Err(RecordError::Conflict("scope cache path"));
         }
     }
-    Ok(corroborated.then(|| VerifiedLibrary {
+    Ok(Some(VerifiedLibrary {
         tenant_id: dashed(&scope.ids.tenant),
         site_id: dashed(&scope.ids.site),
         web_id: dashed(&scope.ids.web),
@@ -235,6 +294,18 @@ impl OneDriveRecords for SystemOneDriveRecords {
             Ok(Vec::new())
         }
     }
+
+    fn user_email(&self, account: &str) -> Result<Option<String>, RecordError> {
+        if !is_business_account(account) {
+            return Err(RecordError::Malformed("account name"));
+        }
+        Ok(crate::registry_string(
+            crate::RegistryHive::CurrentUser,
+            &format!(r"Software\Microsoft\OneDrive\Accounts\{account}"),
+            "UserEmail",
+        )
+        .filter(|email| !email.trim().is_empty()))
+    }
 }
 
 /// Tenant, site, web, and list identifiers as 32 lowercase hex digits.
@@ -271,43 +342,111 @@ fn is_business_account(name: &str) -> bool {
         .is_some_and(|digit| digit.len() == 1 && matches!(digit.as_bytes()[0], b'1'..=b'9'))
 }
 
-/// Every `libraryScope` record of one signed-in business account. A missing
-/// `global.ini`, an empty `cid`, or a missing `<cid>.ini` means the account
-/// has nothing enrolled yet.
+#[derive(Default)]
+struct AccountScopes {
+    records: Vec<ScopeRecord>,
+    malformed: Option<MalformedRecords>,
+}
+
+/// What of one account's records could not be parsed.
+struct MalformedRecords {
+    detail: &'static str,
+    /// The account's settings could not be read as records at all.
+    whole_account: bool,
+    /// Unparseable `libraryScope` lines, lowercased.
+    lines: Vec<String>,
+}
+
+impl MalformedRecords {
+    fn whole_account(detail: &'static str) -> Self {
+        Self {
+            detail,
+            whole_account: true,
+            lines: Vec::new(),
+        }
+    }
+
+    /// Whether an unparseable record could be the one for `scope_id`.
+    fn names_scope(&self, scope_id: &str) -> bool {
+        self.whole_account || self.lines.iter().any(|line| line.contains(scope_id))
+    }
+}
+
+/// Every well-formed `libraryScope` record of one signed-in business account,
+/// and what could not be parsed. A missing `global.ini`, an empty `cid`, or a
+/// missing `<cid>.ini` means the account has nothing enrolled yet. Only an
+/// unreadable source is an error here; see [`verify_library_root`] for when a
+/// malformed one is.
 fn account_scopes(
     records: &dyn OneDriveRecords,
     account: &str,
-) -> Result<Vec<ScopeRecord>, RecordError> {
-    let Some(global) = records.settings_file(account, "global.ini")? else {
-        return Ok(Vec::new());
+) -> Result<AccountScopes, RecordError> {
+    let unparsed = |detail| AccountScopes {
+        records: Vec::new(),
+        malformed: Some(MalformedRecords::whole_account(detail)),
     };
-    let global = decode_utf16(&global)?;
+    let global = match records.settings_file(account, "global.ini") {
+        Ok(Some(global)) => global,
+        Ok(None) => return Ok(AccountScopes::default()),
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let global = match decode_utf16(&global) {
+        Ok(global) => global,
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
     let mut cids = global
         .lines()
         .filter_map(|line| line.strip_prefix("cid = "));
     let cid = match (cids.next(), cids.next()) {
-        (None, _) => return Ok(Vec::new()),
+        (None, _) => return Ok(AccountScopes::default()),
         (Some(cid), None) => cid,
-        (Some(_), Some(_)) => return Err(RecordError::Malformed("duplicate cid")),
+        (Some(_), Some(_)) => return Ok(unparsed("duplicate cid")),
     };
     if cid.is_empty() {
-        return Ok(Vec::new());
+        return Ok(AccountScopes::default());
     }
     if cid.len() > 64
         || !cid
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
-        return Err(RecordError::Malformed("account cid"));
+        return Ok(unparsed("account cid"));
     }
-    let Some(scopes) = records.settings_file(account, &format!("{cid}.ini"))? else {
-        return Ok(Vec::new());
+    let scopes = match records.settings_file(account, &format!("{cid}.ini")) {
+        Ok(Some(scopes)) => scopes,
+        Ok(None) => return Ok(AccountScopes::default()),
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
     };
-    decode_utf16(&scopes)?
+    let scopes = match decode_utf16(&scopes) {
+        Ok(scopes) => scopes,
+        Err(RecordError::Malformed(detail)) => return Ok(unparsed(detail)),
+        Err(error) => return Err(error),
+    };
+    let mut parsed = AccountScopes::default();
+    for line in scopes
         .lines()
         .filter_map(|line| line.strip_prefix("libraryScope = "))
-        .map(parse_scope)
-        .collect()
+    {
+        match parse_scope(line) {
+            Ok(record) => parsed.records.push(record),
+            Err(RecordError::Malformed(detail)) => {
+                parsed
+                    .malformed
+                    .get_or_insert(MalformedRecords {
+                        detail,
+                        whole_account: false,
+                        lines: Vec::new(),
+                    })
+                    .lines
+                    .push(line.to_lowercase());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(parsed)
 }
 
 /// Field positions in a `libraryScope` record, after the tag.
@@ -464,6 +603,9 @@ mod tests {
     const MYSITE_SCOPE: &str = "fedcba9876543210fedcba9876543210";
     const ROOT: &str = r"C:\Users\Pat\Contoso\InternTestSite - Files";
     const CID: &str = "9f8e7d6c-5b4a-4938-8271-605f4e3d2c1b";
+    /// The connected Microsoft account's mail and principal name.
+    const CONNECTED_MAIL: &str = "pat.contoso@contoso.com";
+    const SIGNED_IN: &str = "pat@contoso.com";
 
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -526,6 +668,10 @@ mod tests {
         accounts: Vec<String>,
         files: HashMap<(String, String), Vec<u8>>,
         caches: HashMap<String, Vec<(String, String)>>,
+        emails: HashMap<String, String>,
+        /// Recorded spelling to canonical folder, as a junction or redirected
+        /// profile resolves; anything absent does not canonicalize.
+        canonical: HashMap<String, String>,
         unavailable: bool,
     }
 
@@ -548,6 +694,7 @@ mod tests {
 
         fn account(&mut self, name: &str, cid: &str, lines: &[String], cache: &[(&str, &str)]) {
             self.accounts.push(name.into());
+            self.emails.insert(name.into(), SIGNED_IN.into());
             self.files.insert(
                 (name.into(), "global.ini".into()),
                 utf16(&format!("mode = 1\r\ncid = {cid}\r\n")),
@@ -586,10 +733,25 @@ mod tests {
         fn scope_mount_points(&self, account: &str) -> Result<Vec<(String, String)>, RecordError> {
             Ok(self.caches.get(account).cloned().unwrap_or_default())
         }
+
+        fn user_email(&self, account: &str) -> Result<Option<String>, RecordError> {
+            Ok(self.emails.get(account).cloned())
+        }
     }
 
     fn verify(fixture: &Fixture, candidate: &str) -> Result<Option<VerifiedLibrary>, RecordError> {
-        verify_library_root(fixture, Path::new(candidate), &deployment())
+        verify_library_root(
+            fixture,
+            Path::new(candidate),
+            &deployment(),
+            &[CONNECTED_MAIL, SIGNED_IN],
+            &|path| {
+                fixture
+                    .canonical
+                    .get(path.to_string_lossy().as_ref())
+                    .map(PathBuf::from)
+            },
+        )
     }
 
     fn expected() -> VerifiedLibrary {
@@ -765,15 +927,14 @@ mod tests {
         );
         assert_eq!(verify(&missing, ROOT), Ok(None));
 
+        // A record the cache maps somewhere else is uncorroborated, so it
+        // neither verifies nor conflicts.
         let mut elsewhere = Fixture::standard();
         elsewhere.caches.insert(
             "Business1".into(),
             vec![(SCOPE.into(), r"C:\Users\Pat\Elsewhere".into())],
         );
-        assert_eq!(
-            verify(&elsewhere, ROOT),
-            Err(RecordError::Conflict("scope cache path"))
-        );
+        assert_eq!(verify(&elsewhere, ROOT), Ok(None));
 
         let mut other_scope = Fixture::standard();
         other_scope.caches.insert(
@@ -787,6 +948,139 @@ mod tests {
             verify(&other_scope, ROOT),
             Err(RecordError::Conflict("scope cache path"))
         );
+    }
+
+    #[test]
+    fn only_the_onedrive_account_signed_in_as_the_connected_account_verifies() {
+        let mut other = Fixture::standard();
+        other
+            .emails
+            .insert("Business1".into(), "sam@contoso.com".into());
+        assert_eq!(verify(&other, ROOT), Ok(None));
+
+        let mut unsigned = Fixture::standard();
+        unsigned.emails.clear();
+        assert_eq!(verify(&unsigned, ROOT), Ok(None));
+
+        for email in ["PAT@Contoso.com", " pat.contoso@CONTOSO.com "] {
+            let mut fixture = Fixture::standard();
+            fixture.emails.insert("Business1".into(), email.into());
+            assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())), "{email}");
+        }
+    }
+
+    #[test]
+    fn stale_uncorroborated_records_neither_verify_nor_conflict() {
+        // A settings folder left behind by an unlinked account still names
+        // the library, here and in another folder, but its registry cache no
+        // longer maps either scope.
+        let mut fixture = Fixture::standard();
+        fixture.account(
+            "Business2",
+            "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e",
+            &[
+                scope_line(
+                    0,
+                    "abcdefabcdefabcdefabcdefabcdefab",
+                    TENANT,
+                    (SITE, WEB, LIST),
+                    ROOT,
+                ),
+                scope_line(
+                    1,
+                    "bcdefabcdefabcdefabcdefabcdefabc",
+                    TENANT,
+                    (SITE, WEB, LIST),
+                    r"D:\Contoso\InternTestSite - Files",
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(verify(&fixture, ROOT), Ok(Some(expected())));
+
+        let mut stale_only = Fixture::default();
+        stale_only.account("Business1", CID, &[library_line(ROOT)], &[]);
+        assert_eq!(verify(&stale_only, ROOT), Ok(None));
+    }
+
+    #[test]
+    fn a_malformed_record_for_another_library_does_not_block_a_corroborated_root() {
+        let broken = format!("libraryScope = 7 {MYSITE_SCOPE} 5 \"Other\" \"unterminated");
+        let mut same_account = Fixture::default();
+        same_account.account(
+            "Business1",
+            CID,
+            &[broken, library_line(ROOT)],
+            &[
+                (MYSITE_SCOPE, r"C:\Users\Pat\OneDrive - Contoso"),
+                (SCOPE, ROOT),
+            ],
+        );
+        assert_eq!(verify(&same_account, ROOT), Ok(Some(expected())));
+
+        let mut other_account = Fixture::standard();
+        let other_cid = "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e";
+        other_account.account(
+            "Business2",
+            other_cid,
+            &[],
+            &[(MYSITE_SCOPE, r"D:\Elsewhere")],
+        );
+        let mut odd = utf16("libraryScope = 1 x\r\n");
+        odd.push(0);
+        other_account
+            .files
+            .insert(("Business2".into(), format!("{other_cid}.ini")), odd);
+        assert_eq!(verify(&other_account, ROOT), Ok(Some(expected())));
+    }
+
+    #[test]
+    fn a_malformed_record_that_could_be_the_candidates_fails_closed() {
+        // A second, unparseable record for the candidate's own scope.
+        let duplicate = format!("libraryScope = 2 {SCOPE} 5 \"InternTestSite\" \"Files");
+        let mut fixture = Fixture::default();
+        fixture.account(
+            "Business1",
+            CID,
+            &[library_line(ROOT), duplicate],
+            &[(SCOPE, ROOT)],
+        );
+        assert!(matches!(
+            verify(&fixture, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+
+        // An unreadable settings file in an account whose cache maps a scope
+        // to the candidate: its record could be the one that is unreadable.
+        let mut unreadable = Fixture::standard();
+        let other_cid = "0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e";
+        unreadable.account(
+            "Business2",
+            other_cid,
+            &[],
+            &[("abcdefabcdefabcdefabcdefabcdefab", ROOT)],
+        );
+        let mut odd = utf16("libraryScope = 1 x\r\n");
+        odd.push(0);
+        unreadable
+            .files
+            .insert(("Business2".into(), format!("{other_cid}.ini")), odd);
+        assert!(matches!(
+            verify(&unreadable, ROOT),
+            Err(RecordError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn recorded_paths_compare_after_canonicalization() {
+        // The profile is a junction to D:, so OneDrive recorded C: while the
+        // candidate canonicalized to D:.
+        let canonical = r"\\?\D:\Users\Pat\Contoso\InternTestSite - Files";
+        let mut fixture = Fixture::standard();
+        assert_eq!(verify(&fixture, canonical), Ok(None));
+
+        fixture.canonical.insert(ROOT.into(), canonical.into());
+        assert_eq!(verify(&fixture, canonical), Ok(Some(expected())));
     }
 
     #[test]

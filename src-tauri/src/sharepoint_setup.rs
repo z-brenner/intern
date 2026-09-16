@@ -91,7 +91,8 @@ pub enum SyncOpenFailure {
     Other(String),
 }
 
-/// Full authoritative identity returned for one exact canonical local root.
+/// The recorded remote identity for one exact canonical local root: tenant,
+/// site, web, and list. There is no drive; the sync records do not carry one.
 /// A verifier result is still checked here; returning a display name or path
 /// alone can never satisfy the service.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,11 +102,13 @@ pub struct RemoteLibraryIdentity {
     pub site_id: String,
     pub web_id: String,
     pub list_id: String,
-    pub drive_id: String,
 }
 
 pub trait RootDetector {
     fn one_drive_state(&self) -> OneDriveState;
+    /// Whether a OneDrive work or school account is signed in as `account`
+    /// (its mail or principal name), rather than as someone else.
+    fn one_drive_signed_in_as(&self, account: &Account) -> bool;
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError>;
 }
 
@@ -115,11 +118,14 @@ pub trait SetupFileSystem {
 }
 
 pub trait RemoteLibraryVerifier {
+    /// `fs` is the boundary that canonicalized `candidate`; recorded folders
+    /// must be compared through it too.
     fn verify(
         &self,
         account: &Account,
         candidate: &Path,
         deployment: &SharePointDeployment,
+        fs: &dyn SetupFileSystem,
     ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError>;
 }
 
@@ -150,6 +156,12 @@ pub trait MicrosoftSetup {
 
 pub trait SetupSettings {
     fn load(&self) -> Result<AppSettings, SharePointSetupError>;
+    /// Marks an activation as running and returns the settings stored at that
+    /// moment. Until `end_activation`, ordinary settings saves are refused
+    /// (SHAREPOINT_ACTIVATION_IN_PROGRESS), so a failed activation's restore
+    /// cannot silently undo one.
+    fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError>;
+    fn end_activation(&self);
     /// Applies activation settings. A failure has already restored what was
     /// stored before, or reports ACTIVATION_ROLLBACK_FAILED.
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError>;
@@ -178,6 +190,24 @@ struct ResolvedLibrary {
     identity: RemoteLibraryIdentity,
     inbox: PathBuf,
     destination: PathBuf,
+}
+
+/// Ends the activation on every exit from `activate`.
+struct ActivationRunning<'a>(&'a dyn SetupSettings);
+
+impl Drop for ActivationRunning<'_> {
+    fn drop(&mut self) {
+        self.0.end_activation();
+    }
+}
+
+enum Resolution {
+    Resolved(ResolvedLibrary),
+    /// No registered root verified. `verifier_error` is the first record
+    /// problem that kept a root from verifying, if any.
+    Pending {
+        verifier_error: Option<SharePointSetupError>,
+    },
 }
 
 pub struct SharePointSetup<'a> {
@@ -224,7 +254,7 @@ impl<'a> SharePointSetup<'a> {
     /// Writability is proven again by `start_sync` and `activate`.
     pub fn status(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let Some(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
+        let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
             return Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account));
         };
         let settings = self.settings.load()?;
@@ -246,7 +276,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn start_sync(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        if let Some(resolved) = self.resolve(&account, WriteProbe::Require)? {
+        if let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Require)? {
             let settings = self.settings.load()?;
             let active = managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
                 && self.autostart.is_enabled()?
@@ -290,13 +320,24 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn activate(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let resolved = self.resolve(&account, WriteProbe::Require)?.ok_or_else(|| {
-            SharePointSetupError::new(
-                "SHAREPOINT_SYNC_PENDING",
-                "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
-            )
-        })?;
-        let previous = self.settings.load()?;
+        let resolved = match self.resolve(&account, WriteProbe::Require)? {
+            Resolution::Resolved(resolved) => resolved,
+            // Activation was asked for explicitly, so a record problem that
+            // kept a registered root from verifying is the more useful answer.
+            Resolution::Pending {
+                verifier_error: Some(error),
+            } => return Err(error),
+            Resolution::Pending {
+                verifier_error: None,
+            } => {
+                return Err(SharePointSetupError::new(
+                    "SHAREPOINT_SYNC_PENDING",
+                    "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
+                ));
+            }
+        };
+        let previous = self.settings.begin_activation()?;
+        let _running = ActivationRunning(self.settings);
         let previous_autostart = self.autostart.is_enabled()?;
         let mut next = previous.clone();
         next.intake_folder = resolved.inbox.to_string_lossy().into_owned();
@@ -371,14 +412,32 @@ impl<'a> SharePointSetup<'a> {
                 "The connected Microsoft account is outside the provisioned Contoso tenant.",
             ));
         }
+        if !self.roots.one_drive_signed_in_as(&account) {
+            return Err(SharePointSetupError::new(
+                "ONEDRIVE_ACCOUNT_MISMATCH",
+                format!(
+                    "OneDrive is signed in to a different work or school account. Sign in to OneDrive as {}, then try again.",
+                    account.email
+                ),
+            ));
+        }
         Ok(account)
     }
 
+    /// Finds the one registered root OneDrive's records prove is the
+    /// provisioned library. Other SharePoint and Teams libraries the person
+    /// already syncs are ordinary: a root that does not verify is simply not
+    /// ours, so it never blocks enrollment, and overlap is only checked
+    /// between roots that verified. A verifier error for one root does not
+    /// stop the scan either. It fails closed for that root only: the root
+    /// never verifies, and when nothing else does the error is kept for
+    /// `activate` to report, while status and sync still see enrollment as
+    /// pending so OneDrive can be asked to sync the library.
     fn resolve(
         &self,
         account: &Account,
         probe: WriteProbe,
-    ) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
+    ) -> Result<Resolution, SharePointSetupError> {
         let mut candidates = Vec::new();
         for detected in self.roots.detect()? {
             if detected.kind != CloudProviderKind::SharePoint {
@@ -390,38 +449,37 @@ impl<'a> SharePointSetup<'a> {
                 candidates.push(canonical);
             }
         }
-        if candidates.is_empty() {
-            return Ok(None);
+
+        let mut verified = Vec::new();
+        let mut verifier_error = None;
+        for candidate in &candidates {
+            match self
+                .verifier
+                .verify(account, candidate, self.deployment, self.fs)
+            {
+                Ok(Some(identity)) if self.identity_matches(candidate, &identity) => {
+                    verified.push(identity);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    verifier_error.get_or_insert(error);
+                }
+            }
         }
-        for (index, left) in candidates.iter().enumerate() {
-            if candidates
+        for (index, left) in verified.iter().enumerate() {
+            if verified
                 .iter()
                 .skip(index + 1)
-                .any(|right| paths_overlap(left, right))
+                .any(|right| paths_overlap(&left.local_root, &right.local_root))
             {
                 return Err(SharePointSetupError::new(
                     "SHAREPOINT_ROOT_NESTED",
-                    "OneDrive registered overlapping SharePoint roots. Intern cannot safely map local files until the duplicate or nested sync is removed.",
+                    "OneDrive registered the Files library at overlapping folders. Intern cannot safely map local files until the duplicate or nested sync is removed.",
                 ));
-            }
-        }
-
-        let mut verified = Vec::new();
-        for candidate in &candidates {
-            let Some(identity) = self.verifier.verify(account, candidate, self.deployment)? else {
-                continue;
-            };
-            if self.identity_matches(candidate, &identity) {
-                verified.push(identity);
             }
         }
         let identity = match verified.len() {
-            0 => {
-                return Err(SharePointSetupError::new(
-                    "SHAREPOINT_ROOT_UNVERIFIED",
-                    "OneDrive registered a SharePoint root, but an authoritative Microsoft check did not match the provisioned tenant, site, web, list, and drive.",
-                ));
-            }
+            0 => return Ok(Resolution::Pending { verifier_error }),
             1 => verified.pop().expect("one verified identity"),
             _ => {
                 return Err(SharePointSetupError::new(
@@ -454,7 +512,7 @@ impl<'a> SharePointSetup<'a> {
                 "Inbox and Filed did not resolve to separate fixed children of the Files library.",
             ));
         }
-        Ok(Some(ResolvedLibrary {
+        Ok(Resolution::Resolved(ResolvedLibrary {
             identity,
             inbox,
             destination,
@@ -497,6 +555,11 @@ impl<'a> SharePointSetup<'a> {
         Ok(child)
     }
 
+    /// Re-checks the recorded identifiers against the deployment. No drive is
+    /// compared: OneDrive's records carry no Graph drive ID, and the drive is
+    /// proven per item by Graph at admission instead. The production verifier
+    /// echoes the candidate as `local_root`, so that comparison can only catch
+    /// a verifier implementation that reports some other folder.
     fn identity_matches(&self, candidate: &Path, identity: &RemoteLibraryIdentity) -> bool {
         identity.local_root == candidate
             && identity
@@ -511,8 +574,6 @@ impl<'a> SharePointSetup<'a> {
             && identity
                 .list_id
                 .eq_ignore_ascii_case(self.deployment.list_id())
-            // A base64url drive ID is case-sensitive.
-            && identity.drive_id == self.deployment.drive_id()
     }
 
     fn restore_local_activation(
@@ -644,20 +705,34 @@ fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
 
 /// OneDrive keeps an `Accounts\Business<N>` key per work or school account
 /// slot, and records `UserEmail` only once someone has signed in to it.
-fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+fn one_drive_work_account_emails(machine: &dyn MachineFacts) -> Vec<String> {
     machine
         .registry_subkeys(RegistryHive::CurrentUser, ONEDRIVE_ACCOUNTS_KEY)
         .iter()
         .filter(|name| name.to_ascii_lowercase().starts_with("business"))
-        .any(|name| {
-            machine
-                .registry_string(
-                    RegistryHive::CurrentUser,
-                    &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
-                    "UserEmail",
-                )
-                .is_some()
+        .filter_map(|name| {
+            machine.registry_string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\{name}"),
+                "UserEmail",
+            )
         })
+        .filter(|email| !email.trim().is_empty())
+        .collect()
+}
+
+fn one_drive_work_account_signed_in(machine: &dyn MachineFacts) -> bool {
+    !one_drive_work_account_emails(machine).is_empty()
+}
+
+fn one_drive_signed_in_as(machine: &dyn MachineFacts, account: &Account) -> bool {
+    one_drive_work_account_emails(machine).iter().any(|email| {
+        [&account.email, &account.user_principal_name]
+            .iter()
+            .any(|wanted| {
+                !wanted.trim().is_empty() && email.trim().eq_ignore_ascii_case(wanted.trim())
+            })
+    })
 }
 
 fn one_drive_state(machine: &dyn MachineFacts) -> OneDriveState {
@@ -687,6 +762,10 @@ impl RootDetector for SystemRoots<'_> {
         // Root absence is the normal pre-enrollment state, not evidence that
         // OneDrive is absent, so only the client and account are checked.
         one_drive_state(self.machine)
+    }
+
+    fn one_drive_signed_in_as(&self, account: &Account) -> bool {
+        one_drive_signed_in_as(self.machine, account)
     }
 
     fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -789,6 +868,15 @@ impl<R: SettingsRuntime> SetupSettings for ProductionSettings<'_, R> {
         self.0
             .load_settings()
             .map_err(|error| SharePointSetupError::new(error.code, error.message))
+    }
+
+    fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError> {
+        crate::commands::begin_sharepoint_activation(self.0)
+            .map_err(|error| SharePointSetupError::new(error.code, error.message))
+    }
+
+    fn end_activation(&self) {
+        crate::commands::end_sharepoint_activation(self.0);
     }
 
     fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
@@ -905,6 +993,12 @@ fn production_operation(
     operation(&setup)
 }
 
+/// The current setup phase, read the way `onboarding_sharepoint_status` reads
+/// it. Blocking: callers must run it away from the IPC thread.
+pub(crate) fn current_phase(app: &AppHandle) -> Result<SharePointSetupPhase, SharePointSetupError> {
+    production_operation(app, |setup| setup.status()).map(|status| status.phase)
+}
+
 /// No-payload, side-effect-free IPC command for polling setup progress: it
 /// rescans and reads, but never launches OneDrive, writes settings or
 /// autostart, or probes the synced library with a write.
@@ -974,7 +1068,6 @@ mod tests {
     const SITE_ID: &str = "cccccccc-cccc-cccc-cccc-cccccccccccc";
     const WEB_ID: &str = "dddddddd-dddd-dddd-dddd-dddddddddddd";
     const LIST_ID: &str = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
-    const DRIVE_ID: &str = "b!TTO6DSRqwEyBsbryPjv57vX3nytJNK-H9VILablLDZguhbtVtnKocmN6zXRm_LYO";
 
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
@@ -1023,18 +1116,22 @@ mod tests {
             site_id: SITE_ID.into(),
             web_id: WEB_ID.into(),
             list_id: LIST_ID.into(),
-            drive_id: DRIVE_ID.into(),
         }
     }
 
     struct FakeRoots {
         state: OneDriveState,
+        signed_in_as_connected: bool,
         roots: Vec<CloudRoot>,
     }
 
     impl RootDetector for FakeRoots {
         fn one_drive_state(&self) -> OneDriveState {
             self.state
+        }
+
+        fn one_drive_signed_in_as(&self, _account: &Account) -> bool {
+            self.signed_in_as_connected
         }
 
         fn detect(&self) -> Result<Vec<CloudRoot>, SharePointSetupError> {
@@ -1066,6 +1163,7 @@ mod tests {
     #[derive(Default)]
     struct FakeVerifier {
         identities: Mutex<HashMap<PathBuf, RemoteLibraryIdentity>>,
+        errors: Mutex<HashMap<PathBuf, SharePointSetupError>>,
         seen: Mutex<Vec<PathBuf>>,
     }
 
@@ -1075,8 +1173,12 @@ mod tests {
             _account: &Account,
             candidate: &Path,
             _deployment: &SharePointDeployment,
+            _fs: &dyn SetupFileSystem,
         ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError> {
             self.seen.lock().unwrap().push(candidate.to_path_buf());
+            if let Some(error) = self.errors.lock().unwrap().get(candidate) {
+                return Err(error.clone());
+            }
             Ok(self.identities.lock().unwrap().get(candidate).cloned())
         }
     }
@@ -1144,6 +1246,9 @@ mod tests {
         saved: Mutex<AppSettings>,
         fail_next: Mutex<bool>,
         events: Arc<Mutex<Vec<&'static str>>>,
+        activating: Mutex<bool>,
+        /// Whether an activation was marked running at each save.
+        saved_while_activating: Mutex<Vec<bool>>,
     }
 
     impl SetupSettings for FakeSettings {
@@ -1151,7 +1256,27 @@ mod tests {
             Ok(self.saved.lock().unwrap().clone())
         }
 
+        fn begin_activation(&self) -> Result<AppSettings, SharePointSetupError> {
+            let mut activating = self.activating.lock().unwrap();
+            if *activating {
+                return Err(SharePointSetupError::new(
+                    "SHAREPOINT_ACTIVATION_IN_PROGRESS",
+                    "already activating",
+                ));
+            }
+            *activating = true;
+            self.load()
+        }
+
+        fn end_activation(&self) {
+            *self.activating.lock().unwrap() = false;
+        }
+
         fn save(&self, settings: &AppSettings) -> Result<(), SharePointSetupError> {
+            self.saved_while_activating
+                .lock()
+                .unwrap()
+                .push(*self.activating.lock().unwrap());
             self.events.lock().unwrap().push("settings");
             let mut fail = self.fail_next.lock().unwrap();
             if *fail {
@@ -1246,6 +1371,7 @@ mod tests {
                 deployment: deployment(),
                 roots: FakeRoots {
                     state: OneDriveState::Available,
+                    signed_in_as_connected: true,
                     roots: Vec::new(),
                 },
                 fs: FakeFileSystem::default(),
@@ -1260,6 +1386,8 @@ mod tests {
                     saved: Mutex::new(previous),
                     fail_next: Mutex::new(false),
                     events: Arc::clone(&events),
+                    activating: Mutex::new(false),
+                    saved_while_activating: Mutex::new(Vec::new()),
                 },
                 autostart: FakeAutostart {
                     enabled: Mutex::new(false),
@@ -1287,6 +1415,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(root, identity(path));
+            self
+        }
+
+        /// A SharePoint root OneDrive registered for some other library, so
+        /// the verifier does not claim it.
+        fn with_unverified_root(mut self, path: &str) -> Self {
+            let root = PathBuf::from(path);
+            self.roots.roots.push(super::tests::root(path));
+            self.fs.canonical.insert(root.clone(), root);
             self
         }
 
@@ -1387,6 +1524,12 @@ mod tests {
         let mut rig = Rig::empty();
         rig.roots.state = OneDriveState::Missing;
         assert_eq!(code(rig.setup().start_sync()), "ONEDRIVE_MISSING");
+
+        let mut rig = Rig::empty();
+        rig.roots.signed_in_as_connected = false;
+        assert_eq!(code(rig.setup().start_sync()), "ONEDRIVE_ACCOUNT_MISMATCH");
+        assert_eq!(code(rig.setup().status()), "ONEDRIVE_ACCOUNT_MISMATCH");
+        assert!(rig.opener.opened.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1547,6 +1690,11 @@ mod tests {
                 FakeMachine::default().installed().odopen(),
                 "ONEDRIVE_ACCOUNT_MISSING",
             ),
+            // Signed in, but as pat@ while Intern is connected as pat+intern@.
+            (
+                FakeMachine::default().installed().work_account().odopen(),
+                "ONEDRIVE_ACCOUNT_MISMATCH",
+            ),
         ] {
             let rig = Rig::empty();
             let roots = SystemRoots { machine: &machine };
@@ -1567,6 +1715,57 @@ mod tests {
             assert_eq!(code(setup.start_sync()), expected);
         }
         assert_eq!(launches.get(), 0);
+    }
+
+    #[test]
+    fn production_onedrive_account_matches_the_connected_mail_or_principal_name() {
+        let launches = std::cell::Cell::new(0);
+        let launch = |_: &str| {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+        for signed_in in ["PAT+Intern@Contoso.com", "pat.principal@contoso.com"] {
+            let machine = FakeMachine::default().installed().odopen().string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business2"),
+                "UserEmail",
+                signed_in,
+            );
+            let machine = machine.accounts(&["Business1", "Business2"]).string(
+                RegistryHive::CurrentUser,
+                &format!(r"{ONEDRIVE_ACCOUNTS_KEY}\Business1"),
+                "UserEmail",
+                "someone.else@contoso.com",
+            );
+            let rig = Rig::empty();
+            rig.microsoft
+                .account
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .user_principal_name = "pat.principal@contoso.com".into();
+            let roots = SystemRoots { machine: &machine };
+            let opener = ProductionOpener {
+                machine: &machine,
+                launch: &launch,
+            };
+            let setup = SharePointSetup::new(
+                &rig.deployment,
+                &roots,
+                &rig.fs,
+                &rig.verifier,
+                &rig.microsoft,
+                &rig.settings,
+                &rig.autostart,
+                &opener,
+            );
+            assert_eq!(
+                setup.start_sync().expect(signed_in).phase,
+                SharePointSetupPhase::EnrollmentPending
+            );
+        }
+        assert_eq!(launches.get(), 2);
     }
 
     #[test]
@@ -1631,12 +1830,9 @@ mod tests {
 
     #[test]
     fn display_names_and_paths_do_not_override_wrong_remote_identity() {
-        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files-A");
-        rig.roots.roots.push(root(r"C:\Sync\Files-B"));
-        rig.fs.canonical.insert(
-            PathBuf::from(r"C:\Sync\Files-B"),
-            PathBuf::from(r"C:\Sync\Files-B"),
-        );
+        let rig = Rig::empty()
+            .with_verified_root(r"C:\Sync\Files-A")
+            .with_unverified_root(r"C:\Sync\Files-B");
         rig.verifier.identities.lock().unwrap().insert(
             PathBuf::from(r"C:\Sync\Files-A"),
             RemoteLibraryIdentity {
@@ -1645,21 +1841,85 @@ mod tests {
             },
         );
 
-        assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_UNVERIFIED");
+        // Neither root is the provisioned library, so it is simply not synced
+        // yet: status waits and sync can be launched, and nothing activates.
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(code(rig.setup().activate()), "SHAREPOINT_SYNC_PENDING");
+        assert_eq!(
+            rig.setup().start_sync().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn a_drive_id_differing_only_in_case_is_a_different_library() {
-        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files-A");
-        rig.verifier.identities.lock().unwrap().insert(
-            PathBuf::from(r"C:\Sync\Files-A"),
-            RemoteLibraryIdentity {
-                drive_id: DRIVE_ID.to_ascii_lowercase(),
-                ..identity(r"C:\Sync\Files-A")
-            },
+    fn other_synced_sharepoint_libraries_do_not_block_enrollment() {
+        let rig = Rig::empty().with_unverified_root(r"C:\Sync\Team Site - Documents");
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        let started = rig.setup().start_sync().expect("launch sync");
+        assert_eq!(started.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
+        assert_eq!(code(rig.setup().activate()), "SHAREPOINT_SYNC_PENDING");
+    }
+
+    #[test]
+    fn a_verifier_error_for_another_candidate_does_not_abort_the_scan() {
+        let rig = Rig::empty()
+            .with_unverified_root(r"C:\Sync\Broken")
+            .with_verified_root(r"C:\Sync\Files");
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Broken"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_CONFLICT", "records disagree"),
         );
 
-        assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_UNVERIFIED");
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::ReadyToActivate
+        );
+        assert_eq!(
+            rig.setup().activate().expect("activate").phase,
+            SharePointSetupPhase::Active
+        );
+        assert!(
+            rig.verifier
+                .seen
+                .lock()
+                .unwrap()
+                .contains(&PathBuf::from(r"C:\Sync\Files")),
+            "the scan continues past the failing candidate"
+        );
+    }
+
+    #[test]
+    fn a_verifier_error_with_nothing_verified_waits_but_activation_reports_it() {
+        let rig = Rig::empty().with_unverified_root(r"C:\Sync\Files");
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Files"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_MALFORMED", "unreadable record"),
+        );
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(
+            rig.setup().start_sync().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
+        let previous = rig.settings.saved.lock().unwrap().clone();
+        assert_eq!(
+            code(rig.setup().activate()),
+            "SHAREPOINT_ROOT_RECORD_MALFORMED"
+        );
+        assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
     }
 
     #[test]
@@ -1673,13 +1933,30 @@ mod tests {
     }
 
     #[test]
-    fn nested_registered_library_roots_are_rejected() {
-        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
-        let nested = PathBuf::from(r"C:\Sync\Files\Nested");
-        rig.roots.roots.push(root(nested.to_str().unwrap()));
-        rig.fs.canonical.insert(nested.clone(), nested);
+    fn nested_verified_library_roots_are_rejected() {
+        let rig = Rig::empty()
+            .with_verified_root(r"C:\Sync\Files")
+            .with_verified_root(r"C:\Sync\Files\Nested");
 
         assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_NESTED");
+    }
+
+    #[test]
+    fn an_unverified_root_nested_with_the_verified_library_is_not_ours_to_refuse() {
+        for (verified, other) in [
+            (r"C:\Sync\Files", r"C:\Sync\Files\Shortcut"),
+            (r"C:\Sync\Team\Files", r"C:\Sync\Team"),
+        ] {
+            let rig = Rig::empty()
+                .with_verified_root(verified)
+                .with_unverified_root(other);
+
+            assert_eq!(
+                rig.setup().status().unwrap().phase,
+                SharePointSetupPhase::ReadyToActivate,
+                "{verified} with {other}"
+            );
+        }
     }
 
     #[test]
@@ -1758,6 +2035,35 @@ mod tests {
     }
 
     #[test]
+    fn activation_is_marked_running_for_its_whole_transaction_and_always_ended() {
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        rig.setup().activate().expect("activate");
+        assert_eq!(*rig.settings.saved_while_activating.lock().unwrap(), [true]);
+        assert!(!*rig.settings.activating.lock().unwrap());
+
+        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        rig.microsoft.activation_mode = ActivationMode::FailAfter;
+        assert_eq!(code(rig.setup().activate()), "MICROSOFT_BINDING_FAILED");
+        assert_eq!(
+            *rig.settings.saved_while_activating.lock().unwrap(),
+            [true, true],
+            "the commit and its restore"
+        );
+        assert!(!*rig.settings.activating.lock().unwrap());
+
+        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
+        *rig.settings.activating.lock().unwrap() = true;
+        assert_eq!(
+            code(rig.setup().activate()),
+            "SHAREPOINT_ACTIVATION_IN_PROGRESS"
+        );
+        assert!(
+            *rig.settings.activating.lock().unwrap(),
+            "a refused activation does not end the one already running"
+        );
+    }
+
+    #[test]
     fn binding_stage_failure_never_touches_autostart_or_settings() {
         let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
         rig.microsoft.activation_mode = ActivationMode::FailBefore;
@@ -1804,15 +2110,23 @@ mod tests {
         use crate::microsoft_intake::{MicrosoftIntake, test_support::connected_manager};
         use intern_queue::{AdmissionGuard, AdmissionStage, SettingsStore};
 
-        struct LiveAutostart<'a>(&'a RecordingRuntime);
+        struct LiveAutostart<'a>(&'a LiveRig);
 
         impl AutostartBoundary for LiveAutostart<'_> {
             fn is_enabled(&self) -> Result<bool, SharePointSetupError> {
-                Ok(self.0.live().autostart)
+                Ok(self.0.runtime.live().autostart)
             }
 
+            /// Enabling autostart is the first step of the activation commit,
+            /// outside the settings gate: where a Settings save can race it.
             fn set_enabled(&self, enabled: bool) -> Result<(), SharePointSetupError> {
+                if enabled && let Some(payload) = self.0.racing_save.lock().unwrap().take() {
+                    let result = crate::commands::save_settings(&self.0.runtime, payload)
+                        .map_err(|error| error.code);
+                    *self.0.racing_result.lock().unwrap() = Some(result);
+                }
                 self.0
+                    .runtime
                     .set_autostart(enabled)
                     .map_err(|error| SharePointSetupError::new(error.code, error.message))
             }
@@ -1830,6 +2144,9 @@ mod tests {
             pub(super) microsoft: Arc<MicrosoftIntake>,
             pub(super) runtime: RecordingRuntime,
             opener: FakeOpener,
+            /// A Settings save to make while activation is under way.
+            racing_save: Mutex<Option<AppSettings>>,
+            racing_result: Mutex<Option<Result<(), String>>>,
         }
 
         impl Drop for LiveRig {
@@ -1895,6 +2212,7 @@ mod tests {
                     deployment: deployment(),
                     roots: FakeRoots {
                         state: OneDriveState::Available,
+                        signed_in_as_connected: true,
                         roots: vec![CloudRoot {
                             kind: CloudProviderKind::SharePoint,
                             display_name: "Contoso - Files".into(),
@@ -1908,6 +2226,8 @@ mod tests {
                         opened: Mutex::new(Vec::new()),
                         failure: None,
                     },
+                    racing_save: Mutex::new(None),
+                    racing_result: Mutex::new(None),
                     dir,
                     inbox,
                     filed,
@@ -1920,7 +2240,7 @@ mod tests {
                 let fs = SystemFileSystem;
                 let microsoft = ProductionMicrosoft(self.microsoft.as_ref());
                 let settings = ProductionSettings(&self.runtime);
-                let autostart = LiveAutostart(&self.runtime);
+                let autostart = LiveAutostart(self);
                 operation(&SharePointSetup::new(
                     &self.deployment,
                     &self.roots,
@@ -2184,6 +2504,48 @@ mod tests {
             assert!(!rig.runtime.live().autostart);
             assert!(!rig.binding_active());
             assert!(!rig.inbox_upload_admitted());
+        }
+
+        #[test]
+        fn a_settings_save_racing_activation_fails_instead_of_being_silently_undone() {
+            let rig = LiveRig::new("racing-save");
+            fail_restart_for(&rig, &rig.inbox);
+            let racing = AppSettings {
+                machine_label: "Front desk".into(),
+                ..rig.previous.clone()
+            };
+            *rig.racing_save.lock().unwrap() = Some(racing.clone());
+
+            let error = rig
+                .run(|setup| setup.activate())
+                .expect_err("watcher failed");
+
+            assert_eq!(error.code, "APP_DATA_UNAVAILABLE");
+            assert_eq!(
+                *rig.racing_result.lock().unwrap(),
+                Some(Err("SHAREPOINT_ACTIVATION_IN_PROGRESS".into())),
+                "the racing save was refused rather than reported saved and then rolled back"
+            );
+            rig.assert_previous_live_state();
+
+            crate::commands::save_settings(&rig.runtime, racing.clone())
+                .expect("the same save goes through once activation is over");
+            assert_eq!(rig.persisted(), racing);
+        }
+
+        #[test]
+        fn a_successful_activation_also_releases_settings_saves() {
+            let rig = LiveRig::new("racing-success");
+            *rig.racing_save.lock().unwrap() = Some(rig.previous.clone());
+
+            rig.run(|setup| setup.activate()).expect("activate");
+
+            assert_eq!(
+                *rig.racing_result.lock().unwrap(),
+                Some(Err("SHAREPOINT_ACTIVATION_IN_PROGRESS".into()))
+            );
+            crate::commands::save_settings(&rig.runtime, tampered_payload(&rig))
+                .expect("saves work after activation");
         }
     }
 }
