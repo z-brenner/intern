@@ -1,4 +1,5 @@
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
+import { SharePointConnection } from '../features/settings/SharePointConnection';
 import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
@@ -149,6 +150,23 @@ function isProvider(value: string): value is HostedProvider {
   return PROVIDERS.some((provider) => provider.value === value);
 }
 
+/*
+  With the fixed SharePoint deployment these belong to the connection, not to
+  the person: the backend derives them at activation and enforces them on
+  every save. Settings still sends a whole settings object, so it sends these
+  exactly as they were loaded - never a draft value.
+*/
+const MANAGED_KEYS = ['destination', 'intakeFolder', 'intakeEnabled', 'intakeLocalOnly', 'processOthersUploads', 'machineLabel', 'runInBackground', 'startAtLogin', 'startMinimized'] as const;
+
+function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings {
+  const result = { ...draft };
+  for (const key of MANAGED_KEYS) {
+    if (key in loaded) Object.assign(result, { [key]: loaded[key] });
+    else delete result[key as 'intakeLocalOnly'];
+  }
+  return result;
+}
+
 function formatScanTime(lastScanAt: number | null): string {
   if (lastScanAt === null) return 'not yet';
   return new Date(lastScanAt * 1000).toLocaleTimeString();
@@ -190,9 +208,13 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [testError, setTestError] = useState('');
   const [rules, setRules] = useState<LearnedRule[]>();
   const [rulesError, setRulesError] = useState('');
+  // Unknown until the backend answers, and treated as unmanaged meanwhile, so a
+  // build without the deployment renders exactly as it always has.
+  const [managed, setManaged] = useState(false);
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
+  const layout = useRef<HTMLSelectElement>(null);
   // Escape has to reach the latest onClose without the focus effect below
   // depending on its identity.
   const close = useRef(onClose);
@@ -224,6 +246,18 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     const stop = source.subscribeDescriptions?.((current) => { if (active) setDescriptions(current); });
     return () => { active = false; stop?.(); };
   }, [bridge]);
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => bridge.getOnboarding())
+      .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
+      .catch(() => { /* Without an answer the manual settings stay, and the backend still enforces its policy on save. */ });
+    return () => { active = false; };
+  }, [bridge]);
+  // The destination field focused on open is not rendered once the connection
+  // is managed; keep focus inside the dialog rather than dropping it on the page.
+  useEffect(() => {
+    if (managed && !dialog.current?.contains(document.activeElement)) layout.current?.focus();
+  }, [managed]);
   useEffect(() => {
     let active = true;
     void Promise.resolve().then(() => bridge.hostedModelStatus())
@@ -267,7 +301,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaveError('');
     try {
       await storeKeyDraft();
-      await onSave(next);
+      await onSave(managed ? withManagedValues(next, settings) : next);
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -356,7 +390,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }
       if (event.key !== 'Tab') return;
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []);
+      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary') ?? []);
       if (!focusable.length) return;
       const current = document.activeElement;
       const index = focusable.indexOf(current as HTMLElement);
@@ -393,17 +427,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       <section className="settings-group">
         <h3>Filing</h3>
         <p className="section-lead">Where renamed documents are put, and when Intern may file one without asking.</p>
-        <div className="folder-row">
+        {!managed && <><div className="folder-row">
           <label>Destination folder<input ref={destination} value={next.destination} onChange={(event) => setNext({ ...next, destination: event.target.value })} /></label>
           {selection && <button type="button" aria-label="Browse for destination folder" onClick={() => void browse((path) => setNext((current) => ({ ...current, destination: path })))}>Browse…</button>}
         </div>
-        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}
+        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}</>}
         {/*
           A year of contracts in one folder is a thousand files nobody can
           scan. Each layout names its folders from facts the filename already
           carries, so nothing is filed anywhere the name does not explain.
         */}
-        <label>Arrange filed documents<select value={next.destinationLayout} onChange={(event) => { const value = event.target.value; if (isLayout(value)) setNext({ ...next, destinationLayout: value }); }}>
+        <label>Arrange filed documents<select ref={layout} value={next.destinationLayout} onChange={(event) => { const value = event.target.value; if (isLayout(value)) setNext({ ...next, destinationLayout: value }); }}>
           {LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
         </select></label>
         <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder, never loose in the root. Undo removes a folder it empties.'}</p>
@@ -463,7 +497,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           </div>
         </div>}
       </section>
-      <section className="settings-group">
+      {managed && <SharePointConnection bridge={bridge} settings={settings} />}
+      {!managed && <><section className="settings-group">
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>
@@ -524,7 +559,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           {(intakeError || (intake?.error && !settingsFileProblem)) && <p className="form-error" role="alert">{intakeError || intake?.error}</p>}
           <button type="button" disabled={scanning} onClick={() => void runScanNow()}>{scanning ? 'Scanning…' : 'Scan now'}</button>
         </div>}
-      </section>
+      </section></>}
       <section className="settings-group">
         <h3>Descriptions for SharePoint</h3>
         {/*
