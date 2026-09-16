@@ -11,6 +11,7 @@ const BACKEND_CODES = [
   'SHAREPOINT_SETUP_TASK_FAILED', 'SHAREPOINT_SYNC_PENDING', 'SYNC_OPENER_UNAVAILABLE', 'SYNC_PROTOCOL_UNAVAILABLE',
   'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE', 'SHAREPOINT_ROOT_RECORD_MALFORMED', 'SHAREPOINT_ROOT_RECORD_CONFLICT',
   'SHAREPOINT_ROOT_RECORD_UNAVAILABLE', 'ONBOARDING_STATE_WRITE_FAILED', 'ONBOARDING_STATE_UNREADABLE',
+  'ONEDRIVE_ACCOUNT_MISMATCH', 'MICROSOFT_MANUAL_PAIRING_DISABLED', 'ONBOARDING_SETUP_INCOMPLETE', 'SHAREPOINT_ACTIVATION_IN_PROGRESS',
 ];
 
 describe('describeSharePointProblem', () => {
@@ -44,6 +45,19 @@ describe('describeSharePointProblem', () => {
     expect(describeSharePointProblem({ code: 'ONEDRIVE_MISSING' }).action).toMatch(/^Install or open OneDrive/);
     expect(describeSharePointProblem({ code: 'SHAREPOINT_SYNC_PENDING' }).switchAccount).toBeUndefined();
     expect(describeSharePointProblem({ code: 'SHAREPOINT_SYNC_PENDING' }).getOneDrive).toBeUndefined();
+  });
+
+  it('asks for OneDrive and Intern to use the same work account, and offers connecting a different one', () => {
+    const problem = describeSharePointProblem({ code: 'ONEDRIVE_ACCOUNT_MISMATCH' });
+    expect(problem.action).toMatch(/^Sign in to OneDrive with the same work account/);
+    expect(problem.switchAccount).toBe(true);
+    expect(problem.getOneDrive).toBeUndefined();
+  });
+
+  it('explains the refusals that protect managed setup in terms of what to do next', () => {
+    expect(describeSharePointProblem({ code: 'SHAREPOINT_ACTIVATION_IN_PROGRESS' }).action).toMatch(/^Try again in a moment/);
+    expect(describeSharePointProblem({ code: 'ONBOARDING_SETUP_INCOMPLETE' }).action).toMatch(/^Turn on filing/);
+    expect(describeSharePointProblem({ code: 'MICROSOFT_MANUAL_PAIRING_DISABLED' }).action).toMatch(/SharePoint connection/);
   });
 
   it('recognizes the backend consent-blocked token in a sign-in message', () => {

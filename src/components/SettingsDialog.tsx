@@ -59,8 +59,9 @@ function saveFailure(error: unknown): string {
     case 'HOSTED_MODEL_REFUSED': return 'The model declined to read the calibration document, so it cannot be relied on to file yours. (HOSTED_MODEL_REFUSED)';
     case 'MODEL_SELF_TEST_FAILED': return 'The model answered, but not correctly: it did not name the calibration document. Try a more capable model. (MODEL_SELF_TEST_FAILED)';
     case 'MODEL_RESPONSE_INVALID': return 'The model did not answer in the shape Intern needs, twice. Try a more capable model. (MODEL_RESPONSE_INVALID)';
-    // The managed-save refusal reads the same here as everywhere else SharePoint setup is explained.
-    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE': return `${describeSharePointProblem(error).action} (SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE)`;
+    // The managed-save refusals read the same here as everywhere else SharePoint setup is explained.
+    case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
+    case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();

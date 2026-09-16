@@ -259,6 +259,17 @@ describe('SharePoint connection in Settings', () => {
     expect(alert).not.toHaveTextContent('the managed binding could not be read');
   });
 
+  it('asks for a moment when a save lands while filing is being turned on', async () => {
+    const onSave = vi.fn(async () => { throw { code: 'SHAREPOINT_ACTIVATION_IN_PROGRESS', message: 'activation holds the settings gate' }; });
+    renderDialog(managedBridge(), managedSettings, onSave);
+    await screen.findByRole('region', { name: 'SharePoint connection' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+
+    const alert = await screen.findByText(describeSharePointProblem('SHAREPOINT_ACTIVATION_IN_PROGRESS').action, { exact: false });
+    expect(alert).toHaveTextContent('(SHAREPOINT_ACTIVATION_IN_PROGRESS)');
+  });
+
   it('never sends managed values that differ from what was loaded', async () => {
     // A draft edited before the deployment status arrived must not leak through.
     let resolveOnboarding!: (value: OnboardingStatus) => void;

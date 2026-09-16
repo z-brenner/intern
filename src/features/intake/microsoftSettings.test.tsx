@@ -21,6 +21,20 @@ function bridge(status = initial) {
   return { ...createInMemoryBridge(), ...microsoft };
 }
 describe('Microsoft upload identity setup', () => {
+  it('explains that manual pairing is off in a build that sets up SharePoint itself, whichever shape the refusal takes', async () => {
+    for (const refusal of [{ code: 'MICROSOFT_MANUAL_PAIRING_DISABLED', message: 'manual pairing is disabled' }, 'Manual folder pairing is disabled for this deployment. (MICROSOFT_MANUAL_PAIRING_DISABLED)']) {
+      const api = bridge({ ...initial, connected: true, account });
+      vi.mocked(api.microsoftBindIntake).mockRejectedValueOnce(refusal);
+      const view = render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);
+      const pair = await screen.findByRole('button', { name: 'Verify folder pairing' });
+      await waitFor(() => expect(pair).toBeEnabled());
+      fireEvent.click(pair);
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/use the SharePoint connection/i);
+      expect(alert).toHaveTextContent('(MICROSOFT_MANUAL_PAIRING_DISABLED)');
+      view.unmount();
+    }
+  });
   it('shows a disabled deployment as persistent status rather than masking action alerts', async () => {
     const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
     render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, error: unavailable })} savedFolder="C:/Intake" unsavedFolder={false} />);
