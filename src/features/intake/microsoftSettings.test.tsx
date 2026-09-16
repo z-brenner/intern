@@ -44,6 +44,15 @@ describe('Microsoft upload identity setup', () => {
     expect(screen.getByRole('button', { name: 'Connect my Microsoft account' })).toBeDisabled();
   });
 
+  it('describes the proof as Microsoft metadata about who created and last modified a document', async () => {
+    render(<MicrosoftIntakeSettings bridge={bridge()} savedFolder="C:/Intake" unsavedFolder={false} />);
+    const lead = screen.getByText(/Unverified uploads are never processed/);
+    expect(lead).toHaveTextContent(/created/);
+    expect(lead).toHaveTextContent(/last modified/);
+    expect(lead).not.toHaveTextContent(/upload activity/);
+    await act(async () => {});
+  });
+
   it('uses one managed connection action without audit consent or identifier fields', async () => {
     const api = bridge();
     render(<MicrosoftIntakeSettings bridge={api} savedFolder="C:/Intake" unsavedFolder={false} />);

@@ -13,7 +13,7 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
   };
   return <div className="microsoft-intake" role="group" aria-label="Microsoft upload identity">
     <div className="identity-heading"><h4>Microsoft upload identity</h4><span className="identity-policy">Unknown uploader = held</span></div>
-    <p className="section-lead">Unverified uploads are never processed. Intern checks the actual upload activity, not a typed name, the computer that synced first, or the document's last editor.</p>
+    <p className="section-lead">Unverified uploads are never processed. Intern checks Microsoft's own file metadata for who created the document and who last modified it, never a typed name or the computer that synced it first.</p>
     {!available && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
     {status?.error && <p className="form-error" role="status" aria-label="Microsoft connection status">{status.error}</p>}
     {status?.connected ? <div className="identity-account">

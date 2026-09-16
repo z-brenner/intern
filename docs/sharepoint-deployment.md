@@ -150,9 +150,19 @@ OneDrive may ask the user to confirm; they should choose **Sync**. While
 OneDrive works, Intern checks again every few seconds, and the user can close
 Intern and finish later.
 
-- If OneDrive is not installed, cannot receive sync links, or is signed in to
-  the wrong account, the step says what to do. It offers **Get OneDrive**
+- If OneDrive is not installed, cannot receive sync links, or has no work
+  account signed in, the step says what to do. It offers **Get OneDrive**
   (Microsoft's download page) where relevant.
+- If OneDrive is signed in with a different work account than the Microsoft
+  account connected to Intern, setup stops with `ONEDRIVE_ACCOUNT_MISMATCH`.
+  The step asks the user to sign in to OneDrive with the same work account,
+  and also offers **Use a different account** for when the account connected
+  to Intern is the wrong one.
+- Other SharePoint or Teams libraries already synced on the computer do not
+  block setup. Until the `Files` library itself is synced, setup reports that
+  enrollment is pending, and **Sync Files with OneDrive** stays available. A
+  check that lands while OneDrive is still adding the library keeps waiting
+  rather than stopping.
 - **Open SharePoint** opens the site, so the user can choose **Sync** on the
   library themselves.
 
@@ -192,7 +202,28 @@ direct folders of the synced library and be writable. When the user chooses
 
 If any step fails, Intern restores the previous settings and startup state.
 The Settings dialog then shows a read-only **SharePoint connection**
-card instead of the manual shared-intake controls.
+card instead of the manual shared-intake controls. Manual folder pairing is
+refused in an enabled build (`MICROSOFT_MANUAL_PAIRING_DISABLED`), and a
+settings save that arrives while filing is being turned on is refused with
+`SHAREPOINT_ACTIVATION_IN_PROGRESS` so it can be tried again a moment later
+instead of being silently undone. Onboarding is recorded as finished only
+while filing is on; otherwise completion is refused with
+`ONBOARDING_SETUP_INCOMPLETE` and onboarding returns to **Turn on filing**.
+
+### Reconnecting or switching accounts
+
+Filing is turned on for one Microsoft account. If **Reconnect Microsoft** in
+Settings signs in a different account from the same organization, Intern does
+not carry the earlier activation over: setup returns to "ready to turn on",
+and the SharePoint connection card offers **Turn on filing** for the new
+account. Documents are filed for the new account only after that, and only
+ones it uploads after that moment. Reconnecting the same account keeps filing
+on. An account from another organization is disconnected and reported, as in
+onboarding.
+
+The card also offers **Sync Files with OneDrive** if the library is no longer
+synced on the computer, so setup can be finished again without reinstalling
+or re-running onboarding.
 
 ## Which documents are filed
 
@@ -228,7 +259,12 @@ claims live SharePoint compatibility, run these on a clean Windows machine with
 two Contoso test accounts (A and B):
 
 - [ ] Onboarding works when the library is already synced, and when it is not
-      synced yet and OneDrive must enroll it.
+      synced yet and OneDrive must enroll it, including on a computer that
+      already syncs another SharePoint or Teams library.
+- [ ] OneDrive signed in as account B while Intern is connected as account A
+      reports `ONEDRIVE_ACCOUNT_MISMATCH`.
+- [ ] After activation as A, reconnecting Microsoft as B shows **Turn on
+      filing**, and B's uploads made before B turns filing on stay held.
 - [ ] Only account A processes a fresh upload created by account A.
 - [ ] Account A holds account B's upload before any content extraction.
 - [ ] Detectably copied or moved, edited, conflict, shortcut, unknown, offline,

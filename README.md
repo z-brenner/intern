@@ -176,13 +176,18 @@ Machine names and origin markers help coordination; they are never evidence
 of the Microsoft uploader. Team-worker mode still requires a verified uploader.
 The protocol is documented in [shared intake](docs/shared-intake.md).
 
-Settings lists the **synced locations** the sync client keeps on the machine
-— each SharePoint library and OneDrive account, with its local folder — so
-the folder a library syncs to (`C:\Users\pat\Contoso\Legal - Documents`, a
-name nobody chose) is one click away instead of a hunt through a folder
-dialog. A folder on a **network share** — a UNC path or a mapped drive — is
-recognised and labelled too, and the same `.intern/` claim files coordinate
-machines watching a share. A subfolder the account cannot read is counted and
+In a build without the deployment, Settings lists the **synced locations** the
+sync client keeps on the machine — each SharePoint library and OneDrive
+account, with its local folder — so the folder a library syncs to
+(`C:\Users\pat\Contoso\Legal - Documents`, a name nobody chose) can be picked
+as a destination without a hunt through a folder dialog. Picking one as the
+intake folder only fills in the field: saving it is refused, because watching
+a synced folder needs Microsoft upload verification, which that build does not
+have, and private local mode is refused for synced folders. A build with the
+deployment hides these manual controls and uses the SharePoint connection
+instead. A folder on a **network share** — a UNC path or a mapped drive — is
+recognised and labelled too, and is held to the same rule as a synced folder.
+A subfolder the account cannot read is counted and
 skipped rather than stopping the scan.
 
 ### The description in a SharePoint column
