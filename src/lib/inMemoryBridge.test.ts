@@ -41,6 +41,21 @@ describe('createInMemoryBridge fake SharePoint deployment', () => {
     expect((await bridge.getSettings()).destination).toMatch(/Filed$/);
   });
 
+  it('reports an injected record problem while the library is pending, and none once it appears', async () => {
+    const problem = { code: 'SHAREPOINT_ROOT_RECORD_CONFLICT', message: "OneDrive's sync records disagree (library records)." };
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, pendingRescans: 1, pendingProblem: problem } });
+
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.startSharePointSync()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'enrollment_pending', problem });
+    expect(await bridge.getSharePointSetup()).toMatchObject({ phase: 'ready_to_activate', problem: null });
+  });
+
+  it('reports no problem by default', async () => {
+    const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true } });
+    expect((await bridge.getSharePointSetup()).problem).toBeNull();
+  });
+
   it('throws injected failures once each, in order', async () => {
     const bridge = createInMemoryBridge({ sharePoint: 'fake', sharePointFake: { connected: true, phase: 'active', failures: { completeOnboarding: [{ code: 'ONBOARDING_STATE_WRITE_FAILED', message: 'disk full' }] } } });
 

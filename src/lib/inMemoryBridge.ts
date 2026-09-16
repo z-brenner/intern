@@ -1,6 +1,6 @@
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupStatus } from '../types';
+import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 
@@ -76,6 +76,8 @@ export interface FakeSharePointOptions {
   phase?: SharePointSetupPhase;
   /** Rescans that still report pending after a sync request before the library appears. */
   pendingRescans?: number;
+  /** A OneDrive record problem every pending status carries, as the backend reports one. */
+  pendingProblem?: SharePointSetupProblem;
   /** Errors each call throws, one per call in order, before it behaves normally again. */
   failures?: Partial<Record<FakeSharePointCall, unknown[]>>;
 }
@@ -183,7 +185,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const libraryRoot = 'C:\\Users\\pat\\Contoso\\InternTestSite - Files';
   const sharePointStatus = (): SharePointSetupStatus => {
     if (!microsoftConnected) throw { code: 'MICROSOFT_ACCOUNT_MISSING', message: 'Connect the Microsoft account before setting up the Files library.' };
-    return { phase: libraryPhase, account: { displayName: fakeAccount.displayName, email: fakeAccount.email }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed' };
+    const problem = libraryPhase === 'enrollment_pending' ? fake.pendingProblem ?? null : null;
+    return { phase: libraryPhase, account: { displayName: fakeAccount.displayName, email: fakeAccount.email }, site: 'InternTestSite', library: 'Files', intake: 'Inbox', destination: 'Filed', problem };
   };
   // A simulated enabled deployment: device sign-in, OneDrive enrollment that
   // takes a few rescans to appear, and activation to the managed settings.
