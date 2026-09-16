@@ -180,6 +180,15 @@ struct ResolvedLibrary {
     destination: PathBuf,
 }
 
+enum Resolution {
+    Resolved(ResolvedLibrary),
+    /// No registered root verified. `verifier_error` is the first record
+    /// problem that kept a root from verifying, if any.
+    Pending {
+        verifier_error: Option<SharePointSetupError>,
+    },
+}
+
 pub struct SharePointSetup<'a> {
     deployment: &'a SharePointDeployment,
     roots: &'a dyn RootDetector,
@@ -224,7 +233,7 @@ impl<'a> SharePointSetup<'a> {
     /// Writability is proven again by `start_sync` and `activate`.
     pub fn status(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let Some(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
+        let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Skip)? else {
             return Ok(self.status_for(SharePointSetupPhase::EnrollmentPending, &account));
         };
         let settings = self.settings.load()?;
@@ -246,7 +255,7 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn start_sync(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        if let Some(resolved) = self.resolve(&account, WriteProbe::Require)? {
+        if let Resolution::Resolved(resolved) = self.resolve(&account, WriteProbe::Require)? {
             let settings = self.settings.load()?;
             let active = managed_settings_match(&settings, &resolved.inbox, &resolved.destination)
                 && self.autostart.is_enabled()?
@@ -290,12 +299,22 @@ impl<'a> SharePointSetup<'a> {
 
     pub fn activate(&self) -> Result<SharePointSetupStatus, SharePointSetupError> {
         let account = self.connected_account()?;
-        let resolved = self.resolve(&account, WriteProbe::Require)?.ok_or_else(|| {
-            SharePointSetupError::new(
-                "SHAREPOINT_SYNC_PENDING",
-                "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
-            )
-        })?;
+        let resolved = match self.resolve(&account, WriteProbe::Require)? {
+            Resolution::Resolved(resolved) => resolved,
+            // Activation was asked for explicitly, so a record problem that
+            // kept a registered root from verifying is the more useful answer.
+            Resolution::Pending {
+                verifier_error: Some(error),
+            } => return Err(error),
+            Resolution::Pending {
+                verifier_error: None,
+            } => {
+                return Err(SharePointSetupError::new(
+                    "SHAREPOINT_SYNC_PENDING",
+                    "OneDrive has not registered the verified Files library yet. Keep OneDrive open and try again.",
+                ));
+            }
+        };
         let previous = self.settings.load()?;
         let previous_autostart = self.autostart.is_enabled()?;
         let mut next = previous.clone();
@@ -374,11 +393,20 @@ impl<'a> SharePointSetup<'a> {
         Ok(account)
     }
 
+    /// Finds the one registered root OneDrive's records prove is the
+    /// provisioned library. Other SharePoint and Teams libraries the person
+    /// already syncs are ordinary: a root that does not verify is simply not
+    /// ours, so it never blocks enrollment, and overlap is only checked
+    /// between roots that verified. A verifier error for one root does not
+    /// stop the scan either. It fails closed for that root only: the root
+    /// never verifies, and when nothing else does the error is kept for
+    /// `activate` to report, while status and sync still see enrollment as
+    /// pending so OneDrive can be asked to sync the library.
     fn resolve(
         &self,
         account: &Account,
         probe: WriteProbe,
-    ) -> Result<Option<ResolvedLibrary>, SharePointSetupError> {
+    ) -> Result<Resolution, SharePointSetupError> {
         let mut candidates = Vec::new();
         for detected in self.roots.detect()? {
             if detected.kind != CloudProviderKind::SharePoint {
@@ -390,38 +418,34 @@ impl<'a> SharePointSetup<'a> {
                 candidates.push(canonical);
             }
         }
-        if candidates.is_empty() {
-            return Ok(None);
+
+        let mut verified = Vec::new();
+        let mut verifier_error = None;
+        for candidate in &candidates {
+            match self.verifier.verify(account, candidate, self.deployment) {
+                Ok(Some(identity)) if self.identity_matches(candidate, &identity) => {
+                    verified.push(identity);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    verifier_error.get_or_insert(error);
+                }
+            }
         }
-        for (index, left) in candidates.iter().enumerate() {
-            if candidates
+        for (index, left) in verified.iter().enumerate() {
+            if verified
                 .iter()
                 .skip(index + 1)
-                .any(|right| paths_overlap(left, right))
+                .any(|right| paths_overlap(&left.local_root, &right.local_root))
             {
                 return Err(SharePointSetupError::new(
                     "SHAREPOINT_ROOT_NESTED",
-                    "OneDrive registered overlapping SharePoint roots. Intern cannot safely map local files until the duplicate or nested sync is removed.",
+                    "OneDrive registered the Files library at overlapping folders. Intern cannot safely map local files until the duplicate or nested sync is removed.",
                 ));
-            }
-        }
-
-        let mut verified = Vec::new();
-        for candidate in &candidates {
-            let Some(identity) = self.verifier.verify(account, candidate, self.deployment)? else {
-                continue;
-            };
-            if self.identity_matches(candidate, &identity) {
-                verified.push(identity);
             }
         }
         let identity = match verified.len() {
-            0 => {
-                return Err(SharePointSetupError::new(
-                    "SHAREPOINT_ROOT_UNVERIFIED",
-                    "OneDrive registered a SharePoint root, but an authoritative Microsoft check did not match the provisioned tenant, site, web, list, and drive.",
-                ));
-            }
+            0 => return Ok(Resolution::Pending { verifier_error }),
             1 => verified.pop().expect("one verified identity"),
             _ => {
                 return Err(SharePointSetupError::new(
@@ -454,7 +478,7 @@ impl<'a> SharePointSetup<'a> {
                 "Inbox and Filed did not resolve to separate fixed children of the Files library.",
             ));
         }
-        Ok(Some(ResolvedLibrary {
+        Ok(Resolution::Resolved(ResolvedLibrary {
             identity,
             inbox,
             destination,
@@ -1066,6 +1090,7 @@ mod tests {
     #[derive(Default)]
     struct FakeVerifier {
         identities: Mutex<HashMap<PathBuf, RemoteLibraryIdentity>>,
+        errors: Mutex<HashMap<PathBuf, SharePointSetupError>>,
         seen: Mutex<Vec<PathBuf>>,
     }
 
@@ -1077,6 +1102,9 @@ mod tests {
             _deployment: &SharePointDeployment,
         ) -> Result<Option<RemoteLibraryIdentity>, SharePointSetupError> {
             self.seen.lock().unwrap().push(candidate.to_path_buf());
+            if let Some(error) = self.errors.lock().unwrap().get(candidate) {
+                return Err(error.clone());
+            }
             Ok(self.identities.lock().unwrap().get(candidate).cloned())
         }
     }
@@ -1287,6 +1315,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(root, identity(path));
+            self
+        }
+
+        /// A SharePoint root OneDrive registered for some other library, so
+        /// the verifier does not claim it.
+        fn with_unverified_root(mut self, path: &str) -> Self {
+            let root = PathBuf::from(path);
+            self.roots.roots.push(super::tests::root(path));
+            self.fs.canonical.insert(root.clone(), root);
             self
         }
 
@@ -1631,12 +1668,9 @@ mod tests {
 
     #[test]
     fn display_names_and_paths_do_not_override_wrong_remote_identity() {
-        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files-A");
-        rig.roots.roots.push(root(r"C:\Sync\Files-B"));
-        rig.fs.canonical.insert(
-            PathBuf::from(r"C:\Sync\Files-B"),
-            PathBuf::from(r"C:\Sync\Files-B"),
-        );
+        let rig = Rig::empty()
+            .with_verified_root(r"C:\Sync\Files-A")
+            .with_unverified_root(r"C:\Sync\Files-B");
         rig.verifier.identities.lock().unwrap().insert(
             PathBuf::from(r"C:\Sync\Files-A"),
             RemoteLibraryIdentity {
@@ -1645,21 +1679,85 @@ mod tests {
             },
         );
 
-        assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_UNVERIFIED");
+        // Neither root is the provisioned library, so it is simply not synced
+        // yet: status waits and sync can be launched, and nothing activates.
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(code(rig.setup().activate()), "SHAREPOINT_SYNC_PENDING");
+        assert_eq!(
+            rig.setup().start_sync().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn a_drive_id_differing_only_in_case_is_a_different_library() {
-        let rig = Rig::empty().with_verified_root(r"C:\Sync\Files-A");
-        rig.verifier.identities.lock().unwrap().insert(
-            PathBuf::from(r"C:\Sync\Files-A"),
-            RemoteLibraryIdentity {
-                drive_id: DRIVE_ID.to_ascii_lowercase(),
-                ..identity(r"C:\Sync\Files-A")
-            },
+    fn other_synced_sharepoint_libraries_do_not_block_enrollment() {
+        let rig = Rig::empty().with_unverified_root(r"C:\Sync\Team Site - Documents");
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        let started = rig.setup().start_sync().expect("launch sync");
+        assert_eq!(started.phase, SharePointSetupPhase::EnrollmentPending);
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
+        assert_eq!(code(rig.setup().activate()), "SHAREPOINT_SYNC_PENDING");
+    }
+
+    #[test]
+    fn a_verifier_error_for_another_candidate_does_not_abort_the_scan() {
+        let rig = Rig::empty()
+            .with_unverified_root(r"C:\Sync\Broken")
+            .with_verified_root(r"C:\Sync\Files");
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Broken"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_CONFLICT", "records disagree"),
         );
 
-        assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_UNVERIFIED");
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::ReadyToActivate
+        );
+        assert_eq!(
+            rig.setup().activate().expect("activate").phase,
+            SharePointSetupPhase::Active
+        );
+        assert!(
+            rig.verifier
+                .seen
+                .lock()
+                .unwrap()
+                .contains(&PathBuf::from(r"C:\Sync\Files")),
+            "the scan continues past the failing candidate"
+        );
+    }
+
+    #[test]
+    fn a_verifier_error_with_nothing_verified_waits_but_activation_reports_it() {
+        let rig = Rig::empty().with_unverified_root(r"C:\Sync\Files");
+        rig.verifier.errors.lock().unwrap().insert(
+            PathBuf::from(r"C:\Sync\Files"),
+            SharePointSetupError::new("SHAREPOINT_ROOT_RECORD_MALFORMED", "unreadable record"),
+        );
+
+        assert_eq!(
+            rig.setup().status().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(
+            rig.setup().start_sync().unwrap().phase,
+            SharePointSetupPhase::EnrollmentPending
+        );
+        assert_eq!(rig.opener.opened.lock().unwrap().len(), 1);
+        let previous = rig.settings.saved.lock().unwrap().clone();
+        assert_eq!(
+            code(rig.setup().activate()),
+            "SHAREPOINT_ROOT_RECORD_MALFORMED"
+        );
+        assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
     }
 
     #[test]
@@ -1673,13 +1771,30 @@ mod tests {
     }
 
     #[test]
-    fn nested_registered_library_roots_are_rejected() {
-        let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
-        let nested = PathBuf::from(r"C:\Sync\Files\Nested");
-        rig.roots.roots.push(root(nested.to_str().unwrap()));
-        rig.fs.canonical.insert(nested.clone(), nested);
+    fn nested_verified_library_roots_are_rejected() {
+        let rig = Rig::empty()
+            .with_verified_root(r"C:\Sync\Files")
+            .with_verified_root(r"C:\Sync\Files\Nested");
 
         assert_eq!(code(rig.setup().status()), "SHAREPOINT_ROOT_NESTED");
+    }
+
+    #[test]
+    fn an_unverified_root_nested_with_the_verified_library_is_not_ours_to_refuse() {
+        for (verified, other) in [
+            (r"C:\Sync\Files", r"C:\Sync\Files\Shortcut"),
+            (r"C:\Sync\Team\Files", r"C:\Sync\Team"),
+        ] {
+            let rig = Rig::empty()
+                .with_verified_root(verified)
+                .with_unverified_root(other);
+
+            assert_eq!(
+                rig.setup().status().unwrap().phase,
+                SharePointSetupPhase::ReadyToActivate,
+                "{verified} with {other}"
+            );
+        }
     }
 
     #[test]
