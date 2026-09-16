@@ -1512,28 +1512,107 @@ pub async fn settings_save(
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let app = state.app.clone();
-    tauri::async_runtime::spawn_blocking(move || save_settings(&app.state::<AppState>(), settings))
-        .await
-        .map_err(|_| background_task_failed("settings save"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        save_settings(app.state::<AppState>().inner(), settings)
+    })
+    .await
+    .map_err(|_| background_task_failed("settings save"))?
 }
 
-fn save_settings(state: &AppState, settings: AppSettings) -> Result<(), CommandError> {
+/// Every live effect of applying settings. `AppState` is the production
+/// implementation; tests drive the same application and rollback code over a
+/// real settings file with recorded watcher, tray, and autostart effects,
+/// because a Tauri `AppHandle` cannot be constructed outside the app.
+pub(crate) trait SettingsRuntime {
+    fn load_settings(&self) -> Result<AppSettings, CommandError>;
+    fn persist_settings(&self, settings: &AppSettings) -> Result<(), CommandError>;
+    fn canonical_folder(&self, path: &Path) -> Result<PathBuf, CommandError>;
+    fn check_hosted_model(&self, settings: &AppSettings) -> Result<(), CommandError>;
+    fn protect_microsoft(&self, settings: &AppSettings) -> Result<(), CommandError>;
+    fn set_autostart(&self, enabled: bool) -> Result<(), CommandError>;
+    fn refresh_hosted_active(&self, settings: &AppSettings);
+    fn schedule(&self) -> Result<(), CommandError>;
+    fn sync_tray(&self, run_in_background: bool);
+    fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
+    fn emit_intake_changed(&self) -> Result<(), CommandError>;
+}
+
+impl SettingsRuntime for AppState {
+    fn load_settings(&self) -> Result<AppSettings, CommandError> {
+        self.settings.load().map_err(CommandError::from)
+    }
+
+    fn persist_settings(&self, settings: &AppSettings) -> Result<(), CommandError> {
+        self.settings.save(settings).map_err(CommandError::from)
+    }
+
+    fn canonical_folder(&self, path: &Path) -> Result<PathBuf, CommandError> {
+        canonical_folder(path).map_err(CommandError::from)
+    }
+
+    fn check_hosted_model(&self, settings: &AppSettings) -> Result<(), CommandError> {
+        self.hosted.config(settings).map(|_| ())
+    }
+
+    fn protect_microsoft(&self, settings: &AppSettings) -> Result<(), CommandError> {
+        self.app
+            .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()
+            .protect_settings(settings)
+            .map_err(|message| CommandError {
+                code: "UPLOADER_UNVERIFIED".into(),
+                message,
+            })
+    }
+
+    fn set_autostart(&self, enabled: bool) -> Result<(), CommandError> {
+        apply_autostart(&self.app, enabled)
+    }
+
+    fn refresh_hosted_active(&self, settings: &AppSettings) {
+        AppState::refresh_hosted_active(self, settings);
+    }
+
+    fn schedule(&self) -> Result<(), CommandError> {
+        AppState::schedule(self)
+    }
+
+    fn sync_tray(&self, run_in_background: bool) {
+        crate::tray::sync_tray(&self.app, run_in_background);
+        // A tray that was just created starts with the bare tooltip; give it
+        // the current counts rather than waiting for the next queue change.
+        if run_in_background && let Ok(items) = self.pipeline.list() {
+            let (needs_review, ready) = attention_counts(&items);
+            crate::tray::update_tooltip(&self.app, needs_review, ready);
+        }
+    }
+
+    fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError> {
+        AppState::restart_intake(self, settings)
+    }
+
+    fn emit_intake_changed(&self) -> Result<(), CommandError> {
+        AppState::emit_intake_changed(self)
+    }
+}
+
+fn save_settings(state: &impl SettingsRuntime, settings: AppSettings) -> Result<(), CommandError> {
     save_settings_with_microsoft_protection(state, settings, true)
 }
 
 fn save_settings_with_microsoft_protection(
-    state: &AppState,
+    state: &impl SettingsRuntime,
     mut settings: AppSettings,
     protect_microsoft: bool,
 ) -> Result<(), CommandError> {
-    let previous = state.settings.load().unwrap_or_default();
+    let previous = state.load_settings().unwrap_or_default();
     validate_intake_settings(&mut settings, &previous.intake_folder, &|path| {
-        canonical_folder(path).ok()
+        state.canonical_folder(path).ok()
     })?;
     // With intake enabled the destination was already canonicalized (with the
     // intake-specific error code); otherwise keep the original behavior.
     if !settings.intake_enabled && !settings.destination.trim().is_empty() {
-        settings.destination = canonical_folder(Path::new(&settings.destination))?
+        settings.destination = state
+            .canonical_folder(Path::new(&settings.destination))?
             .to_string_lossy()
             .into_owned();
     }
@@ -1543,38 +1622,23 @@ fn save_settings_with_microsoft_protection(
     // be in the credential store and the address must be one a key may be
     // sent to.
     if settings.model_source == ModelSource::Hosted {
-        state.hosted.config(&settings)?;
+        state.check_hosted_model(&settings)?;
     }
     if protect_microsoft {
-        state
-            .app
-            .state::<Arc<crate::microsoft_intake::MicrosoftIntake>>()
-            .protect_settings(&settings)
-            .map_err(|message| CommandError {
-                code: "UPLOADER_UNVERIFIED".into(),
-                message,
-            })?;
+        state.protect_microsoft(&settings)?;
     }
     save_settings_and_autostart(
         &previous,
         &settings,
-        |settings| state.settings.save(settings).map_err(CommandError::from),
-        |enabled| apply_autostart(&state.app, enabled),
+        |settings| state.persist_settings(settings),
+        |enabled| state.set_autostart(enabled),
     )?;
     state.refresh_hosted_active(&settings);
     if previous.model_source != settings.model_source {
         state.schedule()?;
     }
     if previous.run_in_background != settings.run_in_background {
-        crate::tray::sync_tray(&state.app, settings.run_in_background);
-        // A tray that was just created starts with the bare tooltip; give it
-        // the current counts rather than waiting for the next queue change.
-        if settings.run_in_background
-            && let Ok(items) = state.pipeline.list()
-        {
-            let (needs_review, ready) = attention_counts(&items);
-            crate::tray::update_tooltip(&state.app, needs_review, ready);
-        }
+        state.sync_tray(settings.run_in_background);
     }
     if previous.intake_folder != settings.intake_folder
         || previous.intake_enabled != settings.intake_enabled
