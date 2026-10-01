@@ -396,7 +396,7 @@ jobs:
       # the ability to prove which repository, workflow, and commit produced the
       # exact bytes they hold:
       #
-      #   gh attestation verify Intern_0.1.0-alpha.10_x64-setup.exe --repo zgbrenner/intern
+      #   gh attestation verify Intern_0.1.0-alpha.10_x64-setup.exe --repo z-brenner/intern
       #
       # It needs no certificate and stores no key: the runner proves its own
       # identity through OIDC, so there is nothing to leak or rotate.

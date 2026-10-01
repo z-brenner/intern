@@ -360,7 +360,7 @@ describe('TauriBridge', () => {
     expect(fake.calls).toEqual([
       { command: 'plugin:opener|open_url', args: { url: GUIDE_URL } },
     ]);
-    expect(GUIDE_URL).toBe('https://zgbrenner.github.io/intern/guide.html');
+    expect(GUIDE_URL).toBe('https://z-brenner.github.io/intern/guide.html');
   });
 
   // The same reasoning as the guide: onboarding's recovery links must reach

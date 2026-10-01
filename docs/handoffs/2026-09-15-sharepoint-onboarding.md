@@ -83,7 +83,7 @@ These focused results do not replace the full Task 4 suite and independent re-re
 ## Resume on another computer
 
 ```powershell
-git clone https://github.com/zgbrenner/intern.git
+git clone https://github.com/z-brenner/intern.git
 cd intern
 git fetch origin
 git switch wip/sharepoint-exact-byte-snapshot
