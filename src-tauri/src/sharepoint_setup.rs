@@ -410,7 +410,7 @@ impl<'a> SharePointSetup<'a> {
         let account = self.microsoft.connected_account()?.ok_or_else(|| {
             SharePointSetupError::new(
                 "MICROSOFT_ACCOUNT_MISSING",
-                "Connect the Microsoft account used for Contoso uploads before starting SharePoint sync.",
+                "Connect the Microsoft account used for uploads before starting SharePoint sync.",
             )
         })?;
         if !is_guid(&account.id)
@@ -420,7 +420,7 @@ impl<'a> SharePointSetup<'a> {
         {
             return Err(SharePointSetupError::new(
                 "MICROSOFT_ACCOUNT_WRONG_TENANT",
-                "The connected Microsoft account is outside the provisioned Contoso tenant.",
+                "The connected Microsoft account is outside the provisioned organization tenant.",
             ));
         }
         if !self.roots.one_drive_signed_in_as(&account) {

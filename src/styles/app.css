@@ -68,7 +68,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .setup-screen .primary:hover:not(:disabled),
 .history-actions .primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 
-/* Small-caps field labels. The wordmark's "for Contoso" tag already uses this
+/* Small-caps field labels. The wordmark tag style already uses this
    treatment, so reusing it for column headings, evidence fields, and form
    eyebrows says "this names something" in one consistent voice. */
 .field-label, .table-wrap th { font-size: 12px; font-weight: 600; text-transform: lowercase; font-variant-caps: small-caps; letter-spacing: .07em; color: var(--text-muted); }

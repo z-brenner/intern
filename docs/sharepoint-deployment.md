@@ -1,6 +1,6 @@
 # SharePoint deployment: administrator guide
 
-This guide is for the person who prepares an Intern build for the Contoso
+This guide is for the person who prepares an Intern build for an organization
 SharePoint deployment. For the admission rules Intern applies to each document,
 see [Microsoft upload verification](microsoft-upload-verification.md). For how
 Intern proves which local folder is the synced library, see
@@ -57,7 +57,7 @@ All of them are public identifiers, not credentials.
 
 | Field | What it is | Shape |
 | --- | --- | --- |
-| `tenant_id` | The Contoso Microsoft Entra tenant (directory) ID | GUID |
+| `tenant_id` | Your organization's Microsoft Entra tenant (directory) ID | GUID |
 | `client_id` | Application (client) ID of the public client app registration | GUID |
 | `site_id` | SharePoint site collection ID | GUID |
 | `web_id` | SharePoint web (subsite) ID | GUID |
@@ -72,7 +72,7 @@ expected every identifier to be a GUID.
 
 ### App registration
 
-Create the app registration in the Contoso tenant, in Microsoft Entra admin
+Create the app registration in your organization's tenant, in Microsoft Entra admin
 center > **App registrations** > **New registration**:
 
 1. For **Supported account types**, choose this organizational directory only.
@@ -89,7 +89,7 @@ center > **App registrations** > **New registration**:
 ### Graph Explorer lookups
 
 Sign in to [Graph Explorer](https://developer.microsoft.com/graph/graph-explorer)
-with a Contoso account that can open the site. Then run these `GET` requests.
+with an organization account that can open the site. Then run these `GET` requests.
 
 1. **Tenant:** `https://graph.microsoft.com/v1.0/organization?$select=id`.
    The `id` is `tenant_id`.
@@ -271,7 +271,7 @@ described audit-event verification does not apply to this release.
 
 The automated tests use fake OneDrive and Graph boundaries. Before any release
 claims live SharePoint compatibility, run these on a clean Windows machine with
-two Contoso test accounts (A and B):
+two test accounts (A and B):
 
 - [ ] Onboarding works when the library is already synced, and when it is not
       synced yet and OneDrive must enroll it, including on a computer that

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make Intern a setup-and-forget Windows application for nontechnical Contoso users. The normal user must not choose folders or enter Microsoft tenant, application, drive, or item identifiers. Intern targets one deployment:
+Make Intern a setup-and-forget Windows application for nontechnical users. The normal user must not choose folders or enter Microsoft tenant, application, drive, or item identifiers. Intern targets one deployment:
 
 - site: `https://teamcontoso.sharepoint.com/sites/InternTestSite`
 - document library: `Files`
@@ -124,7 +124,7 @@ Backend tests cover deployment-resource parsing and URL confinement, onboarding-
 
 Frontend tests cover fresh install, legacy update, resume, model download, Microsoft device sign-in, wrong account, blocked consent, existing sync, enrollment and delayed detection, activation, completion persistence, read-only settings, accessibility, and plain-language errors.
 
-Windows integration tests use a fake OneDrive/Graph boundary for deterministic CI. Before release, a clean Windows machine and two Contoso test accounts must prove:
+Windows integration tests use a fake OneDrive/Graph boundary for deterministic CI. Before release, a clean Windows machine and two test accounts must prove:
 
 - existing and missing-library-sync onboarding paths;
 - only account A processes a fresh upload created by account A;
