@@ -3,7 +3,7 @@
   "model_id": "intern-local",
   "budget_characters": 12000,
   "recorded_at_unix": 1788749572,
-  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp b10361 CPU build, 4 threads, 8192 context; worker built on Linux with pdfium chromium/7881 and tesseract 5.3.4 over the pinned tessdata_fast files",
+  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp b10361 CPU build, 4 threads, 8192 context; worker built on Linux with pdfium chromium/7881 and tesseract 5.3.4 over the pinned tessdata_fast files; 2026-10-01: the counterparty name was mechanically changed to Contoso (same length) in fixtures, extracted text and replies, with hashes recomputed, not re-recorded live",
   "fixtures": [
     {
       "file": "employment-agreement.pdf",
@@ -1107,7 +1107,7 @@
     },
     {
       "file": "statement-of-work.pdf",
-      "sha256": "109f3ab85ab020e706502a1cef4eb2d861bb1c956886b544d3d2812c0d6d75cb",
+      "sha256": "7c54ce40793a52e71387c0293ab199b415eb1f8b2d06da0b1c7d4a16dfc5e592",
       "extraction": {
         "outcome": "parsed",
         "source": {
@@ -1201,7 +1201,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "2479bbed04b0809131b2be79788971bd865b5ef2b899c0f1a2258a85de78287b",
+      "prompt_sha256": "3c7bcf4ba1cf6867d5ffaacd70f9e9c6d73f8d406ab1fb0602483c2e02a6778a",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1269,7 +1269,7 @@
     },
     {
       "file": "consulting-amendment.pdf",
-      "sha256": "ccdd230170b42b532efd95c85f59acc0dfd1500d996f30b7ff879559985cbd38",
+      "sha256": "eaddf59cf4a90ca0ba0061dbb217e9a53ba8fc6620865285007ed3c41668bd02",
       "extraction": {
         "outcome": "parsed",
         "source": {
@@ -1291,7 +1291,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "84b9376875db21d04546e6cce4b0dfc8c8c872988378fc20c63da3dd358b75c1",
+      "prompt_sha256": "2497d05044fab099d230bcb84c1a195c4837c6cbe2155095854a8f49c5e062fa",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1316,7 +1316,7 @@
     },
     {
       "file": "vendor-invoice.pdf",
-      "sha256": "74f1c0ae99739e111a33f7c88aed5863d44e0b1204be073060c58ef3fe85c008",
+      "sha256": "30930d6f7ce6fade7750f914d094541d3580d2b7cfcf365ffd61e231dadd2198",
       "extraction": {
         "outcome": "parsed",
         "source": {
@@ -1332,7 +1332,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "d848f0db688650be19095acdd54d3f4ccb4c7c31920631593d7e97b493b4fc70",
+      "prompt_sha256": "7336004ff40b2acce145322ffbef08b93e3bb0c450c1d6886eca079bf70ea384",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1478,7 +1478,7 @@
     },
     {
       "file": "board-deck.pptx",
-      "sha256": "bb1949e38dee01bfb8250f96b1ae25bb1a09a9e0694e1e43f2b5be93a6c54070",
+      "sha256": "e6d3ed76543c3070bb1f63010b64921183cd773a3a2e6bdd6d7f6cfc9ceeb971",
       "extraction": {
         "outcome": "parsed",
         "source": {
@@ -1494,7 +1494,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "ef2079484f19c829826cd8e989a3eb36723c67aafa5265d123cebb8372d3fc92",
+      "prompt_sha256": "43bf76b74ec275d1c2329f2025ea9d161d04ccc3ef22146e7b45d43238a25312",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1519,7 +1519,7 @@
     },
     {
       "file": "order-form.docx",
-      "sha256": "47cae15c715415f045b992916febd27ab0a6c3452fe8695f329458d9ae94303c",
+      "sha256": "27b064f5125c87bb0d01e57b1f2b5b428ed63acbc22ab3c3d830657788a88586",
       "extraction": {
         "outcome": "parsed",
         "source": {
@@ -1535,7 +1535,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "33742d0d6b51c5caa308c905ce9c5342f90798331889e7620334f792e305fae5",
+      "prompt_sha256": "e95918124a8287cc6c5e134690e13e6a8601f217603c8b24fecbb08903e9bcb8",
       "reply": {
         "outcome": "proposed",
         "proposal": {
