@@ -101,6 +101,12 @@ pub struct AppSettings {
     pub intake_local_only: bool,
     #[serde(default)]
     pub process_others_uploads: bool,
+    /// The watched folder is a OneDrive or SharePoint folder the person chose
+    /// as one only they add documents to, so its documents are treated as
+    /// their own without asking Microsoft who uploaded them. Never honored in
+    /// a build with the verified team Inbox deployment.
+    #[serde(default)]
+    pub intake_my_folder: bool,
     #[serde(default)]
     pub machine_label: String,
     /// Keep Intern alive in the system tray when the window is closed.

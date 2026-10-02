@@ -72,12 +72,13 @@ describe('guided onboarding routing', () => {
     expect(screen.queryByRole('list', { name: 'Setup steps' })).not.toBeInTheDocument();
   });
 
-  it('never routes to onboarding when the backend reports it required without a deployment', async () => {
+  it('offers folder setup, never SharePoint onboarding, when the backend reports it required without a deployment', async () => {
     const base = createInMemoryBridge();
     const bridge: DesktopBridge = { ...base, getOnboarding: async () => ({ currentVersion: 1, completedVersion: 0, required: true, sharePointAvailable: false }) };
     render(<App bridge={bridge} />);
 
-    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Your documents, renamed and filed' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
   });
 
   it('shows an inert loading state until onboarding status settles', () => {

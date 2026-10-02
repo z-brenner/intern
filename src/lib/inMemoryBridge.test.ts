@@ -14,7 +14,8 @@ describe('createInMemoryBridge onboarding state', () => {
   });
 
   it('never requires onboarding while the packaged deployment is unavailable', async () => {
-    expect(await createInMemoryBridge().getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: false, sharePointAvailable: false });
+    expect(await createInMemoryBridge().getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false });
+    expect(await createInMemoryBridge({ completedOnboardingVersion: 0 }).getOnboarding()).toEqual({ currentVersion: 1, completedVersion: 0, required: false, sharePointAvailable: false });
   });
 });
 

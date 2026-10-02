@@ -141,6 +141,38 @@ folder** to watch: documents that appear in it are analyzed and, once approved
 (or automatically, if you enable high-confidence renames), moved to the
 destination folder under their new name.
 
+### Your own folder: three clicks
+
+The first time Intern opens without an administrator's deployment, it offers
+to watch a folder for you. Nothing asks for a tenant, a site, or an account.
+
+1. **Choose a folder.** Intern lists the OneDrive and SharePoint folders
+   already on this computer, such as *Legal - Documents (Contoso SharePoint)*
+   or *OneDrive – Contoso*. Use one, or browse to a folder inside it. Folders
+   synced with **Sync**, folders added with **Add shortcut to My files**, and
+   your own OneDrive all work. If none is listed, open the folder in
+   SharePoint, click Sync (or Add shortcut to My files), and check again.
+2. **Say where renamed documents go.** Intern creates a *Filed* folder next to
+   the one you chose, or you choose another.
+3. **Decide about what is already there.** If the folder already holds
+   documents, Intern asks once whether to rename them too. The default is to
+   rename only new ones.
+
+Pick a folder that **only you add documents to**: choosing it is how Intern
+knows the documents in it are yours, so it does not ask Microsoft who uploaded
+them. Intern then keeps running in the system tray and starts when you sign in.
+Settings shows how the folder is doing — up to date, waiting for OneDrive to
+download documents, OneDrive not running, or no longer synced — with the one
+button that fixes each, and **Set up a folder step by step…** runs the same
+setup again. A document whose contents are still in the cloud is never renamed
+or moved until OneDrive has downloaded it.
+
+The verified team Inbox described below is unchanged. It is used only in a
+build an administrator provisioned, and is documented in the
+[administrator guide](docs/sharepoint-deployment.md).
+
+### The verified team Inbox
+
 Files continue to move through the **Microsoft sync client**. Shared intake
 uses strict Microsoft uploader verification rather than assuming that a file
 first seen on this machine was uploaded by its user. Unknown uploaders stay out
@@ -163,9 +195,8 @@ by the same person from a direct upload, so upload directly. If your
 organization blocks the Microsoft connection, setup says so and asks you to
 contact your IT administrator.
 
-The build published here has no deployment identifiers, so it shows no guided
-setup, and a folder in a OneDrive or SharePoint sync root cannot be saved as a
-watched intake. The [administrator guide](docs/sharepoint-deployment.md) lists
+The build published here has no deployment identifiers, so it shows the
+folder setup above instead of the team Inbox setup. The [administrator guide](docs/sharepoint-deployment.md) lists
 what a provisioned build needs, and the tenant-backed acceptance run required
 before any live SharePoint compatibility is claimed. No live tenant
 compatibility is implied by unit tests.
@@ -180,13 +211,13 @@ In a build without the deployment, Settings lists the **synced locations** the
 sync client keeps on the machine — each SharePoint library and OneDrive
 account, with its local folder — so the folder a library syncs to
 (`C:\Users\pat\Contoso\Legal - Documents`, a name nobody chose) can be picked
-as a destination without a hunt through a folder dialog. Picking one as the
-intake folder only fills in the field: saving it is refused, because watching
-a synced folder needs Microsoft upload verification, which that build does not
-have, and private local mode is refused for synced folders. A build with the
-deployment hides these manual controls and uses the SharePoint connection
-instead. A folder on a **network share** — a UNC path or a mapped drive — is
-recognised and labelled too, and is held to the same rule as a synced folder.
+as a destination without a hunt through a folder dialog. A synced folder is
+watched as your own only through folder setup; one typed into Settings by hand
+is still held for Microsoft upload verification, and private local mode is
+refused for synced folders. A build with the deployment hides these manual
+controls and uses the SharePoint connection instead. A folder on a **network
+share** — a UNC path or a mapped drive — is recognised and labelled too, and
+can never be watched as your own, because anyone with access can add to it.
 A subfolder the account cannot read is counted and
 skipped rather than stopping the scan.
 

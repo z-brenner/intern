@@ -40,7 +40,8 @@ use intern_queue::{
 
 use crate::intake::{
     CloudLocationDto, CloudRootDto, DescriptionsStatusDto, IntakeStatusDto, LedgerSink,
-    PipelineIntakeHost, SharedFiledIndex, classify_folder, list_cloud_roots, now_unix, status_dto,
+    PipelineIntakeHost, SharedFiledIndex, classify_folder, filed_folder_for, list_cloud_roots,
+    now_unix, status_dto,
 };
 use crate::model::{
     HostedModel, HostedModelStatusDto, HostedModelTestDto, SwitchingModel, suggested_date,
@@ -1650,6 +1651,7 @@ impl ManagedSharePoint {
         settings.intake_enabled = true;
         settings.process_others_uploads = false;
         settings.intake_local_only = false;
+        settings.intake_my_folder = false;
         settings.run_in_background = true;
         settings.start_at_login = true;
         settings.start_minimized = true;
@@ -1713,6 +1715,7 @@ fn save_settings_with_microsoft_protection(
     if previous.intake_folder != settings.intake_folder
         || previous.intake_enabled != settings.intake_enabled
         || previous.intake_local_only != settings.intake_local_only
+        || previous.intake_my_folder != settings.intake_my_folder
         || previous.process_others_uploads != settings.process_others_uploads
         || previous.machine_label != settings.machine_label
     {
@@ -2029,6 +2032,69 @@ pub async fn hosted_model_test(
 #[tauri::command]
 pub fn cloud_roots() -> Result<Vec<CloudRootDto>, CommandError> {
     Ok(list_cloud_roots())
+}
+
+/// How many documents a folder already holds, counted exactly as adding the
+/// folder to the queue would collect them, so setup can ask once whether to
+/// rename those too.
+#[tauri::command]
+pub async fn intake_folder_documents(path: String) -> Result<usize, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, CommandError> {
+        let folder = canonical_folder(Path::new(&path))?;
+        Ok(collect_supported_files(&folder)?.len())
+    })
+    .await
+    .map_err(|_| background_task_failed("folder count"))?
+}
+
+/// Creates the "Filed" folder beside a chosen intake folder, or finds the one
+/// already there, and returns where it is.
+#[tauri::command]
+pub fn filed_folder_create(intake_folder: String) -> Result<String, CommandError> {
+    let intake = canonical_folder(Path::new(&intake_folder))?;
+    let filed = filed_folder_for(&intake).ok_or_else(|| CommandError {
+        code: "FILED_FOLDER_UNAVAILABLE".into(),
+        message: "a drive's top folder has nothing beside it to file into".into(),
+    })?;
+    std::fs::create_dir_all(&filed).map_err(|error| CommandError {
+        code: "FILED_FOLDER_UNAVAILABLE".into(),
+        message: format!("the Filed folder could not be created: {error}"),
+    })?;
+    Ok(display_path(&filed))
+}
+
+/// Creates (or finds) an "Inbox" folder inside a OneDrive or SharePoint
+/// folder's own top folder, for folder setup to watch: a Filed folder beside
+/// the top folder would sit outside what OneDrive syncs. Refused for any
+/// other folder, so the webview cannot make folders anywhere it likes.
+#[tauri::command]
+pub fn inbox_folder_create(root: String) -> Result<String, CommandError> {
+    let unavailable = |message: String| CommandError {
+        code: "INBOX_FOLDER_UNAVAILABLE".into(),
+        message,
+    };
+    let root = canonical_folder(Path::new(&root))?;
+    let synced = intern_intake::detect_cloud_roots()
+        .iter()
+        .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
+    if !synced {
+        return Err(unavailable(
+            "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
+        ));
+    }
+    let inbox = root.join("Inbox");
+    std::fs::create_dir_all(&inbox)
+        .map_err(|error| unavailable(format!("the Inbox folder could not be created: {error}")))?;
+    Ok(display_path(&inbox))
+}
+
+/// Starts OneDrive, or opens its folder when it is already running.
+#[tauri::command]
+pub fn onedrive_open() -> Result<(), CommandError> {
+    crate::sharepoint_setup::open_one_drive().map_err(|error| CommandError {
+        code: error.code,
+        message: error.message,
+    })
 }
 
 #[tauri::command]
@@ -2428,7 +2494,9 @@ mod intake_tests {
     use super::{
         save_settings_and_autostart, validate_description_settings, validate_intake_settings,
     };
-    use crate::intake::{CloudProviderDto, item_fate, presence_active, status_dto};
+    use crate::intake::{
+        CloudProviderDto, filed_folder_for, item_fate, lists_one_drive, presence_active, status_dto,
+    };
 
     /// A fake folder canonicalizer: pairs of (as-entered, canonical form).
     fn canonicalizer(
@@ -2468,6 +2536,26 @@ mod intake_tests {
             error_code(validate_intake_settings(&mut missing, "", &fs)),
             "INTAKE_FOLDER_MISSING"
         );
+    }
+
+    #[test]
+    fn the_filed_folder_is_offered_beside_the_watched_folder() {
+        assert_eq!(
+            filed_folder_for(Path::new(r"C:\Users\pat\Contoso\Legal - Documents\Inbox")),
+            Some(PathBuf::from(
+                r"C:\Users\pat\Contoso\Legal - Documents\Filed"
+            ))
+        );
+    }
+
+    #[test]
+    fn onedrive_is_running_only_when_tasklist_names_it() {
+        assert!(lists_one_drive(
+            "\"OneDrive.exe\",\"10436\",\"Console\",\"1\",\"87,212 K\"\r\n"
+        ));
+        assert!(!lists_one_drive(
+            "INFO: No tasks are running which match the specified criteria.\r\n"
+        ));
     }
 
     #[test]

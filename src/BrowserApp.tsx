@@ -16,6 +16,8 @@ function browserBridge() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('fixtureBatch') === '1') return createFixtureBatchBridge();
   if (import.meta.env.DEV && params.get('sharePoint') === 'fake') return createInMemoryBridge({ sharePoint: 'fake' });
+  // A first run without the deployment, for walking folder setup.
+  if (import.meta.env.DEV && params.get('folderSetup') === 'fake') return createInMemoryBridge({ completedOnboardingVersion: 0 });
   return undefined;
 }
 

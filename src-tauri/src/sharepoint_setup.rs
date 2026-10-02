@@ -356,6 +356,7 @@ impl<'a> SharePointSetup<'a> {
         next.intake_enabled = true;
         next.process_others_uploads = false;
         next.intake_local_only = false;
+        next.intake_my_folder = false;
         next.run_in_background = true;
         next.start_at_login = true;
         next.start_minimized = true;
@@ -644,6 +645,7 @@ fn managed_settings_match(settings: &AppSettings, inbox: &Path, destination: &Pa
         && settings.intake_enabled
         && !settings.process_others_uploads
         && !settings.intake_local_only
+        && !settings.intake_my_folder
         && settings.run_in_background
         && settings.start_at_login
         && settings.start_minimized
@@ -706,6 +708,11 @@ const ONEDRIVE_ACCOUNTS_KEY: &str = r"Software\Microsoft\OneDrive\Accounts";
 /// OneDrive records, or the per-user and per-machine install locations. A
 /// registry value left behind by an uninstall is not an installation.
 fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
+    one_drive_executable(machine).is_some()
+}
+
+/// The OneDrive program this user would start, found the same way.
+fn one_drive_executable(machine: &dyn MachineFacts) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(trigger) = machine.registry_string(
         RegistryHive::CurrentUser,
@@ -724,8 +731,29 @@ fn one_drive_client_installed(machine: &dyn MachineFacts) -> bool {
         }
     }
     candidates
-        .iter()
-        .any(|candidate| machine.is_file(candidate))
+        .into_iter()
+        .find(|candidate| machine.is_file(candidate))
+}
+
+/// Starts OneDrive, or brings its folder forward when it is already running:
+/// a second launch of OneDrive.exe opens the OneDrive folder. Health checks
+/// offer this when new documents cannot arrive.
+pub(crate) fn open_one_drive() -> Result<(), SharePointSetupError> {
+    let executable = one_drive_executable(&SystemMachine).ok_or_else(|| {
+        SharePointSetupError::new(
+            "ONEDRIVE_MISSING",
+            "OneDrive is not installed on this computer.",
+        )
+    })?;
+    std::process::Command::new(executable)
+        .spawn()
+        .map(drop)
+        .map_err(|error| {
+            SharePointSetupError::new(
+                "ONEDRIVE_OPEN_FAILED",
+                format!("OneDrive could not be started: {error}"),
+            )
+        })
 }
 
 /// OneDrive keeps an `Accounts\Business<N>` key per work or school account
@@ -1699,6 +1727,17 @@ mod tests {
         assert_eq!(
             one_drive_state(&FakeMachine::default().installed().work_account()),
             OneDriveState::Available
+        );
+    }
+
+    #[test]
+    fn the_onedrive_program_is_found_where_it_is_installed() {
+        assert_eq!(one_drive_executable(&FakeMachine::default()), None);
+        assert_eq!(
+            one_drive_executable(&FakeMachine::default().installed()),
+            Some(PathBuf::from(
+                r"C:\Program Files\Microsoft OneDrive\OneDrive.exe"
+            ))
         );
     }
 

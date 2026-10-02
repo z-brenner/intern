@@ -139,6 +139,10 @@ pub struct IntakeStatusDto {
     pub processed_here: u32,
     pub last_scan_at: Option<i64>,
     pub error: Option<String>,
+    /// For a OneDrive or SharePoint folder, whether the OneDrive program is
+    /// running, since nothing new arrives while it is not. `None` for any
+    /// other folder, or where it cannot be told.
+    pub one_drive_running: Option<bool>,
 }
 
 pub(crate) fn now_unix() -> i64 {
@@ -162,6 +166,55 @@ pub(crate) fn classify_folder(path: &str) -> Option<CloudLocationDto> {
         return None;
     }
     classify(Path::new(trimmed), &detect_cloud_roots()).map(Into::into)
+}
+
+/// Whether OneDrive is running, asked only about a folder OneDrive keeps.
+fn one_drive_running(cloud: Option<&CloudLocationDto>) -> Option<bool> {
+    match cloud?.provider {
+        CloudProviderDto::NetworkShare => None,
+        _ => one_drive_process_listed(),
+    }
+}
+
+/// Asks Windows' own process list. A paused OneDrive is still running and is
+/// not told apart here: its documents simply stay waiting to download, which
+/// the awaiting-hydration count already reports.
+#[cfg(windows)]
+fn one_drive_process_listed() -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+
+    /// Keeps a console window from flashing up on every status read.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq OneDrive.exe", "/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| lists_one_drive(&String::from_utf8_lossy(&output.stdout)))
+}
+
+#[cfg(not(windows))]
+fn one_drive_process_listed() -> Option<bool> {
+    None
+}
+
+/// `tasklist /FO CSV` names each match in quotes first; with no match it
+/// prints an informational line instead.
+pub(crate) fn lists_one_drive(tasklist: &str) -> bool {
+    tasklist.lines().any(|line| {
+        line.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("\"onedrive.exe\"")
+    })
+}
+
+/// Where setup offers to file documents from `intake`: a "Filed" folder
+/// beside it, because the destination may not be inside the watched folder.
+pub(crate) fn filed_folder_for(intake: &Path) -> Option<PathBuf> {
+    intake.parent().map(|parent| parent.join("Filed"))
 }
 
 fn machine_dto(machine: &MachinePresence, now: i64) -> IntakeMachineDto {
@@ -205,14 +258,20 @@ pub(crate) fn status_dto(
         processed_here: 0,
         last_scan_at: None,
         error,
+        one_drive_running: None,
     };
     let Some(status) = watcher else {
-        return base;
+        return IntakeStatusDto {
+            one_drive_running: one_drive_running(base.cloud.as_ref()),
+            ..base
+        };
     };
     let folder = status.folder.to_string_lossy().into_owned();
+    let cloud = classify_folder(&folder);
     IntakeStatusDto {
         watching: status.watching,
-        cloud: classify_folder(&folder),
+        one_drive_running: one_drive_running(cloud.as_ref()),
+        cloud,
         folder: display_path(&status.folder),
         machines: status
             .machines

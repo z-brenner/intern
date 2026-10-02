@@ -2,6 +2,7 @@ import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
+import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 
 /** Exact size of the single pinned model file this build downloads. */
@@ -56,6 +57,8 @@ export interface InMemoryBridgeOptions {
    */
   sharePoint?: 'unavailable' | 'fake';
   sharePointFake?: FakeSharePointOptions;
+  /** Documents folder setup finds already in a chosen folder. */
+  existingDocuments?: number;
 }
 
 export type FakeSharePointCall = 'microsoftSignInStart' | 'microsoftSignInPoll' | 'microsoftOpenSignIn' | 'microsoftDisconnect' | 'getSharePointSetup' | 'startSharePointSync' | 'activateOnboarding' | 'completeOnboarding';
@@ -137,6 +140,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // provider, or start like a UNC path. Mirrors the DTO the desktop backend
   // returns from folder_classify.
   const classifyPath = async (path: string): Promise<CloudLocation | null> => {
+    const root = rootFor(roots, path);
+    if (root) return { provider: root.provider, displayName: root.displayName };
     const lower = path.toLowerCase();
     if (lower.includes('onedrive')) return { provider: 'onedrive_business', displayName: 'OneDrive – Contoso' };
     if (lower.includes('sharepoint')) return { provider: 'sharepoint', displayName: 'Contoso' };
@@ -168,7 +173,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // The previous value, 3_278_329_184, was a model plus a vision projector that
   // this pipeline does not download.
   let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
-  let completedOnboardingVersion = options.completedOnboardingVersion ?? 0;
+  // Without a deployment the demo opens straight into the app; pass 0 to walk
+  // folder setup instead.
+  let completedOnboardingVersion = options.completedOnboardingVersion ?? (options.sharePoint === 'fake' ? 0 : 1);
   const microsoftUnavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
   const sharePointEnabled = options.sharePoint === 'fake';
   const fake = options.sharePointFake ?? {};
@@ -397,11 +404,16 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         processedHere: enabled ? 3 : 0,
         lastScanAt: enabled ? now - 5 : null,
         error: null,
+        oneDriveRunning: enabled && (await classifyPath(settings.intakeFolder)) ? true : null,
       };
     },
     scanIntakeNow: async () => { /* Nothing is watching in the browser; the desktop backend wakes its scan loop. */ },
     classifyFolder: (path) => classifyPath(path),
     cloudRoots: async () => roots.map((root) => ({ ...root })),
+    intakeFolderDocuments: async () => options.existingDocuments ?? 0,
+    createInboxFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Inbox`,
+    createFiledFolder: async (intakeFolder) => filedBeside(intakeFolder),
+    openOneDrive: async () => { /* No OneDrive in the browser. */ },
     descriptionsStatus: async () => descriptionsStatus(),
     // Mirrors the backend: refused until the setting is saved on, otherwise
     // one record per completed item that still carries its sentence.

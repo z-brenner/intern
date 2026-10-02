@@ -27,13 +27,20 @@ folder name when it loads the resource.
 The resource in this repository has `"enabled": false`, and every identifier is
 `null`, because no real identifiers have been supplied. In that build:
 
-- Intern opens exactly as it did before: the usual model setup screen, the
-  usual Settings, and no guided onboarding.
+- There is no team Inbox onboarding. A first run that watches no folder is
+  offered the simpler **folder setup** instead (see "Your own folder: three
+  clicks" in the README): the person picks a OneDrive or SharePoint folder
+  only they add documents to, and its documents are filed without a Microsoft
+  uploader check (`intakeMyFolder`). Network shares are refused.
 - Microsoft sign-in, pairing, and SharePoint setup all fail with
   `SHAREPOINT_DEPLOYMENT_UNAVAILABLE`.
-- Settings will not save a watched intake folder inside a OneDrive,
-  SharePoint, or network location. The only watched folder it accepts is a
-  private local one.
+- Settings will not save a OneDrive, SharePoint, or network folder typed in by
+  hand as a watched intake; only folder setup marks a synced folder as the
+  person's own.
+
+In an enabled build, folder setup's "my folder" mode is refused
+(`INTAKE_MY_FOLDER_UNAVAILABLE`) and activation clears it: only verified
+uploads to the team Inbox are filed.
 
 Guided onboarding is required only when both of these are true:
 

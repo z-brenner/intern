@@ -65,6 +65,13 @@ export interface AppSettings {
   intakeEnabled: boolean;
   /** Only for explicitly private local folders, never a shared sync root. */
   intakeLocalOnly?: boolean;
+  /**
+   * The watched folder is a OneDrive or SharePoint folder the person chose as
+   * one only they add documents to, so its documents count as theirs without
+   * a Microsoft check. Set by folder setup; never honored beside the verified
+   * team Inbox.
+   */
+  intakeMyFolder?: boolean;
   /** false = only process documents uploaded from this machine ("mine" scope). */
   processOthersUploads: boolean;
   /** Overrides the hostname shown to other machines; "" = use hostname. */
@@ -226,6 +233,8 @@ export interface IntakeStatus {
   processedHere: number;
   lastScanAt: number | null;
   error: string | null;
+  /** For a OneDrive or SharePoint folder, whether OneDrive is running; null when that does not apply or cannot be told. */
+  oneDriveRunning?: boolean | null;
 }
 
 export interface SetupState {
