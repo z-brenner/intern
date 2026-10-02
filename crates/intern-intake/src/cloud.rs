@@ -348,6 +348,85 @@ fn push_unique(roots: &mut Vec<CloudRoot>, candidate: CloudRoot) {
     }
 }
 
+/// What OneDrive records about one signed-in account, read from
+/// `HKCU\Software\Microsoft\OneDrive\Accounts\<account>`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct OneDriveAccount {
+    pub business: bool,
+    /// The account's own OneDrive folder.
+    pub user_folder: Option<String>,
+    /// The organization name OneDrive shows, such as `Contoso`.
+    pub display_name: Option<String>,
+    /// `Tenants\<tenant>`: the libraries synced with "Sync", by tenant name.
+    pub tenants: Vec<(String, Vec<String>)>,
+    /// `ScopeIdToMountPointPathCache`: every folder OneDrive mounted for a
+    /// scope, which is where "Add shortcut to My files" folders appear. It
+    /// also repeats the account folder and the synced libraries.
+    pub mount_points: Vec<String>,
+}
+
+/// The sync roots one account contributes, account folder first. A mount
+/// point the other records do not already name is a SharePoint folder added
+/// as a shortcut; it is listed under the account's organization so the
+/// longest-match rule in `classify` reports it as SharePoint rather than as
+/// the OneDrive folder it sits inside.
+pub(crate) fn account_roots(account: &OneDriveAccount) -> Vec<CloudRoot> {
+    let mut roots = Vec::new();
+    if let Some(folder) = &account.user_folder {
+        let (kind, fallback) = if account.business {
+            (CloudProviderKind::OneDriveBusiness, "OneDrive – Work")
+        } else {
+            (CloudProviderKind::OneDrivePersonal, "OneDrive – Personal")
+        };
+        let display_name = account
+            .display_name
+            .as_ref()
+            .map_or_else(|| fallback.to_string(), |name| format!("OneDrive – {name}"));
+        push_unique(
+            &mut roots,
+            CloudRoot {
+                kind,
+                display_name,
+                root: PathBuf::from(folder),
+            },
+        );
+    }
+    for (tenant, mounts) in &account.tenants {
+        for mount in mounts.iter().filter(|mount| !mount.is_empty()) {
+            push_unique(
+                &mut roots,
+                CloudRoot {
+                    kind: CloudProviderKind::SharePoint,
+                    display_name: tenant.clone(),
+                    root: PathBuf::from(mount),
+                },
+            );
+        }
+    }
+    if account.business {
+        let organization = account
+            .display_name
+            .clone()
+            .or_else(|| account.tenants.first().map(|(name, _)| name.clone()))
+            .unwrap_or_else(|| "Work".to_string());
+        for mount in account
+            .mount_points
+            .iter()
+            .filter(|mount| !mount.is_empty())
+        {
+            push_unique(
+                &mut roots,
+                CloudRoot {
+                    kind: CloudProviderKind::SharePoint,
+                    display_name: organization.clone(),
+                    root: PathBuf::from(mount),
+                },
+            );
+        }
+    }
+    roots
+}
+
 /// Raw Win32 drive and network queries: whether a drive letter is a mapped
 /// network drive, and which share it maps to.
 #[cfg(windows)]
@@ -448,7 +527,7 @@ pub fn registry_subkeys(hive: RegistryHive, key: &str) -> Vec<String> {
 pub(crate) mod windows_registry {
     #![allow(unsafe_code)]
 
-    use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::PathBuf};
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
 
     use windows_sys::Win32::{
         Foundation::ERROR_SUCCESS,
@@ -459,7 +538,7 @@ pub(crate) mod windows_registry {
         },
     };
 
-    use super::{CloudProviderKind, CloudRoot, push_unique};
+    use super::{CloudRoot, OneDriveAccount, account_roots, push_unique};
 
     struct RegKey(HKEY);
 
@@ -617,50 +696,41 @@ pub(crate) mod windows_registry {
             let Some(account) = accounts.open_sub(&account_name) else {
                 continue;
             };
-            let business = account
-                .dword_value("Business")
-                .is_some_and(|value| value != 0)
-                || account_name.to_ascii_lowercase().starts_with("business");
-            if let Some(folder) = account.string_value("UserFolder") {
-                let kind = if business {
-                    CloudProviderKind::OneDriveBusiness
-                } else {
-                    CloudProviderKind::OneDrivePersonal
-                };
-                let display_name = match account.string_value("DisplayName") {
-                    Some(name) => format!("OneDrive – {name}"),
-                    None if business => "OneDrive – Work".to_string(),
-                    None => "OneDrive – Personal".to_string(),
-                };
-                push_unique(
-                    roots,
-                    CloudRoot {
-                        kind,
-                        display_name,
-                        root: PathBuf::from(folder),
-                    },
-                );
-            }
-            let Some(tenants) = account.open_sub("Tenants") else {
-                continue;
+            let tenants = account
+                .open_sub("Tenants")
+                .map(|tenants| {
+                    tenants
+                        .subkey_names()
+                        .into_iter()
+                        .filter_map(|name| {
+                            let mounts = tenants.open_sub(&name)?.value_names();
+                            Some((name, mounts))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mount_points = account
+                .open_sub("ScopeIdToMountPointPathCache")
+                .map(|cache| {
+                    cache
+                        .value_names()
+                        .iter()
+                        .filter_map(|scope| cache.string_value(scope))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let record = OneDriveAccount {
+                business: account
+                    .dword_value("Business")
+                    .is_some_and(|value| value != 0)
+                    || account_name.to_ascii_lowercase().starts_with("business"),
+                user_folder: account.string_value("UserFolder"),
+                display_name: account.string_value("DisplayName"),
+                tenants,
+                mount_points,
             };
-            for tenant_name in tenants.subkey_names() {
-                let Some(tenant) = tenants.open_sub(&tenant_name) else {
-                    continue;
-                };
-                for mount in tenant.value_names() {
-                    if mount.is_empty() {
-                        continue;
-                    }
-                    push_unique(
-                        roots,
-                        CloudRoot {
-                            kind: CloudProviderKind::SharePoint,
-                            display_name: tenant_name.clone(),
-                            root: PathBuf::from(&mount),
-                        },
-                    );
-                }
+            for root in account_roots(&record) {
+                push_unique(roots, root);
             }
         }
     }
@@ -781,6 +851,60 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn shortcut_mount_points_are_listed_as_sharepoint_beside_synced_libraries() {
+        let account = OneDriveAccount {
+            business: true,
+            user_folder: Some(r"C:\Users\pat\OneDrive - Contoso".into()),
+            display_name: Some("Contoso".into()),
+            tenants: vec![(
+                "Contoso".into(),
+                vec![r"C:\Users\pat\Contoso\Legal - Documents".into()],
+            )],
+            mount_points: vec![
+                // The account folder and the synced library are repeated here.
+                r"C:\Users\pat\OneDrive - Contoso".into(),
+                r"C:\Users\pat\Contoso\Legal - Documents".into(),
+                // "Add shortcut to My files" lands inside the OneDrive folder.
+                r"C:\Users\pat\OneDrive - Contoso\Finance - Invoices".into(),
+            ],
+        };
+        let roots = account_roots(&account);
+
+        let listed: Vec<_> = roots
+            .iter()
+            .map(|root| (root.kind, root.display_name.as_str()))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (CloudProviderKind::OneDriveBusiness, "OneDrive – Contoso"),
+                (CloudProviderKind::SharePoint, "Contoso"),
+                (CloudProviderKind::SharePoint, "Contoso"),
+            ]
+        );
+        let shortcut = classify(
+            Path::new(r"C:\Users\pat\OneDrive - Contoso\Finance - Invoices\Inbox"),
+            &roots,
+        );
+        assert_eq!(shortcut.unwrap().kind, CloudProviderKind::SharePoint);
+        let personal = classify(Path::new(r"C:\Users\pat\OneDrive - Contoso\Scans"), &roots);
+        assert_eq!(personal.unwrap().kind, CloudProviderKind::OneDriveBusiness);
+    }
+
+    #[test]
+    fn a_personal_account_lists_only_its_own_folder() {
+        let account = OneDriveAccount {
+            user_folder: Some(r"C:\Users\pat\OneDrive".into()),
+            mount_points: vec![r"C:\Users\pat\OneDrive\Shared album".into()],
+            ..OneDriveAccount::default()
+        };
+        let roots = account_roots(&account);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].kind, CloudProviderKind::OneDrivePersonal);
+        assert_eq!(roots[0].display_name, "OneDrive – Personal");
     }
 
     #[cfg(windows)]

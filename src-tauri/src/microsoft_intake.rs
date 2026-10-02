@@ -7,7 +7,9 @@ use intern_intake::microsoft::{
     TokenStore,
     proof::{FreshUploadMetadata, FreshUploadOutcome, verify_fresh_upload},
 };
-use intern_intake::{SharePointDeployment, classify, detect_cloud_roots, relative_to_root};
+use intern_intake::{
+    SharePointDeployment, classify, detect_cloud_roots, network_share, relative_to_root,
+};
 use intern_queue::{
     AdmissionEvidence, AdmissionGuard, AdmissionStage, AppSettings, FiledDocument, FilingSink,
     PipelineError, PipelineResult, SettingsStore,
@@ -106,6 +108,14 @@ pub struct MicrosoftIntake {
 /// ordinary thing to happen and the person has to be able to find out why
 /// their documents stopped moving.
 const LOCAL_ONLY_BUT_SHARED: &str = "This intake folder is a OneDrive, SharePoint, or network folder, although it was saved as a private local intake. Files in a shared folder are held until Microsoft confirms who uploaded them, so choose a folder that is not shared.";
+
+/// Why a "my folder" intake is refused in a build that ships the verified
+/// team Inbox: there, only verified uploads are filed.
+const MY_FOLDER_WITH_DEPLOYMENT: &str = "This build files only verified uploads to your team's Inbox, so a folder of your own cannot be watched. (INTAKE_MY_FOLDER_UNAVAILABLE)";
+
+/// Why a network share cannot be "my folder": anyone with access may add
+/// documents to it, and no sync client keeps it.
+const MY_FOLDER_ON_NETWORK_SHARE: &str = "A network share cannot be used as your own folder, because anyone with access can add documents to it. Choose a OneDrive or SharePoint folder, or one on this computer. (INTAKE_MY_FOLDER_NETWORK_SHARE)";
 
 /// How long an answer about the intake folder is reused. Deciding it reads
 /// the Windows registry and the network drive table, and `scope` asks about
@@ -255,6 +265,15 @@ impl MicrosoftIntake {
             return *shared;
         }
         self.recheck_folder_is_shared(folder)
+    }
+
+    /// Whether the watched folder is a "my folder" intake this build honors:
+    /// never beside the verified team Inbox, and never on a network share,
+    /// which no sync client keeps and where anyone may add documents.
+    fn my_folder(&self, settings: &AppSettings) -> bool {
+        settings.intake_my_folder
+            && self.deployment.is_none()
+            && network_share(Path::new(settings.intake_folder.trim())).is_none()
     }
 
     /// Asks the machine itself, and remembers the answer.
@@ -627,8 +646,19 @@ impl MicrosoftIntake {
         if settings.intake_local_only && self.recheck_folder_is_shared(&settings.intake_folder) {
             return Err("Local-only intake cannot be used for OneDrive, SharePoint, or a network share. Microsoft upload verification is required.".into());
         }
+        if settings.intake_my_folder && self.deployment.is_some() {
+            return Err(MY_FOLDER_WITH_DEPLOYMENT.into());
+        }
+        if settings.intake_my_folder
+            && network_share(Path::new(settings.intake_folder.trim())).is_some()
+        {
+            return Err(MY_FOLDER_ON_NETWORK_SHARE.into());
+        }
         self.generation.fetch_add(1, Ordering::SeqCst);
-        if settings.intake_folder.trim().is_empty() || settings.intake_local_only {
+        if settings.intake_folder.trim().is_empty()
+            || settings.intake_local_only
+            || settings.intake_my_folder
+        {
             return Ok(());
         }
         // Only a save that names a folder Microsoft verification must cover
@@ -721,6 +751,13 @@ impl MicrosoftIntake {
         let mut protected = config.protected_roots.iter().any(|root| within(path, root));
         let watched =
             !settings.intake_folder.trim().is_empty() && within(path, &settings.intake_folder);
+        // "My folder": the person chose this synced folder as one only they
+        // add documents to, so that choice is the ownership proof. It holds
+        // even over a root protected by an earlier save, because choosing the
+        // same folder again this way is a decision about exactly that folder.
+        if watched && self.my_folder(settings) {
+            return Ok(None);
+        }
         // `intake_local_only` is a claim made about a folder on the day it was
         // saved, and folders change: one moved into OneDrive, or one whose
         // parent starts syncing, is a shared folder from that moment however
@@ -1836,6 +1873,91 @@ mod tests {
                 .is_none()
         );
         assert!(intake.local_only_contradiction().is_none());
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn my_folder_is_admitted_without_microsoft_even_over_a_protected_root() {
+        let folder =
+            std::env::temp_dir().join(format!("intern-microsoft-mine-{}", std::process::id()));
+        let verified = AppSettings {
+            intake_folder: folder.to_string_lossy().into_owned(),
+            intake_enabled: true,
+            ..AppSettings::default()
+        };
+        let (data, intake) = configured("my-folder", &verified);
+        // Watched before as an ordinary folder, it is protected and held.
+        intake.config.lock().unwrap().protected_roots = vec![verified.intake_folder.clone()];
+        assert!(intake.scope(&folder.join("lease.pdf"), &verified).is_err());
+
+        let mine = AppSettings {
+            intake_my_folder: true,
+            ..verified.clone()
+        };
+        intake.protect_settings(&mine).unwrap();
+        assert!(
+            intake
+                .scope(&folder.join("lease.pdf"), &mine)
+                .unwrap()
+                .is_none()
+        );
+        // Only the watched folder: the protected root still holds what lies
+        // outside it once another folder is chosen.
+        let elsewhere = AppSettings {
+            intake_folder: data.join("other").to_string_lossy().into_owned(),
+            ..mine
+        };
+        assert!(intake.scope(&folder.join("lease.pdf"), &elsewhere).is_err());
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn my_folder_is_refused_on_a_network_share() {
+        let settings = AppSettings {
+            intake_folder: r"\\fileserver\legal\intake".into(),
+            intake_my_folder: true,
+            ..AppSettings::default()
+        };
+        let (data, intake) = configured("my-folder-share", &settings);
+
+        assert_eq!(
+            intake.protect_settings(&settings).unwrap_err(),
+            MY_FOLDER_ON_NETWORK_SHARE
+        );
+        assert!(
+            intake
+                .scope(Path::new(r"\\fileserver\legal\intake\a.pdf"), &settings)
+                .is_err(),
+            "and a file there is held, not admitted"
+        );
+        let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn my_folder_is_never_honored_beside_the_verified_team_inbox() {
+        let data =
+            std::env::temp_dir().join(format!("intern-microsoft-mine-dep-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+        let settings = AppSettings {
+            intake_folder: data.join("Inbox").to_string_lossy().into_owned(),
+            intake_enabled: true,
+            intake_my_folder: true,
+            ..AppSettings::default()
+        };
+        let store = SettingsStore::new(data.join("settings.json"));
+        store.save(&settings).unwrap();
+        let intake = MicrosoftIntake::with_deployment(store, data.clone(), Ok(test_deployment()));
+
+        assert_eq!(
+            intake.protect_settings(&settings).unwrap_err(),
+            MY_FOLDER_WITH_DEPLOYMENT
+        );
+        assert!(
+            intake
+                .scope(&data.join("Inbox").join("a.pdf"), &settings)
+                .is_err()
+        );
         let _ = fs::remove_dir_all(&data);
     }
 
