@@ -605,7 +605,9 @@ enum RecordedReply {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_confidence: Option<TokenConfidence>,
     },
-    Failed { code: String },
+    Failed {
+        code: String,
+    },
 }
 
 /// A rendered page image is a signal that a page could not be read, never an
