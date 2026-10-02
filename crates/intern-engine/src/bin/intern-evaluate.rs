@@ -1260,6 +1260,7 @@ mod tests {
                 prompt_sha256,
                 reply: Some(RecordedReply::Proposed {
                     proposal: invoice_reply(),
+                    token_confidence: None,
                 }),
             }],
         }
@@ -1279,6 +1280,7 @@ mod tests {
             &recording_with(Some(sha)),
             budget,
             false,
+            None,
         );
         assert_eq!(record["status"], json!("completed"), "{record}");
         assert_eq!(record["replayed"], json!(true));
@@ -1293,6 +1295,39 @@ mod tests {
         assert_eq!(record["scores"]["readiness_match"], json!(true));
     }
 
+    /// A recording made with token confidence replays it, and a threshold
+    /// can be calibrated against it without a model.
+    #[test]
+    fn a_recorded_token_confidence_is_reported_and_can_be_gated_in_replay() {
+        let budget = DigestBudget::default();
+        let digest = intern_engine::distill(&invoice_source(), budget);
+        let mut recording = recording_with(Some(ModelRequest::from_digest(&digest).sha256()));
+        let low = TokenConfidence {
+            min: 0.3,
+            mean: 0.8,
+            tokens: 9,
+        };
+        if let Some(RecordedReply::Proposed {
+            token_confidence, ..
+        }) = recording.fixtures[0].reply.as_mut()
+        {
+            *token_confidence = Some(low);
+        }
+        let path = Path::new("/nonexistent/invoice.txt");
+        let ungated = replay_one(&invoice_fixture(), path, &recording, budget, false, None);
+        assert_eq!(ungated["readiness"], json!("ready"), "{ungated}");
+        assert_eq!(ungated["token_confidence"]["min"], json!(0.3_f32));
+        let gated = replay_one(
+            &invoice_fixture(),
+            path,
+            &recording,
+            budget,
+            false,
+            Some(0.5),
+        );
+        assert_eq!(gated["readiness"], json!("needs_review"));
+    }
+
     /// A reply to a prompt the engine no longer builds says nothing about the
     /// engine as it is now. Refused by default; scored and marked on request.
     #[test]
@@ -1305,6 +1340,7 @@ mod tests {
             &recording,
             budget,
             false,
+            None,
         );
         assert_eq!(refused.get("status"), Some(&json!("stale_prompt")));
         assert!(refused.get("scores").is_none());
@@ -1315,6 +1351,7 @@ mod tests {
             &recording,
             budget,
             true,
+            None,
         );
         assert_eq!(tolerated["status"], json!("completed"));
         assert_eq!(tolerated["stale"], json!(true));
@@ -1325,6 +1362,7 @@ mod tests {
             &recording,
             budget,
             true,
+            None,
         );
         assert_eq!(missing["status"], json!("unrecorded"));
     }
