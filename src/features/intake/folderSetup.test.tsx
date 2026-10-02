@@ -126,15 +126,18 @@ describe('folder setup', () => {
     expect(await bridge.getSettings()).toMatchObject({ intakeMyFolder: false, intakeLocalOnly: true, destination: 'D:\\Scans\\Filed' });
   });
 
-  it('does not offer a Filed folder that would sit outside the synced location', async () => {
-    render(<App bridge={firstRun()} selection={selectionPicking('D:\\Elsewhere')} />);
+  it('makes an Inbox and a Filed folder inside a synced location chosen whole, so both stay synced', async () => {
+    const bridge = firstRun({ existingDocuments: 0 });
+    render(<App bridge={bridge} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Choose a folder' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Use Legal - Documents (Contoso SharePoint)' }));
-
-    expect(await screen.findByText(/would not be synced/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Create a “Filed” folder here' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Choose another folder…' })).toHaveClass('primary');
+    fireEvent.click(await screen.findByRole('button', { name: 'Create Inbox and Filed folders' }));
+
+    expect(await screen.findByRole('heading', { name: 'Watching Legal - Documents (Contoso SharePoint) › Inbox.' })).toBeVisible();
+    expect(screen.getByText('Renamed documents go to Legal - Documents (Contoso SharePoint) › Filed.')).toBeVisible();
+    expect(await bridge.getSettings()).toMatchObject({ intakeFolder: `${library}\\Inbox`, destination: `${library}\\Filed`, intakeMyFolder: true });
   });
 
   it('explains how to sync a folder when none is found, and checks again', async () => {

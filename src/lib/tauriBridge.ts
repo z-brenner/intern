@@ -197,6 +197,7 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   }
 
   intakeFolderDocuments(path: string): Promise<number> { return this.transport.invoke('intake_folder_documents', { path }); }
+  createInboxFolder(root: string): Promise<string> { return this.transport.invoke('inbox_folder_create', { root }); }
   createFiledFolder(intakeFolder: string): Promise<string> { return this.transport.invoke('filed_folder_create', { intakeFolder }); }
   openOneDrive(): Promise<void> { return this.transport.invoke('onedrive_open'); }
 

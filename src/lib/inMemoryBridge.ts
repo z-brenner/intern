@@ -411,6 +411,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     classifyFolder: (path) => classifyPath(path),
     cloudRoots: async () => roots.map((root) => ({ ...root })),
     intakeFolderDocuments: async () => options.existingDocuments ?? 0,
+    createInboxFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Inbox`,
     createFiledFolder: async (intakeFolder) => filedBeside(intakeFolder),
     openOneDrive: async () => { /* No OneDrive in the browser. */ },
     descriptionsStatus: async () => descriptionsStatus(),

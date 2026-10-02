@@ -98,6 +98,28 @@ test('a person sets up Intern for the fixed SharePoint library without typing an
   await expect(page.getByRole('button', { name: 'Set up Intern' })).toHaveCount(0);
 });
 
+test('a person watches a synced folder in three clicks, with no sign-in and nothing to type', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/?folderSetup=fake');
+
+  await expectAccessibleStep(page, 'Your documents, renamed and filed', 'Welcome', 'Choose a folder');
+  await page.getByRole('button', { name: 'Choose a folder' }).click();
+
+  const main = setup(page);
+  await expect(main.getByRole('heading', { level: 1, name: 'Choose a folder' })).toBeFocused();
+  await expect(main.getByRole('textbox')).toHaveCount(0);
+  await expect(main.getByText('Legal - Documents (Contoso SharePoint)')).toBeVisible();
+  await expect(main.getByText('Synced by OneDrive').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Use Legal - Documents (Contoso SharePoint)' }).click();
+
+  await expectAccessibleStep(page, 'Where should renamed documents go?', 'Filed', 'Create Inbox and Filed folders');
+  await page.getByRole('button', { name: 'Create Inbox and Filed folders' }).click();
+
+  await expect(main.getByRole('heading', { level: 1, name: 'Watching Legal - Documents (Contoso SharePoint) › Inbox.' })).toBeFocused();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+});
+
 test('the default page opens the app, not onboarding', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();

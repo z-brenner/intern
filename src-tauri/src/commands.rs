@@ -2063,6 +2063,31 @@ pub fn filed_folder_create(intake_folder: String) -> Result<String, CommandError
     Ok(display_path(&filed))
 }
 
+/// Creates (or finds) an "Inbox" folder inside a OneDrive or SharePoint
+/// folder's own top folder, for folder setup to watch: a Filed folder beside
+/// the top folder would sit outside what OneDrive syncs. Refused for any
+/// other folder, so the webview cannot make folders anywhere it likes.
+#[tauri::command]
+pub fn inbox_folder_create(root: String) -> Result<String, CommandError> {
+    let unavailable = |message: String| CommandError {
+        code: "INBOX_FOLDER_UNAVAILABLE".into(),
+        message,
+    };
+    let root = canonical_folder(Path::new(&root))?;
+    let synced = intern_intake::detect_cloud_roots()
+        .iter()
+        .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
+    if !synced {
+        return Err(unavailable(
+            "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
+        ));
+    }
+    let inbox = root.join("Inbox");
+    std::fs::create_dir_all(&inbox)
+        .map_err(|error| unavailable(format!("the Inbox folder could not be created: {error}")))?;
+    Ok(display_path(&inbox))
+}
+
 /// Starts OneDrive, or opens its folder when it is already running.
 #[tauri::command]
 pub fn onedrive_open() -> Result<(), CommandError> {

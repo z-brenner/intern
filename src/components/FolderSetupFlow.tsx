@@ -59,12 +59,12 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   };
   const browse = async () => (await selection?.pickFolder())?.path;
   const choose = (path: string) => { setIntake(path); setStep('filed'); };
-  const save = async (filed: string, renameExisting: boolean) => {
+  const save = async (watched: string, filed: string, renameExisting: boolean) => {
     const settings = await bridge.getSettings();
-    const cloud = await bridge.classifyFolder(intake);
+    const cloud = await bridge.classifyFolder(watched);
     await bridge.saveSettings({
       ...settings,
-      intakeFolder: intake,
+      intakeFolder: watched,
       destination: filed,
       intakeEnabled: true,
       // A synced folder is admitted as the person's own; a network share is
@@ -75,15 +75,22 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       runInBackground: true,
       startAtLogin: true,
     });
-    if (renameExisting) await bridge.addFolder({ path: intake, displayName: folderName(intake) });
+    if (renameExisting) await bridge.addFolder({ path: watched, displayName: folderName(watched) });
     setStep('ready');
   };
-  const fileInto = async (filed: string) => {
+  const fileInto = async (watched: string, filed: string) => {
+    setIntake(watched);
     setDestination(filed);
-    const count = await bridge.intakeFolderDocuments(intake);
+    const count = await bridge.intakeFolderDocuments(watched);
     setExisting(count);
     if (count > 0) setStep('existing');
-    else await save(filed, false);
+    else await save(watched, filed, false);
+  };
+  // A synced location's top folder holds everything in it, so Intern makes
+  // an Inbox to watch there and a Filed folder beside that, both synced.
+  const makeInboxAndFiled = async () => {
+    const inbox = await bridge.createInboxFolder(intake);
+    await fileInto(inbox, await bridge.createFiledFolder(inbox));
   };
 
   const known = roots ?? [];
@@ -136,14 +143,20 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       </>}
       {step === 'filed' && <>
         <h1 ref={heading} tabIndex={-1}>Where should renamed documents go?</h1>
-        <p>Intern will watch <strong>{folderLabel(known, intake)}</strong>.</p>
         {besideLeavesSync
-          ? <p>That is the top of a synced folder, so a Filed folder beside it would not be synced. Choose a folder for renamed documents.</p>
-          : <p>Renamed documents can go to a new folder called Filed, next to the one you chose.</p>}
+          ? <p>You chose all of <strong>{folderLabel(known, intake)}</strong>. Intern will make two folders in it: <strong>Inbox</strong>, where you put documents to rename, and <strong>Filed</strong>, where they go once renamed.</p>
+          : <>
+            <p>Intern will watch <strong>{folderLabel(known, intake)}</strong>.</p>
+            <p>Renamed documents can go to a new folder called Filed, next to the one you chose.</p>
+          </>}
         {alert}
         <div className="onboarding-actions">
-          {!besideLeavesSync && <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { await fileInto(await bridge.createFiledFolder(intake)); })}>Create a “Filed” folder here</button>}
-          {selection && <button type="button" className={besideLeavesSync ? 'primary' : undefined} disabled={busy} onClick={() => void run(async () => { const path = await browse(); if (path) await fileInto(path); })}>Choose another folder…</button>}
+          {besideLeavesSync
+            ? <button type="button" className="primary" disabled={busy} onClick={() => void run(makeInboxAndFiled)}>Create Inbox and Filed folders</button>
+            : <>
+              <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { await fileInto(intake, await bridge.createFiledFolder(intake)); })}>Create a “Filed” folder here</button>
+              {selection && <button type="button" disabled={busy} onClick={() => void run(async () => { const path = await browse(); if (path) await fileInto(intake, path); })}>Choose another folder…</button>}
+            </>}
           <button type="button" disabled={busy} onClick={() => { setProblem(''); setStep('pick'); }}>Back</button>
         </div>
         {!besideLeavesSync && <p className="onboarding-support">Filed folder: {filedBeside(intake)}</p>}
@@ -153,8 +166,8 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         <p>There {existing === 1 ? 'is 1 document' : `are ${existing} documents`} already in this folder. Rename them too?</p>
         {alert}
         <div className="onboarding-actions">
-          <button type="button" disabled={busy} onClick={() => void run(() => save(destination, true))}>Rename them</button>
-          <button type="button" ref={onlyNew} className="primary" disabled={busy} onClick={() => void run(() => save(destination, false))}>Only new documents</button>
+          <button type="button" disabled={busy} onClick={() => void run(() => save(intake, destination, true))}>Rename them</button>
+          <button type="button" ref={onlyNew} className="primary" disabled={busy} onClick={() => void run(() => save(intake, destination, false))}>Only new documents</button>
         </div>
       </>}
       {step === 'ready' && <>

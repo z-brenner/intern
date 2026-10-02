@@ -126,6 +126,7 @@ pub fn run() {
             commands::cloud_roots,
             commands::intake_folder_documents,
             commands::filed_folder_create,
+            commands::inbox_folder_create,
             commands::onedrive_open,
             commands::descriptions_status,
             commands::descriptions_backfill,
