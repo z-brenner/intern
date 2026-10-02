@@ -326,7 +326,7 @@ review.
 ### House style
 
 The document's words are not always the words a person files under.
-"Contoso Worldwide, Inc." is "Contoso" to everyone at Contoso, and a
+"Contoso Worldwide, Inc." is "Contoso" to everyone who works there, and a
 reviewer who fixes that in every name is teaching something the model cannot
 learn and validation must not: validation checks that a name is *in* the
 document, and "Contoso" alone would pass that check for the wrong reason.

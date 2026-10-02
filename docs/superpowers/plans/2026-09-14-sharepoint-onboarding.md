@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Intern automatically connect a nontechnical Contoso user to `InternTestSite/Files`, watch only their fresh uploads in `Inbox`, and file them into `Filed` without exposing folder or Microsoft identifiers.
+**Goal:** Make Intern automatically connect a nontechnical user to `InternTestSite/Files`, watch only their fresh uploads in `Inbox`, and file them into `Filed` without exposing folder or Microsoft identifiers.
 
 **Architecture:** A packaged deployment manifest confines the app to one SharePoint site/library and supplies public OAuth/sync identifiers. A backend onboarding service owns durable progress, Microsoft connection, OneDrive enrollment, verified local-path activation, and settings derivation; the existing admission guard is simplified from audit-event proof to strict fresh-item `createdBy`/`lastModifiedBy` metadata and revision proof.
 

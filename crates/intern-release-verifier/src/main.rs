@@ -253,7 +253,7 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::write(&latest_json, format!(r#"{{"version":"0.1.0-alpha.3","platforms":{{"windows-x86_64":{{"signature":{},"url":"https://github.com/zgbrenner/intern/releases/download/v0.1.0-alpha.3/test"}}}}}}"#, serde_json::to_string(&tauri_signature).unwrap())).unwrap();
+        fs::write(&latest_json, format!(r#"{{"version":"0.1.0-alpha.3","platforms":{{"windows-x86_64":{{"signature":{},"url":"https://github.com/z-brenner/intern/releases/download/v0.1.0-alpha.3/test"}}}}}}"#, serde_json::to_string(&tauri_signature).unwrap())).unwrap();
         (
             directory,
             Input {
@@ -262,7 +262,7 @@ mod tests {
                 latest_json,
                 tauri_config,
                 tag: "v0.1.0-alpha.3".to_owned(),
-                repository: "zgbrenner/intern".to_owned(),
+                repository: "z-brenner/intern".to_owned(),
             },
         )
     }
@@ -322,7 +322,7 @@ mod tests {
         );
         let (_directory, input) = fixture();
         let latest = fs::read_to_string(&input.latest_json).unwrap().replace(
-            "https://github.com/zgbrenner/intern",
+            "https://github.com/z-brenner/intern",
             "https://github.com/other/intern",
         );
         fs::write(&input.latest_json, latest).unwrap();

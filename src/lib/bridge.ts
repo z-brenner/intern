@@ -45,7 +45,7 @@ export interface SelectionBoundary {
  * constant keeps the two in step, and keeps every caller from being able to
  * ask the shell to open something else.
  */
-export const GUIDE_URL = 'https://zgbrenner.github.io/intern/guide.html';
+export const GUIDE_URL = 'https://z-brenner.github.io/intern/guide.html';
 
 /** The fixed recovery destinations SharePoint setup can send a person to. */
 export type SupportLinkTarget = 'sharepoint-site' | 'onedrive-download';

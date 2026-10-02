@@ -36,7 +36,7 @@ Playwright, and `assets:verify`.
 ## Still blocked on people
 
 - `src-tauri/resources/sharepoint-deployment.json` stays disabled. It needs the
-  identifiers listed in `docs/sharepoint-deployment.md` from the Contoso tenant.
+  identifiers listed in `docs/sharepoint-deployment.md` from your organization's tenant.
   Enabling it requires those real values; the packaged-manifest test fails CI on
   invalid ones.
 - Main already removed alpha.9's manual tenant/client Microsoft connection (#38).

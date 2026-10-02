@@ -415,13 +415,13 @@ describe('guided onboarding steps', () => {
     expect(await screen.findByRole('status', { name: 'Library sync' })).toHaveTextContent(/waiting for OneDrive/i);
   });
 
-  it('asks for the Contoso account instead of offering sync when the connected account is from another organization', async () => {
+  it('asks for the work account instead of offering sync when the connected account is from another organization', async () => {
     const bridge = enabledBridge({ connected: true, phase: 'enrollment_pending', failures: { getSharePointSetup: [{ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'outside the tenant' }] } });
     render(<App bridge={bridge} />);
 
     await begin();
     await confirmAccount();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/work account/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Sign in with your work account/);
     expect(screen.getByRole('button', { name: 'Use a different account' })).toHaveClass('primary');
     expect(screen.queryByRole('button', { name: 'Sync Files with OneDrive' })).not.toBeInTheDocument();
   });
@@ -487,14 +487,14 @@ describe('guided onboarding steps', () => {
 
 describe('guided onboarding failures', () => {
   it('asks for the work account when the connected account is from another organization', async () => {
-    const bridge = enabledBridge({ connected: true, failures: { getSharePointSetup: [{ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'The connected Microsoft account is outside the provisioned Contoso tenant.' }] } });
+    const bridge = enabledBridge({ connected: true, failures: { getSharePointSetup: [{ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'The connected Microsoft account is outside the provisioned organization tenant.' }] } });
     const disconnect = vi.spyOn(bridge, 'microsoftDisconnect');
     render(<App bridge={bridge} />);
 
     await begin();
     await confirmAccount();
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/work account/);
+    expect(alert).toHaveTextContent(/Sign in with your work account/);
     expect(screen.getByText('MICROSOFT_ACCOUNT_WRONG_TENANT')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Use a different account' }));

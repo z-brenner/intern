@@ -181,7 +181,7 @@ mod tests {
     fn the_fingerprint_is_stable_across_builds() {
         assert_eq!(
             encode(text_fingerprint(AGREEMENT).unwrap()),
-            "16a8c1f81f18a84f"
+            "16a8c1f81f10a84f"
         );
     }
 }

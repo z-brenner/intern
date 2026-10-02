@@ -157,7 +157,7 @@ describe('SharePoint connection in Settings', () => {
     const generic = describeSharePointProblem('SOMETHING_NEW').action;
     expect(generic).toMatch(/try again/i);
     expect(generic).not.toContain('SOMETHING_NEW');
-    expect(describeSharePointProblem('MICROSOFT_ACCOUNT_WRONG_TENANT').action).toMatch(/work account/);
+    expect(describeSharePointProblem('MICROSOFT_ACCOUNT_WRONG_TENANT').action).toMatch(/Sign in with your work account/);
     expect(describeSharePointProblem('SHAREPOINT_SYNC_PENDING').action).not.toBe(generic);
   });
 
@@ -201,7 +201,7 @@ describe('SharePoint connection in Settings', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const getSharePointSetup = vi.fn()
       .mockResolvedValueOnce(active)
-      .mockRejectedValue({ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'The connected Microsoft account is outside the provisioned Contoso tenant.' });
+      .mockRejectedValue({ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT', message: 'The connected Microsoft account is outside the provisioned organization tenant.' });
     const bridge = managedBridge({ getSharePointSetup });
     renderDialog(bridge);
     await act(async () => {});

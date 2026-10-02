@@ -743,13 +743,13 @@
   <div class="shell nav-in">
     <a class="brand" href="./">
       <span class="brand-mark">Intern</span>
-      
+
     </a>
     <ul class="nav-links">
       <li><a href="./" aria-current="page">Download</a></li>
       <li><a href="./#how">How it works</a></li>
       <li><a href="guide.html">Guide</a></li>
-      <li><a href="https://github.com/zgbrenner/intern" rel="noopener noreferrer">GitHub<svg class="ico ext" aria-hidden="true"><use href="#i-ext"/></svg></a></li>
+      <li><a href="https://github.com/z-brenner/intern" rel="noopener noreferrer">GitHub<svg class="ico ext" aria-hidden="true"><use href="#i-ext"/></svg></a></li>
     </ul>
   </div>
 </nav>
@@ -768,7 +768,7 @@
       </p>
 
       <div class="cta-row">
-        <a class="download" id="download" href="https://github.com/zgbrenner/intern/releases/latest">
+        <a class="download" id="download" href="https://github.com/z-brenner/intern/releases/latest">
           <svg class="ico" aria-hidden="true"><use href="#i-box"/></svg>
           Download for Windows
         </a>
@@ -1071,7 +1071,7 @@
         those exact bytes.
       </p>
 
-      <pre><code id="verify">gh attestation verify Intern_x64-setup.exe --repo zgbrenner/intern</code></pre>
+      <pre><code id="verify">gh attestation verify Intern_x64-setup.exe --repo z-brenner/intern</code></pre>
 
       <table class="cmp">
         <caption>WHAT EACH ONE ACTUALLY PROVES</caption>
@@ -1172,14 +1172,13 @@
   <div class="shell foot-in">
     <div>
       <p class="foot-mark">Intern</p>
-      
-      <p class="foot-copy">© 2026 Zachary Brenner. All rights reserved. Source-available under the <a href="https://github.com/zgbrenner/intern/blob/main/LICENSE">Elastic License 2.0</a>.</p>
+      <p class="foot-copy">© 2026 Zachary Brenner. All rights reserved. Source-available under the <a href="https://github.com/z-brenner/intern/blob/main/LICENSE">Elastic License 2.0</a>.</p>
     </div>
     <nav class="foot-nav" aria-label="Footer">
       <ul>
         <li><a href="./">Download</a></li>
         <li><a href="guide.html">Guide</a></li>
-        <li><a href="https://github.com/zgbrenner/intern" rel="noopener noreferrer">GitHub</a></li>
+        <li><a href="https://github.com/z-brenner/intern" rel="noopener noreferrer">GitHub</a></li>
       </ul>
     </nav>
   </div>
@@ -1195,7 +1194,7 @@
     const meta = document.getElementById('meta');
     const verify = document.getElementById('verify');
     try {
-      const response = await fetch('https://api.github.com/repos/zgbrenner/intern/releases/latest');
+      const response = await fetch('https://api.github.com/repos/z-brenner/intern/releases/latest');
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const release = await response.json();
       const installer = (release.assets || []).find((asset) => asset.name.endsWith('x64-setup.exe'));
@@ -1203,7 +1202,7 @@
 
       button.href = installer.browser_download_url;
       button.setAttribute('download', '');
-      verify.textContent = 'gh attestation verify ' + installer.name + ' --repo zgbrenner/intern';
+      verify.textContent = 'gh attestation verify ' + installer.name + ' --repo z-brenner/intern';
 
       const megabytes = (installer.size / (1024 * 1024)).toFixed(1);
       // Rendered in UTC so the date always matches the one on the release page,

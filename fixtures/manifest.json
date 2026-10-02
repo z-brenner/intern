@@ -72,7 +72,7 @@
     {
       "file": "statement-of-work.pdf",
       "size": 38113,
-      "sha256": "109f3ab85ab020e706502a1cef4eb2d861bb1c956886b544d3d2812c0d6d75cb"
+      "sha256": "7c54ce40793a52e71387c0293ab199b415eb1f8b2d06da0b1c7d4a16dfc5e592"
     },
     {
       "file": "termination-notice.pdf",
@@ -82,12 +82,12 @@
     {
       "file": "consulting-amendment.pdf",
       "size": 4542,
-      "sha256": "ccdd230170b42b532efd95c85f59acc0dfd1500d996f30b7ff879559985cbd38"
+      "sha256": "eaddf59cf4a90ca0ba0061dbb217e9a53ba8fc6620865285007ed3c41668bd02"
     },
     {
       "file": "vendor-invoice.pdf",
       "size": 1499,
-      "sha256": "74f1c0ae99739e111a33f7c88aed5863d44e0b1204be073060c58ef3fe85c008"
+      "sha256": "30930d6f7ce6fade7750f914d094541d3580d2b7cfcf365ffd61e231dadd2198"
     },
     {
       "file": "settlement-agreement.pdf",
@@ -102,12 +102,12 @@
     {
       "file": "order-form.docx",
       "size": 2972,
-      "sha256": "47cae15c715415f045b992916febd27ab0a6c3452fe8695f329458d9ae94303c"
+      "sha256": "27b064f5125c87bb0d01e57b1f2b5b428ed63acbc22ab3c3d830657788a88586"
     },
     {
       "file": "board-deck.pptx",
       "size": 5538,
-      "sha256": "bb1949e38dee01bfb8250f96b1ae25bb1a09a9e0694e1e43f2b5be93a6c54070"
+      "sha256": "e6d3ed76543c3070bb1f63010b64921183cd773a3a2e6bdd6d7f6cfc9ceeb971"
     },
     {
       "file": "mixed-batch/duplicate-invoice-a.pdf",

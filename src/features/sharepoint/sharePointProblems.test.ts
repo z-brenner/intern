@@ -41,7 +41,7 @@ describe('describeSharePointProblem', () => {
 
   it('offers a different account only for account problems, and the OneDrive download only when it is missing', () => {
     expect(describeSharePointProblem({ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT' })).toMatchObject({ switchAccount: true });
-    expect(describeSharePointProblem({ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT' }).action).toMatch(/work account/);
+    expect(describeSharePointProblem({ code: 'MICROSOFT_ACCOUNT_WRONG_TENANT' }).action).toMatch(/Sign in with your work account/);
     expect(describeSharePointProblem({ code: 'ONEDRIVE_MISSING' }).action).toMatch(/^Install or open OneDrive/);
     expect(describeSharePointProblem({ code: 'SHAREPOINT_SYNC_PENDING' }).switchAccount).toBeUndefined();
     expect(describeSharePointProblem({ code: 'SHAREPOINT_SYNC_PENDING' }).getOneDrive).toBeUndefined();

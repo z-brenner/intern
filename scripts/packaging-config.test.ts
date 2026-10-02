@@ -93,10 +93,10 @@ it('scopes the opener capability to the guide and the fixed support links only',
   expect(opener).toEqual([{
     identifier: 'opener:allow-open-url',
     allow: [
-      { url: 'https://zgbrenner.github.io/intern/*' },
+      { url: 'https://z-brenner.github.io/intern/*' },
       { url: SUPPORT_LINKS['sharepoint-site'] },
       { url: SUPPORT_LINKS['onedrive-download'] },
     ],
   }]);
-  expect(GUIDE_URL.startsWith('https://zgbrenner.github.io/intern/')).toBe(true);
+  expect(GUIDE_URL.startsWith('https://z-brenner.github.io/intern/')).toBe(true);
 });

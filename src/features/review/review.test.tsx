@@ -369,7 +369,7 @@ describe('review actions', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Help & support' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' }))
-      .toHaveTextContent('https://zgbrenner.github.io/intern/guide.html');
+      .toHaveTextContent('https://z-brenner.github.io/intern/guide.html');
   });
 
   it('moves Keep original to Completed and lets the user undo it', async () => {

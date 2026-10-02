@@ -341,7 +341,7 @@ the line and produced the site and list IDs that `ClientPolicy.ini` records.
 
 ## Release acceptance (required before enabling the deployment)
 
-On a Windows machine signed in to the Contoso tenant, after syncing the
+On a Windows machine signed in to your organization's tenant, after syncing the
 `Files` library through the `odopen://` flow:
 
 1. Confirm the settings folder contains `global.ini` and `<cid>.ini`, and that

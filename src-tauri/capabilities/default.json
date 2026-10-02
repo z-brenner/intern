@@ -11,7 +11,7 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://zgbrenner.github.io/intern/*" },
+        { "url": "https://z-brenner.github.io/intern/*" },
         { "url": "https://teamcontoso.sharepoint.com/sites/InternTestSite" },
         { "url": "https://www.microsoft.com/microsoft-365/onedrive/download" }
       ]
