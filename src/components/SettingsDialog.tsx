@@ -1,3 +1,4 @@
+import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
@@ -191,9 +192,11 @@ interface Props {
    * reconnect Microsoft would skip ahead of the step that does it.
    */
   hideSharePointConnection?: boolean;
+  /** Open guided folder setup in place of this dialog. */
+  onChooseFolder?(): void;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -315,7 +318,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaveError('');
     try {
       await storeKeyDraft();
-      await onSave(managed ? withManagedValues(next, settings) : next);
+      // "Only I add documents here" was said about the folder chosen in
+      // folder setup; a different folder typed here has not been vouched for.
+      const vouched = next.intakeFolder === settings.intakeFolder ? next : { ...next, intakeMyFolder: false };
+      await onSave(managed ? withManagedValues(next, settings) : vouched);
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -535,6 +541,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           and file metadata after explicit sign-in.
         */}
         <p className="section-lead">Intern can watch a folder — including a OneDrive or SharePoint folder shared with other machines — and process documents that appear in it. Watched intake needs a destination folder outside the intake folder.</p>
+        {onChooseFolder && <div className="update-actions">
+          <button type="button" onClick={onChooseFolder}>Set up a folder step by step…</button>
+        </div>}
         <label className="check-label"><input type="checkbox" checked={next.intakeEnabled} onChange={(event) => setNext({ ...next, intakeEnabled: event.target.checked })} />Watch a folder for new documents</label>
         <div className="folder-row">
           <label>Intake folder<input value={next.intakeFolder} onChange={(event) => setNext({ ...next, intakeFolder: event.target.value })} /></label>
@@ -567,6 +576,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           </li>)}</ul>
         </div>}
         {next.intakeEnabled && <div className="intake-status">
+          {intake && <IntakeHealthNotice status={intake} myFolder={Boolean(settings.intakeMyFolder)} bridge={bridge} onChooseFolder={onChooseFolder} />}
           <p role="status" aria-label="Intake status" aria-live="polite">{intake
             ? `${intake.watching ? 'Watching' : 'Not watching'} · ${activeMachines} ${activeMachines === 1 ? 'machine' : 'machines'} active · ${intake.heldForOthers} held for others · ${intake.uploaderUnknown ?? 0} uploader unknown · Last scan: ${formatScanTime(intake.lastScanAt)}`
             : 'Checking intake status…'}</p>

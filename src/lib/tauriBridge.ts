@@ -196,6 +196,10 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return await this.transport.invoke<CloudRoot[] | null | undefined>('cloud_roots') ?? [];
   }
 
+  intakeFolderDocuments(path: string): Promise<number> { return this.transport.invoke('intake_folder_documents', { path }); }
+  createFiledFolder(intakeFolder: string): Promise<string> { return this.transport.invoke('filed_folder_create', { intakeFolder }); }
+  openOneDrive(): Promise<void> { return this.transport.invoke('onedrive_open'); }
+
   descriptionsStatus(): Promise<DescriptionsStatus> { return this.transport.invoke('descriptions_status'); }
   descriptionsBackfill(): Promise<BackfillResult> { return this.transport.invoke('descriptions_backfill'); }
   hostedModelStatus(): Promise<HostedModelStatus> { return this.transport.invoke('hosted_model_status'); }

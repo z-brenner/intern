@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
+import { FolderSetupFlow } from './components/FolderSetupFlow';
 import { HistoryDialog } from './components/HistoryDialog';
 import { OnboardingFlow, OnboardingProblemNotice } from './components/OnboardingFlow';
 import { QueueTable } from './components/QueueTable';
@@ -24,7 +25,7 @@ import type { AppSettings, QueueItem, QueueView, SetupState } from './types';
 type Gate =
   | { kind: 'loading' }
   | { kind: 'failed'; problem: SharePointProblem }
-  | { kind: 'onboarding' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
+  | { kind: 'onboarding' | 'folder-setup' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
   const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge());
@@ -43,11 +44,16 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     // Each consumer reports its own failure; settling here only waits for it,
     // so the first screen shown already knows the model's state.
     const settled = Promise.allSettled([pendingSettings, pendingSetup]);
-    void Promise.all([bridge.getOnboarding(), settled]).then(([status, [, setup]]) => {
+    void Promise.all([bridge.getOnboarding(), settled]).then(([status, [settings, setup]]) => {
       if (!active) return;
-      // Onboarding exists only for an enabled deployment; without one there is
-      // nothing to connect to, and a required flag alone must not strand anyone.
-      setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined });
+      // SharePoint onboarding exists only for an enabled deployment; a
+      // required flag alone must not strand anyone. Without one, a first run
+      // that watches no folder yet is offered folder setup once - and only
+      // when the settings could be read, so nobody is asked to redo a folder
+      // Intern merely failed to load.
+      const folderSetup = !status.sharePointAvailable && status.completedVersion < status.currentVersion
+        && settings.status === 'fulfilled' && !settings.value.intakeEnabled;
+      setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : folderSetup ? 'folder-setup' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined });
     }).catch((error: unknown) => {
       if (active) setGate({ kind: 'failed', problem: describeSharePointProblem(error) });
     });
@@ -63,6 +69,11 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     <div className="setup-actions"><button type="button" className="primary" onClick={() => { setGate({ kind: 'loading' }); setAttempt((count) => count + 1); }}>Try again</button></div>
   </section></main>;
   // The queue and its subscriptions are not mounted until onboarding is recorded as complete.
+  // Done or skipped, it is recorded so it is offered only once; Settings can open it again.
+  if (gate.kind === 'folder-setup') {
+    const finish = async () => { await bridge.completeOnboarding(); setGate({ ...gate, kind: 'app' }); };
+    return <FolderSetupFlow welcome bridge={bridge} selection={selection} onDone={finish} onSkip={finish} />;
+  }
   if (gate.kind === 'onboarding') return <OnboardingFlow bridge={bridge} selection={selection} pendingSettings={gate.pendingSettings} pendingSetup={gate.pendingSetup} initialSetup={gate.initialSetup} onComplete={() => setGate({ kind: 'app' })} />;
   // A model that still needs setup is shown at once. A ready one is read again
   // by the app itself, as it always was, so the queue's first snapshot arrives
@@ -87,6 +98,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const [selectedByPerson, setSelectedByPerson] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [folderSetupOpen, setFolderSetupOpen] = useState(false);
   // Until the real settings arrive these are placeholders, not the person's
   // configuration, and saving them would overwrite a destination, a watched
   // folder, and a machine name with defaults.
@@ -325,6 +337,12 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     }).catch(() => { /* No drop stream in this runtime; the pickers still work. */ });
     return () => { active = false; stop?.(); };
   }, [selection]);
+  // Opened from Settings. The queue stays subscribed underneath, and the
+  // saved settings are read back afterwards so Settings shows the new folder.
+  if (folderSetupOpen) return <FolderSetupFlow bridge={bridge} selection={selection} onCancel={() => setFolderSetupOpen(false)} onDone={async () => {
+    const saved = await bridge.getSettings();
+    setSettings(saved); setSettingsLoaded(true); setFolderSetupOpen(false);
+  }} />;
   // A hosted model, once chosen and configured, stands in for the local one:
   // the download can be skipped entirely, or finished later from Settings.
   if (!modelReady(model.setup)) return <>
@@ -413,7 +431,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
   </main>;
 }
 

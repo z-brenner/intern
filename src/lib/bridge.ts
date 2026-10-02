@@ -134,6 +134,12 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * own configuration; no network request is made.
    */
   cloudRoots(): Promise<CloudRoot[]>;
+  /** How many documents a folder already holds, counted the way adding the folder to the queue would. */
+  intakeFolderDocuments(path: string): Promise<number>;
+  /** Create (or find) the "Filed" folder beside `intakeFolder`; resolves with its path. */
+  createFiledFolder(intakeFolder: string): Promise<string>;
+  /** Start OneDrive, or open its folder when it is already running. */
+  openOneDrive(): Promise<void>;
   /** What the description records are doing: on or off, where, and the last failure. */
   descriptionsStatus(): Promise<DescriptionsStatus>;
   /**
