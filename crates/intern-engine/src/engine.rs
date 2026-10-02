@@ -39,6 +39,7 @@ pub const MIN_READABLE_CHARACTERS: usize = 200;
 pub struct Engine {
     client: Box<dyn Proposer>,
     budget: DigestBudget,
+    min_token_confidence: Option<f32>,
 }
 
 impl Engine {
@@ -52,7 +53,21 @@ impl Engine {
         Self {
             client,
             budget: DigestBudget::default(),
+            min_token_confidence: None,
         }
+    }
+
+    /// Routes a proposal to review when the model's least probable date or
+    /// party token falls below `threshold` ([`TokenConfidence::min`]).
+    ///
+    /// Unset by default, and silent for a reply that carried no token
+    /// probabilities: readiness is decided by validation alone until a
+    /// threshold has been calibrated against the corpus.
+    ///
+    /// [`TokenConfidence::min`]: crate::domain::TokenConfidence::min
+    pub fn with_min_token_confidence(mut self, threshold: f32) -> Self {
+        self.min_token_confidence = Some(threshold);
+        self
     }
 
     pub fn with_budget(mut self, budget: DigestBudget) -> Self {
@@ -90,7 +105,7 @@ impl Engine {
     ) -> EngineResult<DocumentAnalysis> {
         let request = ModelRequest::from_digest(digest);
         let inference_started = Instant::now();
-        let proposal = self.client.propose(&request)?;
+        let (proposal, token_confidence) = self.client.propose_scored(&request)?;
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
@@ -100,6 +115,14 @@ impl Engine {
             // name, whatever the model returned about it.
             if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
                 outcome.reasons.push(ReviewReason::ParserWarning);
+            }
+            outcome.status = ProposalStatus::NeedsReview;
+        }
+        if let (Some(threshold), Some(confidence)) = (self.min_token_confidence, token_confidence)
+            && confidence.min < threshold
+        {
+            if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
+                outcome.reasons.push(ReviewReason::LowConfidence);
             }
             outcome.status = ProposalStatus::NeedsReview;
         }
@@ -117,6 +140,7 @@ impl Engine {
             },
         );
         analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
+        analysis.token_confidence = token_confidence;
         Ok(analysis)
     }
 
@@ -147,6 +171,7 @@ pub fn finish(
         model_proposal: Some(outcome.candidate),
         stated_dates: stated_dates(digest),
         text_fingerprint: None,
+        token_confidence: None,
     }
 }
 
@@ -225,6 +250,89 @@ mod tests {
             analysis.stated_dates,
             vec!["2026-04-01", "2026-03-28", "2027-03-31", "2026-05-15"]
         );
+    }
+
+    struct Scored(Option<crate::domain::TokenConfidence>);
+
+    impl Proposer for Scored {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<crate::domain::ModelProposal> {
+            self.propose_scored(request).map(|(proposal, _)| proposal)
+        }
+
+        fn propose_scored(
+            &self,
+            _request: &ModelRequest,
+        ) -> EngineResult<(
+            crate::domain::ModelProposal,
+            Option<crate::domain::TokenConfidence>,
+        )> {
+            Ok((
+                crate::domain::ModelProposal {
+                    document_type: Some("Consulting Agreement".into()),
+                    document_date: Some("2026-04-01".into()),
+                    date_role: Some(crate::domain::DateRole::Effective),
+                    parties: vec!["Acme Corporation".into()],
+                    party_relation: crate::domain::PartyRelation::With,
+                    description: "Consulting agreement with Acme Corporation effective April 1, \
+                                  2026."
+                        .into(),
+                    confidence: 0.9,
+                    needs_review: false,
+                    evidence: crate::domain::Evidence {
+                        date: Some("This Agreement is effective as of April 1, 2026.".into()),
+                        document_type: Some("CONSULTING AGREEMENT".into()),
+                        parties: vec!["Acme Corporation".into()],
+                    },
+                },
+                self.0,
+            ))
+        }
+    }
+
+    fn analyze_with(engine: Engine) -> DocumentAnalysis {
+        let source = source_from_text(
+            "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
+             It is made between Acme Corporation and the consultant for advisory services.",
+        );
+        engine.analyze(&source, "pdf", &[]).unwrap()
+    }
+
+    const LOW: crate::domain::TokenConfidence = crate::domain::TokenConfidence {
+        min: 0.2,
+        mean: 0.7,
+        tokens: 12,
+    };
+
+    /// Token confidence is data first: it rides along on the analysis and
+    /// changes nothing about readiness unless a threshold was set.
+    #[test]
+    fn token_confidence_is_reported_without_changing_readiness_by_default() {
+        let unscored = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
+        let scored = analyze_with(Engine::with_proposer(Box::new(Scored(Some(LOW)))));
+        assert_eq!(unscored.status, ProposalStatus::Ready, "{unscored:?}");
+        assert_eq!(scored.status, unscored.status);
+        assert_eq!(scored.review_reasons, unscored.review_reasons);
+        assert_eq!(scored.token_confidence, Some(LOW));
+        assert_eq!(unscored.token_confidence, None);
+    }
+
+    #[test]
+    fn a_set_threshold_routes_a_low_token_confidence_to_review() {
+        let gated = analyze_with(
+            Engine::with_proposer(Box::new(Scored(Some(LOW)))).with_min_token_confidence(0.5),
+        );
+        assert_eq!(gated.status, ProposalStatus::NeedsReview);
+        assert!(gated.review_reasons.contains(&ReviewReason::LowConfidence));
+
+        // Above the threshold, or with nothing to measure, the gate is silent.
+        let passed = analyze_with(
+            Engine::with_proposer(Box::new(Scored(Some(LOW)))).with_min_token_confidence(0.1),
+        );
+        assert_eq!(passed.status, ProposalStatus::Ready);
+        let unmeasured = analyze_with(
+            Engine::with_proposer(Box::new(Scored(None))).with_min_token_confidence(0.5),
+        );
+        assert_eq!(unmeasured.status, ProposalStatus::Ready);
     }
 
     #[test]

@@ -396,6 +396,7 @@ mod tests {
             proposal,
             telemetry: AnalysisTelemetry::default(),
             text_fingerprint: None,
+            token_confidence: None,
             model_proposal: Some(ModelProposal {
                 document_type: Some("Invoice".into()),
                 document_date: proposed.map(str::to_owned),

@@ -28,6 +28,13 @@
 //! is now wrong; `--write-baseline PATH` writes the current scores as the new
 //! baseline. Improvements are reported, never required.
 //!
+//! **Token confidence.** `--token-confidence` asks the local server for token
+//! probabilities on a live run; each record then carries `token_confidence`,
+//! and a recording keeps it beside the reply so replay reports it too.
+//! `--min-token-confidence X` applies [`Engine::with_min_token_confidence`]
+//! in either mode, for calibrating a threshold from a recording. Neither
+//! changes what identifies a prompt, so neither stales a recording.
+//!
 //! `--pipeline legacy` runs the pre-redesign head/tail window and prompt over
 //! the identical corpus, which is how the redesign is shown to be an
 //! improvement rather than asserted to be one. Legacy runs are live only.
@@ -43,7 +50,7 @@ use std::{
 
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, ModelClient,
-    ModelProposal, ModelRequest, PageImage, Proposer, SupervisedWorker,
+    ModelProposal, ModelRequest, PageImage, Proposer, SupervisedWorker, TokenConfidence,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
     legacy::{
@@ -98,6 +105,14 @@ fn run() -> Result<i32, String> {
     let replay_path = arguments.get("replay");
     let record_path = arguments.get("record");
     let allow_stale = arguments.contains_key("allow-stale");
+    let min_token_confidence = arguments
+        .get("min-token-confidence")
+        .map(|value| {
+            value
+                .parse::<f32>()
+                .map_err(|_| "--min-token-confidence must be a number".to_owned())
+        })
+        .transpose()?;
     if replay_path.is_some() && record_path.is_some() {
         return Err("choose --record or --replay, not both".to_owned());
     }
@@ -126,6 +141,7 @@ fn run() -> Result<i32, String> {
                         &recording,
                         budget,
                         allow_stale,
+                        min_token_confidence,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -136,13 +152,17 @@ fn run() -> Result<i32, String> {
             let api_key = required(&arguments, "api-key")?;
             let worker_path = required(&arguments, "worker")?;
             let client = ModelClient::new(endpoint, api_key, model_id)
-                .map_err(|error| format!("model client: {error}"))?;
+                .map_err(|error| format!("model client: {error}"))?
+                .with_token_confidence(arguments.contains_key("token-confidence"));
             let recorder = record_path.map(|_| Recorder::new());
-            let engine = match &recorder {
-                Some(recorder) => Engine::with_proposer(Box::new(recorder.proposer(client))),
-                None => Engine::new(client),
-            }
-            .with_budget(budget);
+            let engine = with_gate(
+                match &recorder {
+                    Some(recorder) => Engine::with_proposer(Box::new(recorder.proposer(client))),
+                    None => Engine::new(client),
+                }
+                .with_budget(budget),
+                min_token_confidence,
+            );
             let worker = SupervisedWorker::new(worker_path);
             let mut recorded = Vec::new();
             let mut records = Vec::new();
@@ -383,6 +403,7 @@ fn replay_one(
     recording: &Recording,
     budget: DigestBudget,
     allow_stale: bool,
+    min_token_confidence: Option<f32>,
 ) -> Value {
     let name = fixture["file"].as_str().unwrap_or_default();
     let extension = path
@@ -433,8 +454,11 @@ fn replay_one(
             "prompt_sha256": prompt_sha256,
         });
     }
-    let proposal = match &recorded.reply {
-        Some(RecordedReply::Proposed { proposal }) => proposal.clone(),
+    let reply = match &recorded.reply {
+        Some(RecordedReply::Proposed {
+            proposal,
+            token_confidence,
+        }) => FixedReply(proposal.clone(), *token_confidence),
         Some(RecordedReply::Failed { code }) => {
             return json!({"file": name, "status": "model_failed", "error": code, "readiness": null, "replayed": true, "stale": stale});
         }
@@ -442,7 +466,10 @@ fn replay_one(
             return json!({"file": name, "status": "model_failed", "error": "UNRECORDED", "readiness": null, "replayed": true, "stale": stale});
         }
     };
-    let engine = Engine::with_proposer(Box::new(FixedReply(proposal))).with_budget(budget);
+    let engine = with_gate(
+        Engine::with_proposer(Box::new(reply)).with_budget(budget),
+        min_token_confidence,
+    );
     match engine.analyze_digest(&source, &digest, 0, extension, &[]) {
         Ok(analysis) => {
             let mut record = completed_record(fixture, &analysis, &digest, 0);
@@ -495,7 +522,15 @@ fn completed_record(
         "source_characters": digest.source_characters,
         "digest_characters": digest.digest_characters,
         "pages": digest.page_count,
+        "token_confidence": analysis.token_confidence,
     })
+}
+
+fn with_gate(engine: Engine, min_token_confidence: Option<f32>) -> Engine {
+    match min_token_confidence {
+        Some(threshold) => engine.with_min_token_confidence(threshold),
+        None => engine,
+    }
 }
 
 /// Everything a live run saw that a replay needs: what the worker read from
@@ -564,8 +599,15 @@ enum RecordedExtraction {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 enum RecordedReply {
-    Proposed { proposal: ModelProposal },
-    Failed { code: String },
+    Proposed {
+        proposal: ModelProposal,
+        /// Present only in recordings made with `--token-confidence`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_confidence: Option<TokenConfidence>,
+    },
+    Failed {
+        code: String,
+    },
 }
 
 /// A rendered page image is a signal that a page could not be read, never an
@@ -612,10 +654,18 @@ struct RecordingProposer {
 
 impl Proposer for RecordingProposer {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
-        let result = self.inner.propose(request);
+        self.propose_scored(request).map(|(proposal, _)| proposal)
+    }
+
+    fn propose_scored(
+        &self,
+        request: &ModelRequest,
+    ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        let result = self.inner.propose_scored(request);
         let reply = match &result {
-            Ok(proposal) => RecordedReply::Proposed {
+            Ok((proposal, token_confidence)) => RecordedReply::Proposed {
                 proposal: proposal.clone(),
+                token_confidence: *token_confidence,
             },
             Err(error) => RecordedReply::Failed {
                 code: error.code().as_str().to_owned(),
@@ -629,11 +679,18 @@ impl Proposer for RecordingProposer {
 }
 
 /// The reply a replay hands the engine in the model's place.
-struct FixedReply(ModelProposal);
+struct FixedReply(ModelProposal, Option<TokenConfidence>);
 
 impl Proposer for FixedReply {
     fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
         Ok(self.0.clone())
+    }
+
+    fn propose_scored(
+        &self,
+        _request: &ModelRequest,
+    ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        Ok((self.0.clone(), self.1))
     }
 }
 
@@ -1074,7 +1131,7 @@ fn strings(fixture: &Value, key: &str) -> Vec<String> {
 }
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale"];
+const FLAGS: &[&str] = &["allow-stale", "token-confidence"];
 
 fn parse_arguments() -> Result<HashMap<String, String>, String> {
     let mut values = HashMap::new();
@@ -1203,6 +1260,7 @@ mod tests {
                 prompt_sha256,
                 reply: Some(RecordedReply::Proposed {
                     proposal: invoice_reply(),
+                    token_confidence: None,
                 }),
             }],
         }
@@ -1222,6 +1280,7 @@ mod tests {
             &recording_with(Some(sha)),
             budget,
             false,
+            None,
         );
         assert_eq!(record["status"], json!("completed"), "{record}");
         assert_eq!(record["replayed"], json!(true));
@@ -1236,6 +1295,39 @@ mod tests {
         assert_eq!(record["scores"]["readiness_match"], json!(true));
     }
 
+    /// A recording made with token confidence replays it, and a threshold
+    /// can be calibrated against it without a model.
+    #[test]
+    fn a_recorded_token_confidence_is_reported_and_can_be_gated_in_replay() {
+        let budget = DigestBudget::default();
+        let digest = intern_engine::distill(&invoice_source(), budget);
+        let mut recording = recording_with(Some(ModelRequest::from_digest(&digest).sha256()));
+        let low = TokenConfidence {
+            min: 0.3,
+            mean: 0.8,
+            tokens: 9,
+        };
+        if let Some(RecordedReply::Proposed {
+            token_confidence, ..
+        }) = recording.fixtures[0].reply.as_mut()
+        {
+            *token_confidence = Some(low);
+        }
+        let path = Path::new("/nonexistent/invoice.txt");
+        let ungated = replay_one(&invoice_fixture(), path, &recording, budget, false, None);
+        assert_eq!(ungated["readiness"], json!("ready"), "{ungated}");
+        assert_eq!(ungated["token_confidence"]["min"], json!(0.3_f32));
+        let gated = replay_one(
+            &invoice_fixture(),
+            path,
+            &recording,
+            budget,
+            false,
+            Some(0.5),
+        );
+        assert_eq!(gated["readiness"], json!("needs_review"));
+    }
+
     /// A reply to a prompt the engine no longer builds says nothing about the
     /// engine as it is now. Refused by default; scored and marked on request.
     #[test]
@@ -1248,6 +1340,7 @@ mod tests {
             &recording,
             budget,
             false,
+            None,
         );
         assert_eq!(refused.get("status"), Some(&json!("stale_prompt")));
         assert!(refused.get("scores").is_none());
@@ -1258,6 +1351,7 @@ mod tests {
             &recording,
             budget,
             true,
+            None,
         );
         assert_eq!(tolerated["status"], json!("completed"));
         assert_eq!(tolerated["stale"], json!(true));
@@ -1268,6 +1362,7 @@ mod tests {
             &recording,
             budget,
             true,
+            None,
         );
         assert_eq!(missing["status"], json!("unrecorded"));
     }

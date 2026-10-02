@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::domain::{DateRole, Evidence, ModelProposal, PartyRelation};
+use crate::domain::{DateRole, Evidence, ModelProposal, PartyRelation, TokenConfidence};
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
 use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
@@ -56,6 +56,16 @@ impl ModelRequest {
 /// local server, or a hosted model standing in for it.
 pub trait Proposer: Send + Sync {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal>;
+
+    /// The proposal, and how probable the model found its own date and party
+    /// tokens when it reported that. Most models do not, so by default this
+    /// is the proposal alone.
+    fn propose_scored(
+        &self,
+        request: &ModelRequest,
+    ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        self.propose(request).map(|proposal| (proposal, None))
+    }
 }
 
 pub struct ModelClient {
@@ -63,11 +73,19 @@ pub struct ModelClient {
     api_key: String,
     model_id: String,
     http: Client,
+    token_confidence: bool,
 }
 
 impl Proposer for ModelClient {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
         ModelClient::propose(self, request)
+    }
+
+    fn propose_scored(
+        &self,
+        request: &ModelRequest,
+    ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        ModelClient::propose_scored(self, request)
     }
 }
 
@@ -100,7 +118,20 @@ impl ModelClient {
             api_key: api_key.into(),
             model_id: model_id.into(),
             http,
+            token_confidence: false,
         })
+    }
+
+    /// Asks the server for the probability of every token it generates, so
+    /// a proposal can carry a [`TokenConfidence`].
+    ///
+    /// Off by default. It changes no generated token - decoding is greedy
+    /// either way - and nothing that identifies a request in a recording,
+    /// but the server pays a softmax over the whole vocabulary per token for
+    /// it, which is measurable on a CPU (see docs/model-candidates.md).
+    pub fn with_token_confidence(mut self, enabled: bool) -> Self {
+        self.token_confidence = enabled;
+        self
     }
 
     /// One attempt, then one retry when the reply was malformed. A request
@@ -108,8 +139,17 @@ impl ModelClient {
     /// way, and against a server that has died or hung it turns one document
     /// into two full request timeouts before anyone is told.
     pub fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
+        self.propose_scored(request).map(|(proposal, _)| proposal)
+    }
+
+    /// [`Self::propose`], with the reply's [`TokenConfidence`] when the
+    /// client asks for token probabilities.
+    pub fn propose_scored(
+        &self,
+        request: &ModelRequest,
+    ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         match self.propose_once(request) {
-            Ok(proposal) => Ok(proposal),
+            Ok(scored) => Ok(scored),
             Err(AttemptError(EngineErrorCode::ModelResponseInvalid)) => {
                 self.propose_once(request).map_err(AttemptError::into_error)
             }
@@ -120,7 +160,7 @@ impl ModelClient {
     pub(crate) fn propose_once(
         &self,
         request: &ModelRequest,
-    ) -> Result<ModelProposal, AttemptError> {
+    ) -> Result<(ModelProposal, Option<TokenConfidence>), AttemptError> {
         let response = self
             .http
             .post(self.endpoint.clone())
@@ -134,11 +174,15 @@ impl ModelClient {
         let bytes = read_capped(response, EngineErrorCode::ModelResponseInvalid)?;
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-        decode(completion)
+        let confidence = completion.token_confidence();
+        decode(completion).map(|proposal| (proposal, confidence))
     }
 
+    /// The request body. Only the user turn identifies a request
+    /// ([`ModelRequest::sha256`]); everything here is transport, and the
+    /// token-probability fields in particular change no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
-        json!({
+        let mut body = json!({
             "model": self.model_id,
             "messages": [
                 {"role": "system", "content": SYSTEM_INSTRUCTION},
@@ -154,8 +198,115 @@ impl ModelClient {
             // filled in, not a chain of thought, and thinking tokens are pure
             // latency on a CPU.
             "chat_template_kwargs": {"enable_thinking": false}
-        })
+        });
+        if self.token_confidence {
+            // One alternative is the least llama-server accepts; only the
+            // chosen token's own probability is read.
+            body["logprobs"] = json!(true);
+            body["top_logprobs"] = json!(1);
+        }
+        body
     }
+}
+
+/// How probable the model found the tokens of its `document_date` and
+/// `parties` values, from the per-token probabilities a server reported.
+///
+/// The grammar forces every key, quote, and bracket, and the model's raw
+/// probability for a forced token says nothing about the answer, so only
+/// tokens overlapping a value's own characters count: the inside of the date
+/// string or a party name, or a bare `null` or `[]`.
+pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidence> {
+    let mut text = Vec::new();
+    let mut ranges = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let start = text.len();
+        match &token.bytes {
+            Some(bytes) => text.extend_from_slice(bytes),
+            None => text.extend_from_slice(token.token.as_bytes()),
+        }
+        ranges.push((start, text.len()));
+    }
+    let mut spans = Vec::new();
+    for key in [&b"\"document_date\":"[..], &b"\"parties\":"[..]] {
+        if let Some(at) = find(&text, key) {
+            value_spans(&text, at + key.len(), &mut spans);
+        }
+    }
+    let mut count = 0_u32;
+    let mut sum = 0.0_f64;
+    let mut min = 1.0_f64;
+    for (token, (start, end)) in tokens.iter().zip(ranges) {
+        if spans.iter().any(|&(a, b)| start < b && a < end) {
+            let probability = token.logprob.exp().clamp(0.0, 1.0);
+            count += 1;
+            sum += probability;
+            min = min.min(probability);
+        }
+    }
+    (count > 0).then(|| TokenConfidence {
+        min: min as f32,
+        mean: (sum / f64::from(count)) as f32,
+        tokens: count,
+    })
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The byte spans of the JSON value starting at `at`: each string's inside,
+/// or the bare literal (`null`, `[]`) when there is no string.
+fn value_spans(text: &[u8], at: usize, spans: &mut Vec<(usize, usize)>) {
+    let mut index = at;
+    match text.get(index) {
+        Some(b'"') => {
+            string_span(text, index, spans);
+        }
+        Some(b'[') => {
+            index += 1;
+            if text.get(index) == Some(&b']') {
+                spans.push((at, index + 1));
+                return;
+            }
+            while text.get(index) == Some(&b'"') {
+                index = string_span(text, index, spans);
+                if text.get(index) != Some(&b',') {
+                    break;
+                }
+                index += 1;
+            }
+        }
+        Some(_) => {
+            let end = text[at..]
+                .iter()
+                .position(|byte| matches!(byte, b',' | b'}' | b']'))
+                .map_or(text.len(), |offset| at + offset);
+            spans.push((at, end));
+        }
+        None => {}
+    }
+}
+
+/// Records the inside of the string opening at `quote` and returns the index
+/// just past its closing quote.
+fn string_span(text: &[u8], quote: usize, spans: &mut Vec<(usize, usize)>) -> usize {
+    let start = quote + 1;
+    let mut index = start;
+    while index < text.len() {
+        match text[index] {
+            b'\\' => index += 2,
+            b'"' => {
+                spans.push((start, index));
+                return index + 1;
+            }
+            _ => index += 1,
+        }
+    }
+    spans.push((start, text.len()));
+    text.len()
 }
 
 /// Reads a reply body, refusing one that could not be a reply.
@@ -240,10 +391,36 @@ pub(crate) struct ChatCompletion {
     choices: Vec<Choice>,
 }
 
+impl ChatCompletion {
+    /// The first choice's [`TokenConfidence`], when the server reported
+    /// token probabilities in a shape this can read. A shape it cannot read
+    /// costs the signal, never the reply.
+    pub(crate) fn token_confidence(&self) -> Option<TokenConfidence> {
+        let logprobs = self.choices.first()?.logprobs.as_ref()?;
+        let tokens: Vec<TokenLogprob> =
+            serde_json::from_value(logprobs.get("content")?.clone()).ok()?;
+        token_confidence(&tokens)
+    }
+}
+
 #[derive(Deserialize)]
 struct Choice {
     message: AssistantMessage,
     finish_reason: Option<String>,
+    /// Kept unparsed: see [`ChatCompletion::token_confidence`].
+    #[serde(default)]
+    logprobs: Option<Value>,
+}
+
+/// One generated token and the model's log-probability for it.
+#[derive(Deserialize)]
+pub(crate) struct TokenLogprob {
+    token: String,
+    /// The token's exact bytes; `token` alone can be lossy where a token
+    /// splits a multi-byte character.
+    #[serde(default)]
+    bytes: Option<Vec<u8>>,
+    logprob: f64,
 }
 
 #[derive(Deserialize)]
@@ -530,6 +707,141 @@ mod tests {
                 .0,
             EngineErrorCode::ModelResponseInvalid
         );
+    }
+
+    /// Token probabilities cost the server a softmax per generated token, so
+    /// they are asked for only when wanted - and asking changes nothing else
+    /// about the request, least of all what identifies it in a recording.
+    #[test]
+    fn token_probabilities_are_requested_only_when_enabled() {
+        let request = ModelRequest { prompt: "p".into() };
+        let plain = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        let body = plain.completion_request(&request);
+        assert!(body.get("logprobs").is_none());
+        assert!(body.get("top_logprobs").is_none());
+
+        let scored = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m")
+            .unwrap()
+            .with_token_confidence(true);
+        let mut scored_body = scored.completion_request(&request);
+        assert_eq!(scored_body["logprobs"], serde_json::json!(true));
+        assert_eq!(scored_body["top_logprobs"], serde_json::json!(1));
+        let fields = scored_body.as_object_mut().unwrap();
+        fields.remove("logprobs");
+        fields.remove("top_logprobs");
+        assert_eq!(scored_body, body);
+    }
+
+    fn pieces(parts: &[(&str, f64)]) -> Vec<TokenLogprob> {
+        parts
+            .iter()
+            .map(|(text, probability)| TokenLogprob {
+                token: (*text).to_owned(),
+                bytes: Some(text.as_bytes().to_vec()),
+                logprob: probability.ln(),
+            })
+            .collect()
+    }
+
+    fn close(actual: f32, expected: f32) -> bool {
+        (actual - expected).abs() < 1e-4
+    }
+
+    /// The grammar forces the scaffolding, and the model's raw probability for
+    /// a forced token says nothing about the answer - the server reported
+    /// e^-14 for a quote mark the grammar required. Only the characters of the
+    /// date and party values count.
+    #[test]
+    fn token_confidence_reads_only_the_date_and_party_values() {
+        let tokens = pieces(&[
+            (
+                r#"{"type_evidence":"INVOICE","document_type":"Invoice","date_evidence":"Invoice date: May 1, 2025","document_date":""#,
+                0.01,
+            ),
+            ("2025-05", 0.8),
+            ("-01", 0.6),
+            (r#"","date_role":"invoice","parties":[""#, 0.02),
+            ("Acme", 0.9),
+            (" Corp", 0.5),
+            (
+                r#""],"party_evidence":["Acme Corp"],"party_relation":"from","description":"An invoice.","confidence":0.9,"needs_review":false}"#,
+                0.03,
+            ),
+            ("", 0.001),
+        ]);
+        let confidence = token_confidence(&tokens).unwrap();
+        assert_eq!(confidence.tokens, 4);
+        assert!(close(confidence.min, 0.5), "{confidence:?}");
+        assert!(close(confidence.mean, 0.7), "{confidence:?}");
+    }
+
+    /// Choosing to say nothing is a choice too: a null date and an empty party
+    /// list are scored like any other value.
+    #[test]
+    fn a_null_date_and_an_empty_party_list_are_scored_as_choices() {
+        let tokens = pieces(&[
+            (
+                r#"{"type_evidence":null,"document_type":"Memo","date_evidence":null,"document_date":"#,
+                0.01,
+            ),
+            ("null", 0.4),
+            (r#","date_role":null,"parties":"#, 0.01),
+            ("[]", 0.7),
+            (
+                r#","party_evidence":[],"party_relation":"none","description":"A memo.","confidence":0.5,"needs_review":false}"#,
+                0.01,
+            ),
+        ]);
+        let confidence = token_confidence(&tokens).unwrap();
+        assert_eq!(confidence.tokens, 2);
+        assert!(close(confidence.min, 0.4), "{confidence:?}");
+        assert!(close(confidence.mean, 0.55), "{confidence:?}");
+    }
+
+    /// A token that carries the end of the scaffolding and the start of a
+    /// value is part of the value; an escaped quote inside a name does not
+    /// end it, and every party counts.
+    #[test]
+    fn straddling_tokens_escapes_and_every_party_are_counted() {
+        let tokens = pieces(&[
+            (r#"{"document_date":"2026"#, 0.3),
+            ("-03-03", 0.9),
+            (r#"","parties":[""#, 0.01),
+            (r#"O\"Hara"#, 0.6),
+            (r#" Ltd",""#, 0.8),
+            ("Acme", 0.7),
+            (r#""],"party_evidence":[]}"#, 0.01),
+        ]);
+        let confidence = token_confidence(&tokens).unwrap();
+        assert_eq!(confidence.tokens, 5);
+        assert!(close(confidence.min, 0.3), "{confidence:?}");
+        assert!(close(confidence.mean, 0.66), "{confidence:?}");
+    }
+
+    #[test]
+    fn a_reply_without_token_probabilities_has_no_token_confidence() {
+        let completion: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":"{}"},"finish_reason":"stop"}]}"#,
+        )
+        .unwrap();
+        assert!(completion.token_confidence().is_none());
+        assert!(token_confidence(&[]).is_none());
+    }
+
+    /// The server's own reply shape, trimmed from a live b10361 response.
+    #[test]
+    fn token_confidence_is_read_from_the_servers_reply() {
+        let completion: ChatCompletion = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"document_date\":\"2025-02-14\"}"},
+               "logprobs":{"content":[
+                 {"id":1,"token":"{\"document_date\":\"","bytes":[123,34,100,111,99,117,109,101,110,116,95,100,97,116,101,34,58,34],"logprob":-14.2,"top_logprobs":[]},
+                 {"id":2,"token":"2025-02-14","bytes":[50,48,50,53,45,48,50,45,49,52],"logprob":-0.01,"top_logprobs":[]},
+                 {"id":3,"token":"\"}","bytes":[34,125],"logprob":-0.4,"top_logprobs":[]}]}}]}"#,
+        )
+        .unwrap();
+        let confidence = completion.token_confidence().unwrap();
+        assert_eq!(confidence.tokens, 1);
+        assert!(close(confidence.min, (-0.01_f32).exp()));
     }
 
     #[test]

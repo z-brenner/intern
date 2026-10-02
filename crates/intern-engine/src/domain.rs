@@ -196,6 +196,26 @@ pub struct ModelProposal {
     pub evidence: Evidence,
 }
 
+/// How probable the model found its own date and party tokens.
+///
+/// Read from the token probabilities the local server reports alongside a
+/// reply, over the characters of the `document_date` and `parties` values
+/// only - never the JSON scaffolding the grammar forced. The probabilities
+/// are the model's own, before the grammar masked anything, so a value the
+/// model would rather not have written shows up here even though the grammar
+/// made it well-formed. A signal next to the verbatim checks in
+/// [`crate::validate`], never a replacement for them.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenConfidence {
+    /// The least probable value token.
+    pub min: f32,
+    /// The mean probability over the value tokens.
+    pub mean: f32,
+    /// How many tokens the figures were taken over.
+    pub tokens: u32,
+}
+
 /// Model output after evidence, format, and calibration checks.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ValidatedProposal {
@@ -318,4 +338,10 @@ pub struct DocumentAnalysis {
     /// fingerprint, and for analyses stored by versions that kept none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_fingerprint: Option<String>,
+    /// How probable the model found its own date and party tokens. Absent
+    /// when the model reported no token probabilities: a hosted model, a
+    /// reply replayed from a recording made without them, or a client that
+    /// did not ask for them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_confidence: Option<TokenConfidence>,
 }
