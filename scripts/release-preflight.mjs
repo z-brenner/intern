@@ -60,6 +60,20 @@ function releaseWorkflowName(root) {
   return /^name:\s*(.+?)\s*$/m.exec(workflow)?.[1]?.replace(/^(['"])(.*)\1$/, '$2');
 }
 
+const EVIDENCE_VALIDATOR_PATH = 'scripts/validate-release-evidence.mjs';
+
+/**
+ * The one workflow name the final evidence validation accepts. It states the
+ * version as a literal in a pattern, `/^Release v(1\.2\.3)$/`, and only a
+ * release run ever reaches that check, so a bump that missed it used to fail
+ * after the whole Windows build and the corpus scoring.
+ */
+function evidenceValidatorVersion(root) {
+  const path = join(root, EVIDENCE_VALIDATOR_PATH);
+  if (!existsSync(path)) return undefined;
+  return /\^Release v\((.+?)\)\$/.exec(readFileSync(path, 'utf8'))?.[1]?.replaceAll('\\.', '.');
+}
+
 /** The release version as each place that states it states it. */
 export function statedVersions(root, workflow = releaseWorkflowName(root)) {
   return {
@@ -67,6 +81,7 @@ export function statedVersions(root, workflow = releaseWorkflowName(root)) {
     'Cargo.toml': cargoWorkspaceVersion(root),
     'src-tauri/tauri.conf.json': readJson(root, 'src-tauri/tauri.conf.json').version,
     workflow: /^Release v(.+)$/.exec(workflow ?? '')?.[1],
+    [EVIDENCE_VALIDATOR_PATH]: evidenceValidatorVersion(root),
   };
 }
 
