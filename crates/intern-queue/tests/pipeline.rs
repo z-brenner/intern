@@ -148,6 +148,17 @@ impl FakeWorker {
         *worker.gate.0.lock().unwrap() = true;
         worker
     }
+
+    /// Counts a cancel and wakes a blocked request to see it. Both under the
+    /// gate: `extract` checks the count and waits while holding it, and a
+    /// count raised and notified between that check and the wait was never
+    /// seen - the request blocked for good, and with it the test, since
+    /// `cargo test` has no per-test timeout.
+    fn release_for_cancel(&self) {
+        let _gate = self.gate.0.lock().unwrap();
+        self.cancellations.fetch_add(1, Ordering::SeqCst);
+        self.gate.1.notify_all();
+    }
 }
 
 impl WorkerBoundary for FakeWorker {
@@ -178,8 +189,7 @@ impl WorkerBoundary for FakeWorker {
     }
 
     fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
-        self.cancellations.fetch_add(1, Ordering::SeqCst);
-        self.gate.1.notify_all();
+        self.release_for_cancel();
         Ok(())
     }
 
@@ -189,8 +199,7 @@ impl WorkerBoundary for FakeWorker {
     }
 
     fn shutdown(&self) -> Result<(), WorkerFailure> {
-        self.cancellations.fetch_add(1, Ordering::SeqCst);
-        self.gate.1.notify_all();
+        self.release_for_cancel();
         Ok(())
     }
 }
