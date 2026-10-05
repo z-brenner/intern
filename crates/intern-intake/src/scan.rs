@@ -33,6 +33,11 @@ pub struct IntakeConfig {
     /// Seconds, on the injected clock, that a file must go unchanged before it
     /// is stable. See `StabilityTracker`.
     pub min_quiet_seconds: i64,
+    /// Where the record of what was already in the folder when this machine
+    /// first watched it is kept, so a restart does not retake it. The host
+    /// puts it in its own data directory, never in the shared `.intern`
+    /// folder. `None` keeps it in memory, retaken by every new watcher.
+    pub backlog_file: Option<PathBuf>,
 }
 
 impl IntakeConfig {
@@ -44,6 +49,7 @@ impl IntakeConfig {
             scan_interval: DEFAULT_SCAN_INTERVAL,
             settling_interval: SETTLING_SCAN_INTERVAL,
             min_quiet_seconds: DEFAULT_MIN_QUIET_SECONDS,
+            backlog_file: None,
         }
     }
 

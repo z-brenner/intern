@@ -165,8 +165,12 @@ impl IntakeHost for FakeHost {
 /// Deterministic harness: hour-long scan intervals, settling or not, mean the
 /// loop only moves when `step` wakes it, and the mock clock stamps every tick
 /// uniquely so `step` can wait for exactly the scan it triggered.
+///
+/// Like the app, it keeps the backlog in a data directory of its own, apart
+/// from the watched folder.
 struct Rig {
     temp: TempDir,
+    data: TempDir,
     clock: Arc<MockClock>,
     host: Arc<FakeHost>,
     hydration: Arc<FakeHydration>,
@@ -246,11 +250,13 @@ impl Rig {
         configure: impl FnOnce(&mut IntakeConfig),
     ) -> Rig {
         let temp = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
         for name in backlog_files {
             fs::write(temp.path().join(name), b"backlog content").unwrap();
         }
         let mut config = IntakeConfig::new(temp.path(), vec!["pdf".to_string(), "txt".to_string()]);
         config.process_others_uploads = process_others_uploads;
+        config.backlog_file = Some(data.path().join("intake-backlog.json"));
         config.scan_interval = Duration::from_secs(3600);
         config.settling_interval = Duration::from_secs(3600);
         // One second of quiet, so the default `step` keeps the two-scan
@@ -260,6 +266,7 @@ impl Rig {
         configure(&mut config);
         Self::launch(
             temp,
+            data,
             MockClock::at_real_now(),
             Arc::new(FakeHost::default()),
             Arc::new(FakeHydration::default()),
@@ -270,6 +277,7 @@ impl Rig {
 
     fn launch(
         temp: TempDir,
+        data: TempDir,
         clock: Arc<MockClock>,
         host: Arc<FakeHost>,
         hydration: Arc<FakeHydration>,
@@ -288,6 +296,7 @@ impl Rig {
         });
         Rig {
             temp,
+            data,
             clock,
             host,
             hydration,
@@ -299,21 +308,41 @@ impl Rig {
 
     /// Stops the watcher and starts a new one, as the app does on every
     /// start, update restart, and intake settings save. The folder, the
-    /// queue, and the clock carry over; nothing the old watcher held in
-    /// memory does.
+    /// app's data, the queue, and the clock carry over; nothing the old
+    /// watcher held in memory does.
     fn restart(self) -> Rig {
+        self.restart_with(|_, _| {})
+    }
+
+    /// Like `restart`, with `while_off` doing what a person or a sync client
+    /// can do while no watcher is running: change the folder (handed its
+    /// path) or the machine's settings.
+    fn restart_with(self, while_off: impl FnOnce(&Path, &mut MachineIdentity)) -> Rig {
         let Rig {
             temp,
+            data,
             clock,
             host,
             hydration,
             config,
-            identity,
+            mut identity,
             watcher,
         } = self;
         drop(watcher);
+        while_off(temp.path(), &mut identity);
         clock.advance(1);
-        Self::launch(temp, clock, host, hydration, config, identity)
+        Self::launch(temp, data, clock, host, hydration, config, identity)
+    }
+
+    fn backlog_file(&self) -> PathBuf {
+        self.config.backlog_file.clone().unwrap()
+    }
+
+    /// The document keys the persisted backlog lists.
+    fn backlog_keys(&self) -> Vec<String> {
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(self.backlog_file()).unwrap()).unwrap();
+        serde_json::from_value(record["keys"].clone()).unwrap()
     }
 
     /// Triggers exactly one scan and waits for it to complete.
@@ -409,6 +438,187 @@ fn files_that_predate_the_watcher_are_held_for_others_in_mine_scope() {
     let rig = Rig::start(false, &["old-report.pdf"]);
     // Advance far past the courtesy delay: scope, not age, is what holds here.
     rig.clock.advance(10 * COURTESY_DELAY_SECONDS);
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+}
+
+/// Intern starts at sign-in, restarts for every update, and starts a new
+/// watcher on every intake settings save. The record of what was already in
+/// the folder used to be retaken each time, so a document that arrived while
+/// Intern was off - scanned from a phone over the weekend - counted as already
+/// there and was held for others for ever.
+#[test]
+fn restart_with_persisted_backlog_processes_files_added_while_off() {
+    let rig = Rig::start(false, &["pre.pdf"]);
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "pre.pdf").key()]
+    );
+
+    let rig = rig.restart_with(|folder, _| {
+        fs::write(
+            folder.join("while-off.pdf"),
+            b"scanned while Intern was off",
+        )
+        .unwrap();
+    });
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![rig.temp.path().join("while-off.pdf")]
+    );
+    let status = rig.watcher.status();
+    assert_eq!(
+        status.held_for_others, 1,
+        "pre.pdf is still held: {status:?}"
+    );
+    let store = ClaimStore::new(rig.temp.path(), identity("other", "elsewhere")).unwrap();
+    assert_eq!(
+        store
+            .read_origin(&facts_for(rig.temp.path(), "while-off.pdf").key())
+            .unwrap()
+            .machine_id,
+        "here-machine",
+        "a document that arrived while this machine was off was put here locally"
+    );
+}
+
+/// The backlog is keyed by document, not by name. A scanner that writes every
+/// scan as "Scan.pdf", or a person replacing a document with a new version,
+/// puts a new document under an old name, and that used to be held as though
+/// it had been there all along.
+#[test]
+fn replaced_backlog_file_is_new() {
+    let rig = Rig::start(false, &["pre.pdf", "other.pdf"]);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+    let old_key = facts_for(rig.temp.path(), "pre.pdf").key();
+
+    let rig = rig.restart_with(|folder, _| {
+        fs::write(folder.join("pre.pdf"), b"a new document under the old name").unwrap();
+    });
+    rig.step();
+    let replaced = rig.temp.path().join("pre.pdf");
+    assert_eq!(rig.host.enqueued(), vec![replaced.clone()]);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "other.pdf").key()],
+        "the replaced document's old key is forgotten"
+    );
+    assert!(!rig.backlog_keys().contains(&old_key));
+
+    // The same while the watcher runs.
+    fs::write(rig.temp.path().join("other.pdf"), b"replaced while watched").unwrap();
+    rig.step();
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![replaced, rig.temp.path().join("other.pdf")]
+    );
+    assert_eq!(rig.watcher.status().held_for_others, 0);
+    assert!(rig.backlog_keys().is_empty());
+}
+
+/// Saving a new machine label restarts the watcher on the same folder. That
+/// is not a new folder, and what was already there is not taken again.
+#[test]
+fn label_restart_keeps_backlog() {
+    let rig = Rig::start_as(
+        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        false,
+        &["pre.pdf"],
+    );
+    rig.step();
+    rig.step();
+    let recorded = fs::read(rig.backlog_file()).unwrap();
+
+    let rig = rig.restart_with(|folder, identity| {
+        identity.name = "Front desk".to_string();
+        fs::write(
+            folder.join("after-relabel.pdf"),
+            b"arrived during the restart",
+        )
+        .unwrap();
+    });
+    rig.step();
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![rig.temp.path().join("after-relabel.pdf")]
+    );
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(
+        fs::read(rig.backlog_file()).unwrap(),
+        recorded,
+        "the snapshot was neither retaken nor rewritten"
+    );
+}
+
+/// A backlog that cannot be written is said so, and written as soon as it can
+/// be: until then a restart would take it again and hold what arrived since.
+#[test]
+fn a_backlog_that_cannot_be_written_is_reported_and_written_later() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["pre.pdf"],
+        |config| {
+            let data = config.backlog_file.as_ref().unwrap().parent().unwrap();
+            config.backlog_file = Some(data.join("not-yet").join("intake-backlog.json"));
+        },
+    );
+    let error = rig.watcher.status().error.unwrap_or_default();
+    assert!(error.starts_with("BACKLOG_WRITE_FAILED"), "{error}");
+
+    fs::create_dir(rig.backlog_file().parent().unwrap()).unwrap();
+    rig.step();
+    assert_eq!(rig.watcher.status().error, None);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "pre.pdf").key()]
+    );
+}
+
+/// A subfolder that cannot be listed hid its documents for one scan; it did
+/// not remove them. Forgetting them would admit them as new the moment the
+/// folder could be read again.
+#[cfg(unix)]
+#[test]
+fn a_subfolder_that_cannot_be_listed_keeps_its_backlog() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        let locked = config.intake_root.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("old.pdf"), b"already here").unwrap();
+    });
+    rig.step();
+    let locked = rig.temp.path().join("locked");
+    let key = facts_for(rig.temp.path(), "locked/old.pdf").key();
+    assert_eq!(rig.backlog_keys(), vec![key.clone()]);
+
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    // Root runs skip permission checks, and the restoration below must happen
+    // even when the assertions fail, so the check is a guarded closure.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rig.step();
+        if fs::read_dir(&locked).is_ok() {
+            return;
+        }
+        assert_eq!(rig.watcher.status().unreadable_folders, 1);
+        assert_eq!(rig.backlog_keys(), vec![key.clone()]);
+    }));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    result.unwrap();
+
     rig.step();
     rig.step();
     assert!(rig.host.enqueued().is_empty());
@@ -1041,6 +1251,17 @@ fn update_config_rearms_on_a_new_folder_and_rebuilds_the_backlog() {
         "the new folder's pre-existing file is backlog again: {status:?}"
     );
     assert_eq!(rig.host.enqueued().len(), 1, "nothing new was enqueued");
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(rig.backlog_file()).unwrap()).unwrap();
+    assert_eq!(
+        record["folder"],
+        fs::canonicalize(second.path()).unwrap().to_str().unwrap(),
+        "a new folder is the one thing that retakes the snapshot"
+    );
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(second.path(), "pre-existing.pdf").key()]
+    );
 }
 
 #[test]

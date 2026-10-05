@@ -929,6 +929,25 @@ pub struct AppState {
     sharepoint_activation: AtomicBool,
 }
 
+/// The watcher's configuration for the canonical intake `folder`.
+///
+/// What was already in the folder when this machine first watched it is kept
+/// in the app's own data, so a restart, an update, or a changed label does not
+/// retake it and hold everything that arrived in between. Never in the shared
+/// `.intern` folder, which every machine reads.
+fn intake_config(folder: PathBuf, settings: &AppSettings, data_dir: &Path) -> IntakeConfig {
+    let mut config = IntakeConfig::new(
+        folder,
+        SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect(),
+    );
+    config.process_others_uploads = settings.process_others_uploads;
+    config.backlog_file = Some(data_dir.join("intake-backlog.json"));
+    config
+}
+
 impl AppState {
     pub fn initialize(app: &AppHandle) -> Result<Self, CommandError> {
         let data = app.path().app_local_data_dir().map_err(|_| CommandError {
@@ -1114,14 +1133,7 @@ impl AppState {
         if settings.intake_enabled {
             match canonical_folder(Path::new(&settings.intake_folder)) {
                 Ok(folder) => {
-                    let mut config = IntakeConfig::new(
-                        folder,
-                        SUPPORTED_EXTENSIONS
-                            .iter()
-                            .map(|extension| (*extension).to_owned())
-                            .collect(),
-                    );
-                    config.process_others_uploads = settings.process_others_uploads;
+                    let config = intake_config(folder, settings, &self.data_dir);
                     let host = Arc::new(PipelineIntakeHost::new(
                         Arc::clone(&self.pipeline),
                         self.scheduler.sender.clone(),
@@ -2492,7 +2504,8 @@ mod intake_tests {
     use intern_queue::AppSettings;
 
     use super::{
-        save_settings_and_autostart, validate_description_settings, validate_intake_settings,
+        intake_config, save_settings_and_autostart, validate_description_settings,
+        validate_intake_settings,
     };
     use crate::intake::{
         CloudProviderDto, filed_folder_for, item_fate, lists_one_drive, presence_active, status_dto,
@@ -2890,6 +2903,29 @@ mod intake_tests {
         assert_eq!(json["lastScanAt"], serde_json::Value::Null);
         assert_eq!(json["error"], serde_json::Value::Null);
         assert_eq!(json["arriving"], 0);
+    }
+
+    /// The backlog has to outlive the watcher, and it is this machine's own
+    /// record: kept with the app's data, not in the folder teammates share.
+    #[test]
+    fn the_intake_backlog_is_kept_in_app_data_not_the_shared_folder() {
+        let settings = AppSettings {
+            process_others_uploads: true,
+            ..AppSettings::default()
+        };
+        let config = intake_config(
+            PathBuf::from("/srv/scans"),
+            &settings,
+            Path::new("/home/pat/.local/share/intern"),
+        );
+        assert_eq!(config.intake_root, PathBuf::from("/srv/scans"));
+        assert!(config.process_others_uploads);
+        assert_eq!(
+            config.backlog_file,
+            Some(PathBuf::from(
+                "/home/pat/.local/share/intern/intake-backlog.json"
+            ))
+        );
     }
 
     /// Settings says what is on its way and what the queue could not take,

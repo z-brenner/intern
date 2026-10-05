@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 
+mod backlog;
 pub mod cloud;
 pub mod coordination;
 pub mod deployment;

@@ -20,6 +20,7 @@ pub const ENQUEUE_RETRY_SECONDS: i64 = 20;
 pub const ENQUEUE_RETRY_CAP_SECONDS: i64 = 15 * 60;
 
 use crate::{
+    backlog::Backlog,
     coordination::{
         AcquireOutcome, COURTESY_DELAY_SECONDS, ClaimState, ClaimStore, Clock, DocumentFacts,
         DoneOutcome, SystemClock,
@@ -110,8 +111,9 @@ impl IntakeWatcher {
     }
 
     /// Re-arms the running watcher on a new configuration. Per-folder scan
-    /// state (backlog, stability, owned claims) is discarded, exactly as a
-    /// stop-and-start would discard it.
+    /// state (stability, owned claims) is discarded, exactly as a
+    /// stop-and-start would discard it; the backlog is retaken only if the
+    /// folder changed.
     pub fn update_config(&self, config: IntakeConfig) {
         {
             let mut control = lock(&self.shared.control);
@@ -144,11 +146,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct ScanState {
     store: Option<ClaimStore>,
     stability: StabilityTracker,
-    /// Relative paths already present when watching started. Files that
-    /// predate the watcher have no known uploader, so "mine" scope leaves
-    /// them alone rather than guessing.
-    backlog: HashSet<String>,
-    backlog_recorded: bool,
+    /// Documents already present when this machine first watched the folder.
+    /// They have no known uploader, so "mine" scope leaves them alone rather
+    /// than guessing.
+    backlog: Backlog,
     /// Claims this machine believes it holds, so a takeover or sync conflict
     /// that rewrites a claim file is noticed and the local item abandoned.
     owned: HashMap<String, PathBuf>,
@@ -169,6 +170,7 @@ impl ScanState {
     fn new(config: &IntakeConfig) -> Self {
         Self {
             stability: StabilityTracker::new(config.min_quiet_seconds),
+            backlog: Backlog::load(config.backlog_file.as_deref(), &config.intake_root),
             ..Self::default()
         }
     }
@@ -249,7 +251,6 @@ fn scan_once(
         store,
         stability,
         backlog,
-        backlog_recorded,
         owned,
         awaiting_hydration,
         seen_live,
@@ -274,6 +275,7 @@ fn scan_once(
         }
     };
     status.unreadable_folders = walk.unreadable_folders;
+    let unreadable_folders = walk.unreadable_folders;
     let files = walk.files;
 
     // Read before the walk is processed so a conflict copy is recognised on the
@@ -299,17 +301,19 @@ fn scan_once(
         store,
         stability,
         backlog,
-        record_backlog: !*backlog_recorded,
         owned,
         awaiting_hydration,
         seen_live,
         enqueue_failures,
         status: &mut status,
         visited: HashSet::new(),
+        seen: HashSet::new(),
         live: HashSet::new(),
     };
+    let mut interrupted = false;
     for facts in &files {
         if shutdown.load(Ordering::SeqCst) {
+            interrupted = true;
             break;
         }
         scanner.process_file(facts);
@@ -321,8 +325,21 @@ fn scan_once(
     scanner
         .enqueue_failures
         .retain(|key, _| visited.contains(key));
-    let live = scanner.live;
-    *backlog_recorded = true;
+    let Scanner { live, seen, .. } = scanner;
+    // Only a whole pass says what is in the folder. A walk cut short by
+    // shutdown never ends the snapshot, and a subfolder that could not be
+    // listed hid its documents rather than removed them: forgetting them
+    // would admit them as new the moment the folder could be read again.
+    if !interrupted {
+        if !backlog.is_recorded() {
+            backlog.finish_recording();
+        } else if unreadable_folders == 0 {
+            backlog.retain_seen(&seen);
+        }
+    }
+    if let Err(error) = backlog.save() {
+        status.error = Some(format!("BACKLOG_WRITE_FAILED: {error}"));
+    }
     stability.retain_live(&live);
 
     if let Err(error) = store.touch_presence() {
@@ -342,29 +359,39 @@ struct Scanner<'a> {
     clock: &'a dyn Clock,
     store: &'a ClaimStore,
     stability: &'a mut StabilityTracker,
-    backlog: &'a mut HashSet<String>,
-    record_backlog: bool,
+    backlog: &'a mut Backlog,
     owned: &'a mut HashMap<String, PathBuf>,
     awaiting_hydration: &'a mut HashSet<String>,
     seen_live: &'a mut HashSet<String>,
     enqueue_failures: &'a mut HashMap<String, (u32, i64)>,
     status: &'a mut IntakeStatus,
+    /// Keys of the stable files this scan processed.
     visited: HashSet<String>,
+    /// Keys of every file this scan walked past, settled or not.
+    seen: HashSet<String>,
     live: HashSet<PathBuf>,
 }
 
 impl Scanner<'_> {
     fn process_file(&mut self, facts: &FileFacts) {
         self.live.insert(facts.path.clone());
+        let doc = DocumentFacts {
+            relative_path: facts.relative_path.clone(),
+            size: facts.size,
+            modified_secs: facts.modified_secs,
+        };
+        let key = doc.key();
+        // Everything in the folder while the backlog is taken is backlog,
+        // settled or not: a file still being written gets a new key once it
+        // settles, and that key is new.
+        self.seen.insert(key.clone());
+        self.backlog.note(&key);
         // A conflict copy is the sync client's bookkeeping, not a new document.
         // Naming it would file a second copy of something already filed, so it
         // is counted and left where it is for a person to resolve.
         if is_conflict_copy(&facts.path, &self.machines) {
             self.status.sync_conflicts += 1;
             return;
-        }
-        if self.record_backlog {
-            self.backlog.insert(facts.relative_path.clone());
         }
         if !self.stability.observe(
             &facts.path,
@@ -377,12 +404,6 @@ impl Scanner<'_> {
             }
             return;
         }
-        let doc = DocumentFacts {
-            relative_path: facts.relative_path.clone(),
-            size: facts.size,
-            modified_secs: facts.modified_secs,
-        };
-        let key = doc.key();
         self.visited.insert(key.clone());
 
         if self.owned.contains_key(&key) {
@@ -499,10 +520,11 @@ impl Scanner<'_> {
         let claimable = match self.store.read_origin(key) {
             Some(origin) if origin.machine_id == self.identity.id => true,
             Some(_) => self.others_claimable(facts),
-            // No origin marker: a file already present when watching started
-            // has an unknown uploader and is treated like someone else's;
-            // one that appeared later must have been put here locally.
-            None if self.backlog.contains(&facts.relative_path) => self.others_claimable(facts),
+            // No origin marker: a document already present when this machine
+            // first watched the folder has an unknown uploader and is treated
+            // like someone else's; one that appeared later, even while Intern
+            // was not running, must have been put here locally.
+            None if self.backlog.contains(key) => self.others_claimable(facts),
             None => {
                 new_local = true;
                 true
