@@ -232,7 +232,7 @@ checks read the document around it:
 * **A deadline.** When every statement of the chosen date is labelled a
   deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
   date the document labels as its issue date (`Invoice Date:`, `Dated`, a
-  bare `Date:`) replaces it; with none or several, the date is withheld for
+  bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none or several, the date is withheld for
   a person, and the model's date is offered to them. Either way the proposal
   goes to review with `DATE_IS_DEADLINE`. `payable` and `return` do not set
   it off, and a numeric date that reads either way round counts as two.

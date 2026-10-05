@@ -2387,6 +2387,48 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
         assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
     }
 
+    /// "Ship Date:" holds the label "Date:", and a shipping date was offered
+    /// in place of the due date as the invoice's own - one click from being
+    /// filed under it. Only a "Date:" nothing qualifies is the issue date.
+    #[test]
+    fn a_qualified_date_label_is_not_the_issue_date() {
+        for date_lines in [
+            "Ship Date: April 2, 2025\nDue Date: May 30, 2025",
+            "Order Date: April 2, 2025\nDue Date: May 30, 2025",
+            "Service Date: 04/02/2025\nDate of Invoice 04/30/2025\nDue Date: 05/30/2025",
+        ] {
+            let outcome = validate_at(
+                invoice("2025-05-30"),
+                &digest_of(&invoice_document(date_lines)),
+                2026,
+            );
+            assert_eq!(outcome.proposal.document_date, None, "{date_lines}");
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::DateIsDeadline],
+                "{date_lines}"
+            );
+        }
+        // A bare label, or one with only a number before it, still names
+        // the issue date.
+        for date_lines in [
+            "Date: April 2, 2025\nDue Date: May 30, 2025",
+            "Invoice No. 1042 Date: April 2, 2025\nDue Date: May 30, 2025",
+        ] {
+            let outcome = validate_at(
+                invoice("2025-05-30"),
+                &digest_of(&invoice_document(date_lines)),
+                2026,
+            );
+            assert_eq!(
+                outcome.proposal.document_date.as_deref(),
+                Some("2025-04-02"),
+                "{date_lines}"
+            );
+            assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        }
+    }
+
     /// "updated" holds the letters of "dated", and a footer's "Rates updated
     /// January 1, 2024" stood as the invoice's issue date, ready to replace
     /// the due date with a date that is not the invoice's either.

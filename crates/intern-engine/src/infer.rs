@@ -353,12 +353,30 @@ pub(crate) fn labels_a_deadline(window: &str) -> bool {
 /// issued: "Invoice Date:", "Date of issue", "Dated", or a bare "Date:".
 /// Whole words only, because the date found here can replace the model's: a
 /// footer's "Rates updated January 1, 2024" is no issue date.
+///
+/// "Date:" is bare only when no word qualifies it. "Ship Date:", "Order
+/// Date:" and "Service Date:" label some other event, and offering the
+/// shipping date as the invoice's would file it under the wrong day at one
+/// click.
 pub(crate) fn labels_the_issue_date(window: &str) -> bool {
     !labels_another_date(window)
         && (ISSUE_LABELS
             .iter()
             .any(|label| rfind_word(window, label).is_some())
-            || is_generic_label(window))
+            || (is_generic_label(window) && !date_is_qualified(window)))
+}
+
+/// Whether a word stands directly before the last "date" in `window`,
+/// saying whose date it is: "ship date", "order date". A number before it -
+/// "Invoice No. 1042 Date:" - qualifies nothing.
+fn date_is_qualified(window: &str) -> bool {
+    rfind_word(window, "date").is_some_and(|at| {
+        window[..at]
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphabetic)
+    })
 }
 
 /// The wording a date's role is read from: what stands before it on its
