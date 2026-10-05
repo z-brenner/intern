@@ -10,6 +10,11 @@ const ACTION_ERRORS: Record<string, string> = {
   PATH_UNAVAILABLE: 'The document is not where Intern last saw it. It may have been moved, renamed, or deleted outside Intern.',
   UNSUPPORTED_FORMAT: 'Intern opens only the document formats it reads.',
   INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
+  // Open, read, approve is the review the panel invites, and on Windows the
+  // viewer still holds the file it opened: the rename, or an undo, then
+  // fails with the system's own "used by another process".
+  SOURCE_LOCKED: 'The document is open in another program, or a sync client is still writing it. Close it, then try again.',
+  RECONCILIATION_REQUIRED: 'A rename of this document stopped part-way, so its files need checking first. Use Check again.',
 };
 
 /** What to tell a person about a command that failed, whatever shape the failure arrived in. */

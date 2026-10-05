@@ -108,6 +108,19 @@ describe('review actions', () => {
   // FRONTEND_UX-8: a filed document's inspector called its old name its
   // current one and never said what it became. And the reviewer could not
   // open the document, or find it once filed.
+  // Open, read, Approve: on Windows the viewer still holds the file, and the
+  // rename failed with the system's "being used by another process".
+  it('says to close a document another program holds, rather than the system error', async () => {
+    const approve = vi.fn(async () => { throw { code: 'SOURCE_LOCKED', message: 'atomic no-replace rename failed (The process cannot access the file because it is being used by another process. (os error 32))' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('The document is open in another program, or a sync client is still writing it. Close it, then try again.');
+    expect(feedback).not.toHaveTextContent('os error 32');
+  });
+
   it('completed_item_labels_and_open_reveal_buttons', async () => {
     const base = createInMemoryBridge({ items: [
       { id: 'filed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement (2).pdf', undoable: true },
