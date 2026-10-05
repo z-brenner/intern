@@ -15,7 +15,9 @@ const seedItems: QueueItem[] = [
   // Stays a PDF even though .xlsx is now supported: the reviewed QA capture
   // pins this queue's rendered contents, and changing a demo row would force a
   // re-sign-off for no product reason.
-  { id: 'financials', originalFilename: 'Q1 Financials.pdf', status: 'processing', proposedFilename: '2024-03-31 Q1 Financial Statements.pdf', progress: 60 },
+  // A stage and no percentage, as the desktop backend reports it: no figure
+  // ever arrives from it, and a seeded "60%" hid that from every screenshot.
+  { id: 'financials', originalFilename: 'Q1 Financials.pdf', status: 'processing', proposedFilename: '2024-03-31 Q1 Financial Statements.pdf', stage: 'naming' },
   { id: 'service', originalFilename: 'Service Agreement - BlueSky LLC.pdf', status: 'ready', proposedFilename: '2024-02-28 Service Agreement with BlueSky LLC.pdf', confidence: 0.96 },
   { id: 'minutes', originalFilename: 'Board Meeting Minutes - May 7, 2024.docx', status: 'waiting' },
   { id: 'invoice', originalFilename: 'Invoice INV-1001.pdf', status: 'waiting' },
@@ -291,9 +293,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       }
     },
     addFolder: async (folder) => addFolder(folder),
-    pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const } : item); },
-    resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', progress: 0 }); },
-    cancel: async (id) => update(id, { status: 'failed', progress: undefined, reason: 'Canceled.' }),
+    pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
+    resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
+    cancel: async (id) => update(id, { status: 'failed', stage: undefined, progress: undefined, reason: 'Canceled.' }),
     // Mirrors the backend's gate: a rename carries a date or it does not happen.
     approve: async (id, filename, description) => {
       if (!leadingDate(filename)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
@@ -301,7 +303,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       noteRecorded();
     },
     keepOriginal: async (id) => update(id, { status: 'completed', proposedFilename: undefined, undoable: true }),
-    retry: async (id) => update(id, { status: 'waiting', progress: undefined }),
+    retry: async (id) => update(id, { status: 'waiting', stage: undefined, progress: undefined }),
     remove: async (id) => {
       const path = pathById.get(id);
       if (path) idByPath.delete(path);

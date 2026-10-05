@@ -40,7 +40,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   for (const [name, status] of [
     ['Employment Agreement - John Smith.pdf', 'Ready'],
     ['Lease Agreement - 123 Main St.pdf', 'Needs review'],
-    ['Q1 Financials.pdf', 'Processing'],
+    ['Q1 Financials.pdf', 'Proposing a name'],
     ['Invoice INV-1001.pdf', 'Waiting'],
   ] as const) {
     await expect(page.getByRole('row', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).toContainText(status);

@@ -1,7 +1,7 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type {
   DescriptionsEventSource,
@@ -424,13 +424,36 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+/**
+ * What a processing document is doing, from either vocabulary the backend
+ * speaks: a row's status (extracting, analyzing, applying) or a progress
+ * event's stage (the worker reports `extracting`; `reading` and `ocr` are
+ * accepted too). Anything else - a cancel being requested, the worker shutting
+ * down - says nothing about the stage, so the one already shown stands.
+ */
+export function processingStage(name: string): ProcessingStage | undefined {
+  switch (name) {
+    case 'extracting':
+    case 'reading':
+    case 'ocr': return 'reading';
+    case 'analyzing': return 'naming';
+    case 'applying': return 'filing';
+  }
+  return undefined;
+}
+
 function normalizeItem(item: QueueItemDto): QueueItem {
   const status = normalizeStatus(item.status);
   const waiting = status === 'waiting';
+  // The backend has three working statuses and the queue used to fold them
+  // into one "Processing (0%)": no figure ever arrives, so every document read
+  // as stalled at nothing. The stage is the honest part of what it knows.
+  const stage = status === 'processing' ? processingStage(item.status) : undefined;
   return {
     id: String(item.id),
     originalFilename: item.originalFilename,
     status,
+    ...(stage ? { stage } : {}),
     ...(waiting ? {} : {
       ...(item.proposedFilename === undefined ? {} : { proposedFilename: item.proposedFilename }),
       ...(item.confidence === undefined ? {} : { confidence: item.confidence }),

@@ -73,7 +73,8 @@ describe('setup and queue controls', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Pause queue' }));
     expect(await screen.findByRole('button', { name: 'Resume queue' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Resume queue' }));
-    expect(await screen.findByText('Processing (0%)')).toBeVisible();
+    expect(await screen.findByRole('row', { name: /Q1 Financials/ })).toHaveTextContent('Reading document…');
+    expect(screen.queryByText(/\(0%\)/)).not.toBeInTheDocument();
   });
 
   it('keeps the queue inaccessible after local setup failure', async () => {

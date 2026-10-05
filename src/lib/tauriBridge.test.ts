@@ -3,6 +3,7 @@ import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
+  processingStage,
   type TauriEvent,
   type TauriTransport,
 } from './tauriBridge';
@@ -194,6 +195,36 @@ describe('TauriBridge', () => {
     const fake = fakeTransport({ cloud_roots: undefined });
 
     await expect(new TauriBridge(fake.transport).cloudRoots()).resolves.toEqual([]);
+  });
+
+  // The three working statuses used to collapse into one "Processing (0%)".
+  it('normalize maps backend status to stage', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'extracting.pdf', status: 'extracting' },
+        { id: 2, originalFilename: 'analyzing.pdf', status: 'analyzing' },
+        { id: 3, originalFilename: 'applying.pdf', status: 'applying' },
+        { id: 4, originalFilename: 'queued.pdf', status: 'queued' },
+        { id: 5, originalFilename: 'review.pdf', status: 'needs_review', proposedFilename: 'reviewed.pdf' },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items.map((item) => [item.status, item.stage])).toEqual([
+      ['processing', 'reading'],
+      ['processing', 'naming'],
+      ['processing', 'filing'],
+      ['waiting', undefined],
+      ['review', undefined],
+    ]);
+    expect(items[3]).not.toHaveProperty('stage');
+    expect(items[0]).not.toHaveProperty('progress');
+  });
+
+  it('names the stage from either the status or a progress event, and nothing else', () => {
+    expect(['extracting', 'reading', 'ocr', 'analyzing', 'applying'].map(processingStage)).toEqual(['reading', 'reading', 'reading', 'naming', 'filing']);
+    expect(['accepted', 'cancel_requested', 'shutdown', ''].map(processingStage)).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it('normalizes backend statuses and never exposes a proposal for waiting items', async () => {

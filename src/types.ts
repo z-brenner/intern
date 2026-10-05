@@ -1,10 +1,13 @@
 export type QueueStatus = 'ready' | 'review' | 'processing' | 'waiting' | 'completed' | 'failed';
 export type QueueView = 'queue' | 'review' | 'completed';
+/** What a processing document is doing: reading its text, proposing a name, or being renamed. */
+export type ProcessingStage = 'reading' | 'naming' | 'filing';
 
 export interface QueueItem {
   id: string;
   originalFilename: string;
   status: QueueStatus;
+  stage?: ProcessingStage;
   proposedFilename?: string;
   confidence?: number;
   description?: string;

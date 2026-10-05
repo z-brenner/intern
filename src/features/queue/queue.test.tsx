@@ -268,6 +268,35 @@ describe('queue interactions', () => {
     await waitFor(() => expect(cancel).toHaveBeenCalledWith('active'));
   });
 
+  // No figure ever comes from the backend, and "Processing (0%)" on every
+  // row read as stalled for the whole of a long OCR run.
+  it('processing without progress shows stage', async () => {
+    const bridge = createInMemoryBridge({ items: [
+      { id: 'reading', originalFilename: 'reading.pdf', status: 'processing', stage: 'reading' },
+      { id: 'naming', originalFilename: 'naming.pdf', status: 'processing', stage: 'naming' },
+      { id: 'filing', originalFilename: 'filing.pdf', status: 'processing', stage: 'filing', cancelable: false },
+      { id: 'counted', originalFilename: 'counted.pdf', status: 'processing', stage: 'reading', progress: 33.3333 },
+    ] });
+    render(<App bridge={bridge} />);
+
+    expect(await screen.findByRole('row', { name: /reading\.pdf/ })).toHaveTextContent('Reading document…');
+    expect(screen.getByRole('row', { name: /naming\.pdf/ })).toHaveTextContent('Proposing a name…');
+    expect(screen.getByRole('row', { name: /filing\.pdf/ })).toHaveTextContent('Renaming…');
+    expect(screen.getByRole('row', { name: /counted\.pdf/ })).toHaveTextContent('Reading document… (33%)');
+    expect(screen.queryByText(/\(0%\)/)).not.toBeInTheDocument();
+
+    await selectRow(screen.getByRole('row', { name: /naming\.pdf/ }));
+    expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('Proposing a name…');
+  });
+
+  it('shows the demo queue working without a made-up percentage', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+
+    const row = await screen.findByRole('row', { name: /Q1 Financials/ });
+    expect(row).toHaveTextContent('Proposing a name…');
+    expect(row).not.toHaveTextContent('%');
+  });
+
   it('does not offer cancellation during the atomic apply stage', async () => {
     const bridge = createInMemoryBridge({ items: [{ id: 'applying', originalFilename: 'applying.pdf', status: 'processing', progress: 90, cancelable: false }] });
     render(<App bridge={bridge} />);
