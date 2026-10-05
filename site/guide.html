@@ -901,10 +901,10 @@
         </div>
         <p class="lead">Intern works through the folders the Microsoft sync client already keeps on your disk.</p>
         <p class="prose">
-          The build published here never talks to Microsoft's servers — no Graph
-          API client, no OAuth token, no upload code — so it never asks you to
-          sign in. Renamed files reach the cloud through the OneDrive app you
-          already run.
+          The build published here never talks to Microsoft's servers: it ships
+          with no deployment to sign in to, so it never asks you to sign in,
+          holds no token, and uploads nothing. Renamed files reach the cloud
+          through the OneDrive app you already run.
         </p>
 
         <figure>
@@ -1254,7 +1254,8 @@
                 <strong>Check for updates</strong> still works when you press it
                 (<a href="#updates">section 10</a>).
                 A build provisioned for a team also asks Microsoft about each
-                upload to its Inbox; the build published here has no such code.
+                upload to its Inbox; the build published here ships with no
+                deployment, so that code never runs and never contacts Microsoft.
               </p>
             </div>
           </details>
