@@ -200,7 +200,7 @@ The goal is calibration, not timidity. A proposal goes to review only when a
 
 | Fact | Accepted when |
 | --- | --- |
-| Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1 |
+| Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, `01/04/26`, `01.04.26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1. A two-digit year is read in either order; dotted or dashed, only padded, so a section number like `1.4.26` is never a date |
 | Type | at least 60% of its significant words appear in the document |
 | Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`, and `&` read as `and`); the words themselves are never loosened. Two spellings of one name (`ACME CORP`, `Acme Corp.`) are one party, but a name is never merged into a longer one (`Acme`, `Acme Holdings`) |
 | Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
@@ -213,8 +213,8 @@ gated on the quoted wrapper and threw away correct dates on half the corpus. Wha
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
 
-A date the document states is not yet the document's date, so three more
-checks read the wording around it:
+A date the document states is not yet the document's date, so four more
+checks read the document around it:
 
 * **Another document's date.** "the Master Services Agreement dated June 2,
   2023" dates somebody else's agreement. A date stated only that way is
@@ -234,6 +234,15 @@ checks read the wording around it:
 * **An implausible year.** A year more than ten years ahead or before 1900 is
   usually an OCR misread the model copied faithfully (2625 for 2025). The
   date is kept and the proposal goes to review with `DATE_IMPLAUSIBLE`.
+* **A date that reads either way round.** `04/01/2026` is 1 April in London
+  and 4 January in New York, and both are dates the document prints. When
+  the day and the month are both 12 or under and differ, the document
+  writes the date only in numbers (never in words, never year first), and
+  nothing settles the document's order - no other numeric date that can
+  only be read one way round, like `30/01/2026` - the date is kept and the
+  proposal goes to review with `DATE_AMBIGUOUS`. A date read against the
+  order the document does show (`03/04/2026` as 4 March beside a
+  `30/01/2026`) goes to review the same way.
 
 All of this is string handling over text nobody controls. A panic in it -
 one slice inside an `é` once panicked on every French invoice - fails that
@@ -301,7 +310,7 @@ validated name for the reviewer to read. Real names from the scored corpus:
 2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf
 2026-12-29 Notice of Termination - John Smith.pdf
 2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf
-Lease Agreement with ORION GLASS STUDIO INC.pdf
+Lease Agreement with Orion Glass Studio Inc.pdf
 ```
 
 Those are outputs, not illustrations. The last one carries no date because the
@@ -314,25 +323,45 @@ validated facts for exactly that offer — a date the document never states
 verbatim is withheld from the name, not lost — and lists every date the
 document does state, so a document the model could not date is dated from
 its own page in a click, with the file's last-modified date as the labelled
-last resort. Whatever date the applied name carries is the date the queue
+last resort. A date printed only in numbers is listed when it can be read
+one way: `30/01/2026`, a year-first date, or `03/04/2026` in a document
+whose other numeric dates show which way round it writes them. One that
+could be either, and any two-digit year, is left off rather than offered
+under a guess. Whatever date the applied name carries is the date the queue
 files under: the layout's year folder and the description record read it
 from the name, never from the fact validation withheld.
 
 The party clause is composed from a validated relation and validated names, not
 from free text, so every name in a filename has been found in the document.
+`between` needs two names: when a house-style merge or an unprintable name
+leaves one, the clause reads `with`. A type or a party a letterhead or a scan
+printed in capitals is title-cased for the name — `ORION GLASS STUDIO INC.`
+becomes `Orion Glass Studio Inc.` — when it has no lowercase letter and at
+least two words of four letters or more, so `IBM` and `KPMG LLP` stay as they
+are; company suffixes read as usual (`Inc`, `Corp`, `Ltd`, `GmbH`, while
+`LLC`, `LLP`, `PLC` stay in capitals), short words and vowel-less
+initialisms (`HSBC`) stay in capitals, and a word with a digit, an
+apostrophe, or a `Mc`/`Mac` prefix is left alone. Only the name changes; the
+evidence and the description keep the document's casing.
 Names longer than 120 characters shed the second party, then the party clause,
 then truncate the type — detail is lost from the least identifying end first.
-Windows-hostile characters, reserved device names, trailing dots and spaces, and
+Typographic ligatures (`ﬁ`) and full-width letters (`ＡＣＭＥ`) are folded to the
+letters a person types and every segment is composed to NFC, so two spellings
+of one accented name make one filename. Windows-hostile characters, reserved
+device names, trailing dots and spaces, and
 invisible formatting characters — the bidirectional controls, a soft hyphen, a
 zero-width space, a byte-order mark — are removed; the original extension is
-always preserved; collisions get a ` (2)` suffix. The engine checks collisions
+always preserved; collisions get a ` (2)` suffix, judged the way Windows
+compares names. The engine checks collisions
 against the only folder it knows, the document's own; the queue recomposes the
 name against the folder the document is actually going to, so a suffix means
 a real collision at the destination and never a phantom one at the source.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
-type, the type, or the first party (`2026/Statement of Work/`). A fact the
+type, the type, or the first party (`2026/Statement of Work/`). A folder
+name is cut to 80 characters and never ends in a space or a dot, which the
+queue's verbatim paths would otherwise create as written. A fact the
 layout needs but the document lacks sends it to `Undated` or `Unsorted`, never
 the root. Folders are created on first use and removed by the undo that
 empties them; the destination itself is never removed, and neither is
