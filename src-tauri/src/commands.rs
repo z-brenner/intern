@@ -822,16 +822,7 @@ impl RuntimeModel {
     fn failure_for(&self, code: &str, asked: u64, started: u64) -> ModelFailure {
         let now = self.generation.load(Ordering::SeqCst);
         if now != asked || now != started {
-            // A hosted model was chosen, or Intern is exiting, while this
-            // request ran: nothing is wrong with the document, which goes
-            // back to be read again - by the hosted model, now.
-            if self.is_held() {
-                return ModelFailure::retryable("MODEL_NOT_READY");
-            }
-            // A cancel came between: the server was stopped under this
-            // request on purpose, and restarting it again for the request
-            // would re-read a document someone has just canceled.
-            return ModelFailure::fatal("MODEL_CANCELED");
+            return self.overtaken();
         }
         // These say something about this document, not about the server: it
         // does not fit, its reply was cut off or unreadable (the client has
@@ -848,6 +839,20 @@ impl RuntimeModel {
         }
         self.failed_generation.store(now, Ordering::SeqCst);
         ModelFailure::retryable(code)
+    }
+
+    /// What a request amounts to when a deliberate stop came after it began.
+    fn overtaken(&self) -> ModelFailure {
+        // A hosted model was chosen, or Intern is exiting: nothing is wrong
+        // with the document, which goes back to be read again - by the
+        // hosted model, now.
+        if self.is_held() {
+            return ModelFailure::retryable("MODEL_NOT_READY");
+        }
+        // A cancel came between: the server was stopped under this request
+        // on purpose, and restarting it again for the request would re-read
+        // a document someone has just canceled.
+        ModelFailure::fatal("MODEL_CANCELED")
     }
 }
 
@@ -873,21 +878,52 @@ impl AnalyzerBoundary for RuntimeModel {
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
         let asked = self.generation.load(Ordering::SeqCst);
-        let slot = self
-            .engine
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // No engine is a server between starts: restarting after a cancel,
-        // held while a hosted model is chosen, or not yet verified. Nothing
-        // is wrong with the document, so this is the queue's to put back
-        // rather than a failure to count against it.
-        let Some(running) = slot.as_ref() else {
-            return Err(ModelFailure::retryable("MODEL_NOT_READY"));
-        };
-        running
-            .engine
-            .analyze(source, extension, existing_names)
-            .map_err(|error| self.failure_for(error.code().as_str(), asked, running.generation))
+        let mut waited = false;
+        loop {
+            {
+                let slot = self
+                    .engine
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Only an engine started since the last deliberate stop. One
+                // from before it is the one that stop is about to take away,
+                // and a request sent to it would fail under the stop as if
+                // something were wrong with the document.
+                if let Some(running) = slot.as_ref().filter(|running| running.generation == asked) {
+                    return running
+                        .engine
+                        .analyze(source, extension, existing_names)
+                        .map_err(|error| {
+                            self.failure_for(error.code().as_str(), asked, running.generation)
+                        });
+                }
+            }
+            // No engine to ask. Nothing is wrong with the document either
+            // way, so none of this is a failure to count against it.
+            if self.is_held() || self.generation.load(Ordering::SeqCst) != asked {
+                return Err(self.overtaken());
+            }
+            if waited {
+                // Nothing under way: never started, a start that failed, or
+                // a verified start whose thread has yet to begin. The
+                // queue's to put back until setup has a server running.
+                return Err(ModelFailure::retryable("MODEL_NOT_READY"));
+            }
+            // A restart under way - a cancel's, or the verified start that
+            // choosing the local model again begins - holds `lifecycle` from
+            // before it empties the slot until the new engine is in it. A
+            // cancel no longer holds the queue while it restarts the server,
+            // so the next document arrives in the middle of that, and handing
+            // it back failed it as a file error twice over in the seconds the
+            // server took to load. Waiting costs it those seconds instead.
+            // Taken with the engine guard released: a stop needs the slot.
+            drop(
+                self.lifecycle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            waited = true;
+        }
     }
 
     /// Restarts a server that failed a request. Only once per failure: a
@@ -4492,6 +4528,145 @@ mod runtime_tests {
         assert!(runtime.analyze(&probe(), "pdf", &[]).is_ok());
     }
 
+    /// A cancel no longer holds the queue while it restarts the server, so
+    /// the next document reaches the model while the new server is still
+    /// loading - and so does one that arrives as the local model is chosen
+    /// again. Each waits for the server instead of being handed back, which
+    /// the queue counted as a failure and, the second time, failed it for.
+    #[test]
+    fn the_next_document_waits_out_a_restart_under_way() {
+        let install = Install::new("analyze-restart");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+        let asked = || rig.proposals.load(Ordering::SeqCst);
+        let before = asked();
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let analyzing = Arc::clone(&runtime);
+        let next = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!next.is_finished(), "it waits for the new server");
+        gate.open();
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert!(next.join().unwrap().is_ok());
+        assert_eq!(asked(), before + 1, "asked once, of the new server");
+
+        // A hosted model chosen and then the local one again: the verified
+        // start holds the slot empty while it loads.
+        runtime.hold().unwrap();
+        runtime.release();
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let starting = Arc::clone(&runtime);
+        let start = std::thread::spawn(move || {
+            starting
+                .start_verified(&CancellationToken::new())
+                .map_err(|error| error.code)
+        });
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let analyzing = Arc::clone(&runtime);
+        let next = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!next.is_finished(), "it waits for the verified start");
+        gate.open();
+        assert_eq!(start.join().unwrap(), Ok(()));
+        assert!(next.join().unwrap().is_ok());
+        assert_eq!(rig.launches(), 3);
+    }
+
+    /// A cancel moves the generation before it stops anything, and for a
+    /// moment the engine it is stopping is still in the slot. A document
+    /// that arrives then is not sent to it - its request would fail under
+    /// the stop and read as a canceled request - but waits for the new one.
+    #[test]
+    fn an_engine_a_cancel_is_stopping_is_not_asked() {
+        let install = Install::new("analyze-stale");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+        let before = rig.proposals.load(Ordering::SeqCst);
+
+        let gate = Arc::new(Gate::default());
+        *rig.stop_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        gate.wait_reached();
+        *rig.stop_gate.lock().unwrap() = None;
+        let analyzing = Arc::clone(&runtime);
+        let next = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            before,
+            "nothing was sent to the server being stopped"
+        );
+        assert!(!next.is_finished());
+        gate.open();
+
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert!(next.join().unwrap().is_ok());
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), before + 1);
+        assert_eq!(rig.launches(), 2);
+    }
+
+    /// The lock itself, which the generation check cannot stand in for: a
+    /// cancel that arrives while a recovery is already loading a new server
+    /// waits for it and then restarts that one. Unserialized, the cancel
+    /// found the slot empty, launched nothing, and left running the server a
+    /// re-sent request for the canceled document would be read on - or,
+    /// before the slot check, loaded a second server beside it.
+    #[test]
+    fn a_cancel_during_a_recovery_launch_waits_for_it_and_restarts_once() {
+        let install = Install::new("recover-launch-cancel");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+
+        rig.reply(Reply::Fail(EngineErrorCode::ModelRequestFailed));
+        let failure = runtime.analyze(&probe(), "pdf", &[]).unwrap_err();
+        rig.reply(Reply::Calibration);
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let recovering = Arc::clone(&runtime);
+        let recover = std::thread::spawn(move || recovering.recover(&failure));
+        // The recovery has stopped the failed server and is loading another.
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!cancel.is_finished(), "the cancel waits for the recovery");
+        gate.open();
+
+        assert_eq!(recover.join().unwrap(), Ok(()));
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert_eq!(
+            rig.launches(),
+            3,
+            "the first start, the recovery's, and the cancel's restart"
+        );
+        assert_eq!(
+            rig.stops.load(Ordering::SeqCst),
+            2,
+            "the failed server, then the recovered one"
+        );
+        assert_eq!(
+            rig.most_alive.load(Ordering::SeqCst),
+            1,
+            "never two servers"
+        );
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 1);
+        assert!(runtime.analyze(&probe(), "pdf", &[]).is_ok());
+    }
+
     #[test]
     fn input_too_large_and_invalid_reply_are_fatal() {
         let install = Install::new("fatal-codes");
@@ -4965,15 +5140,17 @@ mod runtime_tests {
             .expect("a short document is read");
         assert_eq!(servers(), first, "after a document");
 
-        let long = intern_engine::distill::source_from_text(format!(
-            "SERVICES AGREEMENT\n\nThis agreement is made on April 12, 2024 between Harbor Point \
-             Logistics LLC and Northwind Freight Partners.\n\n{}",
-            "The provider shall perform the services described in each statement of work, \
-             and the customer shall pay the fees set out there within thirty days. "
-                .repeat(60)
-        ));
+        let long = || {
+            intern_engine::distill::source_from_text(format!(
+                "SERVICES AGREEMENT\n\nThis agreement is made on April 12, 2024 between Harbor \
+                 Point Logistics LLC and Northwind Freight Partners.\n\n{}",
+                "The provider shall perform the services described in each statement of work, \
+                 and the customer shall pay the fees set out there within thirty days. "
+                    .repeat(60)
+            ))
+        };
         let analyzing = Arc::clone(&runtime);
-        let request = std::thread::spawn(move || analyzing.analyze(&long, "pdf", &[]));
+        let request = std::thread::spawn(move || analyzing.analyze(&long(), "pdf", &[]));
         std::thread::sleep(Duration::from_millis(1_500));
         assert!(
             !request.is_finished(),
@@ -4987,6 +5164,36 @@ mod runtime_tests {
         let restarted = servers();
         assert_eq!(restarted.len(), 1, "after cancel: {restarted:?}");
         assert_ne!(restarted, first, "the cancel replaced the server");
+
+        // The next document arrives while a cancel is still loading the new
+        // server, as it does in the queue: it waits for that server rather
+        // than being handed back, and is read by it.
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&long(), "pdf", &[]));
+        std::thread::sleep(Duration::from_millis(1_500));
+        assert!(!request.is_finished());
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while runtime.running() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the cancel never began"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        runtime
+            .analyze(&memo, "pdf", &[])
+            .expect("the next document waits out the restart");
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::fatal("MODEL_CANCELED")
+        );
+        let restarted_again = servers();
+        assert_eq!(restarted_again.len(), 1, "after the second cancel");
+        assert_ne!(restarted_again, restarted);
+        let restarted = restarted_again;
 
         runtime
             .analyze(&memo, "pdf", &[])
