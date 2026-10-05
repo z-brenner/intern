@@ -14,9 +14,11 @@ use std::{
 
 use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
 use intern_intake::{
-    CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState, ClaimStore, DoneOutcome,
-    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig,
-    IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity, scan::is_conflict_copy,
+    CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState, ClaimStore,
+    DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome, ENQUEUE_RETRY_CAP_SECONDS,
+    ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus,
+    IntakeWatcher, ItemState, MachineIdentity, SETTLING_SCAN_INTERVAL, StabilityTracker,
+    scan::is_conflict_copy,
 };
 use tempfile::TempDir;
 
@@ -160,9 +162,9 @@ impl IntakeHost for FakeHost {
     }
 }
 
-/// Deterministic harness: an hour-long scan interval means the loop only
-/// moves when `step` wakes it, and the mock clock stamps every tick uniquely
-/// so `step` can wait for exactly the scan it triggered.
+/// Deterministic harness: hour-long scan intervals, settling or not, mean the
+/// loop only moves when `step` wakes it, and the mock clock stamps every tick
+/// uniquely so `step` can wait for exactly the scan it triggered.
 struct Rig {
     temp: TempDir,
     clock: Arc<MockClock>,
@@ -232,6 +234,17 @@ impl Rig {
         process_others_uploads: bool,
         backlog_files: &[&str],
     ) -> Rig {
+        Self::start_with(identity, process_others_uploads, backlog_files, |_| {})
+    }
+
+    /// Starts on a fresh folder with the rig's defaults, adjusted by
+    /// `configure` before the watcher sees them.
+    fn start_with(
+        identity: MachineIdentity,
+        process_others_uploads: bool,
+        backlog_files: &[&str],
+        configure: impl FnOnce(&mut IntakeConfig),
+    ) -> Rig {
         let temp = TempDir::new().unwrap();
         for name in backlog_files {
             fs::write(temp.path().join(name), b"backlog content").unwrap();
@@ -239,6 +252,12 @@ impl Rig {
         let mut config = IntakeConfig::new(temp.path(), vec!["pdf".to_string(), "txt".to_string()]);
         config.process_others_uploads = process_others_uploads;
         config.scan_interval = Duration::from_secs(3600);
+        config.settling_interval = Duration::from_secs(3600);
+        // One second of quiet, so the default `step` keeps the two-scan
+        // pickup the scenarios below are written in; tests about the quiet
+        // time itself set their own.
+        config.min_quiet_seconds = 1;
+        configure(&mut config);
         Self::launch(
             temp,
             MockClock::at_real_now(),
@@ -646,6 +665,141 @@ fn a_file_changing_between_scans_is_not_claimed_until_it_settles() {
     );
 }
 
+/// Two observations a moment apart prove nothing about a writer that has only
+/// paused; stability is a stretch of quiet on the clock.
+#[test]
+fn stability_requires_minimum_quiet_time() {
+    let path = Path::new("/intake/attachment.pdf");
+    let mut tracker = StabilityTracker::new(10);
+    assert!(!tracker.observe(path, 4_000, 1_700_000_000, 1_000));
+    assert!(
+        !tracker.observe(path, 4_000, 1_700_000_000, 1_001),
+        "equal facts one second apart are not stable"
+    );
+    assert!(
+        tracker.observe(path, 4_000, 1_700_000_000, 1_010),
+        "the same facts min_quiet_seconds apart are"
+    );
+
+    // A change starts the quiet time over.
+    assert!(!tracker.observe(path, 9_000, 1_700_000_005, 1_011));
+    assert!(!tracker.observe(path, 9_000, 1_700_000_005, 1_020));
+    assert!(tracker.observe(path, 9_000, 1_700_000_005, 1_021));
+
+    // Two scans within the same second never settle anything.
+    let mut quick = StabilityTracker::new(10);
+    assert!(!quick.observe(path, 1, 1, 50));
+    assert!(!quick.observe(path, 1, 1, 50));
+}
+
+/// "Scan now" wakes the loop at once, so two scans could land milliseconds
+/// apart and see a paused writer's half-written file twice. The document was
+/// claimed and fingerprinted from that torn snapshot, then processed again
+/// once it settled.
+#[test]
+fn scan_now_double_scan_does_not_claim_changing_file() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.min_quiet_seconds = 10;
+    });
+    rig.step();
+    let path = rig.write("attachment.pdf", b"the first pages");
+    rig.step();
+    rig.step();
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "unchanged across two scans, but not quiet for long"
+    );
+
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "and the rest of the attachment").unwrap();
+    drop(file);
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+
+    rig.step_by(10);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    let key = facts_for(rig.temp.path(), "attachment.pdf").key();
+    assert_eq!(
+        rig.read_claim(&key).size,
+        fs::metadata(rig.temp.path().join("attachment.pdf"))
+            .unwrap()
+            .len(),
+        "claimed as the finished file"
+    );
+}
+
+#[test]
+fn next_interval_is_fast_while_settling() {
+    let mut config = IntakeConfig::new("/intake", vec!["pdf".to_string()]);
+    assert_eq!(config.next_interval(0), DEFAULT_SCAN_INTERVAL);
+    assert_eq!(config.next_interval(2), SETTLING_SCAN_INTERVAL);
+    assert_eq!(SETTLING_SCAN_INTERVAL, Duration::from_secs(3));
+    // Never slower than the configured interval.
+    config.scan_interval = Duration::from_secs(1);
+    assert_eq!(config.next_interval(2), Duration::from_secs(1));
+}
+
+/// A dropped document used to wait out a whole scan interval after it went
+/// quiet, and pickup took 20 to 40 seconds. Driven the way the loop drives
+/// itself, with the production intervals, it is claimed within one fast
+/// rescan of its quiet time.
+#[test]
+fn a_dropped_file_is_claimed_within_the_quiet_time_and_one_fast_rescan() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.min_quiet_seconds = DEFAULT_MIN_QUIET_SECONDS;
+    });
+    let production = IntakeConfig::new(rig.temp.path(), Vec::new());
+    rig.step();
+    let path = rig.write("scan.pdf", b"a scanned page");
+    rig.step();
+    let last_change = rig.watcher.status().last_scan_at.unwrap();
+    while rig.host.enqueued().is_empty() {
+        let wait = production.next_interval(rig.watcher.status().arriving as usize);
+        rig.step_by(wait.as_secs() as i64);
+        assert!(
+            rig.watcher.status().last_scan_at.unwrap() - last_change
+                <= DEFAULT_MIN_QUIET_SECONDS + SETTLING_SCAN_INTERVAL.as_secs() as i64,
+            "still not claimed"
+        );
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// Settings shows what is on its way, and the loop rescans quickly while
+/// anything is. Files that were already there when watching started are not
+/// arriving.
+#[test]
+fn arriving_count_reported() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["already-here.pdf"],
+        |config| config.min_quiet_seconds = 10,
+    );
+    assert_eq!(rig.watcher.status().arriving, 0);
+    rig.write("first.pdf", b"one document on its way");
+    rig.write("second.pdf", b"another document on its way");
+    rig.step();
+    assert_eq!(rig.watcher.status().arriving, 2);
+    rig.step_by(5);
+    assert_eq!(rig.watcher.status().arriving, 2, "still settling");
+
+    rig.step_by(5);
+    let status = rig.watcher.status();
+    assert_eq!(status.arriving, 0, "{status:?}");
+    assert_eq!(rig.host.enqueued().len(), 2);
+    assert!(
+        rig.host
+            .statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|reported| reported.arriving == 2),
+        "an arriving count is worth telling the host about"
+    );
+}
+
 #[test]
 fn an_enqueue_failure_releases_the_claim_so_a_later_scan_can_retry() {
     let rig = Rig::start(false, &[]);
@@ -871,8 +1025,9 @@ fn update_config_rearms_on_a_new_folder_and_rebuilds_the_backlog() {
 
     let second = TempDir::new().unwrap();
     fs::write(second.path().join("pre-existing.pdf"), b"was already here").unwrap();
-    let mut config = IntakeConfig::new(second.path(), vec!["pdf".to_string()]);
-    config.scan_interval = Duration::from_secs(3600);
+    let mut config = rig.config.clone();
+    config.intake_root = second.path().to_path_buf();
+    config.extensions = vec!["pdf".to_string()];
     rig.watcher.update_config(config);
     wait_until("the watcher to adopt the new folder", || {
         rig.watcher.status().folder == second.path()

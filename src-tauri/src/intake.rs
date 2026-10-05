@@ -139,6 +139,8 @@ pub struct IntakeStatusDto {
     /// pauses.
     pub unreadable_documents: u32,
     pub unreadable_folders: u32,
+    /// Files still being written or synced in, claimed once they settle.
+    pub arriving: u32,
     pub claimed_by_others: u32,
     pub processed_here: u32,
     pub last_scan_at: Option<i64>,
@@ -259,6 +261,7 @@ pub(crate) fn status_dto(
         awaiting_hydration: 0,
         unreadable_documents: 0,
         unreadable_folders: 0,
+        arriving: 0,
         claimed_by_others: 0,
         processed_here: 0,
         last_scan_at: None,
@@ -289,6 +292,7 @@ pub(crate) fn status_dto(
         awaiting_hydration: status.awaiting_hydration,
         unreadable_documents: status.unreadable_documents,
         unreadable_folders: status.unreadable_folders,
+        arriving: status.arriving,
         claimed_by_others: status.claimed_by_others,
         processed_here: status.processed_here,
         last_scan_at: status.last_scan_at,

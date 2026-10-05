@@ -165,6 +165,15 @@ struct ScanState {
     enqueue_failures: HashMap<String, (u32, i64)>,
 }
 
+impl ScanState {
+    fn new(config: &IntakeConfig) -> Self {
+        Self {
+            stability: StabilityTracker::new(config.min_quiet_seconds),
+            ..Self::default()
+        }
+    }
+}
+
 fn run(
     shared: &Shared,
     identity: &MachineIdentity,
@@ -173,7 +182,7 @@ fn run(
     hydration: Arc<dyn Hydration>,
 ) {
     let mut state = ScanState::default();
-    let mut state_generation = 0_u64;
+    let mut state_generation = None;
     let mut last_reported: Option<IntakeStatus> = None;
     loop {
         let (config, generation) = {
@@ -184,9 +193,9 @@ fn run(
             control.wake = false;
             (control.config.clone(), control.generation)
         };
-        if generation != state_generation {
-            state = ScanState::default();
-            state_generation = generation;
+        if state_generation != Some(generation) {
+            state = ScanState::new(&config);
+            state_generation = Some(generation);
         }
         let status = scan_once(
             &config,
@@ -198,6 +207,7 @@ fn run(
             &shared.shutdown,
         );
         *lock(&shared.status) = status.clone();
+        let interval = config.next_interval(status.arriving as usize);
         if last_reported
             .as_ref()
             .is_none_or(|previous| previous.materially_differs(&status))
@@ -205,7 +215,7 @@ fn run(
             host.status_changed(&status);
             last_reported = Some(status);
         }
-        let deadline = Instant::now() + config.scan_interval;
+        let deadline = Instant::now() + interval;
         let mut control = lock(&shared.control);
         while !control.wake && !control.shutdown {
             let now = Instant::now();
@@ -362,6 +372,9 @@ impl Scanner<'_> {
             facts.modified_secs,
             self.clock.now(),
         ) {
+            if self.stability.is_arriving(&facts.path) {
+                self.status.arriving += 1;
+            }
             return;
         }
         let doc = DocumentFacts {

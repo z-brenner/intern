@@ -229,6 +229,10 @@ export interface IntakeStatus {
   awaitingHydration: number;
   /** Subfolders the last scan could not read; the rest was still scanned. */
   unreadableFolders: number;
+  /** Files seen but still being written or synced in; picked up once they settle. */
+  arriving?: number;
+  /** Settled files the queue could not take, tried again with growing pauses. */
+  unreadableDocuments?: number;
   claimedByOthers: number;
   processedHere: number;
   lastScanAt: number | null;

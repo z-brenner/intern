@@ -2488,7 +2488,7 @@ mod intake_tests {
     use intern_core::{
         OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
     };
-    use intern_intake::{CloudProviderKind, DoneOutcome, ItemState, MachineIdentity};
+    use intern_intake::{CloudProviderKind, DoneOutcome, IntakeStatus, ItemState, MachineIdentity};
     use intern_queue::AppSettings;
 
     use super::{
@@ -2889,6 +2889,37 @@ mod intake_tests {
         assert_eq!(json["processedHere"], 0);
         assert_eq!(json["lastScanAt"], serde_json::Value::Null);
         assert_eq!(json["error"], serde_json::Value::Null);
+        assert_eq!(json["arriving"], 0);
+    }
+
+    /// Settings says what is on its way and what the queue could not take,
+    /// so both counts have to reach the wire from a live watcher.
+    #[test]
+    fn status_dto_carries_the_arriving_and_unreadable_counts() {
+        let identity = MachineIdentity {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "Front desk".into(),
+            host_name: "DESKTOP-A1B2C3".into(),
+            user: "pat".into(),
+        };
+        let live = IntakeStatus {
+            arriving: 2,
+            unreadable_documents: 3,
+            last_scan_at: Some(1_755_850_000),
+            ..IntakeStatus::idle(PathBuf::from("/srv/scans"))
+        };
+        let dto = status_dto(
+            true,
+            &identity,
+            "/srv/scans",
+            Some(&live),
+            None,
+            1_755_850_000,
+        );
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["watching"], true);
+        assert_eq!(json["arriving"], 2);
+        assert_eq!(json["unreadableDocuments"], 3);
     }
 
     #[test]

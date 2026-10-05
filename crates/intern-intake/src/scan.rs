@@ -11,6 +11,12 @@ use std::{
 use crate::coordination::{DoneOutcome, MachinePresence};
 
 pub const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(20);
+/// How soon the loop looks again while a file is still arriving.
+pub const SETTLING_SCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// How long a file's size and modification time must hold still before it is
+/// claimed: half the default interval, so ordinary pickup still takes two
+/// scans, but no longer two scans that happen to land a moment apart.
+pub const DEFAULT_MIN_QUIET_SECONDS: i64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct IntakeConfig {
@@ -21,6 +27,12 @@ pub struct IntakeConfig {
     pub process_others_uploads: bool,
     /// Injectable so tests can drive the loop without real waits.
     pub scan_interval: Duration,
+    /// The interval while any file is still arriving. Injectable for the same
+    /// reason as `scan_interval`.
+    pub settling_interval: Duration,
+    /// Seconds, on the injected clock, that a file must go unchanged before it
+    /// is stable. See `StabilityTracker`.
+    pub min_quiet_seconds: i64,
 }
 
 impl IntakeConfig {
@@ -30,6 +42,25 @@ impl IntakeConfig {
             extensions,
             process_others_uploads: false,
             scan_interval: DEFAULT_SCAN_INTERVAL,
+            settling_interval: SETTLING_SCAN_INTERVAL,
+            min_quiet_seconds: DEFAULT_MIN_QUIET_SECONDS,
+        }
+    }
+
+    /// How long the loop waits before its next scan, given how many files the
+    /// last one found still arriving.
+    ///
+    /// A file is only claimed once it has been quiet for `min_quiet_seconds`,
+    /// and only a scan can notice that, so waiting out a whole `scan_interval`
+    /// after a file goes quiet added up to 20 seconds to every pickup. While
+    /// something is arriving the loop looks again every `settling_interval`
+    /// instead - never less often than `scan_interval` - and a dropped document
+    /// is claimed within a few seconds of settling.
+    pub fn next_interval(&self, settling: usize) -> Duration {
+        if settling == 0 {
+            self.scan_interval
+        } else {
+            self.settling_interval.min(self.scan_interval)
         }
     }
 }
@@ -118,6 +149,9 @@ pub struct IntakeStatus {
     /// not grant, or a folder that vanished mid-scan. The rest of the folder
     /// is still scanned; these are counted so a person can see them.
     pub unreadable_folders: u32,
+    /// Files that turned up or changed while being watched and have not yet
+    /// held still long enough to be claimed.
+    pub arriving: u32,
     pub claimed_by_others: u32,
     /// Done-by-us claims seen.
     pub processed_here: u32,
@@ -127,7 +161,8 @@ pub struct IntakeStatus {
 }
 
 impl IntakeStatus {
-    pub(crate) fn idle(folder: PathBuf) -> Self {
+    /// A watcher's status before its first scan has counted anything.
+    pub fn idle(folder: PathBuf) -> Self {
         Self {
             watching: true,
             folder,
@@ -138,6 +173,7 @@ impl IntakeStatus {
             awaiting_hydration: 0,
             unreadable_documents: 0,
             unreadable_folders: 0,
+            arriving: 0,
             claimed_by_others: 0,
             processed_here: 0,
             machines: Vec::new(),
@@ -156,6 +192,7 @@ impl IntakeStatus {
             || self.awaiting_hydration != other.awaiting_hydration
             || self.unreadable_documents != other.unreadable_documents
             || self.unreadable_folders != other.unreadable_folders
+            || self.arriving != other.arriving
             || self.claimed_by_others != other.claimed_by_others
             || self.processed_here != other.processed_here
             || self.machines != other.machines
@@ -253,17 +290,23 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
     Ok(walk)
 }
 
-/// A file only becomes claimable after it is observed with an identical
-/// `(size, mtime)` on two consecutive scans.
+/// A file only becomes claimable once it has been observed with an
+/// identical `(size, mtime)` for at least `min_quiet_seconds` on the clock.
 ///
 /// The sync client (or a user copy) writes intake files incrementally, and a
 /// key computed from a half-written file would never match the settled file —
 /// the claim would orphan and the document would be processed from a torn
-/// snapshot. One full scan interval of quiet is the cheapest proof of
-/// stability available from stat alone.
-#[derive(Debug, Default)]
+/// snapshot. A stretch of quiet is the cheapest proof of stability available
+/// from stat alone. It is measured in time, not in scans: "Scan now" wakes the
+/// loop at once, and two scans a moment apart proved nothing about a writer
+/// that had merely paused.
+#[derive(Debug)]
 pub struct StabilityTracker {
     observed: HashMap<PathBuf, Observation>,
+    min_quiet_seconds: i64,
+    /// Set once a whole pass over the folder has been observed. A file first
+    /// seen before then was already there when watching started.
+    primed: bool,
 }
 
 #[derive(Debug)]
@@ -271,21 +314,45 @@ struct Observation {
     facts: (u64, i64),
     /// When this machine first saw the file at all, on its own clock.
     first_seen_at: i64,
+    /// When the facts were last seen to change, or first seen.
+    last_change_at: i64,
+    /// Whether the file turned up or changed while being watched, rather than
+    /// sitting unchanged since watching started.
+    arriving: bool,
+}
+
+impl Default for StabilityTracker {
+    fn default() -> Self {
+        Self::new(DEFAULT_MIN_QUIET_SECONDS)
+    }
 }
 
 impl StabilityTracker {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(min_quiet_seconds: i64) -> Self {
+        Self {
+            observed: HashMap::new(),
+            min_quiet_seconds,
+            primed: false,
+        }
     }
 
-    /// Records the observation; true when it is unchanged since the previous
-    /// scan. A first sighting is always unstable.
+    /// Records the observation; true when the facts are unchanged since the
+    /// previous one and have been for at least the minimum quiet time. A first
+    /// sighting is always unstable. A clock that moved backwards restarts the
+    /// quiet time rather than holding the file until it catches up.
     pub fn observe(&mut self, path: &Path, size: u64, modified_secs: i64, now: i64) -> bool {
         match self.observed.get_mut(path) {
             Some(observation) => {
-                let unchanged = observation.facts == (size, modified_secs);
-                observation.facts = (size, modified_secs);
-                unchanged
+                if observation.facts != (size, modified_secs) {
+                    observation.facts = (size, modified_secs);
+                    observation.last_change_at = now;
+                    observation.arriving = true;
+                    return false;
+                }
+                if now < observation.last_change_at {
+                    observation.last_change_at = now;
+                }
+                now - observation.last_change_at >= self.min_quiet_seconds
             }
             None => {
                 self.observed.insert(
@@ -293,11 +360,22 @@ impl StabilityTracker {
                     Observation {
                         facts: (size, modified_secs),
                         first_seen_at: now,
+                        last_change_at: now,
+                        arriving: self.primed,
                     },
                 );
                 false
             }
         }
+    }
+
+    /// Whether a file turned up or changed while being watched. A file that
+    /// has sat unchanged since watching started is not arriving, even before
+    /// its quiet time has passed.
+    pub fn is_arriving(&self, path: &Path) -> bool {
+        self.observed
+            .get(path)
+            .is_some_and(|observation| observation.arriving)
     }
 
     /// When this machine first saw the file, which is not the same as the
@@ -308,10 +386,12 @@ impl StabilityTracker {
             .map(|observation| observation.first_seen_at)
     }
 
-    /// Drops observations for files that vanished so the map cannot grow
-    /// without bound.
+    /// Ends a pass over the folder: drops observations for files that
+    /// vanished so the map cannot grow without bound, and from now on counts
+    /// any new file as arriving.
     pub fn retain_live(&mut self, live: &HashSet<PathBuf>) {
         self.observed.retain(|path, _| live.contains(path));
+        self.primed = true;
     }
 }
 
