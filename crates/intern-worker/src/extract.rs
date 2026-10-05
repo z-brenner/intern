@@ -223,6 +223,80 @@ pub fn better_reading(incumbent: OcrResult, challenger: OcrResult) -> OcrResult 
     }
 }
 
+/// Words an upright reading has to find, besides being confident, to be
+/// accepted without asking which way up the page is.
+pub const UPRIGHT_WORDS: usize = 3;
+
+/// Whether a page read as it came is done, with no orientation detection at
+/// all.
+///
+/// Nearly every page is upright, and reading it upright first means the
+/// common case costs one recognition pass. Orientation detection used to run
+/// first on every page - and on dense all-caps pages it was confidently
+/// wrong, reporting 180 degrees on the corpus's upright lease and buying
+/// four recognition passes to find the orientation the page already had.
+/// A sideways or inverted page read as-is comes back as low-confidence
+/// gibberish, so confidence is the test; the word floor stops two
+/// confident specks on an otherwise unread page from passing it.
+pub fn upright_reading_is_accepted(reading: &OcrResult) -> bool {
+    reading.mean_confidence >= CONFIDENT_READING
+        && reading.text.split_whitespace().count() >= UPRIGHT_WORDS
+}
+
+/// The passes reading one page can cost, as [`read_upright`] sees them.
+///
+/// The Tesseract adapter runs each one as a process. The decisions between
+/// them need no Tesseract at all, which is what lets them be held to account
+/// on the platform this ships on.
+pub trait OrientationPasses {
+    /// Reads the page turned clockwise by `rotation_degrees`. Asked at most
+    /// once for any one rotation.
+    fn recognize(&mut self, rotation_degrees: u16) -> Result<OcrResult, ExtractionError>;
+
+    /// The clockwise rotation orientation detection says the page needs.
+    fn detect_orientation(&mut self) -> Result<u16, ExtractionError>;
+}
+
+/// Reads a page the right way up, in as few passes as the page allows.
+///
+/// The page is read as it came, first. A confident reading of it is done -
+/// that is nearly every page, at one recognition and no detection - and so
+/// is a reading that found nothing: a blank page is blank in every
+/// orientation, and asking which way up it is buys nothing. Only an
+/// unconvincing reading asks orientation detection, and then the search
+/// over the other orientations runs as it always has. The upright reading
+/// is one of its candidates and is never read twice: it is compared as it
+/// already came back.
+pub fn read_upright(passes: &mut dyn OrientationPasses) -> Result<OcrResult, ExtractionError> {
+    let upright = passes.recognize(0)?;
+    if upright_reading_is_accepted(&upright) || upright.text.trim().is_empty() {
+        return Ok(upright);
+    }
+    let rotation = passes.detect_orientation()?;
+    let mut best = if rotation == 0 {
+        upright.clone()
+    } else {
+        passes.recognize(rotation)?
+    };
+    // A page that reads confidently in the orientation detection asked for
+    // is done, and so is one that read as blank.
+    for candidate in [270, 90, 180, 0] {
+        if !orientation_search_is_worthwhile(&best) {
+            break;
+        }
+        if candidate == rotation {
+            continue;
+        }
+        let attempt = if candidate == 0 {
+            upright.clone()
+        } else {
+            passes.recognize(candidate)?
+        };
+        best = better_reading(best, attempt);
+    }
+    Ok(best)
+}
+
 /// Whether reading this page again in another orientation could tell us
 /// anything.
 ///

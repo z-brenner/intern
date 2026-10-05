@@ -10,11 +10,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 #[cfg(feature = "native-tesseract")]
-use image::{DynamicImage, ImageFormat};
+use image::{DynamicImage, ImageFormat, imageops::FilterType};
 
 use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, RenderedPage};
 #[cfg(feature = "native-tesseract")]
-use crate::extract::{apply_detected_rotation, better_reading, orientation_search_is_worthwhile};
+use crate::extract::{OrientationPasses, apply_detected_rotation, read_upright};
 #[cfg(feature = "native-tesseract")]
 use crate::limits::ResourceLimits;
 #[cfg(feature = "native-tesseract")]
@@ -217,19 +217,31 @@ impl TesseractOcr {
         }
     }
 
+    /// Reads the page turned clockwise by `rotation` degrees.
     fn recognize_at(
         &self,
         workspace: &TempWorkspace,
-        page: &RenderedPage,
+        page: &DynamicImage,
         rotation: u16,
-        label: &str,
         cancel: &CancellationToken,
     ) -> Result<OcrResult, ExtractionError> {
-        let rotated = apply_detected_rotation(page.image.clone(), rotation)?;
-        let input = self.write_png(workspace, &format!("{label}.png"), &rotated)?;
+        let label = if rotation == 0 {
+            "upright".to_owned()
+        } else {
+            format!("rotated-{rotation}")
+        };
+        // The page as it came is encoded as it is: turning it by nothing
+        // used to cost a copy of the whole page, and then a second encode of
+        // the image orientation detection had already been given.
+        let input = if rotation == 0 {
+            self.write_png(workspace, &format!("{label}.png"), page)?
+        } else {
+            let rotated = apply_detected_rotation(page.clone(), rotation)?;
+            self.write_png(workspace, &format!("{label}.png"), &rotated)?
+        };
         let output_base = workspace.path().join(format!("ocr-{label}"));
         let child = Command::new(&self.executable)
-            .arg(&input)
+            .arg(input)
             .arg(&output_base)
             .arg("-l")
             .arg(&self.language)
@@ -258,27 +270,28 @@ impl TesseractOcr {
         })?;
         Ok(parse_tsv(&output)?.with_rotation(rotation))
     }
-}
 
-#[cfg(feature = "native-tesseract")]
-impl OcrBackend for TesseractOcr {
-    fn recognize(
+    /// The clockwise rotation Tesseract's orientation detection says the page
+    /// needs, read from a half-scale copy.
+    ///
+    /// A 300-DPI page halved is 150 DPI, which is still far more than
+    /// orientation detection looks at, and it is a quarter of the pixels to
+    /// encode and scan. On a page too small to halve - a low-resolution
+    /// photo - detection reports too few characters, which is a rotation of
+    /// zero: the orientation search that follows is what decides, and it
+    /// still finds such a page's orientation by reading it.
+    fn detect_orientation(
         &self,
-        page: &RenderedPage,
+        workspace: &TempWorkspace,
+        page: &DynamicImage,
         cancel: &CancellationToken,
-    ) -> Result<OcrResult, ExtractionError> {
-        cancel.check()?;
-        if !self.executable.is_file()
-            || !self.tessdata_directory.join("eng.traineddata").is_file()
-            || !self.tessdata_directory.join("osd.traineddata").is_file()
-        {
-            return Err(ExtractionError::native_assets_missing(
-                "Tesseract executable, eng.traineddata, or osd.traineddata is absent",
-            ));
-        }
-        let workspace =
-            TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
-        let input = self.write_png(&workspace, "input.png", &page.image)?;
+    ) -> Result<u16, ExtractionError> {
+        let half = page.resize_exact(
+            (page.width() / 2).max(1),
+            (page.height() / 2).max(1),
+            FilterType::Triangle,
+        );
+        let input = self.write_png(workspace, "orientation.png", &half)?;
         let osd_base = workspace.path().join("orientation");
         let osd_stderr_path = workspace.write("osd.stderr", b"")?;
         let osd_stderr = std::fs::OpenOptions::new()
@@ -308,47 +321,78 @@ impl OcrBackend for TesseractOcr {
             .read_to_end(&mut osd_diagnostic)
             .map_err(ExtractionError::io)?;
         let osd_diagnostic = String::from_utf8_lossy(&osd_diagnostic);
-        let rotation = if osd_status.success() {
+        if osd_status.success() {
             let osd_path = Self::osd_output_path(&osd_base);
             workspace.register_existing(&osd_path)?;
-            self.parse_osd(&std::fs::read(osd_path).map_err(ExtractionError::io)?)?
+            self.parse_osd(&std::fs::read(osd_path).map_err(ExtractionError::io)?)
         } else if osd_status.code() == Some(1) && Self::is_sparse_osd_diagnostic(&osd_diagnostic) {
             // Tesseract uses exit code 1 when OSD cannot determine an
             // orientation for sparse or blank input. OCR remains useful.
-            0
+            Ok(0)
         } else if Self::is_osd_initialization_diagnostic(&osd_diagnostic) {
-            return Err(ExtractionError::native_assets_missing(format!(
+            Err(ExtractionError::native_assets_missing(format!(
                 "Tesseract OSD initialization failed: {}",
                 Self::diagnostic_summary(&osd_diagnostic)
-            )));
+            )))
         } else {
-            return Err(ExtractionError::parse_failed(format!(
+            Err(ExtractionError::parse_failed(format!(
                 "Tesseract OSD exited with {osd_status}: {}",
                 Self::diagnostic_summary(&osd_diagnostic)
-            )));
-        };
-
-        let mut best = self.recognize_at(&workspace, page, rotation, "oriented", cancel)?;
-        // A page that reads confidently in the orientation OSD asked for is done,
-        // and so is one that read as blank: the overwhelmingly common upright
-        // document, and every blank back of a duplex scan, cost exactly one pass.
-        for candidate in [270, 90, 180, 0] {
-            if !orientation_search_is_worthwhile(&best) {
-                break;
-            }
-            if candidate == rotation {
-                continue;
-            }
-            let attempt = self.recognize_at(
-                &workspace,
-                page,
-                candidate,
-                &format!("try-{candidate}"),
-                cancel,
-            )?;
-            best = better_reading(best, attempt);
+            )))
         }
-        Ok(best)
+    }
+}
+
+#[cfg(feature = "native-tesseract")]
+impl OcrBackend for TesseractOcr {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        cancel.check()?;
+        if !self.executable.is_file()
+            || !self.tessdata_directory.join("eng.traineddata").is_file()
+            || !self.tessdata_directory.join("osd.traineddata").is_file()
+        {
+            return Err(ExtractionError::native_assets_missing(
+                "Tesseract executable, eng.traineddata, or osd.traineddata is absent",
+            ));
+        }
+        let workspace =
+            TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
+        // Tesseract binarises whatever it is given, so colour tells it
+        // nothing; grey is a third of the bytes to encode, write and decode
+        // on every pass.
+        let page = DynamicImage::ImageLuma8(page.image.to_luma8());
+        read_upright(&mut PagePasses {
+            ocr: self,
+            workspace: &workspace,
+            page: &page,
+            cancel,
+        })
+    }
+}
+
+/// One page's passes through the Tesseract executable, in one workspace.
+#[cfg(feature = "native-tesseract")]
+struct PagePasses<'a> {
+    ocr: &'a TesseractOcr,
+    workspace: &'a TempWorkspace,
+    page: &'a DynamicImage,
+    cancel: &'a CancellationToken,
+}
+
+#[cfg(feature = "native-tesseract")]
+impl OrientationPasses for PagePasses<'_> {
+    fn recognize(&mut self, rotation_degrees: u16) -> Result<OcrResult, ExtractionError> {
+        self.ocr
+            .recognize_at(self.workspace, self.page, rotation_degrees, self.cancel)
+    }
+
+    fn detect_orientation(&mut self) -> Result<u16, ExtractionError> {
+        self.ocr
+            .detect_orientation(self.workspace, self.page, self.cancel)
     }
 }
 
