@@ -144,6 +144,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .file-kind--spreadsheet { color: #24734d; }
 .file-kind--text { color: #667085; }
 .file-kind--image { color: #7653a8; }
+.file-kind--presentation { color: #b04a17; }
+.file-kind--email { color: #1f6f8b; }
 /* Hover and selection used to be the same tint, so the row under the pointer
    claimed to be the row the inspector was describing. */
 .table-wrap tbody tr:hover { background: var(--surface-subtle); }

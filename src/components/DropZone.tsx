@@ -1,9 +1,10 @@
 import { FileUp } from 'lucide-react';
 import type { DragEvent } from 'react';
+import { SUPPORTED_FORMATS_LABEL } from '../lib/formats';
 import { Icon } from './Icon';
 
 const LABEL = 'Drag files or folders here to add to the queue';
-const FORMATS = 'Supports PDF, DOCX, XLSX, EML, TXT, Markdown, PNG, JPEG (JPG), and TIFF';
+const FORMATS = `Supports ${SUPPORTED_FORMATS_LABEL}`;
 
 /**
  * The same drop target in two sizes.

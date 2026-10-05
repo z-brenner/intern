@@ -101,7 +101,7 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
       evidence: { date: 'Invoice date: April 30, 2025', type: 'INVOICE INV-2048', parties: 'Nimbus Orchard Supply Co.; Atlas Threadworks LLC' },
       reason: 'Identical content from a different path is retained as a separate review result.',
     };
-    if (file.displayName === 'unsupported.csv') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .csv.' };
+    if (file.displayName === 'unsupported.zip') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .zip.' };
     if (file.displayName.startsWith('~$')) return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Office lock file skipped.' };
   }
   return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'waiting' };

@@ -624,7 +624,7 @@ export async function generateFixtures(outputDirectory) {
     ['board-deck.pptx', boardDeckPptx()],
     ['mixed-batch/duplicate-invoice-a.pdf', invoice],
     ['mixed-batch/duplicate-invoice-b.pdf', invoice],
-    ['mixed-batch/unsupported.csv', Buffer.from('fictional_id,status\nX-001,unsupported\n')],
+    ['mixed-batch/unsupported.zip', Buffer.from('fictional_id,status\nX-001,unsupported\n')],
     ['mixed-batch/~$nda.docx', Buffer.from('temporary lock file; intentionally ignored')],
   ]);
   for (const [relative, bytes] of files) await writeFile(join(root, relative), bytes);
