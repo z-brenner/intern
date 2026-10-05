@@ -16,17 +16,21 @@
 //! fixture and the model's reply to every prompt, keyed by a hash of the
 //! prompt. `--replay PATH` then scores the corpus from that file alone - no
 //! worker, no model, seconds rather than most of an hour - so a change to
-//! distillation, validation, evidence, or naming is measured in CI on every
-//! push. A change to the prompt, or to the text the model would have read,
-//! changes the hash, and replay refuses the stale reply rather than scoring
-//! the wrong model output as if it were the right one: re-record, and commit
-//! the recording with the change. `--allow-stale` scores anyway, marked, for
-//! local iteration.
+//! validation, evidence, inference, house style, or naming is measured in CI
+//! on every push. A change to the prompt changes the hash - and that includes
+//! a change to distillation, because the digest it builds is most of the
+//! prompt - and replay refuses the stale reply rather than scoring the wrong
+//! model output as if it were the right one: re-record, and commit the
+//! recording with the change. `--allow-stale` scores anyway, marked, for
+//! local iteration. A fixture added or regenerated before anyone could
+//! record it is marked `"recording": "pending"` in the gold corpus, and
+//! replays as `pending`, which is neither scored nor a failure.
 //!
 //! **Baseline.** `--baseline PATH` compares every fixture's scores with a
 //! committed baseline and exits 2 when a reviewed answer that used to be right
 //! is now wrong; `--write-baseline PATH` writes the current scores as the new
-//! baseline. Improvements are reported, never required.
+//! baseline. Improvements are reported, never required. A score key the
+//! baseline does not have yet is not compared until a baseline is written.
 //!
 //! **Token confidence.** `--token-confidence` asks the local server for token
 //! probabilities on a live run; each record then carries `token_confidence`,
@@ -49,14 +53,16 @@ use std::{
 };
 
 use intern_engine::{
-    DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, ModelClient,
-    ModelProposal, ModelRequest, PageImage, Proposer, SupervisedWorker, TokenConfidence,
+    DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, Evidence, ModelClient,
+    ModelProposal, ModelRequest, PageImage, PartyRelation, Proposer, SupervisedWorker,
+    TokenConfidence, ValidatedProposal, compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
     legacy::{
         LEGACY_GRAMMAR, LegacyProposal, legacy_digest, legacy_filename, legacy_prompt,
         legacy_validate,
     },
+    naming::windows_name_key,
     prompt::SYSTEM_INSTRUCTION,
 };
 use serde::{Deserialize, Serialize};
@@ -66,6 +72,9 @@ use sha2::{Digest, Sha256};
 /// Exit status when the corpus scored, but worse than the baseline, or with
 /// fixtures replay could not score.
 const EXIT_REGRESSED: i32 = 2;
+
+/// The status of a fixture whose recording is still to be made.
+const PENDING: &str = "pending";
 
 fn main() {
     match run() {
@@ -204,22 +213,7 @@ fn run() -> Result<i32, String> {
     };
 
     let mut exit = 0;
-    let unscored = records
-        .iter()
-        .filter(|record| {
-            matches!(
-                record["status"].as_str(),
-                Some("unrecorded" | "stale_prompt" | "stale_fixture")
-            )
-        })
-        .map(|record| {
-            format!(
-                "{} ({})",
-                record["file"].as_str().unwrap_or_default(),
-                record["status"].as_str().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>();
+    let unscored = unscored(&records);
     if !unscored.is_empty() {
         eprintln!(
             "{} fixture(s) could not be scored from the recording: {}",
@@ -230,6 +224,21 @@ fn run() -> Result<i32, String> {
             "re-record the corpus (see docs/evaluation.md), or pass --allow-stale to score anyway"
         );
         exit = EXIT_REGRESSED;
+    }
+    let pending = records
+        .iter()
+        .filter(|record| record["status"] == json!(PENDING))
+        .map(|record| record["file"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    if !pending.is_empty() {
+        eprintln!(
+            "{} fixture(s) pending a recording: {}",
+            pending.len(),
+            pending.join(", ")
+        );
+    }
+    for line in filename_misses(fixtures, &records) {
+        eprintln!("{line}");
     }
 
     let mut report = Map::new();
@@ -253,10 +262,11 @@ fn run() -> Result<i32, String> {
             eprintln!("improved: {line}");
         }
         eprintln!(
-            "baseline: {} regression(s), {} improvement(s), {} new fixture(s)",
+            "baseline: {} regression(s), {} improvement(s), {} new fixture(s), {} pending",
             comparison.regressions.len(),
             comparison.improvements.len(),
-            comparison.new.len()
+            comparison.new.len(),
+            comparison.pending.len()
         );
         if !comparison.regressions.is_empty() {
             exit = EXIT_REGRESSED;
@@ -410,6 +420,13 @@ fn replay_one(
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
+    // A fixture added or regenerated before anyone could record it says so
+    // in the gold corpus. Its recording, if there is one, answers a document
+    // that no longer exists, so it is not scored - and not counted against
+    // the run either, which a recording nobody could make yet would be.
+    if fixture.get("recording").and_then(Value::as_str) == Some(PENDING) {
+        return json!({"file": name, "status": PENDING, "readiness": null, "replayed": true});
+    }
     let Some(recorded) = recording.fixtures.iter().find(|entry| entry.file == name) else {
         return json!({"file": name, "status": "unrecorded", "readiness": null, "replayed": true});
     };
@@ -504,7 +521,9 @@ fn completed_record(
             document_type: analysis.proposal.document_type.as_deref(),
             date_role: analysis.proposal.date_role.map(|role| role.as_str()),
             parties: &analysis.proposal.parties,
+            party_relation: Some(analysis.proposal.party_relation.as_str()),
             description: &analysis.description,
+            filename: Some(&analysis.filename),
             ready: analysis.status == ProposalStatus::Ready,
         },
     );
@@ -676,6 +695,10 @@ impl Proposer for RecordingProposer {
         }
         result
     }
+
+    fn context_tokens(&self) -> Option<usize> {
+        self.inner.context_tokens()
+    }
 }
 
 /// The reply a replay hands the engine in the model's place.
@@ -712,14 +735,22 @@ struct Comparison {
     regressions: Vec<String>,
     improvements: Vec<String>,
     new: Vec<String>,
+    /// Fixtures awaiting a recording, compared with nothing.
+    pending: Vec<String>,
 }
 
+/// A pending fixture has no scores to hold a later run to, so it is left out
+/// of the baseline: once recorded, it arrives as a new fixture rather than
+/// as a "pending" status that every real result would regress from.
 fn baseline_from(records: &[Value]) -> Baseline {
     let mut fixtures = BTreeMap::new();
     for record in records {
         let Some(file) = record["file"].as_str() else {
             continue;
         };
+        if record["status"] == json!(PENDING) {
+            continue;
+        }
         let scores = record["scores"]
             .as_object()
             .map(|scores| {
@@ -759,11 +790,19 @@ fn compare_with_baseline(records: &[Value], baseline: &Baseline) -> Comparison {
         let Some(file) = record["file"].as_str() else {
             continue;
         };
-        let Some(expected) = baseline.fixtures.get(file) else {
+        let status = record["status"].as_str().unwrap_or_default();
+        if status == PENDING {
+            comparison.pending.push(file.to_owned());
+            continue;
+        }
+        let Some(expected) = baseline
+            .fixtures
+            .get(file)
+            .filter(|expected| expected.status != PENDING)
+        else {
             comparison.new.push(file.to_owned());
             continue;
         };
-        let status = record["status"].as_str().unwrap_or_default();
         if status != expected.status {
             comparison
                 .regressions
@@ -825,6 +864,7 @@ fn legacy_record(
         return json!({"file": name, "status": "model_failed", "error": "MODEL_RESPONSE_INVALID", "readiness": null});
     };
     let outcome = legacy_validate(&candidate, &digest);
+    let filename = legacy_filename(&outcome, extension);
     let scores = score(
         fixture,
         ScoreInput {
@@ -834,14 +874,17 @@ fn legacy_record(
             // absence is the point of the comparison, not a gap in the scoring.
             date_role: None,
             parties: &outcome.parties,
+            // Nor had it a relation to state.
+            party_relation: None,
             description: &outcome.description,
+            filename: Some(&filename),
             ready: outcome.ready,
         },
     );
     json!({
         "file": name,
         "status": "completed",
-        "filename": legacy_filename(&outcome, extension),
+        "filename": filename,
         "description": outcome.description,
         "readiness": if outcome.ready { "ready" } else { "needs_review" },
         "review_reasons": outcome.reasons,
@@ -895,7 +938,10 @@ struct ScoreInput<'a> {
     document_type: Option<&'a str>,
     date_role: Option<&'a str>,
     parties: &'a [String],
+    party_relation: Option<&'a str>,
     description: &'a str,
+    /// The name the run proposed, as a person would see it in the folder.
+    filename: Option<&'a str>,
     ready: bool,
 }
 
@@ -992,6 +1038,36 @@ fn score(fixture: &Value, actual: ScoreInput<'_>) -> Value {
             })),
         );
     }
+    // The connecting word is what the filename says the parties are to the
+    // document - "to John Smith" and "for John Smith" are different claims
+    // about a notice. Scored where the corpus states a relation and parties
+    // were produced, because a relation attached to nobody measures nothing.
+    if let Some(gold_relation) = fixture
+        .get("party_relation")
+        .and_then(Value::as_str)
+        .filter(|relation| !relation.is_empty())
+        && !actual.parties.is_empty()
+        && let Some(relation) = actual.party_relation
+    {
+        scores.insert(
+            "relation_correct".into(),
+            Value::Bool(relation == gold_relation),
+        );
+    }
+    // Every score above can be right while the name a person sees is still
+    // wrong - a party spelled differently, the wrong connecting word, a lost
+    // date. The whole name is compared with the names the reviewed answer
+    // composes to, under the comparison Windows itself makes.
+    if let Some(filename) = actual.filename {
+        let gold = gold_filenames(fixture);
+        if !gold.is_empty() {
+            let key = windows_name_key(filename);
+            scores.insert(
+                "filename_correct".into(),
+                Value::Bool(gold.iter().any(|name| windows_name_key(name) == key)),
+            );
+        }
+    }
     let facts = strings(fixture, "acceptable_description_facts");
     if !facts.is_empty() {
         let lowered = actual.description.to_lowercase();
@@ -1018,6 +1094,99 @@ fn score(fixture: &Value, actual: ScoreInput<'_>) -> Value {
     }
     scores.insert("ready".into(), Value::Bool(actual.ready));
     Value::Object(scores)
+}
+
+/// The filenames the reviewed answer composes to, the reviewed one first:
+/// the reviewed type or an acceptable one, the reviewed date or an acceptable
+/// one, with the reviewed parties and relation, composed by the engine's own
+/// naming with the fixture's extension. Empty when the corpus gives no date
+/// or no type, because then there is no reviewed name to compare with.
+fn gold_filenames(fixture: &Value) -> Vec<String> {
+    let (Some(gold_date), Some(gold_type)) = (
+        fixture.get("document_date").and_then(Value::as_str),
+        fixture.get("document_type").and_then(Value::as_str),
+    ) else {
+        return Vec::new();
+    };
+    let extension = Path::new(fixture["file"].as_str().unwrap_or_default())
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let party_relation = fixture
+        .get("party_relation")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            PartyRelation::ALL
+                .into_iter()
+                .find(|relation| relation.as_str() == value)
+        })
+        .unwrap_or(PartyRelation::None);
+    let parties = strings(fixture, "parties");
+    let types = std::iter::once(gold_type.to_owned()).chain(strings(fixture, "acceptable_types"));
+    let dates = std::iter::once(gold_date.to_owned())
+        .chain(strings(fixture, "acceptable_dates"))
+        .collect::<Vec<_>>();
+    let mut names = Vec::new();
+    for document_type in types {
+        for date in &dates {
+            let proposal = ValidatedProposal {
+                document_type: Some(document_type.clone()),
+                document_date: Some(date.clone()),
+                date_role: None,
+                parties: parties.clone(),
+                party_relation,
+                description: String::new(),
+                confidence: 1.0,
+                evidence: Evidence::default(),
+            };
+            let name = compose_filename(&proposal, extension, &[]).value;
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// "file: filename: expected X, got Y" for every scored name that missed,
+/// with X the reviewed answer's own name.
+fn filename_misses(fixtures: &[Value], records: &[Value]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| record["scores"]["filename_correct"] == json!(false))
+        .filter_map(|record| {
+            let file = record["file"].as_str()?;
+            let fixture = fixtures
+                .iter()
+                .find(|fixture| fixture["file"] == json!(file))?;
+            let expected = gold_filenames(fixture).into_iter().next()?;
+            Some(format!(
+                "{file}: filename: expected {expected}, got {}",
+                record["filename"].as_str().unwrap_or_default()
+            ))
+        })
+        .collect()
+}
+
+/// Fixtures replay could not score, as "file (status)". A pending fixture is
+/// not one of them: it is waiting for a recording on purpose.
+fn unscored(records: &[Value]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record["status"].as_str(),
+                Some("unrecorded" | "stale_prompt" | "stale_fixture")
+            )
+        })
+        .map(|record| {
+            format!(
+                "{} ({})",
+                record["file"].as_str().unwrap_or_default(),
+                record["status"].as_str().unwrap_or_default()
+            )
+        })
+        .collect()
 }
 
 /// A predicted type counts as correct when it carries every meaningful word of
@@ -1091,6 +1260,10 @@ fn summarize(records: &[Value]) -> Value {
         );
     }
     summary.insert("evaluated".into(), json!(scored));
+    summary.insert(
+        "pending".into(),
+        json!(by_status.get(PENDING).copied().unwrap_or(0)),
+    );
     summary.insert("statuses".into(), json!(by_status));
     summary.insert(
         "review_rate".into(),
@@ -1172,7 +1345,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use intern_engine::{DateRole, Evidence, PartyRelation, source_from_text};
+    use intern_engine::{DateRole, source_from_text};
 
     #[test]
     fn a_more_specific_type_still_matches_the_reviewed_type() {
@@ -1240,6 +1413,7 @@ mod tests {
             "forbidden_dates": ["2026-02-04"],
             "date_role": "invoice",
             "parties": ["Acme Corporation"],
+            "party_relation": "from",
             "expected_readiness": "ready",
         })
     }
@@ -1423,5 +1597,176 @@ mod tests {
         let written = baseline_from(&records);
         assert!(written.fixtures["a.pdf"].scores["date_forbidden"]);
         assert_eq!(written.fixtures["c.pdf"].status, "stale_prompt");
+    }
+
+    fn scored(fixture: &Value, parties: &[String], relation: &str, filename: &str) -> Value {
+        score(
+            fixture,
+            ScoreInput {
+                document_date: Some("2026-01-05"),
+                document_type: Some("Invoice"),
+                date_role: Some("invoice"),
+                parties,
+                party_relation: Some(relation),
+                description: "Invoice from Acme Corporation for January consulting services.",
+                filename: Some(filename),
+                ready: true,
+            },
+        )
+    }
+
+    /// Every other score can be right while the name a person sees is
+    /// wrong, so the relation and the whole name are scored too: the name
+    /// against the one the reviewed answer composes to, compared the way
+    /// Windows compares names.
+    #[test]
+    fn relation_and_filename_scores() {
+        let fixture = invoice_fixture();
+        let acme = vec!["Acme Corporation".to_owned()];
+        assert_eq!(
+            gold_filenames(&fixture),
+            vec!["2026-01-05 Invoice from Acme Corporation.txt"]
+        );
+
+        let right = scored(
+            &fixture,
+            &acme,
+            "from",
+            "2026-01-05 Invoice from Acme Corporation.txt",
+        );
+        assert_eq!(right["relation_correct"], json!(true));
+        assert_eq!(right["filename_correct"], json!(true));
+        // Case is not a difference Windows sees.
+        let cased = scored(
+            &fixture,
+            &acme,
+            "from",
+            "2026-01-05 INVOICE FROM ACME CORPORATION.TXT",
+        );
+        assert_eq!(cased["filename_correct"], json!(true));
+
+        let wrong = scored(
+            &fixture,
+            &acme,
+            "to",
+            "2026-01-05 Invoice to Acme Corporation.txt",
+        );
+        assert_eq!(wrong["relation_correct"], json!(false));
+        assert_eq!(wrong["filename_correct"], json!(false));
+        assert_eq!(
+            wrong["parties_correct"],
+            json!(true),
+            "the parties were right"
+        );
+
+        // No parties produced: no relation to judge. No reviewed date or
+        // type: no reviewed name to compare with.
+        let nobody = scored(&fixture, &[], "none", "2026-01-05 Invoice.txt");
+        assert!(nobody.get("relation_correct").is_none());
+        let mut undated = fixture.clone();
+        undated.as_object_mut().unwrap().remove("document_date");
+        let unscored_name = scored(&undated, &acme, "from", "Invoice from Acme Corporation.txt");
+        assert!(unscored_name.get("filename_correct").is_none());
+
+        // An acceptable type or date composes an acceptable name; the
+        // reviewed one is still the one a miss reports.
+        let minutes = json!({
+            "file": "minutes.md",
+            "document_type": "Meeting Minutes",
+            "acceptable_types": ["Quarterly Operations Review"],
+            "document_date": "2025-05-07",
+            "acceptable_dates": ["2025-05-08"],
+            "parties": [],
+            "party_relation": "none",
+        });
+        let names = gold_filenames(&minutes);
+        assert_eq!(names[0], "2025-05-07 Meeting Minutes.md");
+        assert!(names.contains(&"2025-05-08 Quarterly Operations Review.md".to_owned()));
+        let record = json!({
+            "file": "minutes.md",
+            "status": "completed",
+            "filename": "2025-05-07 Board Notes.md",
+            "scores": {"filename_correct": false},
+        });
+        assert_eq!(
+            filename_misses(&[minutes], &[record]),
+            vec![
+                "minutes.md: filename: expected 2025-05-07 Meeting Minutes.md, got 2025-05-07 Board Notes.md"
+            ]
+        );
+
+        // A replayed record is scored the same way, through the engine's
+        // own naming.
+        let budget = DigestBudget::default();
+        let digest = intern_engine::distill(&invoice_source(), budget);
+        let record = replay_one(
+            &invoice_fixture(),
+            Path::new("/nonexistent/invoice.txt"),
+            &recording_with(Some(ModelRequest::from_digest(&digest).sha256())),
+            budget,
+            false,
+            None,
+        );
+        assert_eq!(record["scores"]["relation_correct"], json!(true));
+        assert_eq!(record["scores"]["filename_correct"], json!(true));
+    }
+
+    /// A fixture added before anyone could record it is marked pending in
+    /// the gold corpus. Replay neither scores it nor fails over it, and a
+    /// baseline written meanwhile does not hold it to a "pending" status.
+    #[test]
+    fn pending_fixture_is_not_a_regression() {
+        let budget = DigestBudget::default();
+        let mut fixture = invoice_fixture();
+        fixture["recording"] = json!("pending");
+        // Recorded or not, a pending fixture is not scored.
+        for recording in [recording_with(None), recording_with(Some("0".repeat(64)))] {
+            let record = replay_one(
+                &fixture,
+                Path::new("/nonexistent/invoice.txt"),
+                &recording,
+                budget,
+                false,
+                None,
+            );
+            assert_eq!(record["status"], json!("pending"));
+            assert!(record.get("scores").is_none());
+        }
+
+        let records = vec![
+            json!({"file": "invoice.txt", "status": "pending", "readiness": null}),
+            json!({"file": "new.pdf", "status": "pending", "readiness": null}),
+            json!({"file": "gone.pdf", "status": "unrecorded", "readiness": null}),
+        ];
+        assert_eq!(unscored(&records), vec!["gone.pdf (unrecorded)"]);
+
+        let baseline = Baseline {
+            schema_version: 1,
+            fixtures: BTreeMap::from([(
+                "invoice.txt".to_owned(),
+                BaselineEntry {
+                    status: "completed".into(),
+                    scores: BTreeMap::from([("date_correct".to_owned(), true)]),
+                },
+            )]),
+        };
+        let comparison = compare_with_baseline(&records, &baseline);
+        assert!(comparison.regressions.is_empty(), "{comparison:?}");
+        assert_eq!(comparison.pending, vec!["invoice.txt", "new.pdf"]);
+        assert_eq!(comparison.new, vec!["gone.pdf"]);
+
+        let summary = summarize(&records);
+        assert_eq!(summary["pending"], json!(2));
+        assert_eq!(summary["statuses"]["pending"], json!(2));
+
+        // Written into no baseline, so once recorded it arrives as new.
+        let written = baseline_from(&records);
+        assert!(!written.fixtures.contains_key("invoice.txt"));
+        let recorded = vec![
+            json!({"file": "invoice.txt", "status": "completed", "scores": {"date_correct": true}}),
+        ];
+        let later = compare_with_baseline(&recorded, &written);
+        assert!(later.regressions.is_empty());
+        assert_eq!(later.new, vec!["invoice.txt"]);
     }
 }

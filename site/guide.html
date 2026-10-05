@@ -637,7 +637,7 @@
           </div>
           <div>
             <dt>It stays on your machine</dt>
-            <dd>Reading, OCR, and the AI model all run locally. Your documents never leave the computer.</dd>
+            <dd>Reading, OCR, and the AI model all run locally. Your documents never leave the computer, unless you turn on a hosted model (opt-in, your own API key).</dd>
           </div>
         </dl>
 
@@ -648,9 +648,12 @@
             <p>Intern never asks for a password — not even for OneDrive or
             SharePoint, which it reaches through folders already on your disk
             (see <a href="#onedrive">section 06</a>).</p>
-            <p>It makes two kinds of network request, both only when you press a
-            button: the one-time model download, and <strong>Check for
-            updates</strong>. Neither carries anything about your documents.</p>
+            <p>It makes two kinds of network request, and neither carries
+            anything about your documents: the one-time model download, which
+            you start, and the update check, which runs when Intern starts and
+            every 6 hours while it runs, and whenever you press <strong>Check
+            for updates</strong>. You can switch the automatic check off
+            (<a href="#updates">section 10</a>).</p>
             <p>The one exception is yours to make: Settings can send documents
             to a <strong>hosted model</strong> under your own API key. It is off
             unless you turn it on, and the header says so while it is
@@ -692,10 +695,15 @@
         <div class="warn">
           <svg class="ico" aria-hidden="true"><use href="#i-warn"/></svg>
           <div>
-            <b>Why that warning appears</b>
-            <p>The installer is not Authenticode signed, because this project has
-            no code-signing certificate. Don't take an unrecognized-app warning
-            lightly in general — verify the download rather than trust it.</p>
+            <b>Before you install: why that warning appears</b>
+            <p>The installer is not Authenticode signed yet, because this project
+            has no code-signing certificate. Don't take an unrecognized-app
+            warning lightly in general — verify the download rather than trust
+            it.</p>
+            <p>On a PC where <strong>Smart App Control</strong> is on (enforcement
+            mode), Windows blocks the installer outright and offers no
+            <strong>Run anyway</strong>. Intern cannot be installed there until
+            it is signed.</p>
           </div>
         </div>
 
@@ -704,7 +712,7 @@
           repository, workflow, and commit produced those exact bytes. Check it
           with the GitHub CLI:
         </p>
-        <pre><code>gh attestation verify Intern_&lt;version&gt;_x64-setup.exe --repo z-brenner/intern</code></pre>
+        <pre><code>gh attestation verify Intern_&lt;version&gt;_x64-setup.exe --repo z-brenner/intern --signer-workflow z-brenner/intern/.github/workflows/release.yml</code></pre>
         <p class="note">
           <code>SHA256SUMS.txt</code>, published beside the installer, catches a
           corrupted download — but it sits on the same page as the installer, so
@@ -892,16 +900,18 @@
           <p class="sec-num">06</p>
           <h2>OneDrive &amp; SharePoint</h2>
         </div>
-        <p class="lead">Intern connects through the folders the Microsoft sync client already keeps on your disk.</p>
+        <p class="lead">Intern works through the folders the Microsoft sync client already keeps on your disk.</p>
         <p class="prose">
-          It never talks to Microsoft's servers — no Graph API client, no OAuth
-          token, no upload code — so it never asks you to sign in.
+          The build published here never talks to Microsoft's servers: it ships
+          with no deployment to sign in to, so it never asks you to sign in,
+          holds no token, and uploads nothing. Renamed files reach the cloud
+          through the OneDrive app you already run.
         </p>
 
         <figure>
           <svg class="fig-topo" viewBox="0 0 420 398" role="img" aria-labelledby="tp-t tp-d">
             <title id="tp-t">How Intern reaches a SharePoint library</title>
-            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. Intern reads and renames files in that folder only. Intern never connects to Microsoft's servers itself.</desc>
+            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. Intern reads and renames files in that folder only. In the build published here, Intern never connects to Microsoft's servers itself.</desc>
 
             <rect class="f-dash" x="60.5" y="8.5" width="349" height="75" rx="12"/>
             <rect class="f-knock" x="72" y="1" width="118" height="14"/>
@@ -944,34 +954,72 @@
             <text class="f-micro" x="82" y="382">Intern never connects to Microsoft&#39;s servers</text>
           </svg>
           <figcaption>
-            The crossed-out line is the connection Intern does not make. The only
-            thing moving files to the cloud is the OneDrive app you already run.
+            The crossed-out line is the connection the published build does not
+            make. The only thing moving files to the cloud is the OneDrive app
+            you already run. (A build an administrator provisions for a verified
+            team Inbox does read upload metadata from Microsoft; see
+            <a href="#team">section 08</a>.)
           </figcaption>
         </figure>
 
+        <h3 class="sym-group">SET UP A FOLDER: THREE CLICKS</h3>
+        <p class="prose">
+          The first time Intern opens it offers to watch a folder for you; later,
+          open Settings and choose <strong>Set up a folder step by step…</strong>
+          under <strong>Shared intake</strong>. Nothing asks for a tenant, a site,
+          or an account. First make sure the folder is on your disk: your own
+          OneDrive already is, and for a SharePoint library you open it in the
+          browser and click <strong>Sync</strong> or <strong>Add shortcut to My
+          files</strong>.
+        </p>
         <ol class="steps">
           <li>
-            <b>Make the library a folder on your disk.</b>
-            <p>Your personal OneDrive already is one. For SharePoint, open the library in the browser and click <strong>Sync</strong> — or <strong>Add shortcut to OneDrive</strong>.</p>
+            <b>Choose a folder.</b>
+            <p>Intern lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, or browse to a folder inside it. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Check again</strong>.</p>
           </li>
           <li>
-            <b>Point Intern at it.</b>
-            <p>In Settings, pick that folder (or any folder inside it) as the intake folder, the destination, or both.</p>
+            <b>Say where renamed documents go.</b>
+            <p>Intern creates a <em>Filed</em> folder next to the one you chose, or you choose another. Choose the top folder of a synced location and Intern makes an <em>Inbox</em> to watch and a <em>Filed</em> folder inside it, so renamed documents stay synced.</p>
           </li>
           <li>
-            <b>That's it.</b>
-            <p>Files that appear in the folder get processed; renamed files sync back to the cloud through the sync client.</p>
+            <b>Decide about what is already there.</b>
+            <p>If the folder already holds documents, Intern asks once whether to rename them too. The default is to rename only new ones.</p>
           </li>
         </ol>
 
+        <div class="callout">
+          <svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg>
+          <div>
+            <b>Pick a folder that only you add documents to.</b>
+            <p>Choosing it here is how Intern knows the documents in it are yours,
+            so it does not ask Microsoft who uploaded them. Intern then keeps
+            running in the system tray and starts when you sign in, so documents
+            are filed while its window is closed.</p>
+          </div>
+        </div>
+
+        <div class="warn">
+          <svg class="ico" aria-hidden="true"><use href="#i-warn"/></svg>
+          <div>
+            <b>Don't type a OneDrive or SharePoint folder into Settings by hand.</b>
+            <p>A synced folder chosen that way has not been vouched for, so its
+            documents are held as <em>uploader unknown</em> and none is renamed:
+            the published build cannot ask Microsoft who uploaded them. Use
+            <strong>Set up a folder step by step…</strong> instead.</p>
+          </div>
+        </div>
+
         <p class="note">
-          Intern detects sync roots and labels your pick — “Synced with
-          OneDrive – …”, “Synced with SharePoint – …”, or “On a network
-          share – …” for a UNC path or mapped drive — so you can see what you
-          chose. Settings also lists every <strong>synced location</strong>
-          the sync client keeps on this computer, with a button to use it as
-          the intake or destination folder, because the folder a library syncs
-          to has a name nobody chose and is easy to lose in a folder dialog.
+          Settings shows how the folder is doing — up to date, waiting for
+          OneDrive to download documents, OneDrive not running, or no longer
+          synced — with the one button that fixes each. A document whose
+          contents are still in the cloud is never renamed or moved until
+          OneDrive has downloaded it. Intern labels a folder you pick “Synced
+          with OneDrive – …”, “Synced with SharePoint – …”, or “On a network
+          share – …”, and Settings lists every <strong>synced location</strong>
+          on this computer, because the folder a library syncs to has a name
+          nobody chose. A network share can never be watched as your own:
+          anyone with access can add to it.
         </p>
 
         <h3 class="sym-group">DESCRIPTIONS IN A SHAREPOINT COLUMN</h3>
@@ -1038,7 +1086,29 @@
           <p class="sec-num">07</p>
           <h2>Watch a folder</h2>
         </div>
-        <p class="lead">In Settings, enable <strong>Watch a folder</strong> and pick the intake folder.</p>
+        <p class="lead">A plain folder on this computer works too: tick <strong>This is a private local intake</strong>.</p>
+
+        <ol class="steps">
+          <li>
+            <b>Choose the folder.</b>
+            <p>In Settings, under <strong>Shared intake</strong>, turn on <strong>Watch a folder for new documents</strong> and choose the intake folder.</p>
+          </li>
+          <li>
+            <b>Say it is yours.</b>
+            <p>Tick <strong>This is a private local intake, not a shared or synced folder</strong>. That tells Intern only you put documents there, so it processes them without asking anyone who added them. The box is refused for a OneDrive, SharePoint, or network-share folder; for those, use <strong>Set up a folder step by step…</strong> (<a href="#onedrive">section 06</a>).</p>
+          </li>
+          <li>
+            <b>Choose a destination and save.</b>
+            <p>Renamed documents go to the destination folder.</p>
+          </li>
+        </ol>
+
+        <p class="prose">
+          A watched folder that is neither set up step by step nor ticked as a
+          private local intake is treated as shared: its documents are held as
+          <em>uploader unknown</em> until Microsoft confirms who uploaded them,
+          which only a provisioned build can do. Settings counts them.
+        </p>
         <p class="prose">Two rules are enforced when you save, rather than discovered while running:</p>
 
         <ul class="bullets">
@@ -1068,24 +1138,33 @@
           <p class="sec-num">08</p>
           <h2>Working as a team</h2>
         </div>
-        <p class="lead">Several computers can watch the same synced intake folder.</p>
+        <p class="lead">A team Inbox that files what your colleagues upload needs a build your administrator provisioned.</p>
         <p class="prose">
-          They coordinate through a <code>.intern</code> folder inside it — small
-          files the sync client replicates like anything else. Don't delete
-          <code>.intern</code> casually; it is how machines avoid processing the
-          same document twice.
+          In that build Intern connects your Microsoft work account and reads,
+          from Microsoft's own file metadata, who uploaded each document — never
+          its content. Only documents you upload directly into the Inbox,
+          unchanged, are filed for you. Anything uploaded by someone else, or
+          that cannot be verified, stays untouched in the Inbox. The build
+          published here has no deployment, so it cannot verify anyone; use a
+          folder only you add documents to (<a href="#onedrive">section 06</a>).
+        </p>
+        <p class="prose">
+          Several computers can watch the same synced folder. They coordinate
+          through a <code>.intern</code> folder inside it — small files the sync
+          client replicates like anything else. Don't delete <code>.intern</code>
+          casually; it is how machines avoid processing the same document twice.
         </p>
 
         <dl class="kv">
           <div>
             <dt>One claim per document</dt>
-            <dd>First claim wins, with a time-limited lease. If a machine crashes, its work is taken over automatically once the lease lapses — about 15 minutes.</dd>
+            <dd>First claim wins, with a time-limited lease. If a machine crashes, its work is taken over automatically once the lease lapses — about 15 minutes. Sync-based leases are best effort, not an exactly-once guarantee.</dd>
           </div>
           <div>
             <dt>Shared work queue</dt>
             <dd>
-              <p>By default each machine only processes documents dropped on it.</p>
-              <p>Turn on <strong>Also process documents uploaded by others</strong> to share the queue — with a two-minute courtesy delay, so the uploader's own machine gets first claim.</p>
+              <p>By default each machine only processes its own verified uploads.</p>
+              <p>In a provisioned build, <strong>Also process documents uploaded by others</strong> accepts other verified uploaders' documents too — never unknown ones — with a two-minute courtesy delay, so the uploader's own machine gets first claim. Without a provisioned build there is no one it can verify, so it adds nothing.</p>
             </dd>
           </div>
           <div>
@@ -1131,6 +1210,18 @@
             </div>
           </details>
           <details>
+            <summary>Windows blocked the installer and there is no Run anyway</summary>
+            <div class="answer">
+              <p>
+                That is <strong>Smart App Control</strong> in enforcement mode,
+                which blocks unsigned installers outright. The Intern installer is
+                not Authenticode signed yet, so it cannot be installed on that PC
+                until it is. Turning Smart App Control off is a decision about
+                the whole computer, not one to make for one app.
+              </p>
+            </div>
+          </details>
+          <details>
             <summary>The model download stopped partway through</summary>
             <div class="answer">
               <p>
@@ -1145,9 +1236,27 @@
             <div class="answer">
               <p>
                 It is the only network call Intern makes besides the model
-                download (and a hosted model, if you chose one), so check your
-                connectivity. An update that is not signed by this project's key
-                is refused outright — that is deliberate.
+                download (and a hosted model, if you chose one, or Microsoft, in
+                a build provisioned for a team), so check your connectivity. An
+                update that is not signed by this project's key is refused
+                outright — that is deliberate.
+              </p>
+            </div>
+          </details>
+          <details>
+            <summary>Intern must not contact anything on its own</summary>
+            <div class="answer">
+              <p>
+                Untick <strong>Check for updates automatically</strong> in
+                Settings → Updates and save, and keep the local model rather than
+                a hosted one: with a hosted model, each document's text is sent
+                as the document arrives, watched folders included, without a
+                click. Intern then makes no request you did not ask for;
+                <strong>Check for updates</strong> still works when you press it
+                (<a href="#updates">section 10</a>).
+                A build provisioned for a team also asks Microsoft about each
+                upload to its Inbox; the build published here ships with no
+                deployment, so that code never runs and never contacts Microsoft.
               </p>
             </div>
           </details>
@@ -1287,6 +1396,21 @@
             </div>
           </details>
           <details>
+            <summary>Settings says documents are “uploader unknown” and nothing is renamed</summary>
+            <div class="answer">
+              <p>
+                The watched folder was chosen by hand, so Intern does not know the
+                documents in it are yours and is waiting for Microsoft to say who
+                uploaded them — which the published build cannot ask. For a
+                OneDrive or SharePoint folder, run <strong>Set up a folder step
+                by step…</strong> in Settings and pick the same folder
+                (<a href="#onedrive">section 06</a>). For a plain local folder,
+                tick <strong>This is a private local intake</strong>
+                (<a href="#watch">section 07</a>).
+              </p>
+            </div>
+          </details>
+          <details>
             <summary>A file in my watched folder is being ignored</summary>
             <div class="answer">
               <p>Work through the usual causes:</p>
@@ -1352,11 +1476,22 @@
           <p class="sec-num">10</p>
           <h2>Updates</h2>
         </div>
-        <p class="lead"><strong>Settings → Check for updates.</strong> Only when you ask.</p>
+        <p class="lead">Intern checks for a newer release when it starts and every 6 hours while it runs.</p>
         <p class="prose">
-          There is no background polling and no timer. An update installs only if
-          it is signed by this project's key; anything else is refused.
+          The check asks GitHub for the release manifest and sends nothing about
+          your documents: no filenames, no contents, no identifier. A found
+          update shows a banner; nothing is downloaded or installed until you
+          click <strong>Install … and restart</strong>, which shows how much of
+          the download has arrived. Only a build signed with this project's key
+          is accepted; anything else is refused. Installing waits for renames:
+          once the download is in, the queue pauses so it starts no more,
+          and a rename part-way through its move, even one that began during
+          the download, finishes before Intern closes for the installer.
         </p>
+        <ul class="bullets">
+          <li><strong>To stop the automatic check</strong>, untick <strong>Check for updates automatically (when Intern starts and every 6 hours)</strong> in Settings → Updates and save.</li>
+          <li><strong>To check right now</strong>, press <strong>Check for updates</strong> in the same place. It works whether the automatic check is on or off.</li>
+        </ul>
         <p class="note"><a href="./">Back to the download page</a></p>
       </section>
 

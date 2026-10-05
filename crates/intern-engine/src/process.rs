@@ -21,6 +21,27 @@
 
 use std::process::Child;
 
+/// Windows `CREATE_NO_WINDOW`: a console sidecar opens no console window.
+// Defined everywhere so the flags can be checked on any platform; only the
+// Windows launchers pass them.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Windows `BELOW_NORMAL_PRIORITY_CLASS`. Inference and extraction are
+/// background work: the person at the keyboard should never wait for a
+/// document to be filed, and at normal priority a model holding half the
+/// cores made typing in the next window stutter. They still get every cycle
+/// nothing else wants.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+
+/// The creation flags every sidecar - llama-server and `intern-worker` - is
+/// launched with on Windows.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const fn sidecar_creation_flags() -> u32 {
+    CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+}
+
 /// Make `child` die with this process, whatever ends this process.
 ///
 /// Best effort on purpose. If the job cannot be created or the child cannot be

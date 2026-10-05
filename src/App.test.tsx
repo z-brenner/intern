@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App, UPDATE_POLL_INTERVAL_MS } from './App';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { InMemoryBridgeOptions } from './lib/inMemoryBridge';
 import type { AppSettings, QueueItem } from './types';
@@ -56,6 +56,73 @@ describe('App', () => {
 });
 
 /*
+  The automatic check is the one request Intern makes that nobody asked for at
+  that moment. Some offices allow none, so Settings can switch it off, and off
+  has to mean off from the first instant: not one check at launch before the
+  settings file has been read, and none when the six-hour timer comes round.
+*/
+describe('automatic update checks', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const current = { state: 'current' as const, currentVersion: '0.1.0-alpha.10' };
+
+  it('no_update_check_when_disabled: neither at launch nor on the timer, while the button still checks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = createInMemoryBridge({ settings: { skipUpdateChecks: true } });
+    const checkForUpdate = vi.spyOn(bridge, 'checkForUpdate').mockResolvedValue(current);
+    render(<App bridge={bridge} />);
+
+    // Settings has the saved choice, so the app has read it by now.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByLabelText(/^Check for updates automatically/)).not.toBeChecked();
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS * 2 + 1000); });
+    expect(checkForUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check for updates' }));
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+    expect(await within(dialog).findByRole('status', { name: 'Update status' })).toHaveTextContent('0.1.0-alpha.10 is the latest release');
+  });
+
+  it('check_runs_at_launch_and_on_timer_when_enabled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const checkForUpdate = vi.fn(async () => current);
+    render(<App bridge={{ ...createInMemoryBridge(), checkForUpdate }} />);
+
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS - 60_000); });
+    expect(checkForUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(2));
+  });
+
+  it('stops when switched off in Settings, and checks again as soon as it is switched back on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = createInMemoryBridge();
+    const checkForUpdate = vi.spyOn(bridge, 'checkForUpdate').mockResolvedValue(current);
+    render(<App bridge={bridge} />);
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+
+    const toggle = async () => {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      fireEvent.click(within(dialog).getByLabelText(/^Check for updates automatically/));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
+    };
+
+    await toggle();
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS * 2); });
+    expect(checkForUpdate).toHaveBeenCalledTimes(1);
+
+    await toggle();
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(2));
+  });
+});
+
+/*
   An install updated from 0.1.0-alpha.9: no onboarding has ever been recorded
   (completedVersion 0), the person chose a manual intake folder and destination
   in Settings, the queue holds finished and pending work, and the local model is
@@ -73,6 +140,12 @@ const alpha9Items: QueueItem[] = [
   { id: 'alpha9-waiting', originalFilename: 'scan-0003.pdf', status: 'waiting' },
 ];
 
+/*
+  The same file as this build reads it back: a field added since alpha.9 takes
+  its default, and the update switch's default is checks on.
+*/
+const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, skipUpdateChecks: false };
+
 function alpha9Bridge(options: InMemoryBridgeOptions = {}) {
   return createInMemoryBridge({ settings: alpha9Settings, items: alpha9Items, completedOnboardingVersion: 0, ...options });
 }
@@ -88,7 +161,7 @@ describe('updating from alpha.9', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Yes, this is my account' }));
     // Nothing is overwritten before the person turns filing on.
     await screen.findByRole('heading', { name: 'Turn on filing' });
-    expect(await bridge.getSettings()).toEqual(alpha9Settings);
+    expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on filing' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open Intern' }));
@@ -132,7 +205,7 @@ describe('updating from alpha.9', () => {
     expect(await screen.findByRole('row', { name: /scan-0002.pdf/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Setup steps' })).not.toBeInTheDocument();
-    expect(await bridge.getSettings()).toEqual(alpha9Settings);
+    expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
     expect(await bridge.listItems()).toEqual(alpha9Items);
   });
 });

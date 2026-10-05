@@ -110,7 +110,10 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  // skipUpdateChecks is spelled out because the desktop backend always
+  // returns it - false for a file that predates it - so a bridge that left it
+  // out would differ from the real one in exactly the case worth testing.
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;

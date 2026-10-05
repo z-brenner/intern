@@ -41,6 +41,8 @@ const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
 /// sheet was read and chosen against, so nothing the window shows is in
 /// doubt.
 const CONTENT_ELIDED: &str = "CONTENT_ELIDED";
+/// The worker's standard error, under the log directory when one is set.
+const WORKER_LOG: &str = "worker.log";
 
 /// Progress from the extraction stage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -563,6 +565,18 @@ impl Drop for SupervisedWorker {
 }
 
 fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, ExtractFailure> {
+    launch_logged(executable, temp_root, crate::logs::log_directory())
+}
+
+/// [`launch`], with the worker's standard error kept in `worker.log` under
+/// `log_directory` when there is one. The worker writes warning codes there,
+/// never document text: its panic hook reports where a panic happened, not
+/// the message, which can quote the document.
+fn launch_logged(
+    executable: &Path,
+    temp_root: Option<&Path>,
+    log_directory: Option<&Path>,
+) -> Result<WorkerProcess, ExtractFailure> {
     let mut command = Command::new(executable);
     if let Some(temp_root) = temp_root {
         command.env("INTERN_TEMP_ROOT", temp_root);
@@ -570,11 +584,11 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(crate::logs::stderr_for(log_directory, WORKER_LOG));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
+        command.creation_flags(crate::process::sidecar_creation_flags());
     }
     let mut child = command.spawn().map_err(|_| ExtractFailure::crashed())?;
     crate::process::tie_to_this_process(&child);
@@ -946,6 +960,50 @@ The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n
         // At the real bound, an endless line costs the bound and no more.
         let endless = std::io::repeat(b'x');
         assert_eq!(forwarded(endless, MAX_RESPONSE_LINE_BYTES), vec![Err(())]);
+    }
+
+    /// The worker's standard error is kept beside the server's when a log
+    /// directory is set, in a file emptied once it passes the cap.
+    #[cfg(unix)]
+    #[test]
+    fn worker_stderr_goes_to_its_log_when_directory_set() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join(WORKER_LOG), vec![b'x'; 300 * 1024]).unwrap();
+        // A worker that reports a warning code and then waits for commands.
+        let helper = directory.path().join("worker.sh");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho '{\"level\":\"warning\",\"code\":\"PARSE_FAILED\"}' >&2\nexec cat\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // A script written a moment ago can briefly be "text file busy" while
+        // another test's fork still holds the write handle; try again.
+        let process = (0..20)
+            .find_map(|_| {
+                launch_logged(&helper, None, Some(&logs)).ok().or_else(|| {
+                    std::thread::sleep(Duration::from_millis(50));
+                    None
+                })
+            })
+            .expect("the helper starts");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let log = logs.join(WORKER_LOG);
+        while std::fs::read_to_string(&log).unwrap_or_default().is_empty()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        process.terminate();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "{\"level\":\"warning\",\"code\":\"PARSE_FAILED\"}\n"
+        );
     }
 
     #[test]

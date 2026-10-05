@@ -18,10 +18,11 @@ intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json 
 
 A recording (`fixtures/corpus-recording.json`) holds, per fixture, the text
 the worker extracted and the reply the model gave, keyed by the SHA-256 of
-the exact prompt that reply answers. Replay re-runs everything *after* the
-model - distillation, validation, evidence checks, date-role inference, naming
-- from that text and that reply, so any change to those stages is scored the
-way a live run would score it.
+the exact prompt that reply answers. Replay distils the recorded text again,
+rebuilds the prompt to check it is still the one the reply answers, and then
+re-runs everything *after* the model - validation, evidence checks, date-role
+and type inference, house style, naming - from that text and that reply, so
+a change to those stages is scored the way a live run would score it.
 
 ## What replay can and cannot tell you
 
@@ -39,11 +40,30 @@ the prompt from the recorded text and compares the hash with the one recorded:
 * **The fixture bytes changed** (the generator was edited without
   re-recording): `stale_fixture`, same treatment.
 
-So: a change to `validate.rs`, `evidence.rs`, `infer.rs`, `naming.rs`, or
-`distill.rs`'s selection heuristics is measured for free. A change to
-`prompt.rs`, or to what the digest contains, costs one live recording on a
-machine with the runtime. That cost is the point. A prompt change nobody has
-run the model over is a prompt change nobody has measured.
+So: a change to `validate.rs`, `evidence.rs`, `infer.rs`, `house_style.rs`,
+or `naming.rs` is measured for free. A change to `prompt.rs` costs one live
+recording on a machine with the runtime - and so, almost always, does a
+change to `distill.rs`. The hash is taken over the whole prompt, and the
+digest distillation builds is most of the prompt: a heuristic that keeps a
+different block, orders the date index differently, or trims one more
+character changes the hash, and every fixture it touches replays as
+`stale_prompt` until the corpus is re-recorded. Only a distillation change
+that leaves every corpus prompt byte-for-byte the same replays clean, and
+then it has changed nothing replay can see. That cost is the point. A prompt
+change nobody has run the model over is a prompt change nobody has measured.
+
+### A fixture waiting for a recording
+
+A fixture added to the corpus, or regenerated, before anyone could make a
+live recording of it would otherwise fail every replay as `unrecorded` or
+`stale_fixture`. Mark it in the gold definition in
+`fixtures/generate-fixtures.mjs` with `recording: 'pending'` (and update
+`expected.json` with `--update-gold`, as `fixtures/README.md` describes).
+Replay then reports it with status `pending`: it is not scored, it is not a
+regression, it does not make the run exit 2, and `summary.pending` counts it
+so it is not forgotten. A baseline written meanwhile leaves it out, so once
+it is recorded - and the mark removed - it arrives as a new fixture rather
+than as a regression from "pending". A live run ignores the mark.
 
 ## The baseline gate
 
@@ -57,7 +77,14 @@ recording earns. CI replays the corpus on every push and compares:
 * a fixture whose status changed - it scored before and is now stale or
   unrecorded - is a regression;
 * a score that was wrong and is now right is an **improvement**, reported in
-  the log and never required.
+  the log and never required;
+* a `pending` fixture is listed and compared with nothing.
+
+Only the score keys the baseline already holds are compared. A score added
+to the evaluator is reported from its first run but gates nothing until a
+baseline is written with it: replay first against the old baseline, which
+must show no regressions, then write the baseline, and check in its diff
+that the only changes are the new keys and the improvements you expected.
 
 `ready` on its own is not compared: readiness is a routing decision, and
 `readiness_match` already scores whether it was the right one.
@@ -147,3 +174,23 @@ meaningful word of the reviewed type; `parties_correct` needs every reviewed
 party and no spurious one; `description_covers_facts` needs every listed fact
 in the sentence; `readiness_match` compares the routing decision with the
 reviewed one.
+
+Two scores judge the name a person actually sees:
+
+* `relation_correct` - the connecting word (`between`, `for`, `from`, ...)
+  is the reviewed `party_relation`. Scored where the corpus states one and
+  the run produced parties, since a relation attached to nobody says
+  nothing.
+* `filename_correct` - the proposed filename is one the reviewed answer
+  composes to: the reviewed type (or an acceptable one), the reviewed date
+  (or an acceptable one), the reviewed parties and relation, run through the
+  engine's own naming with the fixture's extension, and compared the way
+  Windows compares names (case, trailing dots and spaces, and Unicode
+  composition disregarded). Scored where the corpus gives a date and a type.
+  Every other score can be right while this one is wrong - "Contoso
+  Worldwide Inc" for "Contoso Worldwide, Inc.", a lost date, the wrong
+  connecting word - which is why it exists.
+
+Each miss is also printed on standard error as `file: filename: expected X,
+got Y`, with X the reviewed answer's own name, so the log says what a person
+would have seen without opening the report.
