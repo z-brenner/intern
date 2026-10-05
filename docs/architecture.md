@@ -176,9 +176,9 @@ One inference per document. The reply is constrained by a GBNF grammar, so
 whole classes of mistake are impossible rather than filtered afterwards:
 
 * `document_date` can only be `YYYY-MM-DD`.
-* `date_role` has no "due", "deadline", or "renewal" member. The model cannot
-  propose a payment due date as the document's date because it has no vocabulary
-  for it.
+* `date_role` has no "due", "deadline", or "renewal" member. The model has no
+  vocabulary for a payment due date as the document's date; it can still pick
+  one and call it something else, which validation catches (below).
 * `parties` is capped at three entries.
 * The reply contains no whitespace at all. Pretty-printing costs generated
   tokens, and generation is the slowest thing on a CPU.
@@ -202,8 +202,8 @@ The goal is calibration, not timidity. A proposal goes to review only when a
 | --- | --- |
 | Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1 |
 | Type | at least 60% of its significant words appear in the document |
-| Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`); the words themselves are never loosened |
-| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, or a hyphen the sentence added |
+| Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`, and `&` read as `and`); the words themselves are never loosened. Two spellings of one name (`ACME CORP`, `Acme Corp.`) are one party, but a name is never merged into a longer one (`Acme`, `Acme Holdings`) |
+| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
 
 The date rule is deliberately about the *date*, not about the model's quoted
 line. Small models paraphrase their own quotes — answering
@@ -212,6 +212,33 @@ reads "Effective date: February 14, 2025". The first version of this validation
 gated on the quoted wrapper and threw away correct dates on half the corpus. What
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
+
+A date the document states is not yet the document's date, so three more
+checks read the wording around it:
+
+* **Another document's date.** "the Master Services Agreement dated June 2,
+  2023" dates somebody else's agreement. A date stated only that way is
+  withheld, or replaced by the one date the document states on an effective
+  or commencement line. The determiner on the nearest document noun decides:
+  `This Consulting Agreement dated`, and a defined term like `(the
+  "Agreement")` standing for it, are the document dating itself. A citation
+  (`issued under`, `pursuant to`) taints only a date it runs straight into,
+  with no clause punctuation in between.
+* **A deadline.** When every statement of the chosen date is labelled a
+  deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
+  date the document labels as its issue date (`Invoice Date:`, `Dated`, a
+  bare `Date:`) replaces it; with none or several, the date is withheld for
+  a person, and the model's date is offered to them. Either way the proposal
+  goes to review with `DATE_IS_DEADLINE`. `payable` and `return` do not set
+  it off, and a numeric date that reads either way round counts as two.
+* **An implausible year.** A year more than ten years ahead or before 1900 is
+  usually an OCR misread the model copied faithfully (2625 for 2025). The
+  date is kept and the proposal goes to review with `DATE_IMPLAUSIBLE`.
+
+All of this is string handling over text nobody controls. A panic in it -
+one slice inside an `é` once panicked on every French invoice - fails that
+one document as `ANALYSIS_FAILED`, with a fixed message that never carries
+the document's text, instead of taking the model thread down with it.
 
 Self-reported confidence below 0.60 also routes to review, as does any
 fact-affecting parser warning, and any document with no defining date or no
