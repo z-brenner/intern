@@ -519,8 +519,9 @@ failing the backlog one item at a time; a busy service earns one retry. That
 retry waits as long as the service's `Retry-After` asked, up to a minute, and
 otherwise about eight seconds, spread by a fifth either way. A request to a
 service on the internet may take three minutes; one to a server on this
-machine - LM Studio or Ollama on a laptop CPU - may take ten, like the local
-model's own.
+machine - LM Studio or Ollama on a laptop CPU - may take 400 seconds, so that a
+request that timed out, the wait, and its one retry all end inside the queue's
+fifteen-minute deadline rather than running on past it.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address

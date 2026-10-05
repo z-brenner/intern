@@ -44,12 +44,18 @@ const MAX_REPLY_TOKENS: u32 = 16_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a service on the internet gets to answer one document.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
-/// How long a server on this machine gets: the local llama-server's own
-/// allowance, still inside the pipeline's fifteen-minute deadline. LM Studio
-/// or Ollama running a 7-8B model on a laptop CPU spends minutes on prefill
-/// alone, and at 180 s every long document timed out, was retried into the
-/// same timeout, and paused the queue.
-const LOCAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// How long a server on this machine gets. LM Studio or Ollama running a 7-8B
+/// model on a laptop CPU spends minutes on prefill alone, and at 180 s every
+/// long document timed out, was retried into the same timeout, and paused the
+/// queue.
+///
+/// Not the local llama-server's ten minutes: a request that times out is
+/// retried once, so two of these and the longest wait between them (860 s)
+/// must end inside the queue's fifteen-minute deadline. At ten minutes they
+/// did not, and the queue gave up on the document while its retry went on
+/// running on the same server - in front of the next document, and of this
+/// one, claimed again at once.
+const LOCAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(400);
 /// The longest wait a `Retry-After` is taken at its word for. A service that
 /// asks for longer is better answered by a paused queue and a person.
 const MAX_RETRY_AFTER_SECS: u64 = 120;
@@ -960,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn request_timeout_for_loopback_is_ten_minutes() {
+    fn request_timeout_for_loopback_is_four_hundred_seconds() {
         for local in [
             "http://localhost:11434/v1",
             "http://127.0.0.1:1234/v1",
@@ -968,7 +974,7 @@ mod tests {
         ] {
             assert_eq!(
                 request_timeout_for(&Url::parse(local).unwrap()),
-                Duration::from_secs(600),
+                Duration::from_secs(400),
                 "{local}"
             );
         }

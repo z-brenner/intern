@@ -654,6 +654,24 @@ mod tests {
         );
     }
 
+    /// A request that times out is retried once, after at most the longest
+    /// wait a retry takes. Both attempts and that wait must end inside the
+    /// queue's deadline: past it, the queue gives up on the document and
+    /// leaves the retry running - on a server on this machine, in front of
+    /// the next document and of this one, claimed again at once.
+    #[test]
+    fn a_timed_out_request_and_its_retry_end_inside_the_queue_deadline() {
+        let deadline = Duration::from_secs(intern_queue::pipeline::MODEL_TIMEOUT_SECONDS);
+        for endpoint in ["http://localhost:11434/v1", "https://api.openai.com/v1"] {
+            let timeout =
+                intern_engine::hosted::request_timeout_for(&url::Url::parse(endpoint).unwrap());
+            assert!(
+                timeout * 2 + super::MAX_HOSTED_RETRY_WAIT < deadline,
+                "{endpoint}: two attempts of {timeout:?} and the wait outlast {deadline:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_key_from_an_earlier_session_only_goes_to_the_saved_address() {
         let secrets: Arc<dyn SecretStore> = Arc::new(MemoryStore::default());
