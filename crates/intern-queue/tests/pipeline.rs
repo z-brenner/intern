@@ -5374,6 +5374,124 @@ fn approved_deferred_name_survives_rule_change() {
     assert_eq!(item_of(&pipeline, b).status, QueueStatus::Completed);
 }
 
+/// A destination on a network share that is offline at the moment of an
+/// undo: nothing under `share` can be read, and asking whether a file is
+/// there fails rather than answering no.
+struct OfflineShareFileSystem {
+    share: PathBuf,
+    offline: AtomicBool,
+}
+
+impl OfflineShareFileSystem {
+    fn unreachable(&self, path: &Path) -> io::Result<()> {
+        if self.offline.load(Ordering::SeqCst) && path.starts_with(&self.share) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "injected: the network path could not be reached",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl FileSystem for OfflineShareFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        self.unreachable(path).is_ok() && StdFileSystem.exists(path)
+    }
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        self.unreachable(path)?;
+        StdFileSystem.try_exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        self.unreachable(path)?;
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        self.unreachable(path)?;
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// Undo with the share the document was filed to offline. That the filed
+/// document could not be found used to read as "it was moved or deleted",
+/// which could send a person off to clear the history of a filing that is
+/// intact and only out of reach.
+#[test]
+fn an_undo_against_an_unreachable_share_does_not_say_the_document_is_gone() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let share = temp.path().join("share");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&share).unwrap();
+    let path = source(&inbox, "scan.pdf");
+    let share = share.canonicalize().unwrap();
+    let filesystem = Arc::new(OfflineShareFileSystem {
+        share: share.clone(),
+        offline: AtomicBool::new(false),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: share.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_file_system(
+        temp.path().join("queue.sqlite3"),
+        Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))])),
+        Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        filesystem.clone(),
+    )
+    .unwrap();
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    assert!(filed.starts_with(&share));
+
+    filesystem.offline.store(true, Ordering::SeqCst);
+    let error = pipeline.undo(id).unwrap_err();
+
+    assert_ne!(error.code, "FILE_CHANGED");
+    assert_eq!(
+        error.message,
+        format!(
+            "The filed document at {} could not be reached. Check that its folder is available, then try Undo again.",
+            display_path(&filed)
+        )
+    );
+    let still_filed = item_of(&pipeline, id);
+    assert_eq!(still_filed.status, QueueStatus::Completed);
+    assert!(still_filed.filed_receipt.is_some());
+
+    filesystem.offline.store(false, Ordering::SeqCst);
+    pipeline.undo(id).unwrap();
+    assert!(path.exists());
+    assert!(!filed.exists());
+}
+
 /// A receipt a newer build wrote - a stage or a direction this one has never
 /// heard of - in a database opened after the older release was reinstalled.
 /// The queue listing read every item's receipts strictly, so one such row

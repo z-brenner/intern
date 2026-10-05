@@ -240,6 +240,15 @@ pub trait LockedFile: Send {
 
 pub trait FileSystem: Send + Sync {
     fn exists(&self, path: &Path) -> bool;
+    /// Whether `path` exists, or the error that kept that from being known.
+    ///
+    /// `exists` reads both "not there" and "could not look" as absent, which
+    /// is the safe answer before a rename. It is the wrong one to tell a
+    /// person: a network share that is offline is not a document that was
+    /// moved or deleted.
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        Ok(self.exists(path))
+    }
     fn hash(&self, path: &Path) -> io::Result<String>;
     fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool>;
     fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()>;
@@ -254,6 +263,10 @@ pub struct StdFileSystem;
 impl FileSystem for StdFileSystem {
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        path.try_exists()
     }
 
     fn hash(&self, path: &Path) -> io::Result<String> {
@@ -304,6 +317,12 @@ impl FileApplier {
     pub const fn with_lock_retry(mut self, lock_retry: LockRetry) -> Self {
         self.lock_retry = lock_retry;
         self
+    }
+
+    /// Whether `path` exists, as the file system this applier works on sees
+    /// it, or the error that kept that from being known.
+    pub fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        self.filesystem.try_exists(path)
     }
 
     pub fn fingerprint(&self, path: &Path) -> InternResult<String> {

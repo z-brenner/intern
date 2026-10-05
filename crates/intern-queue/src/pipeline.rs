@@ -281,6 +281,12 @@ pub trait FileActions: Send + Sync {
     fn apply(&self, item: &QueueItem, destination: &Path) -> PipelineResult<()>;
     fn undo(&self, item: &QueueItem, receipt: &OperationReceipt) -> PipelineResult<()>;
     fn reconcile(&self, item: &QueueItem) -> PipelineResult<()>;
+    /// Whether `path` exists, or the error that kept that from being known:
+    /// what a failed undo asks before telling a person where their document
+    /// is.
+    fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
+        path.try_exists()
+    }
 }
 
 pub struct CoreFileActions {
@@ -365,6 +371,10 @@ impl FileActions for CoreFileActions {
             .reconcile(item.id)
             .map(|_| ())
             .map_err(Into::into)
+    }
+
+    fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
+        self.applier.try_exists(path)
     }
 }
 
@@ -2215,7 +2225,10 @@ impl Pipeline {
         match outcome {
             Ok(()) => Ok(()),
             Err(_) if self.is_undone(id) => Ok(()),
-            Err(error) => Err(undo_failure(error, &receipt)),
+            Err(error) => {
+                let filed = self.files.try_exists(&receipt.destination);
+                Err(undo_failure(error, &receipt, filed))
+            }
         }
     }
 
@@ -2350,28 +2363,42 @@ impl Pipeline {
     }
 }
 
-/// What a failed undo tells the person who asked for it.
+/// What a failed undo tells the person who asked for it, given whether the
+/// filed document is still where it was filed (`filed_present`).
 ///
 /// The window shows the message as it is, and the applier's own words were
 /// written for a log: a filed document someone moved read as an unavailable
-/// destination volume, and a moment of contention as a compare-and-swap.
-fn undo_failure(error: PipelineError, filed: &OperationReceipt) -> PipelineError {
-    if !filed.destination.exists() {
-        return PipelineError::new(
+/// destination volume, and a moment of contention as a compare-and-swap. Only
+/// a document the file system says is not there was moved or deleted; one it
+/// could not look for - an offline network share, a folder it may not read -
+/// is still filed as far as anyone knows, and saying otherwise could send a
+/// person off to clear the history of a filing that is intact.
+fn undo_failure(
+    error: PipelineError,
+    filed: &OperationReceipt,
+    filed_present: std::io::Result<bool>,
+) -> PipelineError {
+    match filed_present {
+        Ok(false) => PipelineError::new(
             "FILE_CHANGED",
             format!(
                 "The filed document is no longer at {}; it was moved or deleted.",
                 display_path(&filed.destination)
             ),
-        );
-    }
-    if error.code == "STATE_CONFLICT" {
-        return PipelineError::new(
+        ),
+        Err(_) => PipelineError::new(
+            error.code,
+            format!(
+                "The filed document at {} could not be reached. Check that its folder is available, then try Undo again.",
+                display_path(&filed.destination)
+            ),
+        ),
+        Ok(true) if error.code == "STATE_CONFLICT" => PipelineError::new(
             "STATE_CONFLICT",
             "Another rename is in progress. Try Undo again in a moment.",
-        );
+        ),
+        Ok(true) => error,
     }
-    error
 }
 
 /// Why an item's files must be settled before anything else moves them, or
