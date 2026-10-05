@@ -1013,7 +1013,7 @@ impl Pipeline {
     }
 
     fn run_next_inner(&self) -> PipelineResult<bool> {
-        let Some(item) = self.store.claim_next()? else {
+        let Some(item) = self.claim_next()? else {
             return Ok(false);
         };
         let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
@@ -1367,6 +1367,28 @@ impl Pipeline {
             }
         }
         Ok(true)
+    }
+
+    /// The next document to read, if there is one the store will hand out.
+    ///
+    /// Nothing is claimed while any document is being renamed, and an undo,
+    /// an approval or a check of unsettled files can now be renaming one on
+    /// another thread in the middle of a drain - an undo no longer waits for
+    /// the document being read. Finding nothing then ended the drain, and
+    /// nothing woke the scheduler again when the rename was done: the backlog
+    /// sat until the next document arrived or the recovery pass came round,
+    /// up to a minute later. So a drain that finds nothing waits for whatever
+    /// file operation is in flight and looks once more. Holding the run lock
+    /// while it waits is safe: those operations never take it.
+    fn claim_next(&self) -> PipelineResult<Option<QueueItem>> {
+        if let Some(item) = self.store.claim_next()? {
+            return Ok(Some(item));
+        }
+        drop(self.hold_file_ops());
+        if self.paused.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        Ok(self.store.claim_next()?)
     }
 
     /// Applies the renames the scheduler owes: every ready document when
@@ -1852,6 +1874,38 @@ impl Pipeline {
         }
     }
 
+    /// Sends a document an undo just put back to review, while the hold of
+    /// the operation that did it is still held.
+    ///
+    /// A finished undo leaves the item ready - the state the scheduler files
+    /// from - with the approval of the rename it took back still on its
+    /// record. `report_settled` marks it for review, but only after the hold
+    /// is released, and a drain that was waiting for that very undo to finish
+    /// could pick the document up in between and file it again under the
+    /// name just undone. Marked here, any rename of it starts only once it is
+    /// already in review, and is refused.
+    fn hold_undone_for_review(&self, item_id: i64) {
+        let undone = self
+            .store
+            .load_receipt(item_id)
+            .ok()
+            .flatten()
+            .is_some_and(|receipt| {
+                receipt.direction == OperationDirection::Undo
+                    && receipt.stage == OperationStage::Complete
+            });
+        if undone
+            && self
+                .store
+                .get(item_id)
+                .ok()
+                .flatten()
+                .is_some_and(|item| item.status == QueueStatus::Ready)
+        {
+            let _ = self.repository.mark_needs_review(item_id, UNDONE);
+        }
+    }
+
     /// Reports an operation a reconciliation finished rather than the call
     /// that started it.
     ///
@@ -2326,6 +2380,7 @@ impl Pipeline {
                 // Settle it now, as a failed apply is.
                 let _ = self.files.reconcile(&item);
             }
+            self.hold_undone_for_review(id);
             outcome
         };
         // An undo the applier journalled can be finished by a reconciliation
@@ -2466,6 +2521,7 @@ impl Pipeline {
                 {
                     let _ = self.files.reconcile(&claimed);
                 }
+                self.hold_undone_for_review(id);
             }
             self.report_settled(id);
         }

@@ -5702,6 +5702,182 @@ fn an_undo_against_an_unreachable_share_does_not_say_the_document_is_gone() {
     assert!(!filed.exists());
 }
 
+/// Undoes one filing the first time the filed document is read, and holds
+/// the undo there until the test lets it go.
+struct HeldUndoFileSystem {
+    armed: AtomicBool,
+    entered: Barrier,
+    release: Barrier,
+}
+
+impl FileSystem for HeldUndoFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        if path.file_name().and_then(|name| name.to_str()) == Some(AGREEMENT_NAME)
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
+            self.entered.wait();
+            self.release.wait();
+        }
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// A worker that, as it starts each document, notes the status the queue
+/// database holds for the `watched` item at that moment.
+struct StatusProbeWorker {
+    inner: FakeWorker,
+    database: PathBuf,
+    watched: Mutex<Option<i64>>,
+    seen: Mutex<Vec<String>>,
+}
+
+impl WorkerBoundary for StatusProbeWorker {
+    fn extract(
+        &self,
+        request_id: &str,
+        path: &Path,
+        progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        if let Some(id) = *self.watched.lock().unwrap() {
+            let status: String = Connection::open(&self.database)
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM queue_items WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.seen.lock().unwrap().push(status);
+        }
+        self.inner.extract(request_id, path, progress)
+    }
+
+    fn cancel(&self, request_id: &str) -> Result<(), WorkerFailure> {
+        self.inner.cancel(request_id)
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        self.inner.restart()
+    }
+
+    fn shutdown(&self) -> Result<(), WorkerFailure> {
+        self.inner.shutdown()
+    }
+}
+
+/// An undo started while a backlog drains. Nothing is claimed while a
+/// document is being renamed, so the drain used to find nothing, end, and
+/// leave the backlog until something else woke the scheduler - up to a
+/// minute later. It waits for the undo instead, and carries on; and the
+/// document the undo put back is not filed again on the way.
+#[test]
+fn a_drain_waits_for_an_undo_in_flight_instead_of_stopping() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let later = source(temp.path(), "later.pdf");
+    let filesystem = Arc::new(HeldUndoFileSystem {
+        armed: AtomicBool::new(false),
+        entered: Barrier::new(2),
+        release: Barrier::new(2),
+    });
+    let worker = Arc::new(StatusProbeWorker {
+        inner: FakeWorker::new(vec![
+            Ok(parsed(SIGNED_AGREEMENT)),
+            Ok(parsed(SIGNED_AGREEMENT)),
+        ]),
+        database: temp.path().join("queue.sqlite3"),
+        watched: Mutex::new(None),
+        seen: Mutex::new(Vec::new()),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Arc::new(
+        Pipeline::with_file_system(
+            temp.path().join("queue.sqlite3"),
+            worker.clone(),
+            Arc::new(FakeModel::new(vec![
+                Ok(proposal(0.94, false)),
+                Ok(proposal(0.94, false)),
+            ])),
+            Arc::new(RecordingEvents::default()),
+            settings,
+            filesystem.clone(),
+        )
+        .unwrap(),
+    );
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    let later_id = pipeline
+        .enqueue_files(std::slice::from_ref(&later))
+        .unwrap()
+        .remove(0)
+        .id;
+
+    *worker.watched.lock().unwrap() = Some(id);
+    filesystem.armed.store(true, Ordering::SeqCst);
+    let undoing = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.undo(id))
+    };
+    filesystem.entered.wait();
+    let draining = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.run_until_idle())
+    };
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        !draining.is_finished(),
+        "the drain waits for the undo rather than ending with work queued"
+    );
+    filesystem.release.wait();
+    undoing.join().unwrap().unwrap();
+    draining.join().unwrap().unwrap();
+
+    assert_eq!(item_of(&pipeline, later_id).status, QueueStatus::Ready);
+    // When the drain went on to the next document, the one just put back was
+    // already in review. An undo leaves its item ready, with the approval of
+    // the rename it took back, and a drain that had been waiting for the undo
+    // could otherwise file it again before the undo said it was undone.
+    assert_eq!(
+        *worker.seen.lock().unwrap(),
+        vec!["needs_review".to_owned()]
+    );
+    let undone = item_of(&pipeline, id);
+    assert_eq!(undone.status, QueueStatus::NeedsReview);
+    assert!(
+        undone
+            .proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE)
+    );
+    assert!(path.exists());
+    assert!(!filed.exists());
+}
+
 /// A receipt a newer build wrote - a stage or a direction this one has never
 /// heard of - in a database opened after the older release was reinstalled.
 /// The queue listing read every item's receipts strictly, so one such row
