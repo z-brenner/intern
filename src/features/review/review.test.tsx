@@ -121,6 +121,56 @@ describe('review actions', () => {
     expect(feedback).not.toHaveTextContent('os error 32');
   });
 
+  // Pipeline::apply_if_unchanged refuses an approval of a file that changed
+  // since it was read with "Re-analyze it.", and the panel has no control by
+  // that name: it says Analyze again, from the panel and from Apply all ready.
+  it('points an approval refused because the file changed at Analyze again', async () => {
+    const approve = vi.fn(async () => { throw { code: 'FILE_CHANGED', message: 'The file changed after it was analyzed. Re-analyze it.' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('Use Analyze again, under More review actions');
+    expect(feedback).not.toHaveTextContent('Re-analyze');
+    fireEvent.click(within(feedback).getByRole('button', { name: 'Dismiss' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    const batch = await screen.findByRole('alert', { name: 'Action error' });
+    expect(batch).toHaveTextContent('could not be applied. The file changed after it was analyzed, so this name may no longer fit it. Use Analyze again');
+    expect(batch).not.toHaveTextContent('Re-analyze');
+  });
+
+  // Check again (retry on a parked item) queues nothing: it finishes the
+  // stopped rename or rolls it back. It can also fail for the reason the item
+  // was parked, and then sending the person back to Check again is a loop.
+  it('says what Check again found, and never answers a failed check with Check again', async () => {
+    const parked = (id: string, errorCode: string) => ({ id, originalFilename: `${id}.pdf`, status: 'review' as const, proposedFilename: `2024-05-01 ${id}.pdf`, errorCode, parked: true });
+    const base = createInMemoryBridge({ items: [parked('stuck', 'RECONCILIATION_REQUIRED'), parked('copied', 'SOURCE_DELETE_FAILED'), parked('ambiguous', 'RECONCILIATION_REQUIRED')] });
+    const retry = vi.fn(async (id: string) => {
+      if (id === 'ambiguous') throw { code: 'RECONCILIATION_REQUIRED', message: 'an incomplete operation left a file at both of its paths' };
+      await base.retry(id);
+    });
+    render(<App bridge={{ ...base, retry }} />);
+    const status = () => screen.getByRole('status', { name: 'Action status' });
+
+    selectRow(await screen.findByRole('row', { name: /stuck\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(status()).toHaveTextContent('Checked stuck.pdf: it was not renamed, and waits for your decision.'));
+
+    selectRow(screen.getByRole('row', { name: /copied\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(status()).toHaveTextContent('Checked copied.pdf: it is filed.'));
+    expect(status()).not.toHaveTextContent('queued for retry');
+
+    selectRow(screen.getByRole('row', { name: /ambiguous\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).not.toHaveTextContent('Check again');
+    expect(feedback).toHaveTextContent('Remove from queue and choose \u201cI have resolved the files myself\u201d');
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['stuck', 'copied', 'ambiguous']);
+  });
+
   it('completed_item_labels_and_open_reveal_buttons', async () => {
     const base = createInMemoryBridge({ items: [
       { id: 'filed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement (2).pdf', undoable: true },

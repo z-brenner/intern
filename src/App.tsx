@@ -13,6 +13,7 @@ import { Toast } from './components/Toast';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
 import { describeActionError } from './lib/actionErrors';
+import type { RefusedAction } from './lib/actionErrors';
 import { describeAddReport } from './lib/addReport';
 import { installingLabel } from './lib/format';
 import { describeQueueStop } from './lib/reasons';
@@ -23,7 +24,7 @@ import { useMediaQuery } from './lib/useMediaQuery';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
-import { itemActions, nextUndecided, undecidedOrder } from './features/review/actions';
+import { isParked, itemActions, nextUndecided, undecidedOrder } from './features/review/actions';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -284,7 +285,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // resolves with a count - and the result is not needed here. False when
   // the command failed; otherwise the queue as read after it, for a caller
   // that says what the command did - undefined when that reread failed.
-  const runQueueAction = async (run: () => Promise<unknown>, success: string): Promise<false | { read?: QueueItem[] }> => {
+  // `success` can be worked out from that read, for a command whose outcome
+  // only the queue afterwards can say; `refused` says which command it was,
+  // where a code means different things to different commands.
+  const runQueueAction = async (run: () => Promise<unknown>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction): Promise<false | { read?: QueueItem[] }> => {
     if (actionInFlight.current) return false;
     actionInFlight.current = true;
     setActionPending(true);
@@ -296,7 +300,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       try { await run(); }
       catch (error) {
         try { await refresh(); } catch { /* Preserve the original command error. */ }
-        setActionError(describeActionError(error));
+        setActionError(describeActionError(error, refused));
         return false;
       }
       // The command has already happened. A reread that fails afterwards is
@@ -304,7 +308,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       // failed would send someone looking for a file under its old name.
       let read: QueueItem[] | undefined;
       try { read = await refresh(); } catch { /* Reported as a queue connection error. */ }
-      setActionMessage(success);
+      setActionMessage(typeof success === 'string' ? success : success(read));
       return { read };
     } finally {
       actionInFlight.current = false;
@@ -318,7 +322,9 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const decide = async (item: QueueItem, decision: 'approve' | 'keep' | 'remove', run: () => Promise<void>) => {
     const before = undecidedOrder(visible);
     const selectionVersion = focusRestoreVersion.current;
-    const outcome = await runQueueAction(run, '');
+    // Approving a parked item checks its files first, and that check can be
+    // what refuses it.
+    const outcome = await runQueueAction(run, '', decision === 'approve' ? { approve: true, checkedFiles: isParked(item) } : undefined);
     if (!outcome) return;
     // Only a list read after the command says what it did; when that reread
     // failed, the command still happened and the queue as last read stands.
@@ -356,13 +362,20 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     setFocusRequest({ id: next.id, target: 'filename' });
     setActionMessage(`${done} Next: ${next.originalFilename}.`);
   };
-  const refreshAndClear = async (run: () => Promise<void>, success: string) => {
+  const refreshAndClear = async (run: () => Promise<void>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction) => {
     const selectionVersion = focusRestoreVersion.current;
-    if (!await runQueueAction(run, success)) return;
+    if (!await runQueueAction(run, success, refused)) return;
     if (focusRestoreVersion.current !== selectionVersion) return;
     setSelectedId(undefined);
     restoreQueueFocus();
   };
+  // Retry queues a failed item, a duplicate or an unverified upload to be
+  // read again. A parked item's is Check again, which queues nothing: it
+  // finishes the stopped rename or rolls it back, and only the queue after
+  // it says which; it can also fail for the reason the item was parked.
+  const retryItem = (item: QueueItem) => isParked(item)
+    ? refreshAndClear(() => bridge.retry(item.id), (read) => checkedOutcome(item, read), { checkedFiles: true })
+    : refreshAndClear(() => bridge.retry(item.id), 'Item queued for retry.');
   const applyAllReady = async () => {
     if (actionInFlight.current) return;
     actionInFlight.current = true;
@@ -391,7 +404,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       if (failed.size) {
         const firstError = failed.values().next().value;
         setActionMessage('');
-        setActionError(`${applied.length} ${applied.length === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError)}`);
+        setActionError(`${applied.length} ${applied.length === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError, { approve: true })}`);
       } else {
         setActionMessage(outcome.text);
       }
@@ -719,7 +732,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {selected && <ReviewInspector ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
         onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
-        onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
+        onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
@@ -768,6 +781,18 @@ function batchOutcome(ids: string[], queue: QueueItem[]) {
     back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',
   ].filter(Boolean).join(' ');
   return { text, undoable: filed.filter((id) => now(id)?.undoable === true) };
+}
+
+/**
+ * What Check again did, read from the queue after it: the rename had
+ * finished and the document is filed, or it had not happened and the
+ * document waits for a decision again.
+ */
+function checkedOutcome(item: QueueItem, queue?: QueueItem[]) {
+  const now = queue?.find((entry) => entry.id === item.id);
+  if (now?.status === 'completed') return `Checked ${item.originalFilename}: it is filed.`;
+  if (now?.status === 'review') return `Checked ${item.originalFilename}: it was not renamed, and waits for your decision.`;
+  return `Checked ${item.originalFilename}.`;
 }
 
 function queueStatusAnnouncement(items: QueueItem[], paused: boolean) {

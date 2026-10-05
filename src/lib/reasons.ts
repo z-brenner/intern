@@ -22,7 +22,10 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
-  FILE_CHANGED: 'The file changed after it was analyzed, so the result no longer describes it.',
+  // Approving such a document sends it back here rather than filing a name
+  // that described the earlier version; reading it again is the way on, and
+  // the refusal of the approval says the same (actionErrors.ts).
+  FILE_CHANGED: 'The file changed after it was analyzed, so the result no longer describes it. Use Analyze again to read it as it is now.',
   // A rename refused because the file is held - a viewer the person opened
   // it in, a sync client still writing it - is rolled back and the document
   // waits in review; approving again once it is let go is the retry, and the
@@ -60,7 +63,7 @@ const SENTENCES: Record<string, string> = {
   // Raised before analysis when the content was filed before; the name it was
   // filed under is normally given instead, as "Duplicate of ...". The bare code
   // only reaches here once the record of that filing is gone.
-  DUPLICATE: 'This document\'s content was filed once already. Retry to process it anyway, or remove it.',
+  DUPLICATE: 'This document\'s content was filed once already. Choose Process anyway to process it all the same, or remove it.',
   // Raised after analysis when the text is nearly the text of a document
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
