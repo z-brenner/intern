@@ -62,7 +62,6 @@ fn the_header_block_is_emitted_in_fixed_order_before_the_body() {
          Cc: carol@example.com\n\
          Date: Thu, 21 Aug 2025 09:15:00 -0400\n\
          Subject: Q3 invoice attached\n\
-         Sent: 2025-08-21T13:15:00Z\n\
          \n\
          Hi Bob,\n\
          \n\
@@ -81,7 +80,61 @@ fn the_date_header_the_engine_validates_against_survives_verbatim() {
         text.contains("Date: Thu, 21 Aug 2025 09:15:00 -0400"),
         "{text}"
     );
-    assert!(text.contains("Sent: 2025-08-21T13:15:00Z"), "{text}");
+}
+
+/// An evening email from New York is the next day in UTC. Printed beside the
+/// verbatim header, that instant handed the model a second, wrong-day date
+/// to quote, and validation accepted it because it was in the text.
+#[test]
+fn no_utc_sent_line() {
+    let document = extract(
+        b"From: alice@example.com\r\n\
+          Date: Thu, 21 Aug 2025 21:15:00 -0400\r\n\
+          Subject: Late invoice\r\n\
+          \r\n\
+          Body.\r\n",
+    )
+    .unwrap();
+    let text = &document.pages[0].text;
+
+    assert!(
+        text.contains("Date: Thu, 21 Aug 2025 21:15:00 -0400"),
+        "{text}"
+    );
+    assert!(!text.contains("Sent:"), "{text}");
+    assert!(!text.contains("2025-08-22"), "{text}");
+}
+
+/// Receipts and statements are HTML tables. A label and its value in
+/// neighbouring cells stay on one line, told apart, and the curly
+/// apostrophe in a client's name arrives as the character it is.
+#[test]
+fn html_tables_and_entities() {
+    let document = extract(
+        b"From: billing@example.com\r\n\
+          Date: Mon, 3 Mar 2025 08:00:00 +0000\r\n\
+          Subject: Your receipt\r\n\
+          Content-Type: text/html; charset=utf-8\r\n\
+          \r\n\
+          <html><head><title>Receipt</title><style>td{padding:0}</style></head><body>\
+          <!-- tracking pixel follows -->\
+          <table><tr><td>Invoice date</td><td>March 3, 2025</td></tr>\
+          <tr><td>Bill to</td><td>O&rsquo;Brien &amp; Co</td></tr>\
+          <tr><td>Total</td><td>&euro;1,250&#x2009;&mdash; paid</td></tr></table>\
+          </body></html>\r\n",
+    )
+    .unwrap();
+    let text = &document.pages[0].text;
+
+    assert!(text.contains("Invoice date | March 3, 2025"), "{text}");
+    assert!(text.contains("Bill to | O\u{2019}Brien & Co"), "{text}");
+    assert!(
+        text.contains("Total | \u{20AC}1,250\u{2009}\u{2014} paid"),
+        "{text}"
+    );
+    assert!(!text.contains("tracking"), "{text}");
+    assert!(!text.contains("padding"), "{text}");
+    assert!(!text.contains("&rsquo;"), "{text}");
 }
 
 #[test]

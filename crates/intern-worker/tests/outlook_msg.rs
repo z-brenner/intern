@@ -4,9 +4,10 @@
 
 use std::io::Write;
 
-use intern_worker::email::extract_msg;
+use intern_worker::email::{extract_msg, extract_msg_in_zone};
 use intern_worker::extract::CancellationToken;
 use intern_worker::limits::ResourceLimits;
+use jiff::tz::{self, TimeZone};
 use tempfile::tempdir;
 
 /// 2026-03-04T15:22:10Z as a FILETIME: 100-nanosecond ticks since 1601.
@@ -144,8 +145,13 @@ fn an_outlook_message_becomes_the_same_page_an_eml_would() {
     let path = directory.path().join("forwarded-invoice.msg");
     forwarded_invoice(&path);
 
-    let extracted =
-        extract_msg(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap();
+    let extracted = extract_msg_in_zone(
+        &path,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+        &TimeZone::UTC,
+    )
+    .unwrap();
     assert_eq!(extracted.pages.len(), 1);
     let text = &extracted.pages[0].text;
     let header = text.split("\n\n").next().unwrap_or_default();
@@ -154,9 +160,8 @@ fn an_outlook_message_becomes_the_same_page_an_eml_would() {
         "From: Dana Ruiz <dana.ruiz@ridgeline.example>\n\
          To: Priya Nandakumar <priya@contoso.example>\n\
          Cc: Marcus Reyes <marcus@reyestolliver.example>\n\
-         Date: 2026-03-04 15:22:10 UTC\n\
-         Subject: FW: Invoice INV-7741 for January\n\
-         Sent: 2026-03-04T15:22:10Z",
+         Date: 2026-03-04 15:22:10 +00:00\n\
+         Subject: FW: Invoice INV-7741 for January",
         "{text}"
     );
     assert!(
@@ -254,4 +259,216 @@ fn an_honestly_sized_rtf_body_is_still_read() {
     let text = &extracted.pages[0].text;
 
     assert!(text.contains("The March ledger is attached."), "{text}");
+}
+
+/// A message built from top-level property streams and a property stream
+/// carrying the given fixed-size properties.
+fn message(path: &std::path::Path, streams: &[(&str, Vec<u8>)], fixed: &[(u16, u16, [u8; 8])]) {
+    let handle = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap();
+    let mut file = cfb::CompoundFile::create_with_version(cfb::Version::V3, handle).unwrap();
+    for (name, bytes) in streams {
+        write_stream(&mut file, &format!("/__substg1.0_{name}"), bytes);
+    }
+    write_stream(
+        &mut file,
+        "/__properties_version1.0",
+        &properties(true, fixed),
+    );
+    file.flush().unwrap();
+}
+
+/// 2025-03-02T21:30:00Z: 08:30 on 3 March in Sydney.
+const SYDNEY_MORNING: u64 = 133_854_246_000_000_000;
+
+fn extract_in(path: &std::path::Path, zone: &TimeZone) -> String {
+    extract_msg_in_zone(
+        path,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+        zone,
+    )
+    .unwrap()
+    .pages
+    .remove(0)
+    .text
+}
+
+/// Archiving and eDiscovery tools write messages whose only body is HTML.
+/// Outlook stores that HTML as a binary property, which msg_parser hands
+/// over as hex digits, and the whole body used to arrive as kilobytes of
+/// `3c68746d6c3e...`.
+#[test]
+fn html_only_msg_body_is_decoded() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("receipt.msg");
+    let mut html = b"<html><head><meta http-equiv=\"Content-Type\" \
+        content=\"text/html; charset=windows-1252\"><title>Receipt</title></head><body>\
+        <p>Receipt for Caf\xE9 M\xFCller</p>\
+        <table><tr><td>Invoice date</td><td>March 3, 2025</td></tr></table>"
+        .to_vec();
+    html.extend_from_slice(b"</body></html>");
+    message(
+        &path,
+        &[("0037001F", utf16("Your receipt")), ("10130102", html)],
+        &[(0x0040, 0x0039, SYDNEY_MORNING.to_le_bytes())],
+    );
+
+    let text = extract_in(&path, &TimeZone::UTC);
+
+    assert!(text.contains("Receipt for Caf\u{e9} M\u{fc}ller"), "{text}");
+    assert!(text.contains("Invoice date | March 3, 2025"), "{text}");
+    assert!(!text.contains("3c68746d6c"), "{text}");
+    assert!(!text.contains('<'), "{text}");
+}
+
+/// The same property stored as a string is the HTML itself, and must not
+/// be mistaken for hex.
+#[test]
+fn an_html_string_property_is_used_as_written() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("string-html.msg");
+    message(
+        &path,
+        &[(
+            "1013001F",
+            utf16("<p>Engagement confirmed for <b>Juniper Ridge</b>.</p>"),
+        )],
+        &[],
+    );
+
+    let text = extract_in(&path, &TimeZone::UTC);
+
+    assert!(
+        text.contains("Engagement confirmed for Juniper Ridge."),
+        "{text}"
+    );
+}
+
+/// Outlook's ANSI format stores strings in the message's code page, and
+/// msg_parser drops any that are not UTF-8: the subject, sender and body of
+/// a message about a café, or a fee in pounds, simply vanished.
+#[test]
+fn ansi_msg_strings_are_recovered() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("ansi.msg");
+    message(
+        &path,
+        &[
+            ("0037001E", b"Caf\xE9 contract\0".to_vec()),
+            ("0C1A001E", b"Ren\xE9e Dubois\0".to_vec()),
+            ("0C1F001E", b"renee@example.com\0".to_vec()),
+            (
+                "1000001E",
+                b"The fee is \xA3500, payable to Caf\xE9 Ltd.\0".to_vec(),
+            ),
+        ],
+        &[
+            (0x0003, 0x3FFD, long(1252)),
+            (0x0003, 0x3FDE, long(1252)),
+            (0x0040, 0x0039, SYDNEY_MORNING.to_le_bytes()),
+        ],
+    );
+
+    let text = extract_in(&path, &TimeZone::UTC);
+
+    assert!(text.contains("Subject: Caf\u{e9} contract"), "{text}");
+    assert!(
+        text.contains("From: Ren\u{e9}e Dubois <renee@example.com>"),
+        "{text}"
+    );
+    assert!(
+        text.contains("The fee is \u{a3}500, payable to Caf\u{e9} Ltd."),
+        "{text}"
+    );
+}
+
+/// The code page the message declares is the one its strings are read in.
+#[test]
+fn ansi_strings_are_read_in_the_declared_code_page() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("cyrillic.msg");
+    message(
+        &path,
+        // "Договор" in Windows-1251.
+        &[("0037001E", b"\xC4\xEE\xE3\xEE\xE2\xEE\xF0\0".to_vec())],
+        &[(0x0003, 0x3FFD, long(1251))],
+    );
+
+    let text = extract_in(&path, &TimeZone::UTC);
+
+    assert!(
+        text.contains("Subject: \u{414}\u{43e}\u{433}\u{43e}\u{432}\u{43e}\u{440}"),
+        "{text}"
+    );
+}
+
+/// A message that travelled over SMTP carries the `Date` header its sender's
+/// client wrote, in the sender's offset, and that is the line kept. One that
+/// never did is dated in this machine's zone: a Sydney sent item at 08:30
+/// on 3 March is 21:30 on 2 March in UTC, and naming it after the UTC day
+/// files it a day early.
+#[test]
+fn msg_date_uses_transport_header_or_local_offset() {
+    let directory = tempdir().unwrap();
+    let sydney = TimeZone::fixed(tz::offset(11));
+
+    let travelled = directory.path().join("received.msg");
+    message(
+        &travelled,
+        &[
+            ("0037001F", utf16("Signed engagement letter")),
+            (
+                "007D001F",
+                utf16(
+                    "Received: from mx.example.com by mail.example.com\r\n\
+                     Delivery-Date: Sun, 2 Mar 2025 21:31:02 +0000\r\n\
+                     Date: Mon, 3 Mar 2025 08:30:00 +1100\r\n\
+                     Subject: Signed engagement letter\r\n\r\n",
+                ),
+            ),
+        ],
+        &[(0x0040, 0x0039, SYDNEY_MORNING.to_le_bytes())],
+    );
+    let text = extract_in(&travelled, &TimeZone::UTC);
+    assert!(
+        text.contains("\nDate: Mon, 3 Mar 2025 08:30:00 +1100\n"),
+        "{text}"
+    );
+    assert!(!text.contains("2025-03-02"), "{text}");
+
+    let sent_item = directory.path().join("sent-item.msg");
+    message(
+        &sent_item,
+        &[("0037001F", utf16("Signed engagement letter"))],
+        &[(0x0040, 0x0039, SYDNEY_MORNING.to_le_bytes())],
+    );
+    let text = extract_in(&sent_item, &sydney);
+    assert!(
+        text.contains("\nDate: 2025-03-03 08:30:00 +11:00\n"),
+        "{text}"
+    );
+    assert!(!text.contains("Sent:"), "{text}");
+    assert!(!text.contains("2025-03-02"), "{text}");
+
+    // The public entry point dates in the machine's own zone.
+    let local = extract_msg(
+        &sent_item,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap()
+    .pages
+    .remove(0)
+    .text;
+    let expected = jiff::Timestamp::from_second(1_740_951_000)
+        .unwrap()
+        .to_zoned(TimeZone::system())
+        .strftime("%Y-%m-%d %H:%M:%S %:z")
+        .to_string();
+    assert!(local.contains(&format!("\nDate: {expected}\n")), "{local}");
 }
