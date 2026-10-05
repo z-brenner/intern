@@ -385,7 +385,12 @@ party was left out and why. The names in force are recorded with each
 proposal, so the name, the layout folder, a lesson from an edit, and the
 filing report all read the same view. Changing them in Settings recomposes
 every document still waiting, as a learned spelling does; an approved name
-keeps what the person typed.
+keeps what the person typed. Every save asks, not only one that changed the
+list, so a rename an earlier save never reached is finished by the next, and
+a document being read while the list changed reads it again as it starts to
+wait. A proposal's revision moves only when its name does: the review panel
+replaces an unapproved draft when it moves, and a document the change leaves
+named as it was keeps whatever the reviewer had typed.
 
 ## Model and runtime
 

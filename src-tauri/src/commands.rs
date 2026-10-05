@@ -1772,8 +1772,11 @@ pub(crate) trait SettingsRuntime {
     fn sync_tray(&self, run_in_background: bool);
     fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
-    /// The organisation's names changed: documents still waiting are named
-    /// by the other side, or by every side again, at once.
+    /// The organisation's names as just saved: documents still waiting that
+    /// were named under another list are named by the other side, or by
+    /// every side again, at once. Asked after every save, so a rename an
+    /// earlier save never reached is finished by the next; one already
+    /// named by `names` is left as it is.
     fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
@@ -1986,9 +1989,13 @@ fn save_settings_with_microsoft_protection(
     }
     // Last, because it renames only what is still waiting: a queue that
     // could not be renamed must not leave the watcher on the old folder.
-    if previous.own_names() != settings.our_names {
-        state.own_names_changed(&settings.our_names)?;
-    }
+    // Asked on every save, not only when the list differs from the one
+    // stored before: the list is stored first, so when a step above (or the
+    // rename itself) failed, the next save found nothing different, and the
+    // documents waiting kept the old organisation's names until the list
+    // was edited again. Documents already named by this list are not
+    // touched, so a save that changes nothing renames nothing.
+    state.own_names_changed(&settings.our_names)?;
     Ok(())
 }
 
@@ -2109,11 +2116,10 @@ fn restore_settings_unlocked(
     if let Err(error) = runtime.emit_intake_changed() {
         failures.push(error);
     }
-    if current
-        .as_ref()
-        .is_none_or(|current| current.own_names() != previous.own_names())
-        && let Err(error) = runtime.own_names_changed(&previous.own_names())
-    {
+    // Always, like the tray and the watcher: the queue need not be named by
+    // what was stored when the failure struck, and documents already named
+    // by the restored list are left as they are.
+    if let Err(error) = runtime.own_names_changed(&previous.own_names()) {
         failures.push(error);
     }
     let Some(first) = failures.first() else {
@@ -4080,20 +4086,28 @@ mod settings_report_tests {
 
 #[cfg(test)]
 mod own_names_tests {
+    use std::sync::atomic::Ordering;
+
     use intern_queue::AppSettings;
 
     use super::test_runtime::RecordingRuntime;
     use super::{restore_sharepoint_settings, save_settings};
 
-    /// Naming the organisation renames what is waiting, so the queue hears
-    /// about a change to the list - and only about a change: a save of
-    /// anything else, or the same names typed with stray spaces and blank
-    /// lines, renames nothing.
-    #[test]
-    fn settings_save_reports_own_names_change_to_runtime() {
-        let dir = std::env::temp_dir().join(format!("intern-own-names-{}", std::process::id()));
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Naming the organisation renames what is waiting, so the queue hears
+    /// the list after every save - stored the way it is matched, so stray
+    /// spaces and blank lines are not a different list. The queue leaves a
+    /// document already named by the list as it is, so hearing the same
+    /// list again renames nothing (pipeline tests pin that half).
+    #[test]
+    fn settings_save_reports_own_names_change_to_runtime() {
+        let dir = scratch("own-names");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime.store.save(&AppSettings::default()).unwrap();
         let heard = || runtime.own_names.lock().unwrap().clone();
@@ -4131,22 +4145,80 @@ mod own_names_tests {
             },
         )
         .unwrap();
-        assert_eq!(heard().len(), 1, "the same names are not a change");
+        assert_eq!(
+            heard(),
+            vec![named.clone(), named.clone()],
+            "the same names, trimmed the same way"
+        );
 
         save_settings(&runtime, AppSettings::default()).unwrap();
-        assert_eq!(heard(), vec![named, Vec::new()], "nobody named any more");
+        assert_eq!(
+            heard(),
+            vec![named.clone(), named, Vec::new()],
+            "nobody named any more"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list is stored before anything is renamed. A save that failed
+    /// after storing it - the watcher would not restart, or the rename
+    /// itself could not reach the queue - used to leave the waiting
+    /// documents on the old names for good: the retry found the stored list
+    /// already equal to the new one and renamed nothing. The retry finishes
+    /// the rename now.
+    #[test]
+    fn a_rename_a_failed_save_never_reached_happens_on_the_next_save() {
+        let dir = scratch("own-names-retry");
+        let inbox = dir.join("Inbox");
+        let filed = dir.join("Filed");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::create_dir_all(&filed).unwrap();
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let named = vec!["Contoso".to_owned()];
+        let watching = AppSettings {
+            intake_enabled: true,
+            intake_local_only: true,
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            destination: filed.to_string_lossy().into_owned(),
+            our_names: named.clone(),
+            ..AppSettings::default()
+        };
+
+        // The watcher cannot restart: the save stops before the rename.
+        *runtime.fail_intake_restart.lock().unwrap() = Some(Box::new(|_| true));
+        assert_eq!(
+            save_settings(&runtime, watching.clone()).unwrap_err().code,
+            "APP_DATA_UNAVAILABLE"
+        );
+        assert_eq!(runtime.store.load().unwrap().our_names, named, "stored");
+        assert!(runtime.own_names.lock().unwrap().is_empty());
+
+        // The rename itself fails.
+        *runtime.fail_intake_restart.lock().unwrap() = None;
+        runtime.fail_own_names.store(true, Ordering::SeqCst);
+        assert_eq!(
+            save_settings(&runtime, watching.clone()).unwrap_err().code,
+            "DATABASE_UNAVAILABLE"
+        );
+
+        // Nothing differs from what is stored, and the rename still runs.
+        runtime.fail_own_names.store(false, Ordering::SeqCst);
+        save_settings(&runtime, watching).unwrap();
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![named.clone(), named]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Putting back the settings stored before a failed SharePoint
     /// activation puts back the organisation the waiting documents are named
-    /// by - and, like a save, says nothing when the names did not change.
+    /// by - every time, like the tray and the watcher, because the queue
+    /// need not be named by what was stored when the activation failed.
     #[test]
     fn restoring_settings_renames_by_the_restored_organisation() {
-        let dir =
-            std::env::temp_dir().join(format!("intern-own-names-restore-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = scratch("own-names-restore");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime
             .store
@@ -4167,9 +4239,8 @@ mod own_names_tests {
         );
         restore_sharepoint_settings(&runtime, &previous).unwrap();
         assert_eq!(
-            runtime.own_names.lock().unwrap().len(),
-            1,
-            "the same names are not a change"
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()], vec!["Contoso".to_owned()]]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4218,6 +4289,9 @@ pub(crate) mod test_runtime {
         pub after_persist: Mutex<Option<Hook>>,
         /// Every list of own names the queue was told about, in order.
         pub own_names: Mutex<Vec<Vec<String>>>,
+        /// Renaming the waiting documents fails, as a queue database that
+        /// is briefly unavailable does. The names are still recorded.
+        pub fail_own_names: AtomicBool,
         gate: Mutex<()>,
         activation: AtomicBool,
     }
@@ -4234,6 +4308,7 @@ pub(crate) mod test_runtime {
                 fail_intake_events: AtomicBool::new(false),
                 after_persist: Mutex::new(None),
                 own_names: Mutex::new(Vec::new()),
+                fail_own_names: AtomicBool::new(false),
                 gate: Mutex::new(()),
                 activation: AtomicBool::new(false),
             }
@@ -4351,6 +4426,12 @@ pub(crate) mod test_runtime {
 
         fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
             self.own_names.lock().unwrap().push(names.to_vec());
+            if self.fail_own_names.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "DATABASE_UNAVAILABLE",
+                    "injected queue rename failure",
+                ));
+            }
             Ok(())
         }
 
