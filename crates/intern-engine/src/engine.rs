@@ -22,7 +22,7 @@ use crate::domain::{
     AnalysisTelemetry, DocumentAnalysis, DocumentSource, ProposalStatus, ReviewReason,
     ValidationOutcome,
 };
-use crate::error::{EngineErrorCode, EngineResult};
+use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::stated_dates;
 use crate::fingerprint::{self, source_fingerprint};
 use crate::naming::compose_filename;
@@ -159,39 +159,42 @@ impl Engine {
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        let mut outcome = validate(proposal, digest);
-        if barely_readable(source) {
-            // A page that yielded almost no text cannot support a confident
-            // name, whatever the model returned about it.
-            if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
-                outcome.reasons.push(ReviewReason::ParserWarning);
+        guard_analysis(|| {
+            let mut outcome = validate(proposal, digest);
+            if barely_readable(source) {
+                // A page that yielded almost no text cannot support a
+                // confident name, whatever the model returned about it.
+                if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
+                    outcome.reasons.push(ReviewReason::ParserWarning);
+                }
+                outcome.status = ProposalStatus::NeedsReview;
             }
-            outcome.status = ProposalStatus::NeedsReview;
-        }
-        if let (Some(threshold), Some(confidence)) = (self.min_token_confidence, token_confidence)
-            && confidence.min < threshold
-        {
-            if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
-                outcome.reasons.push(ReviewReason::LowConfidence);
+            if let (Some(threshold), Some(confidence)) =
+                (self.min_token_confidence, token_confidence)
+                && confidence.min < threshold
+            {
+                if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
+                    outcome.reasons.push(ReviewReason::LowConfidence);
+                }
+                outcome.status = ProposalStatus::NeedsReview;
             }
-            outcome.status = ProposalStatus::NeedsReview;
-        }
-        let mut analysis = finish(
-            outcome,
-            digest,
-            extension,
-            existing_names,
-            AnalysisTelemetry {
-                source_characters: digest.source_characters,
-                digest_characters: digest.digest_characters,
-                compression_ratio: digest.compression_ratio(),
-                distill_micros,
-                inference_millis,
-            },
-        );
-        analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
-        analysis.token_confidence = token_confidence;
-        Ok(analysis)
+            let mut analysis = finish(
+                outcome,
+                digest,
+                extension,
+                existing_names,
+                AnalysisTelemetry {
+                    source_characters: digest.source_characters,
+                    digest_characters: digest.digest_characters,
+                    compression_ratio: digest.compression_ratio(),
+                    distill_micros,
+                    inference_millis,
+                },
+            );
+            analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
+            analysis.token_confidence = token_confidence;
+            analysis
+        })
     }
 
     pub fn distill(&self, source: &DocumentSource) -> DocumentDigest {
@@ -277,6 +280,27 @@ fn condensed(max_characters: usize) -> DigestBudget {
         passthrough_characters: 0,
         max_characters,
     }
+}
+
+/// Runs the work that follows the model's reply - validation, naming,
+/// fingerprinting - so that a panic in it fails this one document instead of
+/// taking the model thread down with it.
+///
+/// That work is plain string handling over text nobody controls, and a slip
+/// in it once panicked on every French invoice: the panic ended the thread
+/// that runs the model request, the queue read the lost reply as the model
+/// failing, and paused everything. Caught here, it is
+/// [`EngineErrorCode::AnalysisFailed`], a failure of this document alone.
+///
+/// The panic's payload is dropped unread and the error carries a fixed
+/// message: a failed slice reports the string it was slicing, which is
+/// document text, and document text never goes into an error. Retrying the
+/// same document would only panic the same way again. `AssertUnwindSafe` is
+/// sound because nothing the closure touched is used again after a panic:
+/// what it owned is dropped, and what it borrowed it only read.
+fn guard_analysis<F: FnOnce() -> DocumentAnalysis>(f: F) -> EngineResult<DocumentAnalysis> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .map_err(|_| EngineError::new(EngineErrorCode::AnalysisFailed, "document analysis failed"))
 }
 
 /// True when extraction produced too little text to name a document from.
@@ -674,6 +698,31 @@ mod tests {
             crate::error::EngineErrorCode::ModelInputTooLarge
         );
         assert_eq!(server.attempts(), 2);
+    }
+
+    /// A panic after the model answered is this document's failure, under
+    /// its own code and a fixed message - never the panic's text, which for
+    /// a bad slice is the document's own words.
+    #[test]
+    fn guard_analysis_turns_a_panic_into_analysis_failed() {
+        let error = guard_analysis(|| {
+            // What a bad slice reports: the text it was slicing.
+            panic!(
+                "byte index 4 is not a char boundary; it is inside 'é' (bytes 3..5) of \
+                 `La présente convention`"
+            )
+        })
+        .expect_err("a panic must come back as an error");
+        assert_eq!(error.code(), EngineErrorCode::AnalysisFailed);
+        assert_eq!(error.code().as_str(), "ANALYSIS_FAILED");
+        assert_eq!(error.message(), "document analysis failed");
+        assert!(!error.to_string().contains("convention"));
+
+        // Work that does not panic passes straight through.
+        let analysis =
+            guard_analysis(|| analyze_with(Engine::with_proposer(Box::new(Scored(None)))))
+                .expect("no panic, no error");
+        assert_eq!(analysis.status, ProposalStatus::Ready);
     }
 
     #[test]

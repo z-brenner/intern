@@ -13,7 +13,7 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_filename,
+    RuleKind, ValidatedProposal, compose_styled_filename,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
@@ -1161,7 +1161,13 @@ impl Pipeline {
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
         let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
-        let filename = self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+        let filename = self.compose_for_target(
+            &item.source_path,
+            &styled,
+            &house_rules,
+            &extension,
+            &existing,
+        );
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -1312,14 +1318,19 @@ impl Pipeline {
     /// the name that is actually applied must not collide in the folder the
     /// document is going to. Without readable settings the source folder's
     /// names (`fallback`) stand in.
+    ///
+    /// `proposal` is the styled proposal and `house_rules` the rules that
+    /// styled it: what a rule spelled is the reviewer's, and is written as
+    /// they typed it.
     fn compose_for_target(
         &self,
         source_path: &Path,
         proposal: &ValidatedProposal,
+        house_rules: &[HouseRule],
         extension: &str,
         fallback: &[String],
     ) -> String {
-        let named = compose_filename(proposal, extension, &[]).value;
+        let named = compose_styled_filename(proposal, house_rules, extension, &[]).value;
         let existing = match self.settings.load() {
             Ok(settings) => existing_names(&target_folder(
                 &settings,
@@ -1328,8 +1339,9 @@ impl Pipeline {
             )),
             Err(_) => fallback.to_vec(),
         };
-        compose_filename(
+        compose_styled_filename(
             proposal,
+            house_rules,
             extension,
             &existing.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -1397,8 +1409,13 @@ impl Pipeline {
                 .to_owned();
             let existing =
                 existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
-            record.filename =
-                self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+            record.filename = self.compose_for_target(
+                &item.source_path,
+                &styled,
+                &house_rules,
+                &extension,
+                &existing,
+            );
             record.house_rules = house_rules;
             record.revision += 1;
             self.repository.replace_proposal(item.id, &record)?;

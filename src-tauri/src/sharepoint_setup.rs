@@ -1122,6 +1122,22 @@ mod tests {
     const WEB_ID: &str = "dddddddd-dddd-dddd-dddd-dddddddddddd";
     const LIST_ID: &str = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 
+    /// A folder under a fake Windows root, joined the way production joins
+    /// it. On Windows this is exactly `<root>\<name>`. Elsewhere a backslash
+    /// is not a separator, so a literal `C:\Sync\Files\Inbox` never equals
+    /// the joined path; composing both sides the same way keeps these tests
+    /// meaningful on the Linux CI runner without changing what they assert on
+    /// Windows.
+    fn under(root: &str, name: &str) -> PathBuf {
+        Path::new(root).join(name)
+    }
+
+    /// Where the per-machine OneDrive install puts its program, composed from
+    /// `ProgramFiles` the way `one_drive_executable` composes it.
+    fn program_files_one_drive() -> PathBuf {
+        under(r"C:\Program Files", r"Microsoft OneDrive\OneDrive.exe")
+    }
+
     fn deployment() -> SharePointDeployment {
         SharePointDeployment::from_slice(
             br#"{
@@ -1634,9 +1650,7 @@ mod tests {
         fn installed(mut self) -> Self {
             self.env
                 .insert("ProgramFiles".into(), r"C:\Program Files".into());
-            self.files.insert(PathBuf::from(
-                r"C:\Program Files\Microsoft OneDrive\OneDrive.exe",
-            ));
+            self.files.insert(program_files_one_drive());
             self
         }
 
@@ -1735,9 +1749,13 @@ mod tests {
         assert_eq!(one_drive_executable(&FakeMachine::default()), None);
         assert_eq!(
             one_drive_executable(&FakeMachine::default().installed()),
-            Some(PathBuf::from(
-                r"C:\Program Files\Microsoft OneDrive\OneDrive.exe"
-            ))
+            Some(program_files_one_drive())
+        );
+        // Which, where OneDrive actually exists, is this exact path.
+        #[cfg(windows)]
+        assert_eq!(
+            program_files_one_drive(),
+            PathBuf::from(r"C:\Program Files\Microsoft OneDrive\OneDrive.exe")
         );
     }
 
@@ -2064,17 +2082,13 @@ mod tests {
     fn missing_or_unwritable_fixed_children_never_change_settings() {
         let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
         let previous = rig.settings.saved.lock().unwrap().clone();
-        rig.fs
-            .canonical
-            .remove(&PathBuf::from(r"C:\Sync\Files\Inbox"));
+        rig.fs.canonical.remove(&under(r"C:\Sync\Files", "Inbox"));
         assert_eq!(code(rig.setup().activate()), "INBOX_MISSING");
         assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
 
         let mut rig = Rig::empty().with_verified_root(r"C:\Sync\Files");
         let previous = rig.settings.saved.lock().unwrap().clone();
-        rig.fs
-            .writable
-            .remove(&PathBuf::from(r"C:\Sync\Files\Filed"));
+        rig.fs.writable.remove(&under(r"C:\Sync\Files", "Filed"));
         assert_eq!(code(rig.setup().activate()), "FILED_UNWRITABLE");
         assert_eq!(*rig.settings.saved.lock().unwrap(), previous);
     }
@@ -2087,8 +2101,15 @@ mod tests {
 
         assert_eq!(status.phase, SharePointSetupPhase::Active);
         let saved = rig.settings.saved.lock().unwrap();
-        assert_eq!(saved.intake_folder, r"C:\Sync\Files\Inbox");
-        assert_eq!(saved.destination, r"C:\Sync\Files\Filed");
+        // On Windows exactly C:\Sync\Files\Inbox and C:\Sync\Files\Filed.
+        assert_eq!(
+            saved.intake_folder,
+            under(r"C:\Sync\Files", "Inbox").to_string_lossy()
+        );
+        assert_eq!(
+            saved.destination,
+            under(r"C:\Sync\Files", "Filed").to_string_lossy()
+        );
         assert!(saved.intake_enabled);
         assert!(!saved.process_others_uploads);
         assert!(!saved.intake_local_only);

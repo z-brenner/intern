@@ -2805,6 +2805,51 @@ fn a_spelling_can_be_used_at_once_and_forgotten_again() {
     );
 }
 
+/// A spelling a reviewer typed in capitals is theirs. Naming title-cases
+/// words a document printed in capitals, and it cased the rule's spelling
+/// with them: "ACME CORP" was proposed as "Acme Corp", a spelling nobody
+/// chose, and typing the capitals back taught nothing.
+#[test]
+fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let (pipeline, _) = learning_pipeline(
+        temp.path(),
+        &[
+            ("2024-04-12", "April 12, 2024"),
+            ("2024-05-03", "May 3, 2024"),
+        ],
+    );
+    let first = source(&inbox, "a.pdf");
+    let second = source(&inbox, "b.pdf");
+    let queued = pipeline
+        .enqueue_files(&[first, second])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    pipeline
+        .approve(
+            queued[0],
+            "2024-04-12 Employment Agreement between John Smith and ACME CORP.pdf",
+            "A sentence about the agreement.",
+        )
+        .unwrap();
+    let rule = pipeline.learned_rules().unwrap().remove(0);
+    assert_eq!(
+        (rule.from.as_str(), rule.to.as_str()),
+        ("Acme Corporation", "ACME CORP")
+    );
+
+    pipeline.use_rule(rule.id).unwrap();
+    assert_eq!(
+        record_of(&pipeline, queued[1]).filename,
+        "2024-05-03 Employment Agreement between John Smith and ACME CORP.pdf"
+    );
+}
+
 /// A spelling Intern applied that the reviewer undoes is retracted; one the
 /// reviewer changes to a third form starts over from the document's word.
 #[test]
