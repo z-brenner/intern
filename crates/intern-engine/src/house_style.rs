@@ -18,9 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::{PartyRelation, ValidatedProposal};
 use crate::evidence::is_valid_iso_date;
-use crate::naming::{
-    DEFAULT_TYPE, sanitize_extension, sanitize_segment, strip_duplicate_extension,
-};
+use crate::naming::{party_segment, sanitize_extension, sanitize_segment, type_segment};
 
 /// Which part of a name a rule rewrites.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -240,17 +238,16 @@ impl NameShape {
     /// `None` when the stem is not one this proposal composes - it was
     /// truncated for length, or came from somewhere else - because guessing
     /// which words are which would teach the wrong thing.
+    ///
+    /// The segments are built exactly as naming builds them, title-casing
+    /// included, so a name Intern proposed for a document printed in
+    /// capitals is still one this proposal composes.
     fn of(proposal: &ValidatedProposal, stem: &str, extension: &str) -> Option<Self> {
-        let type_segment = proposal
-            .document_type
-            .as_deref()
-            .map(|value| strip_duplicate_extension(value, extension))
-            .and_then(sanitize_segment)
-            .unwrap_or_else(|| DEFAULT_TYPE.to_owned());
+        let type_segment = type_segment(proposal.document_type.as_deref(), extension);
         let parties = proposal
             .parties
             .iter()
-            .filter_map(|party| sanitize_segment(party).map(|segment| (party.clone(), segment)))
+            .filter_map(|party| party_segment(party).map(|segment| (party.clone(), segment)))
             .collect::<Vec<_>>();
         // The same order naming sheds detail in: both parties, one, none.
         let mut candidates = Vec::new();
@@ -468,6 +465,60 @@ mod tests {
         .expect("the one party changed and nothing else did");
         assert_eq!(lesson.from, "Acme");
         assert_eq!(lesson.to, "Acme Industries");
+    }
+
+    /// Naming title-cases a party printed in capitals, so the name a
+    /// reviewer edits is not the document's spelling; it must still read as
+    /// a name this proposal composed, or no edit to it would ever teach.
+    #[test]
+    fn edits_to_title_cased_names_still_teach() {
+        let proposal = proposal(
+            Some("WORK ORDER"),
+            &["HARBOR COMET REPAIRS LLC"],
+            PartyRelation::From,
+        );
+        let proposed = name(&proposal);
+        assert_eq!(
+            proposed,
+            "2026-04-01 Work Order from Harbor Comet Repairs LLC.pdf"
+        );
+        let party = lesson_from_edit(
+            &proposal,
+            "pdf",
+            &proposed,
+            "2026-04-01 Work Order from Harbor Comet.pdf",
+        )
+        .expect("the party changed and nothing else did");
+        assert_eq!(party.kind, RuleKind::Party);
+        assert_eq!(party.from, "HARBOR COMET REPAIRS LLC");
+        assert_eq!(party.to, "Harbor Comet");
+
+        let document_type = lesson_from_edit(
+            &proposal,
+            "pdf",
+            &proposed,
+            "2026-04-01 Repair Order from Harbor Comet Repairs LLC.pdf",
+        )
+        .expect("the type changed and nothing else did");
+        assert_eq!(document_type.kind, RuleKind::DocumentType);
+        assert_eq!(document_type.from, "WORK ORDER");
+        assert_eq!(document_type.to, "Repair Order");
+
+        // Approving the title-cased name as offered teaches nothing, and
+        // neither does typing the capitals back: case is not a spelling.
+        assert_eq!(
+            lesson_from_edit(&proposal, "pdf", &proposed, &proposed),
+            None
+        );
+        assert_eq!(
+            lesson_from_edit(
+                &proposal,
+                "pdf",
+                &proposed,
+                "2026-04-01 Work Order from HARBOR COMET REPAIRS LLC.pdf"
+            ),
+            None
+        );
     }
 
     #[test]
