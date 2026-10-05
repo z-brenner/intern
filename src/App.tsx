@@ -11,7 +11,7 @@ import { SetupScreen } from './components/SetupScreen';
 import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
-import { humanizeReason } from './lib/reasons';
+import { describeQueueStop } from './lib/reasons';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
@@ -391,7 +391,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         simply went quiet, and the reason it reported was thrown away.
       */}
       {pipelineError && <div className="note note--failed" role="alert" aria-label="Queue stopped">
-        <p>The queue stopped taking new work. {humanizeReason(pipelineError)}</p>
+        <p>The queue stopped taking new work. {describeQueueStop(pipelineError)}</p>
       </div>}
       {/*
         An empty queue is the first thing a new user sees, and it used to be

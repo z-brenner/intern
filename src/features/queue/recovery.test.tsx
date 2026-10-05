@@ -152,6 +152,49 @@ const ready: QueueItem = {
     expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
   });
 
+  // A second "slow down" from the hosted service stops the queue, and nothing
+  // retries it until the person resumes. The banner used to borrow the
+  // per-document sentence, which promised that Intern would retry.
+  it('tells the person to resume a queue the hosted service asked to slow down', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_RATE_LIMITED' }));
+
+    const banner = await screen.findByRole('alert', { name: 'Queue stopped' });
+    expect(banner).toHaveTextContent(
+      'The queue stopped taking new work. The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
+    );
+    expect(banner).not.toHaveTextContent('Intern will retry');
+  });
+
+  // The local model server stopped answering, or never came back after a
+  // restart. The document sentence for the same code says "Retry it", which
+  // names the wrong action for a stopped queue.
+  it('tells the person to resume a queue the local model stopped', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'MODEL_FAILED' }));
+
+    const banner = await screen.findByRole('alert', { name: 'Queue stopped' });
+    expect(banner).toHaveTextContent(
+      'The queue stopped taking new work. The local model stopped responding. Resume the queue to try again, and restart Intern if it stops again.',
+    );
+    expect(banner).not.toHaveTextContent('Retry it');
+    expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
+  });
+
   // Tauri's own drag-drop is enabled, so on the desktop a dropped file never
   // reaches the HTML5 handler the tests above drive: the paths arrive as a
   // window event. That path called the bridge directly, so a refusal was

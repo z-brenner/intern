@@ -70,6 +70,31 @@ const SENTENCES: Record<string, string> = {
 };
 
 /**
+ * What the "queue stopped" banner says for a pause, where the sentence for the
+ * same code on a single document would say the wrong thing. A document's
+ * sentence tells a person to retry that document, or that Intern will retry
+ * it; neither is true of a stopped queue, which waits until it is resumed.
+ */
+const QUEUE_STOP_SENTENCES: Record<string, string> = {
+  // The local model server could not be reached, restarted, or recovered, or
+  // no model has been loaded for minutes.
+  MODEL_FAILED: 'The local model stopped responding. Resume the queue to try again, and restart Intern if it stops again.',
+  // Several documents in a row came back with a reply that could not be used.
+  MODEL_OUTPUT_INVALID: 'The model\'s answers for several documents in a row could not be used. Check the Model section in Settings, then resume the queue.',
+  HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
+  HOSTED_MODEL_UNREACHABLE: 'The hosted service could not be reached. Check the connection, then resume the queue.',
+};
+
+/**
+ * The reason the queue stopped itself, in words that fit a stopped queue:
+ * its own sentence where a document's would mislead, and otherwise the same
+ * sentence a document gets.
+ */
+export function describeQueueStop(code: string): string {
+  return QUEUE_STOP_SENTENCES[code.trim().toUpperCase()] ?? humanizeReason(code);
+}
+
+/**
  * Translates a reason string - a single code, or the pipeline's comma-joined
  * list of codes - into sentences. Anything that is not a known code is kept
  * verbatim, including free text like "Duplicate of X".
