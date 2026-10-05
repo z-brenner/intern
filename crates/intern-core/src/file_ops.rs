@@ -1552,7 +1552,7 @@ mod windows_file {
         io::{self, Read, Seek, SeekFrom, Write},
         mem::{MaybeUninit, size_of},
         os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
-        path::Path,
+        path::{Path, PathBuf},
     };
 
     use sha2::{Digest, Sha256};
@@ -1650,7 +1650,43 @@ mod windows_file {
                 )),
             };
         }
+        // The stream before the times: writing it is a modification too.
+        keep_zone_identifier(source, destination);
+        super::keep_times(&input, &locked.file);
         Ok(Box::new(locked))
+    }
+
+    /// The alternate data stream Windows keeps a downloaded or e-mailed
+    /// file's origin in: its Mark-of-the-Web.
+    const ZONE_IDENTIFIER: &str = "Zone.Identifier";
+
+    /// Carries the source's Mark-of-the-Web over to its copy.
+    ///
+    /// A rename keeps every stream a file has, and a copy of its bytes keeps
+    /// none of them, so a document filed to another volume lost the mark that
+    /// makes Office open it in Protected View and block its macros: an
+    /// e-mailed workbook filed to a share opened as if it had been written on
+    /// this machine. Having no mark is the common case, and a volume without
+    /// alternate streams (FAT, many NAS shares) cannot hold one; either way
+    /// the copy is filed without it, as every copy was before. Only the
+    /// unnamed stream is shared-read-only on the copy, so the named one opens
+    /// beside it.
+    fn keep_zone_identifier(source: &Path, copy: &Path) {
+        let Ok(zone) = fs::read(alternate_stream(source, ZONE_IDENTIFIER)) else {
+            return;
+        };
+        if let Ok(mut stream) = fs::File::create(alternate_stream(copy, ZONE_IDENTIFIER))
+            && stream.write_all(&zone).is_ok()
+        {
+            let _ = stream.sync_all();
+        }
+    }
+
+    fn alternate_stream(path: &Path, stream: &str) -> PathBuf {
+        let mut named = path.as_os_str().to_owned();
+        named.push(":");
+        named.push(stream);
+        PathBuf::from(named)
     }
 
     pub(super) fn lock_for_delete(path: &Path) -> io::Result<Box<dyn LockedFile>> {
@@ -1757,7 +1793,38 @@ fn copy_new_locked(source: &Path, destination: &Path) -> io::Result<Box<dyn Lock
             )),
         };
     }
+    keep_times(&input, &locked.file);
     Ok(Box::new(locked))
+}
+
+/// Gives a copy the times of the file it was copied from: modified and
+/// accessed, and on Windows created as well.
+///
+/// A rename keeps them and a copy of the bytes does not, so a document filed
+/// to another volume showed the moment it was filed as its "Date modified" -
+/// the column a folder of documents is sorted by - while the same filing on
+/// one volume did not. Set once the bytes are written and synced, because a
+/// write is itself a modification. Times only: the read-only attribute in
+/// particular stays behind, or the copy could not be cleaned up or undone.
+/// A volume that will not take the times still gets the verified document,
+/// as it always did; the times are not worth refusing the filing over.
+fn keep_times(source: &fs::File, copy: &fs::File) {
+    let Ok(metadata) = source.metadata() else {
+        return;
+    };
+    let mut times = fs::FileTimes::new();
+    if let Ok(modified) = metadata.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    #[cfg(windows)]
+    if let Ok(created) = metadata.created() {
+        use std::os::windows::fs::FileTimesExt;
+        times = times.set_created(created);
+    }
+    let _ = copy.set_times(times);
 }
 
 #[cfg(not(windows))]

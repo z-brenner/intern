@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use intern_core::{
@@ -847,6 +847,75 @@ fn cross_volume_verifies_and_journals_before_locked_source_deletion() {
         store.load_receipt(item_id).unwrap().unwrap().stage,
         OperationStage::Complete
     );
+}
+
+/// A rename keeps a document's "Date modified"; a copy to another volume
+/// used to stamp it with the moment it was filed.
+#[test]
+fn cross_volume_copy_preserves_mtime() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    // 2001-09-09, long before any filing could happen.
+    let modified = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    fs::File::options()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    let (applier, _store, item_id) = applying(&temp, &source, copying_filesystem(false, false));
+
+    let receipt = applier
+        .apply(
+            item_id,
+            &source,
+            &destination,
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.kind, OperationKind::VerifiedCopy);
+    assert!(!source.exists());
+    assert_eq!(fs::read(&destination).unwrap(), b"original");
+    assert_eq!(
+        fs::metadata(&destination).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+/// Mark-of-the-Web is an alternate data stream, and a copy of the bytes used
+/// to leave it behind: an e-mailed document filed to another volume opened
+/// as if it had been written here, macros and all.
+#[cfg(windows)]
+#[test]
+fn zone_identifier_survives_cross_volume() {
+    fn zone_identifier(path: &Path) -> PathBuf {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        PathBuf::from(stream)
+    }
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("invoice.docm");
+    let destination = temp.path().join("2024-04-12 Invoice.docm");
+    write(&source, b"macro-enabled document");
+    let mark = b"[ZoneTransfer]\r\nZoneId=3\r\n";
+    fs::write(zone_identifier(&source), mark).unwrap();
+    let (applier, _store, item_id) = applying(&temp, &source, copying_filesystem(false, false));
+
+    let receipt = applier
+        .apply(
+            item_id,
+            &source,
+            &destination,
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.kind, OperationKind::VerifiedCopy);
+    assert_eq!(fs::read(&destination).unwrap(), b"macro-enabled document");
+    assert_eq!(fs::read(zone_identifier(&destination)).unwrap(), mark);
 }
 
 #[test]
