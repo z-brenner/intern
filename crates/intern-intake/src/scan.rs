@@ -497,6 +497,31 @@ mod tests {
         assert_eq!(walk.unreadable_folders, 0);
     }
 
+    /// The host hands intake the one admission list, so a legacy Word or
+    /// Excel file is claimed like any other - and the `~$` lock file Office
+    /// keeps beside an open one still is not.
+    #[test]
+    fn the_shared_list_admits_legacy_formats_and_still_skips_their_lock_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for name in ["letter.doc", "ledger.xls", "~$letter.doc", "~$ledger.xls"] {
+            fs::write(temp.path().join(name), b"x").unwrap();
+        }
+        let extensions = intern_core::SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect::<Vec<_>>();
+        let walk = walk_intake(temp.path(), &extensions).unwrap();
+        let names: Vec<String> = walk
+            .files
+            .iter()
+            .map(|facts| facts.relative_path.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["ledger.xls".to_string(), "letter.doc".to_string()]
+        );
+    }
+
     /// Windows updates a file's directory entry lazily, so the size a listing
     /// reports for a file that is open for writing is the size it had at the
     /// last flush. Believing it lets the stability check pass a document the

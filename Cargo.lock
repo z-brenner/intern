@@ -2411,6 +2411,7 @@ dependencies = [
  "calamine",
  "cfb 0.10.0",
  "codepage",
+ "csv",
  "encoding_rs",
  "image",
  "intern-core",

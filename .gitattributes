@@ -25,6 +25,14 @@
 *.tiff binary
 *.pdf binary
 *.docx binary
+*.docm binary
+*.doc binary
+*.xlsm binary
+*.xls binary
+*.ppt binary
+*.odt binary
+*.odp binary
+*.ods binary
 *.gguf binary
 *.exe binary
 *.dll binary

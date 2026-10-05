@@ -5,10 +5,9 @@ use std::{
 
 use crate::pipeline::{PipelineError, PipelineResult};
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "pptx", "pptm", "ppsx", "xlsx", "eml", "msg", "txt", "md", "markdown", "png",
-    "jpg", "jpeg", "tif", "tiff",
-];
+/// The admission list lives in intern-core so the queue, the intake watcher,
+/// the snapshot store and the worker's routing test all read the same one.
+pub use intern_core::SUPPORTED_EXTENSIONS;
 
 pub fn parse_item_id(value: &str) -> PipelineResult<i64> {
     if value.is_empty()

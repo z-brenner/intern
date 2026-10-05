@@ -22,9 +22,19 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SNAPSHOT_NAME_ATTEMPTS: usize = 8;
 const CONTENT_NAME: &str = "content";
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "pptx", "pptm", "ppsx", "xlsx", "eml", "msg", "txt", "md", "markdown", "png",
-    "jpg", "jpeg", "tif", "tiff",
+
+/// Every extension Intern admits, lowercase and without the dot.
+///
+/// This is the one list: the queue admits a dropped file by it, the intake
+/// watcher claims a file by it, a snapshot is taken only for it, and the
+/// worker's router has a test that every entry here reaches a reader and
+/// every reader is reachable from here. Two copies of this list drifted apart
+/// once - `.docm` was routed by the worker and refused by both admission
+/// lists - which is why there is now only one.
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "pdf", "docx", "docm", "doc", "rtf", "odt", "pptx", "pptm", "ppsx", "ppt", "odp", "xlsx",
+    "xlsm", "xls", "ods", "csv", "eml", "msg", "txt", "md", "markdown", "png", "jpg", "jpeg",
+    "tif", "tiff",
 ];
 
 /// A directory controlled by Intern and kept outside watched or synced roots.

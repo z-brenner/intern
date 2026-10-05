@@ -34,7 +34,7 @@ impl PdfiumBackend {
         match PDFIUM.get_or_init(|| {
             Pdfium::bind_to_library(&library_path)
                 .map(Pdfium::new)
-                .map_err(|error| error.to_string())
+                .map_err(|error| format!("PDFium did not load: {error:?}"))
         }) {
             Ok(_) => Ok(Self { render_dpi: 300.0 }),
             Err(message) => Err(ExtractionError::native_assets_missing(message.clone())),
@@ -57,6 +57,26 @@ impl PdfiumBackend {
         let height = (height_points * scale).ceil().max(1.0) as u32;
         (width, height)
     }
+}
+
+/// Why PDFium would not open a document, as something a person can act on.
+///
+/// A PDF that needs a password to open is the one failure worth naming. The
+/// rest are reported in one line: `PdfiumError`'s `Display` is its
+/// pretty-printed `Debug`, which spreads one enum variant over several lines.
+#[cfg(feature = "native-pdfium")]
+fn load_error(error: PdfiumError) -> ExtractionError {
+    match error {
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+            ExtractionError::encrypted()
+        }
+        other => one_line(&other),
+    }
+}
+
+#[cfg(feature = "native-pdfium")]
+fn one_line(error: &PdfiumError) -> ExtractionError {
+    ExtractionError::parse_failed(format!("PDFium could not read the document: {error:?}"))
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -101,9 +121,7 @@ impl PdfBackend for PdfiumBackend {
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
         cancel.check()?;
         let pdfium = self.pdfium()?;
-        let document = pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
         if document.pages().len() as usize > MAX_PAGE_COUNT {
             return Err(ExtractionError::resource_limit(
                 "document exceeds 500 pages",
@@ -112,10 +130,7 @@ impl PdfBackend for PdfiumBackend {
         let mut inspections = Vec::with_capacity(document.pages().len() as usize);
         for (page_index, page) in document.pages().iter().enumerate() {
             cancel.check()?;
-            let native_text = page
-                .text()
-                .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
-                .all();
+            let native_text = page.text().map_err(|error| one_line(&error))?.all();
             let (width_pixels, height_pixels) =
                 self.page_dimensions(page.width().value, page.height().value);
             let page_area = page.width().value.abs() * page.height().value.abs();
@@ -148,22 +163,20 @@ impl PdfBackend for PdfiumBackend {
     ) -> Result<RenderedPage, ExtractionError> {
         cancel.check()?;
         let pdfium = self.pdfium()?;
-        let document = pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
         let page = document
             .pages()
             .get(page_index as i32)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+            .map_err(|error| one_line(&error))?;
         let (width, height) = self.page_dimensions(page.width().value, page.height().value);
         let config = PdfRenderConfig::new()
             .set_target_width(width as i32)
             .set_maximum_height(height as i32);
         let image = page
             .render_with_config(&config)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
+            .map_err(|error| one_line(&error))?
             .as_image()
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
+            .map_err(|error| one_line(&error))?
             .into_rgb8();
         cancel.check()?;
         Ok(RenderedPage::new(page_index, image.into()))

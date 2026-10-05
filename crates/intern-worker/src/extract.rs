@@ -15,7 +15,9 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::limits::{MAX_EXTRACTION_DURATION, MAX_VISION_LONG_EDGE, ResourceLimits, VISION_GRID};
+use crate::limits::{
+    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, ResourceLimits, VISION_GRID,
+};
 use crate::temp::TempWorkspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +27,7 @@ enum ExtractionErrorKind {
     Unsupported,
     NativeAssetsMissing,
     ParseFailed,
+    Encrypted,
     Io,
 }
 
@@ -71,6 +74,16 @@ impl ExtractionError {
         }
     }
 
+    /// A document that cannot be read without its password. Retrying cannot
+    /// help, and saying so plainly is what lets the person fix it: remove the
+    /// password and add the file again.
+    pub fn encrypted() -> Self {
+        Self {
+            kind: ExtractionErrorKind::Encrypted,
+            message: "document is password-protected".to_owned(),
+        }
+    }
+
     pub fn io(error: std::io::Error) -> Self {
         Self {
             kind: ExtractionErrorKind::Io,
@@ -84,6 +97,7 @@ impl ExtractionError {
             ExtractionErrorKind::ResourceLimit => "RESOURCE_LIMIT_EXCEEDED",
             ExtractionErrorKind::Unsupported => "UNSUPPORTED_FORMAT",
             ExtractionErrorKind::NativeAssetsMissing => "NATIVE_ASSETS_MISSING",
+            ExtractionErrorKind::Encrypted => "PASSWORD_PROTECTED",
             ExtractionErrorKind::ParseFailed | ExtractionErrorKind::Io => "PARSE_FAILED",
         }
     }
@@ -282,7 +296,15 @@ pub struct ExtractedPage {
 pub enum ExtractionWarning {
     LowOcrConfidence,
     NativeTextCorrupt,
+    /// Text that was lost: a page cut at the size cap, frames of a TIFF that
+    /// were never read. What was dropped is unknown, so it may be the fact
+    /// that names the document.
     TextTruncated,
+    /// Content deliberately left out by design and marked where it was left
+    /// out - the rows and columns past a spreadsheet's rendered window. The
+    /// reader chose what to show and says what it skipped, so this is a note
+    /// about the document's size, not a doubt about what was read.
+    ContentElided,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -495,15 +517,24 @@ pub fn extract_anydoc(
     limits: &ResourceLimits,
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
+    reject_encrypted_ole(path)?;
     cancel.check()?;
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
     limits.validate_source_size(metadata.len())?;
     let bytes = std::fs::read(path).map_err(ExtractionError::io)?;
     let format = expected_anydoc_format(path, &bytes)?;
-    enforce_office_decompressed_limit(path, limits, cancel)?;
+    // The pre-pass follows what the file is rather than what it is called,
+    // so a `.doc` that is really a Word 2007 package is inflated under the
+    // same bound a `.docx` is, and a `.docx` that is really a binary Word
+    // file is not handed to a zip reader at all.
+    if format == anydoc::Format::Docx {
+        enforce_office_decompressed_limit(path, limits, cancel)?;
+    }
     cancel.check()?;
-    let markdown = anydoc::to_markdown_bytes(&bytes, format)
-        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(|error| match error {
+        anydoc::ConvertError::Encrypted => ExtractionError::encrypted(),
+        other => ExtractionError::parse_failed(other.to_string()),
+    })?;
     cancel.check()?;
     Ok(ExtractedDocument {
         pages: vec![ExtractedPage {
@@ -519,15 +550,21 @@ pub fn extract_anydoc(
     })
 }
 
-/// The parser an extension names, refusing content that disagrees with it.
+/// The parser an extension names, refusing content of another kind.
 ///
 /// Left to itself anydoc picks its parser from the file's content and treats
 /// the extension as a fallback, so a workbook renamed `.docx` is rendered by
 /// its Excel path with none of the row and column caps spreadsheets are
 /// routed through here, and a PDF renamed `.pptx` reaches a PDF reader with
 /// no page cap, no OCR, and no page image. Routing in this crate is by
-/// extension, so content that is not what the extension names is a routing
-/// failure that belongs in review, not a document to parse anyway.
+/// extension, so content of a different kind than the extension names is a
+/// routing failure that belongs in review, not a document to parse anyway.
+///
+/// Content of the same kind is a different matter. Word has saved RTF under
+/// `.doc` for decades, and a `.doc` that is really a Word 2007 package (or a
+/// `.pptx` that is really a 97-2003 deck) is a mislabelled file of exactly
+/// the kind the extension promised. None of those reaches a reader without
+/// the caps it would otherwise have had, so they are read as what they are.
 fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, ExtractionError> {
     let extension = path
         .extension()
@@ -537,31 +574,87 @@ fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, E
     let named = anydoc::Format::from_extension(&extension).ok_or_else(|| {
         ExtractionError::unsupported(format!("no Office reader handles a .{extension} file"))
     })?;
-    // Content that identifies as nothing at all - an encrypted package, a
-    // container this version cannot recognise - is still handed to the parser
-    // the extension names, which reports what is actually wrong with it far
-    // better than a routing refusal would.
-    if anydoc::Format::from_bytes(bytes).is_some_and(|detected| detected != named) {
-        return Err(ExtractionError::unsupported(format!(
+    match anydoc::Format::from_bytes(bytes) {
+        // Content that identifies as nothing at all - a container this
+        // version cannot recognise - is still handed to the parser the
+        // extension names, which reports what is actually wrong with it far
+        // better than a routing refusal would.
+        None => Ok(named),
+        Some(detected) if detected == named => Ok(named),
+        Some(detected)
+            if office_family(detected)
+                .is_some_and(|family| Some(family) == office_family(named)) =>
+        {
+            Ok(detected)
+        }
+        Some(_) => Err(ExtractionError::unsupported(format!(
             "file content is not what its .{extension} extension names"
-        )));
+        ))),
     }
-    Ok(named)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfficeFamily {
+    WordProcessing,
+    Presentation,
+}
+
+/// The kinds of document whose formats are interchangeable for routing:
+/// every member is read by anydoc, uncapped, as one page of prose. Workbooks
+/// and PDFs belong to no family, because each has its own capped reader.
+fn office_family(format: anydoc::Format) -> Option<OfficeFamily> {
+    use anydoc::Format;
+    match format {
+        Format::Doc | Format::Docx | Format::Rtf | Format::Odt => {
+            Some(OfficeFamily::WordProcessing)
+        }
+        Format::Ppt | Format::Pptx | Format::Odp => Some(OfficeFamily::Presentation),
+        _ => None,
+    }
+}
+
+/// The signature every OLE compound file - binary Office, Outlook `.msg`, an
+/// encrypted Office package - starts with.
+pub(crate) const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Refuses an Office package that was saved with a password to open.
+///
+/// Office encrypts a `.docx` or `.xlsx` by wrapping it in an OLE compound
+/// file that holds an `EncryptionInfo` stream and the encrypted zip as
+/// `EncryptedPackage`. Nothing downstream can read that: the zip pre-pass
+/// rejects it as a corrupt archive and anydoc's detection identifies it as
+/// nothing, so without this check the person is told the file is damaged
+/// when it only needs its password removed.
+pub(crate) fn reject_encrypted_ole(path: &Path) -> Result<(), ExtractionError> {
+    let mut file = File::open(path).map_err(ExtractionError::io)?;
+    let mut magic = [0_u8; 8];
+    match file.read_exact(&mut magic) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+        Err(error) => return Err(ExtractionError::io(error)),
+    }
+    if magic != OLE_MAGIC {
+        return Ok(());
+    }
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    // A compound file too damaged to open is not this check's to report: the
+    // reader the extension names says what is wrong with it.
+    let Ok(compound) = cfb::CompoundFile::open(file) else {
+        return Ok(());
+    };
+    if compound.exists("EncryptionInfo") || compound.exists("EncryptedPackage") {
+        return Err(ExtractionError::encrypted());
+    }
+    Ok(())
+}
+
+/// Inflates every entry of a zip-packaged Office file once, counting, and
+/// refuses the file before any parser does if the total passes the bound.
 pub(crate) fn enforce_office_decompressed_limit(
     path: &Path,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
 ) -> Result<(), ExtractionError> {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if !matches!(extension.as_str(), "docx" | "docm" | "xlsx") {
-        return Ok(());
-    }
     let file = File::open(path).map_err(ExtractionError::io)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
@@ -591,6 +684,14 @@ pub(crate) fn enforce_office_decompressed_limit(
     Ok(())
 }
 
+/// The most of a text file that is ever read.
+///
+/// One page carries at most [`MAX_PAGE_CHARS`] characters and a character is
+/// at most four bytes, so this many bytes always fill a page; reading a
+/// gigabyte log file whole to keep its first two million characters only
+/// costs memory.
+pub const MAX_TEXT_FILE_BYTES: u64 = 4 * MAX_PAGE_CHARS as u64;
+
 pub fn extract_text(
     path: &Path,
     limits: &ResourceLimits,
@@ -600,7 +701,7 @@ pub fn extract_text(
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
     limits.validate_source_size(metadata.len())?;
     let file = File::open(path).map_err(ExtractionError::io)?;
-    let mut reader = BufReader::new(file).take(limits.max_source_bytes + 1);
+    let mut reader = BufReader::new(file).take(MAX_TEXT_FILE_BYTES + 1);
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -611,9 +712,17 @@ pub fn extract_text(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    limits.validate_source_size(bytes.len() as u64)?;
-    let (text, lossy) = decode_text(&bytes);
+    let truncated = bytes.len() as u64 > MAX_TEXT_FILE_BYTES;
+    bytes.truncate(MAX_TEXT_FILE_BYTES as usize);
+    let (text, suspect) = decode_text(&bytes, truncated);
     cancel.check()?;
+    let mut warnings = Vec::new();
+    if suspect {
+        warnings.push(ExtractionWarning::NativeTextCorrupt);
+    }
+    if truncated {
+        warnings.push(ExtractionWarning::TextTruncated);
+    }
     Ok(ExtractedDocument {
         pages: vec![ExtractedPage {
             page_number: 1,
@@ -622,27 +731,32 @@ pub fn extract_text(
             ocr_confidence: None,
             vision_escalated: false,
         }],
-        warnings: if lossy {
-            vec![ExtractionWarning::NativeTextCorrupt]
-        } else {
-            vec![]
-        },
-        truncated: false,
+        warnings,
+        truncated,
         optional_image: None,
     })
 }
 
-/// Decodes a text file by its byte-order mark, and says whether anything was
-/// replaced on the way.
+/// Decodes a text file by its byte-order mark, and says whether the result
+/// is suspect.
 ///
 /// Notepad and PowerShell's redirection still write UTF-16, and a mark on a
 /// UTF-8 file is ordinary; neither is a document to refuse, and the mark
-/// itself is not a character of the document. Bytes that decode as nothing
-/// known are read lossily rather than lost: half a document with a warning
-/// beats a file the queue cannot open at all.
-fn decode_text(bytes: &[u8]) -> (String, bool) {
-    fn from_utf16(units: impl Iterator<Item = u16>) -> (String, bool) {
-        let units = units.collect::<Vec<_>>();
+/// itself is not a character of the document. Unmarked text that is not
+/// UTF-8 is, on the Windows machines these files come from, almost always
+/// Windows-1252 - an accounting export, a note saved by an old editor - and
+/// reads correctly as that. `cut` says the bytes stop where reading stopped
+/// rather than where the file did, so a character split there is dropped
+/// instead of condemning the whole file.
+fn decode_text(bytes: &[u8], cut: bool) -> (String, bool) {
+    fn from_utf16(mut units: Vec<u16>, cut: bool) -> (String, bool) {
+        if cut
+            && units
+                .last()
+                .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
+        {
+            units.pop();
+        }
         match String::from_utf16(&units) {
             Ok(text) => (text, false),
             Err(_) => (String::from_utf16_lossy(&units), true),
@@ -651,22 +765,53 @@ fn decode_text(bytes: &[u8]) -> (String, bool) {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => from_utf16(
             rest.chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect(),
+            cut,
         ),
         [0xFE, 0xFF, rest @ ..] => from_utf16(
             rest.chunks_exact(2)
-                .map(|pair| u16::from_be_bytes([pair[0], pair[1]])),
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect(),
+            cut,
         ),
-        [0xEF, 0xBB, 0xBF, rest @ ..] => from_utf8(rest),
-        _ => from_utf8(bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => from_utf8(rest, cut),
+        _ => from_utf8(bytes, cut),
     }
 }
 
-fn from_utf8(bytes: &[u8]) -> (String, bool) {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_owned(), false),
-        Err(_) => (String::from_utf8_lossy(bytes).into_owned(), true),
+fn from_utf8(bytes: &[u8], cut: bool) -> (String, bool) {
+    let bytes = match std::str::from_utf8(bytes) {
+        Ok(text) => return (text.to_owned(), false),
+        // Only an incomplete character at the very end, where reading
+        // stopped: everything before it is good UTF-8.
+        Err(error) if cut && error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        Err(_) => bytes,
+    };
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return (text.to_owned(), false);
     }
+    if holds_utf8_text(bytes) {
+        // UTF-8 with a damaged byte or two. Reading it as Windows-1252
+        // would turn every accented letter in it into two wrong ones.
+        return (String::from_utf8_lossy(bytes).into_owned(), true);
+    }
+    let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+    // Windows-1252 leaves five byte values undefined, and the WHATWG
+    // decoder maps them to C1 controls. No Windows-1252 text contains them,
+    // so a file that does is in some other encoding altogether.
+    let suspect = text
+        .chars()
+        .any(|character| ('\u{80}'..='\u{9f}').contains(&character));
+    (text.into_owned(), suspect)
+}
+
+/// Whether bytes that are not valid UTF-8 nevertheless contain well-formed
+/// multi-byte UTF-8 characters. Windows-1252 text almost never does: an
+/// accented letter there is one byte, followed by an ordinary letter that a
+/// UTF-8 lead byte cannot be followed by.
+fn holds_utf8_text(bytes: &[u8]) -> bool {
+    bytes.utf8_chunks().any(|chunk| !chunk.valid().is_ascii())
 }
 
 /// Reads a standalone image file as a one-page document. There is no text
