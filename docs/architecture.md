@@ -182,6 +182,9 @@ most twice. If the server still answers that the prompt does not fit, the
 document is condensed to half once more and sent once more; after that it fails
 on its own as `MODEL_INPUT_TOO_LARGE`, without restarting the server. Only
 prompts that did not fit change, so every recorded prompt is sent as it was.
+The estimate guards the local server's context only: a hosted model's is many
+times larger, so it is sent the digest whole, and condensed only if it answers
+that the prompt did not fit.
 
 The SECTIONS line that opens a condensed digest lists at most 40 headings in at
 most 1,500 characters, ending in ` | …` when cut. A table row is never a

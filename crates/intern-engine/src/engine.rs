@@ -36,12 +36,13 @@ use crate::validate::validate;
 /// to look at, not one to guess about.
 pub const MIN_READABLE_CHARACTERS: usize = 200;
 
-/// The most prompt and reply tokens one request may need: the server's
-/// 8,192-token context, less room for the system turn and chat template.
-const MAX_REQUEST_TOKENS: usize = 8_000;
-/// What a prompt that did not fit is condensed towards. Below the ceiling, so
-/// one re-distillation usually lands inside it despite the fixed instructions.
-const TARGET_PROMPT_TOKENS: usize = 6_500;
+/// What the system turn and the chat template take from the context: the
+/// local server's 8,192 tokens leave 8,000 for the prompt and the reply.
+const TEMPLATE_TOKENS: usize = 192;
+/// How far below that ceiling a prompt that did not fit is condensed to - to
+/// 6,500 tokens on the local server - so one re-distillation usually lands
+/// inside it despite the fixed instructions.
+const CONDENSING_MARGIN_TOKENS: usize = 1_500;
 /// A condensed document smaller than this has lost what it is.
 const MIN_REDISTILLED_CHARACTERS: usize = 2_000;
 /// How many times a prompt that will not fit is condensed further before it
@@ -98,10 +99,14 @@ impl Engine {
     /// two part ways on exactly the documents a firm files: Qwen reads every
     /// digit, and every CJK character, as a token of its own, so a bank
     /// statement or a Chinese contract inside the character budget can still
-    /// overflow 8,192 tokens. The prompt is estimated first and condensed
-    /// further until it fits; if the server still finds it too large, it is
-    /// condensed to half once more. Only a document that does not fit changes,
-    /// so every prompt that fitted before is sent byte for byte as it was.
+    /// overflow the local server's 8,192 tokens. For a model with a context
+    /// that small the prompt is estimated first and condensed further until
+    /// it fits; a hosted model, whose context is many times larger, is sent
+    /// it whole - condensing it there only dropped the blocks that named the
+    /// date and the parties from a request that was paid for anyway. Either
+    /// way, a model that still finds the prompt too large gets it condensed
+    /// to half once more. Only a document that does not fit changes, so every
+    /// prompt that fitted before is sent byte for byte as it was.
     pub fn analyze(
         &self,
         source: &DocumentSource,
@@ -111,14 +116,18 @@ impl Engine {
         let distill_started = Instant::now();
         let mut budget = self.budget;
         let mut digest = distill(source, budget);
-        for _ in 0..MAX_REDISTILLATIONS {
-            let estimate = estimated_tokens(&ModelRequest::from_digest(&digest).prompt);
-            if estimate + MAX_REPLY_TOKENS as usize <= MAX_REQUEST_TOKENS {
-                break;
+        if let Some(context) = self.client.context_tokens() {
+            let ceiling = context.saturating_sub(TEMPLATE_TOKENS);
+            let target = ceiling.saturating_sub(CONDENSING_MARGIN_TOKENS).max(1);
+            for _ in 0..MAX_REDISTILLATIONS {
+                let estimate = estimated_tokens(&ModelRequest::from_digest(&digest).prompt);
+                if estimate + MAX_REPLY_TOKENS as usize <= ceiling {
+                    break;
+                }
+                let scaled = sent_characters(&digest, budget) * target / estimate.max(1);
+                budget = condensed(scaled.max(MIN_REDISTILLED_CHARACTERS));
+                digest = distill(source, budget);
             }
-            let scaled = sent_characters(&digest, budget) * TARGET_PROMPT_TOKENS / estimate;
-            budget = condensed(scaled.max(MIN_REDISTILLED_CHARACTERS));
-            digest = distill(source, budget);
         }
         let distill_micros = micros_since(distill_started);
         match self.analyze_digest(source, &digest, distill_micros, extension, existing_names) {
@@ -431,10 +440,12 @@ mod tests {
     }
 
     /// A proposer that records every prompt it is sent and answers the `n`th
-    /// with `answers[n]` (the last again once they run out).
+    /// with `answers[n]` (the last again once they run out). It has the local
+    /// server's context unless built as a hosted one.
     struct Recording {
         prompts: std::sync::Mutex<Vec<String>>,
         answers: Vec<Result<(), crate::error::EngineErrorCode>>,
+        context: Option<usize>,
     }
 
     impl Recording {
@@ -442,6 +453,14 @@ mod tests {
             Self {
                 prompts: std::sync::Mutex::new(Vec::new()),
                 answers,
+                context: Some(crate::server::CONTEXT_TOKENS as usize),
+            }
+        }
+
+        fn hosted(answers: Vec<Result<(), crate::error::EngineErrorCode>>) -> Self {
+            Self {
+                context: None,
+                ..Self::new(answers)
             }
         }
 
@@ -461,6 +480,10 @@ mod tests {
                     .map(|(proposal, _)| proposal),
                 Err(code) => Err(crate::error::EngineError::new(code, "scripted")),
             }
+        }
+
+        fn context_tokens(&self) -> Option<usize> {
+            self.context
         }
     }
 
@@ -537,6 +560,28 @@ mod tests {
         );
         assert!(prompts[0].contains("Statement date: January 31, 2026"));
         assert!(analysis.telemetry.digest_characters < whole.prompt.chars().count());
+    }
+
+    /// The 8,192-token ceiling is the local server's. A hosted model's
+    /// context is many times larger, and condensing the statement for it
+    /// dropped the blocks that named the date and the parties from a request
+    /// it was paid for anyway: it is sent the digest whole.
+    #[test]
+    fn a_model_without_the_local_context_is_sent_the_whole_digest() {
+        let source = digit_dense_statement();
+        let whole = ModelRequest::from_digest(&distill(&source, DigestBudget::default()));
+        assert!(estimated_tokens(&whole.prompt) + 1_024 > 8_000);
+
+        let hosted = std::sync::Arc::new(Recording::hosted(vec![Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&hosted)));
+        engine.analyze(&source, "pdf", &[]).unwrap();
+        assert_eq!(hosted.prompts(), vec![whole.prompt]);
+
+        // Which models those are: the local client knows its server's
+        // context, and anything else is not condensed to it.
+        let local = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        assert_eq!(local.context_tokens(), Some(8_192));
+        assert_eq!(Scored(None).context_tokens(), None);
     }
 
     /// When the server counts more tokens than the estimate did, the document

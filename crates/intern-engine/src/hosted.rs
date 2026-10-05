@@ -994,6 +994,23 @@ mod tests {
         .unwrap()
     }
 
+    /// The engine condenses prompts to the local server's context only. A
+    /// hosted model - even one on this machine, whose context Intern does not
+    /// set - is sent each document as distilled, and condensed only when it
+    /// answers that the prompt did not fit.
+    #[test]
+    fn a_hosted_model_is_not_held_to_the_local_context() {
+        let local = local_openai("127.0.0.1:9".parse().unwrap());
+        assert_eq!(Proposer::context_tokens(&local), None);
+        let remote = HostedClient::new(config(
+            HostedProvider::Anthropic,
+            DEFAULT_ANTHROPIC_BASE_URL,
+            DEFAULT_ANTHROPIC_MODEL,
+        ))
+        .unwrap();
+        assert_eq!(Proposer::context_tokens(&remote), None);
+    }
+
     /// The whole path, against a service that answers 429: the wait it named
     /// rides out on the error for the queue to honour, and a quota that has
     /// run out is a billing failure, sent once.

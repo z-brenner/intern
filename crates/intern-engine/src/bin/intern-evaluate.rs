@@ -676,6 +676,10 @@ impl Proposer for RecordingProposer {
         }
         result
     }
+
+    fn context_tokens(&self) -> Option<usize> {
+        self.inner.context_tokens()
+    }
 }
 
 /// The reply a replay hands the engine in the model's place.

@@ -76,6 +76,15 @@ pub trait Proposer: Send + Sync {
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         self.propose(request).map(|proposal| (proposal, None))
     }
+
+    /// The context the prompt and the reply share, in tokens, when it is
+    /// small enough that the engine must fit prompts to it: the local
+    /// server's. A hosted service's context is many times that and not
+    /// Intern's to size, so by default a prompt is sent as distilled, and
+    /// only the service's own answer that it did not fit condenses it.
+    fn context_tokens(&self) -> Option<usize> {
+        None
+    }
 }
 
 pub struct ModelClient {
@@ -96,6 +105,11 @@ impl Proposer for ModelClient {
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         ModelClient::propose_scored(self, request)
+    }
+
+    /// The local server always runs with this context.
+    fn context_tokens(&self) -> Option<usize> {
+        Some(crate::server::CONTEXT_TOKENS as usize)
     }
 }
 
