@@ -53,6 +53,12 @@ const NOTICE_CUES: &[&str] = &[
     "date of this notice",
     "notice date",
     "date of notice",
+    // A notice of termination dated a day is a notice issued that day; the
+    // termination it brings about is a later date. Matched here, ahead of
+    // the termination cues, so "terminat" does not claim it.
+    "notice of termination dated",
+    "notice of termination as of",
+    "notice dated",
     "notice is given",
     "notice given",
     "notice is hereby given",
@@ -996,6 +1002,32 @@ Invoice Date: April 30, 2025    Due Date: May 30, 2025",
         assert_eq!(
             infer_date_role(&digest, "2025-04-30", Some("Invoice")),
             Some(DateRole::Invoice)
+        );
+    }
+
+    /// A notice dated a day was given that day, whatever it terminates; the
+    /// role list says so, and the termination cue used to claim it first.
+    #[test]
+    fn notice_of_termination_dated_reads_as_a_notice() {
+        let digest = digest_of("NOTICE OF TERMINATION dated December 29, 2026");
+        assert_eq!(
+            infer_date_role(&digest, "2026-12-29", Some("Notice of Termination")),
+            Some(DateRole::Notice)
+        );
+        let digest = digest_of(
+            "NOTICE OF TERMINATION\nThis notice of termination as of December 29, 2026 ends the lease.",
+        );
+        assert_eq!(
+            infer_date_role(&digest, "2026-12-29", Some("Notice of Termination")),
+            Some(DateRole::Notice)
+        );
+        // The date the termination takes effect is still a termination date.
+        let digest = digest_of(
+            "NOTICE OF TERMINATION dated December 29, 2026\nYour employment will end effective January 31, 2027.",
+        );
+        assert_eq!(
+            infer_date_role(&digest, "2027-01-31", Some("Notice of Termination")),
+            Some(DateRole::Termination)
         );
     }
 

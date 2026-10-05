@@ -371,14 +371,20 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
     // Agreement between you and Northstar Lantern Works LLC dated" is 70
     // characters - and no wider than the window the date's role is read in.
     const WIDE: usize = 96;
-    fn window(normalized: &str, position: usize, span: usize) -> &str {
+    fn window_start(normalized: &str, position: usize, span: usize) -> usize {
         let mut start = position.saturating_sub(span);
         while !normalized.is_char_boundary(start) {
             start -= 1;
         }
-        &normalized[start..position]
+        start
     }
-    if window(normalized, position, NEAR).contains("dated") {
+    // Words are found whole, in everything before the date, so the letters
+    // around one decide what it is even where a window's edge cuts it:
+    // "Contractor" is not a contract, "border" not an order, "updated" not
+    // "dated".
+    let before = &normalized[..position];
+    if rfind_word(before, "dated").is_some_and(|at| at >= window_start(normalized, position, NEAR))
+    {
         // "dated" only references another document when a document noun
         // introduces it - "the Master Services Agreement dated June 2, 2023".
         // A bare "Dated January 8, 2025" on a title block is the document
@@ -387,23 +393,79 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         // those it is, not a "this" anywhere in the window: "This First
         // Amendment to the Consulting Agreement dated September 1, 2020"
         // states the *consulting agreement's* date, and opens with "This".
-        // Punctuation between the two is typography - a defined term is
-        // introduced as `(this "Amendment")` - so it is stepped over.
-        let wide = window(normalized, position, WIDE);
-        let noun_ends_at = ["agreement", "contract", "order", "amendment", "memorandum"]
+        let wide = window_start(normalized, position, WIDE);
+        let noun_at = DOCUMENT_NOUNS
             .iter()
-            .filter_map(|noun| wide.rfind(noun))
+            .filter_map(|noun| rfind_word(before, noun))
+            .filter(|&at| at >= wide)
             .max();
-        return match noun_ends_at {
-            Some(at) => !wide[..at]
-                .trim_end_matches(|character: char| !character.is_alphanumeric())
-                .ends_with("this"),
-            None => false,
-        };
+        return noun_at.is_some_and(|at| !determined_by_this(&before[..at]));
     }
-    ["issued under", "pursuant to", "as amended", "amending "]
-        .iter()
-        .any(|cue| window(normalized, position, WIDE).contains(cue))
+    // A citation runs straight into the date it cites: "issued under the MSA
+    // effective June 2, 2023". Clause punctuation in between means the
+    // sentence moved on - "Pursuant to Section 9.2 of the Employment
+    // Agreement, your employment will terminate effective January 31, 2027"
+    // dates the termination, not the agreement it cites.
+    let wide = &normalized[window_start(normalized, position, WIDE)..position];
+    REFERENCE_CUES.iter().any(|cue| {
+        wide.rfind(cue)
+            .is_some_and(|at| !wide[at + cue.len()..].contains([',', ';', '.', ':']))
+    })
+}
+
+/// Nouns that name a document, for telling "the Master Services Agreement
+/// dated" from a bare "Dated".
+const DOCUMENT_NOUNS: &[&str] = &["agreement", "contract", "order", "amendment", "memorandum"];
+/// Wording that cites another document as the authority for this one.
+const REFERENCE_CUES: &[&str] = &["issued under", "pursuant to", "as amended", "amending "];
+/// Determiners and prepositions that make a document noun somebody else's:
+/// "the Master Services Agreement", "under its Agreement", "of said
+/// Contract".
+const REFERRING_WORDS: &[&str] = &[
+    "the", "that", "said", "such", "a", "an", "any", "each", "its", "their", "your", "our", "to",
+    "of", "under", "with", "between", "by",
+];
+
+/// Whether the words before a document noun make it this document: "This
+/// Consulting Agreement", "This First Amendment", `(this "Amendment")`.
+///
+/// Up to four words are read back from the noun, stepping over quotation
+/// marks and parentheses, which are typography. "this" settles it as this
+/// document. A determiner or preposition settles it as another one, and so
+/// does a word that ends a clause, or running out of words: a noun nobody
+/// qualified is how a document cites another, and a cover line that names
+/// the document itself is recognised separately, by its type.
+fn determined_by_this(lead: &str) -> bool {
+    let words = lead
+        .split_whitespace()
+        .rev()
+        .map(|word| {
+            word.trim_matches(|character: char| matches!(character, '"' | '\'' | '(' | ')'))
+        })
+        .filter(|word| !word.is_empty());
+    for word in words.take(4) {
+        if word.ends_with([',', ';', ':', '.']) {
+            return false;
+        }
+        let bare = word.trim_matches(|character: char| !character.is_alphanumeric());
+        if bare == "this" {
+            return true;
+        }
+        if REFERRING_WORDS.contains(&bare) {
+            return false;
+        }
+    }
+    false
+}
+
+/// The last place `word` stands in `haystack` as a whole word, with no
+/// letter or digit running into it on either side.
+fn rfind_word(haystack: &str, word: &str) -> Option<usize> {
+    haystack.rmatch_indices(word).map(|(at, _)| at).find(|&at| {
+        let before = haystack[..at].chars().next_back();
+        let after = haystack[at + word.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 /// Whether the wording before the date is the document naming itself:
@@ -1183,6 +1245,197 @@ The total fee is $248,000.00 payable on delivery.
             "{}",
             outcome.proposal.description
         );
+    }
+
+    /// Whether the first statement of `date` on `line` reads as another
+    /// document's date.
+    fn reference_at(line: &str, date: &str) -> bool {
+        let normalized = normalize(line);
+        let position = *date_match_positions(date, &normalized)
+            .first()
+            .expect("the line states the date");
+        reference_introduced(&normalized, position)
+    }
+
+    /// "This Consulting Agreement dated as of March 1, 2026" is the
+    /// agreement dating itself, but only a "this" directly on the noun was
+    /// recognised: the adjective in between made the date a reference, and
+    /// it was withheld - or, with a commencement line to fall back on,
+    /// silently replaced, and the file went out Ready under the wrong date.
+    #[test]
+    fn this_adjective_agreement_dated_is_the_documents_own_date() {
+        let document = "CONSULTING AGREEMENT
+This Consulting Agreement dated as of March 1, 2026 is made by and between Acme Corporation and Jane Smith.
+The Consultant will provide services commencing April 15, 2026.
+";
+        let candidate = ModelProposal {
+            document_type: Some("Consulting Agreement".into()),
+            document_date: Some("2026-03-01".into()),
+            date_role: Some(DateRole::Effective),
+            parties: vec!["Acme Corporation".into(), "Jane Smith".into()],
+            party_relation: PartyRelation::Between,
+            description: "Consulting agreement between Acme Corporation and Jane Smith for services commencing April 15, 2026.".into(),
+            confidence: 0.9,
+            needs_review: false,
+            evidence: Evidence {
+                date: Some("This Consulting Agreement dated as of March 1, 2026".into()),
+                document_type: Some("CONSULTING AGREEMENT".into()),
+                parties: Vec::new(),
+            },
+        };
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-01"),
+            "the commencement date must not replace the agreement's own"
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(
+            outcome.proposal.evidence.date.as_deref(),
+            Some("This Consulting Agreement dated as of March 1, 2026")
+        );
+
+        // With no other date to fall back on, the date was withheld.
+        let mut candidate = proposal();
+        candidate.document_type = Some("Lease Agreement".into());
+        candidate.document_date = Some("2024-09-01".into());
+        candidate.parties = vec!["Finch Properties LLC".into()];
+        candidate.party_relation = PartyRelation::With;
+        let outcome = validate_at(
+            candidate,
+            &digest_of(
+                "LEASE AGREEMENT\nThis Lease Agreement dated September 1, 2024 is between Finch Properties LLC and Orion Glass Studio Inc.\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2024-09-01")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateUnsupported));
+
+        // The determiner nearest the noun still decides, however the
+        // sentence opens, and a noun nobody qualified is still a citation.
+        assert!(!reference_at(
+            "This First Amendment to Consulting Agreement (this \"Amendment\") is dated as of September 14, 2025",
+            "2025-09-14"
+        ));
+        assert!(reference_at(
+            "This First Amendment to the Consulting Agreement dated September 1, 2020",
+            "2020-09-01"
+        ));
+        assert!(reference_at(
+            "This First Amendment to Consulting Agreement dated September 1, 2020",
+            "2020-09-01"
+        ));
+        assert!(reference_at(
+            "Issued under the Master Services Agreement dated June 2, 2023",
+            "2023-06-02"
+        ));
+        assert!(reference_at(
+            "Agreement dated June 2, 2023 between the same parties.",
+            "2023-06-02"
+        ));
+        assert!(reference_at(
+            "Contoso Worldwide, Inc. Services Agreement dated June 2, 2023",
+            "2023-06-02"
+        ));
+    }
+
+    /// The document nouns were matched as raw substrings, so a contractor
+    /// was a contract, a border an order, and a disagreement an agreement -
+    /// each one enough to make the document's own date a reference.
+    #[test]
+    fn contractor_border_and_disagreement_are_not_document_nouns() {
+        for line in [
+            "entered into by the Contractor and the Client, dated April 1, 2026",
+            "Signed at the border, dated April 1, 2026",
+            "Settled after a long disagreement, dated April 1, 2026",
+            "Work performed by a subcontractor dated April 1, 2026",
+            // Nor is "updated" the word "dated".
+            "Exhibit B to the Agreement, updated April 1, 2026",
+        ] {
+            assert!(!reference_at(line, "2026-04-01"), "{line}");
+        }
+        for line in [
+            "under the Contract dated April 1, 2026",
+            "the Purchase Order dated April 1, 2026",
+            "a Memorandum dated April 1, 2026",
+        ] {
+            assert!(reference_at(line, "2026-04-01"), "{line}");
+        }
+
+        let mut candidate = proposal();
+        candidate.document_type = Some("Services Schedule".into());
+        candidate.document_date = Some("2026-04-01".into());
+        let outcome = validate_at(
+            candidate,
+            &digest_of(
+                "SERVICES SCHEDULE\nThis schedule was entered into by the Contractor and the Client, dated April 1, 2026.\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-01"),
+            "{:?}",
+            outcome.reasons
+        );
+    }
+
+    /// "Pursuant to Section 9.2 of the Employment Agreement, your
+    /// employment will terminate effective January 31, 2027" cites the
+    /// agreement and then moves on: the date belongs to the termination.
+    /// The cue tainted any date within reach, and the notice's only date
+    /// was dropped.
+    #[test]
+    fn a_cue_separated_from_the_date_by_a_comma_does_not_taint_it() {
+        assert!(!reference_at(
+            "Pursuant to Section 9.2 of the Employment Agreement, your employment will terminate effective January 31, 2027",
+            "2027-01-31"
+        ));
+        assert!(!reference_at(
+            "This Amendment, amending the fee schedule, is effective as of September 14, 2025",
+            "2025-09-14"
+        ));
+        // A cue that runs straight into the date still cites it.
+        assert!(reference_at(
+            "Statement of Work issued under the Master Agreement effective June 2, 2023",
+            "2023-06-02"
+        ));
+        assert!(reference_at(
+            "the Lease as amended March 3, 2024",
+            "2024-03-03"
+        ));
+        assert!(reference_at(
+            "pursuant to the Master Agreement effective June 2, 2023",
+            "2023-06-02"
+        ));
+
+        let mut candidate = proposal();
+        candidate.document_type = Some("Notice of Termination".into());
+        candidate.document_date = Some("2027-01-31".into());
+        candidate.parties = vec!["John Smith".into()];
+        candidate.party_relation = PartyRelation::To;
+        let outcome = validate_at(
+            candidate,
+            &digest_of(
+                "NOTICE OF TERMINATION\nTo: John Smith\nPursuant to Section 9.2 of the Employment Agreement, your employment will terminate effective January 31, 2027.\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2027-01-31"),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Termination));
     }
 
     fn invoice(date: &str) -> ModelProposal {
