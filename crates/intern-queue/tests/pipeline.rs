@@ -4676,8 +4676,21 @@ fn open_file_rename_failure_is_recoverable_by_approve_again() {
 /// checked again: the row in review holding no receipt, and beside it a
 /// receipt still planned that blocks every new one.
 fn seed_orphaned_planned_receipt(database: &Path, item: &intern_queue::PipelineItem) {
+    insert_planned_receipt(database, item);
     let connection = Connection::open(database).unwrap();
     connection
+        .execute(
+            "UPDATE queue_items SET status = 'needs_review', error_code = 'FILE_CHANGED'
+             WHERE id = ?1",
+            [item.id],
+        )
+        .unwrap();
+}
+
+/// A planned rename of `item` to the agreement's name, left in the journal.
+fn insert_planned_receipt(database: &Path, item: &intern_queue::PipelineItem) {
+    Connection::open(database)
+        .unwrap()
         .execute(
             "INSERT INTO operation_receipts(
                queue_item_id, direction, source_path, destination_path, pre_hash,
@@ -4693,13 +4706,6 @@ fn seed_orphaned_planned_receipt(database: &Path, item: &intern_queue::PipelineI
                     .to_string_lossy(),
                 item.source_hash,
             ],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "UPDATE queue_items SET status = 'needs_review', error_code = 'FILE_CHANGED'
-             WHERE id = ?1",
-            [item.id],
         )
         .unwrap();
 }
@@ -5036,6 +5042,20 @@ fn a_foreign_file_at_the_destination_waits_in_review_and_files_once_it_is_gone()
     assert_eq!(waiting.error_code, Some(ErrorCode::DestinationUnavailable));
     assert_eq!(waiting.receipt.unwrap().stage, OperationStage::RolledBack);
     assert!(waiting.unsettled_receipt.is_none());
+    // The record says it waits for a person, and why. It went on saying
+    // "approved", so a house-style change passed it over as an approval
+    // waiting to be filed and it kept a name built under the old rules.
+    let record = waiting.proposal.unwrap();
+    assert!(!record.approved);
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    assert!(
+        record
+            .reasons
+            .iter()
+            .any(|reason| reason == "DESTINATION_UNAVAILABLE"),
+        "{:?}",
+        record.reasons
+    );
     let occupied = temp.path().join(AGREEMENT_NAME);
     assert_eq!(fs::read(&occupied).unwrap(), b"a teammate's invoice");
 
@@ -5582,6 +5602,62 @@ fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
     assert_eq!(item_of(&pipeline, ids[2]).status, QueueStatus::Completed);
     assert!(folders[2].join(AGREEMENT_NAME).exists());
     assert!(!paths[2].exists());
+}
+
+/// A rename an older build left planned, beside a document read again since
+/// and sent to review - the model asked for a person. Checking it again
+/// rolls the rename back, and used to leave the document ready: with
+/// automatic renaming on, filed under a name nobody approved.
+#[test]
+fn checking_again_keeps_a_document_read_since_in_review() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_file_system(
+        database.clone(),
+        Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))])),
+        Arc::new(FakeModel::new(vec![Ok(proposal(0.94, true))])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        Arc::new(StdFileSystem),
+    )
+    .unwrap();
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    insert_planned_receipt(&database, &item_of(&pipeline, id));
+    assert!(item_of(&pipeline, id).unsettled_receipt.is_some());
+
+    pipeline.retry(id).unwrap();
+
+    let checked = item_of(&pipeline, id);
+    assert_eq!(checked.status, QueueStatus::NeedsReview);
+    assert_eq!(checked.receipt.unwrap().stage, OperationStage::RolledBack);
+    assert!(checked.unsettled_receipt.is_none());
+    let record = checked.proposal.unwrap();
+    assert!(!record.approved);
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(path.exists(), "nothing was filed without an approval");
+
+    // Approving it is still how it is filed.
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::Completed);
+    assert!(!path.exists());
 }
 
 /// A destination on a network share that is offline at the moment of an

@@ -1923,6 +1923,16 @@ impl Pipeline {
         let Ok(Some(receipt)) = self.store.load_receipt(item_id) else {
             return;
         };
+        if receipt.stage == OperationStage::RolledBack
+            && receipt.direction == OperationDirection::Apply
+            && item.status == QueueStatus::NeedsReview
+            && let Some(code) = item.error_code
+        {
+            // A rename that moved nothing and left the document in review,
+            // for a reason a person has to act on.
+            let _ = self.repository.hold_for_review(item_id, code.as_str());
+            return;
+        }
         if receipt.stage != OperationStage::Complete {
             return;
         }
@@ -2437,7 +2447,20 @@ impl Pipeline {
                 ));
             }
             let item = self.find_item(id)?;
-            self.files.reconcile(&item)
+            let result = self.files.reconcile(&item);
+            self.hold_undone_for_review(id);
+            // Under the same hold, so no rename of it can start in the
+            // moment it reads as ready.
+            let kept = if self
+                .store
+                .get(id)?
+                .is_some_and(|settled| settled.status == QueueStatus::Ready)
+            {
+                self.repository.keep_in_review(id)
+            } else {
+                Ok(())
+            };
+            result.and(kept)
         };
         self.report_settled(id);
         self.events.queue_changed();
@@ -2921,11 +2944,58 @@ impl PipelineRepository {
     }
 
     fn mark_needs_review(&self, id: i64, reason: &str) -> PipelineResult<()> {
+        self.put_in_review(id, Some(reason), QueueStatus::Ready)
+    }
+
+    /// Makes the proposal of an item a file operation left in review say so:
+    /// waiting for a person, no longer approved, and why.
+    ///
+    /// A rename that rolled back because the original changed, was held, or
+    /// found someone else's file at its name moves the row to review in the
+    /// same transaction that records the rollback - which knows nothing of
+    /// proposals. The record went on saying "ready" and "approved", so the
+    /// window showed whatever reasons it held instead of the one that
+    /// mattered, and house-style changes passed over it as an approval
+    /// waiting to be filed, leaving a name built under the old rules.
+    fn hold_for_review(&self, id: i64, reason: &str) -> PipelineResult<()> {
+        self.put_in_review(id, Some(reason), QueueStatus::NeedsReview)
+    }
+
+    /// Puts an item a check of its files left ready back in review, when its
+    /// proposal was waiting on a person all along.
+    ///
+    /// Checking again puts a rename that never happened back the way it was
+    /// before the rename - for every rename this build makes, ready, because
+    /// only a ready document is renamed. A receipt older builds left behind
+    /// can belong to a document read again since, whose new proposal was
+    /// sent to review: low confidence, a near duplicate. Left ready, it would
+    /// be filed under a name nobody approved.
+    fn keep_in_review(&self, id: i64) -> PipelineResult<()> {
+        if self
+            .load_proposal(id)?
+            .is_some_and(|record| record.status == ProposalStatus::NeedsReview)
+        {
+            self.put_in_review(id, None, QueueStatus::Ready)?;
+        }
+        Ok(())
+    }
+
+    /// Records the proposal as waiting for a person - with `reason` among its
+    /// reasons, when there is one - and the row as in review, provided the
+    /// row is still `row_status`.
+    fn put_in_review(
+        &self,
+        id: i64,
+        reason: Option<&str>,
+        row_status: QueueStatus,
+    ) -> PipelineResult<()> {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
         record.status = ProposalStatus::NeedsReview;
-        if !record.reasons.iter().any(|entry| entry == reason) {
+        if let Some(reason) = reason
+            && !record.reasons.iter().any(|entry| entry == reason)
+        {
             record.reasons.push(reason.to_owned());
         }
         // A document waiting for a person is no longer a document waiting to
@@ -2935,13 +3005,13 @@ impl PipelineRepository {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
         let changed = transaction.execute(
-            "UPDATE queue_items SET status = 'needs_review', updated_at = unixepoch() WHERE id = ?1 AND status = 'ready'",
-            params![id],
+            "UPDATE queue_items SET status = 'needs_review', updated_at = unixepoch() WHERE id = ?1 AND status = ?2",
+            params![id, queue_status_text(row_status)],
         ).map_err(database_error)?;
         if changed != 1 {
             return Err(PipelineError::new(
                 "STATE_CONFLICT",
-                "ready item changed before review",
+                "item changed before review",
             ));
         }
         let json = serde_json::to_string(&record)
