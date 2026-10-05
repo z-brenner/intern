@@ -156,10 +156,11 @@ struct ScanState {
     /// Claims kept open because the document failed while its content was
     /// still in the cloud. Their fate is decided once the bytes arrive.
     awaiting_hydration: HashSet<String>,
-    /// Owned keys whose queue item this run has seen working or waiting for
-    /// review. When such an item disappears while its file is still here, a
-    /// person removed or discarded it; an owned claim with no item that was
-    /// never seen live is the crash between acquire and enqueue instead.
+    /// Owned keys whose queue item this run handed over or has seen working
+    /// or waiting for review. When such an item disappears while its file is
+    /// still here, a person removed or discarded it; an owned claim with no
+    /// item that was never seen live is the crash between acquire and enqueue
+    /// instead.
     seen_live: HashSet<String>,
     /// Documents the queue refused, by key: how many hand-overs failed in a
     /// row, and the clock time before which no claim is attempted again.
@@ -574,6 +575,9 @@ impl Scanner<'_> {
                     Ok(()) => {
                         self.enqueue_failures.remove(key);
                         self.owned.insert(key.to_string(), path.to_path_buf());
+                        // The queue has the item from this moment, so a person
+                        // can discard it before any scan sees it waiting.
+                        self.seen_live.insert(key.to_string());
                     }
                     Err(message) => {
                         let _ = self.store.release(key);
@@ -634,12 +638,13 @@ impl Scanner<'_> {
     /// as a claimed lease forever).
     ///
     /// An item that vanishes while its file stays put is one of two things. If
-    /// this run saw it working or in review, a person took it out of the
-    /// queue - Remove, or Discard waiting - and that decision is recorded as
-    /// `KeptOriginal`: releasing the claim instead put the document straight
-    /// back into the queue on the next scan, to be analysed again. If it was
-    /// never seen live, the claim outlived a crash between acquire and
-    /// enqueue, and is released so the next scan hands the document over.
+    /// this run handed it over or saw it working or in review, a person took
+    /// it out of the queue - Remove, or Discard waiting - and that decision is
+    /// recorded as `KeptOriginal`: releasing the claim instead put the
+    /// document straight back into the queue on the next scan, to be analysed
+    /// again. If it was never seen live, the claim outlived a crash between
+    /// acquire and enqueue, and is released so the next scan hands the
+    /// document over.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
         match self.host.item_state(path) {
             ItemState::Active | ItemState::NeedsReview => {

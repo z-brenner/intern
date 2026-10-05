@@ -766,6 +766,28 @@ fn removed_review_item_is_tombstoned_not_reenqueued() {
     assert_eq!(rig.watcher.status().processed_here, 1);
 }
 
+/// Discard waiting can take a document out of the queue before any scan has
+/// seen it working. The queue had already taken it, so its disappearance is
+/// still a person's decision, not the crash between claim and hand-over.
+#[test]
+fn a_document_discarded_before_any_scan_saw_it_is_not_reenqueued() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("queued.pdf", b"discarded while still waiting");
+    let key = facts_for(rig.temp.path(), "queued.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.remove(&path);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path], "never handed over again");
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+}
+
 /// The queue keeps a canceled row, and handing the same document over again
 /// returns it canceled, so the old mapping (canceled reads as no item) made the
 /// claim file appear and vanish every two scans for ever - an upload to the
