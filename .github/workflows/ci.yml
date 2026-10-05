@@ -256,6 +256,11 @@ jobs:
           key: ${{ steps.assets-cache.outputs.cache-primary-key }}
       # A failed fetch still keeps what it managed to download, under a key of
       # its own: progress for the next run, never mistaken for a complete cache.
+      # Not a cancelled one. Cancelling can stop the script mid-write, before it
+      # can discard a truncated download, and the next run would restore that
+      # file, skip downloading it because it exists, fail its pinned size and
+      # SHA-256, and save it again as the newest partial: every later run would
+      # fail the same way until the manifest or the fetch script changed.
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         if: always() && steps.fetch-assets.outcome == 'failure'
         with:

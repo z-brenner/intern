@@ -37,6 +37,9 @@ describe('the runtime-asset cache in CI', () => {
     // A partial fetch is progress for the next run, under a key of its own: saved
     // under the primary key it would be restored as a hit and never completed.
     expect(partial).toContain("if: always() && steps.fetch-assets.outcome == 'failure'");
+    // Never on cancellation: a killed fetch can leave a truncated download that
+    // every run restoring it would fail on.
+    expect(partial).not.toContain('cancelled');
     expect(partial).toContain('key: ${{ steps.assets-cache.outputs.cache-primary-key }}-partial-${{ github.run_id }}-${{ github.run_attempt }}');
 
     const restore = steps.find((step) => step.includes('actions/cache/restore@'))!;
