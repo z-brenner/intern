@@ -582,6 +582,74 @@ mod tests {
         );
     }
 
+    /// A reviewer is offered the numeric dates that can only mean one thing,
+    /// and the ones the document's own other dates show the order of.
+    #[test]
+    fn stated_dates_offers_unambiguous_numeric_dates_and_follows_the_documents_order() {
+        let day_first = digest_of(
+            "INVOICE INV-2048\nInvoice Date: 03/04/2026\nDelivered: 30/01/2026\nDue: 2026.05.03\n",
+        );
+        assert_eq!(numeric_date_order(&day_first), Some(NumericOrder::DayFirst));
+        assert_eq!(
+            stated_dates(&day_first),
+            vec!["2026-04-03", "2026-01-30", "2026-05-03"]
+        );
+
+        let month_first = digest_of("INVOICE\nInvoice Date: 03/04/2026\nDue Date: 04/30/2026\n");
+        assert_eq!(
+            numeric_date_order(&month_first),
+            Some(NumericOrder::MonthFirst)
+        );
+        assert_eq!(stated_dates(&month_first), vec!["2026-03-04", "2026-04-30"]);
+
+        // Alone, "03/04/2026" could be either, and is not offered under a
+        // guess; "05/05/2026" reads the same both ways.
+        let unsettled = digest_of("INVOICE\nInvoice Date: 03/04/2026\nShipped: 05/05/2026\n");
+        assert_eq!(numeric_date_order(&unsettled), None);
+        assert_eq!(stated_dates(&unsettled), vec!["2026-05-05"]);
+        // A two-digit year settles the order, but its century is a guess,
+        // so it is not offered itself.
+        let short_year = digest_of("INVOICE\nInvoice Date: 03/04/2026\nDue: 30/01/26\n");
+        assert_eq!(
+            numeric_date_order(&short_year),
+            Some(NumericOrder::DayFirst)
+        );
+        assert_eq!(stated_dates(&short_year), vec!["2026-04-03"]);
+
+        // A written date keeps its place among numeric ones on its line.
+        let mixed = digest_of("NOTICE\nSent 30/01/2026, effective March 1, 2026.\n");
+        assert_eq!(stated_dates(&mixed), vec!["2026-01-30", "2026-03-01"]);
+    }
+
+    /// The order is the document's only when the document is consistent
+    /// about it: one numeric date that can only be read month first and one
+    /// that can only be read day first settle nothing.
+    #[test]
+    fn a_document_that_writes_dates_both_ways_has_no_order() {
+        assert_eq!(
+            numeric_date_order(&digest_of("Dated 30/01/2026.\nDue 01/30/2026.\n")),
+            None
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("Dated 03/04/2026.\nTerm 12 months.\n")),
+            None
+        );
+        // A two-digit year settles the order when it is padded or slashed;
+        // an unpadded dotted section number does not.
+        assert_eq!(
+            numeric_date_order(&digest_of("Due 30/04/26.\n")),
+            Some(NumericOrder::DayFirst)
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("See section 13.4.26.\n")),
+            None
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("Due 04-30-26.\n")),
+            Some(NumericOrder::MonthFirst)
+        );
+    }
+
     #[test]
     fn loose_matching_ignores_only_punctuation() {
         let digest = digest_of("by and between Contoso Worldwide, Inc. and Jane O'Brien");
@@ -608,11 +676,37 @@ mod tests {
 /// lines, so each is a date a person could find on the page - which is what
 /// makes it fit to offer a reviewer who has to give a document a date the
 /// model did not.
+///
+/// A date printed only in numbers is offered when it can be read one way:
+/// "30/01/2026" can only be 30 January, and once the document has shown its
+/// order that way, its "03/04/2026" is 3 April. A numeric date that could be
+/// either, in a document that never says which, is left out rather than
+/// offered under a guess - and so is a two-digit year, whose century is one.
 pub fn stated_dates(digest: &DocumentDigest) -> Vec<String> {
     const MOST: usize = 8;
+    let order = numeric_date_order(digest);
     let mut found: Vec<String> = Vec::new();
     for line in &digest.date_lines {
-        for date in extract_stated_dates(line) {
+        let normalized = normalize(line);
+        let mut on_line = extract_stated_dates(line)
+            .into_iter()
+            .map(|date| {
+                let position = date_match_positions(&date, &normalized)
+                    .first()
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                (position, date)
+            })
+            .collect::<Vec<_>>();
+        on_line.extend(
+            numeric_dates(&normalized)
+                .iter()
+                .filter_map(|token| numeric_reading(token, order).map(|date| (token.start, date))),
+        );
+        // In the order the line states them, so a reviewer reads the chips
+        // the way the page reads.
+        on_line.sort_by_key(|(position, _)| *position);
+        for (_, date) in on_line {
             if !found.contains(&date) {
                 found.push(date);
                 if found.len() == MOST {
@@ -734,6 +828,154 @@ pub fn extract_stated_dates(line: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// A token shaped like a numeric date - "04/30/2025", "30.04.2025",
+/// "2025-04-30", "4/30/25" - as byte offsets into the text it was found in,
+/// with its three runs of digits and the separator between them.
+pub(crate) struct NumericDate<'a> {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) parts: [&'a str; 3],
+    pub(crate) separator: u8,
+}
+
+/// Every numeric-date-shaped token in `text`: one to four digits, a
+/// separator out of `/ . -`, one or two digits, the same separator, two to
+/// four digits, with no digit running into either end. Whether the token is
+/// a real calendar date is not asked here.
+pub(crate) fn numeric_dates(text: &str) -> Vec<NumericDate<'_>> {
+    let bytes = text.as_bytes();
+    let digits_from = |from: usize| -> usize {
+        bytes[from..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count()
+    };
+    let mut found = Vec::new();
+    for start in 0..bytes.len() {
+        if !bytes[start].is_ascii_digit() || (start > 0 && bytes[start - 1].is_ascii_digit()) {
+            continue;
+        }
+        // Each run is taken whole, so a run longer than its shape allows
+        // is a longer number and not a date.
+        let first = digits_from(start);
+        let Some(&separator) = bytes.get(start + first) else {
+            continue;
+        };
+        if !(1..=4).contains(&first) || !matches!(separator, b'/' | b'.' | b'-') {
+            continue;
+        }
+        let second_start = start + first + 1;
+        let second = digits_from(second_start);
+        if !(1..=2).contains(&second) || bytes.get(second_start + second) != Some(&separator) {
+            continue;
+        }
+        let third_start = second_start + second + 1;
+        let third = digits_from(third_start);
+        if !(2..=4).contains(&third) {
+            continue;
+        }
+        let end = third_start + third;
+        found.push(NumericDate {
+            start,
+            end,
+            parts: [
+                &text[start..start + first],
+                &text[second_start..second_start + second],
+                &text[third_start..end],
+            ],
+            separator,
+        });
+    }
+    found
+}
+
+/// Which way round a document writes the day and the month of a numeric
+/// date.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NumericOrder {
+    /// "30/01/2026": day, month, year.
+    DayFirst,
+    /// "01/30/2026": month, day, year.
+    MonthFirst,
+}
+
+/// The order the document writes its numeric dates in, when the document
+/// itself settles it: at least one numeric date can only be read one way -
+/// "30/01/2026" has no thirtieth month - and no other numeric date can only
+/// be read the other way. `None` when nothing settles it, or when the
+/// document contradicts itself, because then any one reading is a guess.
+pub fn numeric_date_order(digest: &DocumentDigest) -> Option<NumericOrder> {
+    let mut order = None;
+    for segment in &digest.segments {
+        let normalized = normalize(segment);
+        for token in numeric_dates(&normalized) {
+            let Some(settled) = order_of(&token) else {
+                continue;
+            };
+            match order {
+                None => order = Some(settled),
+                Some(existing) if existing != settled => return None,
+                Some(_) => {}
+            }
+        }
+    }
+    order
+}
+
+/// The order a year-last numeric date can only be read in, if there is
+/// one: exactly one of its two readings is a calendar date. A two-digit
+/// year counts - "30/01/26" is day first whatever its century - but, as the
+/// evidence check does, only padded when dotted or dashed, so a section
+/// number like "13.4.26" settles nothing.
+fn order_of(token: &NumericDate<'_>) -> Option<NumericOrder> {
+    let [first, second, year] = token.parts;
+    if first.len() > 2 {
+        return None;
+    }
+    let year = match year.len() {
+        4 => year.to_owned(),
+        2 if token.separator == b'/' || (first.len() == 2 && second.len() == 2) => {
+            format!("20{year}")
+        }
+        _ => return None,
+    };
+    let month_first = is_valid_iso_date(&format!("{year}-{first:0>2}-{second:0>2}"));
+    let day_first = is_valid_iso_date(&format!("{year}-{second:0>2}-{first:0>2}"));
+    match (month_first, day_first) {
+        (true, false) => Some(NumericOrder::MonthFirst),
+        (false, true) => Some(NumericOrder::DayFirst),
+        _ => None,
+    }
+}
+
+/// The one date a numeric token states, read in the document's order where
+/// the token alone could be either. A year-first token is read one way; a
+/// two-digit year is not read, because its century is a guess.
+fn numeric_reading(token: &NumericDate<'_>, order: Option<NumericOrder>) -> Option<String> {
+    let [first, second, third] = token.parts;
+    let valid = |year: &str, month: &str, day: &str| {
+        let iso = format!("{year}-{month:0>2}-{day:0>2}");
+        is_valid_iso_date(&iso).then_some(iso)
+    };
+    if first.len() == 4 {
+        return (third.len() <= 2)
+            .then(|| valid(first, second, third))
+            .flatten();
+    }
+    if third.len() != 4 || first.len() > 2 {
+        return None;
+    }
+    match (valid(third, first, second), valid(third, second, first)) {
+        (Some(month_first), Some(day_first)) if month_first == day_first => Some(month_first),
+        (Some(month_first), Some(day_first)) => match order? {
+            NumericOrder::MonthFirst => Some(month_first),
+            NumericOrder::DayFirst => Some(day_first),
+        },
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]

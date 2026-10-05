@@ -24,7 +24,8 @@
 use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
-    date_match_positions, extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely,
+    NumericDate, date_match_positions, extract_stated_dates, is_valid_iso_date, normalize,
+    normalize_loosely, numeric_dates,
 };
 use crate::validate::rfind_word;
 
@@ -397,65 +398,6 @@ pub(crate) fn window_before(normalized: &str, position: usize) -> String {
         start += stop + ". ".len();
     }
     normalized[start..position].to_owned()
-}
-
-/// A token shaped like a numeric date - "04/30/2025", "30.04.2025",
-/// "2025-04-30", "4/30/25" - as byte offsets into the text it was found in,
-/// with its three runs of digits.
-struct NumericDate<'a> {
-    start: usize,
-    end: usize,
-    parts: [&'a str; 3],
-}
-
-/// Every numeric-date-shaped token in `text`: one to four digits, a
-/// separator out of `/ . -`, one or two digits, the same separator, two to
-/// four digits, with no digit running into either end. Whether the token is
-/// a real calendar date is not asked here.
-fn numeric_dates(text: &str) -> Vec<NumericDate<'_>> {
-    let bytes = text.as_bytes();
-    let digits_from = |from: usize| -> usize {
-        bytes[from..]
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit())
-            .count()
-    };
-    let mut found = Vec::new();
-    for start in 0..bytes.len() {
-        if !bytes[start].is_ascii_digit() || (start > 0 && bytes[start - 1].is_ascii_digit()) {
-            continue;
-        }
-        // Each run is taken whole, so a run longer than its shape allows
-        // is a longer number and not a date.
-        let first = digits_from(start);
-        let Some(&separator) = bytes.get(start + first) else {
-            continue;
-        };
-        if !(1..=4).contains(&first) || !matches!(separator, b'/' | b'.' | b'-') {
-            continue;
-        }
-        let second_start = start + first + 1;
-        let second = digits_from(second_start);
-        if !(1..=2).contains(&second) || bytes.get(second_start + second) != Some(&separator) {
-            continue;
-        }
-        let third_start = second_start + second + 1;
-        let third = digits_from(third_start);
-        if !(2..=4).contains(&third) {
-            continue;
-        }
-        let end = third_start + third;
-        found.push(NumericDate {
-            start,
-            end,
-            parts: [
-                &text[start..start + first],
-                &text[second_start..second_start + second],
-                &text[third_start..end],
-            ],
-        });
-    }
-    found
 }
 
 /// Where the last numeric-date-shaped token in `window` ends.
