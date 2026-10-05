@@ -40,7 +40,7 @@ describe('dialog focus while the queue is working', () => {
   it('leaves history focus where the person put it when the queue reports progress', async () => {
     const { bridge, emitProgress } = bridgeWithEvents([processing, filed]);
     render(<App bridge={bridge} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Completed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
     fireEvent.click(await screen.findByRole('button', { name: 'History' }));
     const close = await screen.findByRole('button', { name: 'Close history' });
     close.focus();

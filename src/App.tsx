@@ -429,7 +429,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       </div>}
       {view === 'completed' && filtered.length > 0 && <div className="queue-actions">
         <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-        <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[aria-label="Completed"]')?.focus()); })()}>Clear history</button>
+        <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[data-view="completed"]')?.focus()); })()}>Clear history</button>
       </div>}
       {filterShown && <div className="queue-filter" role="search">
         <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {

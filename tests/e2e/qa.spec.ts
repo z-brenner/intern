@@ -168,9 +168,13 @@ test.describe('whole-product browser QA', () => {
     // owed their queue, so the drawer is opened here the way one is opened.
     await expect(navigation).not.toHaveAttribute('inert', '');
     await expect(page.getByRole('complementary', { name: 'Review item' })).toBeVisible();
+    // Collapsed, the labels are tooltips; the accessible names also carry the counts.
     for (const name of ['Queue', 'Needs Review', 'Completed', 'Settings']) {
-      await expect(navigation.locator(`button[aria-label="${name}"]`)).toBeVisible();
+      await expect(navigation.locator(`button[title="${name}"]`)).toBeVisible();
     }
+    await expect(navigation.getByRole('button', { name: 'Needs Review, 1' })).toBeVisible();
+    await expect(navigation.locator('button[data-view="review"] .nav-badge')).toHaveText('1');
+    await expect(navigation.locator('button[data-view="review"] .nav-badge')).toBeVisible();
     await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
     await expect(navigation).toHaveAttribute('inert', '');
     const drawer = page.getByRole('dialog', { name: 'Review item' });

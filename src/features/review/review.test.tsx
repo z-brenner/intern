@@ -28,7 +28,7 @@ describe('review actions', () => {
   // the document disappeared exactly when the document was filed.
   it('still shows the description after a file has been renamed', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Completed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
     selectRow(await screen.findByRole('row', { name: /Completed lease.pdf/i }));
 
     const inspector = screen.getByRole('complementary', { name: 'Review item' });

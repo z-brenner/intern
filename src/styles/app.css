@@ -109,6 +109,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .sidebar .nav-item.active { background: var(--brand-tint); border-left-color: var(--accent); color: var(--brand-navy); font-weight: 600; }
 .sidebar .nav-item b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .sidebar .nav-item.active b { color: var(--brand-navy); }
+.sidebar .nav-icon { position: relative; flex: none; display: inline-grid; place-items: center; }
+/* The count rides on the icon only when the sidebar is collapsed. */
+.sidebar .nav-badge { display: none; }
 .sidebar-footer { display: flex; align-items: center; gap: 4px; padding: 0 15px; }
 .footer-nav { border: 0; background: transparent; border-radius: var(--radius-sm); min-width: 40px; min-height: 40px; display: inline-grid; place-items: center; color: var(--text-muted); transition: background-color .12s ease, color .12s ease; }
 .footer-nav:hover { background: var(--surface-subtle); color: var(--text); }
@@ -372,7 +375,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
   .sidebar .nav-item { justify-content: center; padding: 0; }
-  .sidebar .nav-item span, .sidebar .nav-item b { display: none; }
+  .sidebar .nav-item .nav-label, .sidebar .nav-item b { display: none; }
+  .sidebar .nav-badge { position: absolute; top: -7px; left: 12px; display: grid; place-items: center; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--brand-tint); color: var(--brand-navy); font-size: 10.5px; font-style: normal; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
   .sidebar-footer { flex-direction: column; padding: 0; }
   .inspector { position: fixed; z-index: 3; right: 0; top: 72px; bottom: 0; width: 370px; background: var(--surface); box-shadow: -16px 0 40px rgba(23, 26, 31, .16); }
   .product { gap: 16px; }

@@ -232,7 +232,7 @@ describe('queue interactions', () => {
   it('reports Clear history failures without emptying the completed view', async () => {
     const clearHistory = vi.fn(async () => { throw new Error('History is locked.'); });
     render(<App bridge={{ ...createInMemoryBridge(), clearHistory }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Completed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('History is locked.');
