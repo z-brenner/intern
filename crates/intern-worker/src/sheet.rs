@@ -1294,11 +1294,17 @@ mod tests {
     /// Ordinary workbooks far larger than the window open: a year of monthly
     /// ledgers, a few wide sheets with a total column of formulas, and one
     /// full-height ledger. The budget is what calamine holds at once, and
-    /// summing every sheet's cell list as if it were kept refused all three
-    /// - each opens in well under 512 MiB.
+    /// summing every sheet's cell list as if it were kept refused all three.
+    /// A full-height sheet a hundred columns wide, near the budget, still
+    /// fits.
     #[test]
     fn large_ordinary_workbooks_open() {
-        for (sheets, rows, columns) in [(12, 5_000, 40), (6, 10_000, 35), (1, 65_536, 30)] {
+        for (sheets, rows, columns) in [
+            (12, 5_000, 40),
+            (6, 10_000, 35),
+            (1, 65_536, 30),
+            (1, 65_536, 99),
+        ] {
             let mut sheet = vec![dimensions(rows, columns + 1)];
             for row in 0..rows {
                 let row = row as u16;
