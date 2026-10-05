@@ -43,6 +43,11 @@ pub struct ExtractProgress {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExtractFailure {
     pub code: String,
+    /// What the worker said went wrong, in its own words, when it said
+    /// anything; empty for failures the host detected itself. Diagnostic
+    /// only: the queue decides by `code`, and a person is shown a sentence
+    /// chosen for that code rather than this text.
+    pub message: String,
     pub retryable: bool,
     pub crashed: bool,
     pub canceled: bool,
@@ -52,9 +57,18 @@ impl ExtractFailure {
     pub fn new(code: impl Into<String>, retryable: bool, crashed: bool) -> Self {
         Self {
             code: code.into(),
+            message: String::new(),
             retryable,
             crashed,
             canceled: false,
+        }
+    }
+
+    /// A failure the worker reported for a request, keeping what it said.
+    pub fn reported(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            message: message.into(),
+            ..Self::new(code, retryable, false)
         }
     }
 
@@ -65,6 +79,7 @@ impl ExtractFailure {
     pub fn canceled() -> Self {
         Self {
             code: "CANCELED".into(),
+            message: String::new(),
             retryable: false,
             crashed: false,
             canceled: true,
@@ -250,6 +265,16 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
         parser_warnings,
         page_image,
     })
+}
+
+/// What a worker's error event for a request means to the host. The code,
+/// the retry hint and the worker's own message all travel on: the queue
+/// decides by the code, and the message is what a diagnosis will want.
+fn request_failure(code: String, message: String, retryable: bool) -> ExtractFailure {
+    if code == "CANCELED" {
+        return ExtractFailure::canceled();
+    }
+    ExtractFailure::reported(code, message, retryable)
 }
 
 struct WorkerProcess {
@@ -468,12 +493,11 @@ impl DocumentExtractor for SupervisedWorker {
                             }
                         };
                     }
-                    WorkerEvent::Error { code, .. } if code == "CANCELED" => {
-                        return Err(ExtractFailure::canceled());
-                    }
                     WorkerEvent::Error {
-                        code, retryable, ..
-                    } => return Err(ExtractFailure::new(code, retryable, false)),
+                        code,
+                        message,
+                        retryable,
+                    } => return Err(request_failure(code, message, retryable)),
                     WorkerEvent::Hello { .. } => {
                         process.terminate();
                         self.clear_running(&process);
@@ -775,6 +799,36 @@ mod tests {
         assert_eq!(failure.code, "CANCELED");
         assert!(failure.canceled);
         assert!(!failure.retryable);
+    }
+
+    /// The worker says what went wrong and whether trying again can help. The
+    /// host used to keep only the code and the hint and throw the message
+    /// away, so nothing downstream could tell a password from a damaged file
+    /// except by the code alone.
+    #[test]
+    fn a_worker_error_keeps_its_code_message_and_retry_hint() {
+        let failure = match decode_worker_response(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"error",
+                "code":"PASSWORD_PROTECTED","message":"document is password-protected","retryable":false}}"#,
+        )
+        .unwrap()
+        .event
+        {
+            WorkerEvent::Error {
+                code,
+                message,
+                retryable,
+            } => request_failure(code, message, retryable),
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(failure.code, "PASSWORD_PROTECTED");
+        assert_eq!(failure.message, "document is password-protected");
+        assert!(!failure.retryable);
+        assert!(!failure.crashed);
+        assert!(!failure.canceled);
+
+        let canceled = request_failure("CANCELED".into(), "request canceled".into(), false);
+        assert!(canceled.canceled, "a worker-side cancel is still a cancel");
     }
 
     #[test]
