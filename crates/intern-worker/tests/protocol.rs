@@ -721,3 +721,51 @@ fn parse_emits_throttled_page_progress() {
             .all(|finished| (0..SCANNED_PAGES).contains(finished))
     );
 }
+
+/// Diagnostics go to a log file, and a write to it can fail (a full disk,
+/// an I/O error on the log's volume). That must never stop the worker from
+/// answering: the log is never a reason not to work.
+#[test]
+fn a_diagnostics_log_that_cannot_be_written_never_stops_the_worker() {
+    struct FailingLog;
+    impl Write for FailingLog {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("no space left on device"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("no space left on device"))
+        }
+    }
+
+    let input = joined_lines([
+        b"not json\n".to_vec(),
+        hello_line("after-bad-line"),
+        shutdown_line(),
+    ]);
+    let mut output = Vec::new();
+    run_control_loop(
+        Cursor::new(&input),
+        &mut output,
+        FailingLog,
+        |_request, _sink| unreachable!("no parse request was supplied"),
+    )
+    .expect("a failing log is not a failing worker");
+    assert!(
+        String::from_utf8(output)
+            .unwrap()
+            .contains("after-bad-line")
+    );
+
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    run_concurrent_worker(Cursor::new(input), output, FailingLog, |_path, _cancel| {
+        Ok(empty_document())
+    })
+    .expect("a failing log is not a failing worker");
+    let (bytes, _) = &*captured.0;
+    let text = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("after-bad-line"),
+        "hello must still be answered: {text}"
+    );
+}

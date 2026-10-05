@@ -205,7 +205,11 @@ impl Drop for TempWorkspace {
         if let Err(error) = fs::remove_dir_all(&self.path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            eprintln!(
+            // Not eprintln!: stderr is a log file now, and eprintln! panics
+            // when the write fails - inside Drop, possibly while unwinding,
+            // which would abort the worker over a warning.
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "{{\"level\":\"warning\",\"code\":\"TEMP_CLEANUP_FAILED\",\"message\":{}}}",
                 serde_json::to_string(&error.to_string())
                     .unwrap_or_else(|_| "\"temporary cleanup failed\"".to_owned())

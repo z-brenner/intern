@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use intern_worker::extract::{
@@ -158,7 +159,8 @@ fn main() {
         std::io::stderr(),
         extract_path,
     ) {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr().lock(),
             "{{\"level\":\"error\",\"code\":\"WORKER_IO_FAILED\",\"message\":{}}}",
             serde_json::to_string(&error.to_string())
                 .unwrap_or_else(|_| "\"worker I/O failed\"".to_owned())

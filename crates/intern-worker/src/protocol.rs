@@ -290,11 +290,13 @@ where
                     Event::Error { code, .. } => code.as_str(),
                     _ => "PROTOCOL_ERROR",
                 };
-                writeln!(
+                // Best effort: diagnostics go to a log file, and a full disk must
+                // never stop the worker answering requests.
+                let _ = writeln!(
                     diagnostics,
                     "{{\"level\":\"warning\",\"code\":{}}}",
                     serde_json::to_string(code).map_err(io::Error::other)?
-                )?;
+                );
                 JsonLineSink {
                     writer: &mut output,
                 }
@@ -469,11 +471,13 @@ where
                     Event::Error { code, .. } => code.as_str(),
                     _ => "PROTOCOL_ERROR",
                 };
-                writeln!(
+                // Best effort: diagnostics go to a log file, and a full disk must
+                // never stop the worker answering requests.
+                let _ = writeln!(
                     diagnostics,
                     "{{\"level\":\"warning\",\"code\":{}}}",
                     serde_json::to_string(code).map_err(io::Error::other)?
-                )?;
+                );
                 emit_locked(&output, &response)?;
                 continue;
             }
@@ -556,10 +560,12 @@ where
                 threads = running;
                 for thread in finished {
                     if thread.join().is_err() {
-                        writeln!(
+                        // Best effort: diagnostics go to a log file, and a full disk must
+                        // never stop the worker answering requests.
+                        let _ = writeln!(
                             diagnostics,
                             "{{\"level\":\"error\",\"code\":\"WORKER_THREAD_PANIC\"}}"
-                        )?;
+                        );
                     }
                 }
                 let thread_output = Arc::clone(&output);
@@ -623,10 +629,12 @@ where
     }
     for thread in threads {
         if thread.join().is_err() {
-            writeln!(
+            // Best effort: diagnostics go to a log file, and a full disk must
+            // never stop the worker answering requests.
+            let _ = writeln!(
                 diagnostics,
                 "{{\"level\":\"error\",\"code\":\"WORKER_THREAD_PANIC\"}}"
-            )?;
+            );
         }
     }
     Ok(())
