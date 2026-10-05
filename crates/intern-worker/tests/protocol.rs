@@ -1,12 +1,16 @@
 use std::io::{Cursor, Write};
+use std::path::Path;
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use intern_worker::extract::ExtractedDocument;
-use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+use intern_worker::extract::{
+    CancellationToken, ExtractedDocument, ExtractionError, OcrBackend, OcrResult, PdfBackend,
+    PdfPageInspection, RenderedPage, extract_pdf,
+};
+use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS, ResourceLimits};
 use intern_worker::protocol::{
-    MAX_PROTOCOL_LINE_BYTES, handle_line, run_concurrent_worker, run_concurrent_worker_observed,
-    run_control_loop,
+    MAX_PROTOCOL_LINE_BYTES, PROGRESS_INTERVAL, handle_line, run_concurrent_worker,
+    run_concurrent_worker_observed, run_control_loop,
 };
 
 #[test]
@@ -587,5 +591,131 @@ fn finished_threads_are_reaped() {
     assert!(
         held.iter().all(|threads| *threads <= 3),
         "threads held after each start: {held:?}"
+    );
+}
+
+/// A scanned PDF of `SCANNED_PAGES` image-only pages.
+struct ScannedPdf;
+
+const SCANNED_PAGES: usize = 40;
+
+impl PdfBackend for ScannedPdf {
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        Ok((0..SCANNED_PAGES)
+            .map(|page_index| PdfPageInspection {
+                page_index,
+                native_text: String::new(),
+                image_coverage: 1.0,
+                width_pixels: 10,
+                height_pixels: 10,
+            })
+            .collect())
+    }
+
+    fn render_within(
+        &self,
+        _path: &Path,
+        page_index: usize,
+        _max_pixels: u64,
+        _cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        Ok(RenderedPage::new(
+            page_index,
+            image::DynamicImage::ImageLuma8(image::GrayImage::new(10, 10)),
+        ))
+    }
+}
+
+/// OCR at 25 ms a page: a 40-page scan takes a second.
+struct SteadyOcr;
+
+impl OcrBackend for SteadyOcr {
+    fn recognize(
+        &self,
+        _page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        std::thread::sleep(Duration::from_millis(25));
+        Ok(OcrResult::new("SCANNED PAGE OF THE LEASE", 90.0))
+    }
+}
+
+/// A 200-page scan used to show 0% for minutes: the worker said it had
+/// started and then nothing until it had finished. It now says which page it
+/// has reached and how many there are - a `reading` event as each page is
+/// reached and an `ocr` event as each goes to OCR - and never more than one
+/// of either per interval, however fast the pages go by.
+#[test]
+fn parse_emits_throttled_page_progress() {
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let reader = TerminalGatedReader {
+        chunks: vec![
+            parse_line("scan", "scan.pdf"),
+            joined_lines([shutdown_line()]),
+        ],
+        next: 0,
+        output,
+        first_terminal: b"\"type\":\"parsed\"",
+    };
+    let started = Instant::now();
+
+    run_concurrent_worker(reader, captured.clone(), Vec::new(), |path, cancel| {
+        extract_pdf(
+            &path,
+            &ScannedPdf,
+            &SteadyOcr,
+            &ResourceLimits::default(),
+            &cancel,
+        )
+    })
+    .unwrap();
+
+    let elapsed = started.elapsed();
+    let (bytes, _) = &*captured.0;
+    let events: Vec<serde_json::Value> = String::from_utf8(bytes.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let parsed_at = events
+        .iter()
+        .position(|event| event["event"]["type"] == "parsed")
+        .expect("the scan is parsed");
+    let progress = |stage: &str| {
+        events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| {
+                event["event"]["type"] == "progress" && event["event"]["stage"] == stage
+            })
+            .map(|(index, event)| {
+                assert!(index < parsed_at, "progress after the terminal event");
+                assert_eq!(event["request_id"], "scan");
+                assert_eq!(event["event"]["total"], SCANNED_PAGES);
+                event["event"]["current"].as_u64().unwrap() as usize
+            })
+            .collect::<Vec<_>>()
+    };
+    let reading = progress("reading");
+    let ocr = progress("ocr");
+    // At most one of each stage per interval, plus the first.
+    let allowed = 1 + (elapsed.as_millis() / PROGRESS_INTERVAL.as_millis()) as usize;
+
+    assert_eq!(reading.first(), Some(&1), "{reading:?}");
+    assert_eq!(ocr.first(), Some(&1), "{ocr:?}");
+    // A second of OCR is long enough to say more than that it started.
+    assert!(reading.len() >= 2, "{reading:?} in {elapsed:?}");
+    assert!(reading.len() <= allowed, "{reading:?} in {elapsed:?}");
+    assert!(ocr.len() <= allowed, "{ocr:?} in {elapsed:?}");
+    assert!(reading.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(
+        reading
+            .iter()
+            .all(|page| (1..=SCANNED_PAGES).contains(page))
     );
 }

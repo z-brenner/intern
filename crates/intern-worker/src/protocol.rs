@@ -4,15 +4,25 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::extract::{CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning};
+use crate::extract::{
+    CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, ProgressSink,
+};
 use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PROTOCOL_LINE_BYTES: usize = 1024 * 1024;
+/// The least time between two progress events of the same stage.
+///
+/// A reader reports every page, and a text PDF's pages go by in
+/// milliseconds: five hundred of them would be five hundred lines through
+/// the pipe and five hundred repaints of one percentage. Four a second is
+/// as fast as a person can read a number change.
+pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Request {
@@ -338,6 +348,49 @@ fn emit_locked<W: Write>(output: &Arc<Mutex<W>>, response: &Response) -> io::Res
     .emit(response)
 }
 
+/// Where one request's progress goes: `progress` events on the protocol
+/// output, at most one per [`PROGRESS_INTERVAL`] for each stage.
+///
+/// Each stage keeps its own clock. On a scan every page is read and then
+/// OCR'd a few milliseconds later, and one clock for both would hold back
+/// every `ocr` event behind the `reading` event just before it - the slow
+/// part of the document would never be reported at all. A clock per stage
+/// still bounds what is sent at one event per stage per interval, however
+/// fast the pages go by.
+fn progress_events<W: Write + Send + 'static>(
+    output: Arc<Mutex<W>>,
+    request_id: String,
+) -> ProgressSink {
+    let last_sent: Mutex<Vec<(&'static str, Instant)>> = Mutex::new(Vec::new());
+    Arc::new(move |stage, current, total| {
+        let now = Instant::now();
+        {
+            let Ok(mut last_sent) = last_sent.lock() else {
+                return;
+            };
+            match last_sent.iter_mut().find(|(sent, _)| *sent == stage) {
+                Some((_, sent_at)) if now.duration_since(*sent_at) < PROGRESS_INTERVAL => return,
+                Some((_, sent_at)) => *sent_at = now,
+                None => last_sent.push((stage, now)),
+            }
+        }
+        // Progress is advisory: a pipe that has gone is the control loop's
+        // to notice, and the document's own terminal event will fail the
+        // same way.
+        let _ = emit_locked(
+            &output,
+            &Response::new(
+                request_id.clone(),
+                Event::Progress {
+                    stage,
+                    current,
+                    total,
+                },
+            ),
+        );
+    })
+}
+
 struct ActiveRequestGuard {
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
     request_id: String,
@@ -476,7 +529,10 @@ where
                     continue;
                 }
                 let request_id = request.request_id;
-                let token = CancellationToken::new();
+                let token = CancellationToken::reporting_to(progress_events(
+                    Arc::clone(&output),
+                    request_id.clone(),
+                ));
                 active_guard.insert(request_id.clone(), token.clone());
                 drop(active_guard);
                 emit_locked(

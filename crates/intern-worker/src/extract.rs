@@ -108,12 +108,34 @@ impl ExtractionError {
     }
 }
 
-#[derive(Debug)]
+/// Where a reader reports how far through a document it is: a stage name,
+/// the page it has reached, and how many pages there are, if it knows.
+pub type ProgressSink = Arc<dyn Fn(&'static str, usize, Option<usize>) + Send + Sync>;
+
 struct CancellationState {
     canceled: AtomicBool,
     deadline: Instant,
+    progress: Option<ProgressSink>,
 }
 
+impl std::fmt::Debug for CancellationState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationState")
+            .field("canceled", &self.canceled)
+            .field("deadline", &self.deadline)
+            .field("progress", &self.progress.is_some())
+            .finish()
+    }
+}
+
+/// What a reader carries for one request: whether to stop, and where to say
+/// how far it has got.
+///
+/// Progress rides on the token because the token already reaches every
+/// reader and every page loop, and because neither belongs in the readers'
+/// signatures: a reader that has nothing to report never sees a sink, and
+/// one that does report cannot tell a sink from none.
 #[derive(Clone, Debug)]
 pub struct CancellationToken(Arc<CancellationState>);
 
@@ -125,11 +147,30 @@ impl Default for CancellationToken {
 
 impl CancellationToken {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// A token whose readers' progress goes to `sink`.
+    pub fn reporting_to(sink: ProgressSink) -> Self {
+        Self::build(Some(sink))
+    }
+
+    fn build(progress: Option<ProgressSink>) -> Self {
         Self(Arc::new(CancellationState {
             canceled: AtomicBool::new(false),
             deadline: Instant::now() + MAX_EXTRACTION_DURATION,
+            progress,
         }))
     }
+
+    /// Says how far through the document a reader is. Cheap enough to call
+    /// once per page: deciding whether it is worth sending is the sink's.
+    pub fn report_progress(&self, stage: &'static str, current: usize, total: Option<usize>) {
+        if let Some(sink) = &self.0.progress {
+            sink(stage, current, total);
+        }
+    }
+
     pub fn cancel(&self) {
         self.0.canceled.store(true, Ordering::SeqCst);
     }
@@ -490,12 +531,15 @@ pub fn extract_pdf(
     timed_check(cancel, started, limits)?;
     let inspections = pdf.inspect(path, cancel)?;
     limits.validate_page_count(inspections.len())?;
-    let mut pages = Vec::with_capacity(inspections.len());
+    let page_count = inspections.len();
+    let mut pages = Vec::with_capacity(page_count);
     let mut warnings = Vec::new();
     let mut vision_candidate: Option<VisionImage> = None;
 
     for inspection in inspections {
         timed_check(cancel, started, limits)?;
+        let page_number = inspection.page_index + 1;
+        cancel.report_progress("reading", page_number, Some(page_count));
         // The render cap belongs to rendering. A large-format sheet - an A1
         // drawing, a plan set - is over it at 300 DPI while carrying a
         // perfectly good text layer, and failing the whole document over a
@@ -518,7 +562,7 @@ pub fn extract_pdf(
                 )?);
             }
             pages.push(ExtractedPage {
-                page_number: inspection.page_index + 1,
+                page_number,
                 text: inspection.native_text,
                 source: PageSource::Native,
                 ocr_confidence: None,
@@ -550,6 +594,7 @@ pub fn extract_pdf(
         let (render_width, render_height) = rendered.image.dimensions();
         limits.validate_page_pixels(render_width, render_height)?;
         timed_check(cancel, started, limits)?;
+        cancel.report_progress("ocr", page_number, Some(page_count));
         let result = ocr.recognize(&rendered, cancel)?;
         let vision_escalated =
             vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
@@ -565,7 +610,7 @@ pub fn extract_pdf(
             )?);
         }
         pages.push(ExtractedPage {
-            page_number: inspection.page_index + 1,
+            page_number,
             text: result.text,
             source: PageSource::Ocr,
             ocr_confidence: Some(result.mean_confidence),
@@ -943,6 +988,7 @@ pub fn extract_image(
     cancel.check()?;
     let image = load_oriented_image(path, limits)?;
     let rendered = RenderedPage::new(0, image);
+    cancel.report_progress("ocr", 1, Some(1));
     let result = ocr.recognize(&rendered, cancel)?;
     let mut warnings = Vec::new();
     if result.mean_confidence < CONFIDENT_READING {
