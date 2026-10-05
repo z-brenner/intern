@@ -497,7 +497,7 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
             .filter_map(|noun| rfind_word(before, noun))
             .filter(|&at| at >= wide)
             .max();
-        return noun_at.is_some_and(|at| !determined_by_this(&before[..at]));
+        return noun_at.is_some_and(|at| !determined_by_this(before, at));
     }
     // A citation runs straight into the date it cites: "issued under the MSA
     // effective June 2, 2023". Clause punctuation in between means the
@@ -507,9 +507,38 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
     let wide = &normalized[window_start(normalized, position, WIDE)..position];
     REFERENCE_CUES.iter().any(|cue| {
         wide.rfind(cue)
-            .is_some_and(|at| !wide[at + cue.len()..].contains([',', ';', '.', ':']))
+            .is_some_and(|at| !ends_the_clause(&wide[at + cue.len()..]))
     })
 }
+
+/// Whether the wording between a citation and a date ends the clause the
+/// citation opened: a comma, a semicolon, a colon, or a full stop that ends
+/// a sentence. The point in "Section 9.2", "No. 12" or "Acme Inc." and the
+/// comma in "Contoso Worldwide, Inc." are part of what is cited, and reading
+/// them as the clause ending would let the cited agreement's date through as
+/// this document's own.
+fn ends_the_clause(between: &str) -> bool {
+    between.char_indices().any(|(index, character)| {
+        let rest = &between[index + 1..];
+        match character {
+            ',' => !rest.split_whitespace().next().is_some_and(|word| {
+                COMPANY_FORMS.contains(
+                    &word.trim_end_matches(|character: char| !character.is_alphanumeric()),
+                )
+            }),
+            ';' | ':' => true,
+            '.' => rest.starts_with(char::is_whitespace) && !is_abbreviation_period(between, index),
+            _ => false,
+        }
+    })
+}
+
+/// What follows the comma in a company's name: "Contoso Worldwide, Inc.",
+/// "Contoso Bank, N.A.".
+const COMPANY_FORMS: &[&str] = &[
+    "inc", "llc", "l.l.c", "ltd", "corp", "co", "llp", "l.l.p", "lp", "l.p", "pllc", "plc", "pc",
+    "p.c", "n.a", "gmbh", "ag", "s.a", "sa", "n.v", "nv", "b.v", "bv", "pty",
+];
 
 /// Nouns that name a document, for telling "the Master Services Agreement
 /// dated" from a bare "Dated".
@@ -524,8 +553,9 @@ const REFERRING_WORDS: &[&str] = &[
     "of", "under", "with", "between", "by",
 ];
 
-/// Whether the words before a document noun make it this document: "This
-/// Consulting Agreement", "This First Amendment", `(this "Amendment")`.
+/// Whether the words before the document noun at `noun_at` in `before` make
+/// it this document: "This Consulting Agreement", "This First Amendment",
+/// `(this "Amendment")`.
 ///
 /// Up to four words are read back from the noun, stepping over quotation
 /// marks and parentheses, which are typography. "this" settles it as this
@@ -533,15 +563,33 @@ const REFERRING_WORDS: &[&str] = &[
 /// does a word that ends a clause, or running out of words: a noun nobody
 /// qualified is how a document cites another, and a cover line that names
 /// the document itself is recognised separately, by its type.
-fn determined_by_this(lead: &str) -> bool {
-    let words = lead
-        .split_whitespace()
-        .rev()
-        .map(|word| {
-            word.trim_matches(|character: char| matches!(character, '"' | '\'' | '(' | ')'))
-        })
-        .filter(|word| !word.is_empty());
-    for word in words.take(4) {
+///
+/// One determiner is not the noun's own: the article of a defined term,
+/// `This Consulting Agreement (the "Agreement") dated ...`, belongs to the
+/// definition. There the document noun the parenthesis defines is read
+/// instead, so the term says whatever the name it stands for says - this
+/// agreement here, somebody else's in `the Master Services Agreement (the
+/// "Agreement") dated ...`.
+fn determined_by_this(before: &str, noun_at: usize) -> bool {
+    let mut end = noun_at;
+    let mut read = 0;
+    while read < 4 {
+        let lead = before[..end].trim_end();
+        if lead.is_empty() {
+            return false;
+        }
+        let start = lead
+            .char_indices()
+            .rev()
+            .find(|(_, character)| character.is_whitespace())
+            .map_or(0, |(at, space)| at + space.len_utf8());
+        let raw = &lead[start..];
+        end = start;
+        let word = raw.trim_matches(|character: char| matches!(character, '"' | '\'' | '(' | ')'));
+        if word.is_empty() {
+            continue;
+        }
+        read += 1;
         if word.ends_with([',', ';', ':', '.']) {
             return false;
         }
@@ -550,10 +598,23 @@ fn determined_by_this(lead: &str) -> bool {
             return true;
         }
         if REFERRING_WORDS.contains(&bare) {
-            return false;
+            return raw.starts_with('(')
+                && noun_ending(&before[..start])
+                    .is_some_and(|outer| determined_by_this(before, outer));
         }
     }
     false
+}
+
+/// Where the document noun that `text` ends on begins, if it ends on one:
+/// the "Agreement" a defined term's parenthesis follows.
+fn noun_ending(text: &str) -> Option<usize> {
+    let text = text.trim_end();
+    DOCUMENT_NOUNS.iter().find_map(|noun| {
+        text.strip_suffix(noun)
+            .filter(|lead| !lead.chars().next_back().is_some_and(char::is_alphanumeric))
+            .map(str::len)
+    })
 }
 
 /// The last place `word` stands in `haystack` as a whole word, with no
@@ -1644,6 +1705,76 @@ The Consultant will provide services commencing April 15, 2026.
             outcome.reasons
         );
         assert_eq!(outcome.proposal.date_role, Some(DateRole::Termination));
+    }
+
+    /// Only punctuation that ends the clause ends a citation. The point in a
+    /// section number, "No." or "Inc.", and the comma before "Inc.", belong
+    /// to what is cited; read as the clause ending, each let the cited
+    /// agreement's date through as this document's own.
+    #[test]
+    fn punctuation_inside_a_citation_does_not_end_it() {
+        for line in [
+            "This Statement of Work is issued pursuant to Section 2.1 of the Master Services Agreement effective June 2, 2023",
+            "issued under Master Agreement No. 12 effective June 2, 2023",
+            "issued under the Master Agreement with Acme Corp. effective June 2, 2023",
+            "issued under the MSA between Acme Corporation and Contoso Worldwide, Inc. effective June 2, 2023",
+        ] {
+            assert!(reference_at(line, "2023-06-02"), "{line}");
+        }
+        // A full stop that ends the sentence still ends the citation.
+        assert!(!reference_at(
+            "Pursuant to Section 9.2 of the Employment Agreement. Your employment will terminate effective January 31, 2027",
+            "2027-01-31"
+        ));
+    }
+
+    /// The article of a defined term belongs to the definition: `This
+    /// Consulting Agreement (the "Agreement") dated as of` is the agreement
+    /// dating itself, and the "the" in the parenthesis made it a citation -
+    /// withheld, or replaced by the commencement date and filed Ready. The
+    /// name the term stands for decides.
+    #[test]
+    fn a_defined_term_reads_as_the_name_it_defines() {
+        assert!(!reference_at(
+            "This Consulting Agreement (the \"Agreement\") dated as of March 1, 2026",
+            "2026-03-01"
+        ));
+        assert!(reference_at(
+            "under the Master Services Agreement (the \"Agreement\") dated June 2, 2023",
+            "2023-06-02"
+        ));
+        assert!(reference_at(
+            "issued under that certain Services Agreement (the \"Agreement\") dated June 2, 2023",
+            "2023-06-02"
+        ));
+        // A parenthesis that defines no document's name decides nothing.
+        assert!(reference_at(
+            "Acme Corporation (the \"Agreement\") dated June 2, 2023",
+            "2023-06-02"
+        ));
+
+        let document = "CONSULTING AGREEMENT
+This Consulting Agreement (the \"Agreement\") dated as of March 1, 2026 is made by and between Acme Corporation and Jane Smith.
+The Consultant will provide services commencing April 15, 2026.
+";
+        let mut candidate = proposal();
+        candidate.document_type = Some("Consulting Agreement".into());
+        candidate.document_date = Some("2026-03-01".into());
+        candidate.parties = vec!["Acme Corporation".into(), "Jane Smith".into()];
+        candidate.description =
+            "Consulting agreement between Acme Corporation and Jane Smith for consulting services."
+                .into();
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-01")
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
     }
 
     fn described(description: &str, document: &str) -> ValidationOutcome {
