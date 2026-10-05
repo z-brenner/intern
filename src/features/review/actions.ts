@@ -5,7 +5,9 @@ import type { QueueItem } from '../../types';
  * processed anyway, an unverified upload is checked again, and a renamed copy
  * whose original could not be deleted has the deletion tried again. Every
  * other review reason is refused with INVALID_TRANSITION, which is why Retry
- * is not on the menu for them.
+ * is not on the menu for them - SOURCE_LOCKED included: a rename refused
+ * because another program held the file is rolled back, and approving again
+ * once it is closed is how it is retried.
  */
 const RETRYABLE_REVIEW_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED', 'SOURCE_DELETE_FAILED']);
 
@@ -43,6 +45,16 @@ export function retryAccepted(item: QueueItem): boolean {
 }
 
 /**
+ * Whether the backend would accept Re-analyze (Pipeline::reanalyze): any
+ * ready or review item, whatever its code, except one whose files need
+ * checking - an operation that never finished leaves what is on disk an open
+ * question, and the backend refuses until it is checked again.
+ */
+export function reanalyzeAccepted(item: QueueItem): boolean {
+  return (item.status === 'ready' || item.status === 'review') && !isParked(item);
+}
+
+/**
  * Ready and review items wait for a decision, unless their files need
  * checking first - or the item is ready because it was approved already, and
  * waits only for the queue to be free to file it. Counted as undecided, an
@@ -76,8 +88,11 @@ export function itemActions(item: QueueItem): ItemActions {
   const none: ItemActions = { approve: false, keep: false, reanalyze: false, cancel: false, undo: false, open: false, reveal: false };
   switch (item.status) {
     case 'review': {
-      // Parked: approve and keep are refused until the files are checked, so
-      // the check is the main action rather than an entry in a menu.
+      // Parked: the files decide what happens next, not the name. Keeping,
+      // re-analyzing and an unconfirmed remove are refused until they are
+      // checked, and approving checks them first and may find the rename
+      // finished already - so the check is the main action rather than an
+      // entry in a menu.
       if (isParked(item)) return { ...none, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true, reveal: true };
       const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : undefined;
       return {
@@ -85,7 +100,10 @@ export function itemActions(item: QueueItem): ItemActions {
         approve: item.proposedFilename !== undefined,
         keep: true,
         ...(retry ? { retry: { label: retry, primary: false } } : {}),
-        reanalyze: retry === undefined,
+        // Accepted for every review code, a duplicate's and an unverified
+        // upload's too: read again from the start, a duplicate is processed
+        // and an upload's uploader is checked again on the way in.
+        reanalyze: reanalyzeAccepted(item),
         remove: { label: 'Remove from queue', resolvedFiles: false },
         // Held because nobody could vouch for who uploaded it: opening it
         // would start its program from Intern's window, so it can only be
@@ -95,7 +113,7 @@ export function itemActions(item: QueueItem): ItemActions {
       };
     }
     case 'ready':
-      return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: true, remove: { label: 'Remove from queue', resolvedFiles: false }, open: true, reveal: true };
+      return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: reanalyzeAccepted(item), remove: { label: 'Remove from queue', resolvedFiles: false }, open: true, reveal: true };
     case 'waiting':
       return { ...none, remove: { label: 'Remove from queue', resolvedFiles: false } };
     case 'failed':

@@ -10,6 +10,9 @@ import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 import { isParked, retryAccepted } from '../features/review/actions';
 
+/** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
+const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
+
 /** Exact size of the single pinned model file this build downloads. */
 export const PINNED_MODEL_BYTES = 1_280_835_840;
 
@@ -371,6 +374,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const analysisDelayMs = options.analysisDelayMs ?? 800;
   /** What review leaves behind, by queue status: no proposal while waiting, no failure once settled. */
   const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, ...rest }: QueueItem): QueueItem => rest;
+  // Pipeline::check_again, for a parked item: here the files are always
+  // found in order. A renamed copy whose original could not be deleted was
+  // safe all along, so checking finishes the filing; any other rename that
+  // stopped part-way had not happened, and the item is back in review.
+  const checkAgain = (item: QueueItem): QueueItem => {
+    const checked: QueueItem = item.errorCode === 'SOURCE_DELETE_FAILED'
+      ? { ...settledFields(item), status: 'completed', filedName: item.proposedFilename, undoable: true, keptOriginal: false }
+      : { ...settledFields(item), status: 'review', parked: false };
+    replace(checked);
+    return checked;
+  };
   // The seeded proposals still named from their facts. A name a person
   // approved is theirs: it leaves this map and keeps what they typed.
   const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
@@ -433,7 +447,19 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const name = filename.trim();
       if (validateLeafFilename(name) !== undefined) throw { code: 'NAME_INVALID', message: 'filename must be one nonblank path component' };
       if (!leadingDate(name)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
-      const item = find(id);
+      let item = find(id);
+      // Approving is how a person asks for a stopped rename to be settled, so
+      // a parked item's files are checked first. The check can find the
+      // document filed already: approving what that rename was filing is
+      // then done, and anything else is refused rather than reported as
+      // applied (Pipeline::already_filed).
+      if (isParked(item)) {
+        item = checkAgain(item);
+        if (item.status === 'completed') {
+          if ((name === item.proposedFilename || name === item.filedName) && description.trim() === (item.description ?? '')) return;
+          throw { code: 'ALREADY_FILED', message: `The earlier rename had already finished, so the document is filed as ${item.filedName ?? item.originalFilename} and your changes were not applied. Undo it to rename it again.` };
+        }
+      }
       if (isParked(item)) throw parkedRefusal();
       if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
@@ -466,25 +492,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const item = find(id);
       if (!retryAccepted(item)) throw { code: 'INVALID_TRANSITION', message: 'only failed or canceled items can be retried' };
       if (isParked(item)) {
-        // The renamed copy was safe all along; checking again finishes the filing.
-        if (item.errorCode === 'SOURCE_DELETE_FAILED') replace({ ...settledFields(item), status: 'completed', filedName: item.proposedFilename, undoable: true, keptOriginal: false });
-        else replace({ ...settledFields(item), status: 'review', parked: false });
+        checkAgain(item);
         return;
       }
       replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
     },
     // Re-analysis forgets the proposal and reads the document again. Here the
     // reading takes `analysisDelayMs`, after which the same proposal returns
-    // as a new revision for review.
+    // as a new revision for review - without a flag raised before any reading
+    // (a duplicate, an unverified uploader), which a new reading never raises.
     reanalyze: async (id) => {
       const item = find(id);
-      if (isParked(item)) throw parkedRefusal();
-      if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only ready or review items can be analyzed again' };
+      if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only a document waiting for review can be analyzed again' };
+      // requeue_for_analysis refuses while an operation of the item never
+      // finished, with INVALID_TRANSITION rather than unsettled_files' code.
+      if (isParked(item)) throw { code: 'INVALID_TRANSITION', message: 'an earlier rename of this document did not finish; check it again first' };
       replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
       setTimeout(() => {
         const current = items.find((entry) => entry.id === id);
         if (current?.status !== 'waiting') return;
-        replace({ ...item, status: 'review', proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        const read = PRE_ANALYSIS_CODES.has(item.errorCode ?? '') ? settledFields(item) : item;
+        replace({ ...read, status: 'review', proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
         queueChanged();
       }, analysisDelayMs);
     },

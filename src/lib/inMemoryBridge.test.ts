@@ -201,7 +201,8 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
       const source = bridge as typeof bridge & { subscribeQueue(listener: (event: { type: string }) => void): Promise<() => void> };
       await source.subscribeQueue((event) => changes.push(event.type));
 
-      await expect(bridge.reanalyze('stuck')).rejects.toMatchObject({ code: 'RECONCILIATION_REQUIRED' });
+      // requeue_for_analysis's own refusal: the files come first.
+      await expect(bridge.reanalyze('stuck')).rejects.toMatchObject({ code: 'INVALID_TRANSITION', message: expect.stringMatching(/check it again first/) });
       await expect(bridge.reanalyze('done')).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
       await bridge.reanalyze('lease');
       expect((await bridge.listItems())[0]).toEqual({ id: 'lease', originalFilename: 'lease.pdf', status: 'waiting' });
@@ -213,6 +214,50 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A duplicate is flagged as it arrives, never by a reading, so reading it
+  // again is processing it anyway.
+  it('analyzes a duplicate again as a document like any other', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createInMemoryBridge({ items: [
+        review('copy', { proposedFilename: undefined, errorCode: 'DUPLICATE', reason: 'Duplicate of 2024-05-01 lease.pdf' }),
+      ], analysisDelayMs: 100 });
+
+      await bridge.reanalyze('copy');
+      await vi.advanceTimersByTimeAsync(100);
+
+      const [copy] = await bridge.listItems();
+      expect(copy).toMatchObject({ status: 'review', proposalRevision: '1' });
+      expect(copy).not.toHaveProperty('errorCode');
+      expect(copy).not.toHaveProperty('reason');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Pipeline::approve checks a parked item's files before anything else:
+  // approving again is how a person asks for a stopped rename to be settled.
+  it('checks a parked item\'s files before approving it', async () => {
+    const bridge = createInMemoryBridge({ items: [
+      review('stuck', { errorCode: 'FILE_CHANGED', parked: true }),
+      review('copied', { errorCode: 'SOURCE_DELETE_FAILED', parked: true, description: 'A lease.' }),
+      review('renamed', { errorCode: 'SOURCE_DELETE_FAILED', parked: true, description: 'A lease.' }),
+    ] });
+
+    // A rename that never happened: checked, then approved as asked.
+    await bridge.approve('stuck', '2024-05-01 Stuck renamed.pdf', '');
+    // A rename that had finished: approving what it filed is done...
+    await bridge.approve('copied', '2024-05-01 copied.pdf', 'A lease.');
+    // ...and a different name is refused, not reported as applied.
+    await expect(bridge.approve('renamed', '2024-05-01 Something else.pdf', 'A lease.')).rejects.toMatchObject({ code: 'ALREADY_FILED' });
+
+    const items = await bridge.listItems();
+    const byId = (id: string) => items.find((item) => item.id === id);
+    expect(byId('stuck')).toMatchObject({ status: 'completed', filedName: '2024-05-01 Stuck renamed.pdf' });
+    expect(byId('copied')).toMatchObject({ status: 'completed', filedName: '2024-05-01 copied.pdf', undoable: true });
+    expect(byId('renamed')).toMatchObject({ status: 'completed', filedName: '2024-05-01 renamed.pdf' });
   });
 
   it('pushes no queue events unless asked to', () => {

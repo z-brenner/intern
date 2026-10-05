@@ -52,13 +52,19 @@ describe('the actions each status offers', () => {
     // A backend from before `parked` existed: the codes that always meant it.
     expect(actionSet({ ...review, errorCode: 'RECONCILIATION_REQUIRED' }))
       .toEqual([...open, 'Check again', 'Remove from queue']);
-    // Flagged before analysis, so there is no proposal to approve.
+    // Flagged before analysis, so there is no proposal to approve. Reading
+    // it from the start is accepted too (Pipeline::reanalyze takes any ready
+    // or review item whose files are settled).
     expect(actionSet({ id: 'duplicate', originalFilename: 'copy.pdf', status: 'review', reason: 'Duplicate of 2024-03-01 Lease Agreement.pdf', errorCode: 'DUPLICATE' }))
-      .toEqual([...open, 'Keep original', 'More review actions', 'Process anyway', 'Remove from queue']);
+      .toEqual([...open, 'Keep original', 'More review actions', 'Process anyway', 'Analyze again', 'Remove from queue']);
     // Held because nobody could vouch for its uploader: found in its folder,
     // but not opened in its program from Intern's window.
     expect(actionSet({ id: 'unverified', originalFilename: 'upload.pptm', status: 'review', errorCode: 'UPLOADER_UNVERIFIED' }))
-      .toEqual(['Show in folder', 'Keep original', 'More review actions', 'Check again', 'Remove from queue']);
+      .toEqual(['Show in folder', 'Keep original', 'More review actions', 'Check again', 'Analyze again', 'Remove from queue']);
+    // A rename another program refused by holding the file is rolled back
+    // and retried by approving again once it is closed; Retry is refused.
+    expect(actionSet({ ...review, errorCode: 'SOURCE_LOCKED', reason: 'The document is open in another program.' }))
+      .toEqual([...open, 'Approve & rename', 'Keep original', 'More review actions', 'Analyze again', 'Remove from queue']);
     expect(actionSet({ id: 'failed', originalFilename: 'broken.pdf', status: 'failed', reason: 'Extraction failed.' }))
       .toEqual(['Retry item', 'Remove item']);
     expect(actionSet({ id: 'active', originalFilename: 'scan.pdf', status: 'processing', stage: 'reading' }))
@@ -73,7 +79,7 @@ describe('the actions each status offers', () => {
   });
 
   it('never offers Retry for an ordinary review reason', () => {
-    for (const errorCode of [undefined, 'LOW_CONFIDENCE', 'DATE_UNSUPPORTED', 'TYPE_INFERRED', 'NEAR_DUPLICATE', 'UNDONE']) {
+    for (const errorCode of [undefined, 'LOW_CONFIDENCE', 'DATE_UNSUPPORTED', 'TYPE_INFERRED', 'NEAR_DUPLICATE', 'UNDONE', 'FILE_CHANGED', 'SOURCE_LOCKED', 'DESTINATION_UNAVAILABLE']) {
       const offered = actionSet({ ...review, errorCode });
       expect(offered, String(errorCode)).toContain('Analyze again');
       expect(offered.filter((name) => /retry|again|anyway/i.test(name) && name !== 'Analyze again'), String(errorCode)).toEqual([]);
