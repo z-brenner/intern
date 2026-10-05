@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
@@ -11,9 +11,10 @@ import { SetupScreen } from './components/SetupScreen';
 import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
-import { humanizeReason } from './lib/reasons';
 import { describeAddReport } from './lib/addReport';
-import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
+import { installingLabel } from './lib/format';
+import { describeQueueStop } from './lib/reasons';
+import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -119,6 +120,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // every later poll - but a newer release than the one dismissed still does.
   const [updateDismissed, setUpdateDismissed] = useState<string>();
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState<{ fraction: number | undefined }>();
   const [updateError, setUpdateError] = useState('');
   const narrowInspector = useMediaQuery('(max-width: 1100px)');
 
@@ -131,7 +133,16 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // installs anything: a found update only ever shows a banner, and only the
   // click on it downloads and installs - still signed, still refused if it
   // is not.
+  //
+  // Not before the settings are read, because they can say not to: an office
+  // that allows no unrequested traffic switches this off, and a check sent in
+  // the moment before its own settings file loaded would be exactly that.
+  // Settings that cannot be read start nothing either, since the switch could
+  // be in them; the button in Settings still checks on demand. Turning the
+  // switch back on checks at once and re-arms the timer.
+  const automaticUpdateChecks = settingsLoaded && !settings.skipUpdateChecks;
   useEffect(() => {
+    if (!automaticUpdateChecks) return;
     let active = true;
     let timer: number | undefined;
     const check = async () => {
@@ -147,7 +158,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     };
     void check();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [bridge]);
+  }, [bridge, automaticUpdateChecks]);
   useEffect(() => {
     if (!seededSelection.current && items.length) {
       seededSelection.current = true;
@@ -165,6 +176,13 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const selected = items.find((item) => item.id === selectedId);
   const drawerOpen = Boolean(selected && selectedByPerson && narrowInspector);
   const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename);
+  // Installing an update hands Intern to the installer, which closes it. A
+  // rename in its applying stage is the one piece of work that cannot be
+  // canceled, and closing underneath it leaves the journal to finish the move
+  // on the next launch - recoverable, but not something to start on purpose
+  // while a person is watching the file move. Install waits for it instead:
+  // here, before the click, and in installUpdateBetweenRenames after it.
+  const renameApplying = items.some(applyingRename);
   // Only items that have not started. Anything mid-flight, awaiting a decision,
   // or already renamed is deliberately out of reach of the discard action.
   const waitingItems = items.filter((item) => item.status === 'waiting');
@@ -287,10 +305,42 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const refreshAfterSettings = async () => {
     try { await refresh(); } catch { /* Reported as a queue connection error. */ }
   };
+  // The click is not the moment Intern closes. The download comes first and
+  // can take minutes, and a rename can begin its move meanwhile, which the
+  // disabled button cannot see. So once every byte is in and verified, the
+  // queue stops starting new work and the installer waits for any rename
+  // still part-way through its move, read from the queue itself rather than
+  // from the last render. A pause made here is undone if installing then
+  // fails; a pause the person made is left as it was.
+  // Updated in the same commit as the screen, not after paint: an Install
+  // clicked the moment a pause shows must already see that pause, or it
+  // pauses again and later undoes a pause the person made.
+  const pausedNow = useRef(paused);
+  useLayoutEffect(() => { pausedNow.current = paused; }, [paused]);
+  const installUpdateBetweenRenames = async (onProgress?: UpdateProgressListener) => {
+    let pausedForInstall = false;
+    const settleRenames = async () => {
+      if (!pausedNow.current) {
+        await bridge.pauseQueue();
+        pausedForInstall = true;
+        setPaused(true);
+      }
+      while ((await bridge.listItems()).some(applyingRename)) {
+        await new Promise((resolve) => window.setTimeout(resolve, RENAME_SETTLE_POLL_MS));
+      }
+    };
+    try {
+      await bridge.installUpdate(onProgress, settleRenames);
+    } catch (error) {
+      if (pausedForInstall) await bridge.resumeQueue().then(() => setPaused(false), () => {});
+      throw error;
+    }
+  };
   const installUpdate = async () => {
     setUpdateInstalling(true);
     setUpdateError('');
-    try { await bridge.installUpdate(); }
+    setUpdateProgress(undefined);
+    try { await installUpdateBetweenRenames((fraction) => setUpdateProgress({ fraction })); }
     // On success this hands off to the installer and Intern is closed from
     // outside; there is nothing left to un-set `updateInstalling` for.
     catch (error) { setUpdateError(describeActionError(error)); setUpdateInstalling(false); }
@@ -389,7 +439,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       onChooseExisting={model.chooseExisting}
       onUseHostedModel={() => setSettingsOpen(true)}
     />
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </>;
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
@@ -407,9 +457,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       <p>Intern {updateStatus.version} is available. You have {updateStatus.currentVersion}.</p>
       {updateError && <p role="alert">{updateError}</p>}
       <div className="update-actions">
-        <button type="button" className="primary" disabled={updateInstalling} onClick={() => void installUpdate()}>{updateInstalling ? 'Installing…' : `Install ${updateStatus.version} and restart`}</button>
+        <button type="button" className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
         <button type="button" disabled={updateInstalling} onClick={() => setUpdateDismissed(updateStatus.version)}>Not now</button>
       </div>
+      {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
     <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
@@ -424,7 +475,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         simply went quiet, and the reason it reported was thrown away.
       */}
       {pipelineError && <div className="note note--failed" role="alert" aria-label="Queue stopped">
-        <p>The queue stopped taking new work. {humanizeReason(pipelineError)}</p>
+        <p>The queue stopped taking new work. {describeQueueStop(pipelineError)}</p>
       </div>}
       {/* A note, not a second live region: the status above already reads it out. */}
       {skippedNotice && <div className="note note--review" role="note" aria-label="Files not added">
@@ -469,7 +520,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
 }
 
@@ -481,6 +532,11 @@ const DEMO_SETUP: SetupState = { state: 'ready', downloadedBytes: 0, totalBytes:
 
 /** How often Intern asks GitHub for the release manifest while it keeps running, on top of the check at launch. */
 export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** A rename in its applying stage: the file is moving, and that cannot be canceled. */
+const applyingRename = (item: QueueItem) => item.status === 'processing' && item.cancelable === false;
+/** How often an install that is waiting on a rename asks the queue again. A move takes moments. */
+const RENAME_SETTLE_POLL_MS = 250;
 
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]

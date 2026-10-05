@@ -350,6 +350,11 @@ fn push_unique(roots: &mut Vec<CloudRoot>, candidate: CloudRoot) {
 
 /// What OneDrive records about one signed-in account, read from
 /// `HKCU\Software\Microsoft\OneDrive\Accounts\<account>`.
+///
+/// Only the Windows registry reader builds one, but turning a record into
+/// roots is plain path logic, so it stays compiled and tested everywhere;
+/// without the allowance a Linux `clippy -D warnings` refuses it as dead code.
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OneDriveAccount {
     pub business: bool,
@@ -370,6 +375,7 @@ pub(crate) struct OneDriveAccount {
 /// as a shortcut; it is listed under the account's organization so the
 /// longest-match rule in `classify` reports it as SharePoint rather than as
 /// the OneDrive folder it sits inside.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn account_roots(account: &OneDriveAccount) -> Vec<CloudRoot> {
     let mut roots = Vec::new();
     if let Some(folder) = &account.user_folder {

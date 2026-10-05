@@ -8,7 +8,7 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
     const transfer = new DataTransfer();
     transfer.items.add(new File(['fictional invoice'], 'duplicate-invoice-a.pdf', { type: 'application/pdf' }));
     transfer.items.add(new File(['fictional invoice'], 'duplicate-invoice-b.pdf', { type: 'application/pdf' }));
-    transfer.items.add(new File(['unsupported'], 'unsupported.csv', { type: 'text/csv' }));
+    transfer.items.add(new File(['unsupported'], 'unsupported.zip', { type: 'application/zip' }));
     transfer.items.add(new File(['lock'], '~$nda.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
     dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
@@ -17,8 +17,8 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /duplicate-invoice-b\.pdf/i })).toContainText('Needs review');
   // Files Intern cannot read are left out of the queue and named, with the
   // reason, instead of refusing the whole drop or sitting there as failures.
-  await expect(page.getByRole('note', { name: 'Files not added' })).toHaveText(/Added 2 documents\. Skipped 2: unsupported\.csv \(not a supported format\), ~\$nda\.docx \(a temporary or hidden file\)\./);
-  await expect(page.getByRole('row', { name: /unsupported\.csv/i })).toHaveCount(0);
+  await expect(page.getByRole('note', { name: 'Files not added' })).toHaveText(/Added 2 documents\. Skipped 2: unsupported\.zip \(not a supported format\), ~\$nda\.docx \(a temporary or hidden file\)\./);
+  await expect(page.getByRole('row', { name: /unsupported\.zip/i })).toHaveCount(0);
   await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Select duplicate-invoice-b.pdf' }).click();

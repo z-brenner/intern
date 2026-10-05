@@ -23,7 +23,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::State;
 
@@ -100,7 +100,13 @@ pub struct MicrosoftIntake {
     /// The last answer to "is the saved intake folder synced or on a network
     /// share", the folder it was about, and when it was reached.
     shared_intake: Mutex<Option<(String, Instant, bool)>>,
+    /// The settings `authorize` last read, with the length and modification
+    /// time of the file they were read from. See `admission_settings`.
+    admission_settings: Mutex<Option<(SettingsStamp, AppSettings)>>,
 }
+
+/// What identifies one version of the settings file without reading it.
+type SettingsStamp = (u64, SystemTime);
 
 /// What a folder that claims to be a private local intake but is not is told
 /// about itself. Held documents inherit this, and `intake_status` shows it,
@@ -220,6 +226,7 @@ impl MicrosoftIntake {
             generation: AtomicU64::new(0),
             documents: Mutex::new(documents),
             shared_intake: Mutex::new(None),
+            admission_settings: Mutex::new(None),
         }
     }
 
@@ -248,6 +255,35 @@ impl MicrosoftIntake {
             bindings: vec![binding],
         });
         Ok(intake)
+    }
+
+    /// The saved settings, for the admission check the watcher makes for
+    /// every unowned file on every scan.
+    ///
+    /// Parsed again only when the settings file's length or modification time
+    /// changes: a folder of a thousand held documents otherwise read and parsed
+    /// settings.json a thousand times a scan. A save writes a new file and
+    /// renames it into place, so it changes the stamp unless two saves of the
+    /// same length land within one tick of the filesystem's clock; the scope
+    /// recheck inside `verify` still reads the file afresh.
+    fn admission_settings(&self) -> PipelineResult<AppSettings> {
+        let stamp = fs::metadata(self.settings.path())
+            .ok()
+            .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)));
+        let Some(stamp) = stamp else {
+            return self.settings.load();
+        };
+        if let Ok(cached) = self.admission_settings.lock()
+            && let Some((cached_stamp, settings)) = cached.as_ref()
+            && *cached_stamp == stamp
+        {
+            return Ok(settings.clone());
+        }
+        let settings = self.settings.load()?;
+        if let Ok(mut cached) = self.admission_settings.lock() {
+            *cached = Some((stamp, settings.clone()));
+        }
+        Ok(settings)
     }
 
     /// Whether `folder` is a OneDrive, SharePoint, or network folder, from
@@ -917,7 +953,7 @@ impl MicrosoftIntake {
 }
 impl AdmissionGuard for MicrosoftIntake {
     fn authorize(&self, path: &Path, _stage: AdmissionStage) -> PipelineResult<AdmissionEvidence> {
-        let settings = self.settings.load()?;
+        let settings = self.admission_settings()?;
         match self.verify(path, &settings) {
             Ok(None) => Ok(AdmissionEvidence::local()),
             Ok(Some((hash, uploader, processor, snapshot))) => {
@@ -1748,6 +1784,63 @@ mod tests {
         assert_eq!(intake.poll().unwrap_err(), DEPLOYMENT_UNAVAILABLE);
         assert_eq!(intake.disconnect().unwrap_err(), DEPLOYMENT_UNAVAILABLE);
         assert_eq!(intake.bind().unwrap_err(), DEPLOYMENT_UNAVAILABLE);
+        let _ = fs::remove_dir_all(data);
+    }
+
+    /// The watcher asks for a verdict on every unowned file on every scan, and
+    /// each one used to read and parse settings.json again.
+    #[test]
+    fn admission_rereads_the_settings_only_when_the_file_changes() {
+        let data = std::env::temp_dir().join(format!(
+            "intern-microsoft-admission-settings-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&data);
+        fs::create_dir_all(&data).unwrap();
+        let path = data.join("settings.json");
+        let store = SettingsStore::new(&path);
+        store
+            .save(&AppSettings {
+                intake_folder: "/srv/one".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let intake = MicrosoftIntake::new(store.clone(), data.clone());
+        assert_eq!(
+            intake.admission_settings().unwrap().intake_folder,
+            "/srv/one"
+        );
+
+        // Different bytes under the same length and modification time: only a
+        // reader that never looked again still answers "one".
+        let stamp = fs::metadata(&path).unwrap().modified().unwrap();
+        let swapped = fs::read_to_string(&path)
+            .unwrap()
+            .replace("/srv/one", "/srv/two");
+        fs::write(&path, swapped).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        assert_eq!(
+            intake.admission_settings().unwrap().intake_folder,
+            "/srv/one"
+        );
+
+        // A save changes the file, and the next verdict reads it.
+        store
+            .save(&AppSettings {
+                intake_folder: "/srv/three/Inbox".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert_eq!(
+            intake.admission_settings().unwrap().intake_folder,
+            "/srv/three/Inbox"
+        );
+        drop(intake);
         let _ = fs::remove_dir_all(data);
     }
 

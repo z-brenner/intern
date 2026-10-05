@@ -53,10 +53,10 @@ document, because nothing ever read it. Intern holds the claim open in that
 case rather than closing it, and Settings counts the documents waiting on
 their contents. Each scan asks the sync client for the content it is waiting
 on — a placeholder is only fetched when something opens it, so a held document
-would wait for ever if nobody asked — and when the bytes arrive the claim is
-released, the next scan re-acquires it, and the document goes through the
-pipeline with something to read. A second failure with the content local is a real failure and is
-recorded as one. A laptop that spends a trip offline therefore returns to a
+would wait for ever if nobody asked — and when the bytes arrive the queue runs
+the failed document again in place, with something to read, while the claim
+stays with this machine. A second failure with the content local is a real
+failure and is recorded as one. A laptop that spends a trip offline therefore returns to a
 folder it can still work on, instead of one full of tombstones.
 
 ## Watching a folder
@@ -69,9 +69,16 @@ Enable **Watch a folder** in Settings and pick the intake folder. The watcher
 scans on a short interval — polling, not filesystem events, because sync
 clients replay changes in ways that make event streams lie, and a periodic
 scan is invisible next to a model that takes seconds per document. A
-file is picked up once its size and modification time have held still for a
-full scan interval, so a document still being copied or synced in is never
-read half-written. In the mode that processes everyone's uploads, a document
+file is picked up once its size and modification time have held still for ten
+seconds, so a document still being copied or synced in is never read
+half-written. The quiet is measured in time, not in scans: **Scan now** twice
+in a row cannot vouch for a writer that merely paused. While anything is
+arriving the folder is looked at every three seconds instead of every twenty,
+so a dropped document is picked up within seconds of settling, and Settings
+shows how many are on their way. Those quick looks do not ask again about
+documents that are only being held: for a shared library each uploader check
+is a request to Microsoft, so a held document is checked on the ordinary
+twenty-second scans and when **Scan now** is clicked. In the mode that processes everyone's uploads, a document
 also waits out a short courtesy delay counted from when it arrived on this
 machine — not from the timestamp it carries, which a sync client preserves
 from wherever it was written — so the machine that uploaded it gets first
@@ -89,13 +96,52 @@ in its presence records. A second conflict on the same document is decorated
 further — the sync client numbers the repeat, `report-DESKTOP-A1B2C3 (2).pdf`,
 or stamps the day it happened — and those decorations come off before the
 machine name is looked for, so a numbered conflict copy is skipped like the
-first one. Both names a machine goes by count: the sync client
-uses the hostname, not the label someone may have typed into Settings, so
-presence records carry both and either one marks a conflict copy. Skipping a
-document someone meant to file is the
+first one. Only hostnames count: the sync client uses the hostname, not the
+label someone may have typed into Settings, so presence records carry the
+hostname and a label such as "Office" never makes `Lease-Office.pdf` a
+conflict copy. (A presence record written before hostnames were kept falls
+back to its display name, which was the hostname unless a label was set.)
+Skipping a document someone meant to file is the
 worse of the two mistakes, so the guess is never made on shape alone. Settings
 counts what was skipped; resolve the conflict in the folder and the survivor
 is picked up on the next scan.
+
+What is already in the folder when this machine starts watching it is left
+alone unless Intern was told to process everyone's documents: nobody can say
+who put it there. That first look is remembered with the app's own data, not
+in the shared folder, by each document's path, size, and modification time.
+Restarting Intern, installing an update, or changing the machine's label
+watches the same documents as before, so a document that arrived while the
+computer was off is new and is picked up. A file replaced with new content, or
+a new scan saved under an old name, is new too. Starting a new watch takes the
+first look again: turning **Watch a folder** on, choosing a different folder,
+or changing how the folder's documents are admitted (a private local folder,
+or a synced folder of your own). "Only new documents" means new from that
+moment, so documents that arrived while watching was off are left alone too.
+
+The first look also remembers what it could not see: a subfolder that refused
+to be listed, a file whose details could not be read, and which document types
+this version reads. A document found later in such a place, or of a type a
+later version learns to read, was there all along and is left alone like the
+rest; one that arrives after the place has been seen into is new. A document
+leaves the record only once whole scans have missed it for a day, so a file a
+sync client takes away for a moment is not mistaken for a new one when it
+comes back.
+
+A document taken out of the queue — **Remove**, **Discard waiting**, or
+**Cancel** — stays where it is in the folder and is not picked up again; the
+claim records it as kept, for as long as the document stays there unchanged.
+One limit: if Intern restarts in the seconds between taking a document out of
+the queue and the next scan, it cannot tell that from a document whose hand-over
+was cut short, and the document is analysed again. Clearing the history of a
+document that failed while its content was still in the cloud is not a
+decision about it either; the document is handed over again once its content
+can be read. A document the queue cannot take at all — a file this account may
+not read, or a placeholder while the computer is offline — is tried again after
+20 seconds, then after doubling pauses up to 15 minutes, and Settings counts it
+as waiting for OneDrive or as could not be read. A placeholder does not wait out
+its pause once the connection is back: each scan asks the sync client for its
+content, and the document is handed over as soon as the content arrives.
 
 A watched intake requires a destination folder **outside** the intake folder.
 Renaming in place inside a watched folder would make every result reappear as
@@ -149,7 +195,10 @@ whoever creates the claim file first owns the document, and everyone else
 skips it. While the document is queued or waiting for review the owner renews
 the lease; when it is renamed, kept, or fails, the claim is marked **done**
 and stays behind as a tombstone so a machine with a lagging sync view cannot
-process it again. Done claims are pruned after 30 days.
+process it again. Done claims are pruned after 30 days, except that a document
+someone chose to leave where it is keeps its tombstone for as long as it stays
+in the folder unchanged; the sweep that prunes them runs at most once an hour,
+since every retention it enforces is measured in days.
 
 A crashed or unplugged machine must not strand its documents, so claims can be
 taken over — but only when **both** the lease deadline has passed **and** the
@@ -256,12 +305,13 @@ describes the record and the flow that consumes it.
   lock out — five attempts over about three seconds — rather than reporting an
   intact document as changed. A file still held after that is reported as
   locked, naming what actually happened, and can be retried.
-- **Claim lost to a sync conflict**: the loser cancels its local queue item;
-  if it had already renamed first, the winner finds the file gone and routes
-  to review.
+- **Claim lost to a sync conflict**: the loser cancels its local queue item,
+  marked as withdrawn rather than canceled by a person, so the document can be
+  handed over and run again if it comes back to this machine; if it had
+  already renamed first, the winner finds the file gone and routes to review.
 - **Offline placeholder**: extraction fails and the document goes to review
-  with the reason shown, but the claim is held rather than tombstoned; it is
-  released for a fresh attempt once the content arrives.
+  with the reason shown, but the claim is held rather than tombstoned; the
+  document is run again in place once the content arrives.
 - **Sync conflict copy appears**: skipped and counted, never filed.
 - **Same content uploaded again**: flagged as a duplicate of the filed name
   before analysis, on whichever machine picks it up; retry processes it anyway.

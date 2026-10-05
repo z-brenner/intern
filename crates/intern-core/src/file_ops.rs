@@ -240,6 +240,15 @@ pub trait LockedFile: Send {
 
 pub trait FileSystem: Send + Sync {
     fn exists(&self, path: &Path) -> bool;
+    /// Whether `path` exists, or the error that kept that from being known.
+    ///
+    /// `exists` reads both "not there" and "could not look" as absent, which
+    /// is the safe answer before a rename. It is the wrong one to tell a
+    /// person: a network share that is offline is not a document that was
+    /// moved or deleted.
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        Ok(self.exists(path))
+    }
     fn hash(&self, path: &Path) -> io::Result<String>;
     fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool>;
     fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()>;
@@ -254,6 +263,10 @@ pub struct StdFileSystem;
 impl FileSystem for StdFileSystem {
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        path.try_exists()
     }
 
     fn hash(&self, path: &Path) -> io::Result<String> {
@@ -306,6 +319,12 @@ impl FileApplier {
         self
     }
 
+    /// Whether `path` exists, as the file system this applier works on sees
+    /// it, or the error that kept that from being known.
+    pub fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        self.filesystem.try_exists(path)
+    }
+
     pub fn fingerprint(&self, path: &Path) -> InternResult<String> {
         self.lock_retry
             .run(|| self.filesystem.hash(path))
@@ -346,12 +365,18 @@ impl FileApplier {
         queue_item_id: i64,
         applied: &OperationReceipt,
     ) -> InternResult<OperationReceipt> {
-        let durable = self.store.load_receipt(queue_item_id)?.ok_or_else(|| {
-            InternError::new(
-                ErrorCode::StateConflict,
-                "undo requires a durable apply receipt",
-            )
-        })?;
+        // The newest finished operation, not the newest receipt: an undo that
+        // was refused and rolled back moved nothing, and comparing against it
+        // refused every later undo of a document that was still filed.
+        let durable = self
+            .store
+            .load_latest_complete_receipt(queue_item_id)?
+            .ok_or_else(|| {
+                InternError::new(
+                    ErrorCode::StateConflict,
+                    "undo requires a durable apply receipt",
+                )
+            })?;
         if durable != *applied
             || applied.queue_item_id != queue_item_id
             || applied.direction != OperationDirection::Apply
@@ -423,12 +448,16 @@ impl FileApplier {
         let source_exists = self.filesystem.exists(&receipt.source);
         let destination_exists = self.filesystem.exists(&receipt.destination);
         if source_exists && !destination_exists {
-            let _source = self.verify_reconciled_source(&receipt)?;
+            // The document never left, or was put back: the operation moved
+            // nothing, and that is true whatever the original holds now. What
+            // the read decides is only whether a person should look first.
+            let review = self.source_review(&receipt);
             self.cleanup_reconciled_temporary(&receipt)?;
             return self.store.resolve_reconciled_rollback(
                 receipt.queue_item_id,
                 receipt.id,
                 receipt.stage,
+                review,
             );
         }
         if !source_exists && destination_exists {
@@ -470,6 +499,27 @@ impl FileApplier {
                     .with_receipt(receipt)
                 })?;
             return self.reconcile_published(published);
+        }
+        // A file that arrived at the destination name after it was chosen -
+        // a teammate's document synced in between, typically - makes the
+        // rename fail with nothing moved, and used to leave the item asking a
+        // person to compare two names with no way to record the answer. A
+        // destination that is neither the source's file nor its content is
+        // not the document: the operation is rolled back and the item waits
+        // in review under the reason a person can act on. Only the same file
+        // or the same bytes at both names is genuinely ambiguous.
+        if source_exists
+            && destination_exists
+            && nothing_published(receipt.stage)
+            && self.destination_is_foreign(&receipt)
+        {
+            self.cleanup_reconciled_temporary(&receipt)?;
+            return self.store.resolve_reconciled_rollback(
+                receipt.queue_item_id,
+                receipt.id,
+                receipt.stage,
+                Some(ErrorCode::DestinationUnavailable),
+            );
         }
         let message = if source_exists {
             "an incomplete operation left a file at both of its paths"
@@ -576,58 +626,57 @@ impl FileApplier {
             )
             .with_receipt(receipt));
         }
-        let _source = self.verify_reconciled_source(&receipt)?;
+        let review = self.source_review(&receipt);
         self.cleanup_reconciled_temporary(&receipt)?;
         self.store.resolve_reconciled_rollback(
             receipt.queue_item_id,
             receipt.id,
             OperationStage::RolledBack,
+            review,
         )
     }
 
-    fn verify_reconciled_source(
-        &self,
-        receipt: &OperationReceipt,
-    ) -> InternResult<Box<dyn LockedFile>> {
-        let mut source = self
-            .filesystem
-            .lock_for_delete(&receipt.source)
-            .map_err(|_| {
-                InternError::new(
-                    ErrorCode::FileChanged,
-                    "rolled-back source cannot be verified",
-                )
-                .with_receipt(receipt.clone())
-            })?;
-        let identity = source.identity().map_err(|_| {
-            InternError::new(
-                ErrorCode::FileChanged,
-                "rolled-back source identity is unavailable",
-            )
-            .with_receipt(receipt.clone())
-        })?;
-        let hash = source.hash().map_err(|_| {
-            InternError::new(
-                ErrorCode::FileChanged,
-                "rolled-back source hash is unavailable",
-            )
-            .with_receipt(receipt.clone())
-        })?;
-        let identity_after = source.identity().map_err(|_| {
-            InternError::new(
-                ErrorCode::FileChanged,
-                "rolled-back source identity became unavailable",
-            )
-            .with_receipt(receipt.clone())
-        })?;
-        if hash != receipt.pre_operation_hash || identity_after != identity {
-            return Err(InternError::new(
-                ErrorCode::FileChanged,
-                "rolled-back source does not match its receipt",
-            )
-            .with_receipt(receipt.clone()));
+    /// Whether the original of an operation that moved nothing still holds
+    /// the document the receipt describes, as the review reason to record
+    /// when it does not.
+    ///
+    /// This is a shared read. The check used to open the original for
+    /// deletion, and the hold that refused the rename - a PDF open in Acrobat,
+    /// a Word document being edited - refused that open too, so the item was
+    /// parked with its receipt still live and no apply could ever journal
+    /// again. Nothing is deleted on this path, so nothing needs that access;
+    /// the read is retried like every other read of a source, and a hold
+    /// that outlives the retries is reported as one.
+    fn source_review(&self, receipt: &OperationReceipt) -> Option<ErrorCode> {
+        match self
+            .lock_retry
+            .run(|| self.filesystem.hash(&receipt.source))
+        {
+            Ok(hash) if hash == receipt.pre_operation_hash => None,
+            Err(error) if is_transient_lock(&error) => Some(ErrorCode::SourceLocked),
+            _ => Some(ErrorCode::FileChanged),
         }
-        Ok(source)
+    }
+
+    /// Whether the file at the destination is provably someone else's: a
+    /// different file from the source, holding different bytes from the
+    /// document. Anything that cannot be read counts as not proven.
+    ///
+    /// The comparison waits out a transient hold like every other read of
+    /// these files. The usual way here is a teammate's document a sync client
+    /// has just written at the destination name, and this runs milliseconds
+    /// after the rename found it - while that client most likely still holds
+    /// it. Read once, the hold made the file unprovable and parked the item
+    /// for a person to compare two names that were never in doubt.
+    fn destination_is_foreign(&self, receipt: &OperationReceipt) -> bool {
+        self.lock_retry
+            .run(|| {
+                let source = self.filesystem.lock_for_delete(&receipt.source)?;
+                let mut destination = self.filesystem.lock_for_delete(&receipt.destination)?;
+                Ok(destination.identity()? != source.identity()?
+                    && destination.hash()? != receipt.pre_operation_hash)
+            })
+            .unwrap_or(false)
     }
 
     fn reconcile_complete(&self, receipt: OperationReceipt) -> InternResult<QueueItem> {
@@ -919,6 +968,19 @@ impl FileApplier {
         &self,
         mut receipt: OperationReceipt,
     ) -> InternResult<OperationReceipt> {
+        // The rename is the step that cannot be taken back. A reconciliation
+        // that took this operation over - and may already have recorded it as
+        // rolled back - has decided what it is, and renaming anyway leaves the
+        // document at a name its own history says it never got.
+        self.store
+            .renew_operation_lease(receipt.queue_item_id, receipt.id, OperationStage::Planned)
+            .map_err(|_| {
+                self.reconciliation_error(
+                    receipt.clone(),
+                    ErrorCode::StateConflict,
+                    "rename ownership was lost before the rename",
+                )
+            })?;
         self.lock_retry
             .run(|| {
                 self.filesystem
@@ -1190,6 +1252,18 @@ impl FileApplier {
             ));
         }
         drop(temporary_locked);
+
+        // Publishing is the cross-volume step that cannot be taken back, so
+        // it waits on the same proof of ownership the same-volume rename does.
+        self.store
+            .renew_operation_lease(receipt.queue_item_id, receipt.id, OperationStage::Verified)
+            .map_err(|_| {
+                self.reconciliation_error(
+                    receipt.clone(),
+                    ErrorCode::StateConflict,
+                    "publish ownership was lost before the publish",
+                )
+            })?;
 
         // Publishing the verified copy is a rename onto a name nothing holds
         // yet, but the folder it lands in is watched, so the same transient
@@ -1470,6 +1544,17 @@ fn hash_reader(mut file: fs::File) -> io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Whether a receipt in this stage can only describe an operation whose
+/// irreversible step has not happened: the rename of a `Rename`, or the
+/// publish of a `VerifiedCopy`. A receipt waiting on a rollback did move the
+/// document once, so a file at its destination may well be the document.
+const fn nothing_published(stage: OperationStage) -> bool {
+    matches!(
+        stage,
+        OperationStage::Planned | OperationStage::Copied | OperationStage::Verified
+    )
+}
+
 fn temporary_path(destination: &Path) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -1494,7 +1579,7 @@ mod windows_file {
         io::{self, Read, Seek, SeekFrom, Write},
         mem::{MaybeUninit, size_of},
         os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
-        path::Path,
+        path::{Path, PathBuf},
     };
 
     use sha2::{Digest, Sha256};
@@ -1592,7 +1677,43 @@ mod windows_file {
                 )),
             };
         }
+        // The stream before the times: writing it is a modification too.
+        keep_zone_identifier(source, destination);
+        super::keep_times(&input, &locked.file);
         Ok(Box::new(locked))
+    }
+
+    /// The alternate data stream Windows keeps a downloaded or e-mailed
+    /// file's origin in: its Mark-of-the-Web.
+    const ZONE_IDENTIFIER: &str = "Zone.Identifier";
+
+    /// Carries the source's Mark-of-the-Web over to its copy.
+    ///
+    /// A rename keeps every stream a file has, and a copy of its bytes keeps
+    /// none of them, so a document filed to another volume lost the mark that
+    /// makes Office open it in Protected View and block its macros: an
+    /// e-mailed workbook filed to a share opened as if it had been written on
+    /// this machine. Having no mark is the common case, and a volume without
+    /// alternate streams (FAT, many NAS shares) cannot hold one; either way
+    /// the copy is filed without it, as every copy was before. Only the
+    /// unnamed stream is shared-read-only on the copy, so the named one opens
+    /// beside it.
+    fn keep_zone_identifier(source: &Path, copy: &Path) {
+        let Ok(zone) = fs::read(alternate_stream(source, ZONE_IDENTIFIER)) else {
+            return;
+        };
+        if let Ok(mut stream) = fs::File::create(alternate_stream(copy, ZONE_IDENTIFIER))
+            && stream.write_all(&zone).is_ok()
+        {
+            let _ = stream.sync_all();
+        }
+    }
+
+    fn alternate_stream(path: &Path, stream: &str) -> PathBuf {
+        let mut named = path.as_os_str().to_owned();
+        named.push(":");
+        named.push(stream);
+        PathBuf::from(named)
     }
 
     pub(super) fn lock_for_delete(path: &Path) -> io::Result<Box<dyn LockedFile>> {
@@ -1699,7 +1820,38 @@ fn copy_new_locked(source: &Path, destination: &Path) -> io::Result<Box<dyn Lock
             )),
         };
     }
+    keep_times(&input, &locked.file);
     Ok(Box::new(locked))
+}
+
+/// Gives a copy the times of the file it was copied from: modified and
+/// accessed, and on Windows created as well.
+///
+/// A rename keeps them and a copy of the bytes does not, so a document filed
+/// to another volume showed the moment it was filed as its "Date modified" -
+/// the column a folder of documents is sorted by - while the same filing on
+/// one volume did not. Set once the bytes are written and synced, because a
+/// write is itself a modification. Times only: the read-only attribute in
+/// particular stays behind, or the copy could not be cleaned up or undone.
+/// A volume that will not take the times still gets the verified document,
+/// as it always did; the times are not worth refusing the filing over.
+fn keep_times(source: &fs::File, copy: &fs::File) {
+    let Ok(metadata) = source.metadata() else {
+        return;
+    };
+    let mut times = fs::FileTimes::new();
+    if let Ok(modified) = metadata.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    #[cfg(windows)]
+    if let Ok(created) = metadata.created() {
+        use std::os::windows::fs::FileTimesExt;
+        times = times.set_created(created);
+    }
+    let _ = copy.set_times(times);
 }
 
 #[cfg(not(windows))]

@@ -353,7 +353,7 @@
       "sha256": "5268313932f5977e852bb93fcab20ed4d47a7f4bd8d3e78b18419d1cd9e5a621",
       "extraction": {
         "outcome": "failed",
-        "code": "PARSE_FAILED"
+        "code": "PASSWORD_PROTECTED"
       },
       "prompt_sha256": null,
       "reply": null

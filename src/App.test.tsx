@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import { App } from './App';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { App, UPDATE_POLL_INTERVAL_MS } from './App';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { InMemoryBridgeOptions } from './lib/inMemoryBridge';
 import type { AppSettings, QueueItem } from './types';
@@ -56,6 +56,73 @@ describe('App', () => {
 });
 
 /*
+  The automatic check is the one request Intern makes that nobody asked for at
+  that moment. Some offices allow none, so Settings can switch it off, and off
+  has to mean off from the first instant: not one check at launch before the
+  settings file has been read, and none when the six-hour timer comes round.
+*/
+describe('automatic update checks', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const current = { state: 'current' as const, currentVersion: '0.1.0-alpha.10' };
+
+  it('no_update_check_when_disabled: neither at launch nor on the timer, while the button still checks', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = createInMemoryBridge({ settings: { skipUpdateChecks: true } });
+    const checkForUpdate = vi.spyOn(bridge, 'checkForUpdate').mockResolvedValue(current);
+    render(<App bridge={bridge} />);
+
+    // Settings has the saved choice, so the app has read it by now.
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    expect(within(dialog).getByLabelText(/^Check for updates automatically/)).not.toBeChecked();
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS * 2 + 1000); });
+    expect(checkForUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check for updates' }));
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+    expect(await within(dialog).findByRole('status', { name: 'Update status' })).toHaveTextContent('0.1.0-alpha.10 is the latest release');
+  });
+
+  it('check_runs_at_launch_and_on_timer_when_enabled', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const checkForUpdate = vi.fn(async () => current);
+    render(<App bridge={{ ...createInMemoryBridge(), checkForUpdate }} />);
+
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS - 60_000); });
+    expect(checkForUpdate).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(2));
+  });
+
+  it('stops when switched off in Settings, and checks again as soon as it is switched back on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const bridge = createInMemoryBridge();
+    const checkForUpdate = vi.spyOn(bridge, 'checkForUpdate').mockResolvedValue(current);
+    render(<App bridge={bridge} />);
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(1));
+
+    const toggle = async () => {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'Settings' }))[0]);
+      const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+      fireEvent.click(within(dialog).getByLabelText(/^Check for updates automatically/));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
+    };
+
+    await toggle();
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(UPDATE_POLL_INTERVAL_MS * 2); });
+    expect(checkForUpdate).toHaveBeenCalledTimes(1);
+
+    await toggle();
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
+    await waitFor(() => expect(checkForUpdate).toHaveBeenCalledTimes(2));
+  });
+});
+
+/*
   An install updated from 0.1.0-alpha.9: no onboarding has ever been recorded
   (completedVersion 0), the person chose a manual intake folder and destination
   in Settings, the queue holds finished and pending work, and the local model is
@@ -69,10 +136,11 @@ const alpha9Settings: AppSettings = {
 };
 /*
   The same file as this build reads it back: every saved value as it was, and
-  the organisation's names - which alpha.9 never wrote - as the empty list the
-  backend's serde default gives them, which names nobody.
+  each field added since alpha.9 at the default the backend's serde gives it -
+  the organisation's names as the empty list, which names nobody, and the
+  update switch as checks on.
 */
-const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [] };
+const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false };
 const alpha9Items: QueueItem[] = [
   { id: 'alpha9-filed', originalFilename: 'scan-0001.pdf', status: 'completed', proposedFilename: '2025-03-04 Invoice from Northwind.pdf', confidence: 0.94, undoable: true },
   { id: 'alpha9-review', originalFilename: 'scan-0002.pdf', status: 'review', proposedFilename: '2025-03-05 Lease Amendment.pdf', confidence: 0.61 },

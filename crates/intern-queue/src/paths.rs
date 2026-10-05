@@ -5,10 +5,9 @@ use std::{
 
 use crate::pipeline::{PipelineError, PipelineResult};
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "pptx", "pptm", "ppsx", "xlsx", "eml", "msg", "txt", "md", "markdown", "png",
-    "jpg", "jpeg", "tif", "tiff",
-];
+/// The admission list lives in intern-core so the queue, the intake watcher,
+/// the snapshot store and the worker's routing test all read the same one.
+pub use intern_core::SUPPORTED_EXTENSIONS;
 
 pub fn parse_item_id(value: &str) -> PipelineResult<i64> {
     if value.is_empty()
@@ -166,7 +165,9 @@ fn supported(path: &Path) -> bool {
 fn skipped_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
-        .is_none_or(|name| name.starts_with('.') || name.starts_with("~$"))
+        .is_none_or(|name| {
+            name.starts_with('.') || name.starts_with("~$") || intern_core::is_history_export(name)
+        })
 }
 
 /// Whether a Windows reparse tag belongs to the cloud files family

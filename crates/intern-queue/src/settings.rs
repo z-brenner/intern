@@ -121,6 +121,14 @@ pub struct AppSettings {
     /// Register Intern to start when the user signs in.
     #[serde(default)]
     pub start_at_login: bool,
+    /// Do not ask GitHub for a newer release at launch or on the timer. The
+    /// check sends nothing about documents, but some offices allow no
+    /// unrequested traffic at all. Named for the exception rather than the
+    /// default so that a file without it - every file alpha.10 wrote - keeps
+    /// checks on, as they were; the frontend makes the check, and the button
+    /// in Settings still works either way.
+    #[serde(default)]
+    pub skip_update_checks: bool,
     /// Write a description record beside every document filed into the
     /// destination folder (`<destination>/.intern/descriptions/`), so a
     /// SharePoint column can be filled from it.

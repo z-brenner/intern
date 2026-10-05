@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { SUPPORTED_FORMATS_LABEL } from '../../lib/formats';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
 import type { AddReport } from '../../types';
@@ -19,7 +20,7 @@ describe('queue interactions', () => {
     const report = await bridge.addFiles([
       { path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' },
       { path: 'browser://duplicate-invoice-b.pdf', displayName: 'duplicate-invoice-b.pdf' },
-      { path: 'browser://unsupported.csv', displayName: 'unsupported.csv' },
+      { path: 'browser://unsupported.zip', displayName: 'unsupported.zip' },
       { path: 'browser://~$nda.docx', displayName: '~$nda.docx' },
     ]);
 
@@ -28,7 +29,7 @@ describe('queue interactions', () => {
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')).toMatchObject({ status: 'review', reason: expect.stringMatching(/different path.*separate/i) });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')?.id).not.toBe(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')?.id);
     // What the desktop leaves out is reported, not queued as a failed row.
-    expect(report).toEqual({ added: 2, alreadyQueued: 0, skipped: [{ name: 'unsupported.csv', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
+    expect(report).toEqual({ added: 2, alreadyQueued: 0, skipped: [{ name: 'unsupported.zip', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
     expect(items.map((item) => item.originalFilename)).toEqual(['duplicate-invoice-a.pdf', 'duplicate-invoice-b.pdf']);
 
     expect(await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }])).toEqual({ added: 0, alreadyQueued: 1, skipped: [] });
@@ -121,7 +122,9 @@ describe('queue interactions', () => {
     render(<App bridge={createInMemoryBridge()} />);
 
     const zone = await screen.findByRole('region', { name: /drag files/i });
-    expect(zone).toHaveTextContent('Supports PDF, DOCX, XLSX, EML, TXT, Markdown, PNG, JPEG (JPG), and TIFF');
+    expect(zone).toHaveTextContent(`Supports ${SUPPORTED_FORMATS_LABEL}`);
+    expect(zone).toHaveTextContent(/PowerPoint/);
+    expect(zone).toHaveTextContent(/Outlook \.msg/);
     expect(zone).not.toHaveAttribute('tabindex');
   });
 

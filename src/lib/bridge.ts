@@ -1,25 +1,6 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
-/**
- * The extensions the desktop backend admits, mirroring `SUPPORTED_EXTENSIONS`
- * in crates/intern-queue/src/paths.rs: the file picker's Documents filter, and
- * what the in-memory bridge skips, as the backend does.
- *
- * scripts/supported-extensions.test.ts holds it to the backend's declaration,
- * so a format added there and not here fails the build.
- *
- * TODO(lead): WP-12 adds src/lib/formats.ts and new formats, and moves the
- * backend's list. When it merges, move this list there (or import it from
- * there) so there is one frontend list, point that test at the list's new
- * home, and move the demo's unsupported fixture off a format that becomes
- * supported (`unsupported.csv` in queue.test.tsx and the e2e).
- */
-export const SUPPORTED_EXTENSIONS: readonly string[] = [
-  'pdf', 'docx', 'pptx', 'pptm', 'ppsx', 'xlsx', 'eml', 'msg', 'txt', 'md', 'markdown', 'png',
-  'jpg', 'jpeg', 'tif', 'tiff',
-];
-
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
   path: string;
@@ -135,12 +116,20 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * sends nothing but a request for the release manifest - no filenames, no
    * document contents, no identifier of any kind - and runs once when Intern
    * starts, again on a fixed interval for as long as it keeps running, and
-   * whenever someone presses the button in Settings. Nothing is downloaded or
-   * installed by a check on its own; that is always a separate, explicit click.
+   * whenever someone presses the button in Settings. The first two stop when
+   * `skipUpdateChecks` is set; the button always works. Nothing is downloaded
+   * or installed by a check on its own; that is always a separate, explicit
+   * click.
    */
   checkForUpdate(): Promise<UpdateStatus>;
-  /** Download and install the update found by the last check. */
-  installUpdate(): Promise<void>;
+  /**
+   * Download and install the update found by the last check. `onProgress`
+   * hears how much of the download has arrived as it arrives. `beforeInstall`
+   * runs once every byte is in and its signature has been verified, just
+   * before the installer takes over (on Windows it closes Intern). Installing
+   * waits for it, and does not happen if it throws.
+   */
+  installUpdate(onProgress?: UpdateProgressListener, beforeInstall?: () => Promise<void>): Promise<void>;
   /** Current shared-intake watcher status. Resolves with zeros when intake is disabled. */
   intakeStatus(): Promise<IntakeStatus>;
   /** Wake the intake watcher for an immediate scan. No-op when intake is disabled. */
@@ -243,6 +232,12 @@ export interface DescriptionsEventSource {
 export interface LaunchReportSource {
   subscribeLaunchReports(handler: (report: AddReport) => void): () => void;
 }
+
+/**
+ * How far an update download has got, from 0 to 1, or `undefined` while it
+ * downloads from a server that did not say how large it is.
+ */
+export type UpdateProgressListener = (fraction: number | undefined) => void;
 
 export type UpdateStatus =
   | { state: 'current'; currentVersion: string }

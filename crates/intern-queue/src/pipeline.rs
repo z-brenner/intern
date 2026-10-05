@@ -3,17 +3,17 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
     },
 };
 
 use intern_core::{
-    ErrorCode, FileApplier, InternError, OperationDirection, OperationReceipt, OperationStage,
-    QueueItem, QueueStatus, QueueStore, StdFileSystem, source_path_key,
+    ErrorCode, FileApplier, FileSystem, InternError, OperationDirection, OperationReceipt,
+    OperationStage, QueueItem, QueueStatus, QueueStore, StdFileSystem, source_path_key,
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_filename, counterparty_view,
+    RuleKind, ValidatedProposal, compose_styled_filename, counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
@@ -22,6 +22,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
@@ -280,6 +281,12 @@ pub trait FileActions: Send + Sync {
     fn apply(&self, item: &QueueItem, destination: &Path) -> PipelineResult<()>;
     fn undo(&self, item: &QueueItem, receipt: &OperationReceipt) -> PipelineResult<()>;
     fn reconcile(&self, item: &QueueItem) -> PipelineResult<()>;
+    /// Whether `path` exists, or the error that kept that from being known:
+    /// what a failed undo asks before telling a person where their document
+    /// is.
+    fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
+        path.try_exists()
+    }
 }
 
 pub struct CoreFileActions {
@@ -289,8 +296,15 @@ pub struct CoreFileActions {
 
 impl CoreFileActions {
     pub fn local(store: Arc<QueueStore>) -> Self {
+        Self::with_file_system(store, Arc::new(StdFileSystem))
+    }
+
+    /// The journalled file operations over `filesystem` rather than the
+    /// machine's own: what lets a held file, a refused rename or a slow copy
+    /// be reproduced on any platform, against the queue's own store.
+    pub fn with_file_system(store: Arc<QueueStore>, filesystem: Arc<dyn FileSystem>) -> Self {
         Self {
-            applier: FileApplier::new(Arc::new(StdFileSystem), Arc::clone(&store)),
+            applier: FileApplier::new(filesystem, Arc::clone(&store)),
             store,
         }
     }
@@ -334,7 +348,7 @@ impl FileActions for CoreFileActions {
     }
 
     fn undo(&self, item: &QueueItem, receipt: &OperationReceipt) -> PipelineResult<()> {
-        self.store.begin_applying(item.id, QueueStatus::Completed)?;
+        self.store.begin_undo(item.id)?;
         let lease = LeaseKeeper::start(Arc::clone(&self.store), item.id, LEASE_RENEWAL_INTERVAL)?;
         let result = self.applier.undo(item.id, receipt);
         lease.stop_and_check()?;
@@ -357,6 +371,10 @@ impl FileActions for CoreFileActions {
             .reconcile(item.id)
             .map(|_| ())
             .map_err(Into::into)
+    }
+
+    fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
+        self.applier.try_exists(path)
     }
 }
 
@@ -594,7 +612,18 @@ pub struct PipelineItem {
     pub processing_failures: u32,
     pub error_code: Option<ErrorCode>,
     pub proposal: Option<ProposalRecord>,
+    /// The newest receipt of any stage: the operation reconciliation is
+    /// about, whether or not it finished.
     pub receipt: Option<OperationReceipt>,
+    /// The completed apply the document is filed by, when its newest finished
+    /// operation is one. An undo that was refused and rolled back leaves this
+    /// in place; an undo that finished takes it away. This, not `receipt`, is
+    /// what says where the document is and whether it can be undone.
+    pub filed_receipt: Option<OperationReceipt>,
+    /// An operation that never finished, on an item that is not applying: one
+    /// a reconciliation could not settle. Until it is checked again, no new
+    /// rename of the document can be journalled.
+    pub unsettled_receipt: Option<OperationReceipt>,
     /// For an item flagged DUPLICATE: the name its content is already filed
     /// under (the completed apply's destination leaf, or the completed item's
     /// original filename for keep-original completions). `None` once the
@@ -627,11 +656,34 @@ pub struct Pipeline {
     admission: Arc<dyn AdmissionGuard>,
     settings: SettingsStore,
     paused: AtomicBool,
+    /// Why the queue stopped itself, as a code the window has a sentence
+    /// for; `None` when it is running or a person paused it.
+    pause_reason: Mutex<Option<String>>,
+    /// Documents in a row whose model reply could not be used. One such
+    /// reply is that document's problem; several in a row is the model's.
+    consecutive_unreadable_replies: AtomicU32,
+    /// When a document first found no model loaded to ask, in the current
+    /// run of such documents; `None` once a model has answered since.
+    model_missing_since: Mutex<Option<std::time::Instant>>,
+    /// How long no model may be loaded before the queue stops for it.
+    model_missing_grace: std::time::Duration,
     active_item: AtomicI64,
+    /// Set when the active item's model request is canceled - by a person or
+    /// by its deadline - before the model itself is told. The request thread
+    /// reads it to tell a failure the cancel caused from one worth a retry.
+    active_cancel: Mutex<Option<Arc<AtomicBool>>>,
     shutting_down: AtomicBool,
     model_timeout: std::time::Duration,
     lease_renewal_interval: std::time::Duration,
     run_lock: Mutex<()>,
+    /// Held around every file operation and the reconciliation that follows
+    /// it. Approve, undo, retry and the recovery pass run on different
+    /// threads with the same store session, so every ownership check of one
+    /// passed against another still in flight: recovery could record a
+    /// rename as rolled back just before it landed, or delete a temporary
+    /// copy still being verified. Taken after `run_lock`, never before it,
+    /// and never held twice.
+    file_ops: Mutex<()>,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -663,24 +715,9 @@ impl Pipeline {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        Ok(Self {
-            store,
-            repository,
-            worker,
-            model,
-            files,
-            events,
-            filing: Arc::new(NoFilingSink),
-            duplicates: Arc::new(NoDuplicateOracle),
-            admission: Arc::new(LocalAdmission),
-            settings,
-            paused: AtomicBool::new(false),
-            active_item: AtomicI64::new(0),
-            shutting_down: AtomicBool::new(false),
-            model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
-            lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
-            run_lock: Mutex::new(()),
-        })
+        Ok(Self::assemble(
+            store, repository, worker, model, files, events, settings,
+        ))
     }
 
     pub fn with_local_files(
@@ -690,11 +727,51 @@ impl Pipeline {
         events: Arc<dyn PipelineEventSink>,
         settings: SettingsStore,
     ) -> PipelineResult<Self> {
+        Self::with_file_system(
+            database,
+            worker,
+            model,
+            events,
+            settings,
+            Arc::new(StdFileSystem),
+        )
+    }
+
+    /// The queue with its real journalled file operations, over `filesystem`.
+    ///
+    /// The file operations share the queue's own store, as they do in the
+    /// app: their ownership checks run against the same session as approve,
+    /// undo and recovery, which is exactly where those calls used to race.
+    pub fn with_file_system(
+        database: impl AsRef<Path>,
+        worker: Arc<dyn WorkerBoundary>,
+        model: Arc<dyn AnalyzerBoundary>,
+        events: Arc<dyn PipelineEventSink>,
+        settings: SettingsStore,
+        filesystem: Arc<dyn FileSystem>,
+    ) -> PipelineResult<Self> {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        let files = Arc::new(CoreFileActions::local(Arc::clone(&store)));
-        Ok(Self {
+        let files = Arc::new(CoreFileActions::with_file_system(
+            Arc::clone(&store),
+            filesystem,
+        ));
+        Ok(Self::assemble(
+            store, repository, worker, model, files, events, settings,
+        ))
+    }
+
+    fn assemble(
+        store: Arc<QueueStore>,
+        repository: PipelineRepository,
+        worker: Arc<dyn WorkerBoundary>,
+        model: Arc<dyn AnalyzerBoundary>,
+        files: Arc<dyn FileActions>,
+        events: Arc<dyn PipelineEventSink>,
+        settings: SettingsStore,
+    ) -> Self {
+        Self {
             store,
             repository,
             worker,
@@ -706,12 +783,18 @@ impl Pipeline {
             admission: Arc::new(LocalAdmission),
             settings,
             paused: AtomicBool::new(false),
+            pause_reason: Mutex::new(None),
+            consecutive_unreadable_replies: AtomicU32::new(0),
+            model_missing_since: Mutex::new(None),
+            model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
+            active_cancel: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
             lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
             run_lock: Mutex::new(()),
-        })
+            file_ops: Mutex::new(()),
+        }
     }
 
     /// Reports every completed rename (and every undo of one) to `sink`.
@@ -744,6 +827,12 @@ impl Pipeline {
     #[doc(hidden)]
     pub fn with_lease_renewal_interval(mut self, interval: std::time::Duration) -> Self {
         self.lease_renewal_interval = interval;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_model_missing_grace(mut self, grace: std::time::Duration) -> Self {
+        self.model_missing_grace = grace;
         self
     }
 
@@ -914,7 +1003,20 @@ impl Pipeline {
 
     fn pipeline_item(&self, item: QueueItem) -> PipelineResult<PipelineItem> {
         let proposal = self.repository.load_proposal(item.id)?;
-        let receipt = self.store.load_receipt(item.id)?;
+        // Read so that a receipt a newer build wrote shows as absent rather
+        // than failing the listing - and with it the whole queue window.
+        let receipts = self.store.listed_receipts(item.id)?;
+        let receipt = receipts.newest;
+        let filed_receipt = receipts
+            .latest_complete
+            .filter(|receipt| receipt.direction == OperationDirection::Apply);
+        // An applying item's unfinished receipt is the operation in flight,
+        // not one left behind.
+        let unsettled_receipt = if item.status == QueueStatus::Applying {
+            None
+        } else {
+            receipts.unsettled
+        };
         let duplicate_of = if item.status == QueueStatus::NeedsReview
             && item.error_code == Some(ErrorCode::Duplicate)
         {
@@ -947,29 +1049,35 @@ impl Pipeline {
             error_code: item.error_code,
             proposal,
             receipt,
+            filed_receipt,
+            unsettled_receipt,
             duplicate_of,
         })
     }
 
     /// Every document the queue has filed and not undone: completed items
-    /// whose latest receipt is a finished apply, with the sentence and facts
-    /// that were applied. What a records keeper replays when it is switched
-    /// on after documents were already filed.
+    /// whose latest finished operation is an apply, with the sentence and
+    /// facts that were applied. What a records keeper replays when it is
+    /// switched on after documents were already filed.
+    ///
+    /// The filing time is when the receipt finished. It used to be read from
+    /// the filed document's modification time, but a rename does not change
+    /// that, so a contract last saved years ago was recorded as filed then.
     pub fn filed_documents(&self) -> PipelineResult<Vec<FiledDocument>> {
         Ok(self
             .list()?
             .into_iter()
             .filter(|item| item.status == QueueStatus::Completed)
             .filter_map(|item| {
-                let receipt = item.receipt?;
+                let receipt = item.filed_receipt?;
                 let proposal = item.proposal?;
-                filed_document(
-                    item.id,
-                    &item.source_hash,
-                    &receipt,
-                    &proposal,
-                    receipt_time(&receipt),
-                )
+                let filed_at = self
+                    .store
+                    .receipt_updated_at(receipt.id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(unix_now);
+                filed_document(item.id, &item.source_hash, &receipt, &proposal, filed_at)
             })
             .collect())
     }
@@ -1005,7 +1113,7 @@ impl Pipeline {
     }
 
     fn run_next_inner(&self) -> PipelineResult<bool> {
-        let Some(item) = self.store.claim_next()? else {
+        let Some(item) = self.claim_next()? else {
             return Ok(false);
         };
         let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
@@ -1048,6 +1156,8 @@ impl Pipeline {
         let cancel_worker = Arc::clone(&self.worker);
         let cancel_model = Arc::clone(&self.model);
         let cancel_request_id = request_id.clone();
+        let cancel_store = Arc::clone(&self.store);
+        let cancel_item = item.id;
         let lease = match LeaseKeeper::start_with_cancel(
             Arc::clone(&self.store),
             item.id,
@@ -1056,8 +1166,13 @@ impl Pipeline {
                 Ok(LeasePhase::Extracting) => {
                     let _ = cancel_worker.cancel(&cancel_request_id);
                 }
+                // A canceled item loses its lease by being canceled, and the
+                // cancel already stopped its request. Stopping the model
+                // again only restarted the server a second time.
                 Ok(LeasePhase::Analyzing) => {
-                    let _ = cancel_model.cancel();
+                    if !item_is_canceled(&cancel_store, cancel_item).unwrap_or(false) {
+                        let _ = cancel_model.cancel();
+                    }
                 }
                 Err(_) => {
                     let _ = cancel_worker.shutdown();
@@ -1105,11 +1220,29 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Ok(true);
                 }
+                let code = extraction_error_code(&error.code, error.retryable);
+                // A failure the worker calls permanent - a password, a file
+                // that is not what its name says, a document past the limits
+                // - reads the same on every attempt, and a second attempt
+                // only re-ran it (thirty minutes of it, for a document that
+                // hit the time limit). It fails now, with its own reason.
+                // A crash, or a failure the worker says may pass, still gets
+                // its second attempt.
+                if !error.retryable && !error.crashed && code != ErrorCode::IoError {
+                    self.store.record_terminal_failure(item.id, code)?;
+                    // Without the text-recognition files every document that
+                    // needs them fails the same way, so the queue stops and
+                    // says why rather than failing the backlog one by one.
+                    if code == ErrorCode::OcrUnavailable {
+                        self.pause_for(code.as_str());
+                    }
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
                 let restart_failed = error.crashed
                     && item.processing_failures == 0
                     && self.worker.restart().is_err();
-                self.store
-                    .record_processing_failure(item.id, ErrorCode::IoError)?;
+                self.store.record_processing_failure(item.id, code)?;
                 // A worker that will not come back cannot read this
                 // document on a second attempt either, so the failure is
                 // counted twice and the document fails now rather than
@@ -1150,7 +1283,10 @@ impl Pipeline {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
-        let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
+        let existing = names_beside(
+            item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+            &item.source_path,
+        );
         if let Err(error) = self.authorize_item(&item, AdmissionStage::Analyze) {
             lease.stop_and_check()?;
             let (next, code, keep_draining) = if error.is_retryable() {
@@ -1169,7 +1305,12 @@ impl Pipeline {
             return Ok(keep_draining);
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
-            Ok(analysis) => analysis,
+            Ok(analysis) => {
+                self.consecutive_unreadable_replies
+                    .store(0, Ordering::SeqCst);
+                self.forget_missing_model();
+                analysis
+            }
             Err(error) => {
                 self.active_item.store(0, Ordering::SeqCst);
                 if self.shutting_down.load(Ordering::SeqCst) {
@@ -1178,39 +1319,106 @@ impl Pipeline {
                         "pipeline is shutting down",
                     ));
                 }
+                // Before the lease: canceling an item is what takes its lease
+                // away, so a canceled item always fails its lease check, and
+                // checking that first paused the queue for every cancel.
+                if item_is_canceled(&self.store, item.id)? {
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
                 if let Err(lease_error) = lease.check() {
                     self.paused.store(true, Ordering::SeqCst);
                     self.events.queue_changed();
                     return Err(lease_error);
                 }
-                if self.store.list()?.iter().any(|candidate| {
-                    candidate.id == item.id && candidate.status == QueueStatus::Canceled
-                }) {
-                    self.events.queue_changed();
-                    return Ok(true);
+                let code = model_error_code(&error);
+                let action = model_failure_action(&error.code);
+                if action != ModelFailureAction::Requeue {
+                    // Anything but an empty slot means there was a model to
+                    // ask this time, whatever it answered.
+                    self.forget_missing_model();
                 }
-                self.store
-                    .record_processing_failure(item.id, model_error_code(&error))?;
-                // Failures that would repeat for every document - a model
-                // that cannot be reached, a key that was refused - pause the
-                // queue rather than fail the backlog one item at a time.
-                if matches!(
-                    error.code.as_str(),
-                    "MODEL_CANCEL_FAILED"
-                        | "MODEL_RECOVERY_FAILED"
-                        | "MODEL_REQUEST_FAILED"
-                        | "MODEL_RESPONSE_INVALID"
-                        | "HOSTED_MODEL_MISCONFIGURED"
-                        | "HOSTED_MODEL_UNAUTHORIZED"
-                        | "HOSTED_MODEL_UNREACHABLE"
-                        | "HOSTED_MODEL_RATE_LIMITED"
-                ) {
-                    self.paused.store(true, Ordering::SeqCst);
+                match action {
+                    ModelFailureAction::Requeue => {
+                        // Nothing was asked: no model was loaded to ask, as
+                        // happens for a moment while switching between the
+                        // hosted and the local one, before the local server's
+                        // start has begun. (A request that meets a start or a
+                        // restart under way waits for it in the app's model,
+                        // and comes back here only if no server came up.) The
+                        // document goes back to wait with nothing counted
+                        // against it - counted, it failed outright at the
+                        // second such moment - and this drain ends rather
+                        // than claiming it again at once; the scheduler's next
+                        // pass finds the model in place.
+                        lease.stop_and_check()?;
+                        self.store.transition(
+                            item.id,
+                            QueueStatus::Analyzing,
+                            QueueStatus::Queued,
+                            None,
+                        )?;
+                        // Unless it never comes back. A restart that failed
+                        // leaves the slot empty for as long as the app runs,
+                        // and every pass then read the head document again in
+                        // full only to put it back, with nothing on screen to
+                        // say the queue had stopped moving. A model still
+                        // missing once the moment has passed stops the queue
+                        // and says so.
+                        if self.model_missing_too_long() {
+                            self.pause_for(ErrorCode::ModelFailed.as_str());
+                        }
+                        self.events.queue_changed();
+                        return Ok(false);
+                    }
+                    ModelFailureAction::Terminal => {
+                        // Asking again gets the same answer about this
+                        // document, and from a hosted model bills for it
+                        // again, so it fails now and the queue moves on.
+                        self.store.record_terminal_failure(item.id, code)?;
+                        if is_unreadable_reply(&error.code) {
+                            // One reply that cannot be used is that
+                            // document's problem. Several documents in a row
+                            // is the model's, and every document behind them
+                            // would fail the same way. Resuming does not
+                            // clear the count: only a document read
+                            // successfully ends the row, so a model still
+                            // broken after a resume stops the queue again at
+                            // the next such reply rather than three later.
+                            let streak = self
+                                .consecutive_unreadable_replies
+                                .fetch_add(1, Ordering::SeqCst)
+                                .saturating_add(1);
+                            if streak >= UNREADABLE_REPLIES_BEFORE_PAUSE {
+                                self.pause_for(pause_reason_code(&error.code, code));
+                            }
+                        }
+                    }
+                    ModelFailureAction::Pause => {
+                        // Failures that would repeat for every document - a
+                        // model that cannot be reached, a key that was
+                        // refused, an account out of credit - pause the queue
+                        // rather than fail the backlog one item at a time.
+                        // The document keeps its second attempt for when the
+                        // queue is resumed.
+                        self.store.record_processing_failure(item.id, code)?;
+                        self.pause_for(pause_reason_code(&error.code, code));
+                    }
+                    ModelFailureAction::Retry => {
+                        self.store.record_processing_failure(item.id, code)?;
+                    }
                 }
                 self.events.queue_changed();
                 return Ok(true);
             }
         };
+        // An answer for a document canceled while it was being read is not
+        // wanted, and its lost lease is not the queue's problem.
+        if item_is_canceled(&self.store, item.id)? {
+            self.active_item.store(0, Ordering::SeqCst);
+            self.events.queue_changed();
+            return Ok(true);
+        }
         self.ensure_lease(&lease)?;
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
@@ -1226,7 +1434,13 @@ impl Pipeline {
             .map(|settings| settings.own_names())
             .unwrap_or_default();
         let (named, _) = counterparty_view(&styled, &own_names);
-        let filename = self.compose_for_target(&item.source_path, &named, &extension, &existing);
+        let filename = self.compose_for_target(
+            &item.source_path,
+            &named,
+            &house_rules,
+            &extension,
+            &existing,
+        );
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -1280,17 +1494,12 @@ impl Pipeline {
                 self.recompose(&self.repository.active_style()?, &item, Some(&names))?;
             }
         }
-        let ready_item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|candidate| candidate.id == item.id)
-            .ok_or_else(|| {
-                PipelineError::new(
-                    "ITEM_NOT_FOUND",
-                    "queue item disappeared after proposal storage",
-                )
-            })?;
+        let ready_item = self.store.get(item.id)?.ok_or_else(|| {
+            PipelineError::new(
+                "ITEM_NOT_FOUND",
+                "queue item disappeared after proposal storage",
+            )
+        })?;
         self.active_item.store(0, Ordering::SeqCst);
         self.events.queue_changed();
         if next == QueueStatus::Ready {
@@ -1307,6 +1516,28 @@ impl Pipeline {
             }
         }
         Ok(true)
+    }
+
+    /// The next document to read, if there is one the store will hand out.
+    ///
+    /// Nothing is claimed while any document is being renamed, and an undo,
+    /// an approval or a check of unsettled files can now be renaming one on
+    /// another thread in the middle of a drain - an undo no longer waits for
+    /// the document being read. Finding nothing then ended the drain, and
+    /// nothing woke the scheduler again when the rename was done: the backlog
+    /// sat until the next document arrived or the recovery pass came round,
+    /// up to a minute later. So a drain that finds nothing waits for whatever
+    /// file operation is in flight and looks once more. Holding the run lock
+    /// while it waits is safe: those operations never take it.
+    fn claim_next(&self) -> PipelineResult<Option<QueueItem>> {
+        if let Some(item) = self.store.claim_next()? {
+            return Ok(Some(item));
+        }
+        drop(self.hold_file_ops());
+        if self.paused.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        Ok(self.store.claim_next()?)
     }
 
     /// Applies the renames the scheduler owes: every ready document when
@@ -1391,24 +1622,33 @@ impl Pipeline {
     /// the name that is actually applied must not collide in the folder the
     /// document is going to. Without readable settings the source folder's
     /// names (`fallback`) stand in.
+    ///
+    /// `proposal` is the styled proposal and `house_rules` the rules that
+    /// styled it: what a rule spelled is the reviewer's, and is written as
+    /// they typed it.
     fn compose_for_target(
         &self,
         source_path: &Path,
         proposal: &ValidatedProposal,
+        house_rules: &[HouseRule],
         extension: &str,
         fallback: &[String],
     ) -> String {
-        let named = compose_filename(proposal, extension, &[]).value;
+        let named = compose_styled_filename(proposal, house_rules, extension, &[]).value;
         let existing = match self.settings.load() {
-            Ok(settings) => existing_names(&target_folder(
-                &settings,
+            Ok(settings) => names_beside(
+                &target_folder(
+                    &settings,
+                    source_path,
+                    &proposal_as_applied(proposal, &named),
+                ),
                 source_path,
-                &proposal_as_applied(proposal, &named),
-            )),
+            ),
             Err(_) => fallback.to_vec(),
         };
-        compose_filename(
+        compose_styled_filename(
             proposal,
+            house_rules,
             extension,
             &existing.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -1470,7 +1710,10 @@ impl Pipeline {
     /// right now, and one approved earlier that is still waiting for a busy
     /// queue to file it. It is the name they chose, and composing it again
     /// from the validated facts would throw away everything the facts do not
-    /// carry, the date they typed in most of all.
+    /// carry, the date they typed in most of all. An earlier approval waiting
+    /// for the queue counts too: a rule learned while it waited once rebuilt
+    /// its name, and the scheduler then filed the rebuilt name under the
+    /// approval - without the date the reviewer had typed.
     fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
         let style = self.repository.active_style()?;
         let mut changed = false;
@@ -1520,8 +1763,17 @@ impl Pipeline {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
-        let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
-        let filename = self.compose_for_target(&item.source_path, &named, &extension, &existing);
+        let existing = names_beside(
+            item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+            &item.source_path,
+        );
+        let filename = self.compose_for_target(
+            &item.source_path,
+            &named,
+            &house_rules,
+            &extension,
+            &existing,
+        );
         if filename != record.filename {
             record.revision += 1;
         }
@@ -1577,6 +1829,9 @@ impl Pipeline {
         let source = source.clone();
         let extension = extension.to_owned();
         let existing_names = existing_names.to_vec();
+        let canceled = Arc::new(AtomicBool::new(false));
+        let request_canceled = Arc::clone(&canceled);
+        self.set_active_cancel(Some(Arc::clone(&canceled)));
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let join = std::thread::Builder::new()
             .name("intern-model-request".into())
@@ -1585,21 +1840,74 @@ impl Pipeline {
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
+                let was_canceled = || {
+                    request_canceled
+                        .load(Ordering::SeqCst)
+                        .then(|| ModelFailure::fatal("MODEL_CANCELED"))
+                };
+                // A request the cancel interrupted fails like a server that
+                // died - the local model is restarted under it - and was
+                // recovered and sent again: the canceled document read a
+                // second time, on yet another restarted server.
                 let result = match request_model.analyze(&source, &extension, &existing) {
-                    Err(error) if error.retryable => request_model
-                        .recover(&error)
-                        .and_then(|()| request_model.analyze(&source, &extension, &existing)),
+                    Err(error) => match was_canceled() {
+                        Some(canceled) => Err(canceled),
+                        None if error.retryable => {
+                            request_model
+                                .recover(&error)
+                                .and_then(|()| match was_canceled() {
+                                    Some(canceled) => Err(canceled),
+                                    None => request_model.analyze(&source, &extension, &existing),
+                                })
+                        }
+                        None => Err(error),
+                    },
                     result => result,
                 };
                 let _ = sender.send(result);
             })
-            .map_err(|_| ModelFailure::fatal("MODEL_REQUEST_FAILED"))?;
+            .map_err(|_| {
+                self.set_active_cancel(None);
+                ModelFailure::fatal("MODEL_REQUEST_FAILED")
+            })?;
+        let result = self.await_model_request(&model, &canceled, &receiver, join);
+        self.set_active_cancel(None);
+        result
+    }
+
+    fn set_active_cancel(&self, flag: Option<Arc<AtomicBool>>) {
+        *self
+            .active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = flag;
+    }
+
+    /// Marks the active model request canceled, before the model is told.
+    fn cancel_active_request(&self) {
+        if let Some(flag) = self
+            .active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn await_model_request(
+        &self,
+        model: &Arc<dyn AnalyzerBoundary>,
+        request_canceled: &AtomicBool,
+        receiver: &std::sync::mpsc::Receiver<Result<DocumentAnalysis, ModelFailure>>,
+        join: std::thread::JoinHandle<()>,
+    ) -> Result<DocumentAnalysis, ModelFailure> {
         match receiver.recv_timeout(self.model_timeout) {
             Ok(result) => {
                 let _ = join.join();
                 result
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                request_canceled.store(true, Ordering::SeqCst);
                 let canceled = model.cancel();
                 // A request that has already missed its deadline is given a
                 // little longer to notice the cancel, and then left to finish
@@ -1666,9 +1974,15 @@ impl Pipeline {
             }
         };
         if fingerprint != item.source_hash {
+            // Back to review, and said: approve reported "Rename applied" for a
+            // document that had just gone back to review instead, and approving
+            // again could only repeat it. Reading the file again is the way on.
             self.repository.mark_needs_review(item.id, "FILE_CHANGED")?;
             self.events.queue_changed();
-            return Ok(());
+            return Err(PipelineError::new(
+                "FILE_CHANGED",
+                "The file changed after it was analyzed. Re-analyze it.",
+            ));
         }
         let proposal = self.repository.load_proposal(item.id)?;
         // The name to apply is the one the record holds now, not the one the
@@ -1704,7 +2018,25 @@ impl Pipeline {
             self.events.queue_changed();
             return Err(failure);
         }
-        if let Err(error) = self.files.apply(item, &target.join(filename)) {
+        let destination = target.join(filename);
+        if names_the_source(&destination, &item.source_path) {
+            return self.complete_already_named(item);
+        }
+        let applied = {
+            let _files = self.hold_file_ops();
+            let applied = self.files.apply(item, &destination);
+            if let Err(error) = &applied
+                && error.code != APPLY_DEFERRED
+            {
+                // Core file operations journal ambiguous failures in Applying.
+                // Settle them now, under the same hold, so no recovery pass
+                // can take the operation over between its failure and this;
+                // the scheduler also retries reconciliation periodically.
+                let _ = self.files.reconcile(item);
+            }
+            applied
+        };
+        if let Err(error) = applied {
             if error.code == APPLY_DEFERRED {
                 // Nothing is wrong with this document: the queue was busy with
                 // another one. The name a person approved is durable in the
@@ -1713,14 +2045,10 @@ impl Pipeline {
                 self.events.queue_changed();
                 return Ok(());
             }
-            // Core file operations journal ambiguous failures in Applying. Try to settle
-            // them now; the scheduler also retries reconciliation periodically.
-            let _ = self.files.reconcile(item);
             if self
                 .store
-                .list()?
-                .iter()
-                .any(|current| current.id == item.id && current.status == QueueStatus::Ready)
+                .get(item.id)?
+                .is_some_and(|current| current.status == QueueStatus::Ready)
             {
                 self.repository.mark_needs_review(item.id, &error.code)?;
             } else {
@@ -1734,12 +2062,48 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Completes a document whose name is already the one it would be filed
+    /// under, without touching the file.
+    ///
+    /// A rename onto the document's own name has nowhere to go: the name is
+    /// taken, by the document itself, so the applier refused it or - through
+    /// the collision suffix - filed it as "... (2)". A name that differs only
+    /// in case is the same file to Windows, and a case-only rename is not one
+    /// this release makes, so it completes the same way. The record says why
+    /// nothing moved.
+    fn complete_already_named(&self, item: &QueueItem) -> PipelineResult<()> {
+        if let Err(error) = self
+            .store
+            .complete_keep_original(item.id, QueueStatus::Ready)
+        {
+            // An approval and a scheduler pass can reach the same document;
+            // the one that finds it completed by the other has nothing to do.
+            if self
+                .store
+                .get(item.id)?
+                .is_some_and(|current| current.status == QueueStatus::Completed)
+            {
+                return Ok(());
+            }
+            return Err(error.into());
+        }
+        if let Some(mut record) = self.repository.load_proposal(item.id)?
+            && !record.reasons.iter().any(|reason| reason == ALREADY_NAMED)
+        {
+            record.reasons.push(ALREADY_NAMED.to_owned());
+            record.revision += 1;
+            self.repository.replace_proposal(item.id, &record)?;
+        }
+        self.events.queue_changed();
+        Ok(())
+    }
+
     /// Tells the filing sink about a rename that just completed. Read back
     /// from the store rather than assumed: the receipt carries the destination
     /// the applier actually chose, suffix and all, and the proposal carries
     /// the sentence a reviewer may have edited.
     fn report_filed(&self, item: &QueueItem) {
-        let Ok(Some(receipt)) = self.store.load_receipt(item.id) else {
+        let Ok(Some(receipt)) = self.store.load_latest_complete_receipt(item.id) else {
             return;
         };
         let Ok(Some(proposal)) = self.repository.load_proposal(item.id) else {
@@ -1766,6 +2130,38 @@ impl Pipeline {
         }
     }
 
+    /// Sends a document an undo just put back to review, while the hold of
+    /// the operation that did it is still held.
+    ///
+    /// A finished undo leaves the item ready - the state the scheduler files
+    /// from - with the approval of the rename it took back still on its
+    /// record. `report_settled` marks it for review, but only after the hold
+    /// is released, and a drain that was waiting for that very undo to finish
+    /// could pick the document up in between and file it again under the
+    /// name just undone. Marked here, any rename of it starts only once it is
+    /// already in review, and is refused.
+    fn hold_undone_for_review(&self, item_id: i64) {
+        let undone = self
+            .store
+            .load_receipt(item_id)
+            .ok()
+            .flatten()
+            .is_some_and(|receipt| {
+                receipt.direction == OperationDirection::Undo
+                    && receipt.stage == OperationStage::Complete
+            });
+        if undone
+            && self
+                .store
+                .get(item_id)
+                .ok()
+                .flatten()
+                .is_some_and(|item| item.status == QueueStatus::Ready)
+        {
+            let _ = self.repository.mark_needs_review(item_id, UNDONE);
+        }
+    }
+
     /// Reports an operation a reconciliation finished rather than the call
     /// that started it.
     ///
@@ -1777,15 +2173,22 @@ impl Pipeline {
     /// remembered as filed. What is reported is read from the store, so it is
     /// the same work whichever call finished the operation.
     fn report_settled(&self, item_id: i64) {
-        let Ok(items) = self.store.list() else {
-            return;
-        };
-        let Some(item) = items.into_iter().find(|candidate| candidate.id == item_id) else {
+        let Ok(Some(item)) = self.store.get(item_id) else {
             return;
         };
         let Ok(Some(receipt)) = self.store.load_receipt(item_id) else {
             return;
         };
+        if receipt.stage == OperationStage::RolledBack
+            && receipt.direction == OperationDirection::Apply
+            && item.status == QueueStatus::NeedsReview
+            && let Some(code) = item.error_code
+        {
+            // A rename that moved nothing and left the document in review,
+            // for a reason a person has to act on.
+            let _ = self.repository.hold_for_review(item_id, code.as_str());
+            return;
+        }
         if receipt.stage != OperationStage::Complete {
             return;
         }
@@ -1828,11 +2231,96 @@ impl Pipeline {
         self.events.queue_changed();
     }
     pub fn resume(&self) {
+        *self
+            .pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.paused.store(false, Ordering::SeqCst);
         self.events.queue_changed();
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Why the queue stopped itself, while it is stopped: a code the window
+    /// turns into a sentence. `None` while it runs, and for a pause a person
+    /// asked for.
+    pub fn pause_reason(&self) -> Option<String> {
+        if !self.is_paused() {
+            return None;
+        }
+        self.pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Stops the queue for a failure every following document would share,
+    /// and keeps the reason. The queue used to stop with nothing to say: the
+    /// window heard only that it was paused, and a person resuming it had no
+    /// way to know there was a key or an account to fix first.
+    fn pause_for(&self, reason: &str) {
+        *self
+            .pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.to_owned());
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    /// Records that a document found no model loaded, and says whether one
+    /// has now been missing for longer than a switch or a restart takes.
+    ///
+    /// The first such document never stops the queue: the slot is empty for
+    /// a moment whenever Settings switches models or the local server is
+    /// restarted after a cancel. A later one stops it once the first is more
+    /// than the grace in the past. Resuming does not start the clock again -
+    /// only a model answering does - so a model still missing after a resume
+    /// stops the queue at the next document rather than minutes later.
+    fn model_missing_too_long(&self) -> bool {
+        let mut since = self
+            .model_missing_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *since {
+            Some(first) => first.elapsed() >= self.model_missing_grace,
+            None => {
+                *since = Some(std::time::Instant::now());
+                false
+            }
+        }
+    }
+
+    /// A model answered, so the slot is filled again.
+    fn forget_missing_model(&self) {
+        *self
+            .model_missing_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    /// The hold every file operation and its reconciliation runs under. The
+    /// guarded value is nothing, so a holder that panicked leaves nothing to
+    /// distrust behind it.
+    fn hold_file_ops(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.file_ops
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn find_item(&self, id: i64) -> PipelineResult<QueueItem> {
+        self.store
+            .get(id)?
+            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))
+    }
+
+    /// The operation an item was left with when a reconciliation could not
+    /// settle it. An applying item's unfinished receipt is the operation in
+    /// flight, so it never counts.
+    fn unsettled_receipt(&self, item: &QueueItem) -> PipelineResult<Option<OperationReceipt>> {
+        if item.status == QueueStatus::Applying {
+            return Ok(None);
+        }
+        Ok(self.store.load_unsettled_receipt(item.id)?)
     }
 
     pub fn shutdown(&self) -> PipelineResult<()> {
@@ -1847,14 +2335,24 @@ impl Pipeline {
     }
 
     pub fn cancel(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        self.cancel_marked(id, None)
+    }
+
+    /// Cancels on the intake watcher's behalf: the claim on the document went
+    /// to another computer, or its uploader could no longer be confirmed. The
+    /// row is marked `INTAKE_WITHDRAWN`, on the row itself so the mark
+    /// outlives a restart, because a person's cancel leaves the same status
+    /// and means the opposite - leave the document alone - where this one
+    /// may be handed over and run again. A row already canceled stays the
+    /// person's.
+    pub fn withdraw(&self, id: i64) -> PipelineResult<()> {
+        self.cancel_marked(id, Some(ErrorCode::IntakeWithdrawn))
+    }
+
+    fn cancel_marked(&self, id: i64, mark: Option<ErrorCode>) -> PipelineResult<()> {
+        let item = self.find_item(id)?;
         if item.status == QueueStatus::NeedsReview
-            && let Some(error) = unsettled_files(&item)
+            && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
             return Err(error);
         }
@@ -1865,7 +2363,7 @@ impl Pipeline {
             | QueueStatus::Ready
             | QueueStatus::NeedsReview => {
                 self.store
-                    .transition(id, item.status, QueueStatus::Canceled, None)?;
+                    .transition(id, item.status, QueueStatus::Canceled, mark)?;
             }
             QueueStatus::Canceled => {}
             QueueStatus::Applying => {
@@ -1887,9 +2385,12 @@ impl Pipeline {
                     let request_id = format!("queue-{}-{}", id, item.processing_failures + 1);
                     self.worker.cancel(&request_id).map_err(worker_error)?;
                 }
-                QueueStatus::Analyzing => self.model.cancel().map_err(|error| {
-                    PipelineError::new(error.code, "local model request could not be canceled")
-                })?,
+                QueueStatus::Analyzing => {
+                    self.cancel_active_request();
+                    self.model.cancel().map_err(|error| {
+                        PipelineError::new(error.code, "local model request could not be canceled")
+                    })?
+                }
                 _ => {}
             }
         }
@@ -1898,20 +2399,17 @@ impl Pipeline {
     }
 
     pub fn retry(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
+        // For a document whose files were left unsettled, the only thing
+        // Retry can mean is "look at them again": the deletion a sync client
+        // was blocking, the rename a program holding the file refused, the two
+        // names a person has since sorted out by hand. Whatever stage the
+        // operation reached.
         if item.status == QueueStatus::NeedsReview
-            && item.error_code == Some(ErrorCode::SourceDeleteFailed)
+            && (item.error_code == Some(ErrorCode::SourceDeleteFailed)
+                || self.unsettled_receipt(&item)?.is_some())
         {
-            let claimed = self.store.claim_deferred_reconciliation(id)?;
-            let result = self.files.reconcile(&claimed);
-            self.report_settled(id);
-            self.events.queue_changed();
-            return result;
+            return self.check_again(id);
         }
         if item.status == QueueStatus::NeedsReview
             && item.error_code == Some(ErrorCode::UploaderUnverified)
@@ -1950,8 +2448,45 @@ impl Pipeline {
         Ok(())
     }
 
-    pub fn remove(&self, id: i64) -> PipelineResult<()> {
-        self.reject_deferred_reconciliation_mutation(id)?;
+    /// Reads a document waiting on a person again, from the start:
+    /// Re-analyze.
+    ///
+    /// What a person needs once the document itself has changed - signed
+    /// after it was read, edited, scanned again over itself - and for any
+    /// reading they would rather have done again than correct by hand. The
+    /// file is fingerprinted now and the item takes the new fingerprint when
+    /// it changed, so the new reading is of the file as it is, and the rename
+    /// that follows checks against that. What the earlier reading left goes:
+    /// the proposal and any approval in it, and the text fingerprint a
+    /// filing of it left for near-duplicate checks.
+    pub fn reanalyze(&self, id: i64) -> PipelineResult<()> {
+        let item = self.find_item(id)?;
+        if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+            return Err(PipelineError::new(
+                "INVALID_TRANSITION",
+                "only a document waiting for review can be analyzed again",
+            ));
+        }
+        let fingerprint = self.files.fingerprint(&item.source_path)?;
+        let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
+        self.store.requeue_for_analysis(id, item.status, new_hash)?;
+        self.repository.forget_fingerprint(id)?;
+        self.events.queue_changed();
+        Ok(())
+    }
+
+    /// Takes an item out of the queue, with its proposal and receipts.
+    ///
+    /// An item whose files were left unsettled is removed only once the
+    /// person has `confirmed` they resolved the files themselves: removing it
+    /// otherwise decides what the files are on their behalf, and with the
+    /// receipts goes the only record of what is where. Without that there was
+    /// no way out at all for an operation reconciliation could never prove -
+    /// every action refused it, even after the files were sorted by hand.
+    pub fn remove(&self, id: i64, confirmed: bool) -> PipelineResult<()> {
+        if !confirmed {
+            self.reject_deferred_reconciliation_mutation(id)?;
+        }
         self.repository.remove_item(id)?;
         self.events.queue_changed();
         Ok(())
@@ -1965,13 +2500,24 @@ impl Pipeline {
                 "the filename must start with the document's date as YYYY-MM-DD",
             ));
         }
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
-        if let Some(error) = unsettled_files(&item) {
+        let mut item = self.find_item(id)?;
+        // A rename that never finished stops any new one being journalled,
+        // and approving again - once the program holding the file has let go
+        // - is exactly how a person asks for it to be settled. So it is
+        // checked first, rather than left to fail the apply every time.
+        if matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
+            && self.unsettled_receipt(&item)?.is_some()
+        {
+            self.check_again(id)?;
+            item = self.find_item(id)?;
+            if item.status == QueueStatus::Completed {
+                // The earlier operation had in fact landed, or an undo of it
+                // never did: the document is filed, under the name that
+                // rename gave it.
+                return self.already_filed(&item, &filename, description);
+            }
+        }
+        if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
         let source_extension = item
@@ -2013,14 +2559,9 @@ impl Pipeline {
         if let Some(record) = proposed.as_ref() {
             let _ = self.learn_from_edit(record, source_extension, &filename);
         }
-        let ready = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|candidate| candidate.id == id)
-            .ok_or_else(|| {
-                PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
-            })?;
+        let ready = self.store.get(id)?.ok_or_else(|| {
+            PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
+        })?;
         let settings = match self.settings.load() {
             Ok(settings) => settings,
             Err(error) => {
@@ -2032,14 +2573,59 @@ impl Pipeline {
         self.apply_if_unchanged(&ready, &filename, &settings)
     }
 
-    pub fn keep_original(&self, id: i64) -> PipelineResult<()> {
-        let item = self
+    /// What approving says when checking the files again finished the earlier
+    /// operation instead, and the document is filed already.
+    ///
+    /// Approval of exactly what the earlier rename was filing - the name and
+    /// sentence on the record, or the name the file actually took - is done.
+    /// Anything the person changed was not applied, and reporting success
+    /// told them it had been: the window said "Rename applied" over a
+    /// document still filed under the old name, with the new name and
+    /// sentence dropped and nothing learned from them. Renaming a filed
+    /// document is an undo and a new approval, and the refusal says so.
+    fn already_filed(
+        &self,
+        item: &QueueItem,
+        filename: &str,
+        description: &str,
+    ) -> PipelineResult<()> {
+        let filed_name = self
             .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
-        if let Some(error) = unsettled_files(&item) {
+            .load_latest_complete_receipt(item.id)?
+            .filter(|receipt| receipt.direction == OperationDirection::Apply)
+            .and_then(|receipt| {
+                receipt
+                    .destination
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
+        let unchanged = self
+            .repository
+            .load_proposal(item.id)?
+            .is_some_and(|record| {
+                (record.filename == filename || filed_name.as_deref() == Some(filename))
+                    && record.description == description.trim()
+            });
+        if unchanged {
+            return Ok(());
+        }
+        let filed_as = filed_name.unwrap_or_else(|| {
+            item.source_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        Err(PipelineError::new(
+            "ALREADY_FILED",
+            format!(
+                "The earlier rename had already finished, so the document is filed as {filed_as} and your changes were not applied. Undo it to rename it again."
+            ),
+        ))
+    }
+
+    pub fn keep_original(&self, id: i64) -> PipelineResult<()> {
+        let item = self.find_item(id)?;
+        if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
         self.store.complete_keep_original(id, item.status)?;
@@ -2048,31 +2634,111 @@ impl Pipeline {
     }
 
     pub fn undo(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if item.status != QueueStatus::Completed {
             return Err(PipelineError::new(
                 "INVALID_TRANSITION",
                 "only completed operations can be undone",
             ));
         }
-        let receipt = self.store.load_receipt(id)?.ok_or_else(|| {
-            PipelineError::new(
-                "STATE_CONFLICT",
-                "completed item has no durable operation receipt",
-            )
-        })?;
+        // The apply that filed the document, not the newest receipt: an undo
+        // refused and rolled back earlier sits on top of it having moved
+        // nothing.
+        let receipt = self
+            .store
+            .load_latest_complete_receipt(id)?
+            .filter(|receipt| receipt.direction == OperationDirection::Apply)
+            .ok_or_else(|| {
+                PipelineError::new(
+                    "STATE_CONFLICT",
+                    "completed item has no durable operation receipt",
+                )
+            })?;
+        let outcome = {
+            let _files = self.hold_file_ops();
+            let outcome = self.files.undo(&item, &receipt);
+            if outcome.is_err() {
+                // A journalled undo that failed leaves the item applying, and
+                // one applying row stops every other document - until a
+                // recovery pass that steady intake could put off for good.
+                // Settle it now, as a failed apply is.
+                let _ = self.files.reconcile(&item);
+            }
+            self.hold_undone_for_review(id);
+            outcome
+        };
         // An undo the applier journalled can be finished by a reconciliation
         // even when the call itself reports a failure, so what settles this is
         // the store rather than the return value.
-        let outcome = self.files.undo(&item, &receipt);
         self.report_settled(id);
         self.events.queue_changed();
-        outcome
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(_) if self.is_undone(id) => Ok(()),
+            Err(error) => {
+                let filed = self.files.try_exists(&receipt.destination);
+                Err(undo_failure(error, &receipt, filed))
+            }
+        }
+    }
+
+    /// Whether the item's newest finished operation is an undo: the document
+    /// is back where it started, whichever call got it there.
+    fn is_undone(&self, id: i64) -> bool {
+        self.store
+            .load_latest_complete_receipt(id)
+            .ok()
+            .flatten()
+            .is_some_and(|receipt| receipt.direction == OperationDirection::Undo)
+    }
+
+    /// Looks again at a file operation that never finished - "Check again",
+    /// which retry and approve run too.
+    ///
+    /// The operation is put back in `applying` bound to its receipt, and the
+    /// same reconciliation recovery runs settles it: a rename that never
+    /// happened is rolled back, one that did is finished, and one that still
+    /// cannot be proven is parked again with the reason. Before this, nothing
+    /// ever looked at a parked receipt again, and its unfinished stage made
+    /// every later apply of the document fail to journal.
+    pub fn check_again(&self, id: i64) -> PipelineResult<()> {
+        let result = {
+            let _files = self.hold_file_ops();
+            let reattached =
+                self.store
+                    .reattach_unsettled_receipt(id)
+                    .map_err(|error| match error.code() {
+                        ErrorCode::StateConflict => PipelineError::new(
+                            "STATE_CONFLICT",
+                            "another file operation is in progress; check again in a moment",
+                        ),
+                        _ => error.into(),
+                    })?;
+            if reattached.is_none() {
+                return Err(PipelineError::new(
+                    "INVALID_TRANSITION",
+                    "no file operation of this document is waiting to be checked",
+                ));
+            }
+            let item = self.find_item(id)?;
+            let result = self.files.reconcile(&item);
+            self.hold_undone_for_review(id);
+            // Under the same hold, so no rename of it can start in the
+            // moment it reads as ready.
+            let kept = if self
+                .store
+                .get(id)?
+                .is_some_and(|settled| settled.status == QueueStatus::Ready)
+            {
+                self.repository.keep_in_review(id)
+            } else {
+                Ok(())
+            };
+            result.and(kept)
+        };
+        self.report_settled(id);
+        self.events.queue_changed();
+        result
     }
 
     pub fn clear_history(&self) -> PipelineResult<usize> {
@@ -2091,14 +2757,9 @@ impl Pipeline {
     }
 
     fn reject_deferred_reconciliation_mutation(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if item.status == QueueStatus::NeedsReview
-            && let Some(error) = unsettled_files(&item)
+            && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
             return Err(error);
         }
@@ -2122,30 +2783,85 @@ impl Pipeline {
         for id in interrupted {
             if self
                 .store
-                .list()?
-                .iter()
-                .any(|item| item.id == id && item.status == QueueStatus::Queued)
+                .get(id)?
+                .is_some_and(|item| item.status == QueueStatus::Queued)
             {
                 self.repository.record_recovered_failure(id)?;
             }
         }
-        for item in self
+        let applying = self
             .store
             .list()?
             .into_iter()
             .filter(|item| item.status == QueueStatus::Applying)
-        {
-            // A still-running app may own the ambiguous operation. Its file boundary can
-            // reconcile under that lease without waiting for its own session to go stale.
-            if self.files.reconcile(&item).is_err()
-                && let Ok(claimed) = self.store.claim_applying_reconciliation(item.id)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        for id in applying {
             {
-                let _ = self.files.reconcile(&claimed);
+                // An approve, undo or check on another thread may be in the
+                // middle of this very operation, with the same session, so
+                // nothing in the store tells the two apart. Wait for it, then
+                // look at what it left: if it settled the item, there is
+                // nothing to recover, and whoever settled it reported it.
+                let _files = self.hold_file_ops();
+                let Some(item) = self
+                    .store
+                    .get(id)?
+                    .filter(|item| item.status == QueueStatus::Applying)
+                else {
+                    continue;
+                };
+                // A still-running app may own the ambiguous operation. Its file boundary can
+                // reconcile under that lease without waiting for its own session to go stale.
+                if self.files.reconcile(&item).is_err()
+                    && let Ok(claimed) = self.store.claim_applying_reconciliation(item.id)
+                {
+                    let _ = self.files.reconcile(&claimed);
+                }
+                self.hold_undone_for_review(id);
             }
-            self.report_settled(item.id);
+            self.report_settled(id);
         }
         self.events.queue_changed();
         Ok(())
+    }
+}
+
+/// What a failed undo tells the person who asked for it, given whether the
+/// filed document is still where it was filed (`filed_present`).
+///
+/// The window shows the message as it is, and the applier's own words were
+/// written for a log: a filed document someone moved read as an unavailable
+/// destination volume, and a moment of contention as a compare-and-swap. Only
+/// a document the file system says is not there was moved or deleted; one it
+/// could not look for - an offline network share, a folder it may not read -
+/// is still filed as far as anyone knows, and saying otherwise could send a
+/// person off to clear the history of a filing that is intact.
+fn undo_failure(
+    error: PipelineError,
+    filed: &OperationReceipt,
+    filed_present: std::io::Result<bool>,
+) -> PipelineError {
+    match filed_present {
+        Ok(false) => PipelineError::new(
+            "FILE_CHANGED",
+            format!(
+                "The filed document is no longer at {}; it was moved or deleted.",
+                display_path(&filed.destination)
+            ),
+        ),
+        Err(_) => PipelineError::new(
+            error.code,
+            format!(
+                "The filed document at {} could not be reached. Check that its folder is available, then try Undo again.",
+                display_path(&filed.destination)
+            ),
+        ),
+        Ok(true) if error.code == "STATE_CONFLICT" => PipelineError::new(
+            "STATE_CONFLICT",
+            "Another rename is in progress. Try Undo again in a moment.",
+        ),
+        Ok(true) => error,
     }
 }
 
@@ -2154,10 +2870,16 @@ impl Pipeline {
 ///
 /// Both codes mean two files are on disk where one document should be: a
 /// verified copy whose original could not be deleted, and a reconciliation
-/// that could not tell which of the two the document is. Renaming, cancelling
-/// or removing such an item would decide that on the person's behalf, so each
-/// of those refuses and says which question is open.
-fn unsettled_files(item: &QueueItem) -> Option<PipelineError> {
+/// that could not tell which of the two the document is. Any other
+/// unfinished receipt is an operation nobody has looked at since it failed,
+/// and it stops the next rename from being journalled. Renaming, cancelling
+/// or removing such an item would decide what the files are on the person's
+/// behalf, so each of those refuses and says which question is open - by
+/// name, rather than letting an apply fail on it later as a conflict.
+fn unsettled_files(
+    item: &QueueItem,
+    unsettled: Option<&OperationReceipt>,
+) -> Option<PipelineError> {
     match item.error_code {
         Some(ErrorCode::SourceDeleteFailed) => Some(PipelineError::new(
             "RECONCILIATION_REQUIRED",
@@ -2167,7 +2889,12 @@ fn unsettled_files(item: &QueueItem) -> Option<PipelineError> {
             "RECONCILIATION_REQUIRED",
             "reconciliation could not tell which file is the document; compare both names",
         )),
-        _ => None,
+        _ => unsettled.map(|_| {
+            PipelineError::new(
+                "RECONCILIATION_REQUIRED",
+                "an earlier rename of this document did not finish, so its files need checking: use Check again",
+            )
+        }),
     }
 }
 
@@ -2491,11 +3218,58 @@ impl PipelineRepository {
     }
 
     fn mark_needs_review(&self, id: i64, reason: &str) -> PipelineResult<()> {
+        self.put_in_review(id, Some(reason), QueueStatus::Ready)
+    }
+
+    /// Makes the proposal of an item a file operation left in review say so:
+    /// waiting for a person, no longer approved, and why.
+    ///
+    /// A rename that rolled back because the original changed, was held, or
+    /// found someone else's file at its name moves the row to review in the
+    /// same transaction that records the rollback - which knows nothing of
+    /// proposals. The record went on saying "ready" and "approved", so the
+    /// window showed whatever reasons it held instead of the one that
+    /// mattered, and house-style changes passed over it as an approval
+    /// waiting to be filed, leaving a name built under the old rules.
+    fn hold_for_review(&self, id: i64, reason: &str) -> PipelineResult<()> {
+        self.put_in_review(id, Some(reason), QueueStatus::NeedsReview)
+    }
+
+    /// Puts an item a check of its files left ready back in review, when its
+    /// proposal was waiting on a person all along.
+    ///
+    /// Checking again puts a rename that never happened back the way it was
+    /// before the rename - for every rename this build makes, ready, because
+    /// only a ready document is renamed. A receipt older builds left behind
+    /// can belong to a document read again since, whose new proposal was
+    /// sent to review: low confidence, a near duplicate. Left ready, it would
+    /// be filed under a name nobody approved.
+    fn keep_in_review(&self, id: i64) -> PipelineResult<()> {
+        if self
+            .load_proposal(id)?
+            .is_some_and(|record| record.status == ProposalStatus::NeedsReview)
+        {
+            self.put_in_review(id, None, QueueStatus::Ready)?;
+        }
+        Ok(())
+    }
+
+    /// Records the proposal as waiting for a person - with `reason` among its
+    /// reasons, when there is one - and the row as in review, provided the
+    /// row is still `row_status`.
+    fn put_in_review(
+        &self,
+        id: i64,
+        reason: Option<&str>,
+        row_status: QueueStatus,
+    ) -> PipelineResult<()> {
         let mut record = self
             .load_proposal(id)?
             .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
         record.status = ProposalStatus::NeedsReview;
-        if !record.reasons.iter().any(|entry| entry == reason) {
+        if let Some(reason) = reason
+            && !record.reasons.iter().any(|entry| entry == reason)
+        {
             record.reasons.push(reason.to_owned());
         }
         // A document waiting for a person is no longer a document waiting to
@@ -2505,13 +3279,13 @@ impl PipelineRepository {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
         let changed = transaction.execute(
-            "UPDATE queue_items SET status = 'needs_review', updated_at = unixepoch() WHERE id = ?1 AND status = 'ready'",
-            params![id],
+            "UPDATE queue_items SET status = 'needs_review', updated_at = unixepoch() WHERE id = ?1 AND status = ?2",
+            params![id, queue_status_text(row_status)],
         ).map_err(database_error)?;
         if changed != 1 {
             return Err(PipelineError::new(
                 "STATE_CONFLICT",
-                "ready item changed before review",
+                "item changed before review",
             ));
         }
         let json = serde_json::to_string(&record)
@@ -2800,28 +3574,116 @@ pub fn proposal_as_applied(proposal: &ValidatedProposal, filename: &str) -> Vali
     applied
 }
 
-/// When a completed rename happened, as best the receipt can say: the
-/// destination's modification time is the rename itself on most filesystems,
-/// and a missing file (deleted since) falls back to now.
-fn receipt_time(receipt: &OperationReceipt) -> i64 {
-    fs::metadata(&receipt.destination)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or_else(unix_now, |duration| duration.as_secs() as i64)
-}
-
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() as i64)
 }
 
+/// Whether the item has been canceled. One indexed read: this is asked
+/// whenever a model request ends, and from the lease's cancel callback.
+fn item_is_canceled(store: &QueueStore, id: i64) -> PipelineResult<bool> {
+    Ok(store
+        .get(id)?
+        .is_some_and(|item| item.status == QueueStatus::Canceled))
+}
+
+/// The queue code an extraction failure is stored under, from the worker's
+/// code and its own word on whether trying again can help.
+///
+/// Anything this does not recognise stays IO_ERROR and keeps its second
+/// attempt: crashes, a busy or misbehaving worker, and the worker's I/O
+/// failures, which it reports as retryable PARSE_FAILED.
+fn extraction_error_code(code: &str, retryable: bool) -> ErrorCode {
+    match code {
+        "PASSWORD_PROTECTED" => ErrorCode::PasswordProtected,
+        "UNSUPPORTED_FORMAT" => ErrorCode::UnsupportedContent,
+        // The worker's own limits, and the host's deadline on the worker.
+        "RESOURCE_LIMIT_EXCEEDED" | "RESOURCE_LIMIT" => ErrorCode::DocumentTooLarge,
+        "NATIVE_ASSETS_MISSING" => ErrorCode::OcrUnavailable,
+        "PARSE_FAILED" if !retryable => ErrorCode::ExtractionFailed,
+        _ => ErrorCode::IoError,
+    }
+}
+
+/// The queue code a model failure is stored under. Nothing here is a file
+/// operation, so nothing here is IO_ERROR: a code the table does not name
+/// still failed at the model's step, and says so.
 fn model_error_code(error: &ModelFailure) -> ErrorCode {
     match error.code.as_str() {
-        "MODEL_RESPONSE_INVALID" => ErrorCode::ModelOutputInvalid,
+        "MODEL_RESPONSE_INVALID" | "MODEL_REPLY_TRUNCATED" => ErrorCode::ModelOutputInvalid,
         "HOSTED_MODEL_REFUSED" => ErrorCode::ModelDeclined,
-        _ => ErrorCode::IoError,
+        "MODEL_INPUT_TOO_LARGE" => ErrorCode::DocumentTooLarge,
+        "ANALYSIS_FAILED" => ErrorCode::AnalysisFailed,
+        code if code.starts_with("HOSTED_MODEL_") => ErrorCode::HostedModelUnavailable,
+        _ => ErrorCode::ModelFailed,
+    }
+}
+
+/// How many documents in a row may come back with a reply that cannot be
+/// used before the queue stops to say the model itself is the problem.
+const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
+
+/// How long documents may keep finding no model loaded before the queue
+/// stops for it. A request that meets a start or a restart under way waits
+/// for it in the app's model, so the only empty slot that fills on its own
+/// is the moment a switch between the hosted and the local model takes to
+/// begin its start. Far longer than that, and short enough that a start or
+/// restart that failed is reported within minutes rather than never.
+const MODEL_MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(4 * 60);
+
+/// What the queue does with a document whose analysis failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelFailureAction {
+    /// Back to waiting, nothing counted: the document was never analysed.
+    Requeue,
+    /// Fail this document now; another attempt would answer the same.
+    Terminal,
+    /// Count the failure and stop the queue; the next document would fail
+    /// the same way.
+    Pause,
+    /// Count the failure; the document gets its one more attempt.
+    Retry,
+}
+
+fn model_failure_action(code: &str) -> ModelFailureAction {
+    match code {
+        "MODEL_NOT_READY" => ModelFailureAction::Requeue,
+        "MODEL_INPUT_TOO_LARGE"
+        | "HOSTED_MODEL_REFUSED"
+        | "ANALYSIS_FAILED"
+        | "MODEL_RESPONSE_INVALID"
+        | "MODEL_REPLY_TRUNCATED" => ModelFailureAction::Terminal,
+        "MODEL_CANCEL_FAILED"
+        | "MODEL_RECOVERY_FAILED"
+        | "MODEL_REQUEST_FAILED"
+        | "MODEL_SERVER_START_FAILED"
+        | "HOSTED_MODEL_MISCONFIGURED"
+        | "HOSTED_MODEL_KEY_MISSING"
+        | "HOSTED_MODEL_UNAUTHORIZED"
+        | "HOSTED_MODEL_UNREACHABLE"
+        | "HOSTED_MODEL_RATE_LIMITED"
+        | "HOSTED_MODEL_BILLING" => ModelFailureAction::Pause,
+        // MODEL_CANCELED among them: a request that was called off says
+        // nothing about the next document, so it never stops the queue.
+        _ => ModelFailureAction::Retry,
+    }
+}
+
+/// A reply that came back but could not be used.
+fn is_unreadable_reply(code: &str) -> bool {
+    matches!(code, "MODEL_RESPONSE_INVALID" | "MODEL_REPLY_TRUNCATED")
+}
+
+/// The reason a pause reports. A hosted failure's own code names what to
+/// fix - the key, the address, the account's credit - and the window has a
+/// sentence for each; anything else reports the code the document was
+/// stored under, which it also has a sentence for.
+fn pause_reason_code(failure: &str, stored: ErrorCode) -> &str {
+    if failure.starts_with("HOSTED_MODEL_") {
+        failure
+    } else {
+        stored.as_str()
     }
 }
 
@@ -2872,6 +3734,57 @@ fn queue_status_text(status: QueueStatus) -> &'static str {
         QueueStatus::Applying => "applying",
         QueueStatus::Completed => "completed",
     }
+}
+
+/// The names already in `folder` that a document from `source_path` must not
+/// take. Its own name is not one of them: in its own folder the document is
+/// the file with that name, and counting it made a document already named the
+/// way Intern names documents collide with itself and be proposed - and with
+/// automatic renaming, renamed - as "... (2)".
+fn names_beside(folder: &Path, source_path: &Path) -> Vec<String> {
+    let mut names = existing_names(folder);
+    if let Some(own) = source_path
+        .file_name()
+        .filter(|_| is_own_folder(folder, source_path))
+    {
+        let own = name_key(&own.to_string_lossy());
+        names.retain(|name| name_key(name) != own);
+    }
+    names
+}
+
+/// Whether filing at `destination` would leave the document where it is,
+/// under a name Windows takes for its own.
+fn names_the_source(destination: &Path, source_path: &Path) -> bool {
+    let (Some(folder), Some(name), Some(own)) = (
+        destination.parent(),
+        destination.file_name(),
+        source_path.file_name(),
+    ) else {
+        return false;
+    };
+    is_own_folder(folder, source_path)
+        && name_key(&name.to_string_lossy()) == name_key(&own.to_string_lossy())
+}
+
+/// Whether `folder` is the folder `source_path` is in: the same path, or the
+/// same folder spelled another way.
+fn is_own_folder(folder: &Path, source_path: &Path) -> bool {
+    let Some(parent) = source_path.parent() else {
+        return false;
+    };
+    folder == parent
+        || matches!(
+            (fs::canonicalize(folder), fs::canonicalize(parent)),
+            (Ok(folder), Ok(parent)) if folder == parent
+        )
+}
+
+/// A name as Windows compares two in one folder - without regard to case, and
+/// without the trailing dots and spaces it drops - which is how the composer
+/// decides that two names collide.
+fn name_key(name: &str) -> String {
+    name.trim_end_matches([' ', '.']).to_lowercase()
 }
 
 fn existing_names(directory: &Path) -> Vec<String> {
@@ -3199,4 +4112,134 @@ fn validate_leaf_filename(value: &str) -> PipelineResult<String> {
         return Err(PipelineError::new("NAME_INVALID", "filename must be one nonblank path component"));
     }
     Ok(trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod failure_policy_tests {
+    use intern_core::ErrorCode;
+
+    use super::{
+        ModelFailure, ModelFailureAction, extraction_error_code, model_error_code,
+        model_failure_action, pause_reason_code,
+    };
+
+    #[test]
+    fn extraction_failures_the_worker_may_get_past_keep_the_generic_code() {
+        assert_eq!(
+            extraction_error_code("PARSE_FAILED", false),
+            ErrorCode::ExtractionFailed
+        );
+        // The worker reports its own I/O failures as retryable PARSE_FAILED.
+        assert_eq!(
+            extraction_error_code("PARSE_FAILED", true),
+            ErrorCode::IoError
+        );
+        for code in [
+            "WORKER_CRASHED",
+            "WORKER_BUSY",
+            "WORKER_PROTOCOL_INVALID",
+            "SOMETHING_NEW",
+        ] {
+            assert_eq!(
+                extraction_error_code(code, false),
+                ErrorCode::IoError,
+                "{code}"
+            );
+        }
+    }
+
+    /// Every model failure the queue can meet, with where it is stored and
+    /// what the queue does about it. Nothing on the model's side of the line
+    /// is a file operation, so none of it is IO_ERROR any more.
+    #[test]
+    fn every_model_failure_has_a_code_and_a_policy() {
+        use ModelFailureAction::{Pause, Requeue, Retry, Terminal};
+        let table = [
+            (
+                "MODEL_RESPONSE_INVALID",
+                ErrorCode::ModelOutputInvalid,
+                Terminal,
+            ),
+            (
+                "MODEL_REPLY_TRUNCATED",
+                ErrorCode::ModelOutputInvalid,
+                Terminal,
+            ),
+            ("HOSTED_MODEL_REFUSED", ErrorCode::ModelDeclined, Terminal),
+            (
+                "MODEL_INPUT_TOO_LARGE",
+                ErrorCode::DocumentTooLarge,
+                Terminal,
+            ),
+            ("ANALYSIS_FAILED", ErrorCode::AnalysisFailed, Terminal),
+            ("MODEL_CANCEL_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_RECOVERY_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_REQUEST_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_SERVER_START_FAILED", ErrorCode::ModelFailed, Pause),
+            (
+                "HOSTED_MODEL_MISCONFIGURED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_KEY_MISSING",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_UNAUTHORIZED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_UNREACHABLE",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_RATE_LIMITED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_BILLING",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_REJECTED",
+                ErrorCode::HostedModelUnavailable,
+                Retry,
+            ),
+            ("MODEL_TIMEOUT", ErrorCode::ModelFailed, Retry),
+            ("MODEL_CANCELED", ErrorCode::ModelFailed, Retry),
+            ("MODEL_SERVER_UNHEALTHY", ErrorCode::ModelFailed, Retry),
+            ("SETTINGS_UNAVAILABLE", ErrorCode::ModelFailed, Retry),
+            ("MODEL_NOT_READY", ErrorCode::ModelFailed, Requeue),
+        ];
+        for (code, stored, action) in table {
+            assert_eq!(
+                model_error_code(&ModelFailure::fatal(code)),
+                stored,
+                "{code}"
+            );
+            assert_eq!(model_failure_action(code), action, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_pause_names_the_hosted_failure_or_the_stored_code() {
+        assert_eq!(
+            pause_reason_code("HOSTED_MODEL_BILLING", ErrorCode::HostedModelUnavailable),
+            "HOSTED_MODEL_BILLING"
+        );
+        assert_eq!(
+            pause_reason_code("MODEL_REQUEST_FAILED", ErrorCode::ModelFailed),
+            "MODEL_FAILED"
+        );
+        assert_eq!(
+            pause_reason_code("MODEL_REPLY_TRUNCATED", ErrorCode::ModelOutputInvalid),
+            "MODEL_OUTPUT_INVALID"
+        );
+    }
 }

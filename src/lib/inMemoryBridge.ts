@@ -1,4 +1,5 @@
-import { GUIDE_URL, SUPPORTED_EXTENSIONS, SUPPORT_LINKS } from './bridge';
+import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
@@ -163,7 +164,10 @@ function skipCode(file: FileSelection): string | undefined {
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  // skipUpdateChecks is spelled out because the desktop backend always
+  // returns it - false for a file that predates it - so a bridge that left it
+  // out would differ from the real one in exactly the case worth testing.
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -478,6 +482,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         syncConflicts: 0,
         awaitingHydration: 0,
         unreadableFolders: 0,
+        arriving: 0,
+        unreadableDocuments: 0,
         claimedByOthers: enabled ? 1 : 0,
         processedHere: enabled ? 3 : 0,
         lastScanAt: enabled ? now - 5 : null,

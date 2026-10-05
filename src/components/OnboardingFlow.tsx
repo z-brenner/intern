@@ -152,7 +152,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
         <button type="button" ref={hostedTrigger} onClick={() => setHostedOpen(true)} disabled={downloading || busy || !settings}>Use a hosted model instead</button>
       </div>
     </details>
-    {hostedOpen && settings && <SettingsDialog hideSharePointConnection settings={settings} bridge={bridge} selection={selection} onClose={closeHosted} onSave={async (next) => { await bridge.saveSettings(next); setSettings(next); closeHosted(); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {hostedOpen && settings && <SettingsDialog hideSharePointConnection settings={settings} bridge={bridge} selection={selection} onClose={closeHosted} onSave={async (next) => { await bridge.saveSettings(next); setSettings(next); closeHosted(); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={(onProgress) => bridge.installUpdate(onProgress)} />}
   </>;
 }
 

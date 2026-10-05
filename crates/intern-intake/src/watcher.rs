@@ -13,7 +13,14 @@ use std::{
     time::Instant,
 };
 
+/// The pause after a document's first failed hand-over to the queue, doubled
+/// after each further failure.
+pub const ENQUEUE_RETRY_SECONDS: i64 = 20;
+/// The longest pause between hand-over attempts for one document.
+pub const ENQUEUE_RETRY_CAP_SECONDS: i64 = 15 * 60;
+
 use crate::{
+    backlog::Backlog,
     coordination::{
         AcquireOutcome, COURTESY_DELAY_SECONDS, ClaimState, ClaimStore, Clock, DocumentFacts,
         DoneOutcome, SystemClock,
@@ -104,8 +111,9 @@ impl IntakeWatcher {
     }
 
     /// Re-arms the running watcher on a new configuration. Per-folder scan
-    /// state (backlog, stability, owned claims) is discarded, exactly as a
-    /// stop-and-start would discard it.
+    /// state (stability, owned claims) is discarded, exactly as a
+    /// stop-and-start would discard it; the backlog is retaken only if the
+    /// folder changed or the configuration asks for it.
     pub fn update_config(&self, config: IntakeConfig) {
         {
             let mut control = lock(&self.shared.control);
@@ -138,17 +146,38 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 struct ScanState {
     store: Option<ClaimStore>,
     stability: StabilityTracker,
-    /// Relative paths already present when watching started. Files that
-    /// predate the watcher have no known uploader, so "mine" scope leaves
-    /// them alone rather than guessing.
-    backlog: HashSet<String>,
-    backlog_recorded: bool,
+    /// Documents already present when this machine first watched the folder.
+    /// They have no known uploader, so "mine" scope leaves them alone rather
+    /// than guessing.
+    backlog: Backlog,
     /// Claims this machine believes it holds, so a takeover or sync conflict
     /// that rewrites a claim file is noticed and the local item abandoned.
     owned: HashMap<String, PathBuf>,
     /// Claims kept open because the document failed while its content was
     /// still in the cloud. Their fate is decided once the bytes arrive.
     awaiting_hydration: HashSet<String>,
+    /// Owned keys whose queue item this run handed over or has seen working
+    /// or waiting for review. When such an item disappears while its file is
+    /// still here, a person removed or discarded it; an owned claim with no
+    /// item that was never seen live is the crash between acquire and enqueue
+    /// instead.
+    seen_live: HashSet<String>,
+    /// Documents the queue refused, by key: how many hand-overs failed in a
+    /// row, and the clock time before which no claim is attempted again.
+    enqueue_failures: HashMap<String, (u32, i64)>,
+    /// The verdict that holds each held document, by key, as the last full
+    /// scan heard it. A rescan while files settle reuses it.
+    held: HashMap<String, IntakeAdmission>,
+}
+
+impl ScanState {
+    fn new(config: &IntakeConfig) -> Self {
+        Self {
+            stability: StabilityTracker::new(config.min_quiet_seconds),
+            backlog: Backlog::load(config),
+            ..Self::default()
+        }
+    }
 }
 
 fn run(
@@ -159,20 +188,33 @@ fn run(
     hydration: Arc<dyn Hydration>,
 ) {
     let mut state = ScanState::default();
-    let mut state_generation = 0_u64;
+    let mut state_generation = None;
     let mut last_reported: Option<IntakeStatus> = None;
+    let mut last_full: Option<Instant> = None;
     loop {
-        let (config, generation) = {
+        let (config, generation, requested) = {
             let mut control = lock(&shared.control);
             if control.shutdown {
                 break;
             }
+            let requested = control.wake;
             control.wake = false;
-            (control.config.clone(), control.generation)
+            (control.config.clone(), control.generation, requested)
         };
-        if generation != state_generation {
-            state = ScanState::default();
-            state_generation = generation;
+        if state_generation != Some(generation) {
+            state = ScanState::new(&config);
+            state_generation = Some(generation);
+        }
+        // A rescan while files settle comes every few seconds, and asking
+        // again about every document that is merely being held - for a shared
+        // folder each uploader check is a request to Microsoft - multiplied
+        // those requests several times over for as long as anything arrived.
+        // Only a scan someone asked for, or the first a whole interval after
+        // the last full one, asks again. Measured in real time, like the
+        // waits it is paired with.
+        let full = requested || last_full.is_none_or(|at| at.elapsed() >= config.scan_interval);
+        if full {
+            last_full = Some(Instant::now());
         }
         let status = scan_once(
             &config,
@@ -182,8 +224,10 @@ fn run(
             hydration.as_ref(),
             &mut state,
             &shared.shutdown,
+            full,
         );
         *lock(&shared.status) = status.clone();
+        let interval = config.next_interval(status.arriving as usize);
         if last_reported
             .as_ref()
             .is_none_or(|previous| previous.materially_differs(&status))
@@ -191,7 +235,7 @@ fn run(
             host.status_changed(&status);
             last_reported = Some(status);
         }
-        let deadline = Instant::now() + config.scan_interval;
+        let deadline = Instant::now() + interval;
         let mut control = lock(&shared.control);
         while !control.wake && !control.shutdown {
             let now = Instant::now();
@@ -207,6 +251,10 @@ fn run(
     }
 }
 
+/// One pass over the folder. `full` is false for a rescan while files
+/// settle, which reuses the verdicts holding documents back rather than
+/// asking for them again.
+#[allow(clippy::too_many_arguments)]
 fn scan_once(
     config: &IntakeConfig,
     identity: &MachineIdentity,
@@ -215,6 +263,7 @@ fn scan_once(
     hydration: &dyn Hydration,
     state: &mut ScanState,
     shutdown: &AtomicBool,
+    full: bool,
 ) -> IntakeStatus {
     // Stamped at the start of the walk: the timestamp then vouches that
     // everything on disk up to that instant has been observed.
@@ -225,9 +274,11 @@ fn scan_once(
         store,
         stability,
         backlog,
-        backlog_recorded,
         owned,
         awaiting_hydration,
+        seen_live,
+        enqueue_failures,
+        held,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -248,17 +299,20 @@ fn scan_once(
         }
     };
     status.unreadable_folders = walk.unreadable_folders;
+    let hidden = walk.hidden;
     let files = walk.files;
 
     // Read before the walk is processed so a conflict copy is recognised on the
     // same scan it appears, and include this machine: OneDrive names the losing
     // side of a conflict after whichever machine wrote it, which is often us.
+    // Hostnames only: a label typed into Settings ("Office", "Jane") is not
+    // what a sync client writes, and matching it would silently skip an
+    // ordinary document such as "Lease-Office.pdf".
     let mut machines: Vec<String> = store
         .list_machines()
         .iter()
-        .flat_map(|presence| presence.names().map(str::to_owned))
+        .map(|presence| presence.conflict_name().to_owned())
         .collect();
-    machines.push(identity.name.clone());
     machines.push(identity.host_name.clone());
 
     let mut scanner = Scanner {
@@ -271,22 +325,38 @@ fn scan_once(
         store,
         stability,
         backlog,
-        record_backlog: !*backlog_recorded,
         owned,
         awaiting_hydration,
+        seen_live,
+        enqueue_failures,
+        held,
+        full,
         status: &mut status,
         visited: HashSet::new(),
+        seen: HashSet::new(),
         live: HashSet::new(),
     };
+    let mut interrupted = false;
     for facts in &files {
         if shutdown.load(Ordering::SeqCst) {
+            interrupted = true;
             break;
         }
         scanner.process_file(facts);
     }
     scanner.finish_unseen_owned();
-    let live = scanner.live;
-    *backlog_recorded = true;
+    // A refused document that is gone, or changed into a new key, starts
+    // with a clean slate if it comes back.
+    let visited = &scanner.visited;
+    scanner
+        .enqueue_failures
+        .retain(|key, _| visited.contains(key));
+    scanner.held.retain(|key, _| visited.contains(key));
+    let Scanner { live, seen, .. } = scanner;
+    backlog.end_pass(&seen, &hidden, interrupted, clock.now());
+    if let Err(error) = backlog.save() {
+        status.error = Some(format!("BACKLOG_WRITE_FAILED: {error}"));
+    }
     stability.retain_live(&live);
 
     if let Err(error) = store.touch_presence() {
@@ -306,18 +376,36 @@ struct Scanner<'a> {
     clock: &'a dyn Clock,
     store: &'a ClaimStore,
     stability: &'a mut StabilityTracker,
-    backlog: &'a mut HashSet<String>,
-    record_backlog: bool,
+    backlog: &'a mut Backlog,
     owned: &'a mut HashMap<String, PathBuf>,
     awaiting_hydration: &'a mut HashSet<String>,
+    seen_live: &'a mut HashSet<String>,
+    enqueue_failures: &'a mut HashMap<String, (u32, i64)>,
+    held: &'a mut HashMap<String, IntakeAdmission>,
+    /// See `scan_once`.
+    full: bool,
     status: &'a mut IntakeStatus,
+    /// Keys of the stable files this scan processed.
     visited: HashSet<String>,
+    /// Keys of every file this scan walked past, settled or not.
+    seen: HashSet<String>,
     live: HashSet<PathBuf>,
 }
 
 impl Scanner<'_> {
     fn process_file(&mut self, facts: &FileFacts) {
         self.live.insert(facts.path.clone());
+        let doc = DocumentFacts {
+            relative_path: facts.relative_path.clone(),
+            size: facts.size,
+            modified_secs: facts.modified_secs,
+        };
+        let key = doc.key();
+        // Everything in the folder while the backlog is taken is backlog,
+        // settled or not: a file still being written gets a new key once it
+        // settles, and that key is new.
+        self.seen.insert(key.clone());
+        self.backlog.note(&key, &facts.relative_path);
         // A conflict copy is the sync client's bookkeeping, not a new document.
         // Naming it would file a second copy of something already filed, so it
         // is counted and left where it is for a person to resolve.
@@ -325,23 +413,17 @@ impl Scanner<'_> {
             self.status.sync_conflicts += 1;
             return;
         }
-        if self.record_backlog {
-            self.backlog.insert(facts.relative_path.clone());
-        }
         if !self.stability.observe(
             &facts.path,
             facts.size,
             facts.modified_secs,
             self.clock.now(),
         ) {
+            if self.stability.is_arriving(&facts.path) {
+                self.status.arriving += 1;
+            }
             return;
         }
-        let doc = DocumentFacts {
-            relative_path: facts.relative_path.clone(),
-            size: facts.size,
-            modified_secs: facts.modified_secs,
-        };
-        let key = doc.key();
         self.visited.insert(key.clone());
 
         if self.owned.contains_key(&key) {
@@ -350,10 +432,9 @@ impl Scanner<'_> {
         }
 
         // Asking the host about a document only when this machine might act on
-        // it: an uploader check can cost a Microsoft audit search, and only 32
-        // of those can be pending at once. Spending them on documents already
-        // tombstoned here, or claimed by another machine, starves the ones that
-        // actually need a verdict.
+        // it: an uploader check can cost a request to Microsoft. Spending those
+        // on documents already tombstoned here, or claimed by another machine,
+        // starves the ones that actually need a verdict.
         match self.store.read(&key) {
             Some(claim) if claim.machine_id == self.identity.id => match claim.state {
                 ClaimState::Claimed => {
@@ -385,9 +466,29 @@ impl Scanner<'_> {
     }
 
     /// What this machine may do with a document nobody is processing: ask the
-    /// host who uploaded it, and claim it only if the answer allows.
+    /// host who uploaded it, and claim it only if the answer allows. A rescan
+    /// while files settle takes a document's hold from the last full scan
+    /// instead of asking again; anything else is asked every time, because an
+    /// answer that admits a document is acted on at once.
     fn consider_admission(&mut self, doc: &DocumentFacts, key: &str, facts: &FileFacts) {
-        match self.host.admission(&facts.path) {
+        let admission = match self.held.get(key) {
+            Some(&verdict) if !self.full => verdict,
+            _ => self.host.admission(&facts.path),
+        };
+        match admission {
+            IntakeAdmission::Verified | IntakeAdmission::LocalOnly => {
+                self.held.remove(key);
+            }
+            // "Could not check right now" is held too: asking again every few
+            // seconds is the last thing a throttled service needs.
+            IntakeAdmission::Other
+            | IntakeAdmission::Unknown
+            | IntakeAdmission::Revoked
+            | IntakeAdmission::Retryable => {
+                self.held.insert(key.to_owned(), admission);
+            }
+        }
+        match admission {
             IntakeAdmission::Verified => self.attempt_claim(doc, key, &facts.path),
             IntakeAdmission::LocalOnly => self.consider_unclaimed(doc, key, facts),
             IntakeAdmission::Other => self.status.held_for_others += 1,
@@ -402,11 +503,11 @@ impl Scanner<'_> {
     /// drives the claim.
     ///
     /// Only a verdict ends the work. "We could not check right now" — an
-    /// unreachable Microsoft, a throttled connection, an audit event that has
-    /// not been delivered yet — leaves the claim and the queue item alone: the
-    /// queue authorizes again at every stage of its own, so nothing is
-    /// processed on stale evidence, and cancelling here would throw away work
-    /// that was legitimately admitted a moment ago.
+    /// unreachable Microsoft, a throttled connection, metadata that has not
+    /// caught up with an upload yet — leaves the claim and the queue item
+    /// alone: the queue authorizes again at every stage of its own, so nothing
+    /// is processed on stale evidence, and cancelling here would throw away
+    /// work that was legitimately admitted a moment ago.
     fn manage_admitted(&mut self, key: &str, facts: &FileFacts) {
         let admission = self.host.admission(&facts.path);
         match admission {
@@ -416,8 +517,7 @@ impl Scanner<'_> {
                 } else {
                     self.status.uploader_unknown += 1;
                 }
-                self.owned.remove(key);
-                self.host.abandon(&facts.path);
+                self.abandon(key, &facts.path);
                 let _ = self.store.release(key);
                 return;
             }
@@ -426,8 +526,7 @@ impl Scanner<'_> {
                 if self.store.verify(key) {
                     let _ = self.store.renew(key);
                 } else {
-                    self.owned.remove(key);
-                    self.host.abandon(&facts.path);
+                    self.abandon(key, &facts.path);
                 }
                 return;
             }
@@ -435,8 +534,7 @@ impl Scanner<'_> {
                 if self.store.verify(key) {
                     let _ = self.store.renew(key);
                 } else {
-                    self.owned.remove(key);
-                    self.host.abandon(&facts.path);
+                    self.abandon(key, &facts.path);
                 }
                 return;
             }
@@ -445,8 +543,7 @@ impl Scanner<'_> {
         if self.store.verify(key) {
             self.manage_owned(key, &facts.path, true);
         } else {
-            self.owned.remove(key);
-            self.host.abandon(&facts.path);
+            self.abandon(key, &facts.path);
         }
     }
 
@@ -462,10 +559,11 @@ impl Scanner<'_> {
         let claimable = match self.store.read_origin(key) {
             Some(origin) if origin.machine_id == self.identity.id => true,
             Some(_) => self.others_claimable(facts),
-            // No origin marker: a file already present when watching started
-            // has an unknown uploader and is treated like someone else's;
-            // one that appeared later must have been put here locally.
-            None if self.backlog.contains(&facts.relative_path) => self.others_claimable(facts),
+            // No origin marker: a document already present when this machine
+            // first watched the folder has an unknown uploader and is treated
+            // like someone else's; one that appeared later, even while Intern
+            // was not running, must have been put here locally.
+            None if self.backlog.contains(key) => self.others_claimable(facts),
             None => {
                 new_local = true;
                 true
@@ -497,6 +595,22 @@ impl Scanner<'_> {
     }
 
     fn attempt_claim(&mut self, doc: &DocumentFacts, key: &str, path: &Path) {
+        if self
+            .enqueue_failures
+            .get(key)
+            .is_some_and(|&(_, next_try_at)| self.clock.now() < next_try_at)
+        {
+            // A placeholder the queue could not read offline is waiting for
+            // the connection, not for the clock. Asking the sync client for
+            // its content fails at once while offline, and once back online
+            // hands the document over on this scan rather than after a pause
+            // of up to fifteen minutes - while Settings says the next scan
+            // picks it up.
+            if !(self.hydration.is_dehydrated(path) && self.hydration.hydrate(path)) {
+                self.count_refused(path);
+                return;
+            }
+        }
         match self.store.acquire(doc) {
             AcquireOutcome::Acquired => {
                 if !self.store.verify(key) {
@@ -506,11 +620,15 @@ impl Scanner<'_> {
                 }
                 match self.host.enqueue(&[path.to_path_buf()]) {
                     Ok(()) => {
+                        self.enqueue_failures.remove(key);
                         self.owned.insert(key.to_string(), path.to_path_buf());
+                        // The queue has the item from this moment, so a person
+                        // can discard it before any scan sees it waiting.
+                        self.seen_live.insert(key.to_string());
                     }
                     Err(message) => {
                         let _ = self.store.release(key);
-                        self.status.error = Some(format!("ENQUEUE_FAILED: {message}"));
+                        self.note_refused(key, path, &message);
                     }
                 }
             }
@@ -522,32 +640,109 @@ impl Scanner<'_> {
         }
     }
 
+    /// The queue would not take a document this machine had just claimed.
+    ///
+    /// Some refusals never clear - a file this account may not read, a
+    /// reparse point the queue will not open - and an offline placeholder
+    /// fails until the connection returns. Claiming again on every scan
+    /// created and deleted a claim file in the shared folder every 20 seconds
+    /// for ever, so the next attempt waits, doubling from
+    /// `ENQUEUE_RETRY_SECONDS` up to `ENQUEUE_RETRY_CAP_SECONDS`.
+    fn note_refused(&mut self, key: &str, path: &Path, message: &str) {
+        let attempts = self
+            .enqueue_failures
+            .get(key)
+            .map_or(0, |&(attempts, _)| attempts)
+            .saturating_add(1);
+        let pause = ENQUEUE_RETRY_SECONDS
+            .saturating_mul(1 << (attempts - 1).min(16))
+            .min(ENQUEUE_RETRY_CAP_SECONDS);
+        self.enqueue_failures
+            .insert(key.to_owned(), (attempts, self.clock.now() + pause));
+        // Waiting for OneDrive is what the health notice already explains;
+        // only a refusal that is not about missing content is an error.
+        if !self.count_refused(path) {
+            self.status.error = Some(format!("ENQUEUE_FAILED: {message}"));
+        }
+    }
+
+    /// Counts a document the queue refused, for as long as it is refused: as
+    /// waiting for OneDrive when its content is still in the cloud, otherwise
+    /// as unreadable. True for the first.
+    fn count_refused(&mut self, path: &Path) -> bool {
+        if self.hydration.is_dehydrated(path) {
+            self.status.awaiting_hydration += 1;
+            true
+        } else {
+            self.status.unreadable_documents += 1;
+            false
+        }
+    }
+
     /// Drives an owned claim according to what the host reports about the
-    /// item. `file_present` distinguishes a released document (still on disk,
-    /// claimable again) from one the user deleted (tombstoned as `Removed`
-    /// so the claim does not linger as a claimed lease forever).
+    /// item. `file_present` distinguishes a document still on disk from one
+    /// the user deleted (tombstoned as `Removed` so the claim does not linger
+    /// as a claimed lease forever).
+    ///
+    /// An item that vanishes while its file stays put is one of two things. If
+    /// this run handed it over or saw it working or in review, a person took
+    /// it out of the queue - Remove, or Discard waiting - and that decision is
+    /// recorded as `KeptOriginal`: releasing the claim instead put the
+    /// document straight back into the queue on the next scan, to be analysed
+    /// again. If it was never seen live, the claim outlived a crash between
+    /// acquire and enqueue, and is released so the next scan hands the
+    /// document over. A run that started after the person removed it cannot
+    /// tell the two apart, and hands it over again: analysing a document twice
+    /// is the lesser mistake next to never analysing it.
+    ///
+    /// A document whose item failed before its content ever arrived is
+    /// released too. Nothing judged it, and Clear history tidying its failed
+    /// item away is no decision about it; handed over again, it gets the
+    /// attempt it is owed.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
         match self.host.item_state(path) {
             ItemState::Active | ItemState::NeedsReview => {
-                if self.store.renew(key).is_err() {
-                    self.owned.remove(key);
-                    self.host.abandon(path);
-                }
+                self.seen_live.insert(key.to_owned());
+                self.keep(key, path);
             }
+            // Nothing was learned about the document, so nothing is decided.
+            ItemState::Unavailable => self.keep(key, path),
             ItemState::Done {
                 outcome,
                 result_filename,
             } => self.finish_owned(key, outcome, result_filename.as_deref()),
             ItemState::Failed => self.finish_failed(key, path),
+            ItemState::Unknown if !file_present => {
+                let _ = self.store.mark_done(key, DoneOutcome::Removed, None);
+                self.owned.remove(key);
+            }
+            ItemState::Unknown
+                if self.seen_live.contains(key) && !self.awaiting_hydration.contains(key) =>
+            {
+                self.finish_owned(key, DoneOutcome::KeptOriginal, None);
+            }
             ItemState::Unknown => {
-                if file_present {
-                    let _ = self.store.release(key);
-                } else {
-                    let _ = self.store.mark_done(key, DoneOutcome::Removed, None);
-                }
+                let _ = self.store.release(key);
                 self.owned.remove(key);
             }
         }
+    }
+
+    /// Renews the lease on a document still in hand; a claim that is no
+    /// longer this machine's lets the item go.
+    fn keep(&mut self, key: &str, path: &Path) {
+        if self.store.renew(key).is_err() {
+            self.abandon(key, path);
+        }
+    }
+
+    /// Withdraws the local item for a claim this machine is giving up. The
+    /// host reports a withdrawn item as `Unknown`, and that is the watcher's
+    /// own doing, so it must not read as a person's removal later.
+    fn abandon(&mut self, key: &str, path: &Path) {
+        self.owned.remove(key);
+        self.seen_live.remove(key);
+        self.host.abandon(path);
     }
 
     /// A document that failed while its bytes were still in the cloud has not
@@ -556,43 +751,57 @@ impl Scanner<'_> {
     /// the tombstone outlives the trip. So the claim is held, not closed, and
     /// the verdict waits for the content.
     ///
-    /// Once the bytes arrive the claim is released rather than retried in
-    /// place: the next scan re-acquires it and the document goes through the
-    /// pipeline again, now with something to read. A second failure with the
-    /// content local is a real failure and tombstones normally, so this can
-    /// forgive a document exactly once per trip through the cloud.
+    /// Once the bytes arrive the document is given the attempt it never had
+    /// (`forgive`). A second failure with the content local is a real failure
+    /// and tombstones normally, so this can forgive a document exactly once
+    /// per trip through the cloud.
     fn finish_failed(&mut self, key: &str, path: &Path) {
         if self.hydration.is_dehydrated(path) {
             // Nothing else will ever open a placeholder, and a placeholder is
             // only recalled when something opens it, so a claim held waiting
             // for content would wait for ever unless the scan asks for the
-            // bytes itself. Once they arrive the claim is released rather than
-            // retried in place, exactly as it is when they arrive some other
-            // way.
+            // bytes itself.
             if self.hydration.hydrate(path) {
-                let _ = self.store.release(key);
-                self.owned.remove(key);
-                self.awaiting_hydration.remove(key);
+                self.forgive(key, path);
                 return;
             }
             // Counted only once the lease is actually held: a document we just
             // abandoned is not one we are waiting on.
             if self.store.renew(key).is_err() {
-                self.owned.remove(key);
                 self.awaiting_hydration.remove(key);
-                self.host.abandon(path);
+                self.abandon(key, path);
                 return;
             }
             self.awaiting_hydration.insert(key.to_owned());
             self.status.awaiting_hydration += 1;
             return;
         }
-        if self.awaiting_hydration.remove(key) {
-            let _ = self.store.release(key);
-            self.owned.remove(key);
+        if self.awaiting_hydration.contains(key) {
+            // The bytes arrived some other way.
+            self.forgive(key, path);
             return;
         }
         self.finish_owned(key, DoneOutcome::Failed, None);
+    }
+
+    /// Gives a document that failed without its content the attempt it never
+    /// had, now that the content is here.
+    ///
+    /// The host retries the failed item in place and the claim stays held.
+    /// Releasing it instead, for the next scan to hand the document over
+    /// again, never retried anything against the real queue: it keeps one row
+    /// per path and content and hands back the failed row unchanged, which
+    /// the following scan then tombstoned. Only the document the claim names
+    /// is retried in place; a file that changed or vanished since, or a host
+    /// that cannot retry, gets the claim released as before.
+    fn forgive(&mut self, key: &str, path: &Path) {
+        self.awaiting_hydration.remove(key);
+        if self.visited.contains(key) && self.host.retry(path) {
+            self.keep(key, path);
+            return;
+        }
+        let _ = self.store.release(key);
+        self.owned.remove(key);
     }
 
     fn finish_owned(&mut self, key: &str, outcome: DoneOutcome, result_filename: Option<&str>) {
@@ -618,18 +827,18 @@ impl Scanner<'_> {
             .collect();
         for (key, path) in unseen {
             if !self.store.verify(&key) {
-                self.owned.remove(&key);
-                self.host.abandon(&path);
+                self.abandon(&key, &path);
                 continue;
             }
             self.manage_owned(&key, &path, path.exists());
         }
         // A claim we no longer hold - deleted, taken over, abandoned - is not
-        // one we are waiting on the cloud for. Without this the set grows for
-        // the life of the process and a later file landing on the same key
-        // would inherit a stale forgiveness.
+        // one we are waiting on the cloud for, nor one whose item we watched.
+        // Without this the sets grow for the life of the process and a later
+        // file landing on the same key would inherit a stale history.
         let owned = &*self.owned;
         self.awaiting_hydration
             .retain(|key| owned.contains_key(key));
+        self.seen_live.retain(|key| owned.contains_key(key));
     }
 }

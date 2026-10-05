@@ -224,6 +224,71 @@ fn automatic_processing_retries_stop_after_two_failures() {
     assert!(db.claim_next().unwrap().is_none());
 }
 
+/// A failure that a second attempt would only repeat fails the document on
+/// the first one, with its own code, and only for the session doing the work.
+#[test]
+fn record_terminal_failure_fails_owned_work_once() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("queue.sqlite3");
+    let db = QueueStore::open(&path).unwrap();
+
+    let locked = db.enqueue(Path::new("locked.docx"), "hl").unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, locked.id);
+    db.record_terminal_failure(locked.id, ErrorCode::PasswordProtected)
+        .unwrap();
+    let failed = &db.list().unwrap()[0];
+    assert_eq!(failed.status, QueueStatus::Failed);
+    assert_eq!(failed.error_code, Some(ErrorCode::PasswordProtected));
+    assert_eq!(failed.processing_failures, 2);
+    assert!(
+        db.claim_next().unwrap().is_none(),
+        "nothing re-queues a terminal failure"
+    );
+    // Once failed it is no longer processing work, so a second report is
+    // refused rather than rewriting the reason.
+    assert_eq!(
+        db.record_terminal_failure(locked.id, ErrorCode::ExtractionFailed)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+
+    // Work that is waiting, or owned by another session, is not this
+    // session's to fail.
+    let waiting = db.enqueue(Path::new("waiting.pdf"), "hw").unwrap();
+    assert_eq!(
+        db.record_terminal_failure(waiting.id, ErrorCode::DocumentTooLarge)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    let other = QueueStore::open(&path).unwrap();
+    assert_eq!(other.claim_next().unwrap().unwrap().id, waiting.id);
+    assert_eq!(
+        db.record_terminal_failure(waiting.id, ErrorCode::DocumentTooLarge)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(other.list().unwrap()[1].status, QueueStatus::Extracting);
+
+    // An item that already used attempts keeps counting up from there.
+    let inspector = rusqlite::Connection::open(&path).unwrap();
+    inspector
+        .execute(
+            "UPDATE queue_items SET processing_failures = 4 WHERE id = ?1",
+            [waiting.id],
+        )
+        .unwrap();
+    other
+        .record_terminal_failure(waiting.id, ErrorCode::ModelDeclined)
+        .unwrap();
+    let declined = &other.list().unwrap()[1];
+    assert_eq!(declined.status, QueueStatus::Failed);
+    assert_eq!(declined.error_code, Some(ErrorCode::ModelDeclined));
+    assert_eq!(declined.processing_failures, 5);
+}
+
 #[test]
 fn clear_terminal_removes_only_terminal_rows() {
     let temp = TempDir::new().unwrap();
@@ -1044,4 +1109,578 @@ fn the_newest_item_for_a_path_is_found_by_key_across_spellings() {
         "any offered spelling may match"
     );
     assert!(db.find_newest_by_source_path(&[]).unwrap().is_none());
+}
+
+#[test]
+fn undo_after_rolled_back_undo_succeeds() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"same-content").unwrap();
+    let filed = temp.path().join("2024 - Filed Agreement.pdf");
+    let id = complete_via_apply(&db, &original, &filed);
+    let applied = db.load_latest_complete_receipt(id).unwrap().unwrap();
+
+    // The first undo is refused - the filed document is open somewhere - and
+    // reconciles as rolled back, which makes it the item's newest receipt.
+    db.begin_undo(id).unwrap();
+    let refused = FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db));
+    refused.undo(id, &applied).unwrap_err();
+    assert_eq!(
+        refused.reconcile(id).unwrap().status,
+        QueueStatus::Completed
+    );
+    assert_eq!(
+        db.load_receipt(id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    // ... but the document is still filed by the apply underneath it.
+    assert_eq!(
+        db.load_latest_complete_receipt(id).unwrap().unwrap(),
+        applied
+    );
+
+    // So the next undo, with the document closed, goes through.
+    db.begin_undo(id).unwrap();
+    let undone = FileApplier::local(Arc::clone(&db))
+        .undo(id, &db.load_latest_complete_receipt(id).unwrap().unwrap())
+        .unwrap();
+    assert_eq!(
+        db.complete_undo(id, undone.id).unwrap().status,
+        QueueStatus::Ready
+    );
+    assert_eq!(fs::read(&original).unwrap(), b"same-content");
+    assert!(!filed.exists());
+    assert_eq!(
+        db.load_latest_complete_receipt(id)
+            .unwrap()
+            .unwrap()
+            .direction,
+        OperationDirection::Undo
+    );
+}
+
+/// What `park_applying_for_review` left behind before parks could be checked
+/// again, after a later apply attempt cleared the reconciliation pointer: a
+/// row in review, holding no receipt, and an unfinished receipt beside it.
+fn park_with_live_receipt(database: &Path, id: i64) {
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute(
+            "UPDATE queue_items
+             SET status = 'needs_review', error_code = 'FILE_CHANGED',
+                 active_receipt_id = NULL, reconciliation_receipt_id = NULL,
+                 previous_status = NULL, owner_session = NULL, lease_expires_at = NULL
+             WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+}
+
+#[test]
+fn reattach_unsettled_receipt_restores_previous_status_by_direction() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let db = Arc::new(store(&temp));
+
+    // An apply whose rename was refused, parked with its receipt planned.
+    let waiting = temp.path().join("waiting.pdf");
+    fs::write(&waiting, b"waiting").unwrap();
+    let hash = StdFileSystem.hash(&waiting).unwrap();
+    let apply_item = db.enqueue(&waiting, &hash).unwrap().id;
+    advance_to_ready(&db, apply_item);
+    db.begin_applying(apply_item, QueueStatus::Ready).unwrap();
+    FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db))
+        .apply(apply_item, &waiting, &temp.path().join("named.pdf"), &hash)
+        .unwrap_err();
+    park_with_live_receipt(&database, apply_item);
+    let parked = db.load_unsettled_receipt(apply_item).unwrap().unwrap();
+
+    let reattached = db.reattach_unsettled_receipt(apply_item).unwrap().unwrap();
+
+    assert_eq!(reattached, parked);
+    let row = db.list().unwrap().remove(0);
+    assert_eq!(row.status, QueueStatus::Applying);
+    assert_eq!(row.previous_status, Some(QueueStatus::Ready));
+    assert_eq!(row.active_receipt_id, Some(parked.id));
+    assert_eq!(row.owner_session.as_deref(), Some(db.session_id()));
+    // Bound like that, the ordinary reconciliation settles it.
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(apply_item)
+            .unwrap()
+            .status,
+        QueueStatus::Ready
+    );
+    assert!(db.reattach_unsettled_receipt(apply_item).unwrap().is_none());
+
+    // An undo whose rename was refused goes back to completed: the document
+    // is still filed.
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"filed").unwrap();
+    let filed = temp.path().join("Filed.pdf");
+    let undo_item = complete_via_apply(&db, &original, &filed);
+    db.begin_undo(undo_item).unwrap();
+    let applied = db.load_latest_complete_receipt(undo_item).unwrap().unwrap();
+    FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db))
+        .undo(undo_item, &applied)
+        .unwrap_err();
+    park_with_live_receipt(&database, undo_item);
+
+    // Not while another operation is applying...
+    db.begin_applying(apply_item, QueueStatus::Ready).unwrap();
+    assert_eq!(
+        db.reattach_unsettled_receipt(undo_item).unwrap_err().code(),
+        ErrorCode::StateConflict
+    );
+    FileApplier::local(Arc::clone(&db))
+        .reconcile(apply_item)
+        .unwrap();
+
+    // ... and then by the undo's own direction.
+    let reattached = db.reattach_unsettled_receipt(undo_item).unwrap().unwrap();
+    assert_eq!(reattached.direction, OperationDirection::Undo);
+    let row = db
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == undo_item)
+        .unwrap();
+    assert_eq!(row.status, QueueStatus::Applying);
+    assert_eq!(row.previous_status, Some(QueueStatus::Completed));
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(undo_item)
+            .unwrap()
+            .status,
+        QueueStatus::Completed
+    );
+    assert!(filed.exists());
+}
+
+#[test]
+fn begin_undo_refuses_only_while_another_row_applies() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"filed").unwrap();
+    let filed_id = complete_via_apply(&db, &original, &temp.path().join("Filed.pdf"));
+
+    // Another document is being read.
+    let reading = db
+        .enqueue(Path::new("reading.pdf"), "reading-hash")
+        .unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, reading.id);
+
+    // A new rename still waits for it; an undo does not.
+    assert_eq!(
+        db.begin_applying(filed_id, QueueStatus::Completed)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(
+        db.begin_undo(filed_id).unwrap().status,
+        QueueStatus::Applying
+    );
+    // While the undo applies, nothing new is claimed.
+    db.transition(
+        reading.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    db.enqueue(Path::new("next.pdf"), "next-hash").unwrap();
+    assert!(db.claim_next().unwrap().is_none());
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(filed_id)
+            .unwrap()
+            .status,
+        QueueStatus::Completed
+    );
+
+    // Another row applying is the one thing an undo waits for.
+    let other = temp.path().join("other.pdf");
+    fs::write(&other, b"other").unwrap();
+    let other_id = db
+        .enqueue(&other, &StdFileSystem.hash(&other).unwrap())
+        .unwrap()
+        .id;
+    let next = db.claim_next().unwrap().unwrap();
+    db.transition(
+        next.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    advance_to_ready(&db, other_id);
+    db.begin_applying(other_id, QueueStatus::Ready).unwrap();
+    assert_eq!(
+        db.begin_undo(filed_id).unwrap_err().code(),
+        ErrorCode::StateConflict
+    );
+}
+
+#[test]
+fn receipt_updated_at_reports_filing_time() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"content").unwrap();
+    let id = complete_via_apply(&db, &original, &temp.path().join("Filed.pdf"));
+    let receipt = db.load_latest_complete_receipt(id).unwrap().unwrap();
+
+    let filed_at = db.receipt_updated_at(receipt.id).unwrap().unwrap();
+
+    assert!(filed_at >= started, "{filed_at} < {started}");
+    assert_eq!(db.receipt_updated_at(receipt.id + 1000).unwrap(), None);
+}
+
+fn proposal_rows(database: &Path, id: i64) -> i64 {
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM proposals WHERE queue_item_id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+/// Re-analyze takes a reviewed document back to the queue with nothing left
+/// of the earlier reading, and rekeys it to the file as it is now.
+#[test]
+fn requeue_for_analysis_resets_and_rekeys() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let db = store(&temp);
+    let path = Path::new("C:/scans/signed.pdf");
+    let item = db.enqueue(path, "before-signing").unwrap();
+    // One failed attempt, then a reading that went to review.
+    assert_eq!(db.claim_next().unwrap().unwrap().id, item.id);
+    db.record_processing_failure(item.id, ErrorCode::ModelFailed)
+        .unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, item.id);
+    db.transition(
+        item.id,
+        QueueStatus::Extracting,
+        QueueStatus::Analyzing,
+        None,
+    )
+    .unwrap();
+    db.transition(
+        item.id,
+        QueueStatus::Analyzing,
+        QueueStatus::NeedsReview,
+        Some(ErrorCode::FileChanged),
+    )
+    .unwrap();
+    let inspector = rusqlite::Connection::open(&database).unwrap();
+    inspector
+        .execute(
+            "INSERT INTO proposals(queue_item_id, proposal_json, created_at)
+             VALUES (?1, '{\"approved\":true}', 0)",
+            [item.id],
+        )
+        .unwrap();
+    inspector
+        .execute(
+            "UPDATE queue_items SET reconciliation_receipt_id = 41, previous_status = 'ready'
+             WHERE id = ?1",
+            [item.id],
+        )
+        .unwrap();
+
+    // Only from review or ready, and only from the state the caller saw.
+    assert_eq!(
+        db.requeue_for_analysis(item.id, QueueStatus::Completed, None)
+            .unwrap_err()
+            .code(),
+        ErrorCode::InvalidTransition
+    );
+    assert_eq!(
+        db.requeue_for_analysis(item.id, QueueStatus::Ready, None)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(
+        proposal_rows(&database, item.id),
+        1,
+        "a refusal changes nothing"
+    );
+
+    let requeued = db
+        .requeue_for_analysis(item.id, QueueStatus::NeedsReview, Some("after-signing"))
+        .unwrap();
+
+    assert_eq!(requeued.id, item.id);
+    assert_eq!(requeued.status, QueueStatus::Queued);
+    assert_eq!(requeued.source_hash, "after-signing");
+    assert_eq!(requeued.processing_failures, 0);
+    assert_eq!(requeued.error_code, None);
+    assert_eq!(requeued.previous_status, None);
+    assert_eq!(requeued.active_receipt_id, None);
+    assert_eq!(requeued.reconciliation_receipt_id, None);
+    assert_eq!(requeued.owner_session, None);
+    assert_eq!(
+        proposal_rows(&database, item.id),
+        0,
+        "the proposal, and the approval in it, went with the reading"
+    );
+    // The row is the file as it is now: the new version finds it, and the
+    // old version would be a new document.
+    assert_eq!(db.enqueue(path, "after-signing").unwrap().id, item.id);
+    assert_ne!(db.enqueue(path, "before-signing").unwrap().id, item.id);
+
+    // Without a new fingerprint the stored one stays.
+    assert_eq!(db.claim_next().unwrap().unwrap().id, item.id);
+    db.transition(
+        item.id,
+        QueueStatus::Extracting,
+        QueueStatus::Analyzing,
+        None,
+    )
+    .unwrap();
+    db.transition(item.id, QueueStatus::Analyzing, QueueStatus::Ready, None)
+        .unwrap();
+    let again = db
+        .requeue_for_analysis(item.id, QueueStatus::Ready, None)
+        .unwrap();
+    assert_eq!(again.status, QueueStatus::Queued);
+    assert_eq!(again.source_hash, "after-signing");
+}
+
+#[test]
+fn requeue_refused_with_unsettled_receipt() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let db = Arc::new(store(&temp));
+    let waiting = temp.path().join("waiting.pdf");
+    fs::write(&waiting, b"waiting").unwrap();
+    let hash = StdFileSystem.hash(&waiting).unwrap();
+    let id = db.enqueue(&waiting, &hash).unwrap().id;
+    advance_to_ready(&db, id);
+    db.begin_applying(id, QueueStatus::Ready).unwrap();
+    FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db))
+        .apply(id, &waiting, &temp.path().join("named.pdf"), &hash)
+        .unwrap_err();
+    park_with_live_receipt(&database, id);
+    assert!(db.load_unsettled_receipt(id).unwrap().is_some());
+
+    let refused = db
+        .requeue_for_analysis(id, QueueStatus::NeedsReview, Some("edited"))
+        .unwrap_err();
+
+    assert_eq!(refused.code(), ErrorCode::InvalidTransition);
+    let row = db.get(id).unwrap().unwrap();
+    assert_eq!(row.status, QueueStatus::NeedsReview);
+    assert_eq!(row.source_hash, hash);
+    assert!(db.load_unsettled_receipt(id).unwrap().is_some());
+}
+
+#[test]
+fn requeue_hash_collision_is_duplicate() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let path = Path::new("C:/scans/contract.pdf");
+    let reviewed = db.enqueue(path, "first-version").unwrap();
+    advance_to_ready(&db, reviewed.id);
+    // The edited file was picked up again on its own, as a new row.
+    let edited = db.enqueue(path, "second-version").unwrap();
+    assert_ne!(edited.id, reviewed.id);
+
+    let refused = db
+        .requeue_for_analysis(reviewed.id, QueueStatus::Ready, Some("second-version"))
+        .unwrap_err();
+
+    assert_eq!(refused.code(), ErrorCode::Duplicate);
+    let row = db.get(reviewed.id).unwrap().unwrap();
+    assert_eq!(row.status, QueueStatus::Ready, "nothing changed");
+    assert_eq!(row.source_hash, "first-version");
+}
+
+#[test]
+fn list_all_operation_history_is_uncapped() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let item = db.enqueue(Path::new("bulk.pdf"), "bulk-hash").unwrap();
+    let inspector = rusqlite::Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let mut insert = inspector
+        .prepare(
+            "INSERT INTO operation_receipts(
+               queue_item_id, direction, source_path, destination_path, pre_hash,
+               operation_kind, stage, source_exists, destination_exists, temporary_exists,
+               created_at, updated_at
+             ) VALUES(?1, 'apply', 'bulk.pdf', 'renamed.pdf', 'bulk-hash',
+                      'rename', 'complete', 0, 1, 0, ?2, ?2)",
+        )
+        .unwrap();
+    let total = HISTORY_LIMIT * 2 + 3;
+    for moment in 0..total {
+        insert
+            .execute(rusqlite::params![item.id, moment as i64])
+            .unwrap();
+    }
+
+    let everything = db.list_all_operation_history().unwrap();
+
+    assert_eq!(everything.len(), total);
+    assert_eq!(everything[0].at, (total - 1) as i64);
+    assert!(everything.windows(2).all(|pair| pair[0].at >= pair[1].at));
+    assert_eq!(db.count_operation_history().unwrap(), total);
+    assert_eq!(
+        db.list_operation_history(total).unwrap().len(),
+        HISTORY_LIMIT,
+        "the window's listing keeps its cap"
+    );
+}
+
+/// A database a newer Intern wrote, opened by this one after a reinstall of
+/// the older release: what it cannot read is left out, and the rest lists.
+#[test]
+fn unknown_codes_and_statuses_are_tolerated_on_read() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let readable = db.enqueue(Path::new("readable.pdf"), "h1").unwrap();
+    let future_code = db.enqueue(Path::new("future-code.pdf"), "h2").unwrap();
+    let future_status = db.enqueue(Path::new("future-status.pdf"), "h3").unwrap();
+    let inspector = rusqlite::Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    inspector
+        .execute(
+            "UPDATE queue_items SET status = 'needs_review', error_code = 'FUTURE_CODE'
+             WHERE id = ?1",
+            [future_code.id],
+        )
+        .unwrap();
+    inspector
+        .execute(
+            "UPDATE queue_items SET status = 'future_status', error_code = 'FUTURE_CODE'
+             WHERE id = ?1",
+            [future_status.id],
+        )
+        .unwrap();
+    let insert_receipt = |direction: &str, kind: &str, stage: &str, at: i64| {
+        inspector
+            .execute(
+                "INSERT INTO operation_receipts(
+                   queue_item_id, direction, source_path, destination_path, pre_hash,
+                   operation_kind, stage, source_exists, destination_exists, temporary_exists,
+                   created_at, updated_at
+                 ) VALUES(?1, ?2, 'a.pdf', 'b.pdf', 'h1', ?3, ?4, 0, 1, 0, ?5, ?5)",
+                rusqlite::params![readable.id, direction, kind, stage, at],
+            )
+            .unwrap();
+    };
+    insert_receipt("apply", "rename", "complete", 1);
+    insert_receipt("sideways", "rename", "complete", 2);
+    insert_receipt("apply", "teleport", "rolled_back", 3);
+
+    let items = db.list().unwrap();
+
+    assert_eq!(
+        items.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![readable.id, future_code.id]
+    );
+    assert_eq!(
+        items[1].error_code, None,
+        "an unknown code reads as no code"
+    );
+    assert_eq!(items[1].status, QueueStatus::NeedsReview);
+    assert_eq!(db.hidden_rows(), 1);
+    assert_eq!(db.get(future_status.id).unwrap(), None);
+    assert_eq!(db.get(future_code.id).unwrap().unwrap().error_code, None);
+
+    let history = db.list_all_operation_history().unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].at, 1);
+    assert_eq!(db.hidden_rows(), 3, "one item and two receipts");
+
+    // Writes stay strict: nothing moves the hidden row.
+    assert_eq!(
+        db.transition(
+            future_status.id,
+            QueueStatus::Queued,
+            QueueStatus::Canceled,
+            None
+        )
+        .unwrap_err()
+        .code(),
+        ErrorCode::StateConflict
+    );
+}
+
+/// The queue listing reads every item's receipts, and one a newer Intern
+/// wrote - a direction or stage this build has never heard of - used to fail
+/// the whole listing. Read for the listing, such a receipt is absent; read
+/// for a decision, it is still an error, and a stage this build does not know
+/// is never offered to be checked again.
+#[test]
+fn listed_receipts_leave_out_what_this_build_cannot_read() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let source = temp.path().join("scan.pdf");
+    fs::write(&source, b"scan").unwrap();
+    let filed = complete_via_apply(&db, &source, &temp.path().join("named.pdf"));
+    let inspector = rusqlite::Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let insert = |id: i64, direction: &str, stage: &str| {
+        inspector
+            .execute(
+                "INSERT INTO operation_receipts(
+                   queue_item_id, direction, source_path, destination_path, pre_hash,
+                   operation_kind, stage, source_exists, destination_exists, temporary_exists,
+                   created_at, updated_at
+                 ) VALUES(?1, ?2, 'a.pdf', 'b.pdf', 'h', 'rename', ?3, 1, 0, 0, 1, 1)",
+                rusqlite::params![id, direction, stage],
+            )
+            .unwrap();
+    };
+
+    // A stage from the future on top of a finished apply.
+    insert(filed, "apply", "abandoned");
+    let listed = db.listed_receipts(filed).unwrap();
+    assert_eq!(listed.newest, None);
+    assert_eq!(
+        listed.latest_complete.unwrap().direction,
+        OperationDirection::Apply
+    );
+    assert_eq!(listed.unsettled, None);
+    assert!(db.load_receipt(filed).is_err(), "decisions read strictly");
+    assert_eq!(db.load_unsettled_receipt(filed).unwrap(), None);
+
+    // A direction from the future at a stage this build knows is unfinished.
+    let other = db.enqueue(Path::new("other.pdf"), "h2").unwrap();
+    insert(other.id, "sideways", "planned");
+    let listed = db.listed_receipts(other.id).unwrap();
+    assert_eq!(listed.newest, None);
+    assert_eq!(listed.latest_complete, None);
+    assert_eq!(listed.unsettled, None);
+    assert!(db.load_unsettled_receipt(other.id).is_err());
+
+    // Readable receipts read the same either way.
+    let plain = db.listed_receipts(filed).unwrap().latest_complete;
+    assert_eq!(plain, db.load_latest_complete_receipt(filed).unwrap());
+}
+
+#[test]
+fn get_returns_one_item() {
+    let temp = TempDir::new().unwrap();
+    let db = store(&temp);
+    let first = db.enqueue(Path::new("first.pdf"), "h1").unwrap();
+    let second = db.enqueue(Path::new("second.pdf"), "h2").unwrap();
+    db.transition(second.id, QueueStatus::Queued, QueueStatus::Canceled, None)
+        .unwrap();
+
+    assert_eq!(db.get(first.id).unwrap(), Some(first));
+    let found = db.get(second.id).unwrap().unwrap();
+    assert_eq!(found.id, second.id);
+    assert_eq!(found.status, QueueStatus::Canceled);
+    assert_eq!(db.get(second.id + 100).unwrap(), None);
 }

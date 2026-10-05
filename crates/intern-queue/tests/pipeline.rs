@@ -1,9 +1,9 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Barrier, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
@@ -12,7 +12,8 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use intern_core::{
-    ErrorCode, OperationReceipt, PrivateSnapshotDirectory, QueueItem, QueueStatus, QueueStore,
+    ErrorCode, FileSystem, LockedFile, OperationReceipt, OperationStage, PrivateSnapshotDirectory,
+    QueueItem, QueueStatus, QueueStore, StdFileSystem,
 };
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
@@ -28,10 +29,12 @@ use intern_intake::{
     },
 };
 use intern_queue::{
+    paths::display_path,
     pipeline::{
-        AnalyzerBoundary, CoreFileActions, DuplicateOracle, FileActions, FiledDocument, FilingSink,
-        KnownFiling, ModelFailure, NEAR_DUPLICATE, Pipeline, PipelineError, PipelineEventSink,
-        PipelineProgress, SimilarFiling, UNDONE, UnfiledDocument, WorkerBoundary, WorkerFailure,
+        ALREADY_NAMED, AnalyzerBoundary, CoreFileActions, DuplicateOracle, FileActions,
+        FiledDocument, FilingSink, KnownFiling, ModelFailure, NEAR_DUPLICATE, Pipeline,
+        PipelineError, PipelineEventSink, PipelineProgress, SimilarFiling, UNDONE, UnfiledDocument,
+        WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, DestinationLayout, SettingsStore},
 };
@@ -145,6 +148,17 @@ impl FakeWorker {
         *worker.gate.0.lock().unwrap() = true;
         worker
     }
+
+    /// Counts a cancel and wakes a blocked request to see it. Both under the
+    /// gate: `extract` checks the count and waits while holding it, and a
+    /// count raised and notified between that check and the wait was never
+    /// seen - the request blocked for good, and with it the test, since
+    /// `cargo test` has no per-test timeout.
+    fn release_for_cancel(&self) {
+        let _gate = self.gate.0.lock().unwrap();
+        self.cancellations.fetch_add(1, Ordering::SeqCst);
+        self.gate.1.notify_all();
+    }
 }
 
 impl WorkerBoundary for FakeWorker {
@@ -175,8 +189,7 @@ impl WorkerBoundary for FakeWorker {
     }
 
     fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
-        self.cancellations.fetch_add(1, Ordering::SeqCst);
-        self.gate.1.notify_all();
+        self.release_for_cancel();
         Ok(())
     }
 
@@ -186,8 +199,7 @@ impl WorkerBoundary for FakeWorker {
     }
 
     fn shutdown(&self) -> Result<(), WorkerFailure> {
-        self.cancellations.fetch_add(1, Ordering::SeqCst);
-        self.gate.1.notify_all();
+        self.release_for_cancel();
         Ok(())
     }
 }
@@ -688,6 +700,49 @@ fn failed_model_recovery_pauses_before_retrying_or_draining_next_item() {
     assert_eq!(pipeline.list().unwrap()[1].status, QueueStatus::Queued);
 }
 
+/// An account out of credit fails every document the same way, so the queue
+/// pauses at the first one. It used to fail the whole backlog instead: each
+/// document sent twice, each attempt billed, each marked a file error.
+#[test]
+fn an_account_out_of_credit_pauses_the_queue_instead_of_failing_the_backlog() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let text = "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+    let worker = Arc::new(FakeWorker::new((0..4).map(|_| Ok(parsed(text))).collect()));
+    let model = Arc::new(FakeModel::new(
+        (0..4)
+            .map(|_| Err(ModelFailure::fatal("HOSTED_MODEL_BILLING")))
+            .collect(),
+    ));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    assert!(pipeline.is_paused());
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        1,
+        "one request, not four"
+    );
+    let items = pipeline.list().unwrap();
+    // The first keeps its second attempt for after the account is topped up.
+    assert_eq!(items[0].status, QueueStatus::Queued);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(items[1].processing_failures, 0);
+}
+
 #[test]
 fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
     let temp = tempdir().unwrap();
@@ -720,6 +775,482 @@ fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
     assert_eq!(items[0].status, QueueStatus::Failed);
     assert_eq!(items[0].error_code, Some(ErrorCode::IoError));
     assert_eq!(items[1].status, QueueStatus::Ready);
+}
+
+const READABLE: &str =
+    "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+
+/// Enqueues one trusted document per name, in order, and returns the paths.
+fn documents(dir: &Path, files: &FakeFiles, names: &[&str]) -> Vec<PathBuf> {
+    names
+        .iter()
+        .map(|name| {
+            let path = source(dir, name);
+            files.trust(&path, &format!("{name}-hash"));
+            path
+        })
+        .collect()
+}
+
+/// Every extraction failure used to be stored as IO_ERROR ("A file operation
+/// failed.") and extracted a second time, whatever the worker said. A failure
+/// the worker calls permanent now fails the document on the first attempt,
+/// under a code that says what is wrong with it.
+#[test]
+fn non_retryable_extraction_failure_is_terminal_with_its_code() {
+    let cases = [
+        ("PASSWORD_PROTECTED", ErrorCode::PasswordProtected),
+        ("UNSUPPORTED_FORMAT", ErrorCode::UnsupportedContent),
+        ("RESOURCE_LIMIT_EXCEEDED", ErrorCode::DocumentTooLarge),
+        // The host's own deadline on the worker.
+        ("RESOURCE_LIMIT", ErrorCode::DocumentTooLarge),
+        ("PARSE_FAILED", ErrorCode::ExtractionFailed),
+    ];
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let names = ["a.docx", "b.pdf", "c.xlsx", "d.tif", "e.pdf"];
+    let paths = documents(temp.path(), &files, &names);
+    let worker = Arc::new(FakeWorker::new(
+        cases
+            .iter()
+            .map(|(code, _)| Err(WorkerFailure::reported(*code, "the worker's words", false)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(vec![]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(
+        worker.calls.load(Ordering::SeqCst),
+        cases.len(),
+        "each document is read once"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    let items = pipeline.list().unwrap();
+    for (item, (code, expected)) in items.iter().zip(cases) {
+        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.error_code, Some(expected), "{code}");
+    }
+    assert!(!pipeline.is_paused());
+}
+
+/// A crash, or a failure the worker says may pass, keeps its second attempt.
+#[test]
+fn crashed_extraction_is_retried_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["crashes-once.pdf", "busy-disk.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![
+        Err(WorkerFailure::crashed()),
+        Ok(parsed(READABLE)),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(worker.restarts.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Ready);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[1].status, QueueStatus::Failed);
+    assert_eq!(items[1].error_code, Some(ErrorCode::IoError));
+    assert_eq!(items[1].processing_failures, 2);
+    assert!(!pipeline.is_paused());
+}
+
+/// Without its text-recognition files the worker fails every document that
+/// needs them, so the first such failure stops the queue and says why.
+#[test]
+fn native_assets_missing_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf", "next-scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Err(WorkerFailure::reported(
+        "NATIVE_ASSETS_MISSING",
+        "tessdata is missing",
+        false,
+    ))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Failed);
+    assert_eq!(items[0].error_code, Some(ErrorCode::OcrUnavailable));
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert!(pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason().as_deref(), Some("OCR_UNAVAILABLE"));
+
+    pipeline.resume();
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// A refusal, a document too long for the model, and an internal failure on
+/// one document are that document's answer. Each used to be re-queued - and,
+/// on a hosted model, re-sent and re-billed - before failing anyway.
+#[test]
+fn refused_and_too_large_are_terminal_and_do_not_pause() {
+    let cases = [
+        ("HOSTED_MODEL_REFUSED", ErrorCode::ModelDeclined),
+        ("MODEL_INPUT_TOO_LARGE", ErrorCode::DocumentTooLarge),
+        ("ANALYSIS_FAILED", ErrorCode::AnalysisFailed),
+    ];
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(
+        temp.path(),
+        &files,
+        &["refused.pdf", "too-long.pdf", "internal.pdf", "fine.pdf"],
+    );
+    let worker = Arc::new(FakeWorker::new(
+        (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let mut replies = cases
+        .iter()
+        .map(|(code, _)| Err(ModelFailure::fatal(*code)))
+        .collect::<Vec<_>>();
+    replies.push(Ok(proposal(0.94, false)));
+    let model = Arc::new(FakeModel::new(replies));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), paths.len());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), paths.len());
+    let items = pipeline.list().unwrap();
+    for (item, (code, expected)) in items.iter().zip(cases) {
+        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.error_code, Some(expected), "{code}");
+    }
+    assert_eq!(items[3].status, QueueStatus::Ready);
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// One reply that cannot be used fails that document. A model that keeps
+/// answering that way is broken for every document, so the third in a row
+/// stops the queue - but only in a row: a document read successfully in
+/// between starts the count again.
+#[test]
+fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
+    let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
+    let truncated = || Err(ModelFailure::fatal("MODEL_REPLY_TRUNCATED"));
+    let run = |names: &[&str], replies: Vec<Result<ModelProposal, ModelFailure>>| {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(temp.path(), &files, names);
+        let worker = Arc::new(FakeWorker::new(
+            (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let model = Arc::new(FakeModel::new(replies));
+        let pipeline = pipeline(
+            temp.path(),
+            worker,
+            Arc::clone(&model),
+            files,
+            AppSettings::default(),
+        );
+        pipeline.enqueue_files(&paths).unwrap();
+        pipeline.run_until_idle().unwrap();
+        let items = pipeline.list().unwrap();
+        let calls = model.calls.load(Ordering::SeqCst);
+        (
+            pipeline.is_paused(),
+            pipeline.pause_reason(),
+            items,
+            calls,
+            temp,
+        )
+    };
+
+    let (paused, _, items, calls, _temp) = run(
+        &["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"],
+        vec![
+            invalid(),
+            truncated(),
+            Ok(proposal(0.94, false)),
+            invalid(),
+            truncated(),
+        ],
+    );
+    assert!(
+        !paused,
+        "two, a success, and two more is never three in a row"
+    );
+    assert_eq!(calls, 5, "each document is asked once");
+    let statuses = items.iter().map(|item| item.status).collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        [
+            QueueStatus::Failed,
+            QueueStatus::Failed,
+            QueueStatus::Ready,
+            QueueStatus::Failed,
+            QueueStatus::Failed,
+        ]
+    );
+    assert!(
+        items
+            .iter()
+            .filter(|item| item.status == QueueStatus::Failed)
+            .all(|item| item.error_code == Some(ErrorCode::ModelOutputInvalid))
+    );
+
+    let (paused, reason, items, calls, _temp) = run(
+        &["a.pdf", "b.pdf", "c.pdf", "waits.pdf"],
+        vec![invalid(), truncated(), invalid()],
+    );
+    assert!(paused);
+    assert_eq!(reason.as_deref(), Some("MODEL_OUTPUT_INVALID"));
+    assert_eq!(calls, 3);
+    assert!(items[..3].iter().all(|item| {
+        item.status == QueueStatus::Failed && item.error_code == Some(ErrorCode::ModelOutputInvalid)
+    }));
+    assert_eq!(items[3].status, QueueStatus::Queued);
+}
+
+/// An account out of credit fails every document behind it. The queue stops
+/// at the first one and names the reason, and that document keeps its second
+/// attempt for when the queue is resumed.
+#[test]
+fn billing_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let model = Arc::new(FakeModel::new(vec![Err(ModelFailure::fatal(
+        "HOSTED_MODEL_BILLING",
+    ))]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert!(pipeline.is_paused());
+    assert_eq!(
+        pipeline.pause_reason().as_deref(),
+        Some("HOSTED_MODEL_BILLING")
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Queued);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[0].error_code, Some(ErrorCode::HostedModelUnavailable));
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(items[1].processing_failures, 0);
+
+    pipeline.resume();
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// A request that was called off says nothing about the next document. It is
+/// counted like any failure and never stops the queue.
+#[test]
+fn canceled_never_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["called-off.pdf", "next.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..3).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let model = Arc::new(FakeModel::new(vec![
+        Err(ModelFailure::fatal("MODEL_CANCELED")),
+        Err(ModelFailure::fatal("MODEL_CANCELED")),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Failed);
+    assert_eq!(items[0].error_code, Some(ErrorCode::ModelFailed));
+    assert_eq!(items[1].status, QueueStatus::Ready);
+}
+
+/// Switching from the hosted model to the local one leaves a moment with no
+/// model loaded. A document that meets that moment was never analysed: it
+/// goes back to wait with nothing counted against it, as often as it happens
+/// within that moment, and the drain ends instead of claiming it again at
+/// once.
+#[test]
+fn model_not_ready_requeues_without_counting_a_failure() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..5).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for attempt in 1..=3 {
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(model.calls.load(Ordering::SeqCst), attempt);
+        assert!(!pipeline.is_paused());
+        let items = pipeline.list().unwrap();
+        for item in &items {
+            assert_eq!(item.status, QueueStatus::Queued);
+            assert_eq!(item.processing_failures, 0);
+            assert_eq!(item.error_code, None);
+        }
+    }
+
+    pipeline.run_until_idle().unwrap();
+    let items = pipeline.list().unwrap();
+    assert!(
+        items
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready && item.processing_failures == 0)
+    );
+}
+
+/// A local server whose restart failed leaves no model loaded for as long as
+/// the app runs. Every pass used to read the head document again in full and
+/// put it back, with nothing failed, nothing paused and nothing on screen. A
+/// model still missing once the moment a switch or restart takes has passed
+/// stops the queue and says so; a model that answers starts the clock over.
+#[test]
+fn model_missing_past_the_grace_pauses_the_queue_and_an_answer_starts_it_over() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..6).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    // No grace at all: the first document to find no model is tolerated, and
+    // any later one finds it missing for too long.
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    )
+    .with_model_missing_grace(Duration::ZERO);
+    pipeline.enqueue_files(&paths).unwrap();
+    let untouched = |pipeline: &Pipeline| {
+        pipeline.list().unwrap().iter().all(|item| {
+            item.status == QueueStatus::Queued
+                && item.processing_failures == 0
+                && item.error_code.is_none()
+        })
+    };
+
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused(), "the first is the moment of a switch");
+    assert!(untouched(&pipeline));
+
+    pipeline.run_until_idle().unwrap();
+    assert!(pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason().as_deref(), Some("MODEL_FAILED"));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        untouched(&pipeline),
+        "nothing is failed or counted: no model was ever asked"
+    );
+
+    // Resuming without fixing anything stops at the next document, not
+    // minutes later: only an answer starts the clock over.
+    pipeline.resume();
+    pipeline.run_until_idle().unwrap();
+    assert!(pipeline.is_paused());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+
+    // The model is back. A document read successfully, and the next moment
+    // with no model is the first of a new run again.
+    pipeline.resume();
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused());
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Ready);
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 5);
+
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.list().unwrap()[1].status, QueueStatus::Ready);
 }
 
 /// A crash the worker cannot be restarted from used to reclaim whatever the
@@ -830,6 +1361,141 @@ fn pause_starts_no_item_and_cancel_interrupts_the_active_worker_request() {
 
     assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
     assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Canceled);
+}
+
+/// The intake watcher withdraws an item when its claim goes to another
+/// computer, and a person cancels one to leave the document alone. Both leave
+/// a canceled row and they mean opposite things, so the watcher's is marked
+/// on the row itself, where a restart cannot lose it.
+#[test]
+fn the_watchers_withdrawal_is_marked_on_the_row_and_a_persons_cancel_is_not() {
+    let temp = tempdir().unwrap();
+    let canceled = source(temp.path(), "canceled.pdf");
+    let withdrawn = source(temp.path(), "withdrawn.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&canceled, "canceled-hash");
+    files.trust(&withdrawn, "withdrawn-hash");
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::new(FakeWorker::new(vec![])),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    );
+    let items = pipeline.enqueue_files(&[canceled, withdrawn]).unwrap();
+    let (person, watcher) = (items[0].id, items[1].id);
+
+    pipeline.cancel(person).unwrap();
+    pipeline.withdraw(watcher).unwrap();
+    // A row a person canceled stays theirs, whoever asks next.
+    pipeline.withdraw(person).unwrap();
+    let row = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        (item.status, item.error_code)
+    };
+    assert_eq!(row(person), (QueueStatus::Canceled, None));
+    assert_eq!(
+        row(watcher),
+        (QueueStatus::Canceled, Some(ErrorCode::IntakeWithdrawn))
+    );
+
+    // Running it again takes the mark away with the cancel.
+    pipeline.retry(watcher).unwrap();
+    assert_eq!(row(watcher), (QueueStatus::Queued, None));
+}
+
+/// A worker that holds its request open until released, and refuses to be
+/// told to stop.
+#[derive(Default)]
+struct StubbornWorker {
+    started: AtomicBool,
+    gate: (Mutex<bool>, Condvar),
+}
+
+impl StubbornWorker {
+    fn release(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
+    }
+}
+
+impl WorkerBoundary for StubbornWorker {
+    fn extract(
+        &self,
+        _request_id: &str,
+        _path: &Path,
+        _progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        self.started.store(true, Ordering::SeqCst);
+        let (lock, wake) = &self.gate;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+        Ok(parsed("Employment Agreement signed April 12, 2024."))
+    }
+
+    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+        Err(WorkerFailure::new("WORKER_CANCEL_FAILED", false, false))
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+
+    fn shutdown(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+}
+
+/// The row is canceled before the worker is told to stop, so a worker that
+/// refuses still leaves a canceled row. The mark goes on in the same step:
+/// a withdrawal reported as failed must not leave a row that reads as a
+/// person's cancel, which would close the document for good.
+#[test]
+fn a_withdrawal_is_marked_even_when_the_worker_will_not_stop() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "withdrawn.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&path, "withdrawn-hash");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let worker = Arc::new(StubbornWorker::default());
+    let pipeline = Arc::new(
+        Pipeline::open(
+            temp.path().join("queue.sqlite3"),
+            Arc::clone(&worker) as Arc<dyn WorkerBoundary>,
+            Arc::new(FakeModel::new(vec![])),
+            files,
+            Arc::new(RecordingEvents::default()),
+            settings,
+        )
+        .unwrap(),
+    );
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while !worker.started.load(Ordering::SeqCst) {
+        thread::yield_now();
+    }
+    assert!(pipeline.withdraw(id).is_err(), "the worker refused to stop");
+    worker.release();
+    let _ = join.join().unwrap();
+
+    let item = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap();
+    assert_eq!(item.status, QueueStatus::Canceled);
+    assert_eq!(item.error_code, Some(ErrorCode::IntakeWithdrawn));
 }
 
 #[test]
@@ -1865,6 +2531,314 @@ fn lost_processing_lease_cancels_worker_and_pauses_before_more_work() {
     assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
 }
 
+/// A local model whose first request ends the way the real one's did when a
+/// cancel restarted the server under it: as a retryable server failure, not
+/// as a cancel. It counts what the queue then asks of it.
+#[derive(Default)]
+struct InterruptedModel {
+    calls: AtomicUsize,
+    recoveries: AtomicUsize,
+    cancels: AtomicUsize,
+    /// The first request waits until released.
+    hold_first: bool,
+    /// The first request, once released, comes back with an answer.
+    first_succeeds: bool,
+    /// A recovery waits until released.
+    hold_recover: bool,
+    /// A cancel releases whatever is waiting, as stopping a server does.
+    cancel_releases: bool,
+    /// How many requests after a cancel find no server, as they do while
+    /// the real one restarts under the cancel.
+    not_ready_after_cancel: usize,
+    not_ready_left: AtomicUsize,
+    released: (Mutex<bool>, Condvar),
+}
+
+impl InterruptedModel {
+    fn release(&self) {
+        *self.released.0.lock().unwrap() = true;
+        self.released.1.notify_all();
+    }
+
+    fn wait_for_release(&self) {
+        let (lock, wake) = &self.released;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+
+    fn wait_until(&self, what: impl Fn(&Self) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !what(self) {
+            assert!(Instant::now() < deadline, "the model was never reached");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+impl AnalyzerBoundary for InterruptedModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == 1 {
+            if self.hold_first {
+                self.wait_for_release();
+            }
+            if !self.first_succeeds {
+                return Err(ModelFailure::retryable("MODEL_REQUEST_FAILED"));
+            }
+        }
+        if self
+            .not_ready_left
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ModelFailure::retryable("MODEL_NOT_READY"));
+        }
+        Ok(analyze_locally(
+            source,
+            proposal(0.94, false),
+            extension,
+            existing_names,
+        ))
+    }
+
+    fn recover(&self, _failure: &ModelFailure) -> Result<(), ModelFailure> {
+        self.recoveries.fetch_add(1, Ordering::SeqCst);
+        if self.hold_recover {
+            self.wait_for_release();
+        }
+        Ok(())
+    }
+
+    fn cancel(&self) -> Result<(), ModelFailure> {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        self.not_ready_left
+            .store(self.not_ready_after_cancel, Ordering::SeqCst);
+        if self.cancel_releases {
+            self.release();
+        }
+        Ok(())
+    }
+}
+
+/// Two documents queued behind a model, the first of which is canceled
+/// while it is being read; the drain runs on its own thread.
+fn cancel_rig(
+    temp: &Path,
+    model: Arc<InterruptedModel>,
+    lease_interval: Option<Duration>,
+) -> (
+    Arc<Pipeline>,
+    i64,
+    i64,
+    thread::JoinHandle<Result<(), PipelineError>>,
+) {
+    let first = source(temp, "canceled.pdf");
+    let second = source(temp, "next.pdf");
+    let text = "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+    // One reading to spare, for a next document read a second time.
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(text)),
+        Ok(parsed(text)),
+        Ok(parsed(text)),
+    ]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let settings = SettingsStore::new(temp.join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let mut pipeline = Pipeline::open(
+        temp.join("queue.sqlite3"),
+        worker,
+        model,
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    if let Some(interval) = lease_interval {
+        pipeline = pipeline.with_lease_renewal_interval(interval);
+    }
+    let pipeline = Arc::new(pipeline);
+    pipeline.enqueue_files(&[first, second]).unwrap();
+    let items = pipeline.list().unwrap();
+    let running = Arc::clone(&pipeline);
+    let drain = thread::spawn(move || running.run_until_idle());
+    (pipeline, items[0].id, items[1].id, drain)
+}
+
+fn item_of(pipeline: &Pipeline, id: i64) -> intern_queue::PipelineItem {
+    pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap()
+}
+
+fn status_of(pipeline: &Pipeline, id: i64) -> QueueStatus {
+    item_of(pipeline, id).status
+}
+
+#[test]
+fn cancel_during_analysis_does_not_recover_reanalyze_or_pause() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        cancel_releases: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    // The failure the cancel caused was not recovered: no restart, and the
+    // canceled document was not sent a second time.
+    assert_eq!(model.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(model.cancels.load(Ordering::SeqCst), 1);
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    // The next document is read, once.
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn canceled_item_with_failed_lease_does_not_pause() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(
+        temp.path(),
+        Arc::clone(&model),
+        Some(Duration::from_millis(10)),
+    );
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    // Canceling took the item's lease away; let its renewal fail.
+    thread::sleep(Duration::from_millis(200));
+    model.release();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(
+        model.cancels.load(Ordering::SeqCst),
+        1,
+        "the lost lease did not stop the model a second time"
+    );
+    assert_eq!(model.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn an_answer_for_a_canceled_document_is_discarded_without_pausing() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        first_succeeds: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(
+        temp.path(),
+        Arc::clone(&model),
+        Some(Duration::from_millis(10)),
+    );
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    model.release();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    let items = pipeline.list().unwrap();
+    let canceled = items.iter().find(|item| item.id == canceled).unwrap();
+    assert_eq!(canceled.status, QueueStatus::Canceled);
+    assert!(canceled.proposal.is_none(), "the late answer was not kept");
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn a_cancel_during_recovery_stops_the_second_attempt() {
+    let temp = tempdir().unwrap();
+    // The first request fails on its own, and the person cancels while the
+    // model is being recovered for the retry.
+    let model = Arc::new(InterruptedModel {
+        hold_recover: true,
+        cancel_releases: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.recoveries.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        2,
+        "the canceled document was not sent again"
+    );
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+/// A cancel restarts the local server under the request, and no longer
+/// holds the queue while it does, so the next document can reach the model
+/// before the new server is up. It is handed back to wait, with nothing
+/// counted against it - counted, it failed as a file error the second time
+/// it met the restart - and read once the model is back.
+#[test]
+fn a_document_that_meets_the_restart_after_a_cancel_is_handed_back_not_failed() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        cancel_releases: true,
+        // The next document's request and its one retry both find no server.
+        not_ready_after_cancel: 2,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    let waiting = item_of(&pipeline, next);
+    assert_eq!(
+        waiting.status,
+        QueueStatus::Queued,
+        "handed back, and the drain ended"
+    );
+    assert_eq!(waiting.processing_failures, 0, "nothing counted against it");
+    assert_eq!(waiting.error_code, None);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+
+    // The server is up by the next pass.
+    pipeline.run_until_idle().unwrap();
+    let read = item_of(&pipeline, next);
+    assert_eq!(read.status, QueueStatus::Ready);
+    assert_eq!(read.processing_failures, 0);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 4);
+}
+
 #[test]
 fn refiled_content_at_a_new_path_is_flagged_duplicate_and_retry_analyzes_it() {
     let temp = tempdir().unwrap();
@@ -2245,7 +3219,7 @@ fn flagged_duplicates_support_keep_original_remove_and_cleared_history() {
         .unwrap();
     assert_eq!(stale.status, QueueStatus::NeedsReview);
     assert_eq!(stale.duplicate_of, None);
-    pipeline.remove(flagged.id).unwrap();
+    pipeline.remove(flagged.id, false).unwrap();
     assert!(pipeline.list().unwrap().is_empty());
 
     // With no completed rows left a fresh copy simply queues for analysis.
@@ -2536,6 +3510,51 @@ fn a_spelling_can_be_used_at_once_and_forgotten_again() {
     assert_eq!(
         pipeline.forget_rule(rule.id).unwrap_err().code,
         "RULE_NOT_FOUND"
+    );
+}
+
+/// A spelling a reviewer typed in capitals is theirs. Naming title-cases
+/// words a document printed in capitals, and it cased the rule's spelling
+/// with them: "ACME CORP" was proposed as "Acme Corp", a spelling nobody
+/// chose, and typing the capitals back taught nothing.
+#[test]
+fn a_spelling_typed_in_capitals_is_proposed_as_typed() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let (pipeline, _) = learning_pipeline(
+        temp.path(),
+        &[
+            ("2024-04-12", "April 12, 2024"),
+            ("2024-05-03", "May 3, 2024"),
+        ],
+    );
+    let first = source(&inbox, "a.pdf");
+    let second = source(&inbox, "b.pdf");
+    let queued = pipeline
+        .enqueue_files(&[first, second])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    pipeline
+        .approve(
+            queued[0],
+            "2024-04-12 Employment Agreement between John Smith and ACME CORP.pdf",
+            "A sentence about the agreement.",
+        )
+        .unwrap();
+    let rule = pipeline.learned_rules().unwrap().remove(0);
+    assert_eq!(
+        (rule.from.as_str(), rule.to.as_str()),
+        ("Acme Corporation", "ACME CORP")
+    );
+
+    pipeline.use_rule(rule.id).unwrap();
+    assert_eq!(
+        record_of(&pipeline, queued[1]).filename,
+        "2024-05-03 Employment Agreement between John Smith and ACME CORP.pdf"
     );
 }
 
@@ -4653,5 +5672,1462 @@ fn microsoft_proof_gates_automatic_and_approved_apply() {
             "{scenario:?}: {error:?}"
         );
         assert_eq!(reviewed.counters(), (1, 1, 0), "{scenario:?}");
+    }
+}
+
+const SIGNED_AGREEMENT: &str =
+    "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+const AGREEMENT_NAME: &str =
+    "2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf";
+
+/// A queue over `filesystem`, sharing the queue's own store, with
+/// `documents` agreements to read and automatic renaming off - so every
+/// rename is an approval, made when the test says.
+fn reviewed_queue(root: &Path, filesystem: Arc<dyn FileSystem>, documents: usize) -> Pipeline {
+    let worker = Arc::new(FakeWorker::new(
+        (0..documents)
+            .map(|_| Ok(parsed(SIGNED_AGREEMENT)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        (0..documents).map(|_| Ok(proposal(0.94, false))).collect(),
+    ));
+    let settings = SettingsStore::new(root.join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    Pipeline::with_file_system(
+        root.join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+        filesystem,
+    )
+    .unwrap()
+}
+
+/// Reads one document to ready and returns its id.
+fn ready_document(pipeline: &Pipeline, path: &Path) -> i64 {
+    let id = pipeline
+        .enqueue_files(&[path.to_path_buf()])
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(item_of(pipeline, id).status, QueueStatus::Ready);
+    id
+}
+
+/// A document open in a program that shares it for reading only - a PDF in
+/// Acrobat, a document in Word. While `held`, every rename is refused and so
+/// is every open for deletion; plain reads still work.
+#[derive(Default)]
+struct HeldOpenFileSystem {
+    held: AtomicBool,
+}
+
+impl HeldOpenFileSystem {
+    fn refusal(&self) -> io::Result<()> {
+        if self.held.load(Ordering::SeqCst) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected hold: shared for reading only",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl FileSystem for HeldOpenFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.refusal()?;
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        self.refusal()?;
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// Approve & rename with the PDF still open in Acrobat, then again once it
+/// is closed. The first attempt used to park the item with its receipt still
+/// planned, and every later approve then failed for good.
+#[test]
+fn open_file_rename_failure_is_recoverable_by_approve_again() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let filesystem = Arc::new(HeldOpenFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 1);
+    let id = ready_document(&pipeline, &path);
+
+    filesystem.held.store(true, Ordering::SeqCst);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+
+    let refused = item_of(&pipeline, id);
+    assert_eq!(refused.status, QueueStatus::NeedsReview);
+    assert_eq!(
+        refused.receipt.as_ref().unwrap().stage,
+        OperationStage::RolledBack,
+        "a rename that never happened is finished as rolled back, never left planned"
+    );
+    assert!(refused.unsettled_receipt.is_none());
+    // The open document was read, not locked, to check it: it is unchanged,
+    // and the reason is the refused rename.
+    assert_ne!(refused.error_code, Some(ErrorCode::FileChanged));
+    assert!(path.exists());
+
+    filesystem.held.store(false, Ordering::SeqCst);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    let destination = filed.filed_receipt.unwrap().destination;
+    assert_eq!(
+        destination.file_name().and_then(|name| name.to_str()),
+        Some(AGREEMENT_NAME)
+    );
+    assert_eq!(fs::read(&destination).unwrap(), b"scan.pdf");
+    assert!(!path.exists());
+}
+
+/// What a parked rename left in databases written before parks could be
+/// checked again: the row in review holding no receipt, and beside it a
+/// receipt still planned that blocks every new one.
+fn seed_orphaned_planned_receipt(database: &Path, item: &intern_queue::PipelineItem) {
+    insert_planned_receipt(database, item);
+    let connection = Connection::open(database).unwrap();
+    connection
+        .execute(
+            "UPDATE queue_items SET status = 'needs_review', error_code = 'FILE_CHANGED'
+             WHERE id = ?1",
+            [item.id],
+        )
+        .unwrap();
+}
+
+/// A planned rename of `item` to the agreement's name, left in the journal.
+fn insert_planned_receipt(database: &Path, item: &intern_queue::PipelineItem) {
+    Connection::open(database)
+        .unwrap()
+        .execute(
+            "INSERT INTO operation_receipts(
+               queue_item_id, direction, source_path, destination_path, pre_hash,
+               operation_kind, stage, source_exists, destination_exists, temporary_exists,
+               created_at, updated_at
+             ) VALUES (?1, 'apply', ?2, ?3, ?4, 'rename', 'planned', 1, 0, 0,
+                       unixepoch(), unixepoch())",
+            rusqlite::params![
+                item.id,
+                item.source_path.to_string_lossy(),
+                item.source_path
+                    .with_file_name(AGREEMENT_NAME)
+                    .to_string_lossy(),
+                item.source_hash,
+            ],
+        )
+        .unwrap();
+}
+
+#[test]
+fn orphaned_planned_receipt_heals_on_check_again() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 2);
+    let ids = pipeline
+        .enqueue_files(&[first.clone(), second.clone()])
+        .unwrap();
+    let (first_id, second_id) = (ids[0].id, ids[1].id);
+    pipeline.run_until_idle().unwrap();
+    for id in [first_id, second_id] {
+        seed_orphaned_planned_receipt(&database, &item_of(&pipeline, id));
+    }
+
+    let parked = item_of(&pipeline, first_id);
+    assert_eq!(parked.status, QueueStatus::NeedsReview);
+    assert!(parked.unsettled_receipt.is_some());
+    // Every action that would decide what the files are refuses, and names
+    // the open question instead of failing on it later as a conflict.
+    let refused = pipeline.keep_original(first_id).unwrap_err();
+    assert_eq!(refused.code, "RECONCILIATION_REQUIRED");
+    assert!(
+        refused.message.contains("Check again"),
+        "{}",
+        refused.message
+    );
+    assert!(pipeline.remove(first_id, false).is_err());
+    assert!(pipeline.cancel(first_id).is_err());
+
+    // Retry on a parked item is Check again: the rename never happened.
+    pipeline.retry(first_id).unwrap();
+    let checked = item_of(&pipeline, first_id);
+    assert_eq!(checked.status, QueueStatus::Ready);
+    assert!(checked.unsettled_receipt.is_none());
+    assert_eq!(checked.receipt.unwrap().stage, OperationStage::RolledBack);
+    pipeline
+        .approve(first_id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, first_id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert!(filed.filed_receipt.unwrap().destination.exists());
+    assert!(!first.exists());
+
+    // Approve checks the files first on its own.
+    pipeline
+        .approve(second_id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, second_id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    let destination = filed.filed_receipt.unwrap().destination;
+    assert_eq!(fs::read(&destination).unwrap(), b"second.pdf");
+    assert!(!second.exists());
+}
+
+/// A cross-volume copy that stops, once, with the temporary written and the
+/// receipt still planned - the moment a recovery pass running beside the
+/// apply used to roll the operation back and delete the copy under it.
+struct BlockingCopyFileSystem {
+    blocked: AtomicBool,
+    entered: Barrier,
+    release: Barrier,
+}
+
+impl FileSystem for BlockingCopyFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        let copied = StdFileSystem.copy_new_locked(source, destination)?;
+        if !self.blocked.swap(true, Ordering::SeqCst) {
+            self.entered.wait();
+            self.release.wait();
+        }
+        Ok(copied)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+#[test]
+fn recover_waits_for_in_flight_apply() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let filesystem = Arc::new(BlockingCopyFileSystem {
+        blocked: AtomicBool::new(false),
+        entered: Barrier::new(2),
+        release: Barrier::new(2),
+    });
+    let pipeline = Arc::new(reviewed_queue(temp.path(), filesystem.clone(), 1));
+    let id = ready_document(&pipeline, &path);
+
+    let approving = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.approve(id, AGREEMENT_NAME, "An employment agreement."))
+    };
+    filesystem.entered.wait();
+    // The scheduler's recovery pass comes round while the copy is in flight.
+    let recovering = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.recover())
+    };
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        !recovering.is_finished(),
+        "recovery must wait for the operation in flight, not reconcile it"
+    );
+    filesystem.release.wait();
+    approving.join().unwrap().unwrap();
+    recovering.join().unwrap().unwrap();
+
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(filed.receipt.unwrap().stage, OperationStage::Complete);
+    assert!(!path.exists());
+    let leftovers = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".intern-tmp"))
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+/// Undo with the filed document open in another program, while more work
+/// waits. The failed undo used to leave its row applying, and one applying
+/// row stops the whole queue.
+#[test]
+fn failed_undo_reconciles_and_frees_the_queue() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let later = source(temp.path(), "later.pdf");
+    let filesystem = Arc::new(HeldOpenFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 1);
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    pipeline
+        .enqueue_files(std::slice::from_ref(&later))
+        .unwrap();
+
+    filesystem.held.store(true, Ordering::SeqCst);
+    pipeline.undo(id).unwrap_err();
+
+    let after = item_of(&pipeline, id);
+    assert_eq!(after.status, QueueStatus::Completed);
+    assert_eq!(
+        after.receipt.as_ref().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    assert!(
+        after.filed_receipt.is_some(),
+        "still filed, so still undoable"
+    );
+    assert!(filed.exists());
+    assert!(!path.exists());
+    // Nothing is left applying: the next document can be claimed at once.
+    let busy = QueueStore::open(&database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    assert_eq!(claimed.source_path, later);
+    busy.transition(
+        claimed.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    drop(busy);
+
+    // And with the document closed, the undo the rollback left available
+    // goes through.
+    filesystem.held.store(false, Ordering::SeqCst);
+    pipeline.undo(id).unwrap();
+
+    let undone = item_of(&pipeline, id);
+    assert_eq!(undone.status, QueueStatus::NeedsReview);
+    assert!(
+        undone
+            .proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE)
+    );
+    assert!(path.exists());
+    assert!(!filed.exists());
+}
+
+#[test]
+fn undo_while_another_item_is_extracting() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let other = source(temp.path(), "other.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+
+    // A backlog is draining: another document is being read.
+    pipeline
+        .enqueue_files(std::slice::from_ref(&other))
+        .unwrap();
+    let busy = QueueStore::open(&database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    assert_eq!(claimed.status, QueueStatus::Extracting);
+
+    pipeline.undo(id).unwrap();
+
+    assert!(path.exists());
+    assert!(!filed.exists());
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert_eq!(
+        item_of(&pipeline, claimed.id).status,
+        QueueStatus::Extracting
+    );
+    busy.transition(
+        claimed.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn an_undo_of_a_filed_document_someone_moved_says_where_it_was() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    fs::rename(&filed, temp.path().join("moved by hand.pdf")).unwrap();
+
+    let error = pipeline.undo(id).unwrap_err();
+
+    assert_eq!(
+        error.message,
+        format!(
+            "The filed document is no longer at {}; it was moved or deleted.",
+            display_path(&filed)
+        )
+    );
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::Completed);
+}
+
+/// The first rename finds a file already at the destination name: a
+/// teammate's document syncing in (`foreign`), or a copy of this very
+/// document (not `foreign`). Later renames go through.
+struct ArrivingFileSystem {
+    foreign: bool,
+    arrived: AtomicBool,
+}
+
+impl FileSystem for ArrivingFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        if !self.arrived.swap(true, Ordering::SeqCst) {
+            if self.foreign {
+                fs::write(destination, b"a teammate's invoice")?;
+            } else {
+                fs::copy(source, destination)?;
+            }
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+fn arriving(foreign: bool) -> Arc<ArrivingFileSystem> {
+    Arc::new(ArrivingFileSystem {
+        foreign,
+        arrived: AtomicBool::new(false),
+    })
+}
+
+#[test]
+fn a_foreign_file_at_the_destination_waits_in_review_and_files_once_it_is_gone() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let pipeline = reviewed_queue(temp.path(), arriving(true), 1);
+    let id = ready_document(&pipeline, &path);
+
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+
+    let waiting = item_of(&pipeline, id);
+    assert_eq!(waiting.status, QueueStatus::NeedsReview);
+    assert_eq!(waiting.error_code, Some(ErrorCode::DestinationUnavailable));
+    assert_eq!(waiting.receipt.unwrap().stage, OperationStage::RolledBack);
+    assert!(waiting.unsettled_receipt.is_none());
+    // The record says it waits for a person, and why. It went on saying
+    // "approved", so a house-style change passed it over as an approval
+    // waiting to be filed and it kept a name built under the old rules.
+    let record = waiting.proposal.unwrap();
+    assert!(!record.approved);
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    assert!(
+        record
+            .reasons
+            .iter()
+            .any(|reason| reason == "DESTINATION_UNAVAILABLE"),
+        "{:?}",
+        record.reasons
+    );
+    let occupied = temp.path().join(AGREEMENT_NAME);
+    assert_eq!(fs::read(&occupied).unwrap(), b"a teammate's invoice");
+
+    fs::remove_file(&occupied).unwrap();
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let filed = item_of(&pipeline, id);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(filed.filed_receipt.unwrap().destination, occupied);
+    assert_eq!(fs::read(&occupied).unwrap(), b"scan.pdf");
+}
+
+#[test]
+fn confirmed_remove_of_parked_item() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let pipeline = reviewed_queue(temp.path(), arriving(false), 1);
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+    let parked = item_of(&pipeline, id);
+    assert_eq!(parked.status, QueueStatus::NeedsReview);
+    assert_eq!(parked.error_code, Some(ErrorCode::ReconciliationRequired));
+    assert!(parked.unsettled_receipt.is_some());
+
+    // Without the person saying they resolved the files, it stays.
+    assert_eq!(
+        pipeline.remove(id, false).unwrap_err().code,
+        "RECONCILIATION_REQUIRED"
+    );
+    assert_eq!(pipeline.list().unwrap().len(), 1);
+
+    pipeline.remove(id, true).unwrap();
+
+    assert!(pipeline.list().unwrap().is_empty());
+    let receipts: i64 = Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM operation_receipts WHERE queue_item_id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(receipts, 0, "receipts go with the row");
+    // Removing the row decides nothing about the files.
+    assert!(path.exists());
+    assert!(temp.path().join(AGREEMENT_NAME).exists());
+}
+
+#[test]
+fn a_backfilled_filing_is_dated_when_it_was_filed_not_when_it_was_last_saved() {
+    let temp = tempdir().unwrap();
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let path = source(temp.path(), "contract.pdf");
+    // Last saved on 1 January 2001. A rename does not change that.
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(978_307_200))
+        .unwrap();
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let filings = pipeline.filed_documents().unwrap();
+
+    assert_eq!(filings.len(), 1);
+    assert!(
+        filings[0].filed_at >= started,
+        "filed at {} - before the test began at {started}",
+        filings[0].filed_at
+    );
+}
+
+/// Two documents analyzed before either was filed both propose the same
+/// name; the second is filed beside the first, and its item says so.
+#[test]
+fn two_documents_proposing_one_name_are_filed_apart() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 2);
+    let ids = pipeline.enqueue_files(&[first, second]).unwrap();
+    pipeline.run_until_idle().unwrap();
+    for item in &ids {
+        let proposed = item_of(&pipeline, item.id).proposal.unwrap().filename;
+        assert_eq!(proposed, AGREEMENT_NAME);
+        pipeline
+            .approve(item.id, &proposed, "An employment agreement.")
+            .unwrap();
+    }
+
+    let second = item_of(&pipeline, ids[1].id).filed_receipt.unwrap();
+    assert_eq!(
+        second
+            .destination
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf")
+    );
+}
+
+/// A queue over fake files - fingerprints the test sets - reading `documents`
+/// signed agreements, with automatic renaming off.
+fn edited_queue(root: &Path, documents: usize) -> (Pipeline, Arc<FakeWorker>, Arc<FakeFiles>) {
+    let worker = Arc::new(FakeWorker::new(
+        (0..documents)
+            .map(|_| Ok(parsed(SIGNED_AGREEMENT)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        (0..documents).map(|_| Ok(proposal(0.94, false))).collect(),
+    ));
+    let files = Arc::new(FakeFiles::default());
+    let pipeline = pipeline(
+        root,
+        Arc::clone(&worker),
+        model,
+        Arc::clone(&files),
+        AppSettings::default(),
+    );
+    (pipeline, worker, files)
+}
+
+/// The document was signed after it was read. Approving it used to report
+/// "Rename applied" while the item went back to review, and every approval
+/// after that did the same.
+#[test]
+fn approve_after_edit_reports_file_changed() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, _worker, files) = edited_queue(temp.path(), 1);
+    files.trust(&path, "unsigned");
+    let id = ready_document(&pipeline, &path);
+    files.trust(&path, "signed");
+
+    let refused = pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+
+    assert_eq!(refused.code, "FILE_CHANGED");
+    assert!(
+        refused.message.contains("Re-analyze"),
+        "{}",
+        refused.message
+    );
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert!(
+        item.proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == "FILE_CHANGED")
+    );
+    assert!(files.applies.lock().unwrap().is_empty());
+}
+
+/// Re-analyze is the way on from FILE_CHANGED: the file is read again, as it
+/// is now, and the rename that follows checks against the new fingerprint.
+#[test]
+fn reanalyze_file_changed_item_gives_fresh_proposal() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, worker, files) = edited_queue(temp.path(), 2);
+    files.trust(&path, "unsigned");
+    let id = ready_document(&pipeline, &path);
+    files.trust(&path, "signed");
+    pipeline
+        .approve(id, AGREEMENT_NAME, "A reviewer's sentence.")
+        .unwrap_err();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+
+    pipeline.reanalyze(id).unwrap();
+
+    let queued = item_of(&pipeline, id);
+    assert_eq!(queued.status, QueueStatus::Queued);
+    assert_eq!(queued.source_hash, "signed");
+    assert!(queued.proposal.is_none(), "the earlier reading is gone");
+
+    pipeline.run_until_idle().unwrap();
+
+    let fresh = item_of(&pipeline, id);
+    assert_eq!(fresh.status, QueueStatus::Ready);
+    assert_eq!(fresh.source_hash, "signed");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 2);
+    let record = fresh.proposal.unwrap();
+    assert_eq!(record.revision, 1);
+    assert!(!record.approved);
+    assert!(record.reasons.is_empty(), "{:?}", record.reasons);
+    assert_eq!(record.filename, AGREEMENT_NAME);
+    assert_ne!(record.description, "A reviewer's sentence.");
+
+    // And the rename now goes through against the new fingerprint.
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(files.applies.lock().unwrap().as_slice(), &[id]);
+}
+
+#[test]
+fn reanalyze_is_refused_for_work_not_waiting_on_a_person() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, _worker, files) = edited_queue(temp.path(), 1);
+    files.trust(&path, "unsigned");
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+
+    assert_eq!(
+        pipeline.reanalyze(id).unwrap_err().code,
+        "INVALID_TRANSITION",
+        "still queued: there is nothing to read again yet"
+    );
+    assert_eq!(
+        pipeline.reanalyze(id + 100).unwrap_err().code,
+        "ITEM_NOT_FOUND"
+    );
+}
+
+/// An archive already named the way Intern names documents, with no
+/// destination: every file used to be proposed, and with automatic renaming
+/// renamed, as "... (2)".
+#[test]
+fn already_named_source_is_completed_without_rename() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let path = source(&inbox, AGREEMENT_NAME);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&automatic_settings()).unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let item = pipeline.list().unwrap().pop().unwrap();
+    let record = item.proposal.as_ref().unwrap();
+    assert_eq!(record.filename, AGREEMENT_NAME, "no ' (2)'");
+    assert_eq!(item.status, QueueStatus::Completed);
+    assert!(
+        record.reasons.iter().any(|reason| reason == ALREADY_NAMED),
+        "{:?}",
+        record.reasons
+    );
+    assert!(item.receipt.is_none(), "no file operation was journalled");
+    assert!(path.exists());
+    let names = std::fs::read_dir(&inbox)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec![AGREEMENT_NAME.to_owned()]);
+}
+
+/// A name that differs from the proposal only in case is the document's own
+/// name to Windows: proposed without a suffix, and approved without a rename,
+/// since this release makes no case-only renames.
+#[test]
+fn lowercase_named_source_is_not_suffixed() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let lowercase = AGREEMENT_NAME.to_lowercase();
+    let path = source(&inbox, &lowercase);
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+
+    assert_eq!(
+        item_of(&pipeline, id).proposal.unwrap().filename,
+        AGREEMENT_NAME
+    );
+
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::Completed);
+    assert!(
+        item.proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == ALREADY_NAMED)
+    );
+    assert!(path.exists(), "the file keeps the name it had");
+    assert_eq!(std::fs::read_dir(&inbox).unwrap().count(), 1);
+}
+
+/// A name approved while the queue was busy waits, approved, to be filed. A
+/// spelling rule learned in the meantime used to rebuild it from the facts,
+/// which do not carry the date the reviewer typed, and the rebuilt name was
+/// what the approval then filed - or, with no date left, sent back to review.
+#[test]
+fn approved_deferred_name_survives_rule_change() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&filed).unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    // A says no date at all, so the reviewer types one.
+    let undated = "Employment Agreement between John Smith and Acme Corporation         covering duties, salary, and term.";
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(undated)),
+        Ok(dated_text("May 3, 2024")),
+        Ok(dated_text("April 12, 2024")),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(dated_proposal("2024-05-03", "May 3, 2024")),
+        Ok(dated_proposal("2024-04-12", "April 12, 2024")),
+    ]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        database.clone(),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    let ids = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, a).filename,
+        "Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+    // The respelling once, while the queue is free: a decision, not a rule.
+    pipeline
+        .approve(
+            c,
+            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "An employment agreement.",
+        )
+        .unwrap();
+    assert!(!pipeline.learned_rules().unwrap()[0].active);
+
+    // Another document is being read: approvals wait to be filed.
+    pipeline.enqueue_files(&[source(&inbox, "d.pdf")]).unwrap();
+    let busy = QueueStore::open(&database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    let typed = "2024-03-01 Employment Agreement between John Smith and Acme Corporation.pdf";
+    pipeline
+        .approve(a, typed, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, a).status, QueueStatus::Ready);
+    // The same respelling a second time makes it a rule.
+    pipeline
+        .approve(
+            b,
+            "2024-05-03 Employment Agreement between John Smith and Acme.pdf",
+            "An employment agreement.",
+        )
+        .unwrap();
+    assert!(pipeline.learned_rules().unwrap()[0].active);
+    assert_eq!(record_of(&pipeline, a).filename, typed);
+
+    busy.transition(
+        claimed.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    drop(busy);
+    pipeline.run_until_idle().unwrap();
+
+    let filed_a = item_of(&pipeline, a);
+    assert_eq!(filed_a.status, QueueStatus::Completed);
+    assert_eq!(
+        filed_a.filed_receipt.unwrap().destination,
+        filed.join(typed)
+    );
+    assert_eq!(item_of(&pipeline, b).status, QueueStatus::Completed);
+}
+
+/// A filing to another volume whose original another program keeps open:
+/// while `refuse` is set, the verified copy is published but no original -
+/// a `.pdf` not yet carrying a filed name - can be deleted.
+#[derive(Default)]
+struct UndeletableOriginalFileSystem {
+    refuse: AtomicBool,
+}
+
+struct UndeletableLocked(Box<dyn LockedFile>);
+
+impl LockedFile for UndeletableLocked {
+    fn hash(&mut self) -> io::Result<String> {
+        self.0.hash()
+    }
+    fn identity(&self) -> io::Result<intern_core::FileIdentity> {
+        self.0.identity()
+    }
+    fn delete(self: Box<Self>) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "injected: the original is held open",
+        ))
+    }
+}
+
+impl FileSystem for UndeletableOriginalFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        let locked = StdFileSystem.lock_for_delete(path)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if self.refuse.load(Ordering::SeqCst)
+            && name.ends_with(".pdf")
+            && !name.starts_with("2024-")
+        {
+            return Ok(Box::new(UndeletableLocked(locked)));
+        }
+        Ok(locked)
+    }
+}
+
+/// Approving a document whose earlier filing was left with its original
+/// undeleted finishes that filing first. The name and sentence the person
+/// approved used to be dropped without a word while the window said "Rename
+/// applied": the document stayed under the earlier name, and nothing was
+/// learned from the edit.
+#[test]
+fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
+    let temp = tempdir().unwrap();
+    let folders = ["a", "b", "c"].map(|folder| {
+        let folder = temp.path().join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    });
+    let paths = [
+        source(&folders[0], "scan.pdf"),
+        source(&folders[1], "letter.pdf"),
+        source(&folders[2], "note.pdf"),
+    ];
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 3);
+    let ids = paths
+        .iter()
+        .map(|path| ready_document(&pipeline, path))
+        .collect::<Vec<_>>();
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    for &id in &ids {
+        pipeline
+            .approve(id, AGREEMENT_NAME, "An employment agreement.")
+            .unwrap_err();
+        let parked = item_of(&pipeline, id);
+        assert_eq!(parked.status, QueueStatus::NeedsReview);
+        assert_eq!(parked.error_code, Some(ErrorCode::SourceDeleteFailed));
+    }
+    filesystem.refuse.store(false, Ordering::SeqCst);
+
+    // A different name: the earlier filing is finished, and the person is
+    // told their name was not the one used.
+    let renamed = "2024-04-12 Employment Agreement with Acme.pdf";
+    let refused = pipeline
+        .approve(ids[0], renamed, "An employment agreement.")
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert!(
+        refused.message.contains(AGREEMENT_NAME),
+        "{}",
+        refused.message
+    );
+    let filed = item_of(&pipeline, ids[0]);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folders[0].join(AGREEMENT_NAME)
+    );
+    assert!(!folders[0].join(renamed).exists());
+    assert!(!paths[0].exists());
+
+    // A different sentence alone is a change too.
+    let refused = pipeline
+        .approve(ids[1], AGREEMENT_NAME, "A signed employment agreement.")
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert_eq!(item_of(&pipeline, ids[1]).status, QueueStatus::Completed);
+
+    // Exactly what was being filed: done, and nothing to say.
+    pipeline
+        .approve(ids[2], AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, ids[2]).status, QueueStatus::Completed);
+    assert!(folders[2].join(AGREEMENT_NAME).exists());
+    assert!(!paths[2].exists());
+}
+
+/// A rename an older build left planned, beside a document read again since
+/// and sent to review - the model asked for a person. Checking it again
+/// rolls the rename back, and used to leave the document ready: with
+/// automatic renaming on, filed under a name nobody approved.
+#[test]
+fn checking_again_keeps_a_document_read_since_in_review() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let path = source(temp.path(), "scan.pdf");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_file_system(
+        database.clone(),
+        Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))])),
+        Arc::new(FakeModel::new(vec![Ok(proposal(0.94, true))])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        Arc::new(StdFileSystem),
+    )
+    .unwrap();
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    insert_planned_receipt(&database, &item_of(&pipeline, id));
+    assert!(item_of(&pipeline, id).unsettled_receipt.is_some());
+
+    pipeline.retry(id).unwrap();
+
+    let checked = item_of(&pipeline, id);
+    assert_eq!(checked.status, QueueStatus::NeedsReview);
+    assert_eq!(checked.receipt.unwrap().stage, OperationStage::RolledBack);
+    assert!(checked.unsettled_receipt.is_none());
+    let record = checked.proposal.unwrap();
+    assert!(!record.approved);
+    assert_eq!(record.status, ProposalStatus::NeedsReview);
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+    assert!(path.exists(), "nothing was filed without an approval");
+
+    // Approving it is still how it is filed.
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::Completed);
+    assert!(!path.exists());
+}
+
+/// A destination on a network share that is offline at the moment of an
+/// undo: nothing under `share` can be read, and asking whether a file is
+/// there fails rather than answering no.
+struct OfflineShareFileSystem {
+    share: PathBuf,
+    offline: AtomicBool,
+}
+
+impl OfflineShareFileSystem {
+    fn unreachable(&self, path: &Path) -> io::Result<()> {
+        if self.offline.load(Ordering::SeqCst) && path.starts_with(&self.share) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "injected: the network path could not be reached",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl FileSystem for OfflineShareFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        self.unreachable(path).is_ok() && StdFileSystem.exists(path)
+    }
+    fn try_exists(&self, path: &Path) -> io::Result<bool> {
+        self.unreachable(path)?;
+        StdFileSystem.try_exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        self.unreachable(path)?;
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        self.unreachable(source)?;
+        self.unreachable(destination)?;
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        self.unreachable(path)?;
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// Undo with the share the document was filed to offline. That the filed
+/// document could not be found used to read as "it was moved or deleted",
+/// which could send a person off to clear the history of a filing that is
+/// intact and only out of reach.
+#[test]
+fn an_undo_against_an_unreachable_share_does_not_say_the_document_is_gone() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let share = temp.path().join("share");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::create_dir_all(&share).unwrap();
+    let path = source(&inbox, "scan.pdf");
+    let share = share.canonicalize().unwrap();
+    let filesystem = Arc::new(OfflineShareFileSystem {
+        share: share.clone(),
+        offline: AtomicBool::new(false),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: share.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_file_system(
+        temp.path().join("queue.sqlite3"),
+        Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))])),
+        Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))])),
+        Arc::new(RecordingEvents::default()),
+        settings,
+        filesystem.clone(),
+    )
+    .unwrap();
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    assert!(filed.starts_with(&share));
+
+    filesystem.offline.store(true, Ordering::SeqCst);
+    let error = pipeline.undo(id).unwrap_err();
+
+    assert_ne!(error.code, "FILE_CHANGED");
+    assert_eq!(
+        error.message,
+        format!(
+            "The filed document at {} could not be reached. Check that its folder is available, then try Undo again.",
+            display_path(&filed)
+        )
+    );
+    let still_filed = item_of(&pipeline, id);
+    assert_eq!(still_filed.status, QueueStatus::Completed);
+    assert!(still_filed.filed_receipt.is_some());
+
+    filesystem.offline.store(false, Ordering::SeqCst);
+    pipeline.undo(id).unwrap();
+    assert!(path.exists());
+    assert!(!filed.exists());
+}
+
+/// Undoes one filing the first time the filed document is read, and holds
+/// the undo there until the test lets it go.
+struct HeldUndoFileSystem {
+    armed: AtomicBool,
+    entered: Barrier,
+    release: Barrier,
+}
+
+impl FileSystem for HeldUndoFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        if path.file_name().and_then(|name| name.to_str()) == Some(AGREEMENT_NAME)
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
+            self.entered.wait();
+            self.release.wait();
+        }
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        StdFileSystem.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.lock_for_delete(path)
+    }
+}
+
+/// A worker that, as it starts each document, notes the status the queue
+/// database holds for the `watched` item at that moment.
+struct StatusProbeWorker {
+    inner: FakeWorker,
+    database: PathBuf,
+    watched: Mutex<Option<i64>>,
+    seen: Mutex<Vec<String>>,
+}
+
+impl WorkerBoundary for StatusProbeWorker {
+    fn extract(
+        &self,
+        request_id: &str,
+        path: &Path,
+        progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        if let Some(id) = *self.watched.lock().unwrap() {
+            let status: String = Connection::open(&self.database)
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM queue_items WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.seen.lock().unwrap().push(status);
+        }
+        self.inner.extract(request_id, path, progress)
+    }
+
+    fn cancel(&self, request_id: &str) -> Result<(), WorkerFailure> {
+        self.inner.cancel(request_id)
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        self.inner.restart()
+    }
+
+    fn shutdown(&self) -> Result<(), WorkerFailure> {
+        self.inner.shutdown()
+    }
+}
+
+/// An undo started while a backlog drains. Nothing is claimed while a
+/// document is being renamed, so the drain used to find nothing, end, and
+/// leave the backlog until something else woke the scheduler - up to a
+/// minute later. It waits for the undo instead, and carries on; and the
+/// document the undo put back is not filed again on the way.
+#[test]
+fn a_drain_waits_for_an_undo_in_flight_instead_of_stopping() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let later = source(temp.path(), "later.pdf");
+    let filesystem = Arc::new(HeldUndoFileSystem {
+        armed: AtomicBool::new(false),
+        entered: Barrier::new(2),
+        release: Barrier::new(2),
+    });
+    let worker = Arc::new(StatusProbeWorker {
+        inner: FakeWorker::new(vec![
+            Ok(parsed(SIGNED_AGREEMENT)),
+            Ok(parsed(SIGNED_AGREEMENT)),
+        ]),
+        database: temp.path().join("queue.sqlite3"),
+        watched: Mutex::new(None),
+        seen: Mutex::new(Vec::new()),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let pipeline = Arc::new(
+        Pipeline::with_file_system(
+            temp.path().join("queue.sqlite3"),
+            worker.clone(),
+            Arc::new(FakeModel::new(vec![
+                Ok(proposal(0.94, false)),
+                Ok(proposal(0.94, false)),
+            ])),
+            Arc::new(RecordingEvents::default()),
+            settings,
+            filesystem.clone(),
+        )
+        .unwrap(),
+    );
+    let id = ready_document(&pipeline, &path);
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    let filed = item_of(&pipeline, id).filed_receipt.unwrap().destination;
+    let later_id = pipeline
+        .enqueue_files(std::slice::from_ref(&later))
+        .unwrap()
+        .remove(0)
+        .id;
+
+    *worker.watched.lock().unwrap() = Some(id);
+    filesystem.armed.store(true, Ordering::SeqCst);
+    let undoing = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.undo(id))
+    };
+    filesystem.entered.wait();
+    let draining = {
+        let pipeline = Arc::clone(&pipeline);
+        thread::spawn(move || pipeline.run_until_idle())
+    };
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        !draining.is_finished(),
+        "the drain waits for the undo rather than ending with work queued"
+    );
+    filesystem.release.wait();
+    undoing.join().unwrap().unwrap();
+    draining.join().unwrap().unwrap();
+
+    assert_eq!(item_of(&pipeline, later_id).status, QueueStatus::Ready);
+    // When the drain went on to the next document, the one just put back was
+    // already in review. An undo leaves its item ready, with the approval of
+    // the rename it took back, and a drain that had been waiting for the undo
+    // could otherwise file it again before the undo said it was undone.
+    assert_eq!(
+        *worker.seen.lock().unwrap(),
+        vec!["needs_review".to_owned()]
+    );
+    let undone = item_of(&pipeline, id);
+    assert_eq!(undone.status, QueueStatus::NeedsReview);
+    assert!(
+        undone
+            .proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE)
+    );
+    assert!(path.exists());
+    assert!(!filed.exists());
+}
+
+/// A receipt a newer build wrote - a stage or a direction this one has never
+/// heard of - in a database opened after the older release was reinstalled.
+/// The queue listing read every item's receipts strictly, so one such row
+/// failed the whole listing and the window showed an empty queue.
+#[test]
+fn a_receipt_from_a_newer_build_does_not_empty_the_queue() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 2);
+    let first_id = ready_document(&pipeline, &first);
+    let second_id = ready_document(&pipeline, &second);
+    let connection = Connection::open(&database).unwrap();
+    let insert = |id: i64, direction: &str, stage: &str| {
+        connection
+            .execute(
+                "INSERT INTO operation_receipts(
+                   queue_item_id, direction, source_path, destination_path, pre_hash,
+                   operation_kind, stage, source_exists, destination_exists, temporary_exists,
+                   created_at, updated_at
+                 ) VALUES (?1, ?2, 'a.pdf', 'b.pdf', 'h', 'rename', ?3, 1, 0, 0,
+                           unixepoch(), unixepoch())",
+                rusqlite::params![id, direction, stage],
+            )
+            .unwrap();
+    };
+    insert(first_id, "apply", "abandoned");
+    insert(second_id, "sideways", "planned");
+
+    let items = pipeline.list().unwrap();
+
+    assert_eq!(items.len(), 2);
+    for item in &items {
+        assert_eq!(item.status, QueueStatus::Ready);
+        assert!(item.receipt.is_none());
+        assert!(item.filed_receipt.is_none());
+        assert!(item.unsettled_receipt.is_none());
     }
 }

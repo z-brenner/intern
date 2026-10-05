@@ -27,6 +27,8 @@ intern-queue = { path = "../crates/intern-queue" }
 # (Windows Credential Manager, the macOS Keychain, the kernel keyring on
 # Linux), never in settings.json. Native backends only: no D-Bus, no daemon.
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native", "apple-native", "linux-native"] }
+# Jitter for the hosted model's retry wait. Already built for intern-engine.
+rand = "=0.8.5"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 tauri = { version = "2.11.2", features = ["tray-icon", "image-png"] }

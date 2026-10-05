@@ -692,30 +692,92 @@ fn default_policy_cancels_header_acquisition_and_joins_network_work() {
     server.wait_for_disconnect();
 }
 
+/// A resume used to read and hash the whole partial file first - 1.1 GB of
+/// disk and CPU on every retry - and then throw the digest away, because
+/// there is nothing to compare a prefix's digest with. The ranged request now
+/// goes out on the file's length alone, and the full-file check after the
+/// download is the integrity gate it always was.
 #[test]
-fn cancellation_while_hashing_a_resume_prefix_skips_the_network_request() {
-    let bytes = vec![7_u8; 2 * 1024 * 1024 + 31];
+fn resume_does_not_read_partial_body() {
+    let bytes = (0..2 * 1024 * 1024 + 31)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    let split = 2 * 1024 * 1024;
     let directory = tempdir().unwrap();
     let partial = directory.path().join("model.gguf.partial");
-    fs::write(&partial, &bytes[..2 * 1024 * 1024]).unwrap();
-    let cancellation = CancellationToken::new();
-    let cancel_from_progress = cancellation.clone();
+    fs::write(&partial, &bytes[..split]).unwrap();
+    // Where the permission bits are honoured (not for root), a body nothing
+    // may read until the download has begun: the resume must not need to.
+    // Reading is given back at the first byte of progress, for the final
+    // check of the whole file.
+    set_mode(&partial, 0o200);
+    let server = FakeServer::sequence(vec![response(
+        "206 Partial Content",
+        &[(
+            "Content-Range",
+            format!("bytes {split}-{}/{}", bytes.len() - 1, bytes.len()),
+        )],
+        &bytes[split..],
+    )]);
 
-    let error = downloader(u64::MAX)
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&events);
+    downloader(u64::MAX)
         .download(
-            &file("http://127.0.0.1:1/model.gguf", &bytes),
+            &file(&server.url, &bytes),
             directory.path(),
-            &cancellation,
-            move |event| {
-                if event.stage == SetupStage::Checking && event.completed_bytes > 0 {
-                    cancel_from_progress.cancel();
+            &CancellationToken::new(),
+            {
+                let partial = partial.clone();
+                move |event| {
+                    if event.stage == SetupStage::Downloading {
+                        set_mode(&partial, 0o600);
+                    }
+                    seen.lock().unwrap().push(event);
                 }
             },
         )
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.code(), ModelErrorCode::DownloadCanceled);
-    assert_eq!(fs::metadata(partial).unwrap().len(), 2 * 1024 * 1024);
+    let events = events.lock().unwrap();
+    let before_download = events
+        .iter()
+        .take_while(|event| event.stage != SetupStage::Downloading)
+        .collect::<Vec<_>>();
+    assert!(
+        before_download
+            .iter()
+            .all(|event| event.stage == SetupStage::Checking && event.completed_bytes == 0),
+        "the partial body was read before the request: {before_download:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event.stage == SetupStage::Downloading)
+            .map(|event| event.completed_bytes),
+        Some(split as u64),
+        "the download picks up where the partial file ends"
+    );
+    assert!(
+        server.requests.lock().unwrap()[0]
+            .to_ascii_lowercase()
+            .contains(&format!("range: bytes={split}-"))
+    );
+    assert_eq!(
+        fs::read(directory.path().join("model.gguf")).unwrap(),
+        bytes
+    );
+}
+
+/// Sets a file's permission bits, where a file has any.
+fn set_mode(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
 }
 
 #[test]
