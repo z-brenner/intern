@@ -62,6 +62,7 @@ interface QueueItemDto {
   errorCode?: string;
   progress?: number;
   undoable?: boolean;
+  approved?: boolean;
   proposalRevision?: string | number;
   suggestedDate?: string;
   datesInDocument?: string[];
@@ -487,6 +488,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.progress === undefined ? {} : { progress: item.progress }),
     ...(status === 'processing' ? { cancelable: item.status !== 'applying' } : {}),
     ...(item.undoable === undefined ? {} : { undoable: item.undoable }),
+    ...(status === 'ready' && item.approved === true ? { approved: true } : {}),
     ...(item.proposalRevision === undefined ? {} : { proposalRevision: String(item.proposalRevision) }),
     ...(item.suggestedDate === undefined ? {} : { suggestedDate: item.suggestedDate }),
     ...(item.datesInDocument?.length ? { datesInDocument: [...item.datesInDocument] } : {}),

@@ -192,6 +192,64 @@ describe('keyboard review', () => {
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Removed Scan 0106.pdf from the queue. Next: Scan 0103.pdf.'));
   });
 
+  // While a batch is still being read, the backend files an approved name
+  // between documents and the approval comes back ready. It is decided all
+  // the same: review counted it as still to decide, and came back round to it.
+  it('an approval the queue files later is not left to decide again', async () => {
+    const base = createReviewBatchBridge({ deferApprovalsWhileBusy: true, items: [
+      { id: 'a', originalFilename: 'Scan 0301.pdf', status: 'review', proposedFilename: '2024-06-01 Letter from Northwind Traders.pdf', description: 'A letter.', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' },
+      { id: 'b', originalFilename: 'Scan 0302.pdf', status: 'review', proposedFilename: '2024-06-02 Invoice from Fabrikam Inc.pdf', description: 'An invoice.', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' },
+      { id: 'busy', originalFilename: 'Scan 0303.pdf', status: 'processing', stage: 'reading' },
+    ] });
+    const bridge = { ...base, approve: vi.fn(base.approve) };
+    render(<App bridge={bridge} />);
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0301.pdf'));
+    expect(inspector()).toHaveTextContent('1 of 2 to decide');
+    const status = screen.getByRole('status', { name: 'Action status' });
+
+    press('Enter', { ctrlKey: true });
+
+    await waitFor(() => expect(status).toHaveTextContent('Scan 0301.pdf will be renamed when the queue is free. Next: Scan 0302.pdf.'));
+    expect(inspector()).toHaveTextContent('1 of 1 to decide');
+    await waitFor(() => expect(within(inspector()).getByLabelText('Filename')).toHaveFocus());
+
+    press('Enter', { ctrlKey: true });
+
+    // Nothing is left to decide, so review goes back to the queue rather
+    // than round to the first approval.
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument());
+    expect(status).toHaveTextContent('Scan 0302.pdf will be renamed when the queue is free.');
+    expect(status).not.toHaveTextContent('Next');
+    expect(bridge.approve).toHaveBeenCalledTimes(2);
+
+    // Opened again, it says why it is still in the queue.
+    fireEvent.click(rowButton('Scan 0301.pdf'));
+    await waitFor(() => expect(inspector()).toHaveTextContent('Approved. It will be renamed when the queue is free.'));
+    expect(inspector()).not.toHaveTextContent('to decide');
+  });
+
+  // The queue can start filing a deferred approval the moment it frees up,
+  // and the read after the command then shows it processing: a rename under
+  // way, not one that needs review again.
+  it('an approval already being filed is not called sent back', async () => {
+    const base = createReviewBatchBridge();
+    let filing = false;
+    const bridge = {
+      ...base,
+      approve: vi.fn(async () => { filing = true; }),
+      listItems: async () => (await base.listItems()).map((item) => filing && item.id === 'scan-0101'
+        ? { ...item, status: 'processing' as const, stage: 'filing' as const, cancelable: false, reason: undefined, errorCode: undefined }
+        : item),
+    };
+    render(<App bridge={bridge} />);
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0101.pdf'));
+
+    press('Enter', { ctrlKey: true });
+
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Scan 0101.pdf is being renamed. Next: Scan 0102.pdf.'));
+    expect(inspector()).toHaveTextContent('Scan 0102.pdf');
+  });
+
   it('goes back to the queue when nothing is left to decide', async () => {
     const base = createReviewBatchBridge({ items: [
       { id: 'only', originalFilename: 'Scan 0201.pdf', status: 'review', proposedFilename: '2024-05-01 Letter.pdf', reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' },

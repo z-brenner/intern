@@ -216,6 +216,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
     <div className="source-file">
       <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
       <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
+      {item.status === 'ready' && item.approved && <p className="filed-outcome">Approved. It will be renamed when the queue is free.</p>}
       {completed && (item.keptOriginal
         ? <p className="filed-outcome">Kept its original name</p>
         : filedAs && <p className="filed-outcome">Renamed to <strong>{filedAs}</strong></p>)}

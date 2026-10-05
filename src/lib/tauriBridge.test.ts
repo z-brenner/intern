@@ -226,6 +226,24 @@ describe('TauriBridge', () => {
     for (const field of ['filedName', 'filedPath', 'keptOriginal', 'parked']) expect(items[5]).not.toHaveProperty(field);
   });
 
+  // An approval the queue was too busy to file stays ready; the flag is what
+  // says it is decided rather than still waiting for a person.
+  it('keeps the approved flag of a ready item waiting for the queue', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'approved.pdf', status: 'ready', proposedFilename: '2024-01-02 Letter.pdf', approved: true },
+        { id: 2, originalFilename: 'proposed.pdf', status: 'ready', proposedFilename: '2024-01-03 Letter.pdf', approved: false },
+        { id: 3, originalFilename: 'old.pdf', status: 'ready', proposedFilename: '2024-01-04 Letter.pdf' },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0]).toMatchObject({ status: 'ready', approved: true });
+    expect(items[1]).not.toHaveProperty('approved');
+    expect(items[2]).not.toHaveProperty('approved');
+  });
+
   it('keeps a history description only when the backend sent a sentence', async () => {
     const fake = fakeTransport({
       history_list: [

@@ -28,9 +28,16 @@ export function retryAccepted(item: QueueItem): boolean {
   return item.status === 'review' && (isParked(item) || RETRYABLE_REVIEW_CODES.has(item.errorCode ?? ''));
 }
 
-/** Ready and review items can be decided, unless their files need checking first. */
+/**
+ * Ready and review items wait for a decision, unless their files need
+ * checking first - or the item is ready because it was approved already, and
+ * waits only for the queue to be free to file it. Counted as undecided, an
+ * approval the backend deferred was left "to decide", and review came back
+ * round to it after the next one.
+ */
 export function undecided(item: QueueItem): boolean {
-  return (item.status === 'review' || item.status === 'ready') && !isParked(item);
+  if (item.status === 'ready') return item.approved !== true;
+  return item.status === 'review' && !isParked(item);
 }
 
 /** What the inspector offers for an item: exactly what the backend accepts for it, and nothing it refuses. */

@@ -106,6 +106,11 @@ pub struct QueueItemDto {
     reason: Option<String>,
     error_code: Option<String>,
     undoable: bool,
+    /// A ready item whose name a person has already approved. An approval
+    /// that arrives while the queue is busy with another document is kept
+    /// and filed between documents, so the item stays ready - decided, and
+    /// waiting only for the queue, which the status alone cannot say.
+    approved: bool,
     proposal_revision: Option<String>,
     reconciliation: Option<ReconciliationDto>,
     /// A date the model proposed that validation withheld from the filename,
@@ -2557,6 +2562,8 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                 receipt.direction == OperationDirection::Apply
                     && receipt.stage == OperationStage::Complete
             }),
+        approved: item.status == QueueStatus::Ready
+            && proposal.is_some_and(|record| record.approved),
         proposal_revision: proposal.map(|record| record.revision.to_string()),
         reconciliation,
         suggested_date: proposal.and_then(|record| suggested_date(&record.analysis)),
@@ -3649,6 +3656,78 @@ mod file_date_tests {
         assert!(date == today || date == yesterday, "{date}");
         let _ = std::fs::remove_file(&temp);
         assert_eq!(file_modified_date(&temp), None);
+    }
+}
+
+#[cfg(test)]
+mod approval_dto_tests {
+    use std::path::PathBuf;
+
+    use intern_core::QueueStatus;
+    use intern_queue::{PipelineItem, ProposalRecord};
+
+    use super::queue_item_dto;
+
+    /// An item whose proposal is stored as the queue stores it - JSON, which
+    /// every later field must be able to read with its serde default.
+    fn item(status: QueueStatus, approved: bool) -> PipelineItem {
+        let proposal: ProposalRecord = serde_json::from_value(serde_json::json!({
+            "analysis": {
+                "filename": "2024-02-09 Invoice from Fabrikam Inc.pdf",
+                "description": "An invoice from Fabrikam Inc.",
+                "status": "ready",
+                "reviewReasons": [],
+                "proposal": {
+                    "document_type": "Invoice",
+                    "document_date": "2024-02-09",
+                    "date_role": null,
+                    "parties": ["Fabrikam Inc"],
+                    "party_relation": "from",
+                    "description": "An invoice from Fabrikam Inc.",
+                    "confidence": 0.9,
+                    "evidence": { "date": null, "document_type": null, "parties": [] }
+                },
+                "telemetry": {
+                    "sourceCharacters": 0, "digestCharacters": 0, "compressionRatio": 0.0,
+                    "distillMicros": 0, "inferenceMillis": 0
+                }
+            },
+            "status": "ready",
+            "filename": "2024-02-09 Invoice from Fabrikam Inc.pdf",
+            "description": "An invoice from Fabrikam Inc.",
+            "reasons": [],
+            "revision": 2,
+            "approved": approved
+        }))
+        .unwrap();
+        PipelineItem {
+            id: 12,
+            source_path: PathBuf::from("/intake/scan.pdf"),
+            source_hash: "hash".into(),
+            status,
+            processing_failures: 0,
+            error_code: None,
+            proposal: Some(proposal),
+            receipt: None,
+            duplicate_of: None,
+        }
+    }
+
+    // The queue was busy with another document, so the approved name waits
+    // in the proposal and the item stays ready. Without the flag the window
+    // counted it as still to decide and review came back round to it.
+    #[test]
+    fn an_approval_waiting_for_the_queue_is_reported_as_decided() {
+        let dto = |status, approved| queue_item_dto(item(status, approved)).unwrap();
+        assert!(dto(QueueStatus::Ready, true).approved);
+        // Ready alone is a proposal still waiting for a person.
+        assert!(!dto(QueueStatus::Ready, false).approved);
+        // Once filed, or sent back, there is nothing left waiting on it.
+        for status in [QueueStatus::Completed, QueueStatus::NeedsReview] {
+            assert!(!dto(status, true).approved, "{status:?}");
+        }
+        let json = serde_json::to_value(dto(QueueStatus::Ready, true)).unwrap();
+        assert_eq!(json["approved"], serde_json::json!(true));
     }
 }
 

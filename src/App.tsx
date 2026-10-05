@@ -302,13 +302,16 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     // it files the name between documents while the queue is busy, and sends
     // the item back to review when the file changed since it was read. Each is
     // said as it is, and an item sent back stays on screen with its reason.
-    if (after && after !== 'completed' && after !== 'ready') {
+    // Only review is "back": an approval being filed as the queue was read
+    // shows as processing, and that is a rename under way.
+    if (after === 'review') {
       setActionMessage(`${item.originalFilename} was not renamed. It needs review again.`);
       return;
     }
     const done = decision === 'keep' ? `Kept ${item.originalFilename} under its own name.`
       : decision === 'remove' ? `Removed ${item.originalFilename} from the queue.`
-        : after === 'ready' ? `${item.originalFilename} will be renamed when the queue is free.` : `Renamed ${item.originalFilename}.`;
+        : after === 'ready' ? `${item.originalFilename} will be renamed when the queue is free.`
+          : after === 'processing' ? `${item.originalFilename} is being renamed.` : `Renamed ${item.originalFilename}.`;
     setActionMessage(done);
     // A rename the queue shows as filed can be put back from the toast.
     if (after === 'completed' && fresh?.find((entry) => entry.id === item.id)?.undoable) showToast('done', renamedCount(1), [item.id]);

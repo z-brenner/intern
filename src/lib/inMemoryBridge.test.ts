@@ -231,6 +231,22 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
     expect((await bridge.listItems())[0]).toMatchObject({ status: 'completed', proposedFilename: '2024-05-01 Lease.PDF', filedName: '2024-05-01 Lease.PDF', description: 'A lease.', undoable: true });
   });
 
+  it('can keep an approval for later while another document is processing, as begin_applying does', async () => {
+    const items = () => [review('lease', { reason: 'Low confidence.', errorCode: 'LOW_CONFIDENCE' }), review('memo'), { id: 'busy', originalFilename: 'busy.pdf', status: 'processing' as const, stage: 'reading' as const }];
+    const deferring = createInMemoryBridge({ items: items(), deferApprovalsWhileBusy: true });
+
+    await deferring.approve('lease', '2024-05-01 Lease.pdf', ' A lease. ');
+
+    const [lease] = await deferring.listItems();
+    expect(lease).toMatchObject({ status: 'ready', approved: true, proposedFilename: '2024-05-01 Lease.pdf', description: 'A lease.' });
+    expect(lease).not.toHaveProperty('reason');
+    expect(lease).not.toHaveProperty('errorCode');
+    // Off unless asked for: the demo's processing document never finishes.
+    const demo = createInMemoryBridge({ items: items() });
+    await demo.approve('memo', '2024-05-02 Memo.pdf', '');
+    expect((await demo.listItems())[1]).toMatchObject({ status: 'completed' });
+  });
+
   it('undoes only a filed rename, sending the document back to review', async () => {
     const bridge = createInMemoryBridge({ items: [
       { id: 'filed', originalFilename: 'filed.pdf', status: 'completed', proposedFilename: '2024-05-01 Filed.pdf', filedName: '2024-05-01 Filed.pdf', undoable: true },

@@ -34,6 +34,13 @@ export interface QueueItem {
   progress?: number;
   cancelable?: boolean;
   undoable?: boolean;
+  /**
+   * A ready item whose name a person has already approved. While the queue
+   * is busy with another document the backend keeps the approval and files
+   * it between documents, so the item stays ready: decided, and waiting only
+   * for the queue.
+   */
+  approved?: boolean;
   proposalRevision?: string;
   /**
    * A date the model proposed that Intern could not find written in the

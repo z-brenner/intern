@@ -88,6 +88,13 @@ export interface InMemoryBridgeOptions {
   liveEvents?: boolean;
   /** How long a re-analysis takes before the item is back in review. */
   analysisDelayMs?: number;
+  /**
+   * File an approval only while no other document is being processed, as
+   * the backend's begin_applying does; otherwise keep the approved name and
+   * leave the item ready, for the queue to file between documents. Off by
+   * default: the demo's processing document never finishes.
+   */
+  deferApprovalsWhileBusy?: boolean;
 }
 
 export type FakeSharePointCall = 'microsoftSignInStart' | 'microsoftSignInPoll' | 'microsoftOpenSignIn' | 'microsoftDisconnect' | 'getSharePointSetup' | 'startSharePointSync' | 'activateOnboarding' | 'completeOnboarding';
@@ -350,6 +357,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (isParked(item)) throw parkedRefusal();
       if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
+      // APPLY_DEFERRED: the approval is kept and the command succeeds, but
+      // the document is not renamed yet.
+      if (options.deferApprovalsWhileBusy && items.some((entry) => entry.id !== id && entry.status === 'processing')) {
+        replace({ ...settledFields(item), status: 'ready', proposedFilename: name, description: description.trim(), approved: true, proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        return;
+      }
       // Approval clears the proposal's review reasons, and the filing is
       // recorded under the name it was given.
       replace({ ...settledFields(item), status: 'completed', proposedFilename: name, filedName: name, description: description.trim(), undoable: true, keptOriginal: false });

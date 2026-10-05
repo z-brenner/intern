@@ -131,6 +131,8 @@ describe('the order review works through', () => {
 
   it('takes review items first, then ready ones, each in table order, and skips what cannot be decided', () => {
     expect(undecidedOrder(rows).map(({ id }) => id)).toEqual(['b', 'e', 'a', 'f']);
+    // Ready because it was approved already, and waiting only for the queue.
+    expect(undecidedOrder([...rows, item('h', 'ready', { approved: true })]).map(({ id }) => id)).toEqual(['b', 'e', 'a', 'f']);
   });
 
   it('goes on from the item just decided, and comes back round to any skipped', () => {
