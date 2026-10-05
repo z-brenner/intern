@@ -94,6 +94,16 @@ fn fit(
     let available = MAX_FILENAME_CHARS
         .saturating_sub(reserved)
         .max(MIN_STEM_CHARS);
+    // Validation turns "between" into "with" when fewer than two parties
+    // validate, but a party can still go after it: a house-style rule can
+    // merge two of the document's spellings into one, and a name can
+    // sanitise to nothing. "between Acme" says the document has a second
+    // side it does not name.
+    let relation = if parties.len() < 2 {
+        single_party_relation(relation)
+    } else {
+        relation
+    };
 
     let attempts = [
         stem(date, document_type, parties, relation),
@@ -541,6 +551,36 @@ mod tests {
         let composed = compose_filename(&candidate, "pdf", &["2026-01-05 Invoice.pdf"]);
         assert_eq!(composed.value, "2026-01-05 Invoice (2).pdf");
         assert_eq!(composed.collision_index, 2);
+    }
+
+    /// "between" with one name says the document has a second side it does
+    /// not name. A party that sanitises to nothing leaves one.
+    #[test]
+    fn one_surviving_party_never_reads_between() {
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &["Acme"],
+                    PartyRelation::Between
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Invoice with Acme.pdf"
+        );
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &["Acme Corporation", "???"],
+                    PartyRelation::Between
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Invoice with Acme Corporation.pdf"
+        );
     }
 
     #[test]

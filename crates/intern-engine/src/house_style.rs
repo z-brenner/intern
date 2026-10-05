@@ -148,6 +148,12 @@ impl HouseStyle {
             }
         }
         styled.parties = parties;
+        // Merging two of the document's names into one leaves one side, and
+        // "between" needs two; the name says "with", and the stored proposal
+        // must say the same so the name it composes is the name it reads.
+        if styled.party_relation == PartyRelation::Between && styled.parties.len() < 2 {
+            styled.party_relation = PartyRelation::With;
+        }
         (styled, applied)
     }
 
@@ -447,6 +453,21 @@ mod tests {
         );
         let (styled, _) = style.apply(&proposal);
         assert_eq!(styled.parties, vec!["Acme"]);
+        // One side is left, so the name and the stored proposal both say
+        // "with" - and a name that reads the way it was composed still
+        // teaches.
+        assert_eq!(styled.party_relation, PartyRelation::With);
+        let proposed = name(&styled);
+        assert_eq!(proposed, "2026-04-01 Invoice with Acme.pdf");
+        let lesson = lesson_from_edit(
+            &styled,
+            "pdf",
+            &proposed,
+            "2026-04-01 Invoice with Acme Industries.pdf",
+        )
+        .expect("the one party changed and nothing else did");
+        assert_eq!(lesson.from, "Acme");
+        assert_eq!(lesson.to, "Acme Industries");
     }
 
     #[test]
