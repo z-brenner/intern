@@ -5,6 +5,8 @@
 //! proposal only goes to review when a *specific* thing is wrong with it, so
 //! the review queue stays meaningful instead of collecting every long contract.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::distill::DocumentDigest;
 use crate::domain::{
     ModelProposal, PartyRelation, ProposalStatus, ReviewReason, ValidatedProposal,
@@ -33,7 +35,28 @@ const GENERIC_CAPITALS: &[&str] = &[
     "to", "with", "it", "its", "their",
 ];
 
+/// How far past the current year a document's date may lie before it reads
+/// as a misread rather than a date: far enough for a lease or a term that
+/// starts a few years out, short of the 2625 an OCR'd 2025 becomes.
+const PLAUSIBLE_YEARS_AHEAD: i32 = 10;
+/// The earliest year a document Intern files is taken to carry.
+const EARLIEST_PLAUSIBLE_YEAR: i32 = 1900;
+
+/// Checks a model proposal against the document it answered about.
+///
+/// Whether a date's year is plausible is judged against the current year;
+/// [`validate_at`] takes that year as an argument instead.
 pub fn validate(candidate: ModelProposal, digest: &DocumentDigest) -> ValidationOutcome {
+    validate_at(candidate, digest, current_year())
+}
+
+/// [`validate`], with the current year given rather than read from the
+/// clock, so a test can pin the one judgment that depends on today.
+pub fn validate_at(
+    candidate: ModelProposal,
+    digest: &DocumentDigest,
+    current_year: i32,
+) -> ValidationOutcome {
     let mut reasons = Vec::new();
     let original = candidate.clone();
 
@@ -69,6 +92,14 @@ pub fn validate(candidate: ModelProposal, digest: &DocumentDigest) -> Validation
     }
     if document_date.is_none() && date_supported {
         push(&mut reasons, ReviewReason::DateMissing);
+    }
+    // A year the document really prints can still be wrong: OCR reads 2025
+    // as 2625, and a model that copies it faithfully passes every check
+    // above. The date is kept - it may be right - and a person looks.
+    if let Some(date) = document_date.as_deref()
+        && !year_is_plausible(date, current_year)
+    {
+        push(&mut reasons, ReviewReason::DateImplausible);
     }
     // The wording around the date says what kind of date it is more reliably
     // than the model's label; the model's answer stands only where the
@@ -285,6 +316,44 @@ fn validate_date(
         return (None, None, false, None);
     }
     (Some(date.to_owned()), candidate.date_role, true, None)
+}
+
+/// Whether an accepted ISO date's year is one a document could carry.
+fn year_is_plausible(date: &str, current_year: i32) -> bool {
+    date.get(..4)
+        .and_then(|year| year.parse::<i32>().ok())
+        .is_none_or(|year| {
+            (EARLIEST_PLAUSIBLE_YEAR..=current_year.saturating_add(PLAUSIBLE_YEARS_AHEAD))
+                .contains(&year)
+        })
+}
+
+/// The current year in UTC, from the system clock. A clock set before 1970
+/// reads as 1970, which only makes the plausibility check more lenient.
+fn current_year() -> i32 {
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() / 86_400);
+    civil_year_from_days(i64::try_from(days).unwrap_or(0))
+}
+
+/// The Gregorian year of a day counted from 1970-01-01: the year half of
+/// Howard Hinnant's `civil_from_days`, exact for every day a clock can
+/// report, leap centuries included. The standard library has no calendar,
+/// and one year is not worth a dependency.
+fn civil_year_from_days(days: i64) -> i32 {
+    // Counted from 0000-03-01, so a leap day is the last day of its year.
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    // Months counted from March: 10 and 11 are January and February, which
+    // belong to the next calendar year.
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let year = year_of_era + era * 400 + i64::from(month_from_march >= 10);
+    i32::try_from(year).unwrap_or(i32::MAX)
 }
 
 /// Whether the wording immediately before a date's occurrence marks it as
@@ -1114,5 +1183,94 @@ The total fee is $248,000.00 payable on delivery.
             "{}",
             outcome.proposal.description
         );
+    }
+
+    fn invoice(date: &str) -> ModelProposal {
+        ModelProposal {
+            document_type: Some("Invoice".into()),
+            document_date: Some(date.into()),
+            date_role: Some(DateRole::Invoice),
+            parties: vec!["Acme Corporation".into()],
+            party_relation: PartyRelation::From,
+            description:
+                "Invoice from Acme Corporation to Contoso Worldwide, Inc. for consulting services."
+                    .into(),
+            confidence: 0.9,
+            needs_review: false,
+            evidence: Evidence::default(),
+        }
+    }
+
+    fn invoice_document(date_lines: &str) -> String {
+        format!(
+            "INVOICE INV-2048\nAcme Corporation\n{date_lines}\nBill To: Contoso Worldwide, Inc.\nConsulting services.\n"
+        )
+    }
+
+    /// A scan reads 2025 as 2925, the model copies the year faithfully, and
+    /// every literal check passes: the file was named and filed into a 2925
+    /// folder. The date is kept, because it may be right, and a person looks.
+    #[test]
+    fn an_implausible_year_is_kept_but_reviewed() {
+        for (printed, date) in [
+            ("March 3, 2925", "2925-03-03"),
+            ("March 3, 1850", "1850-03-03"),
+            ("March 3, 2037", "2037-03-03"),
+            ("March 3, 1899", "1899-03-03"),
+        ] {
+            let outcome = validate_at(
+                invoice(date),
+                &digest_of(&invoice_document(&format!("Invoice Date: {printed}"))),
+                2026,
+            );
+            assert_eq!(outcome.proposal.document_date.as_deref(), Some(date));
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::DateImplausible],
+                "{printed}"
+            );
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+        // A term that starts a few years out, or a document from the last
+        // century, is an ordinary date.
+        for (printed, date) in [
+            ("March 3, 2031", "2031-03-03"),
+            ("March 3, 2036", "2036-03-03"),
+            ("March 3, 1900", "1900-03-03"),
+        ] {
+            let outcome = validate_at(
+                invoice(date),
+                &digest_of(&invoice_document(&format!("Invoice Date: {printed}"))),
+                2026,
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{printed}: {:?}",
+                outcome.reasons
+            );
+        }
+        // `validate` judges against the clock, which is well short of 2915.
+        let outcome = validate(
+            invoice("2925-03-03"),
+            &digest_of(&invoice_document("Invoice Date: March 3, 2925")),
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::DateImplausible));
+    }
+
+    /// The year `validate` judges against comes from a calendar conversion
+    /// of its own; its edges are the leap day and the turn of a year.
+    #[test]
+    fn the_current_year_is_read_from_the_calendar() {
+        assert_eq!(civil_year_from_days(0), 1970);
+        assert_eq!(civil_year_from_days(-1), 1969);
+        // 2000-02-29, 2000-12-31, 2001-01-01.
+        assert_eq!(civil_year_from_days(11_016), 2000);
+        assert_eq!(civil_year_from_days(11_322), 2000);
+        assert_eq!(civil_year_from_days(11_323), 2001);
+        // 2023-12-31, 2024-01-01.
+        assert_eq!(civil_year_from_days(19_722), 2023);
+        assert_eq!(civil_year_from_days(19_723), 2024);
+        assert!((2026..2200).contains(&current_year()));
     }
 }
