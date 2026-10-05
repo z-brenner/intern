@@ -288,10 +288,15 @@ pub(crate) enum Spelling {
     /// A spelling a person chose for a house-style rule: made safe for a
     /// filename, and otherwise exactly as they typed it.
     Chosen,
+    /// The way alpha.10 composed every segment, with no presentation forms
+    /// folded, no NFC, and no title-casing. Never composed any more; house
+    /// style reads it back, because a name proposed before an upgrade can
+    /// still be waiting for a reviewer to edit it.
+    Legacy,
 }
 
 impl Spelling {
-    pub(crate) const ALL: [Self; 2] = [Self::Document, Self::Chosen];
+    pub(crate) const ALL: [Self; 3] = [Self::Document, Self::Chosen, Self::Legacy];
 }
 
 /// The document type as a filename carries it: the extension a model
@@ -320,6 +325,7 @@ fn spell(value: &str, spelling: Spelling) -> Option<String> {
     match spelling {
         Spelling::Document => sanitize_segment(value).map(|segment| display_case(&segment)),
         Spelling::Chosen => sanitize_segment(value),
+        Spelling::Legacy => clean_segment(value, false),
     }
 }
 
@@ -542,10 +548,15 @@ fn fold_presentation_forms(value: &str) -> String {
 /// some PDFs hand over "é" as "e" and a combining accent, and the two
 /// spellings of one name must make one filename.
 pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
-    let folded = fold_presentation_forms(value);
+    clean_segment(&fold_presentation_forms(value), true)
+}
+
+/// [`sanitize_segment`] after the folding, composing to NFC only when
+/// `compose` is set. Without it, this is how alpha.10 made every segment.
+fn clean_segment(value: &str, compose: bool) -> Option<String> {
     let mut output = String::new();
     let mut pending_space = false;
-    for character in folded.chars() {
+    for character in value.chars() {
         if character.is_whitespace() {
             pending_space = !output.is_empty();
             continue;
@@ -569,7 +580,9 @@ pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
     // above, so it can follow them; it follows the invisible characters'
     // removal so that one between a letter and its accent cannot keep the
     // two apart.
-    let mut output = output.nfc().collect::<String>();
+    if compose {
+        output = output.nfc().collect();
+    }
     while output.ends_with(' ') || output.ends_with('.') {
         output.pop();
     }

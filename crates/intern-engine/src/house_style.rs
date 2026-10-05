@@ -271,10 +271,12 @@ impl NameShape {
     ///
     /// The segments are built exactly as naming builds them, in every
     /// [`Spelling`] a name can carry a word in: the document's words
-    /// title-cased, and a house-style rule's spelling as the reviewer typed
-    /// it. A name Intern proposed for a document printed in capitals, and
-    /// one carrying a spelling a reviewer typed in capitals, are both names
-    /// this proposal composes.
+    /// title-cased, a house-style rule's spelling as the reviewer typed it,
+    /// and the way alpha.10 wrote both, which also said "between" before a
+    /// party a merge had left alone. A name Intern proposed for a document
+    /// printed in capitals, one carrying a spelling a reviewer typed in
+    /// capitals, and one proposed before an upgrade and still waiting are
+    /// all names this proposal composes.
     fn of(proposal: &ValidatedProposal, stem: &str, extension: &str) -> Option<Self> {
         let types = every_spelling(|spelling| {
             Some(type_segment(
@@ -298,7 +300,12 @@ impl NameShape {
             PartyRelation::Between => PartyRelation::With,
             other => other,
         };
-        let single_connectors = [connector_word(single)];
+        let mut single_connectors = vec![connector_word(single)];
+        // Alpha.10 kept "between" before the one party a house-style merge
+        // left, and a name it proposed can still be waiting.
+        if single == PartyRelation::With {
+            single_connectors.push(connector_word(PartyRelation::Between));
+        }
         for type_segment in types {
             let shape = |clause: PartyClause| {
                 Some(Self {
@@ -654,6 +661,88 @@ mod tests {
         assert_eq!(
             (lesson.from.as_str(), lesson.to.as_str()),
             ("ORION GLASS STUDIO INC", "Orion Glass")
+        );
+    }
+
+    /// A proposal alpha.10 named is still waiting after the upgrade, under
+    /// the name alpha.10 composed: capitals as printed, ligatures and
+    /// decomposed accents as extracted, and "between" before a party a merge
+    /// left alone. Nothing recomposes it, and an edit to it must still teach.
+    #[test]
+    fn names_composed_before_the_upgrade_still_teach() {
+        for (document_type, party, relation, proposed, approved, from, to) in [
+            (
+                "Lease Agreement",
+                "ORION GLASS STUDIO INC.",
+                PartyRelation::With,
+                "2026-04-01 Lease Agreement with ORION GLASS STUDIO INC.pdf",
+                "2026-04-01 Lease Agreement with Orion Glass.pdf",
+                "ORION GLASS STUDIO INC.",
+                "Orion Glass",
+            ),
+            (
+                "Invoice",
+                "O\u{fb03}ce Supplies Direct",
+                PartyRelation::From,
+                "2026-04-01 Invoice from O\u{fb03}ce Supplies Direct.pdf",
+                "2026-04-01 Invoice from Office Supplies.pdf",
+                "O\u{fb03}ce Supplies Direct",
+                "Office Supplies",
+            ),
+            (
+                "Invoice",
+                "Cafe\u{301} Lumie\u{300}re SARL",
+                PartyRelation::From,
+                "2026-04-01 Invoice from Cafe\u{301} Lumie\u{300}re SARL.pdf",
+                "2026-04-01 Invoice from Caf\u{e9} Lumi\u{e8}re.pdf",
+                "Cafe\u{301} Lumie\u{300}re SARL",
+                "Caf\u{e9} Lumi\u{e8}re",
+            ),
+        ] {
+            let proposal = proposal(Some(document_type), &[party], relation);
+            assert_ne!(name(&proposal), proposed, "this build names it otherwise");
+            let lesson = lesson_from_edit(&proposal, "pdf", proposed, approved)
+                .unwrap_or_else(|| panic!("{proposed} still teaches"));
+            assert_eq!(lesson.kind, RuleKind::Party);
+            assert_eq!((lesson.from.as_str(), lesson.to.as_str()), (from, to));
+        }
+
+        let type_in_capitals = proposal(
+            Some("LEASE AGREEMENT"),
+            &["Orion Glass Studio Inc."],
+            PartyRelation::With,
+        );
+        let lesson = lesson_from_edit(
+            &type_in_capitals,
+            "pdf",
+            "2026-04-01 LEASE AGREEMENT with Orion Glass Studio Inc.pdf",
+            "2026-04-01 Lease with Orion Glass Studio Inc.pdf",
+        )
+        .expect("the type changed and nothing else did");
+        assert_eq!(lesson.kind, RuleKind::DocumentType);
+        assert_eq!(lesson.from, "LEASE AGREEMENT");
+        assert_eq!(lesson.to, "Lease");
+
+        // Two spellings merged into one: alpha.10 still said "between".
+        let style = HouseStyle::new(vec![
+            HouseRule::new(RuleKind::Party, "Acme Corporation", "Acme"),
+            HouseRule::new(RuleKind::Party, "Acme Corp.", "Acme"),
+        ]);
+        let (styled, _) = style.apply(&proposal(
+            Some("Invoice"),
+            &["Acme Corporation", "Acme Corp."],
+            PartyRelation::Between,
+        ));
+        let lesson = lesson_from_edit(
+            &styled,
+            "pdf",
+            "2026-04-01 Invoice between Acme.pdf",
+            "2026-04-01 Invoice between Acme Industries.pdf",
+        )
+        .expect("the one party changed and nothing else did");
+        assert_eq!(
+            (lesson.from.as_str(), lesson.to.as_str()),
+            ("Acme", "Acme Industries")
         );
     }
 

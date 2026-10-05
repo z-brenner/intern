@@ -417,7 +417,9 @@ proposed one - type, connecting word, party, `and`, party - after stripping
 the extension, the date, and any collision suffix, so a reviewer who typed a
 date and shortened a party in one go still teaches the party. An edit that
 touches two fields, the connecting word, or a name the engine did not compose
-teaches nothing: it is a decision about that document. Reading the grammar
+teaches nothing: it is a decision about that document. A name an earlier
+version proposed is read the way that version composed it, so a document
+still waiting when Intern is upgraded teaches as before. Reading the grammar
 rather than diffing matters, because the smallest edit lies: "Acme and
 Contoso" becomes "Acme Corp and Contoso Inc" by inserting text one character
 into the connector, and a diff would credit it all to one party.
