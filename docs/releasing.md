@@ -152,7 +152,9 @@ and accepts it. It is only worth anything if that is true.
   move a published tag.
 - **The release job failed after tagging, on the same commit.** Re-run the
   failed job, or dispatch again on the same commit: the tag already names it, so
-  it is accepted, and a draft release is repaired and published.
+  it is accepted, and the publish step creates the release, or repairs and
+  publishes a draft one left behind. A release that is already published is
+  left as it is.
 - **The release job failed before tagging.** Fix the cause. If the fix is
   outside `docs/qa/`, it changes the release inputs, so QA runs again first.
 - **QA's corpus scoring hit its 60-minute limit.** Usually a wedged
