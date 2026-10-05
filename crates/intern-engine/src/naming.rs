@@ -282,7 +282,22 @@ const SUFFIXES: &[(&str, &str)] = &[
 const CAPITAL_SUFFIXES: &[&str] = &["LLC", "LLP", "PLC", "PC", "NA", "LP"];
 
 /// The small words a title keeps in lower case after its first word.
-const CONNECTORS: &[&str] = &["of", "and", "the", "for", "to", "with"];
+const CONNECTORS: &[&str] = &[
+    "of", "and", "the", "for", "to", "with", "in", "on", "at", "by",
+];
+
+/// Short words that are words, not initialisms, and are cased like any
+/// other. Left in capitals, they made "BANK OF NEW YORK MELLON" read "Bank
+/// of NEW York Mellon" and "W-2 WAGE AND TAX STATEMENT" read "W-2 Wage and
+/// TAX Statement". Any other short word stays in capitals: most real
+/// initialisms - "IBM", "ABC", "USA" - have vowels too, so no rule tells
+/// them from words, and a word left as it was printed is no new mistake.
+const SHORT_WORDS: &[&str] = &[
+    "new", "san", "los", "las", "del", "st", "gas", "oil", "tax", "air", "sea", "bay", "oak",
+    "sun", "sky", "one", "two", "six", "ten", "big", "top", "red", "old", "all", "art", "car",
+    "law", "bar", "day", "way", "key", "inn", "box", "pay", "fee", "web", "lab", "pet", "tea",
+    "toy",
+];
 
 /// Title-cases a segment a letterhead or a scan printed in capitals:
 /// "ORION GLASS STUDIO INC" names a document "Orion Glass Studio Inc", which
@@ -301,13 +316,16 @@ const CONNECTORS: &[&str] = &["of", "and", "the", "for", "to", "with"];
 /// - a company suffix reads the way it is usually written ("INC." becomes
 ///   "Inc.", "GMBH" becomes "GmbH"), and LLC, LLP, PLC, PC, NA and LP stay
 ///   in capitals;
-/// - of, and, the, for, to and with are lower case, except as the first
-///   word, where they are capitalised like any other word;
+/// - of, and, the, for, to, with, in, on, at and by are lower case, except
+///   as the first word, where they are capitalised like any other word;
 /// - a word followed by a full stop is an abbreviation and is capitalised
 ///   ("NO. 2" becomes "No. 2", "ST. LOUIS" becomes "St. Louis"); an
 ///   initialism with stops carries them inside ("N.A.") and is kept;
-/// - a word of three letters or fewer stays in capitals ("ABC", "USA"), and
-///   so does a longer word with no vowel, which is an initialism ("HSBC");
+/// - a common short word ([`SHORT_WORDS`]: "NEW", "TAX", "ST") is cased
+///   like any other word;
+/// - any other word of three letters or fewer stays in capitals ("ABC",
+///   "USA"), and so does a longer word with no vowel, which is an
+///   initialism ("HSBC");
 /// - every other word keeps its first letter and lowercases the rest, after
 ///   a hyphen or other mark as well ("COCA-COLA" becomes "Coca-Cola").
 ///
@@ -377,6 +395,8 @@ fn display_word(word: &str, first: bool) -> String {
         // A word cut short by a full stop is an abbreviation, not an
         // initialism, which carries its stops inside ("N.A.", "U.S."):
         // "AMENDMENT NO. 2" reads "No.", "ST. LOUIS" reads "St.".
+        capitalize_runs(core)
+    } else if SHORT_WORDS.contains(&lowered.as_str()) {
         capitalize_runs(core)
     } else if letters <= 3 || is_initialism(core) {
         core.to_owned()
@@ -823,6 +843,28 @@ mod tests {
             ("LYNCH FLYNN CONSULTING LLP", "Lynch Flynn Consulting LLP"),
             ("ABC SUPPLY WAREHOUSE", "ABC Supply Warehouse"),
             ("LINCOLN TOWER 2B HOLDINGS", "Lincoln Tower 2B Holdings"),
+            // A common short word is a word, not an initialism; an unlisted
+            // one stays as printed.
+            ("BANK OF NEW YORK MELLON", "Bank of New York Mellon"),
+            (
+                "NEW YORK LIFE INSURANCE COMPANY",
+                "New York Life Insurance Company",
+            ),
+            ("SUN VALLEY FARMS", "Sun Valley Farms"),
+            ("W-2 WAGE AND TAX STATEMENT", "W-2 Wage and Tax Statement"),
+            ("ST JOHNS HOLDINGS", "St Johns Holdings"),
+            (
+                "SAN DIEGO GAS AND ELECTRIC CO",
+                "San Diego Gas and Electric Co",
+            ),
+            (
+                "LOS ANGELES DEPARTMENT OF WATER AND POWER",
+                "Los Angeles Department of Water and Power",
+            ),
+            ("NOTICE OF CHANGE IN TERMS", "Notice of Change in Terms"),
+            ("SMITH LAW GROUP PLLC", "Smith Law Group PLLC"),
+            ("IBM GLOBAL SERVICES", "IBM Global Services"),
+            ("USA TODAY HOLDINGS", "USA Today Holdings"),
             // Capitals in the middle of a name are the owner's to know.
             (
                 "O'BRIEN MCDONALD MACKENZIE PARTNERS",

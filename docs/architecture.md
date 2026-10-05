@@ -348,11 +348,12 @@ becomes `Orion Glass Studio Inc.` — when it has no lowercase letter and at
 least two words of four letters or more, so `IBM` and `KPMG LLP` stay as they
 are; company suffixes read as usual (`Inc`, `Corp`, `Ltd`, `GmbH`, while
 `LLC`, `LLP`, `PLC` stay in capitals), a word with a full stop is an
-abbreviation (`No. 2`, `St. Louis`), short words and vowel-less initialisms
-(`HSBC`) stay in capitals, and a word with a digit, an apostrophe, or a
-`Mc`/`Mac` surname prefix is left alone (`MACHINES` is a word, not a
-surname). Only the name changes; the evidence and the description keep the
-document's casing.
+abbreviation (`No. 2`, `St. Louis`), common short words are cased (`Bank of
+New York`, `Wage and Tax Statement`), other words of three letters or fewer
+and vowel-less initialisms (`ABC`, `HSBC`) stay in capitals, and a word with
+a digit, an apostrophe, or a `Mc`/`Mac` surname prefix is left alone
+(`MACHINES` is a word, not a surname). Only the name changes; the evidence
+and the description keep the document's casing.
 Names longer than 120 characters shed the second party, then the party clause,
 then truncate the type — detail is lost from the least identifying end first.
 Typographic ligatures (`ﬁ`) and full-width letters (`ＡＣＭＥ`) are folded to the
