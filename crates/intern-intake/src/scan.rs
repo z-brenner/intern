@@ -106,8 +106,14 @@ pub struct IntakeStatus {
     pub uploader_unknown: u32,
     /// Files skipped because their name is a sync client's conflict copy.
     pub sync_conflicts: u32,
-    /// Claims held open because the document's content is not on this disk yet.
+    /// Documents waiting on their content to come down from the cloud: claims
+    /// held open after a failure, and placeholders the queue could not read
+    /// while offline.
     pub awaiting_hydration: u32,
+    /// Settled documents the queue could not take - a file this account may
+    /// not read, or one the queue refuses to open - tried again with growing
+    /// pauses rather than on every scan.
+    pub unreadable_documents: u32,
     /// Subfolders the last scan could not read - a permission the share does
     /// not grant, or a folder that vanished mid-scan. The rest of the folder
     /// is still scanned; these are counted so a person can see them.
@@ -130,6 +136,7 @@ impl IntakeStatus {
             uploader_unknown: 0,
             sync_conflicts: 0,
             awaiting_hydration: 0,
+            unreadable_documents: 0,
             unreadable_folders: 0,
             claimed_by_others: 0,
             processed_here: 0,
@@ -147,6 +154,7 @@ impl IntakeStatus {
             || self.uploader_unknown != other.uploader_unknown
             || self.sync_conflicts != other.sync_conflicts
             || self.awaiting_hydration != other.awaiting_hydration
+            || self.unreadable_documents != other.unreadable_documents
             || self.unreadable_folders != other.unreadable_folders
             || self.claimed_by_others != other.claimed_by_others
             || self.processed_here != other.processed_here

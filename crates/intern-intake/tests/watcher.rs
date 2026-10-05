@@ -15,8 +15,8 @@ use std::{
 use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
 use intern_intake::{
     CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState, ClaimStore, DoneOutcome,
-    Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, IntakeWatcher, ItemState,
-    MachineIdentity, scan::is_conflict_copy,
+    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig,
+    IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity, scan::is_conflict_copy,
 };
 use tempfile::TempDir;
 
@@ -41,6 +41,9 @@ struct FakeHost {
     withdrawn: Mutex<HashSet<PathBuf>>,
     statuses: Mutex<Vec<IntakeStatus>>,
     fail_enqueue: AtomicBool,
+    /// Every hand-over the watcher attempted, refused or not. Each one
+    /// follows a claim acquired in the shared folder.
+    enqueue_calls: AtomicUsize,
     admission: Mutex<Option<IntakeAdmission>>,
     admission_calls: AtomicUsize,
 }
@@ -99,6 +102,7 @@ impl IntakeHost for FakeHost {
             .unwrap_or(IntakeAdmission::LocalOnly)
     }
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String> {
+        self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail_enqueue.load(Ordering::SeqCst) {
             return Err("the queue is unavailable".to_string());
         }
@@ -295,7 +299,12 @@ impl Rig {
 
     /// Triggers exactly one scan and waits for it to complete.
     fn step(&self) {
-        let target = self.clock.advance(1);
+        self.step_by(1);
+    }
+
+    /// Lets `seconds` pass on the clock, then triggers exactly one scan.
+    fn step_by(&self, seconds: i64) {
+        let target = self.clock.advance(seconds);
         self.watcher.scan_now();
         wait_until("a scan tick", || {
             self.watcher.status().last_scan_at == Some(target)
@@ -661,15 +670,83 @@ fn an_enqueue_failure_releases_the_claim_so_a_later_scan_can_retry() {
         rig.watcher.status()
     );
 
+    assert_eq!(rig.watcher.status().unreadable_documents, 1);
+
     rig.host.fail_enqueue.store(false, Ordering::SeqCst);
     rig.step();
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "the next attempt waits out its pause"
+    );
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
     assert_eq!(rig.host.enqueued(), vec![path]);
     assert!(rig.claim_file(&key).exists());
-    assert_eq!(
-        rig.watcher.status().error,
-        None,
-        "a clean scan clears the error"
-    );
+    let status = rig.watcher.status();
+    assert_eq!(status.error, None, "a clean scan clears the error");
+    assert_eq!(status.unreadable_documents, 0);
+}
+
+/// A document the queue can never take - a file this account may not read -
+/// was claimed and released on every scan, a claim file created and deleted
+/// in the shared folder every 20 seconds for ever.
+#[test]
+fn enqueue_failures_back_off() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("locked.pdf", b"a file this account may not read");
+    let key = facts_for(rig.temp.path(), "locked.pdf").key();
+    rig.step();
+    // A minute of scans a second apart: attempts at 0, 20, and 60 seconds.
+    for _ in 0..61 {
+        rig.step();
+        let status = rig.watcher.status();
+        assert_eq!(status.unreadable_documents, 1, "{status:?}");
+        assert!(!rig.claim_file(&key).exists());
+    }
+    let attempts = rig.host.enqueue_calls.load(Ordering::SeqCst);
+    assert_eq!(attempts, 3, "61 scans, 3 attempts");
+
+    // The pause stops growing at its cap; the document is still tried.
+    for _ in 0..12 {
+        rig.step_by(ENQUEUE_RETRY_CAP_SECONDS);
+    }
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), attempts + 12);
+
+    // Settled at last: handed over, and nothing more is counted.
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step_by(ENQUEUE_RETRY_CAP_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().unreadable_documents, 0);
+}
+
+/// Offline, the queue cannot read a placeholder it was handed, and the health
+/// notice said "Up to date" while the document went nowhere.
+#[test]
+fn dehydrated_enqueue_failure_counts_as_awaiting_hydration() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("online-only.pdf", b"bytes that live in the cloud");
+    rig.hydration.set_dehydrated(&path, true);
+    rig.step();
+    rig.step();
+    for _ in 0..3 {
+        let status = rig.watcher.status();
+        assert_eq!(status.awaiting_hydration, 1, "{status:?}");
+        assert_eq!(status.unreadable_documents, 0);
+        assert_eq!(
+            status.error, None,
+            "waiting for OneDrive is not an error to show"
+        );
+        rig.step();
+    }
+
+    // Back online, the next attempt hands it over.
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().awaiting_hydration, 0);
 }
 
 #[test]

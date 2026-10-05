@@ -43,4 +43,4 @@ pub use scan::{
     DEFAULT_SCAN_INTERVAL, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus,
     ItemState, StabilityTracker, SystemHydration, is_conflict_copy,
 };
-pub use watcher::IntakeWatcher;
+pub use watcher::{ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, IntakeWatcher};

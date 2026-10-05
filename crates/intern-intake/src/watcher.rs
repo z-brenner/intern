@@ -13,6 +13,12 @@ use std::{
     time::Instant,
 };
 
+/// The pause after a document's first failed hand-over to the queue, doubled
+/// after each further failure.
+pub const ENQUEUE_RETRY_SECONDS: i64 = 20;
+/// The longest pause between hand-over attempts for one document.
+pub const ENQUEUE_RETRY_CAP_SECONDS: i64 = 15 * 60;
+
 use crate::{
     coordination::{
         AcquireOutcome, COURTESY_DELAY_SECONDS, ClaimState, ClaimStore, Clock, DocumentFacts,
@@ -154,6 +160,9 @@ struct ScanState {
     /// person removed or discarded it; an owned claim with no item that was
     /// never seen live is the crash between acquire and enqueue instead.
     seen_live: HashSet<String>,
+    /// Documents the queue refused, by key: how many hand-overs failed in a
+    /// row, and the clock time before which no claim is attempted again.
+    enqueue_failures: HashMap<String, (u32, i64)>,
 }
 
 fn run(
@@ -234,6 +243,7 @@ fn scan_once(
         owned,
         awaiting_hydration,
         seen_live,
+        enqueue_failures,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -283,6 +293,7 @@ fn scan_once(
         owned,
         awaiting_hydration,
         seen_live,
+        enqueue_failures,
         status: &mut status,
         visited: HashSet::new(),
         live: HashSet::new(),
@@ -294,6 +305,12 @@ fn scan_once(
         scanner.process_file(facts);
     }
     scanner.finish_unseen_owned();
+    // A refused document that is gone, or changed into a new key, starts
+    // with a clean slate if it comes back.
+    let visited = &scanner.visited;
+    scanner
+        .enqueue_failures
+        .retain(|key, _| visited.contains(key));
     let live = scanner.live;
     *backlog_recorded = true;
     stability.retain_live(&live);
@@ -320,6 +337,7 @@ struct Scanner<'a> {
     owned: &'a mut HashMap<String, PathBuf>,
     awaiting_hydration: &'a mut HashSet<String>,
     seen_live: &'a mut HashSet<String>,
+    enqueue_failures: &'a mut HashMap<String, (u32, i64)>,
     status: &'a mut IntakeStatus,
     visited: HashSet<String>,
     live: HashSet<PathBuf>,
@@ -503,6 +521,14 @@ impl Scanner<'_> {
     }
 
     fn attempt_claim(&mut self, doc: &DocumentFacts, key: &str, path: &Path) {
+        if self
+            .enqueue_failures
+            .get(key)
+            .is_some_and(|&(_, next_try_at)| self.clock.now() < next_try_at)
+        {
+            self.count_refused(path);
+            return;
+        }
         match self.store.acquire(doc) {
             AcquireOutcome::Acquired => {
                 if !self.store.verify(key) {
@@ -512,11 +538,12 @@ impl Scanner<'_> {
                 }
                 match self.host.enqueue(&[path.to_path_buf()]) {
                     Ok(()) => {
+                        self.enqueue_failures.remove(key);
                         self.owned.insert(key.to_string(), path.to_path_buf());
                     }
                     Err(message) => {
                         let _ = self.store.release(key);
-                        self.status.error = Some(format!("ENQUEUE_FAILED: {message}"));
+                        self.note_refused(key, path, &message);
                     }
                 }
             }
@@ -525,6 +552,45 @@ impl Scanner<'_> {
             AcquireOutcome::Failed(error) => {
                 self.status.error = Some(format!("CLAIM_IO_FAILED: {error}"));
             }
+        }
+    }
+
+    /// The queue would not take a document this machine had just claimed.
+    ///
+    /// Some refusals never clear - a file this account may not read, a
+    /// reparse point the queue will not open - and an offline placeholder
+    /// fails until the connection returns. Claiming again on every scan
+    /// created and deleted a claim file in the shared folder every 20 seconds
+    /// for ever, so the next attempt waits, doubling from
+    /// `ENQUEUE_RETRY_SECONDS` up to `ENQUEUE_RETRY_CAP_SECONDS`.
+    fn note_refused(&mut self, key: &str, path: &Path, message: &str) {
+        let attempts = self
+            .enqueue_failures
+            .get(key)
+            .map_or(0, |&(attempts, _)| attempts)
+            .saturating_add(1);
+        let pause = ENQUEUE_RETRY_SECONDS
+            .saturating_mul(1 << (attempts - 1).min(16))
+            .min(ENQUEUE_RETRY_CAP_SECONDS);
+        self.enqueue_failures
+            .insert(key.to_owned(), (attempts, self.clock.now() + pause));
+        // Waiting for OneDrive is what the health notice already explains;
+        // only a refusal that is not about missing content is an error.
+        if !self.count_refused(path) {
+            self.status.error = Some(format!("ENQUEUE_FAILED: {message}"));
+        }
+    }
+
+    /// Counts a document the queue refused, for as long as it is refused: as
+    /// waiting for OneDrive when its content is still in the cloud, otherwise
+    /// as unreadable. True for the first.
+    fn count_refused(&mut self, path: &Path) -> bool {
+        if self.hydration.is_dehydrated(path) {
+            self.status.awaiting_hydration += 1;
+            true
+        } else {
+            self.status.unreadable_documents += 1;
+            false
         }
     }
 

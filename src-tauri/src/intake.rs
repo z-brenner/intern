@@ -135,6 +135,9 @@ pub struct IntakeStatusDto {
     pub uploader_unknown: u32,
     pub sync_conflicts: u32,
     pub awaiting_hydration: u32,
+    /// Settled documents the queue could not take, retried with growing
+    /// pauses.
+    pub unreadable_documents: u32,
     pub unreadable_folders: u32,
     pub claimed_by_others: u32,
     pub processed_here: u32,
@@ -254,6 +257,7 @@ pub(crate) fn status_dto(
         uploader_unknown: 0,
         sync_conflicts: 0,
         awaiting_hydration: 0,
+        unreadable_documents: 0,
         unreadable_folders: 0,
         claimed_by_others: 0,
         processed_here: 0,
@@ -283,6 +287,7 @@ pub(crate) fn status_dto(
         uploader_unknown: status.uploader_unknown,
         sync_conflicts: status.sync_conflicts,
         awaiting_hydration: status.awaiting_hydration,
+        unreadable_documents: status.unreadable_documents,
         unreadable_folders: status.unreadable_folders,
         claimed_by_others: status.claimed_by_others,
         processed_here: status.processed_here,

@@ -2884,6 +2884,7 @@ mod intake_tests {
         assert_eq!(json["machines"], serde_json::json!([]));
         assert_eq!(json["heldForOthers"], 0);
         assert_eq!(json["unreadableFolders"], 0);
+        assert_eq!(json["unreadableDocuments"], 0);
         assert_eq!(json["claimedByOthers"], 0);
         assert_eq!(json["processedHere"], 0);
         assert_eq!(json["lastScanAt"], serde_json::Value::Null);
