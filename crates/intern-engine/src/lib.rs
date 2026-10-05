@@ -34,12 +34,15 @@ pub mod hosted;
 pub mod house_style;
 pub mod infer;
 pub mod legacy;
+pub mod logs;
 pub mod manifest;
 pub mod naming;
 mod process;
 pub mod prompt;
 pub mod server;
 pub mod setup;
+#[cfg(test)]
+mod test_support;
 pub mod text;
 pub mod validate;
 pub mod worker;
