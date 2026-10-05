@@ -1,6 +1,8 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
+// Types only: the plugin itself is still imported lazily, below.
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type {
@@ -13,6 +15,7 @@ import type {
   SelectionBoundary,
   SelectionResult,
   SupportLinkTarget,
+  UpdateProgressListener,
   UpdateStatus,
 } from './bridge';
 import { humanizeReason } from './reasons';
@@ -21,7 +24,7 @@ import { humanizeReason } from './reasons';
  * The update found by the last check, held so that installing it cannot race a
  * second lookup and install something other than what the user was shown.
  */
-let pendingUpdate: { version: string; body?: string; date?: string; downloadAndInstall(): Promise<void> } | undefined;
+let pendingUpdate: { version: string; body?: string; date?: string; download(onEvent?: (event: DownloadEvent) => void): Promise<void>; install(): Promise<void> } | undefined;
 
 export interface TauriEvent<T> {
   event: string;
@@ -259,15 +262,50 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return { state: 'available', currentVersion, version: update.version, notes: update.body, date: update.date };
   }
 
-  async installUpdate(): Promise<void> {
-    if (!pendingUpdate) throw new Error('No update has been found to install');
-    // downloadAndInstall verifies the signature against the public key in
-    // tauri.conf.json before it writes anything. An update signed by any other
-    // key is rejected here, not after installation.
-    // On Windows this hands off to the NSIS installer, which closes Intern to
-    // replace it, so there is no relaunch call here to fail after the process
-    // has already gone.
-    await pendingUpdate.downloadAndInstall();
+  async installUpdate(onProgress?: UpdateProgressListener, beforeInstall?: () => Promise<void>): Promise<void> {
+    // Held for both steps: a check that finishes meanwhile replaces
+    // `pendingUpdate`, and only this object holds the bytes it downloaded.
+    const update = pendingUpdate;
+    if (!update) throw new Error('No update has been found to install');
+    // The plugin reports the size once and then each chunk as it lands, so
+    // the fraction is a running total. A server that sends no length gets an
+    // honest "downloading" rather than a percentage of nothing.
+    //
+    // It reports every network chunk, thousands of them for one installer,
+    // and each report re-renders whatever shows it. Only what a person could
+    // see change is passed on: the next whole percent, or the end.
+    let total: number | undefined;
+    let received = 0;
+    let told: { percent: number | undefined } | undefined;
+    const tell = (fraction: number | undefined) => {
+      const percent = fraction === undefined ? undefined : Math.floor(fraction * 100);
+      if (told && told.percent === percent) return;
+      told = { percent };
+      onProgress?.(fraction);
+    };
+    const report = (event: DownloadEvent) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength || undefined;
+        received = 0;
+        tell(total === undefined ? undefined : 0);
+      } else if (event.event === 'Progress') {
+        received += event.data.chunkLength;
+        tell(total === undefined ? undefined : Math.min(1, received / total));
+      } else {
+        tell(1);
+      }
+    };
+    // download verifies the signature against the public key in
+    // tauri.conf.json before it hands anything back. An update signed by any
+    // other key is rejected here, before anything is installed.
+    await update.download(report);
+    // Downloading and installing are separate steps so that what has to
+    // happen before Intern closes happens in between, however long the
+    // download took. On Windows install hands off to the NSIS installer,
+    // which closes Intern to replace it, so there is no relaunch call here to
+    // fail after the process has already gone.
+    await beforeInstall?.();
+    await update.install();
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {

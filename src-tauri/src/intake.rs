@@ -203,6 +203,10 @@ fn one_drive_process_listed() -> Option<bool> {
 
 /// `tasklist /FO CSV` names each match in quotes first; with no match it
 /// prints an informational line instead.
+///
+/// Only the Windows probe above calls it, but parsing is portable and its
+/// tests run everywhere, so it is not gated out of other builds.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn lists_one_drive(tasklist: &str) -> bool {
     tasklist.lines().any(|line| {
         line.trim_start()

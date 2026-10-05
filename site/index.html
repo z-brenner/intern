@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Intern — download</title>
-<meta name="description" content="Intern reads a document and tells you what to call it. Everything happens on your machine.">
+<meta name="description" content="Intern reads a document and tells you what to call it, on your own machine unless you choose a hosted model.">
 <style>
   /* ------------------------------------------------------------------ *
    * Tokens. One accent (ochre) beside navy and interactive blue.
@@ -923,7 +923,7 @@
           <div class="step-node"><svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg></div>
           <h3><span class="num">02</span>Read on your machine</h3>
           <p>The document's own text first, and OCR only when a page has none.</p>
-          <p class="step-note">One AI model does the rest, on your computer.</p>
+          <p class="step-note">One AI model does the rest, on your computer, unless you turn on a hosted model.</p>
         </li>
         <li class="step">
           <div class="step-node"><svg class="ico" aria-hidden="true"><use href="#i-check"/></svg></div>
@@ -960,15 +960,16 @@
       </div>
       <div class="sec-body plate-cols">
       <div>
-        <p class="lead">Intern does its work on your computer, start to finish.</p>
+        <p class="lead">Intern does its work on your computer, start to finish, unless you turn on a hosted model.</p>
         <p class="body-text">
           Document text, extracted pages, OCR output, and the prompts sent to the
-          model never leave the machine.
+          model never leave the machine, unless you turn on a hosted model
+          (opt-in, your own API key).
         </p>
         <ul class="denials">
           <li>NO TELEMETRY</li>
           <li>NO CLOUD FALLBACK</li>
-          <li>NO REMOTE PROCESSING</li>
+          <li>NO REMOTE PROCESSING UNLESS YOU TURN ON A HOSTED MODEL</li>
         </ul>
 
         <dl class="net">
@@ -977,11 +978,19 @@
             <dd>Downloaded once, when you ask for it.</dd>
           </div>
           <div>
-            <dt>Check for updates</dt>
-            <dd>Only when you press the button in Settings.</dd>
+            <dt>Update check</dt>
+            <dd>When Intern starts, every 6 hours while it runs, and when you press <strong>Check for updates</strong>. The automatic check can be switched off in Settings. Sends nothing about your documents.</dd>
+          </div>
+          <div>
+            <dt>Hosted model, if you choose one</dt>
+            <dd>Off unless you turn it on. Then each document's condensed text goes to the service you name, under your own API key.</dd>
+          </div>
+          <div>
+            <dt>Microsoft sign-in and Graph, provisioned builds only</dt>
+            <dd>login.microsoftonline.com, to sign in and keep the sign-in current, and graph.microsoft.com, for account and file metadata that verifies who uploaded a document to a team Inbox; never its content. Not in the build published here.</dd>
           </div>
         </dl>
-        <p class="note">Those are the only two network requests Intern makes, ever. Neither carries anything about your documents.</p>
+        <p class="note">That is every network request Intern makes, and there is no telemetry. A default install sends only the first two, and neither carries anything about your documents.</p>
 
         <div class="callout">
           <svg class="ico" aria-hidden="true"><use href="#i-cloud"/></svg>
@@ -997,7 +1006,7 @@
       <div class="boundary">
         <svg viewBox="0 0 420 394" role="img" aria-labelledby="bnd-t bnd-d">
           <title id="bnd-t">What crosses the boundary of your machine</title>
-          <desc id="bnd-d">Your documents, text extraction, OCR and the AI model all sit inside your machine. Only two arrows cross the boundary: the one-time model file download, and the update check you trigger yourself.</desc>
+          <desc id="bnd-d">Your documents, text extraction, OCR and the AI model all sit inside your machine. Two arrows cross the boundary: the one-time model file download, and the update check, which runs at startup and every 6 hours unless you switch it off. Neither carries anything about your documents. A hosted model, only if you turn one on, is the one way document text leaves.</desc>
 
           <rect class="f-card" x="140.5" y="8.5" width="139" height="29" rx="14.5"/>
           <text class="f-label" x="210" y="27" text-anchor="middle">THE INTERNET</text>
@@ -1010,7 +1019,7 @@
           <path class="f-arrow" d="M260 92v-42"/>
           <path class="f-head" d="M260 44l-4.6 8h9.2z"/>
           <text class="f-label" x="270" y="62">UPDATE CHECK</text>
-          <text class="f-micro" x="270" y="76">only when you press it</text>
+          <text class="f-micro" x="270" y="76">at start, every 6 hours</text>
 
           <rect class="f-dash" x="10.5" y="96.5" width="399" height="285" rx="14"/>
           <rect class="f-knock" x="26" y="88" width="100" height="15"/>
@@ -1034,7 +1043,7 @@
           <rect class="f-solid" x="80" y="298" width="260" height="44" rx="8"/>
           <text class="f-box-t-inv" x="210" y="325" text-anchor="middle">A proposed name</text>
 
-          <text class="f-micro" x="210" y="366" text-anchor="middle">nothing else crosses this line</text>
+          <text class="f-micro" x="210" y="366" text-anchor="middle">nothing else, unless you choose a hosted model</text>
         </svg>
       </div>
       </div>
@@ -1046,7 +1055,7 @@
     <div class="shell sec-grid">
       <div class="sec-head">
         <p class="eyebrow"><svg class="ico" aria-hidden="true"><use href="#i-seal"/></svg>PROVENANCE</p>
-        <h2>Before you run it</h2>
+        <h2>Before you install</h2>
       </div>
       <div class="sec-body">
       <p class="lead">Windows will call this an unrecognized app. Here is why, and what to do about it.</p>
@@ -1054,10 +1063,13 @@
       <div class="warn">
         <svg class="ico" aria-hidden="true"><use href="#i-warn"/></svg>
         <div>
-          <b>The installer is not Authenticode signed.</b>
+          <b>The installer is not Authenticode signed yet.</b>
           <p>This project has no code-signing certificate, so SmartScreen shows
           “Windows protected your PC”. Choose <strong>More info</strong>, then
           <strong>Run anyway</strong>.</p>
+          <p>On a PC where <strong>Smart App Control</strong> is on (enforcement
+          mode), Windows blocks the installer outright and offers no Run anyway.
+          Intern cannot be installed there until it is signed.</p>
         </div>
       </div>
 
@@ -1071,7 +1083,7 @@
         those exact bytes.
       </p>
 
-      <pre><code id="verify">gh attestation verify Intern_x64-setup.exe --repo z-brenner/intern</code></pre>
+      <pre><code id="verify">gh attestation verify Intern_x64-setup.exe --repo z-brenner/intern --signer-workflow z-brenner/intern/.github/workflows/release.yml</code></pre>
 
       <table class="cmp">
         <caption>WHAT EACH ONE ACTUALLY PROVES</caption>
@@ -1143,13 +1155,19 @@
     <div class="shell sec-grid">
       <div class="sec-head">
         <p class="eyebrow"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>UPDATES</p>
-        <h2>Updates, only when you ask</h2>
+        <h2>Updates, checked for you, installed by you</h2>
       </div>
       <div class="sec-body">
-      <p class="lead">Settings → Check for updates. There is no background poll and no timer.</p>
+      <p class="lead">Intern checks for a newer release when it starts and every 6 hours while it runs.</p>
       <p class="body-text">
-        An update is installed only if it is signed by this project's key.
-        Anything else is refused.
+        The check asks GitHub for the release manifest and sends nothing about
+        your documents: no filenames, no contents, no identifier. To stop it,
+        untick <strong>Check for updates automatically</strong> in Settings;
+        <strong>Check for updates</strong> still works whenever you press it.
+      </p>
+      <p class="body-text">
+        A found update is never installed without your click, and only a build
+        signed with this project's key is accepted. Anything else is refused.
       </p>
       </div>
     </div>
@@ -1202,7 +1220,7 @@
 
       button.href = installer.browser_download_url;
       button.setAttribute('download', '');
-      verify.textContent = 'gh attestation verify ' + installer.name + ' --repo z-brenner/intern';
+      verify.textContent = 'gh attestation verify ' + installer.name + ' --repo z-brenner/intern --signer-workflow z-brenner/intern/.github/workflows/release.yml';
 
       const megabytes = (installer.size / (1024 * 1024)).toFixed(1);
       // Rendered in UTC so the date always matches the one on the release page,

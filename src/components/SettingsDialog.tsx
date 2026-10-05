@@ -6,7 +6,8 @@ import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
-import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateStatus } from '../lib/bridge';
+import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
+import { installingLabel } from '../lib/format';
 import { Icon } from './Icon';
 
 /**
@@ -185,7 +186,14 @@ interface Props {
   onSave(settings: AppSettings): Promise<void>;
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
-  onInstallUpdate(): Promise<void>;
+  onInstallUpdate(onProgress?: UpdateProgressListener): Promise<void>;
+  /**
+   * A rename is in its applying stage, which cannot be canceled. Installing
+   * closes Intern, so Install is not offered until the rename has finished,
+   * and the hint stays while a downloaded update waits for one that began
+   * during the download (`onInstallUpdate` does the waiting).
+   */
+  renameApplying?: boolean;
   /**
    * Leave out the SharePoint connection card. Onboarding opens Settings for
    * the hosted model before Microsoft is connected, where a card offering to
@@ -196,11 +204,12 @@ interface Props {
   onChooseFolder?(): void;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false, onChooseFolder }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [installProgress, setInstallProgress] = useState<{ fraction: number | undefined }>();
   const [updateError, setUpdateError] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -397,7 +406,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const runInstall = async () => {
     setInstalling(true);
     setUpdateError('');
-    try { await onInstallUpdate(); }
+    setInstallProgress(undefined);
+    try { await onInstallUpdate((fraction) => setInstallProgress({ fraction })); }
     catch (error) { setUpdateError(updateFailure(error)); }
     finally { setInstalling(false); }
   };
@@ -620,21 +630,26 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         {/*
           Intern also checks on its own - once at launch, and again on a fixed
           interval while it keeps running - so a machine that is never
-          restarted is not left on an old build forever. This button is for
-          checking right now instead of waiting for the next one. Neither path
-          sends anything but a request for the release manifest, and nothing
-          is installed - by either path - unless it is signed by the key this
-          build was compiled with, and never without the separate click below.
+          restarted is not left on an old build forever. That is on by default
+          and can be switched off here, for an office that allows no traffic a
+          person did not ask for; the button checks right now either way.
+          Neither path sends anything but a request for the release manifest,
+          and nothing is installed - by either path - unless it is signed by
+          the key this build was compiled with, and never without the separate
+          click below.
         */}
-        <p className="section-lead">Intern also checks for updates on its own, at launch and periodically while it runs; this checks right now instead. Updates must be signed by this project's key or they are refused.</p>
+        <p className="section-lead">A check asks GitHub whether a newer release exists and sends nothing about your documents. Updates must be signed by this project's key or they are refused, and nothing installs until you click Install.</p>
+        <label className="check-label"><input type="checkbox" checked={!next.skipUpdateChecks} onChange={(event) => setNext({ ...next, skipUpdateChecks: !event.target.checked })} />Check for updates automatically (when Intern starts and every 6 hours)</label>
+        <p className="check-hint">{next.skipUpdateChecks ? 'Off: Intern asks only when you press Check for updates.' : 'Turn this off and Intern asks only when you press Check for updates.'}</p>
         {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
         {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">Updates are available in the installed desktop application.</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}
         {updateError && <p className="form-error" role="alert">{updateError}</p>}
         <div className="update-actions">
           <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check for updates'}</button>
-          {status?.state === 'available' && <button type="button" className="primary" disabled={busy} onClick={() => void runInstall()}>{installing ? 'Installing…' : `Install ${status.version} and restart`}</button>}
+          {status?.state === 'available' && <button type="button" className="primary" disabled={busy || renameApplying} onClick={() => void runInstall()}>{installing ? installingLabel(installProgress) : `Install ${status.version} and restart`}</button>}
         </div>
+        {status?.state === 'available' && renameApplying && (!installing || installProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
       </section>
       <section className="settings-group">
         <h3>Help & support</h3>
