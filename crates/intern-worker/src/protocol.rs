@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use serde::{Deserialize, Serialize};
 
 use crate::extract::{CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning};
-use crate::limits::MAX_PAGE_CHARS;
+use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -221,21 +221,31 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
     }
 }
 
-/// Truncates any page that carries more than [`MAX_PAGE_CHARS`] characters.
+/// Truncates any page that carries more than [`MAX_PAGE_CHARS`] characters,
+/// and every page past the point where the document as a whole reaches
+/// [`MAX_DOCUMENT_CHARS`].
 ///
-/// Only the spreadsheet reader caps what one page may hold, and the host
-/// reads a response line without a bound of its own, so one degenerate file
-/// could put hundreds of megabytes through the pipe and into the queue's
-/// memory. Capping at this boundary rather than in each reader means the
-/// bound holds for every reader, including ones added later, and the document
-/// still arrives - marked truncated - rather than failing.
+/// Most readers cannot know how much text a file will produce until they
+/// have produced it, and one degenerate file could otherwise put hundreds of
+/// megabytes through the pipe and into the queue's memory. Capping at this
+/// boundary rather than in each reader means the bound holds for every
+/// reader, including ones added later, and the document still arrives -
+/// marked truncated - rather than failing. Pages past the document cap stay,
+/// empty, so page numbers still mean what they meant.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
+    let mut remaining = MAX_DOCUMENT_CHARS;
     for page in &mut document.pages {
-        if let Some((end, _)) = page.text.char_indices().nth(MAX_PAGE_CHARS) {
-            page.text.truncate(end);
-            truncated = true;
-        }
+        let allowed = MAX_PAGE_CHARS.min(remaining);
+        let kept = match page.text.char_indices().nth(allowed) {
+            Some((end, _)) => {
+                page.text.truncate(end);
+                truncated = true;
+                allowed
+            }
+            None => page.text.chars().count(),
+        };
+        remaining -= kept;
     }
     if truncated {
         document.truncated = true;
@@ -357,8 +367,31 @@ impl Drop for ActiveRequestGuard {
 pub fn run_concurrent_worker<R, W, E, X>(
     reader: R,
     output: W,
+    diagnostics: E,
+    extractor: X,
+) -> io::Result<()>
+where
+    R: Read,
+    W: Write + Send + 'static,
+    E: Write,
+    X: Fn(PathBuf, CancellationToken) -> Result<ExtractedDocument, ExtractionError>
+        + Send
+        + Sync
+        + 'static,
+{
+    run_concurrent_worker_observed(reader, output, diagnostics, extractor, |_| {})
+}
+
+/// [`run_concurrent_worker`], reporting how many extraction threads it holds
+/// after each one it starts, so a test can see that finished ones are let go.
+#[doc(hidden)]
+#[allow(clippy::result_large_err)]
+pub fn run_concurrent_worker_observed<R, W, E, X>(
+    reader: R,
+    output: W,
     mut diagnostics: E,
     extractor: X,
+    mut held_threads: impl FnMut(usize),
 ) -> io::Result<()>
 where
     R: Read,
@@ -457,6 +490,22 @@ where
                         },
                     ),
                 )?;
+                // The host keeps one worker for the whole session, so a
+                // thread is joined as soon as it is done rather than at
+                // shutdown: an unjoined thread keeps its stack mapping on
+                // Unix and its handle on Windows, one per document filed.
+                let (finished, running): (Vec<_>, Vec<_>) = threads
+                    .drain(..)
+                    .partition(|thread: &JoinHandle<()>| thread.is_finished());
+                threads = running;
+                for thread in finished {
+                    if thread.join().is_err() {
+                        writeln!(
+                            diagnostics,
+                            "{{\"level\":\"error\",\"code\":\"WORKER_THREAD_PANIC\"}}"
+                        )?;
+                    }
+                }
                 let thread_output = Arc::clone(&output);
                 let thread_active = Arc::clone(&active);
                 let thread_extractor = Arc::clone(&extractor);
@@ -487,7 +536,10 @@ where
                     lifecycle.clear();
                     let _ = emit_locked(&thread_output, &response);
                 }) {
-                    Ok(thread) => threads.push(thread),
+                    Ok(thread) => {
+                        threads.push(thread);
+                        held_threads(threads.len());
+                    }
                     Err(error) => {
                         if let Ok(mut active) = active.lock() {
                             active.remove(&spawn_request_id);

@@ -3,9 +3,10 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use intern_worker::extract::ExtractedDocument;
-use intern_worker::limits::MAX_PAGE_CHARS;
+use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 use intern_worker::protocol::{
-    MAX_PROTOCOL_LINE_BYTES, handle_line, run_concurrent_worker, run_control_loop,
+    MAX_PROTOCOL_LINE_BYTES, handle_line, run_concurrent_worker, run_concurrent_worker_observed,
+    run_control_loop,
 };
 
 #[test]
@@ -445,4 +446,146 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
     );
     assert_eq!(parsed["event"]["document"]["truncated"], true);
     assert_eq!(parsed["event"]["document"]["warnings"][0], "TEXT_TRUNCATED");
+}
+
+fn page(number: usize, text: String) -> intern_worker::extract::ExtractedPage {
+    intern_worker::extract::ExtractedPage {
+        page_number: number,
+        text,
+        source: intern_worker::extract::PageSource::AnyDoc,
+        ocr_confidence: None,
+        vision_escalated: false,
+    }
+}
+
+/// Every page under its own cap can still add up: five hundred sheets of two
+/// million characters is a gigabyte on one response line, read whole into
+/// the app. The document as a whole stops at its own cap; the pages past it
+/// arrive empty, so page numbers keep their meaning.
+#[test]
+fn document_char_cap_truncates_later_pages() {
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let reader = TerminalGatedReader {
+        chunks: vec![
+            parse_line("workbook", "book.xlsx"),
+            joined_lines([shutdown_line()]),
+        ],
+        next: 0,
+        output,
+        first_terminal: b"\"type\":\"parsed\"",
+    };
+    let pages = MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS + 2;
+
+    run_concurrent_worker(
+        reader,
+        captured.clone(),
+        Vec::new(),
+        move |_path, _cancel| {
+            Ok(ExtractedDocument {
+                pages: (1..=pages)
+                    .map(|number| page(number, "\u{e9}".repeat(MAX_PAGE_CHARS)))
+                    .collect(),
+                warnings: vec![],
+                truncated: false,
+                optional_image: None,
+            })
+        },
+    )
+    .unwrap();
+
+    let (bytes, _) = &*captured.0;
+    let bytes = bytes.lock().unwrap().clone();
+    let parsed = String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"]["type"] == "parsed")
+        .unwrap();
+    let document = &parsed["event"]["document"];
+    let lengths = document["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|page| page["text"].as_str().unwrap().chars().count())
+        .collect::<Vec<_>>();
+
+    assert_eq!(lengths.len(), pages);
+    assert_eq!(lengths.iter().sum::<usize>(), MAX_DOCUMENT_CHARS);
+    assert_eq!(lengths[pages - 1], 0);
+    assert_eq!(document["truncated"], true);
+    assert_eq!(document["warnings"][0], "TEXT_TRUNCATED");
+}
+
+/// Hands a parse request over only once every earlier one has finished, the
+/// way the host drives the worker: one document at a time, for as long as
+/// the app runs.
+struct SequentialReader {
+    lines: Vec<Vec<u8>>,
+    next: usize,
+    output: SignalingWriter,
+}
+
+impl std::io::Read for SequentialReader {
+    fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+        if self.next >= self.lines.len() {
+            return Ok(0);
+        }
+        let (bytes, changed) = &*self.output.0;
+        let mut bytes = bytes.lock().unwrap();
+        let finished = |bytes: &[u8]| {
+            bytes
+                .windows(b"\"type\":\"parsed\"".len())
+                .filter(|window| *window == b"\"type\":\"parsed\"")
+                .count()
+        };
+        while finished(&bytes) < self.next {
+            bytes = changed.wait(bytes).unwrap();
+        }
+        drop(bytes);
+        let line = &self.lines[self.next];
+        assert!(line.len() <= target.len());
+        target[..line.len()].copy_from_slice(line);
+        self.next += 1;
+        Ok(line.len())
+    }
+}
+
+/// The host keeps one worker for the whole session, and a watched folder can
+/// feed it tens of thousands of documents. Each finished extraction thread
+/// is joined when the next one starts instead of piling up until shutdown.
+#[test]
+fn finished_threads_are_reaped() {
+    const DOCUMENTS: usize = 24;
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let mut lines = (0..DOCUMENTS)
+        .map(|index| parse_line(&format!("document-{index}"), "one.txt"))
+        .collect::<Vec<_>>();
+    lines.push(shutdown_line());
+    let reader = SequentialReader {
+        lines,
+        next: 0,
+        output,
+    };
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&held);
+
+    run_concurrent_worker_observed(
+        reader,
+        captured.clone(),
+        Vec::new(),
+        |_path, _cancel| Ok(empty_document()),
+        move |threads| observed.lock().unwrap().push(threads),
+    )
+    .unwrap();
+
+    let held = held.lock().unwrap();
+    assert_eq!(held.len(), DOCUMENTS);
+    // The previous thread may still be returning when the next starts, so
+    // two is the steady state; anything near the document count is a leak.
+    assert!(
+        held.iter().all(|threads| *threads <= 3),
+        "threads held after each start: {held:?}"
+    );
 }

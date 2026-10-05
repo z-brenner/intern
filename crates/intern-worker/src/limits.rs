@@ -14,6 +14,13 @@ pub const MAX_TEMP_BYTES: u64 = 2_147_483_648;
 /// truncated rather than allowed to put hundreds of megabytes through the
 /// pipe and into the queue's memory.
 pub const MAX_PAGE_CHARS: usize = 2_000_000;
+/// Characters a whole document may carry into a response.
+///
+/// The page cap alone allows five hundred pages of two million characters,
+/// and a small crafted workbook can render exactly that: a gigabyte of JSON
+/// on one line, read whole into the app's own memory. Four full pages is
+/// still a hundred times what distillation reads.
+pub const MAX_DOCUMENT_CHARS: usize = 8_000_000;
 pub const MAX_PAGE_MEGAPIXELS: u64 = 25;
 pub const MAX_PAGE_PIXELS: u64 = MAX_PAGE_MEGAPIXELS * 1_000_000;
 pub const MAX_EXTRACTION_DURATION: Duration = Duration::from_secs(30 * 60);
