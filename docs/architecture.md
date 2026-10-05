@@ -419,10 +419,31 @@ cap. No sampling knobs, because a parameter one provider rejects is a document
 that never gets filed. What goes out is the distilled digest of the document,
 condensed but verbatim; what comes back is read through the same JSON
 recovery and the same evidence checks as a local reply. A refusal from the
-model is reported as one and sends the document to review, never re-routed
-elsewhere; a rejected key, an unreachable service, a model name the service
-does not know, and an address that has moved all pause the queue rather than
-failing the backlog one item at a time; a busy service earns one retry.
+model is reported as one and fails that document on its own, never re-routed
+elsewhere and never sent again; a missing or rejected key, an unreachable
+service, an unusable address, and an account out of credit all pause the queue
+rather than failing the backlog one item at a time, and the queue says which;
+a busy service earns one retry before it pauses.
+
+### When a document fails
+
+Each failure is stored under a code that says what went wrong, and the code
+decides what happens next. A failure that would come out the same on a second
+attempt fails the document at once: a password-protected file, a file that is
+not what its extension says, a document past the extraction limits or too long
+for the model, a damaged file the parser rejects, an internal failure on that
+one document, and a model refusal. Asking again would only re-read the file —
+thirty minutes of it, for a scan that hit the time limit — or re-send and
+re-bill the request. A worker crash, a failure the worker says may pass, and a
+model request that timed out or was called off get one more attempt. A failure
+that every following document would share pauses the queue and names the
+reason in the window: the hosted-model failures above, a local model server
+that cannot be started or recovered, and missing text-recognition files. A
+model reply that cannot be used fails that document; three documents in a row
+with such a reply pause the queue, since by then the model is the problem, and
+any document read successfully starts the count again. A document that meets
+no model at all — the moment while Settings switches between the hosted and
+the local one — goes back to wait with nothing counted against it.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address

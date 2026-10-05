@@ -1196,10 +1196,11 @@
             <summary>The queue paused with a hosted-model error</summary>
             <div class="answer">
               <p>
-                A rejected key, an unreachable service, or a model name the
-                service does not know would fail every document in turn, so
-                Intern pauses instead. Open Settings, use <strong>Test
-                connection</strong> until it succeeds, then resume the queue.
+                A rejected key, an unreachable service, or an account out of
+                credit would fail every document in turn, so Intern pauses
+                instead and says which it was. Open Settings, use <strong>Test
+                connection</strong> until it succeeds (or add credit to the
+                account), then resume the queue.
                 A document the hosted model <em>declined</em> to read is not a
                 pause: it goes to review or fails on its own, and the rest carry on.
               </p>
