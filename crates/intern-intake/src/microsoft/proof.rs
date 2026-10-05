@@ -415,9 +415,9 @@ fn actor_field(value: &Value, pointer: &str) -> ActorField {
     }
 }
 
-/// Legacy first-read parser retained for compatibility with inactive audit
-/// code. It is not an admission proof; production admission uses
-/// [`verify_fresh_upload`].
+/// First-read metadata parser left from the retired audit-log verifier;
+/// nothing in production calls it. It is not an admission proof; production
+/// admission uses [`verify_fresh_upload`].
 pub fn candidate(
     metadata: &Value,
     account: &Account,
