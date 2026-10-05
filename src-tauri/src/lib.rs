@@ -71,16 +71,29 @@ pub fn run() {
                 sharepoint_setup::PACKAGED_DEPLOYMENT,
             ));
             tray::sync_tray(app.handle(), settings.run_in_background);
-            let minimized_launch = std::env::args().any(|argument| argument == "--minimized");
+            // Lossy rather than `args()`, which panics on an argument that is
+            // not Unicode; such a path cannot be found anyway.
+            let arguments = std::env::args_os()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            let minimized_launch = arguments.iter().any(|argument| argument == "--minimized");
             let shows_window = startup::shows_window_after_setup(startup::Startup::Ready {
                 starts_hidden: tray::window_starts_hidden(
                     settings.start_minimized,
                     settings.run_in_background,
                     minimized_launch,
                 ),
+                documents: commands::launch_names_documents(&arguments),
             });
             app.resources_table()
                 .add(ShutdownGuard(app.handle().clone()));
+            // "Send to > Intern" with Intern not yet running starts it with the
+            // documents as arguments.
+            commands::queue_launch_documents(
+                app.handle(),
+                arguments,
+                std::env::current_dir().unwrap_or_default(),
+            );
             if shows_window {
                 tray::show_main_window(app.handle());
             }

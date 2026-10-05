@@ -192,8 +192,12 @@ pub(crate) fn startup_failure_text(
 pub enum Startup {
     /// Initialization failed and a dialog says why.
     Failed,
-    /// Running. `starts_hidden` is `tray::window_starts_hidden`.
-    Ready { starts_hidden: bool },
+    /// Running. `starts_hidden` is `tray::window_starts_hidden`; `documents`
+    /// says the launch named documents to add.
+    Ready {
+        starts_hidden: bool,
+        documents: bool,
+    },
 }
 
 /// Whether setup ends by showing the main window.
@@ -203,11 +207,15 @@ pub enum Startup {
 /// for the tray flashed an empty window that could read "Not Responding"
 /// before it hid. Showing it is now setup's last act, and this is the only
 /// place the choice is made. A failed start always shows it, even for a
-/// launch meant for the tray, or a failing launch would be wholly invisible.
+/// launch meant for the tray, or a failing launch would be wholly invisible;
+/// documents sent to Intern show it, because someone just asked for them.
 pub fn shows_window_after_setup(startup: Startup) -> bool {
     match startup {
         Startup::Failed => true,
-        Startup::Ready { starts_hidden } => !starts_hidden,
+        Startup::Ready {
+            starts_hidden,
+            documents,
+        } => documents || !starts_hidden,
     }
 }
 
@@ -432,11 +440,18 @@ mod tests {
     #[test]
     fn the_window_appears_when_setup_is_done_unless_the_tray_was_asked_for() {
         assert!(shows_window_after_setup(Startup::Ready {
-            starts_hidden: false
+            starts_hidden: false,
+            documents: false,
         }));
         // A sign-in launch with background mode on goes straight to the tray.
         assert!(!shows_window_after_setup(Startup::Ready {
-            starts_hidden: true
+            starts_hidden: true,
+            documents: false,
+        }));
+        // Documents sent to Intern are something a person just asked for.
+        assert!(shows_window_after_setup(Startup::Ready {
+            starts_hidden: true,
+            documents: true,
         }));
         assert!(shows_window_after_setup(Startup::Failed));
     }

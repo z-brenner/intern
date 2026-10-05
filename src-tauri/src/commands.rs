@@ -1220,11 +1220,115 @@ impl AppState {
 /// model, a second intake watcher, and a second tray against the same queue
 /// database, and a sign-in autostart launch followed by a click on the
 /// shortcut is an ordinary way to end up with both. The single-instance
-/// plugin ends the second process and hands its command line here instead.
-pub fn second_instance_launched(app: &AppHandle, arguments: Vec<String>, _directory: String) {
-    if second_launch_shows_window(&arguments) {
+/// plugin ends the second process and hands its command line here instead -
+/// including any documents it was given, which is how "Send to > Intern"
+/// reaches a copy that is already running.
+pub fn second_instance_launched(app: &AppHandle, arguments: Vec<String>, directory: String) {
+    let shows_window = second_launch_shows_window(&arguments);
+    queue_launch_documents(app, arguments, PathBuf::from(directory));
+    if shows_window {
         crate::tray::show_main_window(app);
     }
+}
+
+/// The arguments Intern passes itself, which are never documents: the
+/// autostart entry's `--minimized` (lib.rs). The updater relaunches with the
+/// arguments the previous process had, so this list is the whole of it.
+const LAUNCH_FLAGS: &[&str] = &["--minimized"];
+
+/// The documents a launch asks Intern to add. "Send to > Intern" in Explorer,
+/// "Open with", and a file dropped on the shortcut all start `Intern.exe` with
+/// one path per document.
+///
+/// Only flags Intern itself passes are skipped, not "anything that starts with
+/// a dash", so a document named `-draft.pdf` still arrives; and a leading `/`
+/// marks a switch only on Windows and only in its short form (`/x`), because
+/// everywhere else `/` begins an absolute path. A relative path is resolved
+/// against the launching process's directory, which for a second launch is not
+/// this process's. A path that does not exist is dropped here; one that exists
+/// but is not a document is reported by the add, like any other. The updater
+/// relaunches Intern with the arguments it had, documents included; whatever
+/// is still there unchanged is already in the queue and stays as it is.
+pub fn launch_documents(args: &[String], cwd: &Path) -> Vec<PathBuf> {
+    launch_arguments(args)
+        .map(|argument| cwd.join(argument))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+/// Whether a launch names anything besides Intern's own flags. Touches no
+/// file, so the main thread can ask it of a path on a share that is offline.
+pub fn launch_names_documents(args: &[String]) -> bool {
+    launch_arguments(args).next().is_some()
+}
+
+/// Everything after argv[0] that is not one of Intern's own flags. A blank
+/// argument (`Intern.exe ""`, a script with an unset variable) is not a
+/// document either: joined to the launching directory it would be that
+/// directory, and a sign-in launch starts in System32.
+fn launch_arguments(args: &[String]) -> impl Iterator<Item = &String> {
+    args.iter()
+        .skip(1)
+        .filter(|argument| !argument.trim().is_empty() && !is_launch_flag(argument))
+}
+
+fn is_launch_flag(argument: &str) -> bool {
+    LAUNCH_FLAGS.contains(&argument) || (cfg!(windows) && is_short_windows_switch(argument))
+}
+
+/// `/x`, `/S`, `/?`: a slash and one or two characters, the shape of a
+/// Windows command-line switch. Anything longer (`/Scans`) is a folder at the
+/// root of the current drive, and nothing with a separator in it (`//server`)
+/// is a switch at all. Explorer hands over full paths, with a drive letter or
+/// a `\\server`, so this is only a guard for a switch nobody here passes.
+fn is_short_windows_switch(argument: &str) -> bool {
+    argument.strip_prefix('/').is_some_and(|switch| {
+        (1..=2).contains(&switch.len())
+            && switch
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '?')
+    })
+}
+
+/// What a launch's documents do to the queue, without the app around it:
+/// added like any other add, and the scheduler woken (`wake`) when anything
+/// was.
+fn add_launch_documents(
+    pipeline: &Pipeline,
+    arguments: &[String],
+    cwd: &Path,
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<AddReportDto, CommandError> {
+    let report = add_inputs(pipeline, &launch_documents(arguments, cwd))?;
+    wake_if_added(&report, wake)?;
+    Ok(report)
+}
+
+/// Adds the documents a launch named, off the main thread: even asking
+/// whether a path on an offline share exists can take many seconds, hashing a
+/// folder of scans takes more, and the main thread is the window's. The
+/// queue's own change event refreshes the window; a document that could not
+/// be added is left where it is, exactly as it was.
+pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cwd: PathBuf) {
+    if !launch_names_documents(&arguments) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // A launch that arrives while startup is failing has nowhere to go.
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        // The code only: the message can name the document.
+        if let Err(error) =
+            add_launch_documents(&state.pipeline, &arguments, &cwd, || state.schedule())
+        {
+            eprintln!(
+                "intern: documents from the command line could not be queued: {}",
+                error.code
+            );
+        }
+    });
 }
 
 /// Whether a second launch means "show me the window". Someone who clicked
@@ -3269,7 +3373,110 @@ mod add_report_tests {
 
 #[cfg(test)]
 mod second_instance_tests {
-    use super::second_launch_shows_window;
+    use std::path::{MAIN_SEPARATOR, Path};
+
+    use super::{
+        add_launch_documents, is_short_windows_switch, launch_documents, launch_names_documents,
+        scratch_queue::{folder, queue, write},
+        second_launch_shows_window,
+    };
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn launch_documents_skips_flags_and_resolves_relative_paths() {
+        let cwd = folder("launch");
+        std::fs::create_dir_all(cwd.join("docs")).unwrap();
+        let relative = write(&cwd.join("docs"), "a.pdf", b"%PDF-1.7");
+        let elsewhere = folder("launch-elsewhere");
+        let absolute = write(&elsewhere, "b.pdf", b"%PDF-1.7");
+        // A document whose name starts with a dash is still a document.
+        let dashed = write(&cwd, "-draft.pdf", b"%PDF-1.7");
+        let absolute_text = absolute.to_string_lossy().into_owned();
+
+        let documents = launch_documents(
+            &args(&[
+                // argv[0], which can itself be a real path.
+                cwd.join("docs").join("a.pdf").to_str().unwrap(),
+                "--minimized",
+                &format!("docs{MAIN_SEPARATOR}a.pdf"),
+                &absolute_text,
+                "-draft.pdf",
+                "missing.pdf",
+                // Blank: joined to the launch folder it would be the folder.
+                "",
+                "  ",
+            ]),
+            &cwd,
+        );
+
+        assert_eq!(documents, vec![relative, absolute, dashed]);
+        // Intern's own flag is not a document; nothing else is skipped by
+        // shape alone.
+        assert!(!launch_names_documents(&args(&[
+            "intern.exe",
+            "--minimized"
+        ])));
+        assert!(!launch_names_documents(&args(&["intern.exe"])));
+        assert!(!launch_names_documents(&args(&["intern.exe", ""])));
+        assert!(launch_names_documents(&args(&[
+            "intern.exe",
+            "C:/drop/scan.pdf"
+        ])));
+        std::fs::remove_dir_all(cwd).unwrap();
+        std::fs::remove_dir_all(elsewhere).unwrap();
+    }
+
+    #[test]
+    fn only_a_short_slash_switch_is_a_switch_and_only_on_windows() {
+        assert!(is_short_windows_switch("/x"));
+        assert!(is_short_windows_switch("/S"));
+        assert!(is_short_windows_switch("/?"));
+        // Paths: absolute ones, and on Windows a folder at the drive's root.
+        assert!(!is_short_windows_switch("/home/pat/scan.pdf"));
+        assert!(!is_short_windows_switch("/tmp"));
+        assert!(!is_short_windows_switch("/Scans"));
+        assert!(!is_short_windows_switch("//server/share/scan.pdf"));
+        assert!(!is_short_windows_switch("/scan.pdf"));
+        assert!(!is_short_windows_switch("/"));
+        if !cfg!(windows) {
+            // On Linux and macOS `/x` is a path like any other.
+            assert!(launch_names_documents(&args(&["intern", "/x"])));
+        }
+    }
+
+    #[test]
+    fn second_instance_with_file_queues_it() {
+        let root = folder("second-launch");
+        let inbox = root.join("Saved attachments");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let scan = write(&inbox, "scan.pdf", b"%PDF-1.7 a scan");
+        let (pipeline, changes) = queue(&root.join("data"));
+        // What Explorer's "Send to > Intern" hands the second process, and
+        // the single-instance plugin hands on: its arguments and its folder.
+        let arguments = args(&["C:\\Program Files\\Intern\\Intern.exe", "scan.pdf"]);
+
+        let mut woken = 0;
+        let report = add_launch_documents(&pipeline, &arguments, Path::new(&inbox), || {
+            woken += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(report.added, 1);
+        assert_eq!(woken, 1, "the scheduler is woken for the new document");
+        assert!(report.skipped.is_empty());
+        let queued = pipeline.list().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].source_path, scan);
+        assert_eq!(changes.count(), 1);
+        // And the window comes up to show it.
+        assert!(second_launch_shows_window(&arguments));
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_second_launch_opens_the_window_unless_it_asked_for_the_tray() {

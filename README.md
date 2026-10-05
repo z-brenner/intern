@@ -134,6 +134,14 @@ off by default. The tray icon's tooltip says how many documents need review
 or are ready to rename, so a glance answers whether the window is worth
 opening.
 
+The installer also puts Intern in Explorer's **Send to** menu: select
+documents — attachments saved from Outlook, a folder of scans — right-click,
+and choose **Send to > Intern**. They join the queue whether or not Intern is
+already open. An add is never refused as a batch: a file Intern cannot read
+(a `.zip`, an empty file, an Office lock file, a scan another program still
+has open) is left out and named, with the reason, and everything else is
+queued.
+
 If Intern cannot start, a dialog says why and names its data folder
 (`%LOCALAPPDATA%\com.intern.app`), and the same is written to
 `logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:

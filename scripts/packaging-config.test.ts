@@ -21,6 +21,37 @@ it('packages the license directory as a tree so vcpkg subpaths match the signed 
   expect(smoke).toContain('$EvidencePath');
 });
 
+// nsis_installer_hooks_configured. "Send to > Intern" is created by the
+// installer hooks Tauri includes into its NSIS script, removed again on
+// uninstall - but not by the uninstall an update runs, or every update would
+// take it away - and checked both ways by the installed smoke on Windows CI.
+it('adds Send to > Intern at install and removes it at uninstall, but not during an update', async () => {
+  const config = JSON.parse(await readFile('src-tauri/tauri.conf.json', 'utf8'));
+  expect(config.bundle.windows.nsis.installerHooks).toBe('windows/hooks.nsh');
+  // The smoke looks for Intern.lnk; the hooks name it after the product.
+  expect(config.productName).toBe('Intern');
+
+  const hooks = await readFile('src-tauri/windows/hooks.nsh', 'utf8');
+  const macro = (name: string) => new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`).exec(hooks)?.[1] ?? '';
+  const install = macro('NSIS_HOOK_POSTINSTALL');
+  expect(install).toContain('CreateShortcut "$SENDTO\\${PRODUCTNAME}.lnk" "$INSTDIR\\${MAINBINARYNAME}.exe"');
+  const uninstall = macro('NSIS_HOOK_POSTUNINSTALL');
+  expect(uninstall).toContain('${If} $UpdateMode <> 1');
+  expect(uninstall).toContain('Delete "$SENDTO\\${PRODUCTNAME}.lnk"');
+  expect(uninstall.indexOf('$UpdateMode <> 1')).toBeLessThan(uninstall.indexOf('Delete'));
+  // The template's own uninstall already clears the autostart Run value.
+  expect(hooks).not.toMatch(/CurrentVersion\\Run/i);
+
+  const smoke = await readFile('scripts/smoke-installer.ps1', 'utf8');
+  expect(smoke).toContain('[Environment+SpecialFolder]::SendTo');
+  expect(smoke).toContain('Send to shortcut is missing after install');
+  expect(smoke).toContain('Send to shortcut remains after uninstall');
+  // The window is created hidden and a failed start shows it too, so a window
+  // handle alone no longer proves the app started.
+  expect(smoke).toContain('MainWindowHandle');
+  expect(smoke).toContain('logs/startup-error.log');
+});
+
 // Tauri refuses to build when a plugin's Rust crate and npm package differ in
 // major/minor. A caret range on the crate let it float to 2.10.1 against an
 // exactly-pinned npm 2.9.0, and the release died at the signing build with
