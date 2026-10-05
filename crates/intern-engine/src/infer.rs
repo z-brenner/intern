@@ -24,8 +24,8 @@
 use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
-    NumericDate, date_match_positions, extract_stated_dates, is_valid_iso_date, normalize,
-    normalize_loosely, numeric_dates,
+    NumericDate, NumericOrder, date_match_positions, extract_stated_dates, is_valid_iso_date,
+    normalize, normalize_loosely, numeric_dates,
 };
 use crate::validate::rfind_word;
 
@@ -425,15 +425,23 @@ fn last_numeric_date_end(window: &str) -> Option<usize> {
 
 /// The calendar dates a numeric token can mean. A year-first token is read
 /// one way. A year-last token is read month-first and day-first, and both
-/// readings are kept when both are real dates: the document's locale is not
-/// known, and choosing between them would be a guess. A two-digit year is
-/// not read at all, for the same reason - its century is a guess.
-fn numeric_readings(date: &NumericDate<'_>) -> Vec<String> {
+/// readings are kept when both are real dates, unless `order` - the order
+/// the document's own numeric dates settle ([`numeric_date_order`]) - says
+/// which one it writes. Without that, choosing between them would be a
+/// guess. A two-digit year is not read at all, for the same reason - its
+/// century is a guess.
+///
+/// [`numeric_date_order`]: crate::evidence::numeric_date_order
+fn numeric_readings(date: &NumericDate<'_>, order: Option<NumericOrder>) -> Vec<String> {
     let [first, second, third] = date.parts;
     let candidates = if first.len() == 4 {
         vec![(first, second, third)]
     } else if third.len() == 4 {
-        vec![(third, first, second), (third, second, first)]
+        match order {
+            Some(NumericOrder::MonthFirst) => vec![(third, first, second)],
+            Some(NumericOrder::DayFirst) => vec![(third, second, first)],
+            None => vec![(third, first, second), (third, second, first)],
+        }
     } else {
         Vec::new()
     };
@@ -449,10 +457,14 @@ fn numeric_readings(date: &NumericDate<'_>) -> Vec<String> {
 
 /// Every date a normalized line states, each with the byte offset it stands
 /// at: written months and ISO forms the way [`extract_stated_dates`] reads
-/// them, and numeric tokens in every reading they allow. A reading counts
-/// only where the evidence check finds that date at that token too, so a
-/// date taken from here always passes it.
-pub(crate) fn dates_stated_on(normalized: &str) -> Vec<(String, usize)> {
+/// them, and numeric tokens in every reading they allow - in the document's
+/// `order` alone when it has settled one, as the date chips read them. A
+/// reading counts only where the evidence check finds that date at that
+/// token too, so a date taken from here always passes it.
+pub(crate) fn dates_stated_on(
+    normalized: &str,
+    order: Option<NumericOrder>,
+) -> Vec<(String, usize)> {
     let mut found = Vec::new();
     for date in extract_stated_dates(normalized) {
         for position in date_match_positions(&date, normalized) {
@@ -460,7 +472,7 @@ pub(crate) fn dates_stated_on(normalized: &str) -> Vec<(String, usize)> {
         }
     }
     for token in numeric_dates(normalized) {
-        for reading in numeric_readings(&token) {
+        for reading in numeric_readings(&token, order) {
             if date_match_positions(&reading, normalized).contains(&token.start) {
                 found.push((reading, token.start));
             }
@@ -1195,17 +1207,34 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
         }
         // Only an unambiguous reading of a numeric token is a single date;
         // a token both readings fit stays two, and a two-digit year none.
-        let readings = |text: &str| -> Vec<String> {
+        let readings = |text: &str, order: Option<NumericOrder>| -> Vec<String> {
             numeric_dates(text)
                 .iter()
-                .flat_map(numeric_readings)
+                .flat_map(|token| numeric_readings(token, order))
                 .collect()
         };
-        assert_eq!(readings("04/30/2025"), vec!["2025-04-30"]);
-        assert_eq!(readings("30.04.2025"), vec!["2025-04-30"]);
-        assert_eq!(readings("2025-04-30"), vec!["2025-04-30"]);
-        assert_eq!(readings("04/05/2025"), vec!["2025-04-05", "2025-05-04"]);
-        assert!(readings("04/30/25").is_empty());
+        assert_eq!(readings("04/30/2025", None), vec!["2025-04-30"]);
+        assert_eq!(readings("30.04.2025", None), vec!["2025-04-30"]);
+        assert_eq!(readings("2025-04-30", None), vec!["2025-04-30"]);
+        assert_eq!(
+            readings("04/05/2025", None),
+            vec!["2025-04-05", "2025-05-04"]
+        );
+        assert!(readings("04/30/25", None).is_empty());
+        // The order the document settles reads a token both ways fit one
+        // way round; a year-first token is read one way whatever it is.
+        assert_eq!(
+            readings("04/05/2025", Some(NumericOrder::MonthFirst)),
+            vec!["2025-04-05"]
+        );
+        assert_eq!(
+            readings("04/05/2025", Some(NumericOrder::DayFirst)),
+            vec!["2025-05-04"]
+        );
+        assert_eq!(
+            readings("2025-04-05", Some(NumericOrder::DayFirst)),
+            vec!["2025-04-05"]
+        );
     }
 
     /// "updated" and "update:" hold the letters of "dated" and "date:", and

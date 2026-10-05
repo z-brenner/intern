@@ -232,10 +232,13 @@ checks read the document around it:
 * **A deadline.** When every statement of the chosen date is labelled a
   deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
   date the document labels as its issue date (`Invoice Date:`, `Dated`, a
-  bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none or several, the date is withheld for
-  a person, and the model's date is offered to them. Either way the proposal
-  goes to review with `DATE_IS_DEADLINE`. `payable` and `return` do not set
-  it off, and a numeric date that reads either way round counts as two.
+  bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none
+  or several, the date is withheld for a person, and the model's date is
+  offered to them. Either way the proposal goes to review with
+  `DATE_IS_DEADLINE`. `payable` and `return` do not set it off, and a
+  numeric date that reads either way round counts as two - unless the
+  document's other numeric dates show which way round it writes them, as
+  they do for the date chips.
 * **An implausible year.** A year more than ten years ahead or before 1900 is
   usually an OCR misread the model copied faithfully (2625 for 2025). The
   date is kept and the proposal goes to review with `DATE_IMPLAUSIBLE`.

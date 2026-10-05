@@ -379,7 +379,9 @@ enum Deadline {
 /// replacement is the one other date labelled as the date of issue ("Invoice
 /// Date:", "Date of issue", "Dated", a bare "Date:"); two or none, and the
 /// date is withheld rather than guessed at. A numeric date both readings fit
-/// counts as two.
+/// counts as two, unless the document's other numeric dates settle which way
+/// round it writes them ([`numeric_date_order`]), the way the date chips
+/// read it.
 ///
 /// A single unlabelled statement of the date anywhere clears it: the
 /// document then says something besides "this is when it is due".
@@ -405,10 +407,11 @@ fn deadline_redirect(digest: &DocumentDigest, date: &str) -> Option<Deadline> {
     if !stated {
         return None;
     }
+    let order = numeric_date_order(digest);
     let mut alternates: Vec<(String, String)> = Vec::new();
     for line in &lines {
         let normalized = normalize(line);
-        for (found, position) in dates_stated_on(&normalized) {
+        for (found, position) in dates_stated_on(&normalized, order) {
             if found == date
                 || alternates.iter().any(|(existing, _)| *existing == found)
                 || reference_introduced(&normalized, position)
@@ -2282,14 +2285,21 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
         assert!(outcome.reasons.contains(&ReviewReason::DateIsDeadline));
 
         // No issue date, two of them, or one a numeric token that reads
-        // either way round: withheld, and only the deadline is the reason.
-        for date_lines in [
-            "Due Date: 05/30/2025",
-            "Invoice Date: 04/30/2025\nStatement Date: May 1, 2025\nDue Date: 05/30/2025",
-            "Invoice Date: 04/05/2025\nDue Date: 05/30/2025",
+        // either way round in a document that never says which: withheld,
+        // and only the deadline is the reason.
+        for (date_lines, due) in [
+            ("Due Date: 05/30/2025", "2025-05-30"),
+            (
+                "Invoice Date: 04/30/2025\nStatement Date: May 1, 2025\nDue Date: 05/30/2025",
+                "2025-05-30",
+            ),
+            (
+                "Invoice Date: 04/05/2025\nDue Date: 05/06/2025",
+                "2025-05-06",
+            ),
         ] {
             let outcome = validate_at(
-                invoice("2025-05-30"),
+                invoice(due),
                 &digest_of(&invoice_document(date_lines)),
                 2026,
             );
@@ -2300,9 +2310,43 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
                 vec![ReviewReason::DateIsDeadline],
                 "{date_lines}"
             );
+            assert_eq!(outcome.candidate.document_date.as_deref(), Some(due));
+        }
+
+        // A due date only month-first can read settles the document's
+        // order, and the issue date is read that way round, as the date
+        // chips read it: one issue date, not two.
+        for (date_lines, due, issued) in [
+            (
+                "Invoice Date: 04/05/2025\nDue Date: 05/30/2025",
+                "2025-05-30",
+                "2025-04-05",
+            ),
+            (
+                "Invoice Date: 03/04/2026\nDue Date: 04/30/2026",
+                "2026-04-30",
+                "2026-03-04",
+            ),
+            (
+                "Invoice Date: 04/03/2026\nDue Date: 30/04/2026",
+                "2026-04-30",
+                "2026-03-04",
+            ),
+        ] {
+            let outcome = validate_at(
+                invoice(due),
+                &digest_of(&invoice_document(date_lines)),
+                2026,
+            );
             assert_eq!(
-                outcome.candidate.document_date.as_deref(),
-                Some("2025-05-30")
+                outcome.proposal.document_date.as_deref(),
+                Some(issued),
+                "{date_lines}"
+            );
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::DateIsDeadline],
+                "{date_lines}"
             );
         }
 
