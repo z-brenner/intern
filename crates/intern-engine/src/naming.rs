@@ -228,8 +228,23 @@ pub(crate) fn strip_duplicate_extension<'a>(value: &'a str, extension: &str) -> 
 /// are: hostile characters dropped, whitespace collapsed, trailing dots and
 /// spaces removed, reserved device names escaped. `None` when nothing is
 /// left.
+///
+/// The trailing dots and spaces are removed again after the cut to 80
+/// characters, which can land just after one. The queue creates folders
+/// through verbatim `\\?\` paths, which skip the trimming Win32 would
+/// otherwise do, so a folder named "Acme Holdings " would be created as
+/// written - and Explorer mishandles it and OneDrive refuses to sync it. The
+/// cut cannot leave a reserved device name behind: the part of the name
+/// before its first dot, which is what makes a name reserved, was already
+/// checked whole.
 pub fn sanitize_folder_name(value: &str) -> Option<String> {
-    sanitize_segment(value).map(|name| name.chars().take(80).collect::<String>())
+    sanitize_segment(value).and_then(|name| {
+        let mut cut = name.chars().take(80).collect::<String>();
+        while cut.ends_with([' ', '.']) {
+            cut.pop();
+        }
+        (!cut.is_empty()).then_some(cut)
+    })
 }
 
 pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
@@ -580,6 +595,27 @@ mod tests {
                 "pdf"
             ),
             "2026-04-01 Invoice with Acme Corporation.pdf"
+        );
+    }
+
+    /// The queue creates folders through verbatim paths, so a cut that lands
+    /// just after a space or a period would create a folder Windows tools
+    /// mishandle and OneDrive will not sync.
+    #[test]
+    fn folder_name_cut_never_ends_in_space_or_period() {
+        let stem = "A".repeat(79);
+        let spaced = sanitize_folder_name(&format!("{stem} Holdings LLC")).unwrap();
+        assert_eq!(spaced, stem, "the 80th character was a space");
+        let dotted = sanitize_folder_name(&format!("{stem}. Holdings LLC")).unwrap();
+        assert_eq!(dotted, stem, "the 80th character was a period");
+        assert_eq!(
+            sanitize_folder_name(&format!("{}x", ". ".repeat(41))),
+            None,
+            "nothing is left once the cut is trimmed"
+        );
+        assert_eq!(
+            sanitize_folder_name("Acme Holdings LLC").as_deref(),
+            Some("Acme Holdings LLC")
         );
     }
 
