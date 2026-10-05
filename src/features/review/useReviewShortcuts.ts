@@ -54,7 +54,9 @@ function isTextField(target: Element | null): boolean {
  * - "/" goes to the filter.
  *
  * Each acts only where the panel offers the matching button, so a shortcut
- * can never do what a click could not.
+ * can never do what a click could not. The keys that decide an item act on
+ * the press, not on its repeats: review moves on after each decision, so a
+ * held key would go on to decide the documents after it, unseen.
  */
 export function useReviewShortcuts(options: ReviewShortcutOptions) {
   // Kept current as each render is committed. A passive effect ran a task
@@ -78,13 +80,13 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
       if (event.key === 'Enter' && command && !event.altKey && !event.shiftKey) {
         if ((textField && !inPanel) || !actions?.approve) return;
         event.preventDefault();
-        inspector.current?.approve();
+        if (!event.repeat) inspector.current?.approve();
         return;
       }
       if (event.altKey && !command && (event.code === 'KeyK' || event.key.toLowerCase() === 'k')) {
         if ((textField && !inPanel) || !actions?.keep) return;
         event.preventDefault();
-        inspector.current?.keep();
+        if (!event.repeat) inspector.current?.keep();
         return;
       }
       if (textField || command || event.altKey) return;
@@ -122,7 +124,7 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
         case 'Delete':
           if (!actions?.remove) return;
           event.preventDefault();
-          inspector.current?.requestRemove();
+          if (!event.repeat) inspector.current?.requestRemove();
           return;
         case '/':
           if (onFilter()) event.preventDefault();

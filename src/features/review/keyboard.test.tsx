@@ -106,6 +106,59 @@ describe('keyboard review', () => {
     expect(bridge.approve).toHaveBeenNthCalledWith(4, 'scan-0106', '2024-04-18 Lease Amendment for 500 Pine St.pdf', 'First amendment to the lease of 500 Pine St.');
   });
 
+  // Review moves on as soon as the backend answers, which is quicker than a
+  // double-click, and the next item's Approve is enabled in the same place.
+  // The second click used to approve a document nobody had looked at.
+  it('the second click of a double-click does not decide the next item', async () => {
+    const bridge = await start();
+    const approve = () => within(inspector()).getByRole('button', { name: /Approve & rename/ });
+
+    fireEvent.click(approve(), { detail: 1 });
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0102.pdf'));
+    await waitFor(() => expect(approve()).toBeEnabled());
+    fireEvent.click(approve(), { detail: 2 });
+    fireEvent.click(within(inspector()).getByRole('button', { name: /Keep original/ }), { detail: 2 });
+
+    expect(bridge.approve).toHaveBeenCalledTimes(1);
+    expect(bridge.keepOriginal).not.toHaveBeenCalled();
+    expect(inspector()).toHaveTextContent('Scan 0102.pdf');
+
+    // A click of its own still decides.
+    fireEvent.click(approve(), { detail: 1 });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(2));
+    expect(bridge.approve).toHaveBeenLastCalledWith('scan-0102', '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', expect.any(String));
+  });
+
+  // The same for a key held down: its repeats arrive once the caret is in
+  // the next item's name, and each one decided another document.
+  it('a held key decides one item, not the ones after it', async () => {
+    const bridge = await start();
+    const filename = () => within(inspector()).getByLabelText('Filename');
+    press('Enter', { ctrlKey: true });
+    await waitFor(() => expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc'));
+    await waitFor(() => expect(filename()).toHaveFocus());
+
+    // Swallowed rather than let through: a repeated Enter would put a space in the name.
+    for (const key of [{ key: 'Enter', ctrlKey: true }, { key: 'Enter' }, { key: 'k', altKey: true }]) {
+      expect(fireEvent.keyDown(filename(), { ...key, repeat: true }), JSON.stringify(key)).toBe(false);
+    }
+    expect(filename()).toHaveValue('2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+    // Enter held on a button presses it again with each repeat.
+    const approve = within(inspector()).getByRole('button', { name: /Approve & rename/ });
+    approve.focus();
+    expect(fireEvent.keyDown(approve, { key: 'Enter', repeat: true })).toBe(false);
+    rowButton('Scan 0102.pdf').focus();
+    fireEvent.keyDown(rowButton('Scan 0102.pdf'), { key: 'Delete', repeat: true });
+    expect(within(inspector()).queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument();
+    expect(bridge.approve).toHaveBeenCalledTimes(1);
+    expect(bridge.keepOriginal).not.toHaveBeenCalled();
+
+    // A press of its own still decides.
+    press('Enter', { ctrlKey: true });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(2));
+    expect(bridge.approve).toHaveBeenLastCalledWith('scan-0102', '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', expect.any(String));
+  });
+
   it('approve_advances_to_next_undecided_and_announces', async () => {
     const bridge = await start();
     fireEvent.click(rowButton('Scan 0102.pdf'));

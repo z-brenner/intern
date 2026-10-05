@@ -1,6 +1,6 @@
 import { Ban, CalendarPlus, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, Ref } from 'react';
+import type { KeyboardEvent, MouseEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
@@ -39,6 +39,16 @@ const withoutLineBreaks = (value: string) => value.replace(/[\r\n]+/g, ' ');
 function quotations(value?: string): string[] {
   return (value ?? '').split(';').map((part) => part.trim()).filter((part) => part.length > 0);
 }
+
+/**
+ * A click that decides the item - approve, keep, remove. Review moves on as
+ * soon as the backend answers, which is quicker than a double-click, and the
+ * next item's button is enabled in the same place in the commit that shows
+ * it. The second click of a double-click therefore landed on a document
+ * nobody had looked at and decided that too. Only a click's first press
+ * decides; one from the keyboard has no count (detail 0) and is a press.
+ */
+const decides = (run: () => void) => (event: MouseEvent<HTMLButtonElement>) => { if (event.detail <= 1) run(); };
 
 /** A key's name beside the button it presses; read out through aria-keyshortcuts instead. */
 const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-hidden="true">{keys}</kbd>;
@@ -141,13 +151,18 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
   const fileDate = !dated ? item.fileModifiedDate : undefined;
   const chooseDate = (date: string) => editStem(withLeadingDate(stem, date));
   // Enter files the name, as it does in any one-line field; the IME's Enter
-  // that ends a composition is left to the IME.
+  // that ends a composition is left to the IME. A held Enter repeats, and
+  // after the first press the caret is in the next item's name: only the
+  // press itself files a name.
   const onFilenameKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== 'Enter' || event.altKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
-    if (!busy) approve();
+    if (!busy && !event.repeat) approve();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    // The same for Enter held on a button, which presses it again with every
+    // repeat - by then the next item's button, in the same place.
+    if (event.repeat && event.key === 'Enter' && event.target instanceof HTMLButtonElement) { event.preventDefault(); return; }
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
     if (event.key !== 'Tab') return;
@@ -255,7 +270,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         <p><Icon icon={CalendarPlus} />The model read <strong>{suggestedDate}</strong> as the document's date, but Intern could not find it written in the document. Every rename needs a date.</p>
         <div className="suggestion-actions">
           <button type="button" disabled={busy} onClick={useSuggestedDate}>Use this date</button>
-          <button type="button" className="primary" disabled={busy} onClick={acceptSuggestedDate}>Use date &amp; rename</button>
+          <button type="button" className="primary" disabled={busy} onClick={decides(acceptSuggestedDate)}>Use date &amp; rename</button>
         </div>
       </div>}
       {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
@@ -293,23 +308,23 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         <p>{remove.resolvedFiles
           ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
           : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is.</>}</p>
-        <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); }}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
+        <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
-        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={approve} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
+        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.retry?.primary && <button type="button" className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
         {actions.keep && <>
-          <button type="button" className="secondary-action" disabled={busy} onClick={onKeep} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
+          <button type="button" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
           <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
           {moreOpen && <div className="review-menu" role="group" aria-label="More review actions">
             {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
             {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
-            {remove && <button type="button" disabled={busy} onClick={chooseRemove} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
+            {remove && <button type="button" disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
           </div>}
         </>}
         {/* Parked, failed or waiting: no keep and no menu, so the rest stand on their own. */}
         {!actions.keep && actions.retry && !actions.retry.primary && <button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={chooseRemove} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
+        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={decides(chooseRemove)} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
         {actions.cancel && <button type="button" disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
         {actions.undo && <button type="button" disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
       </>}
