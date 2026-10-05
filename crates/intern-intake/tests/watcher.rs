@@ -1010,6 +1010,44 @@ fn a_document_the_watcher_withdrew_is_handed_over_again_not_tombstoned() {
     assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
 }
 
+/// A queue that could not be asked says nothing about the document, so the
+/// claim is only kept alive: not released to be handed over again, not
+/// closed, not withdrawn - even with the file gone, since what the queue did
+/// with it is unknown.
+#[test]
+fn an_unavailable_queue_only_keeps_the_claim() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"a document in progress");
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.set_state(&path, ItemState::Unavailable);
+    for _ in 0..3 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+    fs::remove_file(&path).unwrap();
+    for _ in 0..3 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
+    assert!(
+        claim.lease_expires_at > rig.watcher.status().last_scan_at.unwrap(),
+        "the lease was renewed all along"
+    );
+    assert!(rig.host.abandoned().is_empty());
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    // Once the queue answers again the claim is driven as usual.
+    rig.host.set_state(&path, ItemState::Unknown);
+    rig.step();
+    assert_eq!(rig.read_claim(&key).outcome, Some(DoneOutcome::Removed));
+}
+
 #[test]
 fn a_file_changing_between_scans_is_not_claimed_until_it_settles() {
     let rig = Rig::start(false, &[]);
