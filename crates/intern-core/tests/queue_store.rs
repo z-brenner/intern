@@ -1110,3 +1110,235 @@ fn the_newest_item_for_a_path_is_found_by_key_across_spellings() {
     );
     assert!(db.find_newest_by_source_path(&[]).unwrap().is_none());
 }
+
+#[test]
+fn undo_after_rolled_back_undo_succeeds() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"same-content").unwrap();
+    let filed = temp.path().join("2024 - Filed Agreement.pdf");
+    let id = complete_via_apply(&db, &original, &filed);
+    let applied = db.load_latest_complete_receipt(id).unwrap().unwrap();
+
+    // The first undo is refused - the filed document is open somewhere - and
+    // reconciles as rolled back, which makes it the item's newest receipt.
+    db.begin_undo(id).unwrap();
+    let refused = FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db));
+    refused.undo(id, &applied).unwrap_err();
+    assert_eq!(
+        refused.reconcile(id).unwrap().status,
+        QueueStatus::Completed
+    );
+    assert_eq!(
+        db.load_receipt(id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    // ... but the document is still filed by the apply underneath it.
+    assert_eq!(
+        db.load_latest_complete_receipt(id).unwrap().unwrap(),
+        applied
+    );
+
+    // So the next undo, with the document closed, goes through.
+    db.begin_undo(id).unwrap();
+    let undone = FileApplier::local(Arc::clone(&db))
+        .undo(id, &db.load_latest_complete_receipt(id).unwrap().unwrap())
+        .unwrap();
+    assert_eq!(
+        db.complete_undo(id, undone.id).unwrap().status,
+        QueueStatus::Ready
+    );
+    assert_eq!(fs::read(&original).unwrap(), b"same-content");
+    assert!(!filed.exists());
+    assert_eq!(
+        db.load_latest_complete_receipt(id)
+            .unwrap()
+            .unwrap()
+            .direction,
+        OperationDirection::Undo
+    );
+}
+
+/// What `park_applying_for_review` left behind before parks could be checked
+/// again, after a later apply attempt cleared the reconciliation pointer: a
+/// row in review, holding no receipt, and an unfinished receipt beside it.
+fn park_with_live_receipt(database: &Path, id: i64) {
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute(
+            "UPDATE queue_items
+             SET status = 'needs_review', error_code = 'FILE_CHANGED',
+                 active_receipt_id = NULL, reconciliation_receipt_id = NULL,
+                 previous_status = NULL, owner_session = NULL, lease_expires_at = NULL
+             WHERE id = ?1",
+            [id],
+        )
+        .unwrap();
+}
+
+#[test]
+fn reattach_unsettled_receipt_restores_previous_status_by_direction() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let db = Arc::new(store(&temp));
+
+    // An apply whose rename was refused, parked with its receipt planned.
+    let waiting = temp.path().join("waiting.pdf");
+    fs::write(&waiting, b"waiting").unwrap();
+    let hash = StdFileSystem.hash(&waiting).unwrap();
+    let apply_item = db.enqueue(&waiting, &hash).unwrap().id;
+    advance_to_ready(&db, apply_item);
+    db.begin_applying(apply_item, QueueStatus::Ready).unwrap();
+    FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db))
+        .apply(apply_item, &waiting, &temp.path().join("named.pdf"), &hash)
+        .unwrap_err();
+    park_with_live_receipt(&database, apply_item);
+    let parked = db.load_unsettled_receipt(apply_item).unwrap().unwrap();
+
+    let reattached = db.reattach_unsettled_receipt(apply_item).unwrap().unwrap();
+
+    assert_eq!(reattached, parked);
+    let row = db.list().unwrap().remove(0);
+    assert_eq!(row.status, QueueStatus::Applying);
+    assert_eq!(row.previous_status, Some(QueueStatus::Ready));
+    assert_eq!(row.active_receipt_id, Some(parked.id));
+    assert_eq!(row.owner_session.as_deref(), Some(db.session_id()));
+    // Bound like that, the ordinary reconciliation settles it.
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(apply_item)
+            .unwrap()
+            .status,
+        QueueStatus::Ready
+    );
+    assert!(db.reattach_unsettled_receipt(apply_item).unwrap().is_none());
+
+    // An undo whose rename was refused goes back to completed: the document
+    // is still filed.
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"filed").unwrap();
+    let filed = temp.path().join("Filed.pdf");
+    let undo_item = complete_via_apply(&db, &original, &filed);
+    db.begin_undo(undo_item).unwrap();
+    let applied = db.load_latest_complete_receipt(undo_item).unwrap().unwrap();
+    FileApplier::new(Arc::new(RenameRefusedFileSystem), Arc::clone(&db))
+        .undo(undo_item, &applied)
+        .unwrap_err();
+    park_with_live_receipt(&database, undo_item);
+
+    // Not while another operation is applying...
+    db.begin_applying(apply_item, QueueStatus::Ready).unwrap();
+    assert_eq!(
+        db.reattach_unsettled_receipt(undo_item).unwrap_err().code(),
+        ErrorCode::StateConflict
+    );
+    FileApplier::local(Arc::clone(&db))
+        .reconcile(apply_item)
+        .unwrap();
+
+    // ... and then by the undo's own direction.
+    let reattached = db.reattach_unsettled_receipt(undo_item).unwrap().unwrap();
+    assert_eq!(reattached.direction, OperationDirection::Undo);
+    let row = db
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == undo_item)
+        .unwrap();
+    assert_eq!(row.status, QueueStatus::Applying);
+    assert_eq!(row.previous_status, Some(QueueStatus::Completed));
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(undo_item)
+            .unwrap()
+            .status,
+        QueueStatus::Completed
+    );
+    assert!(filed.exists());
+}
+
+#[test]
+fn begin_undo_refuses_only_while_another_row_applies() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"filed").unwrap();
+    let filed_id = complete_via_apply(&db, &original, &temp.path().join("Filed.pdf"));
+
+    // Another document is being read.
+    let reading = db
+        .enqueue(Path::new("reading.pdf"), "reading-hash")
+        .unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, reading.id);
+
+    // A new rename still waits for it; an undo does not.
+    assert_eq!(
+        db.begin_applying(filed_id, QueueStatus::Completed)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(
+        db.begin_undo(filed_id).unwrap().status,
+        QueueStatus::Applying
+    );
+    // While the undo applies, nothing new is claimed.
+    db.transition(
+        reading.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    db.enqueue(Path::new("next.pdf"), "next-hash").unwrap();
+    assert!(db.claim_next().unwrap().is_none());
+    assert_eq!(
+        FileApplier::local(Arc::clone(&db))
+            .reconcile(filed_id)
+            .unwrap()
+            .status,
+        QueueStatus::Completed
+    );
+
+    // Another row applying is the one thing an undo waits for.
+    let other = temp.path().join("other.pdf");
+    fs::write(&other, b"other").unwrap();
+    let other_id = db
+        .enqueue(&other, &StdFileSystem.hash(&other).unwrap())
+        .unwrap()
+        .id;
+    let next = db.claim_next().unwrap().unwrap();
+    db.transition(
+        next.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    advance_to_ready(&db, other_id);
+    db.begin_applying(other_id, QueueStatus::Ready).unwrap();
+    assert_eq!(
+        db.begin_undo(filed_id).unwrap_err().code(),
+        ErrorCode::StateConflict
+    );
+}
+
+#[test]
+fn receipt_updated_at_reports_filing_time() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let original = temp.path().join("original.pdf");
+    fs::write(&original, b"content").unwrap();
+    let id = complete_via_apply(&db, &original, &temp.path().join("Filed.pdf"));
+    let receipt = db.load_latest_complete_receipt(id).unwrap().unwrap();
+
+    let filed_at = db.receipt_updated_at(receipt.id).unwrap().unwrap();
+
+    assert!(filed_at >= started, "{filed_at} < {started}");
+    assert_eq!(db.receipt_updated_at(receipt.id + 1000).unwrap(), None);
+}

@@ -57,6 +57,11 @@ pub struct HistoryEntry {
 /// The most receipts a history listing will ever return.
 pub const HISTORY_LIMIT: usize = 500;
 
+/// The newest receipt of an item that never reached a terminal stage.
+const UNSETTLED_RECEIPT: &str =
+    "WHERE queue_item_id = ?1 AND stage NOT IN ('complete', 'rolled_back')
+     ORDER BY id DESC LIMIT 1";
+
 impl QueueStore {
     pub fn open(path: impl AsRef<Path>) -> InternResult<Self> {
         let mut connection = Connection::open(path).map_err(InternError::from)?;
@@ -127,6 +132,17 @@ impl QueueStore {
             )
             .map_err(InternError::from)?;
         migrate_legacy_schema(&mut connection)?;
+        // Listing the queue asks each item for its newest receipt, its newest
+        // finished one and any unfinished one. Each question is the newest
+        // receipt of one item, which without this index is a walk down every
+        // receipt the queue has ever written - per item, per listing. Created
+        // after the legacy migration, which may rebuild the receipts table.
+        connection
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS operation_receipts_by_item
+                   ON operation_receipts(queue_item_id, id);",
+            )
+            .map_err(InternError::from)?;
         let session_id = new_session_id();
         connection
             .execute(
@@ -436,6 +452,30 @@ impl QueueStore {
                 "apply requires ready or completed state",
             ));
         }
+        self.enter_applying(id, expected, "('extracting', 'analyzing', 'applying')")
+    }
+
+    /// Starts undoing a completed rename, refusing only while another file
+    /// operation is in flight.
+    ///
+    /// `begin_applying` also waits out a document being read or analyzed,
+    /// which is right for a new rename - the analysis may be about to propose
+    /// one - but with a local model taking minutes per document it made Undo
+    /// fail for as long as a backlog drained. An undo moves only its own,
+    /// already filed document, and the worker reads only its own item, so the
+    /// two never touch the same file. The one-applying-row rule still holds:
+    /// `claim_next` claims nothing while this row applies, and the analyzed
+    /// document's own rename is deferred until the undo is done.
+    pub fn begin_undo(&self, id: i64) -> InternResult<QueueItem> {
+        self.enter_applying(id, QueueStatus::Completed, "('applying')")
+    }
+
+    fn enter_applying(
+        &self,
+        id: i64,
+        expected: QueueStatus,
+        blocking_statuses: &str,
+    ) -> InternResult<QueueItem> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -443,7 +483,8 @@ impl QueueStore {
         touch_session(&transaction, &self.session_id)?;
         let changed = transaction
             .execute(
-                "UPDATE queue_items
+                &format!(
+                    "UPDATE queue_items
              SET status = 'applying', previous_status = ?1, owner_session = ?2,
                  lease_expires_at = ?3, active_receipt_id = NULL,
                  reconciliation_receipt_id = NULL, applying_epoch = applying_epoch + 1,
@@ -451,8 +492,9 @@ impl QueueStore {
              WHERE id = ?5 AND status = ?1 AND active_receipt_id IS NULL
                AND NOT EXISTS (
                  SELECT 1 FROM queue_items active
-                 WHERE active.id <> ?5 AND active.status IN ('extracting', 'analyzing', 'applying')
-               )",
+                 WHERE active.id <> ?5 AND active.status IN {blocking_statuses}
+               )"
+                ),
                 params![
                     expected.as_db(),
                     self.session_id,
@@ -542,11 +584,22 @@ impl QueueStore {
         Ok(item)
     }
 
+    /// Records that an operation moved nothing and returns the item to where
+    /// it was before the operation began.
+    ///
+    /// `review` is what the reconciliation found wrong with the files it left
+    /// in place: an original that no longer matches its receipt, or a foreign
+    /// file sitting at the name the rename wanted. The rollback is recorded
+    /// either way, because nothing moved, and an apply then waits in review
+    /// under that code rather than in ready, where the scheduler would file it
+    /// again. An undo always goes back to completed: the document is still
+    /// filed, and a filed document a person has since edited is theirs.
     pub(crate) fn resolve_reconciled_rollback(
         &self,
         id: i64,
         receipt_id: i64,
         expected_stage: OperationStage,
+        review: Option<ErrorCode>,
     ) -> InternResult<QueueItem> {
         if !matches!(
             expected_stage,
@@ -600,12 +653,17 @@ impl QueueStore {
                 ));
             }
         }
+        // Every expression below reads the row as it was, so the review test
+        // still sees the previous status the same statement clears.
         let changed = transaction
             .execute(
                 "UPDATE queue_items
-             SET status = previous_status, owner_session = NULL, lease_expires_at = NULL,
+             SET status = CASE WHEN ?5 IS NOT NULL AND previous_status = 'ready'
+                               THEN 'needs_review' ELSE previous_status END,
+                 error_code = CASE WHEN previous_status = 'ready' THEN ?5 ELSE NULL END,
+                 owner_session = NULL, lease_expires_at = NULL,
                  previous_status = NULL, active_receipt_id = NULL,
-                 reconciliation_receipt_id = NULL, error_code = NULL, updated_at = ?1
+                 reconciliation_receipt_id = NULL, updated_at = ?1
              WHERE id = ?2 AND status = 'applying' AND owner_session = ?3
                AND active_receipt_id = ?4
                AND EXISTS (
@@ -617,7 +675,13 @@ impl QueueStore {
                      OR (receipts.direction = 'undo' AND queue_items.previous_status = 'completed')
                    )
                )",
-                params![now(), id, self.session_id, receipt_id],
+                params![
+                    now(),
+                    id,
+                    self.session_id,
+                    receipt_id,
+                    review.map(ErrorCode::as_str)
+                ],
             )
             .map_err(InternError::from)?;
         if changed != 1 {
@@ -860,8 +924,14 @@ impl QueueStore {
     ///
     /// The receipt itself is left in whatever stage it reached. It is not
     /// finished and pretending otherwise would lose the only record of what
-    /// happened, so a parked item can be kept, removed, or canceled but cannot
-    /// be re-applied until a person resolves the files.
+    /// happened, and while it is unfinished no new operation can be journalled
+    /// for the item. Keep original, cancel and an unconfirmed remove all
+    /// refuse, because each would decide what the files are on the person's
+    /// behalf. What moves a parked item on is `reattach_unsettled_receipt` -
+    /// Check again, which the queue's retry and approve run - re-running the
+    /// reconciliation once the person has dealt with whatever held the files,
+    /// or a remove the person has confirmed, which deletes the row and its
+    /// receipts.
     pub(crate) fn park_applying_for_review(
         &self,
         id: i64,
@@ -935,6 +1005,74 @@ impl QueueStore {
         let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
         transaction.commit().map_err(InternError::from)?;
         Ok(item)
+    }
+
+    /// Puts an item whose file operation never finished back into
+    /// `applying`, bound to that operation's receipt, so a reconciliation
+    /// can settle it. `None` when the item has no unfinished receipt.
+    ///
+    /// A parked item kept its receipt but nothing ever looked at it again:
+    /// recovery only reconciles rows that are applying, and the receipt's
+    /// live stage made every later apply fail to journal, so a document whose
+    /// rename was refused once could never be renamed. The receipt is found by
+    /// its stage rather than through `reconciliation_receipt_id`, which the
+    /// first failed re-apply clears. Only a reviewable row can be reattached -
+    /// a row being read or analyzed belongs to the worker - and, as for an
+    /// undo, only while no other row is applying. The previous status follows
+    /// the receipt's direction, which is what the reconciliation's
+    /// compare-and-swaps return the row to.
+    pub fn reattach_unsettled_receipt(&self, id: i64) -> InternResult<Option<OperationReceipt>> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        touch_session(&transaction, &self.session_id)?;
+        let Some(receipt) = transaction
+            .query_row(
+                &receipt_select(UNSETTLED_RECEIPT),
+                params![id],
+                row_to_receipt,
+            )
+            .optional()
+            .map_err(InternError::from)?
+        else {
+            transaction.commit().map_err(InternError::from)?;
+            return Ok(None);
+        };
+        let previous_status = match receipt.direction {
+            OperationDirection::Apply => QueueStatus::Ready,
+            OperationDirection::Undo => QueueStatus::Completed,
+        };
+        let changed = transaction
+            .execute(
+                "UPDATE queue_items
+             SET status = 'applying', previous_status = ?1, owner_session = ?2,
+                 lease_expires_at = ?3, active_receipt_id = ?4, updated_at = ?5
+             WHERE id = ?6 AND status IN ('needs_review', 'ready')
+               AND active_receipt_id IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM queue_items active
+                 WHERE active.id <> ?6 AND active.status = 'applying'
+               )",
+                params![
+                    previous_status.as_db(),
+                    self.session_id,
+                    lease_deadline(),
+                    receipt.id,
+                    now(),
+                    id
+                ],
+            )
+            .map_err(InternError::from)?;
+        if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "item cannot be reattached to its unfinished operation",
+            ));
+        }
+        transaction.commit().map_err(InternError::from)?;
+        Ok(Some(receipt))
     }
 
     pub fn recover_interrupted(&self) -> InternResult<usize> {
@@ -1248,6 +1386,65 @@ impl QueueStore {
                 &receipt_select("WHERE queue_item_id = ?1 ORDER BY id DESC LIMIT 1"),
                 params![queue_item_id],
                 row_to_receipt,
+            )
+            .optional()
+            .map_err(InternError::from)
+    }
+
+    /// The item's newest finished operation: where its document is now.
+    ///
+    /// `load_receipt` answers with the newest receipt of any stage, and an
+    /// undo that was refused and rolled back sits on top of the apply that
+    /// filed the document without having moved anything. Comparing an undo
+    /// against that, or deciding from it whether the item can be undone,
+    /// refused every later undo for good. A completed undo does answer the
+    /// question: the document is back at its own name.
+    pub fn load_latest_complete_receipt(
+        &self,
+        queue_item_id: i64,
+    ) -> InternResult<Option<OperationReceipt>> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                &receipt_select(
+                    "WHERE queue_item_id = ?1 AND stage = 'complete' ORDER BY id DESC LIMIT 1",
+                ),
+                params![queue_item_id],
+                row_to_receipt,
+            )
+            .optional()
+            .map_err(InternError::from)
+    }
+
+    /// The item's newest operation that never reached a terminal stage, if
+    /// any. While the item is applying that is the operation in flight;
+    /// otherwise it is one a reconciliation could not settle, and no new
+    /// operation can be journalled for the item until it is.
+    pub fn load_unsettled_receipt(
+        &self,
+        queue_item_id: i64,
+    ) -> InternResult<Option<OperationReceipt>> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                &receipt_select(UNSETTLED_RECEIPT),
+                params![queue_item_id],
+                row_to_receipt,
+            )
+            .optional()
+            .map_err(InternError::from)
+    }
+
+    /// When a receipt last changed: for a finished operation, the moment it
+    /// finished. `OperationReceipt` deliberately carries no timestamp - undo
+    /// compares receipts for equality - so this is asked separately.
+    pub fn receipt_updated_at(&self, receipt_id: i64) -> InternResult<Option<i64>> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT updated_at FROM operation_receipts WHERE id = ?1",
+                params![receipt_id],
+                |row| row.get::<_, i64>(0),
             )
             .optional()
             .map_err(InternError::from)

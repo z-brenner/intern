@@ -1533,3 +1533,334 @@ fn a_source_still_held_after_the_retries_reads_as_locked_not_as_changed() {
         "expected the OS error to be carried, got: {error}"
     );
 }
+
+/// A document open in a program that lets others read it but not rename or
+/// delete it - a PDF in Acrobat, a document in Word. While `held` is set,
+/// every rename is refused and so is every open for deletion; plain reads
+/// still work.
+struct OpenInReaderFileSystem {
+    inner: StdFileSystem,
+    held: AtomicBool,
+}
+
+impl OpenInReaderFileSystem {
+    fn refusal(&self) -> Option<io::Error> {
+        self.held.load(Ordering::SeqCst).then(|| {
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected hold: shared for reading only",
+            )
+        })
+    }
+}
+
+impl FileSystem for OpenInReaderFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        self.inner.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        self.inner.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        match self.refusal() {
+            Some(error) => Err(error),
+            None => self.inner.rename_no_replace(source, destination),
+        }
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        self.inner.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        match self.refusal() {
+            Some(error) => Err(error),
+            None => self.inner.lock_for_delete(path),
+        }
+    }
+}
+
+fn open_in_reader() -> Arc<OpenInReaderFileSystem> {
+    Arc::new(OpenInReaderFileSystem {
+        inner: StdFileSystem,
+        held: AtomicBool::new(true),
+    })
+}
+
+#[test]
+fn nothing_moved_rollback_uses_shared_read() {
+    // The rename is refused because the document is open, and the
+    // reconciliation that follows at once meets the same hold.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    let filesystem = open_in_reader();
+    let (applier, store, item_id) = applying(&temp, &source, filesystem.clone());
+    let fingerprint = applier.fingerprint(&source).unwrap();
+    let refused = applier
+        .apply(item_id, &source, &destination, &fingerprint)
+        .unwrap_err();
+    assert_eq!(refused.receipt().unwrap().stage, OperationStage::Planned);
+
+    let resolved = applier.reconcile(item_id).unwrap();
+
+    // Nothing moved, and the shared read proves the original is intact: the
+    // receipt is finished and the item is back where it was.
+    assert_eq!(resolved.status, QueueStatus::Ready);
+    assert_eq!(resolved.error_code, None);
+    assert_eq!(
+        store.load_receipt(item_id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    assert!(store.load_unsettled_receipt(item_id).unwrap().is_none());
+
+    // So once the program lets go, the next apply can be journalled.
+    filesystem.held.store(false, Ordering::SeqCst);
+    store.begin_applying(item_id, QueueStatus::Ready).unwrap();
+    let applied = applier
+        .apply(item_id, &source, &destination, &fingerprint)
+        .unwrap();
+    assert_eq!(applied.stage, OperationStage::Complete);
+    assert_eq!(fs::read(&destination).unwrap(), b"original");
+
+    // The person saves the open document while the rename is refused. The
+    // receipt is still rolled back - nothing moved - and the item waits for
+    // a person under the reason, instead of being parked with a live receipt.
+    let edited = TempDir::new().unwrap();
+    let source = edited.path().join("source.pdf");
+    write(&source, b"original");
+    let filesystem = open_in_reader();
+    let (applier, store, item_id) = applying(&edited, &source, filesystem);
+    let fingerprint = applier.fingerprint(&source).unwrap();
+    applier
+        .apply(
+            item_id,
+            &source,
+            &edited.path().join("named.pdf"),
+            &fingerprint,
+        )
+        .unwrap_err();
+    write(&source, b"saved with an annotation");
+
+    let resolved = applier.reconcile(item_id).unwrap();
+
+    assert_eq!(resolved.status, QueueStatus::NeedsReview);
+    assert_eq!(resolved.error_code, Some(ErrorCode::FileChanged));
+    assert_eq!(
+        store.load_receipt(item_id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    assert_eq!(fs::read(&source).unwrap(), b"saved with an annotation");
+
+    // A rollback the applier itself journalled is settled by the same read:
+    // the rename landed, its verification failed, and the document was put
+    // back - and is then held open before the reconciliation looks at it.
+    let rolled = TempDir::new().unwrap();
+    let source = rolled.path().join("source.pdf");
+    write(&source, b"original");
+    let (applier, store, item_id) = applying(
+        &rolled,
+        &source,
+        Arc::new(PostRenameMismatchFileSystem {
+            inner: StdFileSystem,
+        }),
+    );
+    let error = applier
+        .apply(
+            item_id,
+            &source,
+            &rolled.path().join("named.pdf"),
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(error.receipt().unwrap().stage, OperationStage::RolledBack);
+
+    let resolved = FileApplier::new(open_in_reader(), store.clone())
+        .reconcile(item_id)
+        .unwrap();
+
+    assert_eq!(resolved.status, QueueStatus::Ready);
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+}
+
+/// A same-named file that arrives between the destination being chosen and
+/// the rename: a teammate's document syncing into the folder. The first
+/// rename writes `arriving` at the destination and fails the way the real
+/// no-replace rename does when it finds a file there.
+struct ArrivingFileSystem {
+    inner: StdFileSystem,
+    arriving: &'static [u8],
+    arrived: AtomicBool,
+}
+
+impl FileSystem for ArrivingFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        self.inner.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        self.inner.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(true)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        if !self.arrived.swap(true, Ordering::SeqCst) {
+            fs::write(destination, self.arriving)?;
+            return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+        }
+        self.inner.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        self.inner.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        self.inner.lock_for_delete(path)
+    }
+}
+
+fn arriving(bytes: &'static [u8]) -> Arc<ArrivingFileSystem> {
+    Arc::new(ArrivingFileSystem {
+        inner: StdFileSystem,
+        arriving: bytes,
+        arrived: AtomicBool::new(false),
+    })
+}
+
+#[test]
+fn foreign_destination_rolls_back_to_destination_unavailable() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    let (applier, store, item_id) = applying(&temp, &source, arriving(b"a teammate's invoice"));
+    let fingerprint = applier.fingerprint(&source).unwrap();
+    let error = applier
+        .apply(item_id, &source, &destination, &fingerprint)
+        .unwrap_err();
+    assert_eq!(error.code(), ErrorCode::DestinationUnavailable);
+    assert_eq!(error.receipt().unwrap().stage, OperationStage::Planned);
+
+    let resolved = applier.reconcile(item_id).unwrap();
+
+    // Neither the same file nor the same bytes: the destination is somebody
+    // else's document. The rename never happened, so it is rolled back, and
+    // the item waits in review for a reason a person can act on.
+    assert_eq!(resolved.status, QueueStatus::NeedsReview);
+    assert_eq!(resolved.error_code, Some(ErrorCode::DestinationUnavailable));
+    assert_eq!(
+        store.load_receipt(item_id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    assert!(store.load_unsettled_receipt(item_id).unwrap().is_none());
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert_eq!(fs::read(&destination).unwrap(), b"a teammate's invoice");
+
+    // A copy of the very same document arriving at that name is genuinely
+    // ambiguous - either could be the one to keep - and still goes to a
+    // person with the receipt unsettled.
+    let same = TempDir::new().unwrap();
+    let source = same.path().join("source.pdf");
+    let destination = same.path().join("named.pdf");
+    write(&source, b"original");
+    let (applier, store, item_id) = applying(&same, &source, arriving(b"original"));
+    applier
+        .apply(
+            item_id,
+            &source,
+            &destination,
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap_err();
+
+    let ambiguous = applier.reconcile(item_id).unwrap_err();
+
+    assert_eq!(ambiguous.code(), ErrorCode::ReconciliationRequired);
+    let parked = store.list().unwrap().remove(0);
+    assert_eq!(parked.status, QueueStatus::NeedsReview);
+    assert_eq!(parked.error_code, Some(ErrorCode::ReconciliationRequired));
+    assert_eq!(
+        store
+            .load_unsettled_receipt(item_id)
+            .unwrap()
+            .unwrap()
+            .stage,
+        OperationStage::Planned
+    );
+}
+
+/// Records every operation as rolled back the moment it reaches `stage`, the
+/// way a recovery pass that took the operation over would.
+fn take_over_at(database: &Path, stage: &str) {
+    let trigger = if stage == "planned" {
+        "CREATE TRIGGER taken_over AFTER INSERT ON operation_receipts
+         BEGIN UPDATE operation_receipts SET stage = 'rolled_back' WHERE id = NEW.id; END;"
+            .to_owned()
+    } else {
+        format!(
+            "CREATE TRIGGER taken_over AFTER UPDATE OF stage ON operation_receipts
+             WHEN NEW.stage = '{stage}'
+             BEGIN UPDATE operation_receipts SET stage = 'rolled_back' WHERE id = NEW.id; END;"
+        )
+    };
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute_batch(&trigger)
+        .unwrap();
+}
+
+#[test]
+fn renew_lease_before_irreversible_rename_aborts_taken_over_operation() {
+    // Same volume: taken over as soon as the receipt is planned.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    let (applier, _store, item_id) = applying(&temp, &source, Arc::new(StdFileSystem));
+    take_over_at(&temp.path().join("queue.sqlite3"), "planned");
+
+    let error = applier
+        .apply(
+            item_id,
+            &source,
+            &destination,
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap_err();
+
+    // The operation now belongs to whoever rolled it back, so the rename -
+    // the step that cannot be taken back - never happens.
+    assert_eq!(error.code(), ErrorCode::StateConflict);
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert!(!destination.exists());
+
+    // Cross volume: taken over once the copy is verified, before the publish.
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    let (applier, _store, item_id) = applying(&temp, &source, copying_filesystem(false, false));
+    take_over_at(&temp.path().join("queue.sqlite3"), "verified");
+
+    let error = applier
+        .apply(
+            item_id,
+            &source,
+            &destination,
+            &applier.fingerprint(&source).unwrap(),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code(), ErrorCode::StateConflict);
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+    assert!(!destination.exists());
+}
