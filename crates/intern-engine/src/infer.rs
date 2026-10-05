@@ -297,7 +297,15 @@ fn labels_another_date(window: &str) -> bool {
 }
 
 fn window_before(normalized: &str, position: usize) -> String {
+    // A fixed distance back can land inside a multi-byte character - é, §,
+    // •, °, the fraction slash NFKC makes of ½ - and slicing there panicked
+    // inside the model thread, which paused the whole queue. Walking forward
+    // to a boundary only shortens the window, and `position` is itself a
+    // boundary, so the walk stops in time. Every later move is forward too.
     let mut start = position.saturating_sub(CUE_WINDOW);
+    while !normalized.is_char_boundary(start) {
+        start += 1;
+    }
     // A label governs the date that follows it and stops there. An invoice
     // prints "Invoice Date: April 30, 2025    Due Date: May 30, 2025" on one
     // line, and reading a fixed distance back from the second date reached
@@ -312,9 +320,6 @@ fn window_before(normalized: &str, position: usize) -> String {
     }
     if let Some(stop) = normalized[start..position].rfind(". ") {
         start += stop + ". ".len();
-    }
-    while !normalized.is_char_boundary(start) {
-        start -= 1;
     }
     normalized[start..position].to_owned()
 }
@@ -992,6 +997,71 @@ Invoice Date: April 30, 2025    Due Date: May 30, 2025",
             infer_date_role(&digest, "2025-04-30", Some("Invoice")),
             Some(DateRole::Invoice)
         );
+    }
+
+    /// The cue window starts a fixed number of bytes before the date, and
+    /// that offset landed inside é, §, •, ° or the fraction slash NFKC makes
+    /// of ½ often enough to panic on every French invoice: the panic took
+    /// down the model thread and paused the whole queue. Each padding moves
+    /// the window's start one byte further through the multi-byte
+    /// characters, so every offset inside one of them is reached.
+    #[test]
+    fn a_multibyte_character_inside_the_cue_window_does_not_panic() {
+        let run = |character: &str, count: usize| character.repeat(count);
+        let templates = [
+            "La présente convention conclue entre la Société Générale et Acme Corporation \
+             {pad}prend effet le 01/04/2026"
+                .to_owned(),
+            format!(
+                "Article {} 4 {} Durée {} {} {{pad}}prend effet le 01/04/2026",
+                run("§", 12),
+                run("§", 9),
+                run("§", 9),
+                run("§", 9)
+            ),
+            format!(
+                "{} Acme Corporation {} Contoso {{pad}}effective 01/04/2026",
+                run("•", 20),
+                run("•", 20)
+            ),
+            format!(
+                "Stored at 4{} Juniper Loop {} {{pad}}effective 01/04/2026",
+                run("°", 25),
+                run("°", 25)
+            ),
+            format!(
+                "Interest {} per month {} {{pad}}effective 01/04/2026",
+                run("½", 20),
+                run("½", 20)
+            ),
+        ];
+        for template in &templates {
+            for pad in 0..60 {
+                let line = template.replace("{pad}", &format!("{} ", "x".repeat(pad)));
+                let digest = digest_of(&format!("CONVENTION\n{line}"));
+                // Reaching the assertion at all is most of the test.
+                let _ = infer_date_role(&digest, "2026-04-01", Some("Convention"));
+                let outcome = crate::validate::validate(
+                    crate::domain::ModelProposal {
+                        document_type: None,
+                        document_date: Some("2026-04-01".into()),
+                        date_role: None,
+                        parties: Vec::new(),
+                        party_relation: PartyRelation::None,
+                        description: String::new(),
+                        confidence: 0.9,
+                        needs_review: false,
+                        evidence: crate::domain::Evidence::default(),
+                    },
+                    &digest,
+                );
+                assert_eq!(
+                    outcome.proposal.document_date.as_deref(),
+                    Some("2026-04-01"),
+                    "{line}"
+                );
+            }
+        }
     }
 
     /// Replay of the recorded corpus: the board deck is dated "Presented on
