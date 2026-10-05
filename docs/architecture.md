@@ -170,6 +170,23 @@ taste: prefill on the target machine runs at about 160 tokens/second, so every
 1,000 characters of budget costs about 1.5 seconds of wall clock on every
 document. A larger budget buys nothing on the corpus and costs seconds per file.
 
+"Roughly 3,000 tokens" holds for prose. Qwen's tokenizer reads every digit, and
+every CJK, Hangul, or Kana character, as a token of its own, so a bank statement
+or a Chinese contract inside the character budget can come to 8,000 tokens or
+more and no longer fit the 8,192-token context. Before a prompt is sent the
+engine estimates it - one token per digit or wide-script character, one per
+three and a half characters of anything else - and when the estimate plus the
+reply's 1,024 tokens passes 8,000 it distills again, scaled towards 6,500
+tokens and condensed even if the source was small enough to pass through, at
+most twice. If the server still answers that the prompt does not fit, the
+document is condensed to half once more and sent once more; after that it fails
+on its own as `MODEL_INPUT_TOO_LARGE`, without restarting the server. Only
+prompts that did not fit change, so every recorded prompt is sent as it was.
+
+The SECTIONS line that opens a condensed digest lists at most 40 headings in at
+most 1,500 characters, ending in ` | …` when cut. A table row is never a
+heading, however capitalised: a 600-row ledger used to put 600 of them there.
+
 ## The prompt and the grammar
 
 One inference per document. The reply is constrained by a GBNF grammar, so
@@ -387,7 +404,37 @@ said so. Both statements could not be true.
 
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
-Windows stutter — the product's premise is that it runs while you work.
+Windows stutter — the product's premise is that it runs while you work. For the
+same reason both sidecars run at below-normal priority on Windows: they still
+get every cycle nothing else wants, and the window in front never waits on them.
+
+A reply may run to 1,024 tokens. The grammar's closing brace ends it long
+before that - the corpus's longest is about 200 - but a contract whose opening
+paragraph names the date and both parties is quoted as evidence three times
+over, and at the old 420 that reply was cut off mid-string. A reply that does
+hit the limit is reported as `MODEL_REPLY_TRUNCATED` and not sent again:
+decoding is greedy, so the same request stops at the same token. Only a reply
+that finished but cannot be read gets its one second attempt.
+
+What llama-server and `intern-worker` print on standard error - a missing CPU
+feature, a quarantined runtime library, a model that will not load - is kept in
+`llama-server.log` and `worker.log` under the app's local data folder
+(`%LOCALAPPDATA%\com.intern.app\logs`), each emptied when it is next opened
+past 256 KiB. Setup's messages for a runtime that will not start, will not
+become ready, or fails its self-test point there rather than at a download the
+checksum has already vouched for. At its default verbosity llama-server logs no
+prompt text and not its `--api-key`, and it is never started with `-v`; the
+worker's panic hook writes where a panic happened and how long its message
+was, never the message, which can quote the document.
+
+The model download, a hosted model, and Microsoft Graph trust the operating
+system's root certificates as well as the Mozilla set bundled into the binary.
+Firms that inspect TLS install their own root in the Windows store, and with
+the bundled set alone the first-run download failed behind such a proxy with
+nothing saying why. A store with nothing usable in it would stop a client from
+being built at all, so each client is built again without it rather than not
+at all. The clients for the local server never read the store: they speak plain
+HTTP to this machine.
 
 The server is started once and kept warm between documents, so how it stops
 matters as much as how it starts: it holds well over a gigabyte, and a second
@@ -419,10 +466,18 @@ cap. No sampling knobs, because a parameter one provider rejects is a document
 that never gets filed. What goes out is the distilled digest of the document,
 condensed but verbatim; what comes back is read through the same JSON
 recovery and the same evidence checks as a local reply. A refusal from the
-model is reported as one and sends the document to review, never re-routed
+model - Anthropic's `refusal`, OpenAI's `refusal` field, a `content_filter`
+finish - is reported as one and sends the document to review, never re-routed
 elsewhere; a rejected key, an unreachable service, a model name the service
-does not know, and an address that has moved all pause the queue rather than
-failing the backlog one item at a time; a busy service earns one retry.
+does not know, an address that has moved, and an account out of credit
+(`HOSTED_MODEL_BILLING`: a 402, Anthropic's `billing_error` or its 400 about the
+credit balance, OpenAI's `insufficient_quota`) all pause the queue rather than
+failing the backlog one item at a time; a busy service earns one retry. That
+retry waits as long as the service's `Retry-After` asked, up to a minute, and
+otherwise about eight seconds, spread by a fifth either way. A request to a
+service on the internet may take three minutes; one to a server on this
+machine - LM Studio or Ollama on a laptop CPU - may take ten, like the local
+model's own.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address
