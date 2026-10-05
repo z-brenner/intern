@@ -880,17 +880,19 @@ impl Pipeline {
 
     fn pipeline_item(&self, item: QueueItem) -> PipelineResult<PipelineItem> {
         let proposal = self.repository.load_proposal(item.id)?;
-        let receipt = self.store.load_receipt(item.id)?;
-        let filed_receipt = self
-            .store
-            .load_latest_complete_receipt(item.id)?
+        // Read so that a receipt a newer build wrote shows as absent rather
+        // than failing the listing - and with it the whole queue window.
+        let receipts = self.store.listed_receipts(item.id)?;
+        let receipt = receipts.newest;
+        let filed_receipt = receipts
+            .latest_complete
             .filter(|receipt| receipt.direction == OperationDirection::Apply);
         // An applying item's unfinished receipt is the operation in flight,
         // not one left behind.
         let unsettled_receipt = if item.status == QueueStatus::Applying {
             None
         } else {
-            self.store.load_unsettled_receipt(item.id)?
+            receipts.unsettled
         };
         let duplicate_of = if item.status == QueueStatus::NeedsReview
             && item.error_code == Some(ErrorCode::Duplicate)

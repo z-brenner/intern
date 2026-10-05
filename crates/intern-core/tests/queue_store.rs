@@ -1617,6 +1617,58 @@ fn unknown_codes_and_statuses_are_tolerated_on_read() {
     );
 }
 
+/// The queue listing reads every item's receipts, and one a newer Intern
+/// wrote - a direction or stage this build has never heard of - used to fail
+/// the whole listing. Read for the listing, such a receipt is absent; read
+/// for a decision, it is still an error, and a stage this build does not know
+/// is never offered to be checked again.
+#[test]
+fn listed_receipts_leave_out_what_this_build_cannot_read() {
+    let temp = TempDir::new().unwrap();
+    let db = Arc::new(store(&temp));
+    let source = temp.path().join("scan.pdf");
+    fs::write(&source, b"scan").unwrap();
+    let filed = complete_via_apply(&db, &source, &temp.path().join("named.pdf"));
+    let inspector = rusqlite::Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let insert = |id: i64, direction: &str, stage: &str| {
+        inspector
+            .execute(
+                "INSERT INTO operation_receipts(
+                   queue_item_id, direction, source_path, destination_path, pre_hash,
+                   operation_kind, stage, source_exists, destination_exists, temporary_exists,
+                   created_at, updated_at
+                 ) VALUES(?1, ?2, 'a.pdf', 'b.pdf', 'h', 'rename', ?3, 1, 0, 0, 1, 1)",
+                rusqlite::params![id, direction, stage],
+            )
+            .unwrap();
+    };
+
+    // A stage from the future on top of a finished apply.
+    insert(filed, "apply", "abandoned");
+    let listed = db.listed_receipts(filed).unwrap();
+    assert_eq!(listed.newest, None);
+    assert_eq!(
+        listed.latest_complete.unwrap().direction,
+        OperationDirection::Apply
+    );
+    assert_eq!(listed.unsettled, None);
+    assert!(db.load_receipt(filed).is_err(), "decisions read strictly");
+    assert_eq!(db.load_unsettled_receipt(filed).unwrap(), None);
+
+    // A direction from the future at a stage this build knows is unfinished.
+    let other = db.enqueue(Path::new("other.pdf"), "h2").unwrap();
+    insert(other.id, "sideways", "planned");
+    let listed = db.listed_receipts(other.id).unwrap();
+    assert_eq!(listed.newest, None);
+    assert_eq!(listed.latest_complete, None);
+    assert_eq!(listed.unsettled, None);
+    assert!(db.load_unsettled_receipt(other.id).is_err());
+
+    // Readable receipts read the same either way.
+    let plain = db.listed_receipts(filed).unwrap().latest_complete;
+    assert_eq!(plain, db.load_latest_complete_receipt(filed).unwrap());
+}
+
 #[test]
 fn get_returns_one_item() {
     let temp = TempDir::new().unwrap();

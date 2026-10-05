@@ -5373,3 +5373,44 @@ fn approved_deferred_name_survives_rule_change() {
     );
     assert_eq!(item_of(&pipeline, b).status, QueueStatus::Completed);
 }
+
+/// A receipt a newer build wrote - a stage or a direction this one has never
+/// heard of - in a database opened after the older release was reinstalled.
+/// The queue listing read every item's receipts strictly, so one such row
+/// failed the whole listing and the window showed an empty queue.
+#[test]
+fn a_receipt_from_a_newer_build_does_not_empty_the_queue() {
+    let temp = tempdir().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 2);
+    let first_id = ready_document(&pipeline, &first);
+    let second_id = ready_document(&pipeline, &second);
+    let connection = Connection::open(&database).unwrap();
+    let insert = |id: i64, direction: &str, stage: &str| {
+        connection
+            .execute(
+                "INSERT INTO operation_receipts(
+                   queue_item_id, direction, source_path, destination_path, pre_hash,
+                   operation_kind, stage, source_exists, destination_exists, temporary_exists,
+                   created_at, updated_at
+                 ) VALUES (?1, ?2, 'a.pdf', 'b.pdf', 'h', 'rename', ?3, 1, 0, 0,
+                           unixepoch(), unixepoch())",
+                rusqlite::params![id, direction, stage],
+            )
+            .unwrap();
+    };
+    insert(first_id, "apply", "abandoned");
+    insert(second_id, "sideways", "planned");
+
+    let items = pipeline.list().unwrap();
+
+    assert_eq!(items.len(), 2);
+    for item in &items {
+        assert_eq!(item.status, QueueStatus::Ready);
+        assert!(item.receipt.is_none());
+        assert!(item.filed_receipt.is_none());
+        assert!(item.unsettled_receipt.is_none());
+    }
+}

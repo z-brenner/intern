@@ -20,6 +20,8 @@ static SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// line says what happened; one per row per listing would bury everything
 /// else on stderr.
 static UNKNOWN_ERROR_CODE_REPORTED: AtomicBool = AtomicBool::new(false);
+/// The same, for a receipt the queue listing could not read.
+static UNKNOWN_RECEIPT_REPORTED: AtomicBool = AtomicBool::new(false);
 
 pub struct QueueStore {
     connection: Mutex<Connection>,
@@ -42,6 +44,18 @@ pub struct DuplicateInfo {
     pub queue_item_id: i64,
     pub source_path: PathBuf,
     pub filed_as: Option<String>,
+}
+
+/// What the queue listing shows of one item's operations. See
+/// [`QueueStore::listed_receipts`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ListedReceipts {
+    /// The newest receipt, of any stage.
+    pub newest: Option<OperationReceipt>,
+    /// The newest finished operation: where the document is now.
+    pub latest_complete: Option<OperationReceipt>,
+    /// The newest operation that never finished.
+    pub unsettled: Option<OperationReceipt>,
 }
 
 /// One finished journalled file operation, for the history view.
@@ -67,9 +81,21 @@ pub struct HistoryEntry {
 pub const HISTORY_LIMIT: usize = 500;
 
 /// The newest receipt of an item that never reached a terminal stage.
-const UNSETTLED_RECEIPT: &str =
-    "WHERE queue_item_id = ?1 AND stage NOT IN ('complete', 'rolled_back')
+///
+/// The stages are named rather than "anything but complete or rolled back":
+/// a stage a newer build wrote is not one this build can settle, or even say
+/// is unfinished, so it is not offered to be checked again. Journalling a new
+/// operation still refuses while any such receipt exists.
+const UNSETTLED_RECEIPT: &str = "WHERE queue_item_id = ?1
+       AND stage IN ('planned', 'copied', 'verified', 'published', 'rollback_required')
      ORDER BY id DESC LIMIT 1";
+
+/// The newest receipt of an item, of any stage.
+const NEWEST_RECEIPT: &str = "WHERE queue_item_id = ?1 ORDER BY id DESC LIMIT 1";
+
+/// The item's newest finished operation.
+const LATEST_COMPLETE_RECEIPT: &str =
+    "WHERE queue_item_id = ?1 AND stage = 'complete' ORDER BY id DESC LIMIT 1";
 
 impl QueueStore {
     pub fn open(path: impl AsRef<Path>) -> InternResult<Self> {
@@ -1561,12 +1587,51 @@ impl QueueStore {
         let connection = self.lock()?;
         connection
             .query_row(
-                &receipt_select("WHERE queue_item_id = ?1 ORDER BY id DESC LIMIT 1"),
+                &receipt_select(NEWEST_RECEIPT),
                 params![queue_item_id],
                 row_to_receipt,
             )
             .optional()
             .map_err(InternError::from)
+    }
+
+    /// The receipts the queue listing shows beside one item, read the way the
+    /// listing reads rows: a receipt with a direction, kind or stage a newer
+    /// build wrote reads as absent instead of failing.
+    ///
+    /// The queue listing reads these for every item, and one such receipt
+    /// used to fail the whole listing - the window showed an empty queue and
+    /// a connection error, which is exactly what leaving unreadable rows out
+    /// of the listing was for. Every decision about an item still reads its
+    /// receipts strictly, through the loaders above, and refuses what it
+    /// cannot read.
+    pub fn listed_receipts(&self, queue_item_id: i64) -> InternResult<ListedReceipts> {
+        let connection = self.lock()?;
+        let newest_where = |suffix: &str| -> InternResult<Option<OperationReceipt>> {
+            Ok(connection
+                .query_row(
+                    &receipt_select(suffix),
+                    params![queue_item_id],
+                    read_receipt,
+                )
+                .optional()
+                .map_err(InternError::from)?
+                .and_then(|receipt| {
+                    if receipt.is_none()
+                        && !UNKNOWN_RECEIPT_REPORTED.swap(true, Ordering::Relaxed)
+                    {
+                        eprintln!(
+                            "intern: a queue item has an operation record this version cannot read; it is shown without it"
+                        );
+                    }
+                    receipt
+                }))
+        };
+        Ok(ListedReceipts {
+            newest: newest_where(NEWEST_RECEIPT)?,
+            latest_complete: newest_where(LATEST_COMPLETE_RECEIPT)?,
+            unsettled: newest_where(UNSETTLED_RECEIPT)?,
+        })
     }
 
     /// The item's newest finished operation: where its document is now.
@@ -1584,9 +1649,7 @@ impl QueueStore {
         let connection = self.lock()?;
         connection
             .query_row(
-                &receipt_select(
-                    "WHERE queue_item_id = ?1 AND stage = 'complete' ORDER BY id DESC LIMIT 1",
-                ),
+                &receipt_select(LATEST_COMPLETE_RECEIPT),
                 params![queue_item_id],
                 row_to_receipt,
             )
@@ -2093,28 +2156,36 @@ fn receipt_select(suffix: &str) -> String {
     )
 }
 
+/// A receipt that was just written, or that a decision rests on: one this
+/// build cannot read is an error.
 fn row_to_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationReceipt> {
-    let direction_text: String = row.get(2)?;
-    let kind_text: String = row.get(8)?;
-    let stage_text: String = row.get(9)?;
-    Ok(OperationReceipt {
+    read_receipt(row)?.ok_or_else(|| invalid_column(9, "unknown receipt direction, kind or stage"))
+}
+
+/// A receipt as this build reads it, or `None` for one whose direction, kind
+/// or stage a newer build wrote.
+fn read_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<OperationReceipt>> {
+    let direction = OperationDirection::from_db(&row.get::<_, String>(2)?);
+    let kind = OperationKind::from_db(&row.get::<_, String>(8)?);
+    let stage = OperationStage::from_db(&row.get::<_, String>(9)?);
+    let (Some(direction), Some(kind), Some(stage)) = (direction, kind, stage) else {
+        return Ok(None);
+    };
+    Ok(Some(OperationReceipt {
         id: row.get(0)?,
         queue_item_id: row.get(1)?,
-        direction: OperationDirection::from_db(&direction_text)
-            .ok_or_else(|| invalid_column(2, "unknown receipt direction"))?,
+        direction,
         source: PathBuf::from(row.get::<_, String>(3)?),
         destination: PathBuf::from(row.get::<_, String>(4)?),
         temporary_path: row.get::<_, Option<String>>(5)?.map(PathBuf::from),
         pre_operation_hash: row.get(6)?,
         post_operation_hash: row.get(7)?,
-        kind: OperationKind::from_db(&kind_text)
-            .ok_or_else(|| invalid_column(8, "unknown operation kind"))?,
-        stage: OperationStage::from_db(&stage_text)
-            .ok_or_else(|| invalid_column(9, "unknown operation stage"))?,
+        kind,
+        stage,
         source_exists: row.get(10)?,
         destination_exists: row.get(11)?,
         temporary_exists: row.get(12)?,
-    })
+    }))
 }
 
 /// A finished operation as this build reads it, or `None` for one whose
