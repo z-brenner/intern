@@ -1135,6 +1135,50 @@ fn a_dropped_file_is_claimed_within_the_quiet_time_and_one_fast_rescan() {
     assert_eq!(rig.host.enqueued(), vec![path]);
 }
 
+/// While anything is arriving the loop looks again within seconds without
+/// being asked. Those rescans take a held document's verdict from the last
+/// full scan: for a shared folder each uploader check is a request to
+/// Microsoft, and asking about every held document every three seconds
+/// multiplied those requests for as long as anything arrived.
+#[test]
+fn settling_rescans_run_unasked_and_reuse_held_verdicts() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["held.pdf"],
+        |config| {
+            config.settling_interval = Duration::from_millis(20);
+            config.min_quiet_seconds = 1000;
+        },
+    );
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Other);
+    rig.step_by(1000);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(rig.host.admission_calls(), 1);
+
+    rig.write("arriving.pdf", b"still being written");
+    rig.step();
+    assert_eq!(rig.watcher.status().arriving, 1);
+    let asked = rig.host.admission_calls();
+    assert_eq!(asked, 2, "a scan someone asked for checks again");
+
+    // Nothing asks for these scans: the clock moves and the loop, rescanning
+    // while the file settles, stamps each one.
+    for _ in 0..3 {
+        let target = rig.clock.advance(1);
+        wait_until("a settling rescan", || {
+            rig.watcher.status().last_scan_at == Some(target)
+        });
+    }
+    assert_eq!(rig.host.admission_calls(), asked);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    rig.watcher.scan_now();
+    wait_until("a full scan to check again", || {
+        rig.host.admission_calls() > asked
+    });
+}
+
 /// Settings shows what is on its way, and the loop rescans quickly while
 /// anything is. Files that were already there when watching started are not
 /// arriving.

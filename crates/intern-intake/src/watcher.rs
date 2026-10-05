@@ -165,6 +165,9 @@ struct ScanState {
     /// Documents the queue refused, by key: how many hand-overs failed in a
     /// row, and the clock time before which no claim is attempted again.
     enqueue_failures: HashMap<String, (u32, i64)>,
+    /// The verdict that holds each held document, by key, as the last full
+    /// scan heard it. A rescan while files settle reuses it.
+    held: HashMap<String, IntakeAdmission>,
 }
 
 impl ScanState {
@@ -187,18 +190,31 @@ fn run(
     let mut state = ScanState::default();
     let mut state_generation = None;
     let mut last_reported: Option<IntakeStatus> = None;
+    let mut last_full: Option<Instant> = None;
     loop {
-        let (config, generation) = {
+        let (config, generation, requested) = {
             let mut control = lock(&shared.control);
             if control.shutdown {
                 break;
             }
+            let requested = control.wake;
             control.wake = false;
-            (control.config.clone(), control.generation)
+            (control.config.clone(), control.generation, requested)
         };
         if state_generation != Some(generation) {
             state = ScanState::new(&config);
             state_generation = Some(generation);
+        }
+        // A rescan while files settle comes every few seconds, and asking
+        // again about every document that is merely being held - for a shared
+        // folder each uploader check is a request to Microsoft - multiplied
+        // those requests several times over for as long as anything arrived.
+        // Only a scan someone asked for, or the first a whole interval after
+        // the last full one, asks again. Measured in real time, like the
+        // waits it is paired with.
+        let full = requested || last_full.is_none_or(|at| at.elapsed() >= config.scan_interval);
+        if full {
+            last_full = Some(Instant::now());
         }
         let status = scan_once(
             &config,
@@ -208,6 +224,7 @@ fn run(
             hydration.as_ref(),
             &mut state,
             &shared.shutdown,
+            full,
         );
         *lock(&shared.status) = status.clone();
         let interval = config.next_interval(status.arriving as usize);
@@ -234,6 +251,10 @@ fn run(
     }
 }
 
+/// One pass over the folder. `full` is false for a rescan while files
+/// settle, which reuses the verdicts holding documents back rather than
+/// asking for them again.
+#[allow(clippy::too_many_arguments)]
 fn scan_once(
     config: &IntakeConfig,
     identity: &MachineIdentity,
@@ -242,6 +263,7 @@ fn scan_once(
     hydration: &dyn Hydration,
     state: &mut ScanState,
     shutdown: &AtomicBool,
+    full: bool,
 ) -> IntakeStatus {
     // Stamped at the start of the walk: the timestamp then vouches that
     // everything on disk up to that instant has been observed.
@@ -256,6 +278,7 @@ fn scan_once(
         awaiting_hydration,
         seen_live,
         enqueue_failures,
+        held,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -306,6 +329,8 @@ fn scan_once(
         awaiting_hydration,
         seen_live,
         enqueue_failures,
+        held,
+        full,
         status: &mut status,
         visited: HashSet::new(),
         seen: HashSet::new(),
@@ -326,6 +351,7 @@ fn scan_once(
     scanner
         .enqueue_failures
         .retain(|key, _| visited.contains(key));
+    scanner.held.retain(|key, _| visited.contains(key));
     let Scanner { live, seen, .. } = scanner;
     backlog.end_pass(&seen, &hidden, interrupted, clock.now());
     if let Err(error) = backlog.save() {
@@ -355,6 +381,9 @@ struct Scanner<'a> {
     awaiting_hydration: &'a mut HashSet<String>,
     seen_live: &'a mut HashSet<String>,
     enqueue_failures: &'a mut HashMap<String, (u32, i64)>,
+    held: &'a mut HashMap<String, IntakeAdmission>,
+    /// See `scan_once`.
+    full: bool,
     status: &'a mut IntakeStatus,
     /// Keys of the stable files this scan processed.
     visited: HashSet<String>,
@@ -437,9 +466,29 @@ impl Scanner<'_> {
     }
 
     /// What this machine may do with a document nobody is processing: ask the
-    /// host who uploaded it, and claim it only if the answer allows.
+    /// host who uploaded it, and claim it only if the answer allows. A rescan
+    /// while files settle takes a document's hold from the last full scan
+    /// instead of asking again; anything else is asked every time, because an
+    /// answer that admits a document is acted on at once.
     fn consider_admission(&mut self, doc: &DocumentFacts, key: &str, facts: &FileFacts) {
-        match self.host.admission(&facts.path) {
+        let admission = match self.held.get(key) {
+            Some(&verdict) if !self.full => verdict,
+            _ => self.host.admission(&facts.path),
+        };
+        match admission {
+            IntakeAdmission::Verified | IntakeAdmission::LocalOnly => {
+                self.held.remove(key);
+            }
+            // "Could not check right now" is held too: asking again every few
+            // seconds is the last thing a throttled service needs.
+            IntakeAdmission::Other
+            | IntakeAdmission::Unknown
+            | IntakeAdmission::Revoked
+            | IntakeAdmission::Retryable => {
+                self.held.insert(key.to_owned(), admission);
+            }
+        }
+        match admission {
             IntakeAdmission::Verified => self.attempt_claim(doc, key, &facts.path),
             IntakeAdmission::LocalOnly => self.consider_unclaimed(doc, key, facts),
             IntakeAdmission::Other => self.status.held_for_others += 1,
