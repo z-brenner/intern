@@ -340,11 +340,22 @@ approving again once the program lets go files it. A file that appeared at
 the destination name in the meantime is somebody else's, so the rename is
 rolled back and the document waits in review; only the same file or the same
 bytes at both names is ambiguous enough to hold, and an item whose files a
-person has sorted out by hand can then be removed once they confirm it. Every
-file operation and the reconciliation after it run one at a time, so the
-recovery pass - every 65 seconds by the clock, however often new documents
-wake the scheduler - never reconciles an operation still in flight, and an
-operation that has been taken over stops before its rename rather than after.
+person has sorted out by hand can then be removed once they confirm it.
+Approving a document with an unfinished operation checks its files first. If
+that finishes the earlier rename, the document is filed under the name that
+rename gave it, and an approval that asked for another name or sentence is
+refused with that name rather than reported as applied. A rename rolled back
+into review takes the approval off its proposal, and a document read again
+since its old rename was journalled stays in review when that rename is
+rolled back. Every file operation and the reconciliation after it run one at
+a time, so the recovery pass - every 65 seconds by the clock, however often
+new documents wake the scheduler - never reconciles an operation still in
+flight, and an operation that has been taken over stops before its rename
+rather than after. A drain that finds nothing it may claim because a rename
+or an undo is running waits for it and carries on, instead of leaving the
+backlog until the next wake. An undo that cannot reach the filed document -
+an offline share - says so; only a document the file system reports missing
+is called moved or deleted.
 
 A document that changed after it was read - signed, edited, saved over - is
 never filed under a name that described the earlier version: approving it
@@ -479,7 +490,23 @@ model reply that cannot be used fails that document; three documents in a row
 with such a reply pause the queue, since by then the model is the problem, and
 any document read successfully starts the count again. A document that meets
 no model at all — the moment while Settings switches between the hosted and
-the local one — goes back to wait with nothing counted against it.
+the local one, or while the local server restarts after a cancel — goes back
+to wait with nothing counted against it. A model still missing four minutes
+later, longer than the local server is given to start, is a restart that
+failed: the queue pauses and says the local model stopped responding, rather
+than reading the same document again on every pass with nothing on screen.
+The banner for a pause says to resume the queue; a document's own sentence
+for the same code, which says to retry that document, would name the wrong
+action.
+
+These codes are new in alpha.11, and alpha.10 fails its whole queue listing
+on a code it does not know. A database in which alpha.11 has recorded a
+failure - a failed document, or one waiting for its second attempt -
+therefore shows an empty queue if alpha.10 is reinstalled over it: remove the
+failed documents, and let the waiting ones finish, before going back. From
+alpha.11 on, an unknown code reads as none, and a row or an operation record
+with a status, direction or stage a newer build wrote is left out of the
+listing rather than failing it.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address
