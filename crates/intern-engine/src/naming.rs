@@ -12,8 +12,16 @@
 //! When the name would be too long to scan, detail is shed from the least
 //! identifying end first: the second party, then the party clause, then the
 //! document type.
+//!
+//! A type or a party printed in capitals - a letterhead, an OCR'd scan - is
+//! title-cased for the name (`display_case`); a spelling a reviewer chose
+//! for a house-style rule is carried as they typed it; everything else
+//! Intern keeps about the document, the evidence and the description
+//! included, keeps the document's own casing.
 
 use std::collections::HashSet;
+
+use unicode_normalization::UnicodeNormalization;
 
 use crate::domain::{ComposedName, PartyRelation, ValidatedProposal};
 
@@ -28,22 +36,46 @@ pub fn compose_filename(
     extension: &str,
     existing_names: &[&str],
 ) -> ComposedName {
+    compose_spelled(proposal, extension, existing_names, &[], &[])
+}
+
+/// [`compose_filename`] for a proposal some of whose words a person chose:
+/// `chosen_types` and `chosen_parties` are the spellings house-style rules
+/// wrote into it. A type or a party spelled exactly one of those is carried
+/// as the reviewer typed it, capitals and all; only the document's own words
+/// are title-cased.
+pub(crate) fn compose_spelled(
+    proposal: &ValidatedProposal,
+    extension: &str,
+    existing_names: &[&str],
+    chosen_types: &[&str],
+    chosen_parties: &[&str],
+) -> ComposedName {
+    let spelling = |chosen: &[&str], value: &str| {
+        if chosen.contains(&value) {
+            Spelling::Chosen
+        } else {
+            Spelling::Document
+        }
+    };
     let extension = sanitize_extension(extension);
     let date = proposal
         .document_date
         .as_deref()
         .and_then(sanitize_segment)
         .unwrap_or_default();
-    let document_type = proposal
-        .document_type
-        .as_deref()
-        .map(|value| strip_duplicate_extension(value, &extension))
-        .and_then(sanitize_segment)
-        .unwrap_or_else(|| DEFAULT_TYPE.to_owned());
+    let document_type = type_segment(
+        proposal.document_type.as_deref(),
+        &extension,
+        proposal
+            .document_type
+            .as_deref()
+            .map_or(Spelling::Document, |value| spelling(chosen_types, value)),
+    );
     let parties = proposal
         .parties
         .iter()
-        .filter_map(|party| sanitize_segment(party))
+        .filter_map(|party| party_segment(party, spelling(chosen_parties, party)))
         .collect::<Vec<_>>();
 
     let existing = existing_names
@@ -94,6 +126,16 @@ fn fit(
     let available = MAX_FILENAME_CHARS
         .saturating_sub(reserved)
         .max(MIN_STEM_CHARS);
+    // Validation turns "between" into "with" when fewer than two parties
+    // validate, but a party can still go after it: a house-style rule can
+    // merge two of the document's spellings into one, and a name can
+    // sanitise to nothing. "between Acme" says the document has a second
+    // side it does not name.
+    let relation = if parties.len() < 2 {
+        single_party_relation(relation)
+    } else {
+        relation
+    };
 
     let attempts = [
         stem(date, document_type, parties, relation),
@@ -218,11 +260,300 @@ pub(crate) fn strip_duplicate_extension<'a>(value: &'a str, extension: &str) -> 
 /// are: hostile characters dropped, whitespace collapsed, trailing dots and
 /// spaces removed, reserved device names escaped. `None` when nothing is
 /// left.
+///
+/// The trailing dots and spaces are removed again after the cut to 80
+/// characters, which can land just after one. The queue creates folders
+/// through verbatim `\\?\` paths, which skip the trimming Win32 would
+/// otherwise do, so a folder named "Acme Holdings " would be created as
+/// written - and Explorer mishandles it and OneDrive refuses to sync it. The
+/// cut cannot leave a reserved device name behind: the part of the name
+/// before its first dot, which is what makes a name reserved, was already
+/// checked whole.
 pub fn sanitize_folder_name(value: &str) -> Option<String> {
-    sanitize_segment(value).map(|name| name.chars().take(80).collect::<String>())
+    sanitize_segment(value).and_then(|name| {
+        let mut cut = name.chars().take(80).collect::<String>();
+        while cut.ends_with([' ', '.']) {
+            cut.pop();
+        }
+        (!cut.is_empty()).then_some(cut)
+    })
 }
 
+/// How a name writes one of a proposal's words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Spelling {
+    /// The document's own words: made safe for a filename, and title-cased
+    /// when printed in capitals.
+    Document,
+    /// A spelling a person chose for a house-style rule: made safe for a
+    /// filename, and otherwise exactly as they typed it.
+    Chosen,
+    /// The way alpha.10 composed every segment, with no presentation forms
+    /// folded, no NFC, and no title-casing. Never composed any more; house
+    /// style reads it back, because a name proposed before an upgrade can
+    /// still be waiting for a reviewer to edit it.
+    Legacy,
+}
+
+impl Spelling {
+    pub(crate) const ALL: [Self; 3] = [Self::Document, Self::Chosen, Self::Legacy];
+}
+
+/// The document type as a filename carries it: the extension a model
+/// sometimes appends dropped, made safe for a filename, written the way
+/// `spelling` says, and "Document" when there is none. House style reads
+/// proposed names back with this, so it must stay the one place the type
+/// segment is built.
+pub(crate) fn type_segment(
+    document_type: Option<&str>,
+    extension: &str,
+    spelling: Spelling,
+) -> String {
+    document_type
+        .map(|value| strip_duplicate_extension(value, extension))
+        .and_then(|value| spell(value, spelling))
+        .unwrap_or_else(|| DEFAULT_TYPE.to_owned())
+}
+
+/// A party as a filename carries it, or `None` when nothing printable is
+/// left of the name. The counterpart of [`type_segment`].
+pub(crate) fn party_segment(party: &str, spelling: Spelling) -> Option<String> {
+    spell(party, spelling)
+}
+
+fn spell(value: &str, spelling: Spelling) -> Option<String> {
+    match spelling {
+        Spelling::Document => sanitize_segment(value).map(|segment| display_case(&segment)),
+        Spelling::Chosen => sanitize_segment(value),
+        Spelling::Legacy => clean_segment(value, false),
+    }
+}
+
+/// Suffixes a company name writes in capitals that read in mixed case.
+const SUFFIXES: &[(&str, &str)] = &[
+    ("INC", "Inc"),
+    ("CORP", "Corp"),
+    ("CO", "Co"),
+    ("LTD", "Ltd"),
+    ("LIMITED", "Limited"),
+    ("GMBH", "GmbH"),
+];
+
+/// Suffixes that are initialisms and stay in capitals.
+const CAPITAL_SUFFIXES: &[&str] = &["LLC", "LLP", "PLC", "PC", "NA", "LP"];
+
+/// The small words a title keeps in lower case after its first word.
+const CONNECTORS: &[&str] = &[
+    "of", "and", "the", "for", "to", "with", "in", "on", "at", "by",
+];
+
+/// Short words that are words, not initialisms, and are cased like any
+/// other. Left in capitals, they made "BANK OF NEW YORK MELLON" read "Bank
+/// of NEW York Mellon" and "W-2 WAGE AND TAX STATEMENT" read "W-2 Wage and
+/// TAX Statement". Any other short word stays in capitals: most real
+/// initialisms - "IBM", "ABC", "USA" - have vowels too, so no rule tells
+/// them from words, and a word left as it was printed is no new mistake.
+const SHORT_WORDS: &[&str] = &[
+    "new", "san", "los", "las", "del", "st", "gas", "oil", "tax", "air", "sea", "bay", "oak",
+    "sun", "sky", "one", "two", "six", "ten", "big", "top", "red", "old", "all", "art", "car",
+    "law", "bar", "day", "way", "key", "inn", "box", "pay", "fee", "web", "lab", "pet", "tea",
+    "toy",
+];
+
+/// Title-cases a segment a letterhead or a scan printed in capitals:
+/// "ORION GLASS STUDIO INC" names a document "Orion Glass Studio Inc", which
+/// reads like every other name in the folder.
+///
+/// Only a segment with no lowercase letter and at least two words of four or
+/// more letters is touched. A single capitalised word - "IBM", "NASA", "KPMG
+/// LLP" - is more likely an initialism than shouting, and a segment with any
+/// lowercase letter already says how it wants to be written. Inside a
+/// segment that qualifies, word by word:
+///
+/// - a word holding a digit, an apostrophe, or starting "MC" or "MAC" is
+///   left alone: "O'BRIEN" and "MCDONALD" have capitals in the middle that
+///   only the person who owns the name knows, and "Mcdonald" would be wrong.
+///   "MACHINES" and "MACRO" are words, not surnames, and are cased;
+/// - a company suffix reads the way it is usually written ("INC." becomes
+///   "Inc.", "GMBH" becomes "GmbH"), and LLC, LLP, PLC, PC, NA and LP stay
+///   in capitals;
+/// - of, and, the, for, to, with, in, on, at and by are lower case, except
+///   as the first word, where they are capitalised like any other word;
+/// - a word followed by a full stop is an abbreviation and is capitalised
+///   ("NO. 2" becomes "No. 2", "ST. LOUIS" becomes "St. Louis"); an
+///   initialism with stops carries them inside ("N.A.") and is kept;
+/// - a common short word ([`SHORT_WORDS`]: "NEW", "TAX", "ST") is cased
+///   like any other word;
+/// - any other word of three letters or fewer stays in capitals ("ABC",
+///   "USA"), and so does a longer word with no vowel, which is an
+///   initialism ("HSBC");
+/// - every other word keeps its first letter and lowercases the rest, after
+///   a hyphen or other mark as well ("COCA-COLA" becomes "Coca-Cola").
+///
+/// Y counts as a vowel, so "LYNCH" and "FLYNN" are words, not initialisms.
+pub(crate) fn display_case(segment: &str) -> String {
+    if segment.chars().any(char::is_lowercase) {
+        return segment.to_owned();
+    }
+    let long_words = segment
+        .split_whitespace()
+        .filter(|word| {
+            !word.chars().any(char::is_numeric)
+                && word
+                    .chars()
+                    .filter(|character| character.is_alphabetic())
+                    .count()
+                    >= 4
+        })
+        .count();
+    if long_words < 2 {
+        return segment.to_owned();
+    }
+    segment
+        .split(' ')
+        .enumerate()
+        .map(|(index, word)| display_word(word, index == 0))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One word of a segment [`display_case`] rewrites, with the punctuation
+/// around it kept where it was: "INC." is "INC" between "" and ".".
+fn display_word(word: &str, first: bool) -> String {
+    let Some(start) = word.find(char::is_alphanumeric) else {
+        return word.to_owned();
+    };
+    let end = word
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_alphanumeric())
+        .map_or(word.len(), |(index, character)| {
+            index + character.len_utf8()
+        });
+    let (lead, core, trail) = (&word[..start], &word[start..end], &word[end..]);
+    if core.chars().any(char::is_numeric)
+        || word.contains(['\'', '\u{2019}', '\u{02bc}'])
+        || may_be_mc_surname(core)
+    {
+        return word.to_owned();
+    }
+    let lowered = core.to_lowercase();
+    let letters = core
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    let cased = if let Some((_, suffix)) = SUFFIXES.iter().find(|(from, _)| *from == core) {
+        (*suffix).to_owned()
+    } else if CAPITAL_SUFFIXES.contains(&core) {
+        core.to_owned()
+    } else if CONNECTORS.contains(&lowered.as_str()) {
+        if first {
+            capitalize_runs(core)
+        } else {
+            lowered
+        }
+    } else if trail.starts_with('.') && core.chars().all(char::is_alphabetic) {
+        // A word cut short by a full stop is an abbreviation, not an
+        // initialism, which carries its stops inside ("N.A.", "U.S."):
+        // "AMENDMENT NO. 2" reads "No.", "ST. LOUIS" reads "St.".
+        capitalize_runs(core)
+    } else if SHORT_WORDS.contains(&lowered.as_str()) {
+        capitalize_runs(core)
+    } else if letters <= 3 || is_initialism(core) {
+        core.to_owned()
+    } else {
+        capitalize_runs(core)
+    };
+    format!("{lead}{cased}{trail}")
+}
+
+/// A word that may be a Mc or Mac surname, whose capital after the prefix -
+/// "McDonald", "MacKenzie", but "Macy" - only its owner knows. Words that
+/// start MACH or MACRO - "MACHINES" in "INTERNATIONAL BUSINESS MACHINES",
+/// "MACHINERY", "MACRO" - are ordinary words a company name prints in
+/// capitals, and are cased like any other.
+fn may_be_mc_surname(core: &str) -> bool {
+    core.starts_with("MC")
+        || (core.starts_with("MAC") && !core.starts_with("MACH") && !core.starts_with("MACRO"))
+}
+
+/// A word of capitals with no vowel - "HSBC", "KPMG" - is letters, not a
+/// word. A letter outside ASCII is taken for a vowel, because the word is
+/// then not an English initialism either.
+fn is_initialism(word: &str) -> bool {
+    word.chars()
+        .filter(|character| character.is_alphabetic())
+        .all(|character| {
+            character.is_ascii_alphabetic()
+                && !matches!(
+                    character.to_ascii_uppercase(),
+                    'A' | 'E' | 'I' | 'O' | 'U' | 'Y'
+                )
+        })
+}
+
+/// Keeps the first letter of every run of letters and lowercases the rest of
+/// it, so each part of "COCA-COLA" or "SMITH/JONES" reads as a word.
+fn capitalize_runs(word: &str) -> String {
+    let mut output = String::with_capacity(word.len());
+    let mut run = String::new();
+    let flush = |output: &mut String, run: &mut String| {
+        let mut characters = run.chars();
+        if let Some(first) = characters.next() {
+            output.push(first);
+            output.push_str(&characters.as_str().to_lowercase());
+        }
+        run.clear();
+    };
+    for character in word.chars() {
+        if character.is_alphabetic() {
+            run.push(character);
+        } else {
+            flush(&mut output, &mut run);
+            output.push(character);
+        }
+    }
+    flush(&mut output, &mut run);
+    output
+}
+
+/// Typographic ligatures and full-width forms are the letters a person types,
+/// drawn differently. A PDF that sets "Office" with the "ffi" ligature
+/// (U+FB03) or an East Asian form that writes "ＡＣＭＥ" in full-width
+/// letters gives a filename nobody can search for by typing it, so both are
+/// folded to plain ASCII before anything else looks at the name - which also
+/// lets the hostile-character check see a full-width "：" as the colon it is.
+fn fold_presentation_forms(value: &str) -> String {
+    let mut folded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\u{fb00}' => folded.push_str("ff"),
+            '\u{fb01}' => folded.push_str("fi"),
+            '\u{fb02}' => folded.push_str("fl"),
+            '\u{fb03}' => folded.push_str("ffi"),
+            '\u{fb04}' => folded.push_str("ffl"),
+            '\u{fb05}' | '\u{fb06}' => folded.push_str("st"),
+            '\u{ff01}'..='\u{ff5e}' => {
+                folded.push(char::from_u32(character as u32 - 0xfee0).unwrap_or(character));
+            }
+            other => folded.push(other),
+        }
+    }
+    folded
+}
+
+/// A filename segment: presentation forms folded, hostile and invisible
+/// characters dropped, whitespace collapsed, composed to NFC, trailing dots
+/// and spaces removed, reserved device names escaped. NFC because macOS and
+/// some PDFs hand over "é" as "e" and a combining accent, and the two
+/// spellings of one name must make one filename.
 pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
+    clean_segment(&fold_presentation_forms(value), true)
+}
+
+/// [`sanitize_segment`] after the folding, composing to NFC only when
+/// `compose` is set. Without it, this is how alpha.10 made every segment.
+fn clean_segment(value: &str, compose: bool) -> Option<String> {
     let mut output = String::new();
     let mut pending_space = false;
     for character in value.chars() {
@@ -244,6 +575,13 @@ pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
             pending_space = false;
         }
         output.push(character);
+    }
+    // Composing never produces whitespace or one of the characters dropped
+    // above, so it can follow them; it follows the invisible characters'
+    // removal so that one between a letter and its accent cannot keep the
+    // two apart.
+    if compose {
+        output = output.nfc().collect();
     }
     while output.ends_with(' ') || output.ends_with('.') {
         output.pop();
@@ -306,8 +644,16 @@ fn is_reserved_number(value: &str) -> bool {
     value.len() == 1 && matches!(value.as_bytes()[0], b'1'..=b'9')
 }
 
-fn windows_name_key(value: &str) -> String {
-    value.trim_end_matches([' ', '.']).to_lowercase()
+/// The form Windows compares two names in: trailing dots and spaces
+/// disregarded, case folded. Composed to NFC first, because a name copied
+/// from macOS can spell "Café" with a combining accent, and NTFS would hold
+/// both spellings side by side as two files a person cannot tell apart.
+pub fn windows_name_key(value: &str) -> String {
+    value
+        .trim_end_matches([' ', '.'])
+        .nfc()
+        .collect::<String>()
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -541,6 +887,250 @@ mod tests {
         let composed = compose_filename(&candidate, "pdf", &["2026-01-05 Invoice.pdf"]);
         assert_eq!(composed.value, "2026-01-05 Invoice (2).pdf");
         assert_eq!(composed.collision_index, 2);
+    }
+
+    /// Letterheads and OCR print names in capitals, and "Lease Agreement with
+    /// ORION GLASS STUDIO INC.pdf" shouts in a folder of names that do not.
+    #[test]
+    fn all_caps_segments_are_title_cased_with_initialisms_and_suffixes_kept() {
+        for (printed, expected) in [
+            ("HARBOR COMET REPAIRS LLC", "Harbor Comet Repairs LLC"),
+            ("ORION GLASS STUDIO INC", "Orion Glass Studio Inc"),
+            ("ORION GLASS STUDIO INC.", "Orion Glass Studio Inc."),
+            ("NOTICE OF TERMINATION", "Notice of Termination"),
+            ("BANK OF THE WEST, N.A.", "Bank of the West, N.A."),
+            ("THE HOME DEPOT CORP.", "The Home Depot Corp."),
+            ("HSBC HOLDINGS PLC", "HSBC Holdings PLC"),
+            ("MÜLLER WERKZEUG GMBH", "Müller Werkzeug GmbH"),
+            (
+                "NORTHWIND TRADERS LTD AND CO",
+                "Northwind Traders Ltd and Co",
+            ),
+            ("JOHN DEERE & CO.", "John Deere & Co."),
+            ("COCA-COLA BOTTLING CO", "Coca-Cola Bottling Co"),
+            ("LYNCH FLYNN CONSULTING LLP", "Lynch Flynn Consulting LLP"),
+            ("ABC SUPPLY WAREHOUSE", "ABC Supply Warehouse"),
+            ("LINCOLN TOWER 2B HOLDINGS", "Lincoln Tower 2B Holdings"),
+            // A common short word is a word, not an initialism; an unlisted
+            // one stays as printed.
+            ("BANK OF NEW YORK MELLON", "Bank of New York Mellon"),
+            (
+                "NEW YORK LIFE INSURANCE COMPANY",
+                "New York Life Insurance Company",
+            ),
+            ("SUN VALLEY FARMS", "Sun Valley Farms"),
+            ("W-2 WAGE AND TAX STATEMENT", "W-2 Wage and Tax Statement"),
+            ("ST JOHNS HOLDINGS", "St Johns Holdings"),
+            (
+                "SAN DIEGO GAS AND ELECTRIC CO",
+                "San Diego Gas and Electric Co",
+            ),
+            (
+                "LOS ANGELES DEPARTMENT OF WATER AND POWER",
+                "Los Angeles Department of Water and Power",
+            ),
+            ("NOTICE OF CHANGE IN TERMS", "Notice of Change in Terms"),
+            ("SMITH LAW GROUP PLLC", "Smith Law Group PLLC"),
+            ("IBM GLOBAL SERVICES", "IBM Global Services"),
+            ("USA TODAY HOLDINGS", "USA Today Holdings"),
+            // Capitals in the middle of a name are the owner's to know.
+            (
+                "O'BRIEN MCDONALD MACKENZIE PARTNERS",
+                "O'BRIEN MCDONALD MACKENZIE Partners",
+            ),
+        ] {
+            assert_eq!(display_case(printed), expected, "{printed}");
+        }
+
+        let caps = proposal(
+            Some("2026-04-01"),
+            Some("LEASE AGREEMENT"),
+            &["ORION GLASS STUDIO INC."],
+            PartyRelation::With,
+        );
+        assert_eq!(
+            name(&caps, "pdf"),
+            "2026-04-01 Lease Agreement with Orion Glass Studio Inc.pdf"
+        );
+        // Only the name changes: the proposal, its evidence, and its
+        // description keep the document's own casing.
+        assert_eq!(caps.parties, vec!["ORION GLASS STUDIO INC."]);
+        assert_eq!(caps.document_type.as_deref(), Some("LEASE AGREEMENT"));
+    }
+
+    /// A single word in capitals is more often an initialism than shouting,
+    /// and a name with any lowercase letter already says how it is written.
+    #[test]
+    fn single_word_or_short_caps_names_are_left_alone() {
+        for unchanged in [
+            "KPMG LLP",
+            "IBM",
+            "NASA",
+            "ACME LLC",
+            "DEERE & CO.",
+            "AT&T INC",
+            "INVOICE",
+            "Acme Corporation",
+            "Harbor COMET Repairs",
+            "eBay Marketplace Services",
+        ] {
+            assert_eq!(display_case(unchanged), unchanged, "{unchanged}");
+        }
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &["KPMG LLP"],
+                    PartyRelation::From
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Invoice from KPMG LLP.pdf"
+        );
+    }
+
+    /// The Mc and Mac rule protects surnames, not every word that happens to
+    /// start that way, and a short word with a full stop is an abbreviation
+    /// rather than an initialism.
+    #[test]
+    fn machine_words_and_abbreviations_with_a_full_stop_are_cased() {
+        for (printed, expected) in [
+            (
+                "INTERNATIONAL BUSINESS MACHINES CORP",
+                "International Business Machines Corp",
+            ),
+            (
+                "MACRO PRECISION MACHINING LLC",
+                "Macro Precision Machining LLC",
+            ),
+            (
+                "AMENDMENT NO. 2 TO MASTER SERVICES AGREEMENT",
+                "Amendment No. 2 to Master Services Agreement",
+            ),
+            ("ST. LOUIS FREIGHT HOLDINGS", "St. Louis Freight Holdings"),
+            (
+                "NORTHWIND MFG. AND SUPPLY PTY. LTD",
+                "Northwind Mfg. and Supply Pty. Ltd",
+            ),
+            ("JOHN A. SMITH", "John A. Smith"),
+            // Stops inside an initialism keep it in capitals, and a surname
+            // is still the owner's to case.
+            (
+                "HARBOR SAVINGS BANK, N.A. U.S. BRANCH",
+                "Harbor Savings Bank, N.A. U.S. Branch",
+            ),
+            (
+                "MACKENZIE MACDONALD HOLDINGS",
+                "MACKENZIE MACDONALD Holdings",
+            ),
+        ] {
+            assert_eq!(display_case(printed), expected, "{printed}");
+        }
+    }
+
+    /// "between" with one name says the document has a second side it does
+    /// not name. A party that sanitises to nothing leaves one.
+    #[test]
+    fn one_surviving_party_never_reads_between() {
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &["Acme"],
+                    PartyRelation::Between
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Invoice with Acme.pdf"
+        );
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("Invoice"),
+                    &["Acme Corporation", "???"],
+                    PartyRelation::Between
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Invoice with Acme Corporation.pdf"
+        );
+    }
+
+    /// The queue creates folders through verbatim paths, so a cut that lands
+    /// just after a space or a period would create a folder Windows tools
+    /// mishandle and OneDrive will not sync.
+    #[test]
+    fn folder_name_cut_never_ends_in_space_or_period() {
+        let stem = "A".repeat(79);
+        let spaced = sanitize_folder_name(&format!("{stem} Holdings LLC")).unwrap();
+        assert_eq!(spaced, stem, "the 80th character was a space");
+        let dotted = sanitize_folder_name(&format!("{stem}. Holdings LLC")).unwrap();
+        assert_eq!(dotted, stem, "the 80th character was a period");
+        assert_eq!(
+            sanitize_folder_name(&format!("{}x", ". ".repeat(41))),
+            None,
+            "nothing is left once the cut is trimmed"
+        );
+        assert_eq!(
+            sanitize_folder_name("Acme Holdings LLC").as_deref(),
+            Some("Acme Holdings LLC")
+        );
+    }
+
+    /// A ligature or a full-width letter is the same letter a person types,
+    /// and the composed and decomposed spellings of an accent are one name.
+    #[test]
+    fn ligatures_and_fullwidth_fold_and_nfc_collides() {
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("O\u{fb03}ce Lease"),
+                    &["Paci\u{fb01}c Freight"],
+                    PartyRelation::With
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Office Lease with Pacific Freight.pdf"
+        );
+        assert_eq!(
+            sanitize_segment("\u{ff21}\u{ff43}\u{ff4d}\u{ff45} \u{ff23}\u{ff4f}\u{ff52}\u{ff50}")
+                .as_deref(),
+            Some("Acme Corp")
+        );
+        // A full-width colon and solidus are hostile once folded.
+        assert_eq!(
+            sanitize_segment("Invoice\u{ff1a} 3\u{ff0f}4").as_deref(),
+            Some("Invoice 34")
+        );
+        let composed = "Caf\u{e9} Rouge";
+        let decomposed = "Cafe\u{301} Rouge";
+        assert_eq!(sanitize_segment(decomposed).as_deref(), Some(composed));
+        assert_eq!(
+            windows_name_key(&format!("{composed}.pdf")),
+            windows_name_key(&format!("{decomposed}.pdf"))
+        );
+        // An invisible character between a letter and its accent does not
+        // keep them apart.
+        assert_eq!(
+            sanitize_segment("Cafe\u{200b}\u{301}").as_deref(),
+            Some("Caf\u{e9}")
+        );
+        let existing = ["2026-04-01 Invoice from Cafe\u{301} Rouge.pdf"];
+        let composed_name = compose_filename(
+            &proposal(
+                Some("2026-04-01"),
+                Some("Invoice"),
+                &[composed],
+                PartyRelation::From,
+            ),
+            "pdf",
+            &existing,
+        );
+        assert_eq!(composed_name.collision_index, 2);
     }
 
     #[test]

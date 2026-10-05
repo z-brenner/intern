@@ -50,7 +50,7 @@ pub use domain::*;
 pub use engine::Engine;
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
-pub use house_style::{HouseRule, HouseStyle, RuleKind, lesson_from_edit};
+pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
 pub use manifest::{ModelFile, ModelManifest, ModelRole};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use server::{LlamaServer, ServerOptions};
