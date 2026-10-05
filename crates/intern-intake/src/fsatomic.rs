@@ -192,8 +192,11 @@ mod tests {
             attempts.set(seen + 1);
             if seen < 2 {
                 // What Windows says while the sync client, the indexer or an
-                // antivirus filter has the target open.
-                return Err(io::Error::from_raw_os_error(5));
+                // antivirus filter has the target open: ERROR_ACCESS_DENIED.
+                // Other platforms number the same refusal EACCES, so the
+                // retry is proved on every runner, not only on Windows.
+                let access_denied = if cfg!(windows) { 5 } else { 13 };
+                return Err(io::Error::from_raw_os_error(access_denied));
             }
             fs::rename(&from, &to)
         })
