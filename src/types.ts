@@ -268,3 +268,22 @@ export interface LearnedRule extends HouseRule {
   /** Unix seconds of the latest edit that taught it. */
   learnedAt: number;
 }
+
+/**
+ * What adding files or a folder did. A batch is never refused whole for one
+ * bad file: what could be queued was, and every file left out is named with
+ * the code of the reason.
+ */
+export interface AddReport {
+  /** Documents newly in the queue. */
+  added: number;
+  /** Documents whose path already held these exact bytes in the queue. */
+  alreadyQueued: number;
+  skipped: SkippedDocument[];
+}
+
+/** A file an add left out: its name, and why (UNSUPPORTED_FORMAT, EMPTY_FILE, SOURCE_LOCKED, ...). */
+export interface SkippedDocument {
+  name: string;
+  code: string;
+}

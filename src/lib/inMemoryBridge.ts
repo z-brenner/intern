@@ -1,6 +1,6 @@
-import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { GUIDE_URL, SUPPORTED_EXTENSIONS, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
@@ -101,10 +101,21 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
       evidence: { date: 'Invoice date: April 30, 2025', type: 'INVOICE INV-2048', parties: 'Nimbus Orchard Supply Co.; Atlas Threadworks LLC' },
       reason: 'Identical content from a different path is retained as a separate review result.',
     };
-    if (file.displayName === 'unsupported.csv') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .csv.' };
-    if (file.displayName.startsWith('~$')) return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Office lock file skipped.' };
   }
   return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'waiting' };
+}
+
+/**
+ * Why the desktop backend would leave a file out of an add, by its name alone
+ * (the in-memory bridge has no bytes to weigh): a lock or hidden file, or an
+ * extension it does not read. `undefined` means it would be queued.
+ */
+function skipCode(file: FileSelection): string | undefined {
+  const name = file.displayName.split('/').at(-1) ?? file.displayName;
+  if (name.startsWith('~$') || name.startsWith('.')) return 'TEMPORARY_FILE';
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  return SUPPORTED_EXTENSIONS.includes(extension) ? undefined : 'UNSUPPORTED_FORMAT';
 }
 
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
@@ -263,33 +274,35 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const pathById = new Map<string, string>();
   const update = (id: string, change: Partial<QueueItem>) => { items = items.map((item) => item.id === id ? { ...item, ...change } : item); };
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
-  const addFolder = (folder: FolderSelection) => {
-    const sourceFiles = folder.files ?? [];
-    const folderItems = sourceFiles.flatMap((file) => {
-      if (idByPath.has(file.path)) return [];
+  // Mirrors the backend's partial add: what it would leave out is reported by
+  // name, everything else is queued, and a path already queued says so.
+  const addSelections = (files: FileSelection[], report: AddReport) => {
+    for (const file of files) {
+      const code = skipCode(file);
+      if (code) { report.skipped.push({ name: file.displayName.split('/').at(-1) ?? file.displayName, code }); continue; }
+      if (idByPath.has(file.path)) { report.alreadyQueued += 1; continue; }
       const item = itemFromFile(file, fixtureBatch);
       idByPath.set(file.path, item.id);
       pathById.set(item.id, file.path);
-      return [item];
-    });
-    if (sourceFiles.length) { items = [...items, ...folderItems]; return; }
-    if (idByPath.has(folder.path)) return;
+      items = [...items, item];
+      report.added += 1;
+    }
+    return report;
+  };
+  const addFolder = (folder: FolderSelection): AddReport => {
+    const sourceFiles = folder.files ?? [];
+    // A folder skips what it cannot read silently, as Add folder always has.
+    if (sourceFiles.length) return addSelections(sourceFiles.filter((file) => skipCode(file) === undefined), { added: 0, alreadyQueued: 0, skipped: [] });
+    if (idByPath.has(folder.path)) return { added: 0, alreadyQueued: 1, skipped: [] };
     const item = { id: `folder-${crypto.randomUUID()}`, originalFilename: `${folder.displayName}/`, status: 'waiting' as const };
     idByPath.set(folder.path, item.id);
     pathById.set(item.id, folder.path);
     items = [...items, item];
+    return { added: 1, alreadyQueued: 0, skipped: [] };
   };
   return {
     listItems: async () => items.map((item) => ({ ...item })),
-    addFiles: async (files) => {
-      for (const file of files) {
-        if (idByPath.has(file.path)) continue;
-        const item = itemFromFile(file, fixtureBatch);
-        idByPath.set(file.path, item.id);
-        pathById.set(item.id, file.path);
-        items = [...items, item];
-      }
-    },
+    addFiles: async (files) => addSelections(files, { added: 0, alreadyQueued: 0, skipped: [] }),
     addFolder: async (folder) => addFolder(folder),
     pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const } : item); },
     resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', progress: 0 }); },

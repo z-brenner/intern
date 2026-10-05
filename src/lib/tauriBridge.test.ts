@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { GUIDE_URL, SUPPORTED_EXTENSIONS, SUPPORT_LINKS } from './bridge';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
@@ -387,6 +387,37 @@ describe('TauriBridge', () => {
 
     await expect(new TauriBridge(fake.transport).classifyFolder('C:\\Local\\Scans')).resolves.toBeNull();
     expect(fake.calls).toEqual([{ command: 'folder_classify', args: { path: 'C:\\Local\\Scans' } }]);
+  });
+
+  it('returns the add report the backend sends for files and for a folder', async () => {
+    const report = { added: 24, alreadyQueued: 1, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] };
+    const fake = fakeTransport({ queue_add_files: report, queue_add_folder: { added: 3, alreadyQueued: 0, skipped: [] } });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect(await bridge.addFiles([{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }])).toEqual(report);
+    expect(await bridge.addFolder({ path: 'C:\\Inbox', displayName: 'Inbox' })).toEqual({ added: 3, alreadyQueued: 0, skipped: [] });
+    expect(fake.calls).toEqual([
+      { command: 'queue_add_files', args: { files: [{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }] } },
+      { command: 'queue_add_folder', args: { folder: { path: 'C:\\Inbox', displayName: 'Inbox' } } },
+    ]);
+  });
+
+  it('offers a Documents filter in the file picker, with All files beside it', async () => {
+    const fake = fakeTransport({ 'plugin:dialog|open': ['C:\\Docs\\One.pdf'] });
+    const selection = createTauriSelectionBoundary(fake.transport);
+
+    await selection.pickFiles();
+    await selection.pickFolder();
+
+    const [files, folder] = fake.calls.map((call) => (call.args as { options: Record<string, unknown> }).options);
+    expect(files).toEqual({
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }],
+    });
+    expect(SUPPORTED_EXTENSIONS).toEqual(expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'eml', 'msg', 'txt', 'png', 'jpg', 'tiff']));
+    // A folder picker has nothing to filter.
+    expect(folder).toEqual({ multiple: false, directory: true });
   });
 
   it('keeps native path selection at the injected boundary', async () => {

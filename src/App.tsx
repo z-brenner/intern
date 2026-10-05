@@ -12,6 +12,7 @@ import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
+import { describeAddReport } from './lib/addReport';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
@@ -20,7 +21,7 @@ import { describeSharePointProblem } from './features/sharepoint/sharePointProbl
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
-import type { AppSettings, QueueItem, QueueView, SetupState } from './types';
+import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
 type Gate =
   | { kind: 'loading' }
@@ -108,6 +109,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const [actionPending, setActionPending] = useState(false);
   const actionInFlight = useRef(false);
   const [actionMessage, setActionMessage] = useState('');
+  // The last add's report, kept on screen while it names files that were left
+  // out: the status above is read out but never seen, and a person who dropped
+  // twenty-five files and sees twenty-four rows needs to see which and why.
+  const [skippedNotice, setSkippedNotice] = useState('');
   const [actionError, setActionError] = useState('');
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
   // The version dismissed from the banner, so "Not now" does not reappear on
@@ -295,21 +300,29 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     }
     const selectionVersion = focusRestoreVersion.current;
     let targetId: string | undefined;
+    let report: AddReport | undefined;
     const imported = await runQueueAction(async () => {
       const result = await choose();
       let displayName: string;
       if (result.folder) {
         displayName = result.folder.files?.at(-1)?.displayName ?? `${result.folder.displayName}/`;
-        await bridge.addFolder(result.folder);
+        report = await bridge.addFolder(result.folder);
       } else if (result.files?.length) {
         displayName = result.files[result.files.length - 1].displayName;
-        await bridge.addFiles(result.files);
+        report = await bridge.addFiles(result.files);
       } else {
         return; // Canceling a picker is not an import and needs no success notice.
       }
+      setSkippedNotice('');
       const refreshed = await bridge.listItems();
       targetId = [...refreshed].reverse().find((item) => item.originalFilename === displayName)?.id;
     }, '');
+    // "Added 24 documents. Skipped 1: notes.zip (not a supported format)."
+    if (imported && report) {
+      const message = describeAddReport(report);
+      setActionMessage(message);
+      if (report.skipped.length > 0) setSkippedNotice(message);
+    }
     // Select only after the queue contains the imported row, and never over
     // a different document the reviewer chose while the import was running.
     if (!imported || !targetId || focusRestoreVersion.current !== selectionVersion) return;
@@ -392,6 +405,11 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       */}
       {pipelineError && <div className="note note--failed" role="alert" aria-label="Queue stopped">
         <p>The queue stopped taking new work. {humanizeReason(pipelineError)}</p>
+      </div>}
+      {/* A note, not a second live region: the status above already reads it out. */}
+      {skippedNotice && <div className="note note--review" role="note" aria-label="Files not added">
+        <p>{skippedNotice}</p>
+        <button type="button" onClick={() => setSkippedNotice('')}>Dismiss</button>
       </div>}
       {/*
         An empty queue is the first thing a new user sees, and it used to be

@@ -14,7 +14,7 @@ describe('queue interactions', () => {
   it('keeps identical bytes from different paths separate and deduplicates only the same path', async () => {
     const bridge = createFixtureBatchBridge();
 
-    await bridge.addFiles([
+    const report = await bridge.addFiles([
       { path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' },
       { path: 'browser://duplicate-invoice-b.pdf', displayName: 'duplicate-invoice-b.pdf' },
       { path: 'browser://unsupported.csv', displayName: 'unsupported.csv' },
@@ -25,11 +25,57 @@ describe('queue interactions', () => {
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')).toMatchObject({ status: 'review', proposedFilename: '2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf' });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')).toMatchObject({ status: 'review', reason: expect.stringMatching(/different path.*separate/i) });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')?.id).not.toBe(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')?.id);
-    expect(items.find((item) => item.originalFilename === 'unsupported.csv')).toMatchObject({ status: 'failed', reason: expect.stringMatching(/unsupported.*skipped/i) });
-    expect(items.find((item) => item.originalFilename === '~$nda.docx')).toMatchObject({ status: 'failed', reason: expect.stringMatching(/lock file.*skipped/i) });
+    // What the desktop leaves out is reported, not queued as a failed row.
+    expect(report).toEqual({ added: 2, alreadyQueued: 0, skipped: [{ name: 'unsupported.csv', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
+    expect(items.map((item) => item.originalFilename)).toEqual(['duplicate-invoice-a.pdf', 'duplicate-invoice-b.pdf']);
 
-    await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }]);
-    expect(await bridge.listItems()).toHaveLength(4);
+    expect(await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }])).toEqual({ added: 0, alreadyQueued: 1, skipped: [] });
+    expect(await bridge.listItems()).toHaveLength(2);
+  });
+
+  // add_report_message_lists_skipped_files (TAURI_SHELL-5): one .zip among
+  // twenty-five attachments used to refuse all twenty-five. The rest are
+  // queued, and the one is named with its reason - read out, and on screen,
+  // because twenty-four rows for twenty-five files otherwise just look like a
+  // file went missing.
+  it('names the files an add left out, and why, without refusing the rest', async () => {
+    const bridge = createInMemoryBridge({ items: [] });
+    const attachments = Array.from({ length: 24 }, (_, index) => ({ path: `C:/Inbox/Invoice ${index + 1}.pdf`, displayName: `Invoice ${index + 1}.pdf` }));
+    const pickFiles = vi.fn(async () => [...attachments, { path: 'C:/Inbox/notes.zip', displayName: 'notes.zip' }]);
+    render(<App bridge={bridge} selection={{ pickFiles, pickFolder: async () => undefined, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add files' }));
+
+    const message = 'Added 24 documents. Skipped 1: notes.zip (not a supported format).';
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message));
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
+    expect(await screen.findByRole('row', { name: /Invoice 24\.pdf/ })).toBeVisible();
+    expect(screen.queryByRole('row', { name: /notes\.zip/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByRole('note', { name: 'Files not added' })).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
+  });
+
+  it('reports a backend add in the same words, and keeps a clean add off the screen', async () => {
+    const base = createInMemoryBridge({ items: [] });
+    const reports = [
+      { added: 198, alreadyQueued: 0, skipped: [{ name: 'scan-57.pdf', code: 'SOURCE_LOCKED' }, { name: 'empty.pdf', code: 'EMPTY_FILE' }] },
+      { added: 1, alreadyQueued: 2, skipped: [] },
+    ];
+    const addFolder = vi.fn(async () => reports.shift()!);
+    const folder = { path: 'C:/Inbox/Scans', displayName: 'Scans' };
+    render(<App bridge={{ ...base, addFolder }} selection={{ pickFiles: async () => [], pickFolder: async () => folder, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
+    const skipped = 'Added 198 documents. Skipped 2: scan-57.pdf (another program has it open), empty.pdf (the file is empty).';
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(skipped));
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(skipped);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Added 1 document. 2 were already in the queue.'));
+    // Nothing was left out this time, so the earlier notice goes with it.
+    expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
   });
 
   it('focuses the existing result when the same unchanged path is dropped again', async () => {

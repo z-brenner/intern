@@ -1,5 +1,19 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+
+/**
+ * The extensions the desktop backend admits, mirroring `SUPPORTED_EXTENSIONS`
+ * in crates/intern-queue/src/paths.rs: the file picker's Documents filter, and
+ * what the in-memory bridge skips, as the backend does.
+ *
+ * TODO(lead): WP-12 adds src/lib/formats.ts and new formats. When it merges,
+ * move this list there (or import it from there) so there is one frontend
+ * list, and extend it with whatever paths.rs then admits.
+ */
+export const SUPPORTED_EXTENSIONS: readonly string[] = [
+  'pdf', 'docx', 'pptx', 'pptm', 'ppsx', 'xlsx', 'eml', 'msg', 'txt', 'md', 'markdown', 'png',
+  'jpg', 'jpeg', 'tif', 'tiff',
+];
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -64,8 +78,14 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
 
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
-  addFiles(files: FileSelection[]): Promise<void>;
-  addFolder(folder: FolderSelection): Promise<void>;
+  /**
+   * Add files - or, from a drop, folders too. One file that cannot be added
+   * never refuses the rest; the report says what was queued and names
+   * whatever was left out.
+   */
+  addFiles(files: FileSelection[]): Promise<AddReport>;
+  /** Add the supported documents in a folder, reported the same way. */
+  addFolder(folder: FolderSelection): Promise<AddReport>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
   cancel(id: string): Promise<void>;

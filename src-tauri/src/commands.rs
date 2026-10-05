@@ -1326,47 +1326,167 @@ fn attention_counts(items: &[PipelineItem]) -> (usize, usize) {
     (count(QueueStatus::NeedsReview), count(QueueStatus::Ready))
 }
 
+/// What adding documents did, for the window to say in one line: "Added 24
+/// documents. Skipped 1: notes.zip (not a supported format)."
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddReportDto {
+    added: u32,
+    already_queued: u32,
+    skipped: Vec<SkippedDocumentDto>,
+}
+
+/// A document left out of an add: its name as a person would recognize it,
+/// and the code of the reason.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedDocumentDto {
+    name: String,
+    code: String,
+}
+
+/// An Office lock file (`~$Contract.docx`) or a hidden file (`.DS_Store`):
+/// never a document, and the reason for that differs from "not a supported
+/// format" in what a person should do about it - nothing.
+const TEMPORARY_FILE: &str = "TEMPORARY_FILE";
+/// A document with no bytes in it, often a download or a scan that has not
+/// finished.
+const EMPTY_FILE: &str = "EMPTY_FILE";
+
+/// Splits what a person handed over - files, folders, anything Explorer will
+/// drag - into the documents to queue and the rest, each with the code of the
+/// reason it was left out.
+///
+/// One `.zip` among twenty-five dragged attachments used to refuse all
+/// twenty-five, because the first path `canonical_file` refused ended the
+/// command. A folder expands to the supported documents inside it, exactly as
+/// Add folder does; anything else is named in the report and the others go on.
+fn partition_inputs(inputs: &[PathBuf]) -> (Vec<PathBuf>, Vec<(String, String)>) {
+    let mut files = Vec::new();
+    let mut rejected = Vec::new();
+    for input in inputs {
+        match canonical_file(input) {
+            Ok(path) => files.push(path),
+            Err(file_error) => match canonical_folder(input) {
+                Ok(folder) => match collect_supported_files(&folder) {
+                    Ok(found) => files.extend(found),
+                    Err(error) => rejected.push((document_name(input), error.code)),
+                },
+                Err(_) => rejected.push((document_name(input), skip_code(input, file_error))),
+            },
+        }
+    }
+    (files, rejected)
+}
+
+/// The code a refused path is reported under. `canonical_file` refuses an
+/// unsupported extension, an empty file, and a lock or hidden file alike as
+/// UNSUPPORTED_FORMAT; the person reading the report needs to know which.
+fn skip_code(input: &Path, error: PipelineError) -> String {
+    if error.code != "UNSUPPORTED_FORMAT" {
+        return error.code;
+    }
+    let name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name.starts_with("~$") || name.starts_with('.') {
+        return TEMPORARY_FILE.into();
+    }
+    let supported = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        });
+    let empty =
+        std::fs::metadata(input).is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0);
+    if supported && empty {
+        EMPTY_FILE.into()
+    } else {
+        error.code
+    }
+}
+
+/// The last component of a path, which is what a person picked; the whole
+/// path only when there is no last component to show.
+fn document_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| display_path(path))
+}
+
+/// Queues what a person handed over and reports on all of it: Add files, a
+/// drop, Send to Intern, and a document opened with Intern all come here.
+/// Blocking - every path is canonicalized and every document hashed.
+fn add_inputs(pipeline: &Pipeline, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
+    let (files, mut skipped) = partition_inputs(inputs);
+    let report = pipeline.enqueue_files_report(&files)?;
+    skipped.extend(
+        report
+            .skipped
+            .into_iter()
+            .map(|(path, code)| (document_name(&path), code)),
+    );
+    Ok(AddReportDto {
+        added: u32::try_from(report.added.len()).unwrap_or(u32::MAX),
+        already_queued: u32::try_from(report.already_queued).unwrap_or(u32::MAX),
+        skipped: skipped
+            .into_iter()
+            .map(|(name, code)| SkippedDocumentDto { name, code })
+            .collect(),
+    })
+}
+
+/// Wakes the scheduler when an add queued anything. Without it the documents
+/// sat until the scheduler's own 65-second look, and an add that failed part
+/// way returned before waking it at all.
+fn wake_if_added(
+    report: &AddReportDto,
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    if report.added > 0 { wake() } else { Ok(()) }
+}
+
+/// Adds files, folders, or a mixture of both - a drop carries whatever was
+/// dragged. Partial by design: what cannot be added is reported, and the
+/// scheduler is woken for whatever was, so nothing waits for its timer.
 #[tauri::command]
 pub async fn queue_add_files(
     files: Vec<FileSelectionDto>,
     state: State<'_, AppState>,
-) -> Result<(), CommandError> {
+) -> Result<AddReportDto, CommandError> {
     let pipeline = state.pipeline.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
-        let mut paths = Vec::new();
-        for file in files {
-            let input = Path::new(&file.path);
-            match canonical_file(input) {
-                Ok(path) => paths.push(path),
-                Err(file_error) => match canonical_folder(input) {
-                    Ok(folder) => paths.extend(collect_supported_files(&folder)?),
-                    Err(_) => return Err(file_error.into()),
-                },
-            }
-        }
-        pipeline.enqueue_files(&paths)?;
-        Ok(())
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        let inputs = files
+            .into_iter()
+            .map(|file| PathBuf::from(file.path))
+            .collect::<Vec<_>>();
+        add_inputs(&pipeline, &inputs)
     })
     .await
     .map_err(|_| background_task_failed("file intake"))??;
-    state.schedule()
+    wake_if_added(&report, || state.schedule())?;
+    Ok(report)
 }
 
+/// Adds the supported documents in a folder. The folder itself must exist -
+/// that is the whole selection - but a document in it that cannot be read is
+/// reported, not allowed to drop the rest.
 #[tauri::command]
 pub async fn queue_add_folder(
     folder: FolderSelectionDto,
     state: State<'_, AppState>,
-) -> Result<(), CommandError> {
+) -> Result<AddReportDto, CommandError> {
     let pipeline = state.pipeline.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
+    let report = tauri::async_runtime::spawn_blocking(move || -> Result<_, CommandError> {
         let folder = canonical_folder(Path::new(&folder.path))?;
-        let paths = collect_supported_files(&folder)?;
-        pipeline.enqueue_files(&paths)?;
-        Ok(())
+        add_inputs(&pipeline, &[folder])
     })
     .await
     .map_err(|_| background_task_failed("folder intake"))??;
-    state.schedule()
+    wake_if_added(&report, || state.schedule())?;
+    Ok(report)
 }
 
 #[tauri::command]
@@ -2901,6 +3021,234 @@ mod intake_tests {
         ));
         // Clock skew across machines: a future stamp still counts as active.
         assert!(presence_active(now + 60, now));
+    }
+}
+
+/// A real queue in a scratch folder, for the tests that add documents to one.
+#[cfg(test)]
+mod scratch_queue {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use intern_engine::{DocumentAnalysis, DocumentSource, ExtractProgress};
+    use intern_queue::{
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineProgress,
+        SettingsStore, WorkerBoundary, WorkerFailure,
+    };
+
+    /// Adding a document reads and hashes it, and nothing more.
+    struct NothingRuns;
+
+    impl WorkerBoundary for NothingRuns {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(ExtractProgress),
+        ) -> Result<DocumentSource, WorkerFailure> {
+            panic!("adding a document must not extract it")
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    impl AnalyzerBoundary for NothingRuns {
+        fn analyze(
+            &self,
+            _source: &DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<DocumentAnalysis, ModelFailure> {
+            panic!("adding a document must not analyze it")
+        }
+    }
+
+    /// Counts queue-change announcements, the window's cue to refresh.
+    #[derive(Default)]
+    pub(super) struct Changes(AtomicUsize);
+
+    impl Changes {
+        pub(super) fn count(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PipelineEventSink for Changes {
+        fn queue_changed(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn progress(&self, _progress: PipelineProgress) {}
+    }
+
+    pub(super) fn folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!(
+            "intern-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        folder.canonicalize().unwrap()
+    }
+
+    pub(super) fn write(folder: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = folder.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A queue whose database lives in `data`, apart from the documents.
+    pub(super) fn queue(data: &Path) -> (Pipeline, Arc<Changes>) {
+        std::fs::create_dir_all(data).unwrap();
+        let changes = Arc::new(Changes::default());
+        let pipeline = Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::new(NothingRuns),
+            Arc::new(NothingRuns),
+            changes.clone(),
+            SettingsStore::new(data.join("settings.json")),
+        )
+        .unwrap();
+        (pipeline, changes)
+    }
+}
+
+#[cfg(test)]
+mod add_report_tests {
+    use super::{
+        AddReportDto, SkippedDocumentDto, add_inputs, partition_inputs,
+        scratch_queue::{folder, queue, write},
+        wake_if_added,
+    };
+
+    #[test]
+    fn partition_inputs_accepts_supported_expands_folders_and_reports_rest() {
+        let root = folder("partition");
+        let valid = write(&root, "valid.pdf", b"%PDF-1.7 a document");
+        let archive = write(&root, "notes.zip", b"PK an archive");
+        let empty = write(&root, "empty.pdf", b"");
+        let lock = write(&root, "~$nda.docx", b"Pat Lee");
+        let hidden = write(&root, ".DS_Store", b"Finder state");
+        let scans = root.join("Scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        let scan = write(&scans, "scan.pdf", b"%PDF-1.7 a scan");
+        // Inside a folder, what is not a document is passed over silently,
+        // exactly as Add folder always has.
+        write(&scans, "invite.ics", b"BEGIN:VCALENDAR");
+        let missing = root.join("gone.pdf");
+
+        let (files, rejected) =
+            partition_inputs(&[valid.clone(), archive, empty, lock, hidden, scans, missing]);
+
+        assert_eq!(files, vec![valid, scan.canonicalize().unwrap()]);
+        assert_eq!(
+            rejected,
+            vec![
+                ("notes.zip".to_owned(), "UNSUPPORTED_FORMAT".to_owned()),
+                ("empty.pdf".to_owned(), "EMPTY_FILE".to_owned()),
+                ("~$nda.docx".to_owned(), "TEMPORARY_FILE".to_owned()),
+                (".DS_Store".to_owned(), "TEMPORARY_FILE".to_owned()),
+                ("gone.pdf".to_owned(), "FILE_MISSING".to_owned()),
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_bad_file_in_a_drop_no_longer_refuses_the_rest() {
+        // TAURI_SHELL-5: [a.pdf, b.zip, c.docx, an empty file, a folder].
+        let root = folder("drop");
+        let documents = root.join("Attachments");
+        std::fs::create_dir_all(&documents).unwrap();
+        let first = write(&documents, "a.pdf", b"%PDF-1.7 first");
+        let archive = write(&documents, "b.zip", b"PK archive");
+        let third = write(&documents, "c.docx", b"PK word document");
+        let empty = write(&documents, "d.pdf", b"");
+        let inner = documents.join("More");
+        std::fs::create_dir_all(&inner).unwrap();
+        let fourth = write(&inner, "e.txt", b"a plain text letter");
+        let (pipeline, changes) = queue(&root.join("data"));
+
+        let report = add_inputs(
+            &pipeline,
+            &[first.clone(), archive, third.clone(), empty, inner],
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            AddReportDto {
+                added: 3,
+                already_queued: 0,
+                skipped: vec![
+                    SkippedDocumentDto {
+                        name: "b.zip".into(),
+                        code: "UNSUPPORTED_FORMAT".into(),
+                    },
+                    SkippedDocumentDto {
+                        name: "d.pdf".into(),
+                        code: "EMPTY_FILE".into(),
+                    },
+                ],
+            }
+        );
+        let queued = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|item| item.source_path)
+            .collect::<Vec<_>>();
+        assert_eq!(queued, vec![first.clone(), third, fourth]);
+        // One announcement for the batch, which is what refreshes the window.
+        assert_eq!(changes.count(), 1);
+        // And the scheduler is woken for what was added, though two of the
+        // five were not: nothing waits for its timer.
+        let mut woken = 0;
+        wake_if_added(&report, || {
+            woken += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(woken, 1);
+
+        // The same files again are already there, and say so.
+        let again = add_inputs(&pipeline, std::slice::from_ref(&first)).unwrap();
+        assert_eq!(again.added, 0);
+        assert_eq!(again.already_queued, 1);
+        assert_eq!(changes.count(), 1);
+        wake_if_added(&again, || {
+            panic!("nothing new was queued, so nothing is woken")
+        })
+        .unwrap();
+
+        // The wire shape the window reads.
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::json!({
+                "added": 3,
+                "alreadyQueued": 0,
+                "skipped": [
+                    { "name": "b.zip", "code": "UNSUPPORTED_FORMAT" },
+                    { "name": "d.pdf", "code": "EMPTY_FILE" },
+                ],
+            })
+        );
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

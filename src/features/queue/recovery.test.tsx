@@ -72,7 +72,7 @@ const ready: QueueItem = {
   });
 
   it('treats a canceled picker as a no-op, not a successful import or an error', async () => {
-    const addFiles = vi.fn(async () => {});
+    const addFiles = vi.fn(async () => ({ added: 0, alreadyQueued: 0, skipped: [] }));
     render(<App bridge={{ ...createInMemoryBridge({ items: [] }), addFiles }} selection={selection()} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Add files$/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /^Add files$/i })).toBeEnabled());
@@ -98,7 +98,7 @@ const ready: QueueItem = {
     const second = { ...ready, id: 'second', originalFilename: 'second.pdf' };
     const imported: QueueItem = { id: 'imported', originalFilename: 'new.pdf', status: 'waiting' };
     const items: QueueItem[] = [ready, second];
-    const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); });
+    const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); return { added: 1, alreadyQueued: 0, skipped: [] }; });
     const bridge = { ...createInMemoryBridge({ items: [] }), listItems: async () => [...items], addFiles };
     render(<App bridge={bridge} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Select agreement.pdf' }));

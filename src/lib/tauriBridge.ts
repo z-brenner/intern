@@ -1,8 +1,8 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
-import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import { GUIDE_URL, SUPPORTED_EXTENSIONS, SUPPORT_LINKS } from './bridge';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
@@ -70,6 +70,12 @@ interface QueueItemDto {
   fileModifiedDate?: string;
 }
 
+interface AddReportDto {
+  added?: number;
+  alreadyQueued?: number;
+  skipped?: Array<{ name: string; code: string }>;
+}
+
 interface HistoryEntryDto {
   receiptId: string | number;
   queueItemId: string | number;
@@ -119,12 +125,12 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return items.map(normalizeItem);
   }
 
-  addFiles(files: FileSelection[]): Promise<void> {
-    return this.transport.invoke('queue_add_files', { files });
+  async addFiles(files: FileSelection[]): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_files', { files }));
   }
 
-  addFolder(folder: FolderSelection): Promise<void> {
-    return this.transport.invoke('queue_add_folder', { folder });
+  async addFolder(folder: FolderSelection): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_folder', { folder }));
   }
 
   pauseQueue(): Promise<void> { return this.transport.invoke('queue_pause'); }
@@ -383,6 +389,16 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+// Fresh arrays and plain numbers, whatever arrived: the report is shown, and
+// nothing about it is worth failing an add that already happened.
+function normalizeAddReport(report: AddReportDto | undefined): AddReport {
+  return {
+    added: report?.added ?? 0,
+    alreadyQueued: report?.alreadyQueued ?? 0,
+    skipped: (report?.skipped ?? []).map(({ name, code }) => ({ name, code })),
+  };
+}
+
 function normalizeItem(item: QueueItemDto): QueueItem {
   const status = normalizeStatus(item.status);
   const waiting = status === 'waiting';
@@ -432,7 +448,12 @@ function normalizeStatus(status: BackendStatus): QueueItem['status'] {
 
 async function openDialog(transport: TauriTransport, directory: boolean): Promise<string[]> {
   const result = await transport.invoke<unknown>('plugin:dialog|open', {
-    options: { multiple: !directory, directory },
+    options: directory
+      ? { multiple: false, directory }
+      // Documents first, so the picker opens showing only what Intern can
+      // read; All files stays one click away, and whatever it lets through is
+      // reported by the add rather than refused with the rest.
+      : { multiple: true, directory, filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }] },
   });
   return stringPaths(result);
 }

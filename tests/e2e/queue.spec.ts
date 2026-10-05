@@ -15,15 +15,14 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
 
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toContainText('Needs review');
   await expect(page.getByRole('row', { name: /duplicate-invoice-b\.pdf/i })).toContainText('Needs review');
-  await expect(page.getByRole('row', { name: /unsupported\.csv/i })).toContainText('Failed');
-  await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toContainText('Failed');
+  // Files Intern cannot read are left out of the queue and named, with the
+  // reason, instead of refusing the whole drop or sitting there as failures.
+  await expect(page.getByRole('note', { name: 'Files not added' })).toHaveText(/Added 2 documents\. Skipped 2: unsupported\.csv \(not a supported format\), ~\$nda\.docx \(a temporary or hidden file\)\./);
+  await expect(page.getByRole('row', { name: /unsupported\.csv/i })).toHaveCount(0);
+  await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Select duplicate-invoice-b.pdf' }).click();
   await expect(page.getByText(/different path.*separate/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Select unsupported.csv' }).click();
-  await expect(page.getByText(/Unsupported format skipped/i)).toBeVisible();
-  await page.getByRole('button', { name: 'Select ~$nda.docx' }).click();
-  await expect(page.getByText(/Office lock file skipped/i)).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((dropZone) => {
     const transfer = new DataTransfer();
