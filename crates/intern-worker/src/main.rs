@@ -80,6 +80,10 @@ fn extract_path(
 }
 
 fn main() {
+    // First, before anything can panic: standard error is kept in a log file,
+    // and the default hook would print a panic's message there, document text
+    // and all.
+    intern_worker::panic_hook::install();
     if let Err(error) = intern_worker::protocol::run_concurrent_worker(
         std::io::stdin(),
         std::io::stdout(),

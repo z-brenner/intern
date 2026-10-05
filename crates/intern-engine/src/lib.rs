@@ -34,6 +34,7 @@ pub mod hosted;
 pub mod house_style;
 pub mod infer;
 pub mod legacy;
+pub mod logs;
 pub mod manifest;
 pub mod naming;
 mod process;

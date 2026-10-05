@@ -935,6 +935,7 @@ impl AppState {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "local application data directory is unavailable".into(),
         })?;
+        intern_engine::logs::set_log_directory(data.join("logs"));
         std::fs::create_dir_all(&data).map_err(|_| CommandError {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "local application data directory could not be created".into(),
