@@ -145,6 +145,19 @@ impl QueueStore {
     }
 
     pub fn enqueue(&self, source_path: &Path, source_hash: &str) -> InternResult<QueueItem> {
+        self.enqueue_with_outcome(source_path, source_hash)
+            .map(|(item, _)| item)
+    }
+
+    /// [`Self::enqueue`], also saying whether the row is new. `false` means
+    /// this path already held these exact bytes in the queue - waiting, done,
+    /// or anywhere between - and the row returned is that one, untouched, so
+    /// a person who adds the same files twice can be told so.
+    pub fn enqueue_with_outcome(
+        &self,
+        source_path: &Path,
+        source_hash: &str,
+    ) -> InternResult<(QueueItem, bool)> {
         let path = source_path.to_string_lossy().into_owned();
         let path_key = windows_path_key(&path);
         let timestamp = now();
@@ -152,7 +165,7 @@ impl QueueStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(InternError::from)?;
-        transaction.execute(
+        let inserted = transaction.execute(
             "INSERT INTO queue_items(source_path, source_path_key, source_hash, status, created_at, updated_at)
              VALUES (?1, ?2, ?3, 'queued', ?4, ?4)
              ON CONFLICT(source_path_key, source_hash) DO NOTHING",
@@ -164,7 +177,7 @@ impl QueueStore {
             params![path_key, source_hash],
         )?;
         transaction.commit().map_err(InternError::from)?;
-        Ok(item)
+        Ok((item, inserted == 1))
     }
 
     pub fn claim_next(&self) -> InternResult<Option<QueueItem>> {

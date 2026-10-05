@@ -585,6 +585,19 @@ pub struct PipelineItem {
     pub duplicate_of: Option<String>,
 }
 
+/// What adding a batch of documents did, document by document.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EnqueueReport {
+    /// Rows this batch created, in the order given.
+    pub added: Vec<QueueItem>,
+    /// Documents whose path already held these exact bytes in the queue.
+    pub already_queued: usize,
+    /// Documents that could not be admitted, each with the code of the
+    /// failure: `SOURCE_LOCKED` for a file another program holds open,
+    /// `IO_ERROR` for one that cannot be read, and so on.
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
 pub struct Pipeline {
     store: Arc<QueueStore>,
     repository: PipelineRepository,
@@ -720,30 +733,95 @@ impl Pipeline {
     pub fn enqueue_files(&self, paths: &[PathBuf]) -> PipelineResult<Vec<QueueItem>> {
         let mut queued = Vec::with_capacity(paths.len());
         for path in paths {
-            let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
-            let fingerprint = self.files.fingerprint(path)?;
-            if verified
-                .verified_hash()
-                .is_some_and(|hash| hash != fingerprint)
-            {
-                return Err(PipelineError::new(
-                    "FILE_CHANGED",
-                    "The file changed after Microsoft verified its uploader.",
-                ));
-            }
-            let mut item = self.store.enqueue(path, &fingerprint)?;
-            if item.status == QueueStatus::Queued {
-                item = self.flag_if_completed_duplicate(item)?;
-            }
-            if item.status == QueueStatus::Queued {
-                item = self.flag_if_filed_elsewhere(item)?;
-            }
-            queued.push(item);
+            let fingerprint = self.admit_for_enqueue(path)?;
+            queued.push(self.enqueue_admitted(path, &fingerprint)?.0);
         }
         if !queued.is_empty() {
             self.events.queue_changed();
         }
         Ok(queued)
+    }
+
+    /// Adds documents a person chose, one at a time, and says what became of
+    /// each.
+    ///
+    /// `enqueue_files` stops at the first document it cannot admit, after the
+    /// ones before it are already in the queue - right for the intake
+    /// watcher, which hands over one path at a time, and wrong for a person
+    /// adding a folder of two hundred: one file a scanner is still writing, or
+    /// one online-only placeholder that cannot be read offline, silently
+    /// dropped the rest and announced nothing. Here a document that cannot be
+    /// admitted or fingerprinted is set aside with its code and the rest go
+    /// on.
+    ///
+    /// A failure of the queue database is not about one document, so it still
+    /// ends the batch; what was added before it is announced first, so the
+    /// window shows it either way.
+    pub fn enqueue_files_report(&self, paths: &[PathBuf]) -> PipelineResult<EnqueueReport> {
+        let mut report = EnqueueReport::default();
+        let result = self.enqueue_reporting_into(paths, &mut report);
+        if !report.added.is_empty() {
+            self.events.queue_changed();
+        }
+        result.map(|()| report)
+    }
+
+    fn enqueue_reporting_into(
+        &self,
+        paths: &[PathBuf],
+        report: &mut EnqueueReport,
+    ) -> PipelineResult<()> {
+        for path in paths {
+            let fingerprint = match self.admit_for_enqueue(path) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    report.skipped.push((path.clone(), error.code));
+                    continue;
+                }
+            };
+            let (item, inserted) = self.enqueue_admitted(path, &fingerprint)?;
+            if inserted {
+                report.added.push(item);
+            } else {
+                report.already_queued += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything about one document that can refuse it before the queue is
+    /// touched: who may add it, and whether its bytes can be read. Returns the
+    /// fingerprint the row is keyed on.
+    fn admit_for_enqueue(&self, path: &Path) -> PipelineResult<String> {
+        let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
+        let fingerprint = self.files.fingerprint(path)?;
+        if verified
+            .verified_hash()
+            .is_some_and(|hash| hash != fingerprint)
+        {
+            return Err(PipelineError::new(
+                "FILE_CHANGED",
+                "The file changed after Microsoft verified its uploader.",
+            ));
+        }
+        Ok(fingerprint)
+    }
+
+    /// Writes an admitted document's row and flags it when its content is
+    /// already filed. The flag is `true` when the row is new.
+    fn enqueue_admitted(
+        &self,
+        path: &Path,
+        fingerprint: &str,
+    ) -> PipelineResult<(QueueItem, bool)> {
+        let (mut item, inserted) = self.store.enqueue_with_outcome(path, fingerprint)?;
+        if item.status == QueueStatus::Queued {
+            item = self.flag_if_completed_duplicate(item)?;
+        }
+        if item.status == QueueStatus::Queued {
+            item = self.flag_if_filed_elsewhere(item)?;
+        }
+        Ok((item, inserted))
     }
 
     /// Flags a just-queued item whose content is already filed as completed.

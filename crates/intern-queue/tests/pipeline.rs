@@ -2026,6 +2026,91 @@ fn content_a_teammate_already_filed_is_flagged_before_analysis_and_names_their_m
     assert_eq!(teammates.asked.lock().unwrap().len(), 3);
 }
 
+/// Fingerprints every document but one, which another program holds open -
+/// a scanner still writing it, Outlook still saving it.
+struct OneLockedFile {
+    locked: PathBuf,
+}
+
+impl FileActions for OneLockedFile {
+    fn fingerprint(&self, path: &Path) -> Result<String, PipelineError> {
+        if path == self.locked {
+            return Err(PipelineError::new(
+                "SOURCE_LOCKED",
+                "source file is locked by another program",
+            ));
+        }
+        Ok(format!("hash-of-{}", path.display()))
+    }
+
+    fn apply(&self, _item: &QueueItem, _destination: &Path) -> Result<(), PipelineError> {
+        unreachable!("adding documents applies nothing")
+    }
+
+    fn undo(&self, _item: &QueueItem, _receipt: &OperationReceipt) -> Result<(), PipelineError> {
+        unreachable!("adding documents undoes nothing")
+    }
+
+    fn reconcile(&self, _item: &QueueItem) -> Result<(), PipelineError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn enqueue_report_continues_past_failures_and_emits_once() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let locked = source(temp.path(), "still-scanning.pdf");
+    let third = source(temp.path(), "third.pdf");
+    let events = Arc::new(RecordingEvents::default());
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        Arc::new(FakeWorker::new(vec![])),
+        Arc::new(FakeModel::new(vec![])),
+        Arc::new(OneLockedFile {
+            locked: locked.clone(),
+        }),
+        events.clone(),
+        settings,
+    )
+    .unwrap();
+
+    let report = pipeline
+        .enqueue_files_report(&[first.clone(), locked.clone(), third.clone()])
+        .unwrap();
+
+    // The locked file no longer drops the one after it.
+    let added = report
+        .added
+        .iter()
+        .map(|item| item.source_path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(added, vec![first.clone(), third.clone()]);
+    assert_eq!(
+        report.skipped,
+        vec![(locked.clone(), "SOURCE_LOCKED".to_owned())]
+    );
+    assert_eq!(report.already_queued, 0);
+    assert_eq!(pipeline.list().unwrap().len(), 2);
+    // One announcement for the batch, though a document in it failed.
+    assert_eq!(events.changed.load(Ordering::SeqCst), 1);
+
+    // Added again, the two are already there, and nothing new is announced.
+    let again = pipeline
+        .enqueue_files_report(&[first.clone(), locked.clone(), third])
+        .unwrap();
+    assert!(again.added.is_empty());
+    assert_eq!(again.already_queued, 2);
+    assert_eq!(again.skipped.len(), 1);
+    assert_eq!(events.changed.load(Ordering::SeqCst), 1);
+
+    // The intake watcher's path is unchanged: it hands over one document at a
+    // time, and a failure is still that call's error.
+    let error = pipeline.enqueue_files(&[locked]).unwrap_err();
+    assert_eq!(error.code, "SOURCE_LOCKED");
+}
+
 #[test]
 fn same_content_still_pending_does_not_flag_a_duplicate() {
     let temp = tempdir().unwrap();
