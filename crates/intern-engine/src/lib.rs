@@ -41,6 +41,8 @@ mod process;
 pub mod prompt;
 pub mod server;
 pub mod setup;
+#[cfg(test)]
+mod test_support;
 pub mod text;
 pub mod validate;
 pub mod worker;

@@ -17,15 +17,25 @@ use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
 use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
 
-/// Room for the reply plus the grammar's fixed scaffolding. The model is not
-/// writing prose, so this stays small and generation stays fast.
-const MAX_REPLY_TOKENS: u32 = 420;
+/// Room for the reply plus the grammar's fixed scaffolding.
+///
+/// A ceiling, not a target: the grammar's closing brace ends generation, and
+/// the corpus's longest reply is about 200 tokens. It used to be 420, and a
+/// contract that opens with one long paragraph naming the date and both
+/// parties is quoted as evidence three times over - past 420 tokens, into a
+/// reply cut off mid-string. Transport only: [`ModelRequest::sha256`] covers
+/// the prompt alone, so recordings stay valid.
+pub(crate) const MAX_REPLY_TOKENS: u32 = 1_024;
 
 /// How much of a reply body is worth reading. A reply is a short JSON object;
 /// even a thinking model's whole visible answer is a few tens of kilobytes.
 /// Two megabytes is far above anything real and far below anything that would
 /// hurt a laptop already running the model.
 const MAX_REPLY_BYTES: u64 = 2 * 1024 * 1024;
+
+/// How much of an error reply is worth reading. Enough for any service's JSON
+/// error object; the rest is somebody's HTML error page.
+const MAX_ERROR_BYTES: u64 = 16 * 1024;
 
 /// What actually gets sent to the model for one document.
 ///
@@ -138,10 +148,13 @@ impl ModelClient {
         self
     }
 
-    /// One attempt, then one retry when the reply was malformed. A request
-    /// that failed outright is not retried: the second attempt fails the same
-    /// way, and against a server that has died or hung it turns one document
-    /// into two full request timeouts before anyone is told.
+    /// One attempt, then one retry when the reply was complete but
+    /// malformed. A request that failed outright is not retried: the second
+    /// attempt fails the same way, and against a server that has died or hung
+    /// it turns one document into two full request timeouts before anyone is
+    /// told. Neither is a reply that ran out of tokens or a prompt the server
+    /// could not fit: decoding is greedy, so the same request is cut off at
+    /// the same token or refused for the same size every time.
     pub fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
         self.propose_scored(request).map(|(proposal, _)| proposal)
     }
@@ -172,7 +185,15 @@ impl ModelClient {
             .json(&self.completion_request(request))
             .send()
             .map_err(|_| AttemptError(EngineErrorCode::ModelRequestFailed))?;
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() {
+            // A prompt too long for the context window is the document's
+            // problem, not the server's: restarting the server and sending
+            // the same prompt again only ends in the same 400.
+            let body = read_error_body(response);
+            if status == reqwest::StatusCode::BAD_REQUEST && is_context_overflow(&body) {
+                return Err(AttemptError(EngineErrorCode::ModelInputTooLarge));
+            }
             return Err(AttemptError(EngineErrorCode::ModelRequestFailed));
         }
         let bytes = read_capped(response, EngineErrorCode::ModelResponseInvalid)?;
@@ -336,21 +357,56 @@ pub(crate) fn read_capped(
     Ok(bytes)
 }
 
+/// The start of an error reply, for telling one failure from another. A body
+/// that cannot be read is an empty one: the status still says what happened.
+pub(crate) fn read_error_body(body: impl std::io::Read) -> Vec<u8> {
+    use std::io::Read as _;
+
+    let mut bytes = Vec::new();
+    let _ = body.take(MAX_ERROR_BYTES).read_to_end(&mut bytes);
+    bytes
+}
+
+/// Whether an error reply says the prompt did not fit the context window, in
+/// llama.cpp's words: the error type its server sends (b10361), and the
+/// sentence it and the servers built on it use.
+pub(crate) fn is_context_overflow(body: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(body);
+    text.contains("exceed_context_size_error")
+        || text.contains("exceeds the available context size")
+}
+
 /// Reads a proposal out of a chat-completion reply: the local server's, or
 /// any OpenAI-compatible service's.
+///
+/// Why the reply ended matters more than its exact word for it. A refusal or
+/// a content filter is the service declining this document, which no retry
+/// changes; a reply cut off at the token limit is truncated, not malformed,
+/// and the same request is cut off again. Any other reason - `stop`, a
+/// server's own `eos_token` or `end_turn` - is accepted when the content reads
+/// as a proposal, because the content is what is checked.
 pub(crate) fn decode(completion: ChatCompletion) -> Result<ModelProposal, AttemptError> {
     let choice = completion
         .choices
         .into_iter()
         .next()
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-    if !matches!(choice.finish_reason.as_deref(), Some("stop") | None) {
-        return Err(AttemptError(EngineErrorCode::ModelResponseInvalid));
+    let finish_reason = choice.finish_reason.as_deref();
+    let refused = choice
+        .message
+        .refusal
+        .as_deref()
+        .is_some_and(|refusal| !refusal.trim().is_empty());
+    if refused || finish_reason == Some("content_filter") {
+        return Err(AttemptError(EngineErrorCode::HostedModelRefused));
+    }
+    if finish_reason == Some("length") {
+        return Err(AttemptError(EngineErrorCode::ModelReplyTruncated));
     }
     let content = choice
         .message
         .content
-        .into_text()
+        .and_then(AssistantContent::into_text)
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
     proposal_from_text(&content)
 }
@@ -429,7 +485,11 @@ pub(crate) struct TokenLogprob {
 
 #[derive(Deserialize)]
 struct AssistantMessage {
-    content: AssistantContent,
+    /// Null when the model refused: OpenAI then says why in `refusal`.
+    #[serde(default)]
+    content: Option<AssistantContent>,
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -533,6 +593,18 @@ impl AttemptError {
     fn into_error(self) -> EngineError {
         match self.0 {
             EngineErrorCode::ModelRequestFailed => request_failed(),
+            EngineErrorCode::ModelInputTooLarge => EngineError::new(
+                EngineErrorCode::ModelInputTooLarge,
+                "the document does not fit the local model's context window",
+            ),
+            EngineErrorCode::ModelReplyTruncated => EngineError::new(
+                EngineErrorCode::ModelReplyTruncated,
+                "the local model ran out of room before finishing its answer",
+            ),
+            EngineErrorCode::HostedModelRefused => EngineError::new(
+                EngineErrorCode::HostedModelRefused,
+                "the model declined to answer about this document",
+            ),
             _ => EngineError::new(
                 EngineErrorCode::ModelResponseInvalid,
                 "local model returned malformed output twice",
@@ -551,6 +623,7 @@ const fn request_failed() -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{VALID_REPLY, completion_reply, http_reply, scripted_server};
 
     #[test]
     fn a_non_loopback_endpoint_is_refused() {
@@ -620,6 +693,7 @@ mod tests {
         let body = client.completion_request(&ModelRequest { prompt: "p".into() });
         assert_eq!(body["grammar"], serde_json::json!(RESPONSE_GRAMMAR));
         assert_eq!(body["temperature"], serde_json::json!(0));
+        assert_eq!(body["max_tokens"], serde_json::json!(1_024));
         assert_eq!(
             body["chat_template_kwargs"]["enable_thinking"],
             serde_json::json!(false)
@@ -637,59 +711,157 @@ mod tests {
         assert!(!body.to_string().contains("image_url"));
     }
 
+    fn local_client(address: std::net::SocketAddr) -> ModelClient {
+        ModelClient::new(&format!("http://{address}/v1/chat/completions"), "k", "m").unwrap()
+    }
+
     /// A retry is for a reply that came back malformed. A request that failed
     /// outright fails the same way twice, and against a dead or hung server
     /// the second attempt only doubles a ten-minute wait for one document.
     #[test]
     fn a_failed_request_is_not_retried() {
-        use std::{
-            io::{BufRead, BufReader, Write},
-            net::TcpListener,
-            sync::{
-                Arc,
-                atomic::{AtomicUsize, Ordering},
-            },
-        };
+        let server = scripted_server(vec![http_reply("503 Service Unavailable", &[], "")]);
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&attempts);
-        // Never joined: after the fix there is no second connection to accept,
-        // and the harness ends the process when the last test finishes.
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                counted.fetch_add(1, Ordering::SeqCst);
-                // Drain the request so closing the socket cannot reset it
-                // before the status line arrives.
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut length = 0_usize;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).is_err() || line == "\r\n" || line.is_empty() {
-                        break;
-                    }
-                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let _ = std::io::Read::read_exact(&mut reader, &mut vec![0_u8; length]);
-                let _ = stream.write_all(
-                    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
-                let _ = stream.flush();
-            }
-        });
-
-        let client =
-            ModelClient::new(&format!("http://{address}/v1/chat/completions"), "k", "m").unwrap();
-        let error = client
+        let error = local_client(server.address)
             .propose(&ModelRequest { prompt: "p".into() })
             .unwrap_err();
 
         assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(server.attempts(), 1);
+    }
+
+    /// llama-server answers a prompt longer than its context with a 400. That
+    /// was a "failed request": the server was restarted, the same prompt sent
+    /// again, and the queue paused over one oversized document.
+    #[test]
+    fn exceed_context_400_maps_to_input_too_large() {
+        // The body b10361 sends, as a live server answered a prompt too long
+        // for its 8,192-token context.
+        let overflow = r#"{"error":{"code":400,"message":"request (9214 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9214,"n_ctx":8192}}"#;
+        let server = scripted_server(vec![http_reply(
+            "400 Bad Request",
+            &[("Content-Type", "application/json")],
+            overflow,
+        )]);
+        let error = local_client(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::ModelInputTooLarge);
+        assert_eq!(server.attempts(), 1);
+
+        // Any other 400 is still a failed request.
+        let server = scripted_server(vec![http_reply(
+            "400 Bad Request",
+            &[],
+            r#"{"error":{"code":400,"message":"invalid grammar","type":"invalid_request_error"}}"#,
+        )]);
+        let error = local_client(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
+    }
+
+    /// Decoding is greedy, so a reply cut off at the token limit is cut off at
+    /// the same token the second time. One request, and a code that says what
+    /// happened instead of "malformed".
+    #[test]
+    fn finish_reason_length_is_truncated_and_not_retried() {
+        let server = scripted_server(vec![completion_reply(
+            "length",
+            r#"{"type_evidence":"This Master Services Agreement is entered into as of March 1, 2025 by and between"#,
+        )]);
+        let error = local_client(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::ModelReplyTruncated);
+        assert_eq!(server.attempts(), 1);
+    }
+
+    /// A reply that finished but cannot be read is the one case a second
+    /// attempt is for - once.
+    #[test]
+    fn malformed_complete_reply_is_retried_once() {
+        let server = scripted_server(vec![completion_reply("stop", "I think this is a memo.")]);
+        let error = local_client(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::ModelResponseInvalid);
+        assert_eq!(server.attempts(), 2);
+
+        let server = scripted_server(vec![
+            completion_reply("stop", "I think this is a memo."),
+            completion_reply("stop", VALID_REPLY),
+        ]);
+        let proposal = local_client(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap();
+        assert_eq!(proposal.document_type.as_deref(), Some("Memo"));
+        assert_eq!(server.attempts(), 2);
+    }
+
+    fn decoded(reply: Value) -> Result<ModelProposal, EngineErrorCode> {
+        let completion: ChatCompletion = serde_json::from_value(reply).unwrap();
+        decode(completion).map_err(|AttemptError(code)| code)
+    }
+
+    /// OpenAI's refusal shape - `content: null` beside a `refusal` - did not
+    /// even deserialize, and Azure's content filter read as malformed: four
+    /// billed requests, then the whole queue paused over one document.
+    #[test]
+    fn refusal_null_content_and_content_filter_map_to_refused() {
+        assert_eq!(
+            decoded(
+                json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":null,"refusal":"I can't help with that request."}}]})
+            ),
+            Err(EngineErrorCode::HostedModelRefused)
+        );
+        assert_eq!(
+            decoded(
+                json!({"choices":[{"finish_reason":"content_filter","message":{"role":"assistant","content":null}}]})
+            ),
+            Err(EngineErrorCode::HostedModelRefused)
+        );
+        // A filter that cut in after the model had answered is still a filter.
+        assert_eq!(
+            decoded(
+                json!({"choices":[{"finish_reason":"content_filter","message":{"role":"assistant","content":VALID_REPLY}}]})
+            ),
+            Err(EngineErrorCode::HostedModelRefused)
+        );
+        // An empty refusal field is no refusal.
+        assert!(
+            decoded(json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":VALID_REPLY,"refusal":""}}]}))
+                .is_ok()
+        );
+        // Null content with nothing to say why is a malformed reply.
+        assert_eq!(
+            decoded(
+                json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":null}}]})
+            ),
+            Err(EngineErrorCode::ModelResponseInvalid)
+        );
+        assert_eq!(
+            decoded(
+                json!({"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"{\"type_evidence\":"}}]})
+            ),
+            Err(EngineErrorCode::ModelReplyTruncated)
+        );
+    }
+
+    /// Hugging Face TGI ends with `eos_token`, other servers with words of
+    /// their own. The content is what is checked; the label is not.
+    #[test]
+    fn unknown_finish_reason_with_valid_content_is_accepted() {
+        for reason in ["eos_token", "end_turn", "stop_sequence"] {
+            let proposal = decoded(json!({"choices":[{"finish_reason":reason,"message":{"role":"assistant","content":VALID_REPLY}}]}))
+                .unwrap_or_else(|code| panic!("{reason}: {code:?}"));
+            assert_eq!(proposal.document_type.as_deref(), Some("Memo"));
+        }
+        assert!(
+            decoded(json!({"choices":[{"message":{"role":"assistant","content":VALID_REPLY}}]}))
+                .is_ok(),
+            "no finish reason at all"
+        );
     }
 
     /// Whatever answers the socket decides how many bytes arrive, and the

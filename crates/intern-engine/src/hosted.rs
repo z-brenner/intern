@@ -387,15 +387,15 @@ struct AnthropicBlock {
 }
 
 /// Reads a proposal out of a Messages API reply. Thinking blocks are passed
-/// over; only the text blocks carry the answer. A refusal is reported as
-/// what it is rather than as a malformed reply, so it is not retried and the
-/// document goes to review with the reason shown.
+/// over; only the text blocks carry the answer. A refusal, and a reply cut
+/// off at the token cap, are reported as what they are rather than as a
+/// malformed reply, so neither is sent - and paid for - again.
 pub(crate) fn decode_anthropic(bytes: &[u8]) -> Result<ModelProposal, AttemptError> {
     let message: AnthropicMessage = serde_json::from_slice(bytes)
         .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
     match message.stop_reason.as_deref() {
         Some("refusal") => return Err(AttemptError(EngineErrorCode::HostedModelRefused)),
-        Some("max_tokens") => return Err(AttemptError(EngineErrorCode::ModelResponseInvalid)),
+        Some("max_tokens") => return Err(AttemptError(EngineErrorCode::ModelReplyTruncated)),
         _ => {}
     }
     let text = message
@@ -428,6 +428,10 @@ const fn hosted_error(code: EngineErrorCode) -> EngineError {
         EngineErrorCode::HostedModelRefused => EngineError::new(
             EngineErrorCode::HostedModelRefused,
             "the hosted model declined to answer about this document",
+        ),
+        EngineErrorCode::ModelReplyTruncated => EngineError::new(
+            EngineErrorCode::ModelReplyTruncated,
+            "the hosted model ran out of room before finishing its answer",
         ),
         EngineErrorCode::HostedModelUnreachable => unreachable_error(),
         EngineErrorCode::HostedModelMisconfigured => {
@@ -635,7 +639,7 @@ mod tests {
         let truncated = br#"{"content":[{"type":"text","text":"{\"document_type\":"}],"stop_reason":"max_tokens"}"#;
         assert_eq!(
             decode_anthropic(truncated).unwrap_err().0,
-            EngineErrorCode::ModelResponseInvalid
+            EngineErrorCode::ModelReplyTruncated
         );
         assert_eq!(
             decode_anthropic(b"not json").unwrap_err().0,
