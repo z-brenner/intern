@@ -6,7 +6,7 @@
 
 use std::{
     collections::HashSet,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -29,6 +29,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STALE_WORKSPACE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// OCR below this mean confidence is reported as a fact-affecting warning.
 const LOW_OCR_CONFIDENCE: f32 = 75.0;
+/// The longest response line read from the worker.
+///
+/// The worker caps a document at eight million characters, so an honest
+/// reply - JSON escaping and a page image included - stays well inside this.
+/// A longer line is a worker gone wrong, and reading it whole would put an
+/// unbounded allocation in the app's own process rather than the worker's.
+const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
 /// The worker warning for rows and columns a spreadsheet's window
 /// deliberately leaves out, with a marker where it does. The rest of the
 /// sheet was read and chosen against, so nothing the window shows is in
@@ -590,23 +597,7 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
     let (sender, receiver) = mpsc::channel();
     let reader = std::thread::Builder::new()
         .name("intern-worker-jsonl".into())
-        .spawn(move || {
-            let reader = BufReader::new(output);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if sender.send(Ok(line)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => {
-                        let _ = sender.send(Err(()));
-                        return;
-                    }
-                }
-            }
-            let _ = sender.send(Err(()));
-        });
+        .spawn(move || forward_lines(output, &sender, MAX_RESPONSE_LINE_BYTES));
     if reader.is_err() {
         let _ = child.kill();
         let _ = child.wait();
@@ -617,6 +608,44 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
         input: Mutex::new(input),
         output: Mutex::new(receiver),
     })
+}
+
+/// Sends each line the worker writes, then `Err(())` once the output ends
+/// or cannot be read - including a line longer than `limit`, which is
+/// refused as soon as it passes the limit rather than read to its end. The
+/// receiving side treats `Err(())` as a crashed worker and stops it.
+fn forward_lines(output: impl Read, sender: &mpsc::Sender<Result<String, ()>>, limit: usize) {
+    let mut reader = BufReader::new(output);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = match reader
+            .by_ref()
+            .take(limit as u64 + 1)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        if read == 0 {
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+        } else if line.len() > limit {
+            break;
+        }
+        let Ok(text) = String::from_utf8(std::mem::take(&mut line)) else {
+            break;
+        };
+        if sender.send(Ok(text)).is_err() {
+            return;
+        }
+    }
+    let _ = sender.send(Err(()));
 }
 
 pub fn prepare_worker_temp_root(root: &Path, max_entries: usize) -> std::io::Result<usize> {
@@ -879,6 +908,44 @@ The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n
             unknown.parser_warnings,
             vec![ParserWarning::new("SOMETHING_NEW", true)]
         );
+    }
+
+    /// Reads everything `forward_lines` sends for the given output.
+    fn forwarded(output: impl Read, limit: usize) -> Vec<Result<String, ()>> {
+        let (sender, receiver) = mpsc::channel();
+        forward_lines(output, &sender, limit);
+        drop(sender);
+        receiver.into_iter().collect()
+    }
+
+    /// The worker's reply lines are read with a bound. A line past it is a
+    /// worker gone wrong: it is refused once the bound is passed, never
+    /// read to its end, and reported as the crash the caller already knows
+    /// how to recover from. Nothing after it is read.
+    #[test]
+    fn oversized_response_line_fails_cleanly() {
+        assert_eq!(
+            forwarded(&b"{\"a\":1}\r\n{\"b\":2}\nlast"[..], 16),
+            vec![
+                Ok("{\"a\":1}".to_owned()),
+                Ok("{\"b\":2}".to_owned()),
+                Ok("last".to_owned()),
+                Err(()),
+            ]
+        );
+        assert_eq!(
+            forwarded(&b"short\n0123456789abcdefXYZ\nnever read\n"[..], 16),
+            vec![Ok("short".to_owned()), Err(())]
+        );
+        // A line exactly at the bound is still a line.
+        assert_eq!(
+            forwarded(&b"0123456789abcdef\n"[..], 16),
+            vec![Ok("0123456789abcdef".to_owned()), Err(())]
+        );
+
+        // At the real bound, an endless line costs the bound and no more.
+        let endless = std::io::repeat(b'x');
+        assert_eq!(forwarded(endless, MAX_RESPONSE_LINE_BYTES), vec![Err(())]);
     }
 
     #[test]
