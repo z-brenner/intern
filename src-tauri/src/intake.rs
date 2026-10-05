@@ -1069,12 +1069,14 @@ mod fate_tests {
 #[cfg(test)]
 mod watcher_host_tests {
     use std::{
-        fs,
+        fs, io,
         path::{Path, PathBuf},
         sync::Arc,
     };
 
-    use intern_core::QueueStatus;
+    use intern_core::{
+        FileApplier, FileSystem, LockedFile, OperationStage, QueueStatus, QueueStore, StdFileSystem,
+    };
     use intern_intake::{DoneOutcome, ItemState};
     use intern_queue::{
         AnalyzerBoundary, ModelFailure, Pipeline, PipelineError, PipelineEventSink,
@@ -1194,6 +1196,117 @@ mod watcher_host_tests {
         assert_eq!(intake_item_state(&pipeline, &canceled), kept);
 
         drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A file system whose renames never land. An undo asked of it is
+    /// journalled, refused and rolled back, having moved nothing.
+    struct RenameRefused;
+
+    impl FileSystem for RenameRefused {
+        fn exists(&self, path: &Path) -> bool {
+            StdFileSystem.exists(path)
+        }
+
+        fn hash(&self, path: &Path) -> io::Result<String> {
+            StdFileSystem.hash(path)
+        }
+
+        fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+            StdFileSystem.same_volume(source, destination)
+        }
+
+        fn rename_no_replace(&self, _source: &Path, _destination: &Path) -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected rename refusal",
+            ))
+        }
+
+        fn copy_new_locked(
+            &self,
+            source: &Path,
+            destination: &Path,
+        ) -> io::Result<Box<dyn LockedFile>> {
+            StdFileSystem.copy_new_locked(source, destination)
+        }
+
+        fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+            StdFileSystem.lock_for_delete(path)
+        }
+    }
+
+    /// The watcher asks the queue what became of each document it handed
+    /// over, and one still filed must read as renamed. An undo that was
+    /// refused and rolled back is the item's newest receipt but moved
+    /// nothing; judged by it, a document still filed read as one that kept
+    /// its name. This is the lookup the watcher makes, not only the fate
+    /// rule on a row built by hand.
+    #[test]
+    fn a_filed_document_still_reads_as_renamed_after_a_rolled_back_undo() {
+        let (dir, pipeline) = queue("filed");
+        let source = dir.join("scan.pdf");
+        let filed = dir.join("2024-03-01 Contract.pdf");
+        fs::write(&source, b"a document the queue filed").unwrap();
+        // The watcher only reads the queue. A second store on the same
+        // database files the document, as the app's own session would.
+        let store = Arc::new(QueueStore::open(dir.join("queue.sqlite3")).unwrap());
+        let hash = StdFileSystem.hash(&source).unwrap();
+        let id = store.enqueue(&source, &hash).unwrap().id;
+        assert_eq!(store.claim_next().unwrap().unwrap().id, id);
+        store
+            .transition(id, QueueStatus::Extracting, QueueStatus::Analyzing, None)
+            .unwrap();
+        store
+            .transition(id, QueueStatus::Analyzing, QueueStatus::Ready, None)
+            .unwrap();
+        store.begin_applying(id, QueueStatus::Ready).unwrap();
+        let applied = FileApplier::local(Arc::clone(&store))
+            .apply(id, &source, &filed, &hash)
+            .unwrap();
+        store.complete_apply(id, applied.id).unwrap();
+        let renamed = ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("2024-03-01 Contract.pdf".into()),
+        };
+        assert_eq!(intake_item_state(&pipeline, &source), renamed);
+
+        store.begin_undo(id).unwrap();
+        let refused = FileApplier::new(Arc::new(RenameRefused), Arc::clone(&store));
+        refused.undo(id, &applied).unwrap_err();
+        assert_eq!(
+            refused.reconcile(id).unwrap().status,
+            QueueStatus::Completed
+        );
+        let row = pipeline.find_by_source_path(&source).unwrap().unwrap();
+        assert_eq!(
+            row.receipt.map(|receipt| receipt.stage),
+            Some(OperationStage::RolledBack),
+            "the rolled-back undo is the newest receipt"
+        );
+        assert!(filed.exists() && !source.exists());
+        assert_eq!(intake_item_state(&pipeline, &source), renamed);
+
+        // An undo that lands brings the document home, and kept as it is,
+        // it kept its own name.
+        store.begin_undo(id).unwrap();
+        let undone = FileApplier::local(Arc::clone(&store))
+            .undo(id, &applied)
+            .unwrap();
+        store.complete_undo(id, undone.id).unwrap();
+        store
+            .complete_keep_original(id, QueueStatus::Ready)
+            .unwrap();
+        assert!(source.exists() && !filed.exists());
+        assert_eq!(
+            intake_item_state(&pipeline, &source),
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            }
+        );
+
+        drop((store, pipeline));
         let _ = fs::remove_dir_all(dir);
     }
 
