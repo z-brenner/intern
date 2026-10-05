@@ -120,8 +120,9 @@ test('a rename without a date is refused, and one with a date is applied and und
   await shot(page, 'applied-shows-under-completed');
 
   // Undo returns the file and leaves the document waiting for a person.
+  // The panel's Undo: the toast from the rename offers one for the same item.
   await page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i }).getByRole('button', { name: /Select/ }).click();
-  await page.getByRole('button', { name: /^Undo/ }).click();
+  await drawer.getByRole('button', { name: 'Undo', exact: true }).click();
   await shot(page, 'after-undo');
   await page.getByRole('button', { name: /Needs Review/ }).click();
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toBeVisible();
@@ -144,6 +145,33 @@ test('analyze_again_on_review_item', async ({ page }) => {
   await shot(page, 'analyze-again-waiting');
   await expect(row).toContainText('Needs review');
   await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
+});
+
+// The error banner was centred on the window, and in the narrow window it sat
+// over the drawer's own buttons. The toast is anchored at the bottom left of
+// the queue, and stays clear of the review panel beside it or over it.
+test('the undo toast stays clear of the review panel', async ({ page }) => {
+  for (const width of [1024, 1200]) {
+    await page.setViewportSize({ width, height: 768 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' }).click();
+    await page.getByRole('button', { name: /Apply rename/ }).click();
+    const result = page.getByRole('group', { name: 'Action result' });
+    await expect(result).toContainText('Renamed 1 document.');
+    // Review has gone on to the next ready item, panel and all.
+    await expect(page.locator('.inspector')).toContainText('NDA - Acme Corp.docx');
+    const overlaps = await page.evaluate(() => {
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const meet = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      return { panel: meet(box('.toasts'), box('.inspector')), actions: meet(box('.toasts'), box('.inspector-actions')) };
+    });
+    expect(overlaps, `at ${width} pixels`).toEqual({ panel: false, actions: false });
+    await shot(page, `undo-toast-${width}`);
+
+    await result.getByRole('button', { name: 'Undo this rename' }).click();
+    await expect(page.getByRole('group', { name: 'Action result' })).toContainText('Undid 1 rename.');
+    await expect(page.getByRole('row', { name: /Employment Agreement - John Smith\.pdf/ })).toContainText('Needs review');
+  }
 });
 
 test('pause, resume, apply all ready, and discard waiting all report what they did', async ({ page }) => {

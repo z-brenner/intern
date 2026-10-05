@@ -1,4 +1,3 @@
-import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
@@ -10,8 +9,8 @@ import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { Sidebar } from './components/Sidebar';
+import { Toast } from './components/Toast';
 import { ViewEmpty } from './components/ViewEmpty';
-import { Icon } from './components/Icon';
 import { GUIDE_URL } from './lib/bridge';
 import { describeActionError } from './lib/actionErrors';
 import { humanizeReason } from './lib/reasons';
@@ -121,6 +120,12 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const actionInFlight = useRef(false);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
+  // The toast at the foot of the queue: a batch under way, or one finished,
+  // with the renames it made for Undo to put back. Each new one has a new key,
+  // so its ten seconds start again rather than running on from the last.
+  const [toast, setToast] = useState<{ key: number; kind: 'progress' | 'done'; text: string; undo?: string[] }>();
+  const toastKey = useRef(0);
+  const showToast = (kind: 'progress' | 'done', text: string, undo?: string[]) => setToast({ key: ++toastKey.current, kind, text, undo });
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
   // The version dismissed from the banner, so "Not now" does not reappear on
   // every later poll - but a newer release than the one dismissed still does.
@@ -218,24 +223,26 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // row being filed was still on screen a moment before it left the view, and
   // every toolbar button was still disabled for the action in flight - so
   // focus went to <body> whenever there was no next item to go to.
-  const [queueFocus, setQueueFocus] = useState<{ version: number; invocation: typeof reviewTrigger.current }>();
-  const restoreQueueFocus = () => {
+  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLButtonElement; itemId?: string }>();
+  // `itemId`: a row to go to instead, once it is on screen - the document an
+  // undo has just put back in the queue.
+  const restoreQueueFocus = (itemId?: string) => {
     const invocation = reviewTrigger.current;
     reviewTrigger.current = null;
-    setQueueFocus({ version: ++focusRestoreVersion.current, invocation });
+    setQueueFocus({ version: ++focusRestoreVersion.current, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
   };
   useEffect(() => {
     if (!queueFocus) return;
     setQueueFocus(undefined);
-    const { version, invocation } = queueFocus;
+    const { version, element, itemId } = queueFocus;
     if (focusRestoreVersion.current !== version) return;
-    const refreshedTrigger = invocation ? rowButton(invocation.itemId) : undefined;
+    const refreshedTrigger = itemId ? rowButton(itemId) : undefined;
     // Prefer the primary action by name rather than "the first button in the
     // panel". That positional fallback silently moved the moment the toolbar
     // gained a second control, sending focus to a destructive Discard button
     // instead of Apply all ready.
-    const target = invocation?.element.isConnected
-      ? invocation.element
+    const target = element?.isConnected
+      ? element
       : refreshedTrigger
         ?? document.querySelector<HTMLButtonElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
         ?? document.querySelector<HTMLButtonElement>('.queue-panel button:not(:disabled)');
@@ -258,6 +265,8 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     setActionPending(true);
     setActionError('');
     setActionMessage('');
+    // An Undo still on screen would read as undoing this action instead.
+    setToast(undefined);
     try {
       try { await run(); }
       catch (error) {
@@ -301,6 +310,8 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       : decision === 'remove' ? `Removed ${item.originalFilename} from the queue.`
         : after === 'ready' ? `${item.originalFilename} will be renamed when the queue is free.` : `Renamed ${item.originalFilename}.`;
     setActionMessage(done);
+    // A rename the queue shows as filed can be put back from the toast.
+    if (after === 'completed' && fresh?.find((entry) => entry.id === item.id)?.undoable) showToast('done', renamedCount(1), [item.id]);
     if (focusRestoreVersion.current !== selectionVersion) return;
     const next = nextUndecided(before, item.id, shown(fresh ?? items));
     if (!next) {
@@ -328,33 +339,79 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     actionInFlight.current = true;
     const selectionVersion = focusRestoreVersion.current;
     const selectedAtStart = selected;
+    const batch = readyItems;
     setActionPending(true);
     setActionError('');
-    setActionMessage('');
+    // Said once, not at every step: the toast shows how far along it is.
+    setActionMessage(`Applying ${batch.length} ${batch.length === 1 ? 'rename' : 'renames'}…`);
     const failed = new Map<string, unknown>();
-    let applied = 0;
+    const applied: string[] = [];
     try {
-      for (const item of readyItems) {
-        try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied += 1; }
+      for (const [index, item] of batch.entries()) {
+        // Forty renames take a while, and the button alone said nothing.
+        showToast('progress', `Applying ${index + 1} of ${batch.length}…`);
+        try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied.push(item.id); }
         catch (error) { failed.set(item.id, error); }
       }
       await refresh();
+      const outcome = batchOutcome(applied, snapshot());
+      if (applied.length) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
+      else setToast(undefined);
       if (failed.size) {
         const firstError = failed.values().next().value;
-        setActionError(`${applied} ${applied === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError)}`);
+        setActionMessage('');
+        setActionError(`${applied.length} ${applied.length === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError)}`);
       } else {
-        setActionMessage(`${applied} ${applied === 1 ? 'rename' : 'renames'} applied.`);
+        setActionMessage(outcome.text);
       }
       if (focusRestoreVersion.current === selectionVersion && selectedAtStart?.status === 'ready' && !failed.has(selectedAtStart.id)) {
         setSelectedId(undefined);
         restoreQueueFocus();
       }
     } catch (error) {
+      setToast(undefined);
+      setActionMessage('');
       setActionError(`The queue could not refresh. ${describeActionError(error)}`);
     } finally {
       actionInFlight.current = false;
       setActionPending(false);
     }
+  };
+  // Undo from the toast puts back every rename that batch made, one at a time
+  // as the backend undoes them; one it refuses is reported and the rest are
+  // still undone.
+  const undoRenames = async (ids: string[]) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionPending(true);
+    setActionError('');
+    setActionMessage('');
+    const failed: unknown[] = [];
+    try {
+      for (const [index, id] of ids.entries()) {
+        showToast('progress', `Undoing ${index + 1} of ${ids.length}…`);
+        try { await bridge.undo(id); }
+        catch (error) { failed.push(error); }
+      }
+      // Undone or not, each command has happened; a reread that fails is
+      // reported by the queue's own connection banner.
+      try { await refresh(); } catch { /* Reported as a queue connection error. */ }
+      const undone = ids.length - failed.length;
+      const text = `Undid ${undone} ${undone === 1 ? 'rename' : 'renames'}.`;
+      if (failed.length) {
+        setToast(undefined);
+        setActionError(`${text} ${failed.length} could not be undone. ${describeActionError(failed[0])}`);
+      } else {
+        showToast('done', text);
+        setActionMessage(text);
+      }
+    } finally {
+      actionInFlight.current = false;
+      setActionPending(false);
+    }
+    // Undo went with its toast. Focus goes to the first document put back,
+    // waiting in review again, rather than being left nowhere.
+    if (!document.activeElement || document.activeElement === document.body) restoreQueueFocus(ids[0]);
   };
   // Opening a document changes nothing in the queue, so it takes no part in
   // the one-action-at-a-time guard; it only reports a refusal.
@@ -488,16 +545,6 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
     <p className="sr-only" role="status" aria-label="Action status" aria-live="polite" aria-atomic="true">{actionMessage}</p>
-    {/*
-      An alert, not a polite status: this paragraph is created with its
-      sentence already in it, and a live region that arrives complete is not
-      reliably spoken. Every other error banner in the app is an alert too.
-    */}
-    {actionError && <div className="operation-feedback" role="alert" aria-label="Action error">
-      <p>{actionError}</p>
-      {/* It used to stay until the next action, over whatever was beneath it. */}
-      <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setActionError('')}><Icon icon={X} /></button>
-    </div>}
     {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{drag.count > 0 ? `Drop to add ${drag.count} ${drag.count === 1 ? 'file' : 'files'}` : 'Drop to add files'}</p></div>}
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
@@ -560,6 +607,18 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
           ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
       <p className="item-count">{query ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p></section>
+      {/*
+        At the foot of the queue, beside the panel rather than in it: the
+        panel is inert under the narrow drawer, and an error in an inert
+        subtree is never announced. The drawer sits above it, so it never
+        covers the drawer's actions, as the centred error banner did.
+      */}
+      {(toast || actionError) && <div className="toasts">
+        {toast && <Toast key={toast.key} tone={toast.kind === 'progress' ? 'progress' : 'success'} label={toast.kind === 'progress' ? 'Action progress' : 'Action result'}
+          action={toast.undo ? { label: 'Undo', name: toast.undo.length === 1 ? 'Undo this rename' : `Undo these ${toast.undo.length} renames`, disabled: actionPending, onClick: () => void undoRenames(toast.undo!) } : undefined}
+          onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
+        {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
+      </div>}
       {selected && <ReviewInspector ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
         onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
@@ -582,6 +641,31 @@ export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]
     .some((text) => text !== undefined && text.toLowerCase().includes(query));
+}
+
+/** "Renamed 3 documents." */
+function renamedCount(count: number) {
+  return `Renamed ${count} ${count === 1 ? 'document' : 'documents'}.`;
+}
+
+/**
+ * What a batch of approvals the backend accepted did, read from the queue
+ * after it. Accepted is not the same as renamed: while the queue is busy the
+ * backend files an approved name between documents, and it sends an item back
+ * to review when the file changed since it was read. Each is said as it is,
+ * and only what was filed is offered to Undo.
+ */
+function batchOutcome(ids: string[], queue: QueueItem[]) {
+  const now = (id: string) => queue.find((item) => item.id === id);
+  const filed = ids.filter((id) => now(id)?.status === 'completed');
+  const later = ids.filter((id) => now(id)?.status === 'ready').length;
+  const back = ids.filter((id) => now(id)?.status === 'review').length;
+  const text = [
+    filed.length > 0 || (!later && !back) ? renamedCount(filed.length) : '',
+    later ? `${later} will be renamed when the queue is free.` : '',
+    back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',
+  ].filter(Boolean).join(' ');
+  return { text, undoable: filed.filter((id) => now(id)?.undoable === true) };
 }
 
 function queueStatusAnnouncement(items: QueueItem[], paused: boolean) {

@@ -396,4 +396,123 @@ describe('queue interactions', () => {
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /Approve & rename/i })).not.toBeInTheDocument();
   });
+
+  // A batch of forty used to run behind a disabled button with nothing said
+  // until the end, and nothing offered to take it back.
+  it('apply_all_shows_progress_and_undo_toast', async () => {
+    const base = createInMemoryBridge();
+    const release: Array<() => void> = [];
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      await new Promise<void>((resolve) => { release.push(resolve); });
+      await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    for (const step of [1, 2, 3]) {
+      await waitFor(() => expect(screen.getByRole('group', { name: 'Action progress' })).toHaveTextContent(`Applying ${step} of 3…`));
+      // Work still running cannot be dismissed, or undone half-way.
+      expect(within(screen.getByRole('group', { name: 'Action progress' })).queryByRole('button')).not.toBeInTheDocument();
+      await waitFor(() => expect(release).toHaveLength(step));
+      release[step - 1]();
+    }
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 3 documents.');
+    expect(within(result).getByRole('button', { name: 'Undo these 3 renames' })).toHaveTextContent('Undo');
+    expect(screen.queryByRole('group', { name: 'Action progress' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed 3 documents.');
+  });
+
+  it('undo_from_toast_reverts_batch', async () => {
+    const base = createInMemoryBridge();
+    let releaseFirst: (() => void) | undefined;
+    const undo = vi.fn(async (id: string) => {
+      if (id === 'employment') await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      await base.undo(id);
+    });
+    render(<App bridge={{ ...base, undo }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
+
+    // One at a time, as the backend undoes them: the next waits on the first.
+    await waitFor(() => expect(undo).toHaveBeenCalledWith('employment'));
+    expect(screen.getByRole('group', { name: 'Action progress' })).toHaveTextContent('Undoing 1 of 3…');
+    expect(undo).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 3 renames.'));
+    expect(undo.mock.calls.map(([id]) => id)).toEqual(['employment', 'nda', 'service']);
+    for (const name of [/Employment Agreement/, /NDA - Acme Corp/, /Service Agreement/]) {
+      expect(screen.getByRole('row', { name })).toHaveTextContent('Needs review');
+    }
+    expect(screen.queryByRole('button', { name: /^Undo these/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Undid 3 renames.');
+    // Undo left with its toast; focus goes to the first document put back.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' })).toHaveFocus());
+  });
+
+  it('reports an undo the backend refuses and still undoes the rest', async () => {
+    const base = createInMemoryBridge();
+    const undo = vi.fn(async (id: string) => {
+      if (id === 'nda') throw { code: 'STATE_CONFLICT', message: 'The filed copy changed after it was renamed.' };
+      await base.undo(id);
+    });
+    render(<App bridge={{ ...base, undo }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
+
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Undid 2 renames. 1 could not be undone. The filed copy changed after it was renamed.');
+    expect(undo).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('row', { name: /Service Agreement/ })).toHaveTextContent('Needs review');
+    expect(screen.queryByRole('row', { name: /NDA - Acme Corp/ })).not.toBeInTheDocument();
+  });
+
+  it('offers Undo after a single rename, and Undo puts the document back', async () => {
+    const base = createInMemoryBridge();
+    const undo = vi.fn(base.undo);
+    render(<App bridge={{ ...base, undo }} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document.');
+    fireEvent.click(within(result).getByRole('button', { name: 'Undo this rename' }));
+
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 1 rename.'));
+    expect(undo).toHaveBeenCalledWith('employment');
+    expect(screen.getByRole('row', { name: /Employment Agreement/i })).toHaveTextContent('Needs review');
+  });
+
+  it('takes Undo away once another action follows, so it cannot read as undoing that one', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+    await screen.findByRole('group', { name: 'Action result' });
+
+    // Review has moved on to the next ready item; keeping it is not a rename.
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('NDA - Acme Corp.docx'));
+    fireEvent.click(screen.getByRole('button', { name: /Keep original/ }));
+
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Kept NDA - Acme Corp.docx under its own name.'));
+    expect(screen.queryByRole('group', { name: 'Action result' })).not.toBeInTheDocument();
+  });
+
+  // Accepted is not renamed: while the queue is busy the backend files an
+  // approved name between documents, and the item stays ready until then.
+  it('does not call an approval renamed until the queue shows it filed', async () => {
+    const base = createInMemoryBridge();
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      if (id === 'employment') await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document. 2 will be renamed when the queue is free.');
+    expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+  });
 });
+

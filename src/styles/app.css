@@ -23,7 +23,7 @@
 }
 .app-shell > .note--update { grid-area: banner; margin: 0; border-width: 0 0 1px 3px; border-radius: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px; }
 .app-shell > .note--update .update-actions { margin: 0 0 0 auto; }
-.workspace { grid-area: main; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.workspace { grid-area: main; min-width: 0; min-height: 0; display: flex; overflow: hidden; position: relative; }
 .queue-panel { min-width: 0; min-height: 0; flex: 1; padding: 18px 10px 0; display: flex; flex-direction: column; }
 
 /* ---------- controls ---------- */
@@ -383,10 +383,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    the runtime delivers that to the window, not to anything under the pointer. */
 .drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: rgba(23, 26, 31, .22); }
 .drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-navy); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
-.operation-feedback { position: fixed; z-index: 5; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); margin: 0; padding: 4px 4px 4px 15px; display: flex; align-items: flex-start; gap: 8px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); color: #8f231a; background: #fff5f3; box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
-.operation-feedback p { margin: 0; padding: 7px 0; }
-.operation-feedback .icon-button { flex: none; min-height: 34px; min-width: 34px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; display: inline-grid; place-items: center; }
-.operation-feedback .icon-button:hover { background: rgba(143, 35, 26, .08); }
+/* The outcome of a queue action, at the bottom left of the queue. The error
+   banner this replaces was centred on the window, so in the narrow window it
+   sat over the drawer's own buttons; the drawer (z-index 3) now sits above
+   these, and beside the wide panel they stop short of it. */
+.toasts { position: absolute; z-index: 2; left: 20px; bottom: 16px; display: grid; justify-items: start; gap: 8px; max-width: min(520px, calc(100% - 40px)); pointer-events: none; }
+.toast { pointer-events: auto; margin: 0; padding: 4px 4px 4px 15px; display: flex; align-items: flex-start; gap: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--surface); box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
+.toast p { margin: 0 8px 0 0; padding: 7px 0; font-variant-numeric: tabular-nums; }
+.toast--progress p { color: var(--text-muted); }
+.toast--error { border-color: #e6a9a2; color: #8f231a; background: #fff5f3; }
+.toast .icon-button, .toast-action { flex: none; min-height: 34px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; }
+.toast .icon-button { min-width: 34px; display: inline-grid; place-items: center; }
+.toast-action { padding: 0 10px; color: var(--accent); font-size: 13px; font-weight: 600; }
+.toast .icon-button:hover, .toast-action:hover:not(:disabled) { background: var(--surface-subtle); }
+.toast--error .icon-button:hover { background: rgba(143, 35, 26, .08); }
+.toast-action:disabled { color: var(--text-muted); cursor: default; }
+@media (min-width: 1101px) { .workspace:has(> .inspector) > .toasts { max-width: min(520px, calc(100% - 370px - 40px)); } }
 .setup-screen { min-height: 100vh; display: grid; place-items: center; text-align: center; padding: 24px; }
 .setup-screen section { width: min(500px, calc(100vw - 32px)); }
 .setup-screen > section > svg { color: var(--brand-navy); }

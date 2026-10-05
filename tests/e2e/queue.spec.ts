@@ -44,7 +44,8 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   const completed = page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i });
   await expect(completed).toContainText('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co.pdf');
   await completed.getByRole('button', { name: /Select/ }).click();
-  await page.getByRole('button', { name: 'Undo' }).click();
+  // The panel's Undo: the toast from the rename offers one for the same item.
+  await page.getByRole('complementary', { name: 'Review item' }).getByRole('button', { name: 'Undo', exact: true }).click();
 
   await page.getByRole('button', { name: 'Needs Review' }).click();
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toBeVisible();
