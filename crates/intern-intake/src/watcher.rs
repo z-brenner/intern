@@ -691,7 +691,14 @@ impl Scanner<'_> {
     /// document straight back into the queue on the next scan, to be analysed
     /// again. If it was never seen live, the claim outlived a crash between
     /// acquire and enqueue, and is released so the next scan hands the
-    /// document over.
+    /// document over. A run that started after the person removed it cannot
+    /// tell the two apart, and hands it over again: analysing a document twice
+    /// is the lesser mistake next to never analysing it.
+    ///
+    /// A document whose item failed before its content ever arrived is
+    /// released too. Nothing judged it, and Clear history tidying its failed
+    /// item away is no decision about it; handed over again, it gets the
+    /// attempt it is owed.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
         match self.host.item_state(path) {
             ItemState::Active | ItemState::NeedsReview => {
@@ -709,7 +716,9 @@ impl Scanner<'_> {
                 let _ = self.store.mark_done(key, DoneOutcome::Removed, None);
                 self.owned.remove(key);
             }
-            ItemState::Unknown if self.seen_live.contains(key) => {
+            ItemState::Unknown
+                if self.seen_live.contains(key) && !self.awaiting_hydration.contains(key) =>
+            {
                 self.finish_owned(key, DoneOutcome::KeptOriginal, None);
             }
             ItemState::Unknown => {

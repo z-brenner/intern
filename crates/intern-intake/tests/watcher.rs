@@ -1771,6 +1771,38 @@ fn a_document_deleted_while_awaiting_hydration_stops_being_waited_on() {
     assert!(!rig.claim_file(&key).exists());
 }
 
+/// Clear history tidies failed items away. A document whose item failed
+/// before its content ever arrived was never judged, and its failed item
+/// going is no decision about it: it was closed as kept and never retried.
+/// It is handed over again instead.
+#[test]
+fn clearing_a_failure_that_awaits_its_content_hands_the_document_over_again() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    rig.host.remove(&path);
+    rig.step();
+    assert!(
+        !rig.claim_file(&key).exists(),
+        "released for the next scan to hand over, not tombstoned"
+    );
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone(), path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
+}
+
 /// A shared drive grants permissions per folder. One folder this machine may
 /// not list must not stop every other document in the share from being filed.
 #[cfg(unix)]
