@@ -4035,6 +4035,70 @@ impl DuplicateOracle for SettingsSavedMidway {
     }
 }
 
+/// A document already named by the other side, waiting in the folder it was
+/// found in: naming the firm in Settings composes exactly its own name, and
+/// that name is the document itself, not a file it collides with. Renaming
+/// the waiting documents counted the document's own name as taken, as
+/// composing the first proposal once did, and offered it as "... (2)".
+#[test]
+fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let named = "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf";
+    let path = source(&inbox, named);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(statement_of_work(
+        "April 1, 2026",
+    ))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
+        "2026-04-01",
+        "April 1, 2026",
+        &BOTH_SIDES,
+        PartyRelation::Between,
+        0.94,
+    ))]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, id).filename,
+        "2026-04-01 Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf"
+    );
+
+    let names = vec!["Contoso Worldwide, Inc.".to_owned()];
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings {
+            our_names: names.clone(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    pipeline.refresh_own_names(&names).unwrap();
+
+    let renamed = record_of(&pipeline, id);
+    assert_eq!(renamed.filename, named, "no ' (2)'");
+    assert_eq!(renamed.own_names, names);
+    assert_eq!(renamed.revision, 2);
+
+    // With no settings to say where it is going, the folder it is in stands
+    // in for the destination, and the same holds there.
+    std::fs::write(&settings_path, b"not json").unwrap();
+    pipeline.refresh_own_names(&[]).unwrap();
+    assert_ne!(record_of(&pipeline, id).filename, named);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert_eq!(record_of(&pipeline, id).filename, named, "no ' (2)'");
+}
+
 /// The firm named in Settings while a document is being read: the save's
 /// rename of everything waiting runs before the document waits, so the
 /// document reads the names once more when it does, and is named by the

@@ -7055,6 +7055,50 @@ mod model_source_settings_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The model's answer waits for the end of the save, and the end of the
+    /// save is also where the waiting documents are renamed by the
+    /// organisation: a busy local model must not keep that rename from
+    /// happening, nor a rename that failed hide the model's answer.
+    #[test]
+    fn a_busy_local_model_still_renames_by_the_organisation() {
+        let dir = scratch("source-busy-own-names");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&hosted()).unwrap();
+        runtime.setup_busy.store(true, Ordering::SeqCst);
+        let named = vec!["Contoso".to_owned()];
+
+        let error = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: named.clone(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "SETUP_BUSY");
+        assert_eq!(*runtime.own_names.lock().unwrap(), vec![named.clone()]);
+
+        // Both fail: the model's answer is the one reported, and the rename
+        // was still asked for.
+        runtime.store.save(&hosted()).unwrap();
+        runtime.fail_own_names.store(true, Ordering::SeqCst);
+        let error = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: named.clone(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "SETUP_BUSY");
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![named.clone(), named]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn restoring_settings_puts_the_model_they_name_back() {
         let dir = scratch("source-restore");
