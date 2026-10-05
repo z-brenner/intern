@@ -55,9 +55,9 @@ but `docs/qa/`.
      `scripts/release-version-contract.test.ts` reads (package.json and its
      lock, the Cargo workspace version and Cargo.lock, `tauri.conf.json`, the
      worker protocol test, the PowerShell scripts, the notices, the README's
-     installer names, the QA checklist, and the release and CI workflows),
-     plus the workflow name `scripts/validate-release-evidence.mjs` accepts.
-     That test fails until they agree.
+     installer names, the QA checklist, the release and CI workflows, and the
+     workflow name `scripts/validate-release-evidence.mjs` accepts). That test
+     fails until they agree.
    - Write `docs/releases/v<version>.md`. It is published as the release
      notes. It must start with `# Intern v<version>` and must say the
      installer is `not Authenticode signed`; the preflight checks both.
@@ -94,8 +94,9 @@ but `docs/qa/`.
    It checks the same things the release workflow's first job checks: the
    sign-off is accepted for exactly this commit's release inputs, the committed
    capture is the one it accepted, the notes exist and say what they must, and
-   package.json, Cargo.toml, `tauri.conf.json` and the workflow name state one
-   version. It names every problem at once.
+   package.json, Cargo.toml, `tauri.conf.json`, the workflow name and the
+   workflow name the final evidence validation accepts all state one version.
+   It names every problem at once.
 6. **Dispatch "Release v&lt;version&gt;"** (`release.yml`) on `main`. Its first
    job refuses any ref but `main`, a tag that already names another commit, and
    anything the preflight refuses, all in under a minute. The release job then

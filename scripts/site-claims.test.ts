@@ -109,6 +109,27 @@ describe('what the site says about the network', () => {
     expect(answer).toMatch(/provisioned[\s\S]*Microsoft|Microsoft[\s\S]*provisioned/);
     expect(guide).not.toContain('makes no request it was not asked to make');
   });
+
+  // Every build compiles the Microsoft sign-in and Graph client; no feature
+  // flag leaves it out. What keeps the published build off Microsoft's servers
+  // is the deployment it bundles, which is switched off. The guide once said
+  // the published build "has no such code" and "no Graph API client", which a
+  // reviewer running `strings` on the installer would find to be false.
+  it('says the published build has no deployment, not that it lacks the Microsoft code', async () => {
+    const [auth, deployment] = await Promise.all([
+      readFile('crates/intern-intake/src/microsoft/auth.rs', 'utf8'),
+      readFile('src-tauri/resources/sharepoint-deployment.json', 'utf8').then(JSON.parse),
+    ]);
+    expect(auth).toContain('login.microsoftonline.com');
+    expect(deployment.enabled).toBe(false);
+    const absent = /no such code|no graph api client|no (microsoft|graph|sign-in|upload) code/i;
+    for (const { name, html } of await sitePages()) {
+      expect(absent.exec(text(html))?.[0], name).toBeUndefined();
+    }
+    expect(absent.exec(await readFile('README.md', 'utf8'))?.[0], 'README.md').toBeUndefined();
+    const guide = text(await readFile('site/guide.html', 'utf8'));
+    expect(guide).toMatch(/published here never talks to Microsoft's servers: it ships with no deployment/);
+  });
 });
 
 describe('what the site says about installing', () => {

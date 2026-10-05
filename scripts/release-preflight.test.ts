@@ -9,7 +9,12 @@ import { releaseInputsDigest } from './hash-release-inputs.mjs';
 import { pendingSignoff, preflightProblems, setAsideStaleSignoff } from './release-preflight.mjs';
 
 const exec = promisify(execFile);
-const version = '0.1.0-alpha.11';
+// Versions no release bump will ever rewrite. A bump is done by replacing the
+// old version with the new one everywhere, test files included, which would
+// turn a mismatch between real versions here into a match.
+const version = '9.9.9-preflight';
+const stale = '9.9.8-stale';
+const next = '9.9.10-next';
 const screenshot = 'the capture a reviewer looked at';
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 
@@ -33,6 +38,8 @@ async function releaseCommit(): Promise<string> {
   await writeFile(join(root, 'Cargo.toml'), `[workspace]\nmembers = ["src-tauri"]\n\n[workspace.package]\nversion = "${version}"\nedition = "2024"\n`);
   await writeFile(join(root, 'src-tauri', 'tauri.conf.json'), `${JSON.stringify({ productName: 'Intern', version }, null, 2)}\n`);
   await writeFile(join(root, '.github', 'workflows', 'release.yml'), `name: Release v${version}\n\non:\n  workflow_dispatch:\n`);
+  await mkdir(join(root, 'scripts'), { recursive: true });
+  await writeFile(join(root, 'scripts', 'validate-release-evidence.mjs'), evidenceValidator(version));
   await writeFile(join(root, 'docs', 'releases', `v${version}.md`), `# Intern v${version}\n\nThe installer is not Authenticode signed.\n`);
   await writeFile(join(root, 'docs', 'qa', 'latest-implementation.png'), screenshot);
   git('add', '-A');
@@ -42,6 +49,16 @@ async function releaseCommit(): Promise<string> {
   git('add', '-A');
   git('commit', '-qm', 'record the sign-off');
   return root;
+}
+
+/** The final evidence validation's version check, as validate-release-evidence.mjs writes it. */
+function evidenceValidator(accepted: string) {
+  const escaped = accepted.replaceAll('.', '\\.');
+  return [
+    `const workflowMatch = /^Release v(${escaped})$/.exec(manifest.subject.workflow);`,
+    `requireValue(workflowMatch, 'release evidence workflow must be exactly Release v${accepted}');`,
+    '',
+  ].join('\n');
 }
 
 async function writeSignoff(root: string, overrides: Record<string, unknown> = {}) {
@@ -139,31 +156,49 @@ describe('release preflight', () => {
 
   it('version_mismatch_fails: one file left behind by the bump, or a workflow named for another release', async () => {
     const cargo = await releaseCommit();
-    await writeFile(join(cargo, 'Cargo.toml'), '[workspace]\nmembers = ["src-tauri"]\n\n[workspace.package]\nversion = "0.1.0-alpha.10"\n');
+    await writeFile(join(cargo, 'Cargo.toml'), `[workspace]\nmembers = ["src-tauri"]\n\n[workspace.package]\nversion = "${stale}"\n`);
     expect(preflightProblems(cargo)).toEqual([
-      `The release version is not stated the same everywhere: package.json ${version}, Cargo.toml 0.1.0-alpha.10, src-tauri/tauri.conf.json ${version}, workflow ${version}.`,
+      `The release version is not stated the same everywhere: package.json ${version}, Cargo.toml ${stale}, src-tauri/tauri.conf.json ${version}, workflow ${version}, scripts/validate-release-evidence.mjs ${version}.`,
     ]);
 
     const tauri = await releaseCommit();
-    await writeFile(join(tauri, 'src-tauri', 'tauri.conf.json'), JSON.stringify({ version: '0.1.0-alpha.10' }));
-    expect(preflightProblems(tauri)).toEqual([expect.stringContaining('src-tauri/tauri.conf.json 0.1.0-alpha.10')]);
+    await writeFile(join(tauri, 'src-tauri', 'tauri.conf.json'), JSON.stringify({ version: stale }));
+    expect(preflightProblems(tauri)).toEqual([expect.stringContaining(`src-tauri/tauri.conf.json ${stale}`)]);
 
     // The name the run actually carries wins over the file's.
     const workflow = await releaseCommit();
-    expect(preflightProblems(workflow, { workflow: 'Release v0.1.0-alpha.10' })).toEqual([expect.stringContaining('workflow 0.1.0-alpha.10')]);
-    const result = await runPreflight(workflow, ['--workflow=Release v0.1.0-alpha.10']);
+    expect(preflightProblems(workflow, { workflow: `Release v${stale}` })).toEqual([expect.stringContaining(`workflow ${stale}`)]);
+    const result = await runPreflight(workflow, [`--workflow=Release v${stale}`]);
     expect(result.code).toBe(1);
+  });
+
+  // The final evidence validation states the one workflow name it accepts in
+  // a pattern of its own, and only a release run reaches it, after the whole
+  // Windows build and the corpus scoring. A bump that missed it once failed there.
+  it('version_mismatch_fails: the evidence validator still accepting the last release', async () => {
+    const validator = await releaseCommit();
+    await writeFile(join(validator, 'scripts', 'validate-release-evidence.mjs'), evidenceValidator(stale));
+    expect(preflightProblems(validator)).toEqual([expect.stringContaining(`scripts/validate-release-evidence.mjs ${stale}`)]);
+    const result = await runPreflight(validator, [`--workflow=Release v${version}`]);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain(`scripts/validate-release-evidence.mjs ${stale}`);
+
+    const missing = await releaseCommit();
+    await rm(join(missing, 'scripts', 'validate-release-evidence.mjs'));
+    expect(preflightProblems(missing)).toEqual([expect.stringContaining('scripts/validate-release-evidence.mjs (none)')]);
   });
 
   it('names every problem at once, so one commit can fix them all', async () => {
     const root = await releaseCommit();
     await rm(join(root, 'docs', 'releases', `v${version}.md`));
-    await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.1.0-alpha.12' }));
+    await writeFile(join(root, 'package.json'), JSON.stringify({ version: next }));
     await rm(join(root, 'docs', 'qa', 'latest-implementation.png'));
 
     const problems = preflightProblems(root);
     expect(problems).toHaveLength(3);
-    expect(problems.join('\n')).toMatch(/not stated the same everywhere[\s\S]*v0\.1\.0-alpha\.12\.md is missing[\s\S]*latest-implementation\.png is missing/);
+    expect(problems[0]).toContain('not stated the same everywhere');
+    expect(problems[1]).toBe(`docs/releases/v${next}.md is missing; it is published as the release notes.`);
+    expect(problems[2]).toContain('latest-implementation.png is missing');
   });
 });
 

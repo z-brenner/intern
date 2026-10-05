@@ -5,7 +5,7 @@ const version = '0.1.0-alpha.10';
 const tag = `v${version}`;
 
 it('keeps every current alpha.3 release surface synchronized without rewriting historical alpha.2 records', async () => {
-  const [packageJson, packageLock, workspace, tauri, workerProtocol, smoke, sbom, assets, notices, readme, checklist, release, ci, notes] = await Promise.all([
+  const [packageJson, packageLock, workspace, tauri, workerProtocol, smoke, sbom, assets, notices, readme, checklist, release, ci, notes, evidenceValidator] = await Promise.all([
     readFile('package.json', 'utf8').then(JSON.parse),
     readFile('package-lock.json', 'utf8').then(JSON.parse),
     readFile('Cargo.toml', 'utf8'),
@@ -20,6 +20,7 @@ it('keeps every current alpha.3 release surface synchronized without rewriting h
     readFile('.github/workflows/release.yml', 'utf8'),
     readFile('.github/workflows/ci.yml', 'utf8'),
     readFile(`docs/releases/${tag}.md`, 'utf8'),
+    readFile('scripts/validate-release-evidence.mjs', 'utf8'),
   ]);
 
   expect(packageJson.version).toBe(version);
@@ -44,6 +45,11 @@ it('keeps every current alpha.3 release surface synchronized without rewriting h
   expect(release).toContain(`--title 'Intern ${tag}'`);
   expect(release).toContain(`group: intern-${tag}-release`);
   expect(ci).toContain(`intern-${tag}-windows-`);
+  // The final evidence validation accepts exactly one workflow name, written
+  // as a regular expression. Only a release run reaches it, so a bump that
+  // missed it used to fail after the whole Windows build.
+  expect(evidenceValidator).toContain(`/^Release v(${version.replaceAll('.', '\\.')})$/`);
+  expect(evidenceValidator).toContain(`must be exactly Release ${tag}`);
 });
 
 /**
