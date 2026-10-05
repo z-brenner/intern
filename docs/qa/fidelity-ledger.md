@@ -1,14 +1,101 @@
-# Intern alpha.10 rendered-fidelity ledger
+# Intern alpha.11 rendered-fidelity ledger
 
-**Rendered sign-off status: accepted for alpha.10.**
+**Rendered sign-off status: accepted for alpha.11.**
 `docs/qa/rendered-fidelity-signoff.json` is bound to release-input digest
-`5e0cc31c1184aaa033a7066e65c336394787aa65889c72792a819e660ac73885` and to the
+`7cc3645acd565a349bc58c8cfeab086792c52d282e03704beb0744e17ac1025d` and to the
 1536x1024 capture `docs/qa/latest-implementation.png`, SHA-256
-`ee46abcfe76433b6ed25b6f7a53c80056bf36918b8b44009ae8f5511c54167a4`, taken by
-Whole-product QA evidence run 35084991785 at commit
-`f7fd55c56ade21b2fac8091b76993aa51f104245`.
+`f4bf894357019c77d251b0f0ef9c379e71c2665d67b901c10c8976526bc0aee4`, taken by
+Whole-product QA evidence run 37365868306 (attempt 5) at commit
+`6aa24a522a78475ba7cff02b6b756159b0d67b9b`. That commit's tree is identical to
+`main` at `6ee8a404b37fe17ac50d14106affba40d0f53806`, so both carry the same
+digest.
 
-## alpha.10 record
+## alpha.11 record
+
+Run 37365868306 passed every gate on Windows:
+
+- frontend checks, and the browser QA suite (23 tests) including its contrast
+  assertions;
+- `cargo fmt --check`, workspace clippy with warnings denied, and the Rust
+  workspace tests (1,073);
+- native fixture parsing with the pinned assets, and the verified pinned runtime
+  (51 runtime files, 23 license files);
+- an NSIS build, and installer and uninstall smoke with user data retained;
+- an accepted whole-corpus evaluation with real inference: 19 documents on the
+  pinned model, median 23 s and at most 136 s a document, peak model memory
+  2,074 MB.
+
+The evaluation's scores equal alpha.10's: date role 14/14, type 18/18,
+description specific 19/19, descriptions covering the expected facts 16/18,
+parties 16/19, review rate 42.1%, and nothing filed under a date or a party the
+corpus marks as a trap. This release's naming changes (accented text near a
+date no longer stopping the queue, a document's own date recognised, due,
+implausible and ambiguous dates sent to review, title-cased letterhead names)
+are held by unit tests and the corpus replay rather than moved by these
+aggregate counts. The release notes' figure of parties rising from 15 to 16 of
+19 came from a local Linux rig comparing the branches; on this hosted Windows
+measurement parties are 16/19 in alpha.9 and in alpha.11, and the notes are
+being corrected to say so.
+
+The capture was inspected against the accepted concept:
+
+- Sidebar counts, the queue table and the review panel read as three distinct
+  planes.
+- The header states the privacy posture.
+- Date-first proposed filenames, right-aligned confidence and em-dashes for
+  absent values stay consistent down the column.
+- Ready, Needs review, Proposing a name and Waiting are each distinguishable by
+  icon as well as colour.
+- Evidence stays attributed under DATE, TYPE and PARTIES headings, with each
+  party on its own line.
+- The approve and keep actions sit in a pinned bar at the foot of the panel,
+  now with their keyboard shortcuts.
+- No collisions, illegible copy, excessive density or ambiguous focus were
+  observed.
+
+What changed in the frame is this release's own: the drop zone lists the new
+formats; a document being read says what is happening ("Proposing a name…")
+rather than a percentage; the panel counts what is left to decide and offers
+Next undecided, Open and Show in folder; and the filename field wraps, with the
+extension shown apart.
+
+Two observations, neither a defect of this frame:
+
+- The previous capture showed a "for Vistage" brand tag beside the name. The
+  header has not rendered one since before alpha.10 (`AppHeader` is unchanged
+  from the alpha.10 release commit), so that frame was older than the code it
+  was bound to. This one is a faithful render of what ships.
+- At this size the panel's Reason for review sits below the fold, under the
+  pinned action bar, and is reached by scrolling the panel. The bar is pinned
+  so that Approve is always on screen; bringing the reason above the fold for
+  an item in review is a follow-up.
+
+### Reviewer
+
+Reviewed by the maintainer, Zachary Brenner, who looked at the capture named
+above and accepted it. Claude Code inspected it first and wrote this record and
+the sign-off at the maintainer's direction.
+
+### Freshness boundary
+
+The sign-off is accepted only for the digest and screenshot named above.
+`scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
+release inputs. Any relevant source change invalidates this record and requires
+a new capture and review. Exact-main validation and the deliberately dispatched
+release workflow must still reproduce and accept their own evidence before a tag
+or publication is allowed.
+
+## Superseded alpha.10 record
+
+The alpha.10 sign-off was bound to release-input digest
+`5e0cc31c1184aaa033a7066e65c336394787aa65889c72792a819e660ac73885` at commit
+`f7fd55c56ade21b2fac8091b76993aa51f104245`, with the capture SHA-256
+`ee46abcfe76433b6ed25b6f7a53c80056bf36918b8b44009ae8f5511c54167a4`. Pull
+requests #4 through #14 and the alpha.11 version bump have changed the non-QA
+release inputs since, so that digest no longer describes what would ship. Its
+record is kept below for history.
+
+### alpha.10 run
 
 Run 35084991785 passed every gate on Windows:
 

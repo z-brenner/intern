@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "pending",
-  "release_inputs_sha256": "pending",
+  "status": "accepted",
+  "release_inputs_sha256": "7cc3645acd565a349bc58c8cfeab086792c52d282e03704beb0744e17ac1025d",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "pending",
-  "reviewer": "pending",
-  "reviewed_at": "pending",
-  "notes": "Awaiting a fresh alpha.11 capture. The accepted alpha.10 record was bound to release-input digest 5e0cc31c1184aaa033a7066e65c336394787aa65889c72792a819e660ac73885 at commit f7fd55c56ade21b2fac8091b76993aa51f104245. This release changes the non-QA release inputs, so that digest no longer describes what would ship. This file is deliberately pending rather than stale-accepted. The screenshot named above is still alpha.10's capture until a Whole-product QA evidence run lands and a reviewer accepts its replacement."
+  "screenshot_sha256": "f4bf894357019c77d251b0f0ef9c379e71c2665d67b901c10c8976526bc0aee4",
+  "reviewer": "Zachary Brenner (maintainer), on the capture from Whole-product QA evidence run 37365868306",
+  "reviewed_at": "2026-10-05T23:01:00Z",
+  "notes": "Fresh 1536x1024 capture from run 37365868306 (attempt 5) at commit 6aa24a522a78475ba7cff02b6b756159b0d67b9b, whose tree is identical to main at 6ee8a404b37fe17ac50d14106affba40d0f53806, so it binds to the same release-input digest. The accepted alpha.10 record is superseded because its digest no longer describes what ships. Claude Code inspected the capture first and recorded this file; the maintainer then looked at it and accepted it. Everything the accepted concept asks of the capture still holds. Sidebar counts, the queue table, and the review panel read as three planes. The header states the privacy posture. Proposed filenames stay date-first, with right-aligned confidence and em-dashes for absent values. Ready, Needs review, Proposing a name, and Waiting differ by icon as well as colour. Evidence stays attributed under DATE, TYPE, and PARTIES, with each party on its own line. What changed is this release's: the drop zone lists the new formats; a processing row says what it is doing instead of a percentage; the panel counts what is left to decide and offers Next undecided, Open, and Show in folder; the filename field wraps and shows the extension apart; and Approve & rename and Keep original carry their keyboard shortcuts. Two observations, neither a defect of this frame. The earlier capture showed a 'for Vistage' brand tag beside the name; the header code has not rendered one since before alpha.10 (AppHeader is unchanged from the alpha.10 release commit), so that frame was older than the code it was bound to, and this one is a faithful render. And at this size the review panel's Reason for review sits below the fold, under the pinned Approve bar; it is reached by scrolling the panel, which keeps Approve on screen as intended. No collisions, illegible copy, or ambiguous focus were seen, and the run's automated contrast assertions passed. The sign-off is accepted only for the digest and screenshot hash above. Any later change to a non-QA release input invalidates it and requires a new capture and review."
 }
