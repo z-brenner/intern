@@ -1865,6 +1865,250 @@ fn lost_processing_lease_cancels_worker_and_pauses_before_more_work() {
     assert_eq!(worker.cancellations.load(Ordering::SeqCst), 1);
 }
 
+/// A local model whose first request ends the way the real one's did when a
+/// cancel restarted the server under it: as a retryable server failure, not
+/// as a cancel. It counts what the queue then asks of it.
+#[derive(Default)]
+struct InterruptedModel {
+    calls: AtomicUsize,
+    recoveries: AtomicUsize,
+    cancels: AtomicUsize,
+    /// The first request waits until released.
+    hold_first: bool,
+    /// The first request, once released, comes back with an answer.
+    first_succeeds: bool,
+    /// A recovery waits until released.
+    hold_recover: bool,
+    /// A cancel releases whatever is waiting, as stopping a server does.
+    cancel_releases: bool,
+    released: (Mutex<bool>, Condvar),
+}
+
+impl InterruptedModel {
+    fn release(&self) {
+        *self.released.0.lock().unwrap() = true;
+        self.released.1.notify_all();
+    }
+
+    fn wait_for_release(&self) {
+        let (lock, wake) = &self.released;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+    }
+
+    fn wait_until(&self, what: impl Fn(&Self) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !what(self) {
+            assert!(Instant::now() < deadline, "the model was never reached");
+            thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+impl AnalyzerBoundary for InterruptedModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == 1 {
+            if self.hold_first {
+                self.wait_for_release();
+            }
+            if !self.first_succeeds {
+                return Err(ModelFailure::retryable("MODEL_REQUEST_FAILED"));
+            }
+        }
+        Ok(analyze_locally(
+            source,
+            proposal(0.94, false),
+            extension,
+            existing_names,
+        ))
+    }
+
+    fn recover(&self, _failure: &ModelFailure) -> Result<(), ModelFailure> {
+        self.recoveries.fetch_add(1, Ordering::SeqCst);
+        if self.hold_recover {
+            self.wait_for_release();
+        }
+        Ok(())
+    }
+
+    fn cancel(&self) -> Result<(), ModelFailure> {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        if self.cancel_releases {
+            self.release();
+        }
+        Ok(())
+    }
+}
+
+/// Two documents queued behind a model, the first of which is canceled
+/// while it is being read; the drain runs on its own thread.
+fn cancel_rig(
+    temp: &Path,
+    model: Arc<InterruptedModel>,
+    lease_interval: Option<Duration>,
+) -> (
+    Arc<Pipeline>,
+    i64,
+    i64,
+    thread::JoinHandle<Result<(), PipelineError>>,
+) {
+    let first = source(temp, "canceled.pdf");
+    let second = source(temp, "next.pdf");
+    let text = "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(text)), Ok(parsed(text))]));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let settings = SettingsStore::new(temp.join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let mut pipeline = Pipeline::open(
+        temp.join("queue.sqlite3"),
+        worker,
+        model,
+        files,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    if let Some(interval) = lease_interval {
+        pipeline = pipeline.with_lease_renewal_interval(interval);
+    }
+    let pipeline = Arc::new(pipeline);
+    pipeline.enqueue_files(&[first, second]).unwrap();
+    let items = pipeline.list().unwrap();
+    let running = Arc::clone(&pipeline);
+    let drain = thread::spawn(move || running.run_until_idle());
+    (pipeline, items[0].id, items[1].id, drain)
+}
+
+fn status_of(pipeline: &Pipeline, id: i64) -> QueueStatus {
+    pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap()
+        .status
+}
+
+#[test]
+fn cancel_during_analysis_does_not_recover_reanalyze_or_pause() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        cancel_releases: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    // The failure the cancel caused was not recovered: no restart, and the
+    // canceled document was not sent a second time.
+    assert_eq!(model.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(model.cancels.load(Ordering::SeqCst), 1);
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    // The next document is read, once.
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn canceled_item_with_failed_lease_does_not_pause() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(
+        temp.path(),
+        Arc::clone(&model),
+        Some(Duration::from_millis(10)),
+    );
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    // Canceling took the item's lease away; let its renewal fail.
+    thread::sleep(Duration::from_millis(200));
+    model.release();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(
+        model.cancels.load(Ordering::SeqCst),
+        1,
+        "the lost lease did not stop the model a second time"
+    );
+    assert_eq!(model.recoveries.load(Ordering::SeqCst), 0);
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn an_answer_for_a_canceled_document_is_discarded_without_pausing() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        first_succeeds: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(
+        temp.path(),
+        Arc::clone(&model),
+        Some(Duration::from_millis(10)),
+    );
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    model.release();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    let items = pipeline.list().unwrap();
+    let canceled = items.iter().find(|item| item.id == canceled).unwrap();
+    assert_eq!(canceled.status, QueueStatus::Canceled);
+    assert!(canceled.proposal.is_none(), "the late answer was not kept");
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+#[test]
+fn a_cancel_during_recovery_stops_the_second_attempt() {
+    let temp = tempdir().unwrap();
+    // The first request fails on its own, and the person cancels while the
+    // model is being recovered for the retry.
+    let model = Arc::new(InterruptedModel {
+        hold_recover: true,
+        cancel_releases: true,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.recoveries.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        2,
+        "the canceled document was not sent again"
+    );
+    assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
 #[test]
 fn refiled_content_at_a_new_path_is_flagged_duplicate_and_retry_analyzes_it() {
     let temp = tempdir().unwrap();
