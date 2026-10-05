@@ -301,7 +301,14 @@ zero-width space, a byte-order mark — are removed; the original extension is
 always preserved; collisions get a ` (2)` suffix. The engine checks collisions
 against the only folder it knows, the document's own; the queue recomposes the
 name against the folder the document is actually going to, so a suffix means
-a real collision at the destination and never a phantom one at the source.
+a real collision at the destination and never a phantom one at the source -
+nor one with the document itself. Filed into the folder it is already in (no
+destination, and a flat layout), a document's own name is left out of the
+comparison, so a document already named the way Intern names documents is
+proposed under that name rather than as ` (2)`. Filing it under its own name,
+or that name in other letter case, which Windows takes for the same file,
+completes it without touching the file and records `ALREADY_NAMED`; this
+release makes no case-only renames.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
@@ -321,7 +328,7 @@ Only one document is worked on at a time, so an approval made while the queue
 is busy cannot be applied on the spot. It is remembered on the proposal and
 applied by the scheduler between documents, under the name the reviewer typed
 - a busy queue is not something wrong with the document, and never sends it to
-review. An undo does not wait for a document being read: it moves nothing but
+review, and a spelling rule learned while it waits does not rebuild it. An undo does not wait for a document being read: it moves nothing but
 its own filed document, so the only thing it waits for is another rename.
 
 A rename or undo that fails partway is settled rather than left: its receipt
@@ -338,6 +345,18 @@ file operation and the reconciliation after it run one at a time, so the
 recovery pass - every 65 seconds by the clock, however often new documents
 wake the scheduler - never reconciles an operation still in flight, and an
 operation that has been taken over stops before its rename rather than after.
+
+A document that changed after it was read - signed, edited, saved over - is
+never filed under a name that described the earlier version: approving it
+sends it back to review as `FILE_CHANGED` and says so. **Re-analyze** reads it
+again from the start under its new fingerprint, dropping the earlier proposal
+and any approval in it; it is refused while an operation of the document
+never finished, because what is on disk is an open question until that is
+checked again. A filing to another volume is a verified copy rather than a
+rename, and the copy keeps what a rename would: the document's modified and
+accessed times (and its creation time on Windows) and its Mark-of-the-Web,
+the `Zone.Identifier` stream that keeps Office's Protected View on for a
+downloaded or e-mailed file.
 
 ### House style
 
@@ -371,9 +390,10 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but the one whose name was just approved, which is the
-reviewer's own text and would lose whatever the validated facts do not
-carry, the date they typed with it most of all.
+every document but one whose name a person approved - just now, or earlier
+and still waiting to be filed - which is the reviewer's own text and would
+lose whatever the validated facts do not carry, the date they typed with it
+most of all.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
