@@ -1247,12 +1247,15 @@ impl Pipeline {
                     ModelFailureAction::Requeue => {
                         // Nothing was asked: no model was loaded to ask, as
                         // happens for a moment while switching between the
-                        // hosted and the local one, or while the local server
-                        // restarts after a cancel. The document goes back to
-                        // wait with nothing counted against it - counted, it
-                        // failed outright at the second such moment - and this
-                        // drain ends rather than claiming it again at once;
-                        // the scheduler's next pass finds the model in place.
+                        // hosted and the local one, before the local server's
+                        // start has begun. (A request that meets a start or a
+                        // restart under way waits for it in the app's model,
+                        // and comes back here only if no server came up.) The
+                        // document goes back to wait with nothing counted
+                        // against it - counted, it failed outright at the
+                        // second such moment - and this drain ends rather
+                        // than claiming it again at once; the scheduler's next
+                        // pass finds the model in place.
                         lease.stop_and_check()?;
                         self.store.transition(
                             item.id,
@@ -3463,10 +3466,11 @@ fn model_error_code(error: &ModelFailure) -> ErrorCode {
 const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
 
 /// How long documents may keep finding no model loaded before the queue
-/// stops for it. Longer than the local server is given to start - three
-/// minutes - so a restart in progress always finishes or fails inside it,
-/// and short enough that a restart that failed is reported within minutes
-/// rather than never.
+/// stops for it. A request that meets a start or a restart under way waits
+/// for it in the app's model, so the only empty slot that fills on its own
+/// is the moment a switch between the hosted and the local model takes to
+/// begin its start. Far longer than that, and short enough that a start or
+/// restart that failed is reported within minutes rather than never.
 const MODEL_MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(4 * 60);
 
 /// What the queue does with a document whose analysis failed.

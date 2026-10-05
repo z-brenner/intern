@@ -756,11 +756,13 @@ model reply that cannot be used fails that document; three documents in a row
 with such a reply pause the queue, since by then the model is the problem, and
 any document read successfully starts the count again. A document that meets
 no model at all — the moment while Settings switches between the hosted and
-the local one, or while the local server restarts after a cancel — goes back
-to wait with nothing counted against it. A model still missing four minutes
-later, longer than the local server is given to start, is a restart that
-failed: the queue pauses and says the local model stopped responding, rather
-than reading the same document again on every pass with nothing on screen.
+the local one, before the local server's start has begun — goes back to wait
+with nothing counted against it. A request that finds a start or a restart
+under way waits for it instead (see above), so a model that is missing after
+that did not come up. Still missing four minutes later, far longer than a
+switch takes to begin its start, it is a start or restart that failed: the
+queue pauses and says the local model stopped responding, rather than reading
+the same document again on every pass with nothing on screen.
 The banner for a pause says to resume the queue; a document's own sentence
 for the same code, which says to retry that document, would name the wrong
 action.
