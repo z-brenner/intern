@@ -9,8 +9,9 @@ use std::process::{Command, Stdio};
 #[cfg(feature = "native-tesseract")]
 use std::time::Duration;
 
+use image::DynamicImage;
 #[cfg(feature = "native-tesseract")]
-use image::{DynamicImage, ImageFormat, imageops::FilterType};
+use image::ImageFormat;
 
 use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, RenderedPage};
 #[cfg(feature = "native-tesseract")]
@@ -69,6 +70,27 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
         confidences.iter().sum::<f32>() / confidences.len() as f32
     };
     Ok(OcrResult::new(text, mean_confidence))
+}
+
+/// The page as Tesseract is given it to read: grey.
+///
+/// Tesseract binarises whatever it is given, so colour tells it nothing,
+/// and grey is a third of the bytes to encode, write and decode on every
+/// pass.
+pub fn recognition_image(page: &DynamicImage) -> DynamicImage {
+    DynamicImage::ImageLuma8(page.to_luma8())
+}
+
+/// The copy of a page orientation detection reads: half its size each way.
+///
+/// A 300-DPI page halved is 150 DPI, which is still far more than
+/// orientation detection looks at, and it is a quarter of the pixels to
+/// encode and scan. Each pixel is the average of the four it replaces,
+/// summed in integers straight into the copy. The general resampler would
+/// first build a full-width, half-height copy in 32-bit floats per channel
+/// - 200 MB on a 25-megapixel page - for a picture nobody keeps.
+pub fn orientation_image(page: &DynamicImage) -> DynamicImage {
+    page.thumbnail_exact((page.width() / 2).max(1), (page.height() / 2).max(1))
 }
 
 /// How to ask Tesseract for TSV output without depending on a file we do not ship.
@@ -272,26 +294,19 @@ impl TesseractOcr {
     }
 
     /// The clockwise rotation Tesseract's orientation detection says the page
-    /// needs, read from a half-scale copy.
+    /// needs, read from [`orientation_image`]'s half-scale copy.
     ///
-    /// A 300-DPI page halved is 150 DPI, which is still far more than
-    /// orientation detection looks at, and it is a quarter of the pixels to
-    /// encode and scan. On a page too small to halve - a low-resolution
-    /// photo - detection reports too few characters, which is a rotation of
-    /// zero: the orientation search that follows is what decides, and it
-    /// still finds such a page's orientation by reading it.
+    /// On a page too small to halve - a low-resolution photo - detection
+    /// reports too few characters, which is a rotation of zero: the
+    /// orientation search that follows is what decides, and it still finds
+    /// such a page's orientation by reading it.
     fn detect_orientation(
         &self,
         workspace: &TempWorkspace,
         page: &DynamicImage,
         cancel: &CancellationToken,
     ) -> Result<u16, ExtractionError> {
-        let half = page.resize_exact(
-            (page.width() / 2).max(1),
-            (page.height() / 2).max(1),
-            FilterType::Triangle,
-        );
-        let input = self.write_png(workspace, "orientation.png", &half)?;
+        let input = self.write_png(workspace, "orientation.png", &orientation_image(page))?;
         let osd_base = workspace.path().join("orientation");
         let osd_stderr_path = workspace.write("osd.stderr", b"")?;
         let osd_stderr = std::fs::OpenOptions::new()
@@ -361,10 +376,7 @@ impl OcrBackend for TesseractOcr {
         }
         let workspace =
             TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
-        // Tesseract binarises whatever it is given, so colour tells it
-        // nothing; grey is a third of the bytes to encode, write and decode
-        // on every pass.
-        let page = DynamicImage::ImageLuma8(page.image.to_luma8());
+        let page = recognition_image(&page.image);
         read_upright(&mut PagePasses {
             ocr: self,
             workspace: &workspace,
@@ -393,6 +405,56 @@ impl OrientationPasses for PagePasses<'_> {
     fn detect_orientation(&mut self) -> Result<u16, ExtractionError> {
         self.ocr
             .detect_orientation(self.workspace, self.page, self.cancel)
+    }
+}
+
+/// What Tesseract is handed. These run in every build: the native tests that
+/// watch the real adapter hand these to a stand-in Tesseract only run where
+/// the `native-tesseract` feature is built.
+#[cfg(test)]
+mod page_image_tests {
+    use std::io::Cursor;
+
+    use image::{DynamicImage, GenericImageView, GrayImage, ImageFormat, Luma, Rgb, RgbImage};
+
+    use super::{orientation_image, recognition_image};
+
+    #[test]
+    fn recognition_reads_a_grey_page() {
+        let page = DynamicImage::ImageRgb8(RgbImage::from_pixel(30, 20, Rgb([200, 40, 40])));
+
+        let grey = recognition_image(&page);
+
+        assert_eq!(grey.color(), image::ColorType::L8);
+        assert_eq!(grey.dimensions(), (30, 20));
+        // Encoded the way the adapter writes it: a greyscale PNG, colour
+        // type 0 in the header.
+        let mut png = Vec::new();
+        grey.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        assert_eq!(png[25], 0);
+    }
+
+    #[test]
+    fn orientation_detection_reads_a_half_scale_average() {
+        // Columns alternate black and white in pairs of two: every 2 x 2
+        // block holds two of each, so each half-scale pixel is their mean.
+        let page = DynamicImage::ImageLuma8(GrayImage::from_fn(40, 20, |x, _| {
+            Luma([if x % 2 == 0 { 0 } else { 255 }])
+        }));
+
+        let half = orientation_image(&page);
+
+        assert_eq!(half.dimensions(), (20, 10));
+        assert_eq!(half.color(), image::ColorType::L8);
+        let grey = half.to_luma8();
+        assert!(grey.pixels().all(|pixel| pixel.0[0] == 128), "{grey:?}");
+        // An odd edge loses its last row or column, and nothing is ever
+        // halved to nothing.
+        let odd = DynamicImage::ImageLuma8(GrayImage::new(41, 21));
+        assert_eq!(orientation_image(&odd).dimensions(), (20, 10));
+        let tiny = DynamicImage::ImageLuma8(GrayImage::new(1, 1));
+        assert_eq!(orientation_image(&tiny).dimensions(), (1, 1));
     }
 }
 

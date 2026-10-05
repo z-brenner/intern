@@ -29,10 +29,22 @@ pub const MAX_PAGE_PIXELS: u64 = MAX_PAGE_MEGAPIXELS * 1_000_000;
 /// receipt from one is no harder to read than the 12-megapixel photo the
 /// same phone takes by default: it is decoded and then scaled down to
 /// [`MAX_PAGE_PIXELS`] before OCR. This cap only refuses an image so large
-/// that decoding it is itself the problem - a 100-megapixel RGB image is
-/// already 300 MB of pixels.
+/// that decoding it is itself the problem. The decoded image is the worker's
+/// largest allocation for it - a 100-megapixel RGB image is 300 MB of
+/// pixels - and the page it is scaled into adds 75 MB beside it. Measured
+/// on a release build, a 48-megapixel JPEG peaks at about 220 MB and a
+/// 100-megapixel one at about 375 MB; scaled through a floating-point copy,
+/// as they once were, the same two took 760 MB and 1.15 GB.
 pub const MAX_IMAGE_FILE_MEGAPIXELS: u64 = 100;
 pub const MAX_IMAGE_FILE_PIXELS: u64 = MAX_IMAGE_FILE_MEGAPIXELS * 1_000_000;
+/// The most bytes a pixel of an image file may decode to.
+///
+/// The pixel cap is written for 8-bit images. A 16-bit colour TIFF - a
+/// scanner's 48-bit mode - decodes to six or eight bytes a pixel, so the same
+/// hundred megapixels would be 600 or 800 MB before anything is scaled. Four
+/// bytes a pixel admits every 8-bit image up to the pixel cap, alpha and all,
+/// and holds a deep-colour image to the same 400 MB.
+pub const MAX_IMAGE_FILE_BYTES_PER_PIXEL: u64 = 4;
 /// The resolution a PDF page is rendered at when it fits the pixel budget.
 pub const RENDER_DPI: f64 = 300.0;
 /// The lowest resolution a page is rendered at to be read.
@@ -99,6 +111,22 @@ impl ResourceLimits {
         if pixels > self.max_page_pixels {
             return Err(ExtractionError::resource_limit(
                 "rendered page exceeds 25 megapixels",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuses an image file whose decoded pixels would take more memory than
+    /// the largest image the pixel cap admits at 8 bits a channel, before any
+    /// pixel of it is decoded.
+    pub fn validate_image_file_bytes(&self, bytes: u64) -> Result<(), ExtractionError> {
+        if bytes
+            > self
+                .max_image_file_pixels
+                .saturating_mul(MAX_IMAGE_FILE_BYTES_PER_PIXEL)
+        {
+            return Err(ExtractionError::resource_limit(
+                "image would decode to more than 400 MB",
             ));
         }
         Ok(())

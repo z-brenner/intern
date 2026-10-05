@@ -1109,6 +1109,12 @@ fn has_unread_frames(path: &Path) -> bool {
 /// an ordinary document, and refusing it outright lost the document. What is
 /// decoded is then scaled down to the page cap, so OCR, the page image, and
 /// everything after them see exactly the size a rendered PDF page would be.
+///
+/// The decoded image is the largest thing this holds, and nothing else of its
+/// size is made: it is scaled down before it is turned upright, so turning it
+/// copies a page-sized image rather than the photo, and the scaling writes
+/// straight into the page-sized copy. A 100-megapixel photo costs its 300 MB
+/// of pixels and a 75 MB page beside them.
 pub fn load_oriented_image(
     path: &Path,
     limits: &ResourceLimits,
@@ -1123,13 +1129,16 @@ pub fn load_oriented_image(
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let (encoded_width, encoded_height) = decoder.dimensions();
     limits.validate_image_file_pixels(encoded_width, encoded_height)?;
+    limits.validate_image_file_bytes(decoder.total_bytes())?;
     let orientation = decoder
         .orientation()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
-    let mut image = DynamicImage::from_decoder(decoder)
+    let image = DynamicImage::from_decoder(decoder)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let mut image = within_page_pixels(image, limits.max_page_pixels);
+    // Turning an image keeps its pixel count, so the page it was scaled to
+    // is still within the cap once it is upright.
     image.apply_orientation(orientation);
-    let image = within_page_pixels(image, limits.max_page_pixels);
     limits.validate_page_pixels(image.width(), image.height())?;
     Ok(image.into_rgb8().into())
 }
@@ -1147,9 +1156,12 @@ fn within_page_pixels(image: DynamicImage, max_pixels: u64) -> DynamicImage {
     let scale = (max_pixels as f64 / pixels as f64).sqrt();
     let scaled_width = (f64::from(width) * scale).floor().max(1.0) as u32;
     let scaled_height = (f64::from(height) * scale).floor().max(1.0) as u32;
-    // A triangle filter is a fraction of Lanczos's cost on a 48-megapixel
-    // image and loses nothing OCR can see at this reduction.
-    image.resize_exact(scaled_width, scaled_height, FilterType::Triangle)
+    // Each page pixel is the average of the photo pixels it covers, summed in
+    // integers straight into the page. The filtered resamplers first build a
+    // full-width copy in 32-bit floats per channel - half a gigabyte for a
+    // 48-megapixel photo - and at a reduction this large an area average is
+    // all OCR can see of the difference.
+    image.thumbnail_exact(scaled_width, scaled_height)
 }
 
 #[derive(Debug)]

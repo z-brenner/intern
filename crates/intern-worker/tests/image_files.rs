@@ -6,7 +6,10 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use image::{GenericImageView, Rgb, RgbImage};
+use image::codecs::jpeg::JpegEncoder;
+use image::{
+    ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, Rgb, RgbImage, RgbaImage,
+};
 use intern_worker::extract::{
     CancellationToken, ExtractionError, ExtractionWarning, OcrBackend, OcrResult, PageSource,
     RenderedPage, extract_image,
@@ -235,4 +238,84 @@ fn a_photo_over_the_decode_cap_is_still_refused() {
 
     assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
     assert!(ocr.pages.lock().unwrap().is_empty());
+}
+
+/// A minimal EXIF block: a little-endian TIFF header and one entry,
+/// Orientation (0x0112) = 6, "turn a quarter clockwise to view".
+const EXIF_ROTATE_90: [u8; 26] = [
+    0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+/// A phone stores a portrait photo the way its sensor saw it and says in its
+/// EXIF which way up it goes. The photo is turned only once it has been
+/// scaled down, so the turn copies a page rather than the whole photo, and
+/// it still reaches OCR upright, at the page cap, in upright proportions.
+#[test]
+fn a_rotated_oversized_photo_is_scaled_and_turned_upright() {
+    let limits = ResourceLimits {
+        max_page_pixels: MAX_PAGE_PIXELS / 1_000,
+        max_image_file_pixels: MAX_IMAGE_FILE_PIXELS / 1_000,
+        ..ResourceLimits::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("portrait.jpg");
+    // 240 x 200 as stored, black on the left; a quarter turn clockwise puts
+    // the black at the top.
+    let stored = RgbImage::from_fn(240, 200, |x, _| {
+        if x < 120 {
+            Rgb([0, 0, 0])
+        } else {
+            Rgb([255, 255, 255])
+        }
+    });
+    let mut jpeg = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut jpeg, 90);
+    encoder.set_exif_metadata(EXIF_ROTATE_90.to_vec()).unwrap();
+    encoder
+        .write_image(stored.as_raw(), 240, 200, ExtendedColorType::Rgb8)
+        .unwrap();
+    std::fs::write(&path, jpeg).unwrap();
+    let ocr = KeepingOcr::default();
+
+    extract_image(&path, &ocr, &limits, &CancellationToken::new()).unwrap();
+
+    let pages = ocr.pages.lock().unwrap();
+    let (width, height) = pages[0].dimensions();
+    assert_eq!((width, height), (144, 173));
+    let page = pages[0].to_rgb8();
+    let top = page.get_pixel(width / 2, 10).0[0];
+    let bottom = page.get_pixel(width / 2, height - 10).0[0];
+    assert!(top < 64 && bottom > 192, "top {top}, bottom {bottom}");
+}
+
+/// A scanner's 48-bit colour mode decodes to six bytes a pixel, so the pixel
+/// cap - written for 8-bit images - let a hundred megapixels of it take
+/// 600 MB before anything was scaled. It is held to the bytes the largest
+/// 8-bit image may take, and an 8-bit image with alpha at nearly the pixel
+/// cap is still read.
+#[test]
+fn a_deep_colour_image_is_held_to_the_bytes_an_8_bit_one_may_take() {
+    let limits = ResourceLimits {
+        max_page_pixels: MAX_PAGE_PIXELS / 1_000,
+        max_image_file_pixels: MAX_IMAGE_FILE_PIXELS / 1_000,
+        ..ResourceLimits::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    // 70,000 pixels, well inside the 100,000-pixel cap, at six bytes each.
+    let deep = directory.path().join("scan.png");
+    ImageBuffer::<Rgb<u16>, Vec<u16>>::new(280, 250)
+        .save(&deep)
+        .unwrap();
+    // 99,856 pixels at four bytes each: just inside 400,000 bytes.
+    let rgba = directory.path().join("logo.png");
+    RgbaImage::new(316, 316).save(&rgba).unwrap();
+    let ocr = KeepingOcr::default();
+
+    let error = extract_image(&deep, &ocr, &limits, &CancellationToken::new()).unwrap_err();
+
+    assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
+    assert!(ocr.pages.lock().unwrap().is_empty());
+    extract_image(&rgba, &ocr, &limits, &CancellationToken::new()).unwrap();
+    assert_eq!(ocr.pages.lock().unwrap().len(), 1);
 }

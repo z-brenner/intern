@@ -87,7 +87,12 @@ Tesseract reads perfectly well, instead of failing the document. Only a page
 that would have to go below 50 DPI to fit is a resource limit, and the size of
 what was actually rendered is still checked against the cap. A standalone
 image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
-are ordinary — and scaled down to the page cap before OCR.
+are ordinary — and up to 400 MB of decoded pixels, which holds a scanner's
+16-bit colour mode to the memory an 8-bit image takes. It is scaled down to
+the page cap before OCR by averaging the pixels each page pixel covers,
+straight into the page-sized copy, and only then turned upright, so a
+48-megapixel photo costs the worker about 220 MB at its peak rather than the
+760 MB a filtered resample's floating-point intermediate took.
 
 OCR text keeps the layout Tesseract found. The worker rebuilds it from
 Tesseract's TSV output: words on a line joined with a space, lines with a
