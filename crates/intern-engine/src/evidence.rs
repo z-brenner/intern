@@ -96,13 +96,19 @@ fn contains_whole(haystack: &str, needle: &str) -> bool {
 ///
 /// "Contoso Worldwide Inc" and "Contoso Worldwide, Inc." are one company, and
 /// a name a person would recognise as the same name should not be thrown out
-/// of a filename over a comma.
+/// of a filename over a comma. A standalone "&" reads as "and" for the same
+/// reason - "Quill & Vane" and "Quill and Vane" are one firm - while the "&"
+/// inside a name like "AT&T" is part of the name and stays.
 pub fn normalize_loosely(value: &str) -> String {
     let stripped = normalize(value)
         .chars()
         .filter(|character| !matches!(character, '.' | ',' | '\'' | '"'))
         .collect::<String>();
-    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+    stripped
+        .split_whitespace()
+        .map(|word| if word == "&" { "and" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// True when `excerpt` appears inside a single kept block once punctuation is

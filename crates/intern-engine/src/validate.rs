@@ -14,7 +14,7 @@ use crate::domain::{
 };
 use crate::evidence::{
     date_match_positions, digest_contains, digest_contains_date, digest_contains_loosely,
-    extract_stated_dates, is_valid_iso_date, normalize,
+    extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
@@ -601,6 +601,11 @@ const EFFECTIVE_CUES: &[&str] = &[
 /// Inc." is the same company and the corpus showed the model dropping the
 /// comma often enough that a real name was reaching review over it. Words are
 /// never loosened: a name the document does not contain is still rejected.
+///
+/// The same loosening says when two names are one party: "ACME CORP" from a
+/// letterhead and "Acme Corp." from the body are one company, and the first
+/// spelling is kept. A name is never merged into a longer one that contains
+/// it - "Acme" and "Acme Holdings" are an affiliate agreement's two sides.
 fn validate_parties(candidate: &ModelProposal, digest: &DocumentDigest) -> (Vec<String>, bool) {
     let mut kept = Vec::new();
     let mut all_supported = true;
@@ -611,7 +616,11 @@ fn validate_parties(candidate: &ModelProposal, digest: &DocumentDigest) -> (Vec<
             continue;
         }
         if digest_contains(digest, party) || digest_contains_loosely(digest, party) {
-            if !kept.iter().any(|existing: &String| existing == party) {
+            let key = normalize_loosely(party);
+            if !kept
+                .iter()
+                .any(|existing: &String| normalize_loosely(existing) == key)
+            {
                 kept.push(party.to_owned());
             }
         } else {
@@ -667,14 +676,25 @@ fn validate_description(
     sentence
 }
 
+/// Whether the period at `index` closes an abbreviation rather than the
+/// sentence: a company form ("Inc.", "GmbH."), a title, a month ("Jan. 5"),
+/// a dotted initialism ("P.C.", "U.K.", "N.A.", "L.L.C."), or one letter.
+/// Two-letter words that are also company forms elsewhere - "AG", "SA" - are
+/// not listed bare, because as words they end real sentences; dotted, they
+/// are initialisms.
+///
+/// An abbreviation still ends the sentence when a new one plainly starts
+/// after it - "... Contoso Ltd. The invoice ..." - since a name never
+/// continues with a capitalised "The".
 fn is_abbreviation_period(value: &str, index: usize) -> bool {
     let before = value[..index]
         .split(|character: char| character.is_whitespace())
         .next_back()
         .unwrap_or_default()
         .trim_start_matches(|character: char| !character.is_alphanumeric());
-    matches!(
-        before.to_ascii_lowercase().as_str(),
+    let lowered = before.to_ascii_lowercase();
+    let abbreviation = matches!(
+        lowered.as_str(),
         "inc"
             | "llc"
             | "ltd"
@@ -704,7 +724,53 @@ fn is_abbreviation_period(value: &str, index: usize) -> bool {
             | "ph.d"
             | "m.d"
             | "j.d"
-    ) || before.chars().filter(char::is_ascii_alphabetic).count() == 1
+            | "llp"
+            | "pllc"
+            | "plc"
+            | "pty"
+            | "gmbh"
+            | "intl"
+            | "mfg"
+            | "assn"
+            | "jan"
+            | "feb"
+            | "mar"
+            | "apr"
+            | "jun"
+            | "jul"
+            | "aug"
+            | "sep"
+            | "sept"
+            | "oct"
+            | "nov"
+            | "dec"
+    ) || is_dotted_initialism(&lowered)
+        || before.chars().filter(char::is_ascii_alphabetic).count() == 1;
+    abbreviation && !opens_a_sentence(&value[index + 1..])
+}
+
+/// "p.c", "u.k", "l.l.c": every dot-separated part one ASCII letter.
+fn is_dotted_initialism(token: &str) -> bool {
+    token.contains('.')
+        && token
+            .split('.')
+            .all(|part| part.len() == 1 && part.bytes().all(|byte| byte.is_ascii_alphabetic()))
+}
+
+/// Capitalised words that only ever open a sentence.
+const SENTENCE_OPENERS: &[&str] = &[
+    "the", "this", "that", "these", "those", "it", "its", "they", "their", "there", "a", "an",
+];
+
+/// Whether the text after a period starts a new sentence with a word that
+/// could not be the rest of a name.
+fn opens_a_sentence(rest: &str) -> bool {
+    let Some(word) = rest.split_whitespace().next() else {
+        return false;
+    };
+    let bare = word.trim_end_matches(|character: char| !character.is_alphanumeric());
+    bare.chars().next().is_some_and(char::is_uppercase)
+        && SENTENCE_OPENERS.contains(&bare.to_lowercase().as_str())
 }
 
 fn is_usable_sentence(description: &str) -> bool {
@@ -730,7 +796,11 @@ fn is_usable_sentence(description: &str) -> bool {
 /// sentence together is not a claim about the document and must not send an
 /// otherwise good proposal to review.
 fn first_unsupported_claim(description: &str, digest: &DocumentDigest) -> Option<String> {
+    let restated = restated_dates(description, digest);
     for (index, raw) in description.split_whitespace().enumerate() {
+        if restated[index] {
+            continue;
+        }
         let token = raw.trim_matches(|character: char| !character.is_alphanumeric());
         if token.chars().count() < 3 {
             continue;
@@ -747,6 +817,46 @@ fn first_unsupported_claim(description: &str, digest: &DocumentDigest) -> Option
         }
     }
     None
+}
+
+/// Which of the description's words restate a date the document states,
+/// one flag per word. "January 5, 2026" for a document that prints
+/// "01/05/2026" is the same fact, but read word by word "January" is a name
+/// the document never writes. Each date is matched on the fewest words that
+/// state it - month, day or ordinal, year, and the comma between - and only
+/// a date the document itself states is excused; any other is checked as
+/// before.
+fn restated_dates(description: &str, digest: &DocumentDigest) -> Vec<bool> {
+    // "1st day of April, 2026" is the longest shape a date is read in.
+    const LONGEST: usize = 5;
+    let words: Vec<&str> = description.split_whitespace().collect();
+    let stated = |range: std::ops::Range<usize>| extract_stated_dates(&words[range].join(" "));
+    let mut supported: Vec<(String, bool)> = Vec::new();
+    let mut restated = vec![false; words.len()];
+    for start in 0..words.len() {
+        for end in start + 1..=(start + LONGEST).min(words.len()) {
+            for date in stated(start..end) {
+                // Only the tightest span: one that loses the date when
+                // either end word is dropped.
+                if stated(start + 1..end).contains(&date) || stated(start..end - 1).contains(&date)
+                {
+                    continue;
+                }
+                let in_document = match supported.iter().find(|(known, _)| *known == date) {
+                    Some((_, in_document)) => *in_document,
+                    None => {
+                        let in_document = digest_contains_date(digest, &date);
+                        supported.push((date, in_document));
+                        in_document
+                    }
+                };
+                if in_document {
+                    restated[start..end].fill(true);
+                }
+            }
+        }
+    }
+    restated
 }
 
 /// Whether one specific claim is in the document, allowing for the ways a
@@ -1536,6 +1646,125 @@ The Consultant will provide services commencing April 15, 2026.
         assert_eq!(outcome.proposal.date_role, Some(DateRole::Termination));
     }
 
+    fn described(description: &str, document: &str) -> ValidationOutcome {
+        let mut candidate = proposal();
+        candidate.description = description.into();
+        validate_at(candidate, &digest_of(document), 2026)
+    }
+
+    /// The first-sentence cut ended descriptions at "P.C.", "N.A.", "U.K."
+    /// and "Jan.": the stored description lost its second half, or kept so
+    /// few words that a good proposal went to review.
+    #[test]
+    fn dotted_initialisms_and_month_abbreviations_do_not_end_the_description() {
+        let document = "ENGAGEMENT LETTER
+Contoso Worldwide, Inc. engages Smith & Jones, P.C. for litigation support in the 2026 contract dispute.
+Contoso Bank, N.A. lends to Acme Corporation under a revolving credit facility.
+Invoice from Acme U.K. Ltd for consulting services delivered in March 2026.
+Invoice Date: January 5, 2026
+";
+        for description in [
+            "Engagement letter between Contoso Worldwide, Inc. and Smith & Jones, P.C. for litigation support in the 2026 contract dispute.",
+            "Loan agreement between Contoso Bank, N.A. and Acme Corporation for a revolving credit facility in 2026.",
+            "Invoice from Acme U.K. Ltd to Contoso for consulting services delivered in March 2026.",
+            "Invoice dated Jan. 5, 2026 from Acme Corporation to Contoso for consulting services.",
+            "Agreement between Acme L.L.C. and Contoso Worldwide, Inc. for consulting services in 2026.",
+        ] {
+            let outcome = described(description, document);
+            assert_eq!(outcome.proposal.description, description);
+            assert!(
+                !outcome.reasons.contains(&ReviewReason::DescriptionInvalid),
+                "{description}: {:?}",
+                outcome.reasons
+            );
+        }
+
+        // A sentence that really ends after an abbreviation still ends
+        // there: what follows is the model carrying on.
+        let outcome = described(
+            "Invoice from Acme U.K. Ltd for consulting services delivered to Contoso Ltd. The invoice is payable on receipt.",
+            document,
+        );
+        assert_eq!(
+            outcome.proposal.description,
+            "Invoice from Acme U.K. Ltd for consulting services delivered to Contoso Ltd."
+        );
+        // And an ordinary full stop is untouched by any of it.
+        let outcome = described(
+            "Invoice from Acme Corporation for consulting services delivered in March 2026. It is payable on receipt.",
+            document,
+        );
+        assert_eq!(
+            outcome.proposal.description,
+            "Invoice from Acme Corporation for consulting services delivered in March 2026."
+        );
+    }
+
+    /// A letterhead in capitals and a body in mixed case are one company;
+    /// listing both named it twice in the filename.
+    #[test]
+    fn parties_differing_only_in_case_and_punctuation_are_one_party() {
+        let document = "SERVICES AGREEMENT
+ACME CORP
+This Services Agreement is effective as of April 1, 2026, by and between Acme Corp. and its customers.
+";
+        let mut candidate = proposal();
+        candidate.document_type = Some("Services Agreement".into());
+        candidate.parties = vec!["ACME CORP".into(), "Acme Corp.".into()];
+        candidate.party_relation = PartyRelation::Between;
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(outcome.proposal.parties, vec!["ACME CORP".to_owned()]);
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::With);
+        assert!(!outcome.reasons.contains(&ReviewReason::PartyUnsupported));
+    }
+
+    /// "&" and "and" are one word typed two ways; a name the model wrote
+    /// with the other one was rejected as absent.
+    #[test]
+    fn ampersand_matches_and() {
+        let document = "SETTLEMENT AGREEMENT
+This Settlement Agreement is made as of July 22, 2026 between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.
+Counsel: Smith & Jones LLP.
+";
+        let mut candidate = proposal();
+        candidate.document_type = Some("Settlement Agreement".into());
+        candidate.document_date = Some("2026-07-22".into());
+        candidate.parties = vec![
+            "Quill & Vane Advisory Group".into(),
+            "Smith and Jones LLP".into(),
+        ];
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec![
+                "Quill & Vane Advisory Group".to_owned(),
+                "Smith and Jones LLP".to_owned()
+            ]
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::PartyUnsupported));
+        // Only a standalone "&" is a word; inside a name it is the name.
+        assert_eq!(normalize_loosely("AT&T Corp."), "at&t corp");
+        assert_eq!(normalize_loosely("Smith & Jones"), "smith and jones");
+    }
+
+    /// Two names where one contains the other are an affiliate agreement's
+    /// two sides, not one party spelled twice.
+    #[test]
+    fn affiliates_are_not_merged() {
+        let document = "INTERCOMPANY AGREEMENT
+This Intercompany Agreement is effective as of April 1, 2026 between Acme and Acme Holdings.
+";
+        let mut candidate = proposal();
+        candidate.document_type = Some("Intercompany Agreement".into());
+        candidate.parties = vec!["Acme".into(), "Acme Holdings".into()];
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Acme".to_owned(), "Acme Holdings".to_owned()]
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+    }
+
     fn invoice(date: &str) -> ModelProposal {
         ModelProposal {
             document_type: Some("Invoice".into()),
@@ -1783,5 +2012,40 @@ The Consultant will provide services commencing April 15, 2026.
             Some("2026-03-01")
         );
         assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+    }
+
+    /// A description that writes a date in words for a document that prints
+    /// it in numbers states the same fact, but read word by word "January"
+    /// was a name the document never writes.
+    #[test]
+    fn a_description_restating_a_numeric_date_in_words_is_supported() {
+        let document = invoice_document("Invoice Date: 01/05/2026");
+        for description in [
+            "Invoice from Acme Corporation to Contoso Worldwide, Inc. dated January 5, 2026 for consulting services.",
+            "Invoice from Acme Corporation to Contoso Worldwide, Inc. dated Jan. 5, 2026 for consulting services.",
+            "Invoice from Acme Corporation dated 5 January 2026 for consulting services to Contoso.",
+            "Invoice from Acme Corporation dated 2026-01-05 for consulting services to Contoso.",
+        ] {
+            let mut candidate = invoice("2026-01-05");
+            candidate.description = description.into();
+            let outcome = validate_at(candidate, &digest_of(&document), 2026);
+            assert!(
+                !outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{description}: {:?}",
+                outcome.reasons
+            );
+        }
+        // A date the document does not state is still a claim to check.
+        let mut candidate = invoice("2026-01-05");
+        candidate.description =
+            "Invoice from Acme Corporation to Contoso Worldwide, Inc. dated January 6, 2026 for consulting services.".into();
+        let outcome = validate_at(candidate, &digest_of(&document), 2026);
+        assert!(
+            outcome
+                .reasons
+                .contains(&ReviewReason::DescriptionUnsupported)
+        );
     }
 }
