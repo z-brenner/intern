@@ -43,6 +43,24 @@ describe('your organisation\'s names', () => {
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ ourNames: [] })));
   });
 
+  // An own name under four letters and digits would match far too much, so
+  // the backend ignores it. Saved without a word, "EY" looked like it worked.
+  it('says which names are too short to be used', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    const dialog = await openSettings();
+    const names = within(dialog).getByLabelText('Your organisation\'s names');
+
+    fireEvent.change(names, { target: { value: 'E.Y.\nPwC\nContoso Worldwide, Inc.\nKPMG\n' } });
+    expect(names).toHaveAccessibleDescription(expect.stringContaining('“E.Y.”, “PwC” are too short to match safely and will not be used. Add the name as your documents print it in full.'));
+
+    fireEvent.change(names, { target: { value: 'IBM\nKPMG' } });
+    expect(names).toHaveAccessibleDescription(expect.stringContaining('“IBM” is too short to match safely'));
+
+    fireEvent.change(names, { target: { value: 'KPMG' } });
+    expect(within(dialog).queryByText(/too short to match/)).not.toBeInTheDocument();
+    expect(names).toHaveAccessibleDescription('Your own firm\'s names. When a document names your firm and someone else, the filename and the Party folder use the other side.');
+  });
+
   /*
     The backend renames what is waiting and announces it with a queue event.
     The queue must show the new name once Settings closes, not only after the

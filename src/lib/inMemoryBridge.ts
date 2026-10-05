@@ -2,6 +2,7 @@ import { GUIDE_URL, SUPPORTED_EXTENSIONS, SUPPORT_LINKS } from './bridge';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
+import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 
@@ -35,11 +36,6 @@ const seedNames: Record<string, SeedName> = {
   lease: { stem: '2023-09-15 Lease Agreement', parties: ['ABC Properties LLC', 'TenantCo Inc.'], extension: 'pdf' },
 };
 
-/** HouseRule::key: case, punctuation and spacing disregarded. */
-function nameKey(value: string): string {
-  return value.replace(/[^\p{L}\p{N}\s]/gu, '').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
-}
-
 /**
  * The backend's is_own_name: the same key, or that key followed by more whole
  * words, either way round. An own name under four characters names nobody.
@@ -47,7 +43,7 @@ function nameKey(value: string): string {
 function isOwnName(party: string, own: string): boolean {
   const ownKey = nameKey(own);
   const partyKey = nameKey(party);
-  if ([...ownKey].length < 4 || !partyKey) return false;
+  if ([...ownKey].length < OWN_NAME_MIN_CHARS || !partyKey) return false;
   return partyKey === ownKey || partyKey.startsWith(`${ownKey} `) || ownKey.startsWith(`${partyKey} `);
 }
 
