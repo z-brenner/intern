@@ -5451,6 +5451,139 @@ fn approved_deferred_name_survives_rule_change() {
     assert_eq!(item_of(&pipeline, b).status, QueueStatus::Completed);
 }
 
+/// A filing to another volume whose original another program keeps open:
+/// while `refuse` is set, the verified copy is published but no original -
+/// a `.pdf` not yet carrying a filed name - can be deleted.
+#[derive(Default)]
+struct UndeletableOriginalFileSystem {
+    refuse: AtomicBool,
+}
+
+struct UndeletableLocked(Box<dyn LockedFile>);
+
+impl LockedFile for UndeletableLocked {
+    fn hash(&mut self) -> io::Result<String> {
+        self.0.hash()
+    }
+    fn identity(&self) -> io::Result<intern_core::FileIdentity> {
+        self.0.identity()
+    }
+    fn delete(self: Box<Self>) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "injected: the original is held open",
+        ))
+    }
+}
+
+impl FileSystem for UndeletableOriginalFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        StdFileSystem.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        StdFileSystem.hash(path)
+    }
+    fn same_volume(&self, _source: &Path, _destination: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        StdFileSystem.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        StdFileSystem.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        let locked = StdFileSystem.lock_for_delete(path)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if self.refuse.load(Ordering::SeqCst)
+            && name.ends_with(".pdf")
+            && !name.starts_with("2024-")
+        {
+            return Ok(Box::new(UndeletableLocked(locked)));
+        }
+        Ok(locked)
+    }
+}
+
+/// Approving a document whose earlier filing was left with its original
+/// undeleted finishes that filing first. The name and sentence the person
+/// approved used to be dropped without a word while the window said "Rename
+/// applied": the document stayed under the earlier name, and nothing was
+/// learned from the edit.
+#[test]
+fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
+    let temp = tempdir().unwrap();
+    let folders = ["a", "b", "c"].map(|folder| {
+        let folder = temp.path().join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        folder
+    });
+    let paths = [
+        source(&folders[0], "scan.pdf"),
+        source(&folders[1], "letter.pdf"),
+        source(&folders[2], "note.pdf"),
+    ];
+    let filesystem = Arc::new(UndeletableOriginalFileSystem::default());
+    let pipeline = reviewed_queue(temp.path(), filesystem.clone(), 3);
+    let ids = paths
+        .iter()
+        .map(|path| ready_document(&pipeline, path))
+        .collect::<Vec<_>>();
+    filesystem.refuse.store(true, Ordering::SeqCst);
+    for &id in &ids {
+        pipeline
+            .approve(id, AGREEMENT_NAME, "An employment agreement.")
+            .unwrap_err();
+        let parked = item_of(&pipeline, id);
+        assert_eq!(parked.status, QueueStatus::NeedsReview);
+        assert_eq!(parked.error_code, Some(ErrorCode::SourceDeleteFailed));
+    }
+    filesystem.refuse.store(false, Ordering::SeqCst);
+
+    // A different name: the earlier filing is finished, and the person is
+    // told their name was not the one used.
+    let renamed = "2024-04-12 Employment Agreement with Acme.pdf";
+    let refused = pipeline
+        .approve(ids[0], renamed, "An employment agreement.")
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert!(
+        refused.message.contains(AGREEMENT_NAME),
+        "{}",
+        refused.message
+    );
+    let filed = item_of(&pipeline, ids[0]);
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        folders[0].join(AGREEMENT_NAME)
+    );
+    assert!(!folders[0].join(renamed).exists());
+    assert!(!paths[0].exists());
+
+    // A different sentence alone is a change too.
+    let refused = pipeline
+        .approve(ids[1], AGREEMENT_NAME, "A signed employment agreement.")
+        .unwrap_err();
+    assert_eq!(refused.code, "ALREADY_FILED");
+    assert_eq!(item_of(&pipeline, ids[1]).status, QueueStatus::Completed);
+
+    // Exactly what was being filed: done, and nothing to say.
+    pipeline
+        .approve(ids[2], AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, ids[2]).status, QueueStatus::Completed);
+    assert!(folders[2].join(AGREEMENT_NAME).exists());
+    assert!(!paths[2].exists());
+}
+
 /// A destination on a network share that is offline at the moment of an
 /// undo: nothing under `share` can be read, and asking whether a file is
 /// there fails rather than answering no.

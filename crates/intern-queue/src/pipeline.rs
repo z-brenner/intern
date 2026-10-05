@@ -2173,9 +2173,10 @@ impl Pipeline {
             self.check_again(id)?;
             item = self.find_item(id)?;
             if item.status == QueueStatus::Completed {
-                // The earlier rename had in fact landed: the document is
-                // filed, under the name that rename gave it.
-                return Ok(());
+                // The earlier operation had in fact landed, or an undo of it
+                // never did: the document is filed, under the name that
+                // rename gave it.
+                return self.already_filed(&item, &filename, description);
             }
         }
         if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
@@ -2232,6 +2233,56 @@ impl Pipeline {
             }
         };
         self.apply_if_unchanged(&ready, &filename, &settings)
+    }
+
+    /// What approving says when checking the files again finished the earlier
+    /// operation instead, and the document is filed already.
+    ///
+    /// Approval of exactly what the earlier rename was filing - the name and
+    /// sentence on the record, or the name the file actually took - is done.
+    /// Anything the person changed was not applied, and reporting success
+    /// told them it had been: the window said "Rename applied" over a
+    /// document still filed under the old name, with the new name and
+    /// sentence dropped and nothing learned from them. Renaming a filed
+    /// document is an undo and a new approval, and the refusal says so.
+    fn already_filed(
+        &self,
+        item: &QueueItem,
+        filename: &str,
+        description: &str,
+    ) -> PipelineResult<()> {
+        let filed_name = self
+            .store
+            .load_latest_complete_receipt(item.id)?
+            .filter(|receipt| receipt.direction == OperationDirection::Apply)
+            .and_then(|receipt| {
+                receipt
+                    .destination
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            });
+        let unchanged = self
+            .repository
+            .load_proposal(item.id)?
+            .is_some_and(|record| {
+                (record.filename == filename || filed_name.as_deref() == Some(filename))
+                    && record.description == description.trim()
+            });
+        if unchanged {
+            return Ok(());
+        }
+        let filed_as = filed_name.unwrap_or_else(|| {
+            item.source_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
+        Err(PipelineError::new(
+            "ALREADY_FILED",
+            format!(
+                "The earlier rename had already finished, so the document is filed as {filed_as} and your changes were not applied. Undo it to rename it again."
+            ),
+        ))
     }
 
     pub fn keep_original(&self, id: i64) -> PipelineResult<()> {
