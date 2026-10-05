@@ -13,7 +13,7 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_filename,
+    RuleKind, ValidatedProposal, compose_filename, counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
@@ -22,7 +22,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
-use crate::settings::{AppSettings, DestinationLayout, SettingsStore};
+use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 const LEASE_RENEWAL_ATTEMPTS: usize = 3;
@@ -507,6 +507,13 @@ pub struct ProposalRecord {
     /// differs from them, and why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub house_rules: Vec<HouseRule>,
+    /// The person's own organisation as Settings named it when `filename`
+    /// was composed. A party it names is left out of the name, so the name
+    /// and the Party folder carry the other side. Kept with the record so the
+    /// name can be read back exactly as it was composed, whatever Settings
+    /// says by then.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own_names: Vec<String>,
     /// The name a document with nearly this text was already filed under -
     /// a second scan, a re-export, a copy saved again - when there is one.
     /// Such a document waits for a person rather than being filed twice.
@@ -533,11 +540,21 @@ pub const ALREADY_NAMED: &str = "ALREADY_NAMED";
 
 impl ProposalRecord {
     /// The validated facts as the name carries them: the document's words,
-    /// respelled the way the reviewer has taught Intern to.
+    /// respelled the way the reviewer has taught Intern to, with the
+    /// person's own organisation left out where the document names someone
+    /// else too. The one view the filename, the layout folder, a lesson
+    /// from an edit, and a filing report are all read from.
     pub fn styled_proposal(&self) -> ValidatedProposal {
-        HouseStyle::new(self.house_rules.clone())
+        self.name_view().0
+    }
+
+    /// [`Self::styled_proposal`], and the parties it left out because they
+    /// are the person's own organisation.
+    pub fn name_view(&self) -> (ValidatedProposal, Vec<String>) {
+        let styled = HouseStyle::new(self.house_rules.clone())
             .apply(&self.analysis.proposal)
-            .0
+            .0;
+        counterparty_view(&styled, &self.own_names)
     }
 }
 
@@ -1199,7 +1216,17 @@ impl Pipeline {
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
         let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
-        let filename = self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+        // And named by the other side when it names the person's own
+        // organisation too. Settings that cannot be read name nobody, so the
+        // name carries every party, as it did before the setting existed; an
+        // automatic rename below reports the unreadable file.
+        let own_names = self
+            .settings
+            .load()
+            .map(|settings| settings.own_names())
+            .unwrap_or_default();
+        let (named, _) = counterparty_view(&styled, &own_names);
+        let filename = self.compose_for_target(&item.source_path, &named, &extension, &existing);
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -1223,6 +1250,7 @@ impl Pipeline {
             analysis,
             revision: 1,
             house_rules,
+            own_names,
             near_duplicate_of,
             approved: false,
         };
@@ -1388,7 +1416,7 @@ impl Pipeline {
                 "learned spelling does not exist",
             ));
         }
-        self.restyle_waiting(None)
+        self.restyle_waiting()
     }
 
     /// Apply a learned spelling from now on without waiting for a second
@@ -1400,33 +1428,52 @@ impl Pipeline {
                 "learned spelling does not exist",
             ));
         }
-        self.restyle_waiting(None)
+        self.restyle_waiting()
     }
 
     /// Recomposes the proposed name of every document still waiting under
     /// the spellings now in force, so a rule that just changed shows in the
     /// queue at once rather than only on the next document.
+    fn restyle_waiting(&self) -> PipelineResult<()> {
+        self.recompose_waiting(None)
+    }
+
+    /// Names every document still waiting by the counterparty when it names
+    /// the person's own organisation, now that Settings names it `names`.
+    /// Waiting, unapproved documents are renamed in the queue at once, the
+    /// way a learned spelling renames them; a name a person approved is
+    /// theirs and keeps everything it says.
+    pub fn refresh_own_names(&self, names: &[String]) -> PipelineResult<()> {
+        self.recompose_waiting(Some(&normalize_own_names(names)))
+    }
+
+    /// Recomposes the proposed name of every waiting document whose name
+    /// the spellings in force, or `own_names` when it is given, would change.
     ///
-    /// `approved` names the document whose name a person has just typed, if
-    /// any. That name is theirs and is never recomposed: composing it again
+    /// A name a person approved is never recomposed: the one being approved
+    /// right now, and one approved earlier that is still waiting for a busy
+    /// queue to file it. It is the name they chose, and composing it again
     /// from the validated facts would throw away everything the facts do not
     /// carry, the date they typed in most of all.
-    fn restyle_waiting(&self, approved: Option<i64>) -> PipelineResult<()> {
+    fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
         let style = self.repository.active_style()?;
         let mut changed = false;
         for item in self.store.list()? {
-            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
-                || approved == Some(item.id)
-            {
+            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
             let Some(mut record) = self.repository.load_proposal(item.id)? else {
                 continue;
             };
-            let (styled, house_rules) = style.apply(&record.analysis.proposal);
-            if house_rules == record.house_rules {
+            if record.approved {
                 continue;
             }
+            let (styled, house_rules) = style.apply(&record.analysis.proposal);
+            let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
+            if house_rules == record.house_rules && own_names == record.own_names {
+                continue;
+            }
+            let (named, _) = counterparty_view(&styled, &own_names);
             let extension = item
                 .source_path
                 .extension()
@@ -1436,8 +1483,9 @@ impl Pipeline {
             let existing =
                 existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
             record.filename =
-                self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+                self.compose_for_target(&item.source_path, &named, &extension, &existing);
             record.house_rules = house_rules;
+            record.own_names = own_names;
             record.revision += 1;
             self.repository.replace_proposal(item.id, &record)?;
             changed = true;
@@ -1456,7 +1504,6 @@ impl Pipeline {
     /// rule.
     fn learn_from_edit(
         &self,
-        id: i64,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
@@ -1480,7 +1527,7 @@ impl Pipeline {
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
         }
-        self.restyle_waiting(Some(id))
+        self.restyle_waiting()
     }
 
     fn analyze_with_deadline(
@@ -1928,7 +1975,7 @@ impl Pipeline {
         // A preference store, not a filing step: a lesson that cannot be
         // written must not stop the rename that was just approved.
         if let Some(record) = proposed.as_ref() {
-            let _ = self.learn_from_edit(id, record, source_extension, &filename);
+            let _ = self.learn_from_edit(record, source_extension, &filename);
         }
         let ready = self
             .store

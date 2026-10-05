@@ -2619,6 +2619,364 @@ fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document()
     assert!(pipeline.learned_rules().unwrap().is_empty());
 }
 
+/// A statement of work the firm signed with a supplier, dated `written`.
+fn statement_of_work(written: &str) -> DocumentSource {
+    parsed(&format!(
+        "STATEMENT OF WORK effective as of {written} between Contoso Worldwide, Inc. and \
+         Ridgeline Cartography LLC for the member-map engagement."
+    ))
+}
+
+/// What the model reads in [`statement_of_work`]: the parties it names, in
+/// the order given, joined by `relation`.
+fn statement_of_work_proposal(
+    iso: &str,
+    written: &str,
+    parties: &[&str],
+    relation: PartyRelation,
+    confidence: f32,
+) -> ModelProposal {
+    ModelProposal {
+        document_type: Some("Statement of Work".into()),
+        document_date: Some(iso.into()),
+        date_role: Some(DateRole::Effective),
+        parties: parties.iter().map(|party| (*party).to_owned()).collect(),
+        party_relation: relation,
+        description: "Statement of work between Contoso Worldwide, Inc. and Ridgeline Cartography LLC for the member-map engagement.".into(),
+        confidence,
+        needs_review: false,
+        evidence: Evidence {
+            date: Some(format!("effective as of {written}")),
+            document_type: Some("STATEMENT OF WORK".into()),
+            parties: vec![
+                "between Contoso Worldwide, Inc. and Ridgeline Cartography LLC".into(),
+            ],
+        },
+    }
+}
+
+const BOTH_SIDES: [&str; 2] = ["Contoso Worldwide, Inc.", "Ridgeline Cartography LLC"];
+
+/// The firm's own name is on everything it files. Named once in Settings,
+/// it is left out of a name that has someone else to carry, so the name and
+/// the Party folder say who the document is with - while the analysis, the
+/// evidence, and a document that names only the firm keep the firm.
+#[test]
+fn own_names_file_by_counterparty_in_name_and_party_folder() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&filed).unwrap();
+    let with_supplier = source(&inbox, "sow.pdf");
+    let only_us = source(&inbox, "internal.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(statement_of_work("April 1, 2026")),
+        Ok(statement_of_work("May 4, 2026")),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        // The firm first, as the model often has it: without the setting
+        // this is filed in the firm's own Party folder with everything else.
+        Ok(statement_of_work_proposal(
+            "2026-04-01",
+            "April 1, 2026",
+            &BOTH_SIDES,
+            PartyRelation::Between,
+            0.94,
+        )),
+        Ok(statement_of_work_proposal(
+            "2026-05-04",
+            "May 4, 2026",
+            &["Contoso Worldwide, Inc."],
+            PartyRelation::For,
+            0.94,
+        )),
+    ]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            destination: filed.to_string_lossy().into_owned(),
+            destination_layout: DestinationLayout::Party,
+            // As a textarea sends it: padded, with a blank line.
+            our_names: vec!["  Contoso Worldwide, Inc. ".into(), String::new()],
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let filing = Arc::new(RecordingFiling::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_filing_sink(filing.clone());
+    let queued = pipeline
+        .enqueue_files(&[with_supplier, only_us])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+
+    pipeline.run_until_idle().unwrap();
+
+    let destination = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.status, QueueStatus::Completed);
+        item.receipt.unwrap().destination
+    };
+    assert_eq!(
+        destination(queued[0]),
+        filed
+            .join("Ridgeline Cartography LLC")
+            .join("2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"),
+        "named, and filed, by the other side"
+    );
+    assert_eq!(
+        destination(queued[1]),
+        filed
+            .join("Contoso Worldwide, Inc")
+            .join("2026-05-04 Statement of Work for Contoso Worldwide, Inc.pdf"),
+        "a document that names only the firm keeps the firm"
+    );
+
+    let record = record_of(&pipeline, queued[0]);
+    assert_eq!(record.own_names, vec!["Contoso Worldwide, Inc."]);
+    assert_eq!(
+        record.analysis.proposal.parties, BOTH_SIDES,
+        "the analysis keeps both sides"
+    );
+    assert_eq!(
+        record.analysis.proposal.evidence.parties,
+        vec!["between Contoso Worldwide, Inc. and Ridgeline Cartography LLC"]
+    );
+    assert_eq!(
+        record.name_view().1,
+        vec!["Contoso Worldwide, Inc."],
+        "and says which side it left out"
+    );
+    assert!(record_of(&pipeline, queued[1]).name_view().1.is_empty());
+    let heard = filing.filed.lock().unwrap();
+    assert_eq!(heard[0].proposal.parties, vec!["Ridgeline Cartography LLC"]);
+    assert_eq!(heard[1].proposal.parties, vec!["Contoso Worldwide, Inc."]);
+}
+
+/// A second document claimed the way a running queue claims one, so the
+/// store refuses applies and an approval waits for the scheduler.
+fn hold_the_queue(pipeline: &Pipeline, database: &Path, inbox: &Path) -> (QueueStore, i64) {
+    let other = source(inbox, "being-read.pdf");
+    pipeline
+        .enqueue_files(std::slice::from_ref(&other))
+        .unwrap();
+    let busy = QueueStore::open(database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    (busy, claimed.id)
+}
+
+/// Naming the firm in Settings renames every document still waiting for a
+/// decision at once, in review or ready - and changing it back renames them
+/// back. A name a person already approved is theirs: it keeps what they
+/// typed, even while it waits for a busy queue to file it.
+#[test]
+fn refreshing_own_names_restyles_waiting_but_not_approved() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let dates = [
+        ("2026-04-01", "April 1, 2026", 0.5),
+        ("2026-05-04", "May 4, 2026", 0.94),
+        ("2026-06-01", "June 1, 2026", 0.94),
+    ];
+    let worker = Arc::new(FakeWorker::new(
+        dates
+            .iter()
+            .map(|(_, written, _)| Ok(statement_of_work(written)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        dates
+            .iter()
+            .map(|(iso, written, confidence)| {
+                Ok(statement_of_work_proposal(
+                    iso,
+                    written,
+                    &BOTH_SIDES,
+                    PartyRelation::Between,
+                    *confidence,
+                ))
+            })
+            .collect(),
+    ));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        database.clone(),
+        worker,
+        model,
+        events.clone(),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let queued = ["review.pdf", "ready.pdf", "approved.pdf"]
+        .map(|name| source(&inbox, name))
+        .to_vec();
+    let queued = pipeline
+        .enqueue_files(&queued)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let both = "Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf";
+    assert_eq!(
+        record_of(&pipeline, queued[1]).filename,
+        format!("2026-05-04 {both}")
+    );
+
+    let (busy, claimed) = hold_the_queue(&pipeline, &database, &inbox);
+    let typed = format!("2026-06-07 {both}");
+    pipeline
+        .approve(queued[2], &typed, "A sentence about the engagement.")
+        .unwrap();
+    let approved = record_of(&pipeline, queued[2]);
+    assert!(approved.approved, "waiting for the queue to be free");
+
+    // Settings names the firm.
+    let names = vec!["Contoso Worldwide, Inc.".to_owned(), "  ".to_owned()];
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings {
+            our_names: names.clone(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let heard = events.changed.load(Ordering::SeqCst);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert!(events.changed.load(Ordering::SeqCst) > heard);
+
+    let statuses = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|item| (item.id, item.status))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(statuses[&queued[0]], QueueStatus::NeedsReview);
+    assert_eq!(statuses[&queued[1]], QueueStatus::Ready);
+    for (id, date) in [(queued[0], "2026-04-01"), (queued[1], "2026-05-04")] {
+        let renamed = record_of(&pipeline, id);
+        assert_eq!(
+            renamed.filename,
+            format!("{date} Statement of Work with Ridgeline Cartography LLC.pdf")
+        );
+        assert_eq!(renamed.own_names, vec!["Contoso Worldwide, Inc."]);
+        assert_eq!(renamed.revision, 2);
+    }
+    assert_eq!(
+        record_of(&pipeline, queued[2]),
+        approved,
+        "the approved name keeps what the person typed"
+    );
+
+    // Unnamed again, the waiting documents carry both sides again.
+    pipeline.refresh_own_names(&[]).unwrap();
+    let restored = record_of(&pipeline, queued[1]);
+    assert_eq!(restored.filename, format!("2026-05-04 {both}"));
+    assert!(restored.own_names.is_empty());
+    assert_eq!(restored.revision, 3);
+    // And a list that changes nothing touches nothing.
+    pipeline.refresh_own_names(&[" ".into()]).unwrap();
+    assert_eq!(record_of(&pipeline, queued[1]).revision, 3);
+
+    busy.transition(
+        claimed,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    drop(busy);
+    pipeline.run_until_idle().unwrap();
+    let filed = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == queued[2])
+        .unwrap();
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert!(inbox.join(&typed).exists(), "filed under the typed name");
+}
+
+/// A spelling put to use renames what is waiting for a decision, not a name
+/// a person approved that is waiting only for a busy queue to file it.
+#[test]
+fn a_spelling_put_to_use_leaves_an_approved_name_alone() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let (pipeline, _) = learning_pipeline(
+        temp.path(),
+        &[
+            ("2024-04-12", "April 12, 2024"),
+            ("2024-05-03", "May 3, 2024"),
+            ("2024-06-07", "June 7, 2024"),
+        ],
+    );
+    let queued = ["a.pdf", "b.pdf", "c.pdf"]
+        .map(|name| source(&inbox, name))
+        .to_vec();
+    let queued = pipeline
+        .enqueue_files(&queued)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+
+    let (busy, claimed) = hold_the_queue(&pipeline, &temp.path().join("queue.sqlite3"), &inbox);
+    // Approved in the document's own words, and a date of the person's own.
+    let typed = "2024-05-04 Employment Agreement between John Smith and Acme Corporation.pdf";
+    pipeline
+        .approve(queued[1], typed, "A sentence about the agreement.")
+        .unwrap();
+    let approved = record_of(&pipeline, queued[1]);
+    assert!(approved.approved);
+
+    pipeline
+        .approve(
+            queued[0],
+            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "A sentence about the agreement.",
+        )
+        .unwrap();
+    let rule = pipeline.learned_rules().unwrap().remove(0);
+    pipeline.use_rule(rule.id).unwrap();
+
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        "the document waiting for a decision takes the spelling"
+    );
+    assert_eq!(record_of(&pipeline, queued[1]), approved);
+
+    busy.transition(
+        claimed,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+}
+
 /// An agreement long enough to fingerprint, with the date and the names
 /// the canned proposal quotes.
 const AGREEMENT: &str = "EMPLOYMENT AGREEMENT\n\nThis Employment Agreement is signed April 12, 2024 \
