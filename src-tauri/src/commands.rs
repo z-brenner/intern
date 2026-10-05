@@ -1342,8 +1342,14 @@ fn second_launch_shows_window(arguments: &[String]) -> bool {
 /// pipeline (and with it the local model process) down deliberately, then
 /// leave without starting window teardown - the same shape as the close-time
 /// exit, which deliberately avoids wedging in WebView destruction.
+///
+/// `process::exit` runs no destructors, and the notification-area icon is
+/// removed only when the tray icon is dropped: without the explicit removal
+/// Windows kept a ghost Intern icon in the tray until the pointer passed over
+/// it, and people clicked it believing Intern was still running.
 pub(crate) fn shutdown_and_exit(app: &AppHandle) -> ! {
     shutdown_runtime(app);
+    let _ = app.remove_tray_by_id(crate::tray::TRAY_ID);
     std::process::exit(0);
 }
 
@@ -3491,6 +3497,31 @@ mod second_instance_tests {
             "intern.exe".to_owned(),
             "--minimized".to_owned()
         ]));
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    /// TAURI_SHELL-8. `process::exit` runs no destructors, and Windows takes
+    /// the icon out of the notification area only when the tray icon is
+    /// dropped, so Quit Intern left a ghost icon behind. Nothing short of a
+    /// live tray can watch that happen; what can be pinned is that the quit
+    /// path removes the icon, and does so before it leaves.
+    #[test]
+    fn quitting_from_the_tray_removes_the_icon_before_the_process_ends() {
+        let source = include_str!("commands.rs");
+        let body = source
+            .split("pub(crate) fn shutdown_and_exit(app: &AppHandle) -> ! {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("the quit path is in commands.rs");
+        let removal = body
+            .find("app.remove_tray_by_id(crate::tray::TRAY_ID)")
+            .expect("the quit path removes the tray icon");
+        let exit = body
+            .find("std::process::exit(0)")
+            .expect("the quit path exits");
+        assert!(removal < exit, "the icon must go before the process does");
     }
 }
 
