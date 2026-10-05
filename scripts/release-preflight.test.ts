@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { releaseInputsDigest } from './hash-release-inputs.mjs';
 import { pendingSignoff, preflightProblems, setAsideStaleSignoff } from './release-preflight.mjs';
 
@@ -64,9 +64,18 @@ async function commitChange(root: string, path: string, contents: string) {
   execFileSync('git', ['commit', '-qm', `change ${path}`], { cwd: root });
 }
 
-async function runPreflight(root: string, ...args: string[]) {
+/**
+ * The command line, as the workflows run it. Its job summary is the one the
+ * caller names, or none: inherited, GITHUB_STEP_SUMMARY would be the summary
+ * of whichever Actions job is running these tests (CI, QA, or the release
+ * itself), and a temp repository's "sign-off set aside" note, with digests no
+ * commit has, would land in it as if it were that run's own.
+ */
+async function runPreflight(root: string, args: string[] = [], { summary = '' } = {}) {
   try {
-    const { stdout } = await exec(process.execPath, ['scripts/release-preflight.mjs', `--root=${root}`, ...args]);
+    const { stdout } = await exec(process.execPath, ['scripts/release-preflight.mjs', `--root=${root}`, ...args], {
+      env: { ...process.env, GITHUB_STEP_SUMMARY: summary },
+    });
     return { code: 0, stdout };
   } catch (error) {
     const failed = error as { code: number; stdout: string };
@@ -79,7 +88,7 @@ describe('release preflight', () => {
     const root = await releaseCommit();
 
     expect(preflightProblems(root)).toEqual([]);
-    const result = await runPreflight(root, `--workflow=Release v${version}`);
+    const result = await runPreflight(root, [`--workflow=Release v${version}`]);
     expect(result.code).toBe(0);
     expect(result.stdout).not.toContain('::error::');
   });
@@ -142,7 +151,7 @@ describe('release preflight', () => {
     // The name the run actually carries wins over the file's.
     const workflow = await releaseCommit();
     expect(preflightProblems(workflow, { workflow: 'Release v0.1.0-alpha.10' })).toEqual([expect.stringContaining('workflow 0.1.0-alpha.10')]);
-    const result = await runPreflight(workflow, '--workflow=Release v0.1.0-alpha.10');
+    const result = await runPreflight(workflow, ['--workflow=Release v0.1.0-alpha.10']);
     expect(result.code).toBe(1);
   });
 
@@ -189,14 +198,34 @@ describe('setting aside a stale sign-off for a QA run', () => {
     expect(await readFile(join(pending, 'docs', 'qa', 'rendered-fidelity-signoff.json'), 'utf8')).toBe(pendingBefore);
   });
 
-  it('runs from the command line the way qa.yml calls it', async () => {
+  it('runs from the command line the way qa.yml calls it, noting it in the summary the run names', async () => {
     const root = await releaseCommit();
     await commitChange(root, 'package.json', `${JSON.stringify({ name: 'intern', version, description: 'next release' }, null, 2)}\n`);
+    const summary = join(root, 'summary.md');
 
-    const result = await runPreflight(root, '--set-aside-stale-signoff');
+    const result = await runPreflight(root, ['--set-aside-stale-signoff'], { summary });
 
     expect(result.code).toBe(0);
     expect(result.stdout).toMatch(/^::notice::/);
     expect(JSON.parse(await readFile(join(root, 'docs', 'qa', 'rendered-fidelity-signoff.json'), 'utf8')).status).toBe('pending');
+    expect(await readFile(summary, 'utf8')).toContain(`this commit's are \`${releaseInputsDigest(root)}\``);
+  });
+
+  // These tests run inside CI, QA and release jobs. Their own summary is
+  // evidence a reviewer reads, and step 4 of docs/releasing.md copies a digest
+  // out of it, so a temp repository's note must never reach it.
+  it('never writes into the job summary of the run that is testing it', async () => {
+    const root = await releaseCommit();
+    await commitChange(root, 'package.json', `${JSON.stringify({ name: 'intern', version, description: 'next release' }, null, 2)}\n`);
+    const runSummary = join(root, 'the-running-job-summary.md');
+    await writeFile(runSummary, '### This run\n');
+    vi.stubEnv('GITHUB_STEP_SUMMARY', runSummary);
+    try {
+      const result = await runPreflight(root, ['--set-aside-stale-signoff']);
+      expect(result.stdout).toMatch(/^::notice::/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(await readFile(runSummary, 'utf8')).toBe('### This run\n');
   });
 });
