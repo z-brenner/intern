@@ -1267,6 +1267,19 @@ impl Pipeline {
         )?;
         self.admission
             .processed(&item.source_path, &item.source_hash);
+        // The organisation's names were read before the name was composed,
+        // and a Settings save since then renamed everything that was waiting
+        // - which this document was not, yet. Read once more now that it
+        // waits: a list that changed in between names it the way it names
+        // every other waiting document, and a save after this point finds it
+        // waiting.
+        let settings = self.settings.load();
+        if let Ok(current) = &settings {
+            let names = current.own_names();
+            if names != record.own_names {
+                self.recompose(&self.repository.active_style()?, &item, Some(&names))?;
+            }
+        }
         let ready_item = self
             .store
             .list()?
@@ -1281,7 +1294,7 @@ impl Pipeline {
         self.active_item.store(0, Ordering::SeqCst);
         self.events.queue_changed();
         if next == QueueStatus::Ready {
-            let settings = match self.settings.load() {
+            let settings = match settings {
                 Ok(settings) => settings,
                 Err(error) => {
                     self.repository.mark_needs_review(item.id, &error.code)?;
@@ -1442,7 +1455,10 @@ impl Pipeline {
     /// the person's own organisation, now that Settings names it `names`.
     /// Waiting, unapproved documents are renamed in the queue at once, the
     /// way a learned spelling renames them; a name a person approved is
-    /// theirs and keeps everything it says.
+    /// theirs and keeps everything it says. A document already named by
+    /// `names` is not touched, so asking again with the same list - after
+    /// every save, to finish a rename an earlier one never reached - writes
+    /// nothing and announces nothing.
     pub fn refresh_own_names(&self, names: &[String]) -> PipelineResult<()> {
         self.recompose_waiting(Some(&normalize_own_names(names)))
     }
@@ -1462,38 +1478,58 @@ impl Pipeline {
             if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
-            let Some(mut record) = self.repository.load_proposal(item.id)? else {
-                continue;
-            };
-            if record.approved {
-                continue;
-            }
-            let (styled, house_rules) = style.apply(&record.analysis.proposal);
-            let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
-            if house_rules == record.house_rules && own_names == record.own_names {
-                continue;
-            }
-            let (named, _) = counterparty_view(&styled, &own_names);
-            let extension = item
-                .source_path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            let existing =
-                existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
-            record.filename =
-                self.compose_for_target(&item.source_path, &named, &extension, &existing);
-            record.house_rules = house_rules;
-            record.own_names = own_names;
-            record.revision += 1;
-            self.repository.replace_proposal(item.id, &record)?;
-            changed = true;
+            changed |= self.recompose(&style, &item, own_names)?;
         }
         if changed {
             self.events.queue_changed();
         }
         Ok(())
+    }
+
+    /// Recomposes one waiting document's proposed name the way
+    /// [`Self::recompose_waiting`] does, and says whether its record changed.
+    ///
+    /// The revision moves only when the name does. It is how the window
+    /// knows the name it holds is no longer the proposal, and the reviewer's
+    /// draft of the name and the description is replaced when it moves. A
+    /// change that leaves the name as it was - an organisation this document
+    /// never mentions, a respelling of a party the name leaves out - is
+    /// stored without moving it, so whatever the reviewer has typed and not
+    /// yet approved survives a Settings save.
+    fn recompose(
+        &self,
+        style: &HouseStyle,
+        item: &QueueItem,
+        own_names: Option<&[String]>,
+    ) -> PipelineResult<bool> {
+        let Some(mut record) = self.repository.load_proposal(item.id)? else {
+            return Ok(false);
+        };
+        if record.approved {
+            return Ok(false);
+        }
+        let (styled, house_rules) = style.apply(&record.analysis.proposal);
+        let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
+        if house_rules == record.house_rules && own_names == record.own_names {
+            return Ok(false);
+        }
+        let (named, _) = counterparty_view(&styled, &own_names);
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
+        let filename = self.compose_for_target(&item.source_path, &named, &extension, &existing);
+        if filename != record.filename {
+            record.revision += 1;
+        }
+        record.filename = filename;
+        record.house_rules = house_rules;
+        record.own_names = own_names;
+        self.repository.replace_proposal(item.id, &record)?;
+        Ok(true)
     }
 
     /// What an approved edit teaches, if anything: a respelled party or

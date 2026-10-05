@@ -2916,6 +2916,169 @@ fn refreshing_own_names_restyles_waiting_but_not_approved() {
     assert!(inbox.join(&typed).exists(), "filed under the typed name");
 }
 
+/// The proposal's revision is the window's cue that the name it shows is no
+/// longer the proposal, and the reviewer's unapproved draft of the name and
+/// the description is replaced when it moves. Naming the firm in Settings
+/// must not move it for a document whose name does not change - one that
+/// never mentions the firm - or saving Settings throws away what a reviewer
+/// had typed into it.
+#[test]
+fn naming_the_firm_keeps_the_revision_of_a_name_it_does_not_change() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(statement_of_work("April 1, 2026")),
+        Ok(parsed(AGREEMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(statement_of_work_proposal(
+            "2026-04-01",
+            "April 1, 2026",
+            &BOTH_SIDES,
+            PartyRelation::Between,
+            0.94,
+        )),
+        Ok(proposal(0.94, false)),
+    ]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        events.clone(),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let queued = pipeline
+        .enqueue_files(&[source(&inbox, "sow.pdf"), source(&inbox, "employment.pdf")])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let untouched = record_of(&pipeline, queued[1]);
+    assert_eq!(untouched.revision, 1);
+
+    let names = vec!["Contoso Worldwide, Inc.".to_owned()];
+    pipeline.refresh_own_names(&names).unwrap();
+
+    let renamed = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        renamed.filename,
+        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+    );
+    assert_eq!(renamed.revision, 2, "a new name is a new proposal");
+    let kept = record_of(&pipeline, queued[1]);
+    assert_eq!(kept.filename, untouched.filename);
+    assert_eq!(
+        kept.revision, 1,
+        "the same name: the reviewer's draft of it stands"
+    );
+    // The list is still stored with it, so the record says which names it
+    // was composed under, and the next save has nothing to do.
+    assert_eq!(kept.own_names, names);
+
+    // Asked again with the same names, as every save asks, nothing is
+    // written and nothing is announced.
+    let heard = events.changed.load(Ordering::SeqCst);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert_eq!(events.changed.load(Ordering::SeqCst), heard);
+    assert_eq!(record_of(&pipeline, queued[0]), renamed);
+    assert_eq!(record_of(&pipeline, queued[1]), kept);
+}
+
+/// Says nothing about duplicates. Asked after a document's name has been
+/// composed and before its proposal is stored, which is when it saves
+/// Settings naming the firm: the moment a Settings save lands while the
+/// document is still being read, and its rename of everything waiting
+/// cannot see the document yet.
+struct SettingsSavedMidway {
+    settings: PathBuf,
+    names: Vec<String>,
+}
+
+impl DuplicateOracle for SettingsSavedMidway {
+    fn filed_elsewhere(&self, _source_hash: &str, _source_path: &Path) -> Option<KnownFiling> {
+        None
+    }
+
+    fn similar_elsewhere(&self, _fingerprint: u64) -> Option<SimilarFiling> {
+        let store = SettingsStore::new(&self.settings);
+        let mut settings = store.load().unwrap();
+        settings.our_names = self.names.clone();
+        store.save(&settings).unwrap();
+        None
+    }
+}
+
+/// The firm named in Settings while a document is being read: the save's
+/// rename of everything waiting runs before the document waits, so the
+/// document reads the names once more when it does, and is named by the
+/// other side like everything else.
+#[test]
+fn own_names_saved_while_a_document_is_read_name_it_too() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    // Long enough to have a text fingerprint, which is what asks the shared
+    // index about near-duplicates.
+    let text = format!(
+        "{} The supplier surveys, draws and delivers a member map for every region the \
+         network covers, reviews each draft with the member team, and corrects every map \
+         the team marks before the final delivery date.",
+        "STATEMENT OF WORK effective as of April 1, 2026 between Contoso Worldwide, Inc. and \
+         Ridgeline Cartography LLC for the member-map engagement."
+    );
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(&text))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
+        "2026-04-01",
+        "April 1, 2026",
+        &BOTH_SIDES,
+        PartyRelation::Between,
+        0.94,
+    ))]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap()
+    .with_duplicate_oracle(Arc::new(SettingsSavedMidway {
+        settings: settings_path.clone(),
+        names: vec!["Contoso Worldwide, Inc.".into()],
+    }));
+    let id = pipeline
+        .enqueue_files(&[source(&inbox, "sow.pdf")])
+        .unwrap()[0]
+        .id;
+
+    pipeline.run_until_idle().unwrap();
+
+    let record = record_of(&pipeline, id);
+    assert_eq!(
+        SettingsStore::new(&settings_path).load().unwrap().our_names,
+        vec!["Contoso Worldwide, Inc."],
+        "the save landed while the document was being read"
+    );
+    assert_eq!(
+        record.filename,
+        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+    );
+    assert_eq!(record.own_names, vec!["Contoso Worldwide, Inc."]);
+    assert_eq!(record.name_view().1, vec!["Contoso Worldwide, Inc."]);
+}
+
 /// A spelling put to use renames what is waiting for a decision, not a name
 /// a person approved that is waiting only for a busy queue to file it.
 #[test]
