@@ -1571,6 +1571,42 @@ fn skip_rules_ignore_dotfiles_office_locks_unsupported_and_empty_files() {
     assert_eq!(status.claimed_by_others, 0);
 }
 
+/// The host watches by the one admission list, so the legacy and open
+/// formats the worker learned to read are claimed from a watched folder the
+/// moment they arrive, like a PDF. What the skip rules leave alone stays left
+/// alone in those formats too: the `~$` owner file Office keeps beside an open
+/// legacy document, LibreOffice's `.~lock` file, and Intern's own history
+/// export, which is a CSV.
+#[test]
+fn documents_in_newly_read_formats_are_claimed_and_their_lock_files_are_not() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.extensions = intern_core::SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect();
+    });
+    rig.step();
+    let mut documents = vec![
+        rig.write("letter.doc", b"legacy word"),
+        rig.write("ledger.xls", b"legacy excel"),
+        rig.write("statement.csv", b"date,amount\r\n"),
+        rig.write("minutes.odt", b"open document"),
+    ];
+    rig.write("~$letter.doc", b"office owner file");
+    rig.write("~$ledger.xls", b"office owner file");
+    rig.write(".~lock.minutes.odt#", b"libreoffice lock");
+    rig.write("intern-history.csv", b"at,direction\r\n");
+    rig.step();
+    rig.step();
+    let mut enqueued = rig.host.enqueued();
+    enqueued.sort();
+    documents.sort();
+    assert_eq!(enqueued, documents);
+    let status = rig.watcher.status();
+    assert_eq!(status.held_for_others, 0);
+    assert_eq!(status.unreadable_documents, 0);
+}
+
 #[test]
 fn dropping_the_watcher_joins_the_scan_thread() {
     let rig = Rig::start(false, &[]);

@@ -3686,6 +3686,27 @@ mod intake_tests {
         assert!(first_look.retake_backlog);
     }
 
+    /// The watcher claims by the same single list the queue admits by, so a
+    /// format the worker learns to read - a legacy Word or Excel file, a bank
+    /// statement's CSV - is picked up from a watched folder too, rather than
+    /// left there unseen while a dropped copy of it would be read.
+    #[test]
+    fn the_watcher_claims_every_format_the_queue_admits() {
+        let config = intake_config(
+            PathBuf::from("/srv/scans"),
+            &AppSettings::default(),
+            Path::new("/home/pat/.local/share/intern"),
+            false,
+        );
+        assert_eq!(config.extensions, intern_queue::paths::SUPPORTED_EXTENSIONS);
+        for extension in ["doc", "xls", "csv", "odt", "docm"] {
+            assert!(
+                config.extensions.iter().any(|watched| watched == extension),
+                "{extension} is admitted, so it is watched"
+            );
+        }
+    }
+
     /// "Only new documents" means new from when watching starts. Turning
     /// watching on, choosing another folder, or changing whose documents it
     /// admits starts a new watch, which takes the first look again; the look
