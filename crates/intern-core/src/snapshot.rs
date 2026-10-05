@@ -37,6 +37,21 @@ pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "tif", "tiff",
 ];
 
+/// Whether a file name is one Intern's own rename-history export goes by:
+/// `intern-history.csv`, the name its save dialog suggests, and the
+/// `intern-history (2).csv` or `intern-history-march.csv` a person or the
+/// dialog makes of it.
+///
+/// The export is Intern's own record of what it renamed - every filed
+/// document's old and new path and its description - and since `.csv` is
+/// admitted, one saved into a watched folder looked like any new upload:
+/// it was claimed, read by the model as a client's ledger, and renamed and
+/// filed like one. Nothing Intern admits by this name is a document to file.
+pub fn is_history_export(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.starts_with("intern-history") && name.ends_with(".csv")
+}
+
 /// A directory controlled by Intern and kept outside watched or synced roots.
 ///
 /// Each snapshot receives a create-new child directory. The child name is not
