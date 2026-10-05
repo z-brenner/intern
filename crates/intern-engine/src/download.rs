@@ -123,13 +123,21 @@ impl ReqwestHttpTransport {
                 "download timeouts must be bounded and nonzero",
             ));
         }
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(connect_timeout)
-            .read_timeout(read_timeout);
-        if let Some(overall_timeout) = overall_timeout {
-            builder = builder.timeout(overall_timeout);
-        }
-        let client = builder.build().map_err(|_| {
+        let build = |native_roots: bool| {
+            let mut builder = reqwest::Client::builder()
+                .connect_timeout(connect_timeout)
+                .read_timeout(read_timeout)
+                .tls_built_in_native_certs(native_roots);
+            if let Some(overall_timeout) = overall_timeout {
+                builder = builder.timeout(overall_timeout);
+            }
+            builder.build()
+        };
+        // The operating system's roots are what let the download through a
+        // firm's TLS-inspecting proxy. A store holding nothing usable makes
+        // the build fail outright, though, and that must not stop a download
+        // the bundled roots alone can still make.
+        let client = build(true).or_else(|_| build(false)).map_err(|_| {
             ModelError::new(
                 ModelErrorCode::DownloadFailed,
                 "download client could not be created",

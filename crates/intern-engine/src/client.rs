@@ -106,11 +106,15 @@ impl ModelClient {
                 "model endpoint must be local HTTP",
             ));
         }
+        // Plain HTTP to this machine never consults a root certificate, so
+        // the operating system's store is not read: one with nothing usable
+        // in it fails the build, and must not stop the local model.
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(10 * 60))
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
+            .tls_built_in_native_certs(false)
             .build()
             .map_err(|_| request_failed())?;
         Ok(Self {

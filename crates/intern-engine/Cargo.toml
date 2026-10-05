@@ -20,7 +20,12 @@ path = "src/bin/intern-evaluate.rs"
 base64 = "=0.22.1"
 fs4 = "=0.13.1"
 rand = "=0.8.5"
-reqwest = { version = "=0.12.15", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# Both root sets: the bundled Mozilla roots, and the operating system's store.
+# A firm that inspects TLS installs its own root in the Windows store by
+# policy, and with the bundled roots alone the model download and a hosted
+# model failed behind it with nothing saying why. The union matters: the
+# bundled set still covers roots Windows has not fetched yet.
+reqwest = { version = "=0.12.15", default-features = false, features = ["blocking", "json", "rustls-tls", "rustls-tls-native-roots"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 sha2 = "=0.10.9"
@@ -36,4 +41,9 @@ unicode-normalization = "=0.1.24"
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
+# A throwaway HTTPS server for tests/native_roots.rs, at the versions reqwest
+# already locks. Ring only: it is the provider reqwest is built with.
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "=2.2.0"
+rustls-pki-types = "=1.15.1"
 tempfile = "=3.23.0"

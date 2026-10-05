@@ -404,11 +404,14 @@ struct ReqwestHealthProbe {
 
 impl ReqwestHealthProbe {
     fn new() -> EngineResult<Self> {
+        // Loopback HTTP only; see `ModelClient::new` for why the operating
+        // system's certificate store is left unread.
         let client = Client::builder()
             .connect_timeout(Duration::from_millis(500))
             .timeout(Duration::from_secs(1))
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
+            .tls_built_in_native_certs(false)
             .build()
             .map_err(|_| start_failed())?;
         Ok(Self { client })

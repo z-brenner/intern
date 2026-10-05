@@ -235,14 +235,23 @@ impl HostedClient {
         // exactly on the grounds that neither leaves the machine. Redirects
         // are refused either way, so a key is only ever sent to the address
         // that was configured.
-        let mut builder = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none());
-        if !uses_system_proxy(&endpoint) {
-            builder = builder.no_proxy();
-        }
-        let http = builder.build().map_err(|_| unreachable_error())?;
+        let build = |native_roots: bool| {
+            let mut builder = Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(REQUEST_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .tls_built_in_native_certs(native_roots);
+            if !uses_system_proxy(&endpoint) {
+                builder = builder.no_proxy();
+            }
+            builder.build()
+        };
+        // The operating system's roots are what make a firm's inspecting
+        // proxy trusted, but a store with nothing usable in it fails the
+        // build outright. The bundled roots alone are still a working client.
+        let http = build(true)
+            .or_else(|_| build(false))
+            .map_err(|_| unreachable_error())?;
         Ok(Self {
             config,
             endpoint,
