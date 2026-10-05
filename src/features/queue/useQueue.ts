@@ -18,15 +18,14 @@ export function useQueue(bridge: DesktopBridge) {
   const [readError, setReadError] = useState<QueueIssue | null>(null);
   const [subscriptionError, setSubscriptionError] = useState<QueueIssue | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
-  const connection = useRef<{ bridge: DesktopBridge; reader: QueueReader } | null>(null);
-  // The last list read, as soon as it is read. State reaches the screen a
-  // render later; a caller that has just awaited refresh() needs it now, to
-  // choose what to show next from the queue as it is after its own action.
-  const latest = useRef<QueueItem[]>([]);
-  const snapshot = useCallback(() => latest.current, []);
+  const connection = useRef<{ bridge: DesktopBridge; reader: QueueReader<QueueItem[]> } | null>(null);
+  // Resolves with the list it read. State reaches the screen a render later,
+  // and the read on screen may by then be a newer one a queue event started;
+  // a caller that has just acted needs the queue as it is after its action,
+  // to choose what to show next and to say what the action did.
   const refresh = useCallback(async () => {
     const current = connection.current;
-    if (current?.bridge === bridge) await current.reader.refresh();
+    return current?.bridge === bridge ? current.reader.refresh() : undefined;
   }, [bridge]);
   const reconnect = useCallback(() => setConnectionAttempt((attempt) => attempt + 1), []);
 
@@ -35,7 +34,7 @@ export function useQueue(bridge: DesktopBridge) {
     let stop: (() => void) | undefined;
     const reader = createQueueReader(
       () => bridge.listItems(),
-      (read) => { latest.current = read; setItems(read); setReadError(null); },
+      (read) => { setItems(read); setReadError(null); },
       (cause) => setReadError({ kind: 'snapshot', cause }),
     );
     connection.current = { bridge, reader };
@@ -92,5 +91,5 @@ export function useQueue(bridge: DesktopBridge) {
   }, [bridge, connectionAttempt]);
 
   const execute = useCallback(async (action: () => Promise<void>) => { await action(); await refresh(); }, [refresh]);
-  return { items, paused, setPaused, refresh, snapshot, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
+  return { items, paused, setPaused, refresh, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
 }

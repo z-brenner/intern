@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { QueueBridgeEvent } from '../../lib/tauriBridge';
 
 describe('queue interactions', () => {
   const selectRow = async (row: HTMLElement) => {
@@ -513,6 +514,60 @@ describe('queue interactions', () => {
     const result = await screen.findByRole('group', { name: 'Action result' });
     expect(result).toHaveTextContent('Renamed 1 document. 2 will be renamed when the queue is free.');
     expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+  });
+
+  /**
+   * The desktop raises queue://changed as a command files a document, and
+   * the event can arrive after the command's reply - while the action's own
+   * reread is under way. The background read it starts supersedes that
+   * reread, which is then never shown; here the newer read is held until the
+   * test lets it go, so what is on screen is still the queue from before.
+   */
+  const eventAfterReply = () => {
+    const base = createInMemoryBridge();
+    let listener: ((event: QueueBridgeEvent) => void) | undefined;
+    let phase: 'idle' | 'decided' | 'event' = 'idle';
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const bridge = {
+      ...base,
+      approve: async (id: string, filename: string, description: string) => { await base.approve(id, filename, description); phase = 'decided'; },
+      listItems: async () => {
+        if (phase === 'event') { phase = 'idle'; await held; }
+        const read = await base.listItems();
+        if (phase === 'decided') { phase = 'event'; queueMicrotask(() => listener?.({ type: 'changed' })); }
+        return read;
+      },
+      subscribeQueue: async (next: (event: QueueBridgeEvent) => void) => { listener = next; return () => { listener = undefined; }; },
+    };
+    return { bridge, release };
+  };
+
+  it('says what a rename did from its own read, not one a queue event overtook', async () => {
+    const { bridge, release } = eventAfterReply();
+    render(<App bridge={bridge} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    // Filed and undoable, which only the read made after the rename can say.
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document.');
+    expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+    release();
+  });
+
+  it('says what Apply all ready did from its own read, not one a queue event overtook', async () => {
+    const { bridge, release } = eventAfterReply();
+    render(<App bridge={bridge} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 3 documents.');
+    expect(result).not.toHaveTextContent('when the queue is free');
+    expect(within(result).getByRole('button', { name: 'Undo these 3 renames' })).toBeEnabled();
+    release();
   });
 });
 

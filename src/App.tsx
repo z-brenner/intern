@@ -94,7 +94,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const historyTrigger = useRef<HTMLElement | null>(null);
   const reviewTrigger = useRef<{ element: HTMLButtonElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
-  const { items, paused, setPaused, refresh, snapshot, error: queueError, pipelineError, reconnect } = useQueue(bridge);
+  const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
   const inspectorHandle = useRef<ReviewInspectorHandle>(null);
   // Where focus goes once the item it is meant for is on screen: its row, or
   // its name or heading in the review panel.
@@ -258,8 +258,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     restoreQueueFocus();
   }, [selected, selectedId]);
   // Promise<unknown>: some commands report what they did - discardWaiting
-  // resolves with a count - and the result is not needed here.
-  const runQueueAction = async (run: () => Promise<unknown>, success: string) => {
+  // resolves with a count - and the result is not needed here. False when
+  // the command failed; otherwise the queue as read after it, for a caller
+  // that says what the command did - undefined when that reread failed.
+  const runQueueAction = async (run: () => Promise<unknown>, success: string): Promise<false | { read?: QueueItem[] }> => {
     if (actionInFlight.current) return false;
     actionInFlight.current = true;
     setActionPending(true);
@@ -277,9 +279,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       // The command has already happened. A reread that fails afterwards is
       // reported by the queue's own connection banner, and calling the command
       // failed would send someone looking for a file under its old name.
-      try { await refresh(); } catch { /* Reported as a queue connection error. */ }
+      let read: QueueItem[] | undefined;
+      try { read = await refresh(); } catch { /* Reported as a queue connection error. */ }
       setActionMessage(success);
-      return true;
+      return { read };
     } finally {
       actionInFlight.current = false;
       setActionPending(false);
@@ -292,11 +295,11 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const decide = async (item: QueueItem, decision: 'approve' | 'keep' | 'remove', run: () => Promise<void>) => {
     const before = undecidedOrder(visible);
     const selectionVersion = focusRestoreVersion.current;
-    const read = snapshot();
-    if (!await runQueueAction(run, '')) return;
+    const outcome = await runQueueAction(run, '');
+    if (!outcome) return;
     // Only a list read after the command says what it did; when that reread
     // failed, the command still happened and the queue as last read stands.
-    const fresh = snapshot() === read ? undefined : snapshot();
+    const fresh = outcome.read;
     const after = decision === 'approve' ? fresh?.find((entry) => entry.id === item.id)?.status : undefined;
     // An approval the backend accepted can still leave the document unrenamed:
     // it files the name between documents while the queue is busy, and sends
@@ -356,8 +359,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied.push(item.id); }
         catch (error) { failed.set(item.id, error); }
       }
-      await refresh();
-      const outcome = batchOutcome(applied, snapshot());
+      // Said from the batch's own read. The one on screen can be older: a
+      // queue event the renames raised starts a newer read, and the read
+      // made for the batch is then never shown.
+      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems());
       if (applied.length) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
       else setToast(undefined);
       if (failed.size) {
