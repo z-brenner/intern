@@ -13,13 +13,27 @@ import {
 vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: async () => '0.1.0-alpha.10' }));
 
-/** An update whose download replays `events`, as the updater plugin reports them. */
-/** An update whose download sends these events; each step is recorded, in order, in `steps`. */
-function updateDownloading(events: DownloadEvent[], steps: string[] = []) {
+/**
+ * An update whose download sends these events; each step is recorded, in
+ * order, in `steps`. Like the plugin, it holds the downloaded bytes until an
+ * install succeeds, and refuses to install without them. The first
+ * `failedInstalls` installs fail, as one whose installer cannot start does.
+ */
+function updateDownloading(events: DownloadEvent[], steps: string[] = [], { failedInstalls = 0 } = {}) {
+  let held = false;
+  let failures = failedInstalls;
   vi.mocked(check).mockResolvedValue({
     version: '0.1.0-alpha.11',
-    download: async (onEvent?: (event: DownloadEvent) => void) => { steps.push('download'); events.forEach((event) => onEvent?.(event)); },
-    install: async () => { steps.push('install'); },
+    download: async (onEvent?: (event: DownloadEvent) => void) => { steps.push('download'); events.forEach((event) => onEvent?.(event)); held = true; },
+    install: async () => {
+      if (!held) throw new Error('Update.install called before Update.download');
+      steps.push('install');
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('the installer could not be started');
+      }
+      held = false;
+    },
   } as unknown as Awaited<ReturnType<typeof check>>);
   return steps;
 }
@@ -543,6 +557,52 @@ describe('TauriBridge', () => {
     steps.length = 0;
     await expect(bridge.installUpdate(undefined, async () => { throw new Error('a rename is still moving'); })).rejects.toThrow('a rename is still moving');
     expect(steps).toEqual(['download']);
+  });
+
+  // The plugin keeps the verified bytes until an install succeeds. Downloading
+  // again on a retry fetched and verified the whole installer a second time
+  // and left the first copy allocated until Intern exited.
+  it('retries an install that failed after the download without downloading again', async () => {
+    const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('the queue could not be paused'); })).rejects.toThrow('the queue could not be paused');
+    expect(steps).toEqual(['download']);
+
+    // The retry says the download is complete, so what shows it moves on
+    // from "Downloading" rather than waiting for a download that never comes.
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction), async () => { steps.push('before install'); });
+    expect(steps).toEqual(['download', 'before install', 'install']);
+    expect(seen).toEqual([1]);
+  });
+
+  it('retries an install whose installer failed to start with the bytes it already verified', async () => {
+    const steps = updateDownloading([{ event: 'Finished' }], [], { failedInstalls: 1 });
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate()).rejects.toThrow('the installer could not be started');
+
+    await bridge.installUpdate();
+    expect(steps).toEqual(['download', 'install', 'install']);
+
+    // Once installed, the plugin has let the bytes go: installing again needs them again.
+    await bridge.installUpdate();
+    expect(steps).toEqual(['download', 'install', 'install', 'download', 'install']);
+  });
+
+  it('downloads an update found by a later check, not the bytes held for the one before it', async () => {
+    const first = updateDownloading([{ event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('the queue could not be paused'); })).rejects.toThrow();
+    const second = updateDownloading([{ event: 'Finished' }]);
+    await bridge.checkForUpdate();
+
+    await bridge.installUpdate();
+
+    expect(first).toEqual(['download']);
+    expect(second).toEqual(['download', 'install']);
   });
 
   it('installs the update it downloaded even when a later check finds another', async () => {

@@ -26,6 +26,16 @@ import { humanizeReason } from './reasons';
  */
 let pendingUpdate: { version: string; body?: string; date?: string; download(onEvent?: (event: DownloadEvent) => void): Promise<void>; install(): Promise<void> } | undefined;
 
+/**
+ * The update whose download finished and passed its signature check, while
+ * the plugin still holds those bytes. It frees them only when an install
+ * succeeds, so after a failure between the two steps a retry installs what it
+ * already has. Downloading again would fetch and verify the whole installer a
+ * second time and leave the first copy allocated, out of reach, until Intern
+ * exits; every retry would add another.
+ */
+let downloadedUpdate: typeof pendingUpdate;
+
 export interface TauriEvent<T> {
   event: string;
   id: number;
@@ -295,10 +305,16 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
         tell(1);
       }
     };
-    // download verifies the signature against the public key in
-    // tauri.conf.json before it hands anything back. An update signed by any
-    // other key is rejected here, before anything is installed.
-    await update.download(report);
+    if (downloadedUpdate === update) {
+      // Verified and still held from an earlier try: the download is done.
+      tell(1);
+    } else {
+      // download verifies the signature against the public key in
+      // tauri.conf.json before it hands anything back. An update signed by
+      // any other key is rejected here, before anything is installed.
+      await update.download(report);
+      downloadedUpdate = update;
+    }
     // Downloading and installing are separate steps so that what has to
     // happen before Intern closes happens in between, however long the
     // download took. On Windows install hands off to the NSIS installer,
@@ -306,6 +322,9 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     // fail after the process has already gone.
     await beforeInstall?.();
     await update.install();
+    // A successful install hands the bytes back to the plugin, which frees
+    // them; installing this update again starts from a fresh download.
+    downloadedUpdate = undefined;
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {
