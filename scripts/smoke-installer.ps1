@@ -25,6 +25,12 @@ New-Item -ItemType Directory -Path $UserDataDirectory -Force | Out-Null
 Set-Content -LiteralPath $Sentinel -Value "must survive uninstall" -Encoding utf8NoBOM
 
 if (Test-Path -LiteralPath $InstallDirectory) { throw "Smoke install target already exists: $InstallDirectory" }
+# "Send to > Intern" (src-tauri/windows/hooks.nsh). Checked before install so a
+# shortcut some earlier run left behind cannot pass for this installer's.
+$SendToShortcut = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::SendTo)) "Intern.lnk"
+if (Test-Path -LiteralPath $SendToShortcut) { throw "A Send to shortcut already exists before install: $SendToShortcut" }
+$StartupErrorLog = Join-Path $UserDataDirectory "logs/startup-error.log"
+if (Test-Path -LiteralPath $StartupErrorLog) { Remove-Item -LiteralPath $StartupErrorLog -Force }
 $AppProcess = $null
 $Install = Start-Process -FilePath $Installer -ArgumentList "/S" -Wait -PassThru
 if ($Install.ExitCode -ne 0) { throw "NSIS installer exited with $($Install.ExitCode)" }
@@ -32,6 +38,11 @@ if ($Install.ExitCode -ne 0) { throw "NSIS installer exited with $($Install.Exit
 try {
     $App = Join-Path $InstallDirectory "Intern.exe"
     if (-not (Test-Path -LiteralPath $App -PathType Leaf)) { throw "Installed application is missing: $App" }
+    if (-not (Test-Path -LiteralPath $SendToShortcut -PathType Leaf)) { throw "Send to shortcut is missing after install: $SendToShortcut" }
+    $SendToTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($SendToShortcut).TargetPath
+    if (-not [string]::Equals([IO.Path]::GetFullPath($SendToTarget), [IO.Path]::GetFullPath($App), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Send to shortcut points at $SendToTarget, not $App"
+    }
 
     $ManifestFiles = @(Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File -Filter "runtime-assets.json")
     if ($ManifestFiles.Count -ne 1) { throw "Expected exactly one installed runtime-assets.json, got $($ManifestFiles.Count)" }
@@ -65,6 +76,10 @@ try {
 
     & (Join-Path $PSScriptRoot "smoke-worker.ps1") -WorkerPath (Join-Path $InstallDirectory "intern-worker.exe") -RuntimeDirectory $InstallDirectory -FixtureDirectory $FixtureDirectory
 
+    # The main window is created hidden and shown as setup's last step, so a
+    # window handle here also means setup finished. A failed start shows the
+    # window too (behind a dialog saying why), so the startup error log is
+    # what tells the two apart.
     $AppProcess = Start-Process -FilePath $App -PassThru
     $WindowReady = $false
     for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
@@ -77,6 +92,9 @@ try {
         }
     }
     if (-not $WindowReady) { throw "Installed Intern.exe did not create a main window" }
+    if (Test-Path -LiteralPath $StartupErrorLog) {
+        throw "Installed Intern.exe could not start: $(Get-Content -LiteralPath $StartupErrorLog -Raw)"
+    }
     if (-not $AppProcess.CloseMainWindow()) { throw "Installed Intern.exe rejected a normal window close request" }
     # A WebView2 app on a shared CI runner can take well over fifteen seconds to
     # tear its browser process down, and a timeout here reads as "the app hangs on
@@ -101,6 +119,7 @@ try {
     if ($Uninstall.ExitCode -ne 0) { throw "NSIS uninstaller exited with $($Uninstall.ExitCode)" }
     Start-Sleep -Seconds 2
     if (Test-Path -LiteralPath $App) { throw "Application binary remains after uninstall" }
+    if (Test-Path -LiteralPath $SendToShortcut) { throw "Send to shortcut remains after uninstall: $SendToShortcut" }
     if ((Test-Path -LiteralPath $InstallDirectory) -and (Get-ChildItem -LiteralPath $InstallDirectory -Recurse -Force | Select-Object -First 1)) {
         throw "Installation files remain after uninstall: $InstallDirectory"
     }
@@ -126,7 +145,7 @@ try {
             }
         } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath -Encoding utf8NoBOM
     }
-    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, worker PDF/OCR, and install/uninstall smoke passed."
+    Write-Host "Per-user NSIS app launch, clean shutdown, signed runtime, worker PDF/OCR, Send to shortcut, and install/uninstall smoke passed."
 }
 finally {
     if ($AppProcess -and -not $AppProcess.HasExited) {

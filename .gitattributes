@@ -1,17 +1,16 @@
-# The release gate hashes the checked-out working tree.
+# Line endings are pinned so every checkout's working tree matches the index.
 #
-# scripts/hash-release-inputs.mjs reads every tracked file and digests its bytes
-# into release_inputs_sha256, which binds the rendered-fidelity sign-off to the
-# code it was reviewed against. With no .gitattributes that digest depended on
-# whichever core.autocrlf the checkout happened to use: this repository stores LF
-# in the index, so a Windows checkout with autocrlf=true produces CRLF working
-# files and a different digest than the same commit checked out with
-# autocrlf=input. The sign-off would then be rejected on the release runner for a
-# reason that has nothing to do with what was reviewed.
+# This used to matter to the release gate, which once digested the bytes of
+# every tracked file on disk: a Windows checkout with core.autocrlf=true
+# produced CRLF working files and a different digest from the same commit, and
+# the rendered-fidelity sign-off was rejected for a reason that had nothing to
+# do with what was reviewed. scripts/hash-release-inputs.mjs now digests the
+# commit's tree (`git ls-tree -r HEAD`), so release_inputs_sha256 is a property
+# of the commit and line endings can no longer move it.
 #
-# Pinning eol=lf makes the working tree byte-identical to the index on every
-# machine, so the digest is a property of the commit rather than of the client
-# that fetched it. Nothing in the repository changes: the index is already LF.
+# eol=lf stays for working-tree consistency: scripts, fixtures, and tests read
+# these files as bytes, and a tool should see the same file on every machine.
+# Nothing in the repository changes: the index is already LF.
 * text=auto eol=lf
 
 # Binary assets must never be line-ending converted. text=auto already detects
@@ -25,6 +24,14 @@
 *.tiff binary
 *.pdf binary
 *.docx binary
+*.docm binary
+*.doc binary
+*.xlsm binary
+*.xls binary
+*.ppt binary
+*.odt binary
+*.odp binary
+*.ods binary
 *.gguf binary
 *.exe binary
 *.dll binary

@@ -1,7 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { SUPPORTED_FORMATS_LABEL } from '../../lib/formats';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
+import type { AddReport } from '../../types';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
 
 describe('queue interactions', () => {
@@ -15,10 +18,10 @@ describe('queue interactions', () => {
   it('keeps identical bytes from different paths separate and deduplicates only the same path', async () => {
     const bridge = createFixtureBatchBridge();
 
-    await bridge.addFiles([
+    const report = await bridge.addFiles([
       { path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' },
       { path: 'browser://duplicate-invoice-b.pdf', displayName: 'duplicate-invoice-b.pdf' },
-      { path: 'browser://unsupported.csv', displayName: 'unsupported.csv' },
+      { path: 'browser://unsupported.zip', displayName: 'unsupported.zip' },
       { path: 'browser://~$nda.docx', displayName: '~$nda.docx' },
     ]);
 
@@ -26,11 +29,78 @@ describe('queue interactions', () => {
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')).toMatchObject({ status: 'review', proposedFilename: '2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf' });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')).toMatchObject({ status: 'review', reason: expect.stringMatching(/different path.*separate/i) });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')?.id).not.toBe(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')?.id);
-    expect(items.find((item) => item.originalFilename === 'unsupported.csv')).toMatchObject({ status: 'failed', reason: expect.stringMatching(/unsupported.*skipped/i) });
-    expect(items.find((item) => item.originalFilename === '~$nda.docx')).toMatchObject({ status: 'failed', reason: expect.stringMatching(/lock file.*skipped/i) });
+    // What the desktop leaves out is reported, not queued as a failed row.
+    expect(report).toEqual({ added: 2, alreadyQueued: 0, skipped: [{ name: 'unsupported.zip', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
+    expect(items.map((item) => item.originalFilename)).toEqual(['duplicate-invoice-a.pdf', 'duplicate-invoice-b.pdf']);
 
-    await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }]);
-    expect(await bridge.listItems()).toHaveLength(4);
+    expect(await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }])).toEqual({ added: 0, alreadyQueued: 1, skipped: [] });
+    expect(await bridge.listItems()).toHaveLength(2);
+  });
+
+  // add_report_message_lists_skipped_files (TAURI_SHELL-5): one .zip among
+  // twenty-five attachments used to refuse all twenty-five. The rest are
+  // queued, and the one is named with its reason - read out, and on screen,
+  // because twenty-four rows for twenty-five files otherwise just look like a
+  // file went missing.
+  it('names the files an add left out, and why, without refusing the rest', async () => {
+    const bridge = createInMemoryBridge({ items: [] });
+    const attachments = Array.from({ length: 24 }, (_, index) => ({ path: `C:/Inbox/Invoice ${index + 1}.pdf`, displayName: `Invoice ${index + 1}.pdf` }));
+    const pickFiles = vi.fn(async () => [...attachments, { path: 'C:/Inbox/notes.zip', displayName: 'notes.zip' }]);
+    render(<App bridge={bridge} selection={{ pickFiles, pickFolder: async () => undefined, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add files' }));
+
+    const message = 'Added 24 documents. Skipped 1: notes.zip (not a supported format).';
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message));
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
+    expect(await screen.findByRole('row', { name: /Invoice 24\.pdf/ })).toBeVisible();
+    expect(screen.queryByRole('row', { name: /notes\.zip/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByRole('note', { name: 'Files not added' })).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
+  });
+
+  it('reports a backend add in the same words, and keeps a clean add off the screen', async () => {
+    const base = createInMemoryBridge({ items: [] });
+    const reports = [
+      { added: 198, alreadyQueued: 0, skipped: [{ name: 'scan-57.pdf', code: 'SOURCE_LOCKED' }, { name: 'empty.pdf', code: 'EMPTY_FILE' }] },
+      { added: 1, alreadyQueued: 2, skipped: [] },
+    ];
+    const addFolder = vi.fn(async () => reports.shift()!);
+    const folder = { path: 'C:/Inbox/Scans', displayName: 'Scans' };
+    render(<App bridge={{ ...base, addFolder }} selection={{ pickFiles: async () => [], pickFolder: async () => folder, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
+    const skipped = 'Added 198 documents. Skipped 2: scan-57.pdf (another program has it open), empty.pdf (the file is empty).';
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(skipped));
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(skipped);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Added 1 document. 2 were already in the queue.'));
+    // Nothing was left out this time, so the earlier notice goes with it.
+    expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
+  });
+
+  // "Send to > Intern" adds outside the window. What it left out used to be
+  // said nowhere at all; it is the same note as an add made here.
+  it('names what documents sent to Intern left out', async () => {
+    const base = createInMemoryBridge({ items: [] });
+    let deliver: ((report: AddReport) => void) | undefined;
+    const stop = vi.fn();
+    const subscribeLaunchReports = vi.fn((handler: (report: AddReport) => void) => { deliver = handler; return stop; });
+    const bridge: DesktopBridge & LaunchReportSource = { ...base, subscribeLaunchReports };
+    const view = render(<App bridge={bridge} />);
+    await screen.findByRole('main', { name: 'Intern' });
+    await waitFor(() => expect(deliver).toBeDefined());
+
+    act(() => deliver!({ added: 1, alreadyQueued: 0, skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
+
+    const message = 'Added 1 document. Skipped 2: Contract.doc (not a supported format), blank.pdf (the file is empty).';
+    expect(await screen.findByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message);
+    view.unmount();
+    expect(stop).toHaveBeenCalled();
   });
 
   it('focuses the existing result when the same unchanged path is dropped again', async () => {
@@ -53,7 +123,9 @@ describe('queue interactions', () => {
     render(<App bridge={createInMemoryBridge()} />);
 
     const zone = await screen.findByRole('region', { name: /drag files/i });
-    expect(zone).toHaveTextContent('Supports PDF, DOCX, XLSX, EML, TXT, Markdown, PNG, JPEG (JPG), and TIFF');
+    expect(zone).toHaveTextContent(`Supports ${SUPPORTED_FORMATS_LABEL}`);
+    expect(zone).toHaveTextContent(/PowerPoint/);
+    expect(zone).toHaveTextContent(/Outlook \.msg/);
     expect(zone).not.toHaveAttribute('tabindex');
   });
 

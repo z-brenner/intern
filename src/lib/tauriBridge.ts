@@ -1,8 +1,11 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+// Types only: the plugin itself is still imported lazily, below.
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
@@ -10,9 +13,11 @@ import type {
   FileSelection,
   FolderSelection,
   IntakeEventSource,
+  LaunchReportSource,
   SelectionBoundary,
   SelectionResult,
   SupportLinkTarget,
+  UpdateProgressListener,
   UpdateStatus,
 } from './bridge';
 import { humanizeReason } from './reasons';
@@ -21,7 +26,17 @@ import { humanizeReason } from './reasons';
  * The update found by the last check, held so that installing it cannot race a
  * second lookup and install something other than what the user was shown.
  */
-let pendingUpdate: { version: string; body?: string; date?: string; downloadAndInstall(): Promise<void> } | undefined;
+let pendingUpdate: { version: string; body?: string; date?: string; download(onEvent?: (event: DownloadEvent) => void): Promise<void>; install(): Promise<void> } | undefined;
+
+/**
+ * The update whose download finished and passed its signature check, while
+ * the plugin still holds those bytes. It frees them only when an install
+ * succeeds, so after a failure between the two steps a retry installs what it
+ * already has. Downloading again would fetch and verify the whole installer a
+ * second time and leave the first copy allocated, out of reach, until Intern
+ * exits; every retry would add another.
+ */
+let downloadedUpdate: typeof pendingUpdate;
 
 export interface TauriEvent<T> {
   event: string;
@@ -75,6 +90,13 @@ interface QueueItemDto {
   filedName?: string | null;
   keptOriginal?: boolean;
   parked?: boolean;
+  omittedParties?: string[];
+}
+
+interface AddReportDto {
+  added?: number;
+  alreadyQueued?: number;
+  skipped?: Array<{ name: string; code: string }>;
 }
 
 interface HistoryEntryDto {
@@ -115,7 +137,7 @@ export interface TauriSelectionBoundary extends SelectionBoundary {
   subscribeDragState?(listener: (state: DragState) => void): Promise<() => void>;
 }
 
-export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource {
+export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource, LaunchReportSource {
   constructor(private readonly transport: TauriTransport = defaultTransport) {}
 
   microsoftIntakeStatus(): Promise<MicrosoftIntakeStatus> { return this.transport.invoke('microsoft_intake_status'); }
@@ -130,12 +152,12 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return items.map(normalizeItem);
   }
 
-  addFiles(files: FileSelection[]): Promise<void> {
-    return this.transport.invoke('queue_add_files', { files });
+  async addFiles(files: FileSelection[]): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_files', { files }));
   }
 
-  addFolder(folder: FolderSelection): Promise<void> {
-    return this.transport.invoke('queue_add_folder', { folder });
+  async addFolder(folder: FolderSelection): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_folder', { folder }));
   }
 
   pauseQueue(): Promise<void> { return this.transport.invoke('queue_pause'); }
@@ -278,15 +300,98 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return { state: 'available', currentVersion, version: update.version, notes: update.body, date: update.date };
   }
 
-  async installUpdate(): Promise<void> {
-    if (!pendingUpdate) throw new Error('No update has been found to install');
-    // downloadAndInstall verifies the signature against the public key in
-    // tauri.conf.json before it writes anything. An update signed by any other
-    // key is rejected here, not after installation.
-    // On Windows this hands off to the NSIS installer, which closes Intern to
-    // replace it, so there is no relaunch call here to fail after the process
-    // has already gone.
-    await pendingUpdate.downloadAndInstall();
+  async installUpdate(onProgress?: UpdateProgressListener, beforeInstall?: () => Promise<void>): Promise<void> {
+    // Held for both steps: a check that finishes meanwhile replaces
+    // `pendingUpdate`, and only this object holds the bytes it downloaded.
+    const update = pendingUpdate;
+    if (!update) throw new Error('No update has been found to install');
+    // The plugin reports the size once and then each chunk as it lands, so
+    // the fraction is a running total. A server that sends no length gets an
+    // honest "downloading" rather than a percentage of nothing.
+    //
+    // It reports every network chunk, thousands of them for one installer,
+    // and each report re-renders whatever shows it. Only what a person could
+    // see change is passed on: the next whole percent, or the end.
+    let total: number | undefined;
+    let received = 0;
+    let told: { percent: number | undefined } | undefined;
+    const tell = (fraction: number | undefined) => {
+      const percent = fraction === undefined ? undefined : Math.floor(fraction * 100);
+      if (told && told.percent === percent) return;
+      told = { percent };
+      onProgress?.(fraction);
+    };
+    const report = (event: DownloadEvent) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength || undefined;
+        received = 0;
+        tell(total === undefined ? undefined : 0);
+      } else if (event.event === 'Progress') {
+        received += event.data.chunkLength;
+        tell(total === undefined ? undefined : Math.min(1, received / total));
+      } else {
+        tell(1);
+      }
+    };
+    if (downloadedUpdate === update) {
+      // Verified and still held from an earlier try: the download is done.
+      tell(1);
+    } else {
+      // download verifies the signature against the public key in
+      // tauri.conf.json before it hands anything back. An update signed by
+      // any other key is rejected here, before anything is installed.
+      await update.download(report);
+      downloadedUpdate = update;
+    }
+    // Downloading and installing are separate steps so that what has to
+    // happen before Intern closes happens in between, however long the
+    // download took. On Windows install hands off to the NSIS installer,
+    // which closes Intern to replace it, so there is no relaunch call here to
+    // fail after the process has already gone.
+    await beforeInstall?.();
+    // The installer starts Intern again with this process's arguments, and
+    // documents "Send to > Intern" named among them would be added again -
+    // whatever is at those paths by now. Told just before it takes over, the
+    // backend knows that relaunch for what it is; a download that failed or
+    // was never finished leaves nothing behind. Not being able to tell it is
+    // no reason to withhold an update.
+    await this.transport.invoke('update_relaunch_expected', { expected: true }).catch(() => undefined);
+    try {
+      await update.install();
+    } catch (error) {
+      // Nothing will relaunch, so the next launch is a person's own.
+      await this.transport.invoke('update_relaunch_expected', { expected: false }).catch(() => undefined);
+      throw error;
+    }
+    // A successful install hands the bytes back to the plugin, which frees
+    // them; installing this update again starts from a fresh download.
+    downloadedUpdate = undefined;
+  }
+
+  // Same shape as subscribeIntake. The event only says a report is waiting:
+  // the backend holds it until it is taken, because the add for a launch
+  // that started Intern can finish before this window is listening - so it
+  // is also asked for once, as soon as the listener is in place.
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void {
+    let active = true;
+    let stop: (() => void) | undefined;
+    const take = async () => {
+      try {
+        const report = await this.transport.invoke<AddReportDto | null | undefined>('queue_take_launch_report');
+        if (active && report) handler(normalizeAddReport(report));
+      } catch { /* Nothing to show; the queue still shows what was added. */ }
+    };
+    void this.transport.listen<unknown>('queue://launch-report', () => {
+      if (active) void take();
+    }).then((unlisten) => {
+      if (active) { stop = unlisten; void take(); }
+      else unlisten();
+    }).catch(() => { if (active) void take(); });
+    return () => {
+      if (!active) return;
+      active = false;
+      stop?.();
+    };
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {
@@ -300,8 +405,11 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     let progress: () => void;
     try {
       progress = await this.transport.listen<ProgressPayload>('queue://progress', ({ payload }) => {
+        // A whole percent, rounded down: `current` counts pages finished, and
+        // one of three is 33%, not 33.33333333333333% - nor 34%, which would
+        // claim a little of a page nobody has read yet.
         const progress = payload.total && payload.total > 0
-          ? Math.max(0, Math.min(100, (payload.current / payload.total) * 100))
+          ? Math.floor(Math.max(0, Math.min(100, (payload.current / payload.total) * 100)))
           : undefined;
         listener({
           type: 'progress',
@@ -457,6 +565,16 @@ export function processingStage(name: string): ProcessingStage | undefined {
   return undefined;
 }
 
+// Fresh arrays and plain numbers, whatever arrived: the report is shown, and
+// nothing about it is worth failing an add that already happened.
+function normalizeAddReport(report: AddReportDto | undefined): AddReport {
+  return {
+    added: report?.added ?? 0,
+    alreadyQueued: report?.alreadyQueued ?? 0,
+    skipped: (report?.skipped ?? []).map(({ name, code }) => ({ name, code })),
+  };
+}
+
 function normalizeItem(item: QueueItemDto): QueueItem {
   const status = normalizeStatus(item.status);
   const waiting = status === 'waiting';
@@ -495,6 +613,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.houseRules?.length ? { houseRules: item.houseRules.map((rule) => ({ ...rule })) } : {}),
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
+    ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
   };
 }
 
@@ -519,7 +638,12 @@ function normalizeStatus(status: BackendStatus): QueueItem['status'] {
 
 async function openDialog(transport: TauriTransport, directory: boolean): Promise<string[]> {
   const result = await transport.invoke<unknown>('plugin:dialog|open', {
-    options: { multiple: !directory, directory },
+    options: directory
+      ? { multiple: false, directory }
+      // Documents first, so the picker opens showing only what Intern can
+      // read; All files stays one click away, and whatever it lets through is
+      // reported by the add rather than refused with the rest.
+      : { multiple: true, directory, filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }] },
   });
   return stringPaths(result);
 }

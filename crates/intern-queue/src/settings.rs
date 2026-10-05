@@ -84,6 +84,12 @@ pub struct AppSettings {
     /// Subfolders under the destination, derived from each document's facts.
     #[serde(default)]
     pub destination_layout: DestinationLayout,
+    /// The person's own organisation, as each of its names is written. A
+    /// document that names it and someone else is named, and filed in the
+    /// Party layout, by the someone else. Empty means Intern names every
+    /// party, as every earlier version did.
+    #[serde(default)]
+    pub our_names: Vec<String>,
     /// Open to the tray rather than to the window. Like every other
     /// preference here it is simply off when the file does not mention it;
     /// the destination is the one field Intern will not invent, so a file
@@ -115,6 +121,14 @@ pub struct AppSettings {
     /// Register Intern to start when the user signs in.
     #[serde(default)]
     pub start_at_login: bool,
+    /// Do not ask GitHub for a newer release at launch or on the timer. The
+    /// check sends nothing about documents, but some offices allow no
+    /// unrequested traffic at all. Named for the exception rather than the
+    /// default so that a file without it - every file alpha.10 wrote - keeps
+    /// checks on, as they were; the frontend makes the check, and the button
+    /// in Settings still works either way.
+    #[serde(default)]
+    pub skip_update_checks: bool,
     /// Write a description record beside every document filed into the
     /// destination folder (`<destination>/.intern/descriptions/`), so a
     /// SharePoint column can be filled from it.
@@ -134,6 +148,24 @@ pub struct AppSettings {
     /// operating system's credential store.
     #[serde(default)]
     pub hosted_model: String,
+}
+
+impl AppSettings {
+    /// The organisation's names as a name is composed with them.
+    pub fn own_names(&self) -> Vec<String> {
+        normalize_own_names(&self.our_names)
+    }
+}
+
+/// Own names as they are matched: each trimmed, and the blank lines a list
+/// typed one name per line picks up left out.
+pub fn normalize_own_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// A settings file that was read, and the fields in it that could not be

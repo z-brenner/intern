@@ -177,6 +177,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
   // files must be checked first, and an item flagged before analysis has no
   // proposal for the backend to approve.
   const editable = actions.approve;
+  const omitted = item.omittedParties ?? [];
   const completed = item.status === 'completed';
   const filedAs = item.filedName ?? item.proposedFilename;
   const remove = actions.remove;
@@ -252,6 +253,14 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
       */}
       {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
         Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}. Change or forget it under Settings.
+      </p>}
+      {/*
+        The same for a party the evidence names and the name does not: the
+        person's own organisation, left out so the name says who the
+        document is with.
+      */}
+      {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
+        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organisation, so it is' : 'are your organisation, so they are'} left out of the name. Change this under Settings.
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:

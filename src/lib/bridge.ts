@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -64,8 +64,14 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
 
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
-  addFiles(files: FileSelection[]): Promise<void>;
-  addFolder(folder: FolderSelection): Promise<void>;
+  /**
+   * Add files - or, from a drop, folders too. One file that cannot be added
+   * never refuses the rest; the report says what was queued and names
+   * whatever was left out.
+   */
+  addFiles(files: FileSelection[]): Promise<AddReport>;
+  /** Add the supported documents in a folder, reported the same way. */
+  addFolder(folder: FolderSelection): Promise<AddReport>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
   cancel(id: string): Promise<void>;
@@ -128,12 +134,20 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * sends nothing but a request for the release manifest - no filenames, no
    * document contents, no identifier of any kind - and runs once when Intern
    * starts, again on a fixed interval for as long as it keeps running, and
-   * whenever someone presses the button in Settings. Nothing is downloaded or
-   * installed by a check on its own; that is always a separate, explicit click.
+   * whenever someone presses the button in Settings. The first two stop when
+   * `skipUpdateChecks` is set; the button always works. Nothing is downloaded
+   * or installed by a check on its own; that is always a separate, explicit
+   * click.
    */
   checkForUpdate(): Promise<UpdateStatus>;
-  /** Download and install the update found by the last check. */
-  installUpdate(): Promise<void>;
+  /**
+   * Download and install the update found by the last check. `onProgress`
+   * hears how much of the download has arrived as it arrives. `beforeInstall`
+   * runs once every byte is in and its signature has been verified, just
+   * before the installer takes over (on Windows it closes Intern). Installing
+   * waits for it, and does not happen if it throws.
+   */
+  installUpdate(onProgress?: UpdateProgressListener, beforeInstall?: () => Promise<void>): Promise<void>;
   /** Current shared-intake watcher status. Resolves with zeros when intake is disabled. */
   intakeStatus(): Promise<IntakeStatus>;
   /** Wake the intake watcher for an immediate scan. No-op when intake is disabled. */
@@ -226,6 +240,22 @@ export interface IntakeEventSource {
 export interface DescriptionsEventSource {
   subscribeDescriptions(handler: (status: DescriptionsStatus) => void): () => void;
 }
+
+/**
+ * Optional capability, duck-typed like IntakeEventSource: documents sent to
+ * Intern from outside the window ("Send to > Intern", or named on its command
+ * line) that could not all be added. The handler is given each report once,
+ * including one from a launch that finished before it subscribed.
+ */
+export interface LaunchReportSource {
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void;
+}
+
+/**
+ * How far an update download has got, from 0 to 1, or `undefined` while it
+ * downloads from a server that did not say how large it is.
+ */
+export type UpdateProgressListener = (fraction: number | undefined) => void;
 
 export type UpdateStatus =
   | { state: 'current'; currentVersion: string }

@@ -5,7 +5,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 
 describe('setup with a hosted model', () => {
   it('lets a hosted model stand in for the download', async () => {
-    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0 }, hostedKey: 'sk-ant-api03-already-stored-0001' });
+    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0 }, hostedKey: 'sk-ant-api03-already-stored-0001', settings: { destination: 'C:\\Filed' } });
     render(<App bridge={bridge} />);
 
     const setup = await screen.findByRole('main', { name: 'Intern setup' });
@@ -13,6 +13,11 @@ describe('setup with a hosted model', () => {
     fireEvent.click(within(setup).getByRole('button', { name: 'Set up a hosted model' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    // The settings read at launch reach an open dialog through an effect that
+    // replaces its draft. On a loaded machine that effect was still pending
+    // when the hosted choice below was clicked and ran after it, so the local
+    // model was saved; change nothing until the saved settings are showing.
+    await waitFor(() => expect(within(dialog).getByLabelText('Destination folder')).toHaveValue('C:\\Filed'));
     fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 
@@ -23,11 +28,14 @@ describe('setup with a hosted model', () => {
   });
 
   it('keeps the download screen when the hosted model is chosen but has no key', async () => {
-    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0 } });
+    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0 }, settings: { destination: 'C:\\Filed' } });
     render(<App bridge={bridge} />);
     const setup = await screen.findByRole('main', { name: 'Intern setup' });
     fireEvent.click(within(setup).getByRole('button', { name: 'Set up a hosted model' }));
     const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+    // The same wait as above: until the saved settings reach the dialog, a
+    // pending draft reset can undo the hosted choice clicked next.
+    await waitFor(() => expect(within(dialog).getByLabelText('Destination folder')).toHaveValue('C:\\Filed'));
     fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 

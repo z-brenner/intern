@@ -96,13 +96,19 @@ fn contains_whole(haystack: &str, needle: &str) -> bool {
 ///
 /// "Contoso Worldwide Inc" and "Contoso Worldwide, Inc." are one company, and
 /// a name a person would recognise as the same name should not be thrown out
-/// of a filename over a comma.
+/// of a filename over a comma. A standalone "&" reads as "and" for the same
+/// reason - "Quill & Vane" and "Quill and Vane" are one firm - while the "&"
+/// inside a name like "AT&T" is part of the name and stays.
 pub fn normalize_loosely(value: &str) -> String {
     let stripped = normalize(value)
         .chars()
         .filter(|character| !matches!(character, '.' | ',' | '\'' | '"'))
         .collect::<String>();
-    stripped.split_whitespace().collect::<Vec<_>>().join(" ")
+    stripped
+        .split_whitespace()
+        .map(|word| if word == "&" { "and" } else { word })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// True when `excerpt` appears inside a single kept block once punctuation is
@@ -156,7 +162,66 @@ pub fn date_matches_evidence(iso_date: &str, excerpt: &str) -> bool {
 /// caller judging context - what wording introduces the date - needs all of
 /// them, because one date can be stated twice on a line in different roles.
 pub fn date_match_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
-    if iso_date.len() != 10 {
+    let mut positions = date_statements(iso_date, normalized)
+        .into_iter()
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
+/// How one statement of a date is written, which decides whether a reader
+/// could take it for a different date.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DateSpelling {
+    /// With the month in words: "April 1, 2026", "1st April 2026".
+    Written,
+    /// Numbers, year first - "2026-04-01", "2026.04.01" - which every
+    /// convention reads the same way.
+    YearFirst,
+    /// Numbers, month first: "04/01/2026", "4-1-2026", "04.01.26".
+    MonthFirst,
+    /// Numbers, day first: "01/04/2026", "1.4.2026", "01-04-26".
+    DayFirst,
+}
+
+/// Every statement of `iso_date` in `normalized`, with the spelling it is
+/// written in. One position can carry two spellings - "04/04/2026" is the
+/// same text month first and day first - and each is listed.
+pub(crate) fn date_statements(iso_date: &str, normalized: &str) -> Vec<(usize, DateSpelling)> {
+    let candidates = date_spellings(iso_date);
+    let bytes = normalized.as_bytes();
+    let mut statements = Vec::new();
+    for (candidate, spelling) in &candidates {
+        let candidate = normalize(candidate);
+        if candidate.is_empty() {
+            continue;
+        }
+        let mut from = 0;
+        while let Some(found) = normalized[from..].find(&candidate) {
+            let position = from + found;
+            let end = position + candidate.len();
+            // A spelling that runs straight into other digits is part of a
+            // longer number, not this date: "12/1/2026" states December 1 and
+            // must never support February 1 because "2/1/2026" sits inside it.
+            let digit_before = position > 0 && bytes[position - 1].is_ascii_digit();
+            let digit_after = bytes.get(end).is_some_and(u8::is_ascii_digit);
+            if !digit_before && !digit_after && !statements.contains(&(position, *spelling)) {
+                statements.push((position, *spelling));
+            }
+            from = position + candidate.chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    statements
+}
+
+/// The ordinary human spellings of an ISO date, each with how it is written.
+/// Empty for anything that is not an ISO date's shape.
+fn date_spellings(iso_date: &str) -> Vec<(String, DateSpelling)> {
+    use DateSpelling::{DayFirst, MonthFirst, Written, YearFirst};
+
+    if iso_date.len() != 10 || !iso_date.is_ascii() {
         return Vec::new();
     }
     let year = &iso_date[0..4];
@@ -190,27 +255,50 @@ pub fn date_match_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
     // Numeric shapes. Day-first forms are accepted alongside month-first ones
     // because the check asks whether the date is written in the document, and
     // a European invoice writes 1 April as 01/04/2026; the model has already
-    // decided which reading the document supports.
+    // decided which reading the document supports, and validation asks
+    // whether anything in the document settles it.
     let mut candidates = vec![
-        iso_date.to_owned(),
-        format!("{year}/{month}/{day}"),
-        format!("{year}.{month}.{day}"),
-        format!("{month}/{day}/{year}"),
-        format!("{month_unpadded}/{day_unpadded}/{year}"),
-        format!("{month}-{day}-{year}"),
-        format!("{month_unpadded}-{day_unpadded}-{year}"),
-        format!("{month}.{day}.{year}"),
-        format!("{day}/{month}/{year}"),
-        format!("{day_unpadded}/{month_unpadded}/{year}"),
-        format!("{day}-{month}-{year}"),
-        format!("{day_unpadded}-{month_unpadded}-{year}"),
-        format!("{day}.{month}.{year}"),
-        format!("{day_unpadded}.{month_unpadded}.{year}"),
-        // Two-digit years, the way forms and invoices abbreviate them. The
-        // boundary check below keeps "4/1/26" from matching inside "14/1/26".
-        format!("{month_unpadded}/{day_unpadded}/{short_year}"),
-        format!("{month}/{day}/{short_year}"),
-        format!("{day_unpadded}/{month_unpadded}/{short_year}"),
+        (iso_date.to_owned(), YearFirst),
+        (format!("{year}/{month}/{day}"), YearFirst),
+        (format!("{year}.{month}.{day}"), YearFirst),
+        (format!("{month}/{day}/{year}"), MonthFirst),
+        (
+            format!("{month_unpadded}/{day_unpadded}/{year}"),
+            MonthFirst,
+        ),
+        (format!("{month}-{day}-{year}"), MonthFirst),
+        (
+            format!("{month_unpadded}-{day_unpadded}-{year}"),
+            MonthFirst,
+        ),
+        (format!("{month}.{day}.{year}"), MonthFirst),
+        (format!("{day}/{month}/{year}"), DayFirst),
+        (format!("{day_unpadded}/{month_unpadded}/{year}"), DayFirst),
+        (format!("{day}-{month}-{year}"), DayFirst),
+        (format!("{day_unpadded}-{month_unpadded}-{year}"), DayFirst),
+        (format!("{day}.{month}.{year}"), DayFirst),
+        (format!("{day_unpadded}.{month_unpadded}.{year}"), DayFirst),
+        // Two-digit years, the way forms and invoices abbreviate them, in
+        // both orders: a UK invoice's "01/04/26" is 1 April, and accepting
+        // only the US reading of it filed the document a quarter early. The
+        // boundary check below keeps "4/1/26" from matching inside "14/1/26"
+        // and "01-04-26" inside "2001-04-26". Dotted and dashed forms are
+        // padded only, so a section or version number like "1.4.26" never
+        // becomes a date.
+        (
+            format!("{month_unpadded}/{day_unpadded}/{short_year}"),
+            MonthFirst,
+        ),
+        (format!("{month}/{day}/{short_year}"), MonthFirst),
+        (format!("{month}-{day}-{short_year}"), MonthFirst),
+        (format!("{month}.{day}.{short_year}"), MonthFirst),
+        (
+            format!("{day_unpadded}/{month_unpadded}/{short_year}"),
+            DayFirst,
+        ),
+        (format!("{day}/{month}/{short_year}"), DayFirst),
+        (format!("{day}-{month}-{short_year}"), DayFirst),
+        (format!("{day}.{month}.{short_year}"), DayFirst),
     ];
     // Documents abbreviate months as "Sep", "Sept", "Sept.", or write them out;
     // all of those support the same ISO date.
@@ -226,52 +314,31 @@ pub fn date_match_positions(iso_date: &str, normalized: &str) -> Vec<usize> {
     for spelling in spellings {
         for suffix in ["", "."] {
             let month_word = format!("{spelling}{suffix}");
+            let mut written = Vec::new();
             for day_form in [day_unpadded, day] {
-                candidates.push(format!("{month_word} {day_form}, {year}"));
-                candidates.push(format!("{month_word} {day_form} {year}"));
-                candidates.push(format!("{month_word}-{day_form}-{year}"));
-                candidates.push(format!("{day_form} {month_word} {year}"));
-                candidates.push(format!("{day_form} {month_word}, {year}"));
-                candidates.push(format!("{day_form}-{month_word}-{year}"));
+                written.push(format!("{month_word} {day_form}, {year}"));
+                written.push(format!("{month_word} {day_form} {year}"));
+                written.push(format!("{month_word}-{day_form}-{year}"));
+                written.push(format!("{day_form} {month_word} {year}"));
+                written.push(format!("{day_form} {month_word}, {year}"));
+                written.push(format!("{day_form}-{month_word}-{year}"));
             }
-            candidates.push(format!("{month_word} {day_unpadded}{ordinal}, {year}"));
-            candidates.push(format!("{month_word} {day_unpadded}{ordinal} {year}"));
-            candidates.push(format!("{day_unpadded}{ordinal} {month_word} {year}"));
-            candidates.push(format!("{day_unpadded}{ordinal} {month_word}, {year}"));
-            candidates.push(format!(
+            written.push(format!("{month_word} {day_unpadded}{ordinal}, {year}"));
+            written.push(format!("{month_word} {day_unpadded}{ordinal} {year}"));
+            written.push(format!("{day_unpadded}{ordinal} {month_word} {year}"));
+            written.push(format!("{day_unpadded}{ordinal} {month_word}, {year}"));
+            written.push(format!(
                 "{day_unpadded}{ordinal} day of {month_word}, {year}"
             ));
-            candidates.push(format!(
+            written.push(format!(
                 "{day_unpadded}{ordinal} day of {month_word} {year}"
             ));
-            candidates.push(format!("{day_unpadded}{ordinal} of {month_word}, {year}"));
-            candidates.push(format!("{day_unpadded}{ordinal} of {month_word} {year}"));
+            written.push(format!("{day_unpadded}{ordinal} of {month_word}, {year}"));
+            written.push(format!("{day_unpadded}{ordinal} of {month_word} {year}"));
+            candidates.extend(written.into_iter().map(|candidate| (candidate, Written)));
         }
     }
-    let bytes = normalized.as_bytes();
-    let mut positions = Vec::new();
-    for candidate in &candidates {
-        let candidate = normalize(candidate);
-        if candidate.is_empty() {
-            continue;
-        }
-        let mut from = 0;
-        while let Some(found) = normalized[from..].find(&candidate) {
-            let position = from + found;
-            let end = position + candidate.len();
-            // A spelling that runs straight into other digits is part of a
-            // longer number, not this date: "12/1/2026" states December 1 and
-            // must never support February 1 because "2/1/2026" sits inside it.
-            let digit_before = position > 0 && bytes[position - 1].is_ascii_digit();
-            let digit_after = bytes.get(end).is_some_and(u8::is_ascii_digit);
-            if !digit_before && !digit_after && !positions.contains(&position) {
-                positions.push(position);
-            }
-            from = position + candidate.chars().next().map_or(1, char::len_utf8);
-        }
-    }
-    positions.sort_unstable();
-    positions
+    candidates
 }
 
 fn ordinal_suffix(day: &str) -> &'static str {
@@ -443,6 +510,146 @@ mod tests {
         assert!(date_matches_evidence("2026-04-01", "(4/1/2026)"));
     }
 
+    /// A UK or Australian invoice prints 1 April 2026 as "01/04/26". Only
+    /// the US reading of that used to match, so the right date was withheld
+    /// and the wrong one - 4 January - filed the document as Ready.
+    #[test]
+    fn day_first_two_digit_years_padded_dotted_and_dashed_match() {
+        for spelling in [
+            "Invoice Date: 01/04/26",
+            "Invoice Date: 01.04.26",
+            "Invoice Date: 01-04-26",
+            "Invoice Date: 1/4/26",
+        ] {
+            assert!(
+                date_matches_evidence("2026-04-01", spelling),
+                "{spelling} should support 2026-04-01 day first"
+            );
+        }
+        for spelling in [
+            "Invoice Date: 04/01/26",
+            "Invoice Date: 04.01.26",
+            "Invoice Date: 04-01-26",
+            "Invoice Date: 4/1/26",
+        ] {
+            assert!(
+                date_matches_evidence("2026-04-01", spelling),
+                "{spelling} should support 2026-04-01 month first"
+            );
+        }
+        // Each statement says which way round it was read.
+        let statements = |date: &str, text: &str| {
+            let mut found = date_statements(date, text);
+            found.sort_by_key(|(position, _)| *position);
+            found
+        };
+        assert_eq!(
+            statements("2026-04-01", "date: 01.04.26"),
+            vec![(6, DateSpelling::DayFirst)]
+        );
+        assert_eq!(
+            statements("2026-04-01", "date: 04-01-26"),
+            vec![(6, DateSpelling::MonthFirst)]
+        );
+        assert_eq!(
+            statements("2026-04-04", "on 04/04/2026"),
+            vec![(3, DateSpelling::MonthFirst), (3, DateSpelling::DayFirst)]
+        );
+        assert_eq!(
+            statements("2026-04-01", "on april 1, 2026 and 2026-04-01"),
+            vec![(3, DateSpelling::Written), (21, DateSpelling::YearFirst)]
+        );
+    }
+
+    /// Unpadded dotted numbers are section and version numbers far more often
+    /// than dates, and a two-digit date inside a longer number is no date.
+    #[test]
+    fn version_numbers_are_not_dates() {
+        for text in [
+            "Release v1.4.26 of the software",
+            "Section 1.4.26 applies",
+            "see clause 1-4-26",
+            "filed 2001-04-26",
+            "order 101/04/26",
+            "code 01/04/265",
+        ] {
+            assert!(!date_matches_evidence("2026-04-01", text), "{text}");
+            assert!(!date_matches_evidence("2026-01-04", text), "{text}");
+        }
+        assert!(
+            date_matches_evidence("2001-04-26", "filed 2001-04-26"),
+            "the ISO date itself still matches"
+        );
+    }
+
+    /// A reviewer is offered the numeric dates that can only mean one thing,
+    /// and the ones the document's own other dates show the order of.
+    #[test]
+    fn stated_dates_offers_unambiguous_numeric_dates_and_follows_the_documents_order() {
+        let day_first = digest_of(
+            "INVOICE INV-2048\nInvoice Date: 03/04/2026\nDelivered: 30/01/2026\nDue: 2026.05.03\n",
+        );
+        assert_eq!(numeric_date_order(&day_first), Some(NumericOrder::DayFirst));
+        assert_eq!(
+            stated_dates(&day_first),
+            vec!["2026-04-03", "2026-01-30", "2026-05-03"]
+        );
+
+        let month_first = digest_of("INVOICE\nInvoice Date: 03/04/2026\nDue Date: 04/30/2026\n");
+        assert_eq!(
+            numeric_date_order(&month_first),
+            Some(NumericOrder::MonthFirst)
+        );
+        assert_eq!(stated_dates(&month_first), vec!["2026-03-04", "2026-04-30"]);
+
+        // Alone, "03/04/2026" could be either, and is not offered under a
+        // guess; "05/05/2026" reads the same both ways.
+        let unsettled = digest_of("INVOICE\nInvoice Date: 03/04/2026\nShipped: 05/05/2026\n");
+        assert_eq!(numeric_date_order(&unsettled), None);
+        assert_eq!(stated_dates(&unsettled), vec!["2026-05-05"]);
+        // A two-digit year settles the order, but its century is a guess,
+        // so it is not offered itself.
+        let short_year = digest_of("INVOICE\nInvoice Date: 03/04/2026\nDue: 30/01/26\n");
+        assert_eq!(
+            numeric_date_order(&short_year),
+            Some(NumericOrder::DayFirst)
+        );
+        assert_eq!(stated_dates(&short_year), vec!["2026-04-03"]);
+
+        // A written date keeps its place among numeric ones on its line.
+        let mixed = digest_of("NOTICE\nSent 30/01/2026, effective March 1, 2026.\n");
+        assert_eq!(stated_dates(&mixed), vec!["2026-01-30", "2026-03-01"]);
+    }
+
+    /// The order is the document's only when the document is consistent
+    /// about it: one numeric date that can only be read month first and one
+    /// that can only be read day first settle nothing.
+    #[test]
+    fn a_document_that_writes_dates_both_ways_has_no_order() {
+        assert_eq!(
+            numeric_date_order(&digest_of("Dated 30/01/2026.\nDue 01/30/2026.\n")),
+            None
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("Dated 03/04/2026.\nTerm 12 months.\n")),
+            None
+        );
+        // A two-digit year settles the order when it is padded or slashed;
+        // an unpadded dotted section number does not.
+        assert_eq!(
+            numeric_date_order(&digest_of("Due 30/04/26.\n")),
+            Some(NumericOrder::DayFirst)
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("See section 13.4.26.\n")),
+            None
+        );
+        assert_eq!(
+            numeric_date_order(&digest_of("Due 04-30-26.\n")),
+            Some(NumericOrder::MonthFirst)
+        );
+    }
+
     #[test]
     fn loose_matching_ignores_only_punctuation() {
         let digest = digest_of("by and between Contoso Worldwide, Inc. and Jane O'Brien");
@@ -469,11 +676,37 @@ mod tests {
 /// lines, so each is a date a person could find on the page - which is what
 /// makes it fit to offer a reviewer who has to give a document a date the
 /// model did not.
+///
+/// A date printed only in numbers is offered when it can be read one way:
+/// "30/01/2026" can only be 30 January, and once the document has shown its
+/// order that way, its "03/04/2026" is 3 April. A numeric date that could be
+/// either, in a document that never says which, is left out rather than
+/// offered under a guess - and so is a two-digit year, whose century is one.
 pub fn stated_dates(digest: &DocumentDigest) -> Vec<String> {
     const MOST: usize = 8;
+    let order = numeric_date_order(digest);
     let mut found: Vec<String> = Vec::new();
     for line in &digest.date_lines {
-        for date in extract_stated_dates(line) {
+        let normalized = normalize(line);
+        let mut on_line = extract_stated_dates(line)
+            .into_iter()
+            .map(|date| {
+                let position = date_match_positions(&date, &normalized)
+                    .first()
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                (position, date)
+            })
+            .collect::<Vec<_>>();
+        on_line.extend(
+            numeric_dates(&normalized)
+                .iter()
+                .filter_map(|token| numeric_reading(token, order).map(|date| (token.start, date))),
+        );
+        // In the order the line states them, so a reviewer reads the chips
+        // the way the page reads.
+        on_line.sort_by_key(|(position, _)| *position);
+        for (_, date) in on_line {
             if !found.contains(&date) {
                 found.push(date);
                 if found.len() == MOST {
@@ -595,6 +828,154 @@ pub fn extract_stated_dates(line: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// A token shaped like a numeric date - "04/30/2025", "30.04.2025",
+/// "2025-04-30", "4/30/25" - as byte offsets into the text it was found in,
+/// with its three runs of digits and the separator between them.
+pub(crate) struct NumericDate<'a> {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) parts: [&'a str; 3],
+    pub(crate) separator: u8,
+}
+
+/// Every numeric-date-shaped token in `text`: one to four digits, a
+/// separator out of `/ . -`, one or two digits, the same separator, two to
+/// four digits, with no digit running into either end. Whether the token is
+/// a real calendar date is not asked here.
+pub(crate) fn numeric_dates(text: &str) -> Vec<NumericDate<'_>> {
+    let bytes = text.as_bytes();
+    let digits_from = |from: usize| -> usize {
+        bytes[from..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count()
+    };
+    let mut found = Vec::new();
+    for start in 0..bytes.len() {
+        if !bytes[start].is_ascii_digit() || (start > 0 && bytes[start - 1].is_ascii_digit()) {
+            continue;
+        }
+        // Each run is taken whole, so a run longer than its shape allows
+        // is a longer number and not a date.
+        let first = digits_from(start);
+        let Some(&separator) = bytes.get(start + first) else {
+            continue;
+        };
+        if !(1..=4).contains(&first) || !matches!(separator, b'/' | b'.' | b'-') {
+            continue;
+        }
+        let second_start = start + first + 1;
+        let second = digits_from(second_start);
+        if !(1..=2).contains(&second) || bytes.get(second_start + second) != Some(&separator) {
+            continue;
+        }
+        let third_start = second_start + second + 1;
+        let third = digits_from(third_start);
+        if !(2..=4).contains(&third) {
+            continue;
+        }
+        let end = third_start + third;
+        found.push(NumericDate {
+            start,
+            end,
+            parts: [
+                &text[start..start + first],
+                &text[second_start..second_start + second],
+                &text[third_start..end],
+            ],
+            separator,
+        });
+    }
+    found
+}
+
+/// Which way round a document writes the day and the month of a numeric
+/// date.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NumericOrder {
+    /// "30/01/2026": day, month, year.
+    DayFirst,
+    /// "01/30/2026": month, day, year.
+    MonthFirst,
+}
+
+/// The order the document writes its numeric dates in, when the document
+/// itself settles it: at least one numeric date can only be read one way -
+/// "30/01/2026" has no thirtieth month - and no other numeric date can only
+/// be read the other way. `None` when nothing settles it, or when the
+/// document contradicts itself, because then any one reading is a guess.
+pub fn numeric_date_order(digest: &DocumentDigest) -> Option<NumericOrder> {
+    let mut order = None;
+    for segment in &digest.segments {
+        let normalized = normalize(segment);
+        for token in numeric_dates(&normalized) {
+            let Some(settled) = order_of(&token) else {
+                continue;
+            };
+            match order {
+                None => order = Some(settled),
+                Some(existing) if existing != settled => return None,
+                Some(_) => {}
+            }
+        }
+    }
+    order
+}
+
+/// The order a year-last numeric date can only be read in, if there is
+/// one: exactly one of its two readings is a calendar date. A two-digit
+/// year counts - "30/01/26" is day first whatever its century - but, as the
+/// evidence check does, only padded when dotted or dashed, so a section
+/// number like "13.4.26" settles nothing.
+fn order_of(token: &NumericDate<'_>) -> Option<NumericOrder> {
+    let [first, second, year] = token.parts;
+    if first.len() > 2 {
+        return None;
+    }
+    let year = match year.len() {
+        4 => year.to_owned(),
+        2 if token.separator == b'/' || (first.len() == 2 && second.len() == 2) => {
+            format!("20{year}")
+        }
+        _ => return None,
+    };
+    let month_first = is_valid_iso_date(&format!("{year}-{first:0>2}-{second:0>2}"));
+    let day_first = is_valid_iso_date(&format!("{year}-{second:0>2}-{first:0>2}"));
+    match (month_first, day_first) {
+        (true, false) => Some(NumericOrder::MonthFirst),
+        (false, true) => Some(NumericOrder::DayFirst),
+        _ => None,
+    }
+}
+
+/// The one date a numeric token states, read in the document's order where
+/// the token alone could be either. A year-first token is read one way; a
+/// two-digit year is not read, because its century is a guess.
+fn numeric_reading(token: &NumericDate<'_>, order: Option<NumericOrder>) -> Option<String> {
+    let [first, second, third] = token.parts;
+    let valid = |year: &str, month: &str, day: &str| {
+        let iso = format!("{year}-{month:0>2}-{day:0>2}");
+        is_valid_iso_date(&iso).then_some(iso)
+    };
+    if first.len() == 4 {
+        return (third.len() <= 2)
+            .then(|| valid(first, second, third))
+            .flatten();
+    }
+    if third.len() != 4 || first.len() > 2 {
+        return None;
+    }
+    match (valid(third, first, second), valid(third, second, first)) {
+        (Some(month_first), Some(day_first)) if month_first == day_first => Some(month_first),
+        (Some(month_first), Some(day_first)) => match order? {
+            NumericOrder::MonthFirst => Some(month_first),
+            NumericOrder::DayFirst => Some(day_first),
+        },
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]

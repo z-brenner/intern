@@ -32,6 +32,23 @@ export const HEALTH_COPY: Record<IntakeHealth, { label: string; message(waiting:
   not_synced: { label: 'Not this folder', message: () => 'This folder isn\'t synced by OneDrive anymore.', action: 'Choose folder again' },
 };
 
+/**
+ * What the folder itself is doing, for any watched folder, synced or not:
+ * documents still being written or synced in, which are picked up seconds
+ * after they settle, and documents that could not be handed to the queue,
+ * which are tried again on their own with growing pauses.
+ */
+export function intakeActivity(status: IntakeStatus): string[] {
+  if (!status.enabled) return [];
+  const documents = (count: number) => count === 1 ? '1 document' : `${count} documents`;
+  const lines: string[] = [];
+  const arriving = status.arriving ?? 0;
+  if (arriving > 0) lines.push(`${documents(arriving)} arriving…`);
+  const unreadable = status.unreadableDocuments ?? 0;
+  if (unreadable > 0) lines.push(`${documents(unreadable)} could not be read. Intern keeps trying; check that ${unreadable === 1 ? 'it opens' : 'they open'} on this computer.`);
+  return lines;
+}
+
 interface Props {
   status: IntakeStatus;
   myFolder: boolean;
@@ -42,7 +59,9 @@ interface Props {
 export function IntakeHealthNotice({ status, myFolder, bridge, onChooseFolder }: Props) {
   const [failure, setFailure] = useState('');
   const health = intakeHealth(status, myFolder);
-  if (!health) return null;
+  const activity = intakeActivity(status);
+  const activityNotice = activity.length > 0 && <p className="check-hint" role="status" aria-label="Folder activity">{activity.join(' ')}</p>;
+  if (!health) return activityNotice || null;
   const copy = HEALTH_COPY[health];
   const act = () => {
     setFailure('');
@@ -52,9 +71,12 @@ export function IntakeHealthNotice({ status, myFolder, bridge, onChooseFolder }:
       setFailure(code === 'ONEDRIVE_MISSING' ? 'OneDrive is not installed on this computer.' : 'OneDrive could not be started. Open it from the Start menu.');
     });
   };
-  return <div className={`intake-health intake-health--${health}`}>
-    <p role="status" aria-label="Folder health"><strong>{copy.label}</strong> {copy.message(status.awaitingHydration)}</p>
-    {copy.action && (health !== 'not_synced' || onChooseFolder) && <button type="button" onClick={act}>{copy.action}</button>}
-    {failure && <p className="form-error" role="alert">{failure}</p>}
-  </div>;
+  return <>
+    <div className={`intake-health intake-health--${health}`}>
+      <p role="status" aria-label="Folder health"><strong>{copy.label}</strong> {copy.message(status.awaitingHydration)}</p>
+      {copy.action && (health !== 'not_synced' || onChooseFolder) && <button type="button" onClick={act}>{copy.action}</button>}
+      {failure && <p className="form-error" role="alert">{failure}</p>}
+    </div>
+    {activityNotice}
+  </>;
 }

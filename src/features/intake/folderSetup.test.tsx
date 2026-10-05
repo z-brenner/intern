@@ -125,6 +125,33 @@ describe('folder setup', () => {
     expect((await bridge.getOnboarding()).completedVersion).toBe(1);
   });
 
+  it('names the documents already there that could not be added, rather than saying all of them are', async () => {
+    const bridge = firstRun({ existingDocuments: 3 });
+    vi.spyOn(bridge, 'addFolder').mockResolvedValue({ added: 2, alreadyQueued: 0, skipped: [{ name: 'scan-3.pdf', code: 'SOURCE_LOCKED' }] });
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans\\Inbox')} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse for another folder…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a “Filed” folder here' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename them' }));
+
+    expect(await screen.findByRole('heading', { name: 'Watching D:\\Scans\\Inbox.' })).toBeVisible();
+    expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent('Added 2 documents. Skipped 1: scan-3.pdf (another program has it open). You can add them from the queue later.');
+  });
+
+  it('says so when the folder itself could not be read for its existing documents', async () => {
+    const bridge = firstRun({ existingDocuments: 3 });
+    vi.spyOn(bridge, 'addFolder').mockResolvedValue({ added: 0, alreadyQueued: 0, skipped: [{ name: 'Inbox', code: 'FOLDER_UNAVAILABLE' }] });
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans\\Inbox')} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse for another folder…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a “Filed” folder here' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename them' }));
+
+    expect(await screen.findByRole('note', { name: 'Files not added' })).toHaveTextContent('Skipped 1: Inbox (the folder could not be read).');
+  });
+
   it('leaves existing documents alone by default and skips the question when there are none', async () => {
     const bridge = firstRun();
     const addFolder = vi.spyOn(bridge, 'addFolder');

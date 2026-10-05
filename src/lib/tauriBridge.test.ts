@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { check } from '@tauri-apps/plugin-updater';
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
@@ -7,6 +10,35 @@ import {
   type TauriEvent,
   type TauriTransport,
 } from './tauriBridge';
+
+// The bridge imports both lazily, so these stand in for them when it does.
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }));
+vi.mock('@tauri-apps/api/app', () => ({ getVersion: async () => '0.1.0-alpha.10' }));
+
+/**
+ * An update whose download sends these events; each step is recorded, in
+ * order, in `steps`. Like the plugin, it holds the downloaded bytes until an
+ * install succeeds, and refuses to install without them. The first
+ * `failedInstalls` installs fail, as one whose installer cannot start does.
+ */
+function updateDownloading(events: DownloadEvent[], steps: string[] = [], { failedInstalls = 0 } = {}) {
+  let held = false;
+  let failures = failedInstalls;
+  vi.mocked(check).mockResolvedValue({
+    version: '0.1.0-alpha.11',
+    download: async (onEvent?: (event: DownloadEvent) => void) => { steps.push('download'); events.forEach((event) => onEvent?.(event)); held = true; },
+    install: async () => {
+      if (!held) throw new Error('Update.install called before Update.download');
+      steps.push('install');
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('the installer could not be started');
+      }
+      held = false;
+    },
+  } as unknown as Awaited<ReturnType<typeof check>>);
+  return steps;
+}
 
 function fakeTransport(responses: Record<string, unknown> = {}) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -316,6 +348,20 @@ describe('TauriBridge', () => {
     expect(items[5].cancelable).toBe(false);
   });
 
+  it('carries the parties a name left out as the organisation\'s own, and nothing when there are none', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'sow.pdf', status: 'ready', proposedFilename: '2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf', omittedParties: ['Contoso Worldwide, Inc.'] },
+        { id: 2, originalFilename: 'nda.pdf', status: 'ready', proposedFilename: '2026-04-01 NDA with Acme.pdf', omittedParties: [] },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0].omittedParties).toEqual(['Contoso Worldwide, Inc.']);
+    expect(items[1]).not.toHaveProperty('omittedParties');
+  });
+
   // The backend's status vocabulary can grow ahead of this build. An unmapped
   // one used to fall out of the switch as undefined, and the row then failed
   // every view's status filter and disappeared from the queue entirely.
@@ -345,6 +391,25 @@ describe('TauriBridge', () => {
     unsubscribe();
     expect(fake.unlisten.get('queue://changed')).toHaveBeenCalledTimes(1);
     expect(fake.unlisten.get('queue://progress')).toHaveBeenCalledTimes(1);
+  });
+
+  // The worker reports pages finished out of the page count, and a ratio that
+  // does not divide evenly reached the row as "Processing (33.33333333333333%)".
+  it('reports progress as a whole percent of the pages finished', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    await new TauriBridge(fake.transport).subscribeQueue(seen);
+    const report = (current: number, total: number | null) => fake.listeners.get('queue://progress')?.({
+      event: 'queue://progress', id: 3, payload: { itemId: 9, stage: 'reading', current, total },
+    });
+
+    report(1, 3);
+    report(2, 3);
+    report(39, 40);
+    report(0, 1);
+    report(1, null);
+
+    expect(seen.mock.calls.map(([event]) => event.progress)).toEqual([33, 66, 97, 0, undefined]);
   });
 
   // The queue pauses itself when a failure would repeat for every document -
@@ -411,6 +476,40 @@ describe('TauriBridge', () => {
     expect(fake.unlisten.get('intake://changed')).toHaveBeenCalledTimes(1);
     fake.listeners.get('intake://changed')?.({ event: 'intake://changed', id: 6, payload: status });
     expect(seen).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands over what a launch left out: one held from before it listened, then one per launch-report event', async () => {
+    const fake = fakeTransport();
+    const held: unknown[] = [
+      // Intern started by "Send to": the add finished before the window listened.
+      { added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] },
+      { added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] },
+      null,
+    ];
+    const taken: string[] = [];
+    const transport: TauriTransport = {
+      ...fake.transport,
+      invoke: async <T>(command: string) => {
+        taken.push(command);
+        return held.shift() as T;
+      },
+    };
+    const seen = vi.fn();
+    const unsubscribe = new TauriBridge(transport).subscribeLaunchReports(seen);
+
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    expect(seen).toHaveBeenLastCalledWith({ added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] });
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 1, payload: null });
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
+    expect(seen).toHaveBeenLastCalledWith({ added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] });
+    // Nothing held: nothing said.
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 2, payload: null });
+    await vi.waitFor(() => expect(taken).toHaveLength(3));
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(new Set(taken)).toEqual(new Set(['queue_take_launch_report']));
+
+    unsubscribe();
+    expect(fake.unlisten.get('queue://launch-report')).toHaveBeenCalledOnce();
   });
 
   it('normalizes history entry ids to strings from the wire DTO', async () => {
@@ -485,6 +584,37 @@ describe('TauriBridge', () => {
 
     await expect(new TauriBridge(fake.transport).classifyFolder('C:\\Local\\Scans')).resolves.toBeNull();
     expect(fake.calls).toEqual([{ command: 'folder_classify', args: { path: 'C:\\Local\\Scans' } }]);
+  });
+
+  it('returns the add report the backend sends for files and for a folder', async () => {
+    const report = { added: 24, alreadyQueued: 1, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] };
+    const fake = fakeTransport({ queue_add_files: report, queue_add_folder: { added: 3, alreadyQueued: 0, skipped: [] } });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect(await bridge.addFiles([{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }])).toEqual(report);
+    expect(await bridge.addFolder({ path: 'C:\\Inbox', displayName: 'Inbox' })).toEqual({ added: 3, alreadyQueued: 0, skipped: [] });
+    expect(fake.calls).toEqual([
+      { command: 'queue_add_files', args: { files: [{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }] } },
+      { command: 'queue_add_folder', args: { folder: { path: 'C:\\Inbox', displayName: 'Inbox' } } },
+    ]);
+  });
+
+  it('offers a Documents filter in the file picker, with All files beside it', async () => {
+    const fake = fakeTransport({ 'plugin:dialog|open': ['C:\\Docs\\One.pdf'] });
+    const selection = createTauriSelectionBoundary(fake.transport);
+
+    await selection.pickFiles();
+    await selection.pickFolder();
+
+    const [files, folder] = fake.calls.map((call) => (call.args as { options: Record<string, unknown> }).options);
+    expect(files).toEqual({
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }],
+    });
+    expect(SUPPORTED_EXTENSIONS).toEqual(expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'eml', 'msg', 'txt', 'png', 'jpg', 'tiff']));
+    // A folder picker has nothing to filter.
+    expect(folder).toEqual({ multiple: false, directory: true });
   });
 
   it('keeps native path selection at the injected boundary', async () => {
@@ -619,5 +749,133 @@ describe('TauriBridge', () => {
     await expect(createTauriSelectionBoundary(transport).subscribeDragState!(vi.fn())).rejects.toThrow('drop listener failed');
     expect(stops.get('tauri://drag-enter')).toHaveBeenCalledOnce();
     expect(stops.get('tauri://drag-leave')).toHaveBeenCalledOnce();
+  });
+
+  it('reports an update download as the share of its advertised size that has arrived', async () => {
+    updateDownloading([
+      { event: 'Started', data: { contentLength: 200 } },
+      { event: 'Progress', data: { chunkLength: 84 } },
+      { event: 'Progress', data: { chunkLength: 116 } },
+      { event: 'Finished' },
+    ]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    expect(await bridge.checkForUpdate()).toMatchObject({ state: 'available', version: '0.1.0-alpha.11' });
+
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction));
+
+    // Finished adds nothing to a download already at 100%.
+    expect(seen).toEqual([0, 0.42, 1]);
+  });
+
+  it('reports a download of unknown size without inventing a percentage', async () => {
+    updateDownloading([
+      { event: 'Started', data: {} },
+      { event: 'Progress', data: { chunkLength: 84 } },
+      { event: 'Finished' },
+    ]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction));
+
+    expect(seen).toEqual([undefined, 1]);
+  });
+
+  // The plugin sends one event per network chunk. Each report re-renders the
+  // whole window, queue and all, so thousands of them for a label that can
+  // only change a hundred times was all cost.
+  it('passes on a download chunk only when the whole percent it shows changes', async () => {
+    const chunks = Array.from({ length: 10_000 }, () => ({ event: 'Progress' as const, data: { chunkLength: 100 } }));
+    updateDownloading([{ event: 'Started', data: { contentLength: 1_000_000 } }, ...chunks, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    const seen: number[] = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction!));
+
+    expect(seen).toHaveLength(101);
+    expect(seen.map((fraction) => Math.floor(fraction * 100))).toEqual(Array.from({ length: 101 }, (_, percent) => percent));
+    expect(seen.at(-1)).toBe(1);
+
+    updateDownloading([{ event: 'Started', data: {} }, ...chunks, { event: 'Finished' }]);
+    await bridge.checkForUpdate();
+    const unsized: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => unsized.push(fraction));
+    expect(unsized).toEqual([undefined, 1]);
+  });
+
+  // Installing closes Intern on Windows. What must happen first gets its turn
+  // after the download, however long that took, and can stop the install.
+  it('downloads, runs what must happen before Intern closes, and only then installs', async () => {
+    const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    await bridge.installUpdate(undefined, async () => { steps.push('before install'); });
+    expect(steps).toEqual(['download', 'before install', 'install']);
+
+    steps.length = 0;
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('a rename is still moving'); })).rejects.toThrow('a rename is still moving');
+    expect(steps).toEqual(['download']);
+  });
+
+  // The plugin keeps the verified bytes until an install succeeds. Downloading
+  // again on a retry fetched and verified the whole installer a second time
+  // and left the first copy allocated until Intern exited.
+  it('retries an install that failed after the download without downloading again', async () => {
+    const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('the queue could not be paused'); })).rejects.toThrow('the queue could not be paused');
+    expect(steps).toEqual(['download']);
+
+    // The retry says the download is complete, so what shows it moves on
+    // from "Downloading" rather than waiting for a download that never comes.
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction), async () => { steps.push('before install'); });
+    expect(steps).toEqual(['download', 'before install', 'install']);
+    expect(seen).toEqual([1]);
+  });
+
+  it('retries an install whose installer failed to start with the bytes it already verified', async () => {
+    const steps = updateDownloading([{ event: 'Finished' }], [], { failedInstalls: 1 });
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate()).rejects.toThrow('the installer could not be started');
+
+    await bridge.installUpdate();
+    expect(steps).toEqual(['download', 'install', 'install']);
+
+    // Once installed, the plugin has let the bytes go: installing again needs them again.
+    await bridge.installUpdate();
+    expect(steps).toEqual(['download', 'install', 'install', 'download', 'install']);
+  });
+
+  it('downloads an update found by a later check, not the bytes held for the one before it', async () => {
+    const first = updateDownloading([{ event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('the queue could not be paused'); })).rejects.toThrow();
+    const second = updateDownloading([{ event: 'Finished' }]);
+    await bridge.checkForUpdate();
+
+    await bridge.installUpdate();
+
+    expect(first).toEqual(['download']);
+    expect(second).toEqual(['download', 'install']);
+  });
+
+  it('installs the update it downloaded even when a later check finds another', async () => {
+    const first = updateDownloading([{ event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    const second = updateDownloading([{ event: 'Finished' }]);
+
+    await bridge.installUpdate(undefined, async () => { await bridge.checkForUpdate(); });
+
+    expect(first).toEqual(['download', 'install']);
+    expect(second).toEqual([]);
   });
 });

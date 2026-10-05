@@ -23,7 +23,7 @@ worker's own tests, which build one from the MS-OXMSG property layout; the
 corpus carries none because the generator writes ZIP containers, not compound
 files.
 
-**Document understanding.** Seven fixtures exist specifically to test whether
+**Document understanding.** Eight fixtures exist specifically to test whether
 Intern chooses the date it *understood* rather than the date that was easiest to
 find:
 

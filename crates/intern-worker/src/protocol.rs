@@ -4,15 +4,25 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::extract::{CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning};
-use crate::limits::MAX_PAGE_CHARS;
+use crate::extract::{
+    CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, ProgressSink,
+};
+use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_PROTOCOL_LINE_BYTES: usize = 1024 * 1024;
+/// The least time between two progress events of the same stage.
+///
+/// A reader reports every page, and a text PDF's pages go by in
+/// milliseconds: five hundred of them would be five hundred lines through
+/// the pipe and five hundred repaints of one percentage. Four a second is
+/// as fast as a person can read a number change.
+pub const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Request {
@@ -221,21 +231,31 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
     }
 }
 
-/// Truncates any page that carries more than [`MAX_PAGE_CHARS`] characters.
+/// Truncates any page that carries more than [`MAX_PAGE_CHARS`] characters,
+/// and every page past the point where the document as a whole reaches
+/// [`MAX_DOCUMENT_CHARS`].
 ///
-/// Only the spreadsheet reader caps what one page may hold, and the host
-/// reads a response line without a bound of its own, so one degenerate file
-/// could put hundreds of megabytes through the pipe and into the queue's
-/// memory. Capping at this boundary rather than in each reader means the
-/// bound holds for every reader, including ones added later, and the document
-/// still arrives - marked truncated - rather than failing.
+/// Most readers cannot know how much text a file will produce until they
+/// have produced it, and one degenerate file could otherwise put hundreds of
+/// megabytes through the pipe and into the queue's memory. Capping at this
+/// boundary rather than in each reader means the bound holds for every
+/// reader, including ones added later, and the document still arrives -
+/// marked truncated - rather than failing. Pages past the document cap stay,
+/// empty, so page numbers still mean what they meant.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
+    let mut remaining = MAX_DOCUMENT_CHARS;
     for page in &mut document.pages {
-        if let Some((end, _)) = page.text.char_indices().nth(MAX_PAGE_CHARS) {
-            page.text.truncate(end);
-            truncated = true;
-        }
+        let allowed = MAX_PAGE_CHARS.min(remaining);
+        let kept = match page.text.char_indices().nth(allowed) {
+            Some((end, _)) => {
+                page.text.truncate(end);
+                truncated = true;
+                allowed
+            }
+            None => page.text.chars().count(),
+        };
+        remaining -= kept;
     }
     if truncated {
         document.truncated = true;
@@ -270,11 +290,13 @@ where
                     Event::Error { code, .. } => code.as_str(),
                     _ => "PROTOCOL_ERROR",
                 };
-                writeln!(
+                // Best effort: diagnostics go to a log file, and a full disk must
+                // never stop the worker answering requests.
+                let _ = writeln!(
                     diagnostics,
                     "{{\"level\":\"warning\",\"code\":{}}}",
                     serde_json::to_string(code).map_err(io::Error::other)?
-                )?;
+                );
                 JsonLineSink {
                     writer: &mut output,
                 }
@@ -328,6 +350,49 @@ fn emit_locked<W: Write>(output: &Arc<Mutex<W>>, response: &Response) -> io::Res
     .emit(response)
 }
 
+/// Where one request's progress goes: `progress` events on the protocol
+/// output, at most one per [`PROGRESS_INTERVAL`] for each stage.
+///
+/// Each stage keeps its own clock. On a scan every page is read and then
+/// OCR'd a few milliseconds later, and one clock for both would hold back
+/// every `ocr` event behind the `reading` event just before it - the slow
+/// part of the document would never be reported at all. A clock per stage
+/// still bounds what is sent at one event per stage per interval, however
+/// fast the pages go by.
+fn progress_events<W: Write + Send + 'static>(
+    output: Arc<Mutex<W>>,
+    request_id: String,
+) -> ProgressSink {
+    let last_sent: Mutex<Vec<(&'static str, Instant)>> = Mutex::new(Vec::new());
+    Arc::new(move |stage, current, total| {
+        let now = Instant::now();
+        {
+            let Ok(mut last_sent) = last_sent.lock() else {
+                return;
+            };
+            match last_sent.iter_mut().find(|(sent, _)| *sent == stage) {
+                Some((_, sent_at)) if now.duration_since(*sent_at) < PROGRESS_INTERVAL => return,
+                Some((_, sent_at)) => *sent_at = now,
+                None => last_sent.push((stage, now)),
+            }
+        }
+        // Progress is advisory: a pipe that has gone is the control loop's
+        // to notice, and the document's own terminal event will fail the
+        // same way.
+        let _ = emit_locked(
+            &output,
+            &Response::new(
+                request_id.clone(),
+                Event::Progress {
+                    stage,
+                    current,
+                    total,
+                },
+            ),
+        );
+    })
+}
+
 struct ActiveRequestGuard {
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
     request_id: String,
@@ -357,8 +422,31 @@ impl Drop for ActiveRequestGuard {
 pub fn run_concurrent_worker<R, W, E, X>(
     reader: R,
     output: W,
+    diagnostics: E,
+    extractor: X,
+) -> io::Result<()>
+where
+    R: Read,
+    W: Write + Send + 'static,
+    E: Write,
+    X: Fn(PathBuf, CancellationToken) -> Result<ExtractedDocument, ExtractionError>
+        + Send
+        + Sync
+        + 'static,
+{
+    run_concurrent_worker_observed(reader, output, diagnostics, extractor, |_| {})
+}
+
+/// [`run_concurrent_worker`], reporting how many extraction threads it holds
+/// after each one it starts, so a test can see that finished ones are let go.
+#[doc(hidden)]
+#[allow(clippy::result_large_err)]
+pub fn run_concurrent_worker_observed<R, W, E, X>(
+    reader: R,
+    output: W,
     mut diagnostics: E,
     extractor: X,
+    mut held_threads: impl FnMut(usize),
 ) -> io::Result<()>
 where
     R: Read,
@@ -383,11 +471,13 @@ where
                     Event::Error { code, .. } => code.as_str(),
                     _ => "PROTOCOL_ERROR",
                 };
-                writeln!(
+                // Best effort: diagnostics go to a log file, and a full disk must
+                // never stop the worker answering requests.
+                let _ = writeln!(
                     diagnostics,
                     "{{\"level\":\"warning\",\"code\":{}}}",
                     serde_json::to_string(code).map_err(io::Error::other)?
-                )?;
+                );
                 emit_locked(&output, &response)?;
                 continue;
             }
@@ -443,7 +533,10 @@ where
                     continue;
                 }
                 let request_id = request.request_id;
-                let token = CancellationToken::new();
+                let token = CancellationToken::reporting_to(progress_events(
+                    Arc::clone(&output),
+                    request_id.clone(),
+                ));
                 active_guard.insert(request_id.clone(), token.clone());
                 drop(active_guard);
                 emit_locked(
@@ -457,6 +550,24 @@ where
                         },
                     ),
                 )?;
+                // The host keeps one worker for the whole session, so a
+                // thread is joined as soon as it is done rather than at
+                // shutdown: an unjoined thread keeps its stack mapping on
+                // Unix and its handle on Windows, one per document filed.
+                let (finished, running): (Vec<_>, Vec<_>) = threads
+                    .drain(..)
+                    .partition(|thread: &JoinHandle<()>| thread.is_finished());
+                threads = running;
+                for thread in finished {
+                    if thread.join().is_err() {
+                        // Best effort: diagnostics go to a log file, and a full disk must
+                        // never stop the worker answering requests.
+                        let _ = writeln!(
+                            diagnostics,
+                            "{{\"level\":\"error\",\"code\":\"WORKER_THREAD_PANIC\"}}"
+                        );
+                    }
+                }
                 let thread_output = Arc::clone(&output);
                 let thread_active = Arc::clone(&active);
                 let thread_extractor = Arc::clone(&extractor);
@@ -487,7 +598,10 @@ where
                     lifecycle.clear();
                     let _ = emit_locked(&thread_output, &response);
                 }) {
-                    Ok(thread) => threads.push(thread),
+                    Ok(thread) => {
+                        threads.push(thread);
+                        held_threads(threads.len());
+                    }
                     Err(error) => {
                         if let Ok(mut active) = active.lock() {
                             active.remove(&spawn_request_id);
@@ -515,10 +629,12 @@ where
     }
     for thread in threads {
         if thread.join().is_err() {
-            writeln!(
+            // Best effort: diagnostics go to a log file, and a full disk must
+            // never stop the worker answering requests.
+            let _ = writeln!(
                 diagnostics,
                 "{{\"level\":\"error\",\"code\":\"WORKER_THREAD_PANIC\"}}"
-            )?;
+            );
         }
     }
     Ok(())

@@ -63,6 +63,12 @@ export interface QueueItem {
    * document waits for a person instead of being filed twice.
    */
   nearDuplicateOf?: string;
+  /**
+   * Parties left out of the proposed name because they are the person's own
+   * organisation (Settings, "Your organisation's names"), as the document
+   * spells them. The evidence still shows them.
+   */
+  omittedParties?: string[];
 }
 
 /**
@@ -86,6 +92,12 @@ export type HostedProvider = 'anthropic' | 'openai_compatible';
 export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
+  /**
+   * The person's own organisation, one name per entry. A document that names
+   * it and someone else is named, and filed in the Party layout, by the
+   * someone else. Absent from an older backend.
+   */
+  ourNames?: string[];
   startMinimized: boolean;
   automaticRename: boolean;
   /** Watched intake folder path; "" = none configured. */
@@ -108,6 +120,12 @@ export interface AppSettings {
   runInBackground: boolean;
   /** Start Intern automatically when the user signs in. */
   startAtLogin: boolean;
+  /**
+   * Do not ask GitHub for a newer release at launch or on the six-hour timer.
+   * Off (checks on) unless a person turns it on; Check for updates in Settings
+   * still works either way. Absent in a file written before alpha.11.
+   */
+  skipUpdateChecks?: boolean;
   /**
    * Write a description record beside every document filed into the
    * destination (`<destination>/.intern/descriptions/`), so a SharePoint
@@ -257,6 +275,10 @@ export interface IntakeStatus {
   awaitingHydration: number;
   /** Subfolders the last scan could not read; the rest was still scanned. */
   unreadableFolders: number;
+  /** Files seen but still being written or synced in; picked up once they settle. */
+  arriving?: number;
+  /** Settled files the queue could not take, tried again with growing pauses. */
+  unreadableDocuments?: number;
   claimedByOthers: number;
   processedHere: number;
   lastScanAt: number | null;
@@ -295,4 +317,23 @@ export interface LearnedRule extends HouseRule {
   active: boolean;
   /** Unix seconds of the latest edit that taught it. */
   learnedAt: number;
+}
+
+/**
+ * What adding files or a folder did. A batch is never refused whole for one
+ * bad file: what could be queued was, and every file left out is named with
+ * the code of the reason.
+ */
+export interface AddReport {
+  /** Documents newly in the queue. */
+  added: number;
+  /** Documents whose path already held these exact bytes in the queue. */
+  alreadyQueued: number;
+  skipped: SkippedDocument[];
+}
+
+/** A file an add left out: its name, and why (UNSUPPORTED_FORMAT, EMPTY_FILE, SOURCE_LOCKED, ...). */
+export interface SkippedDocument {
+  name: string;
+  code: string;
 }

@@ -6,7 +6,9 @@ import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
-import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateStatus } from '../lib/bridge';
+import { tooShortOwnNames } from '../lib/ownNames';
+import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
+import { installingLabel } from '../lib/format';
 import { Icon } from './Icon';
 
 /**
@@ -191,6 +193,12 @@ function rebaseDraft(draft: AppSettings, shownFrom: AppSettings, arrived: AppSet
   return result;
 }
 
+/** The organisation's names as they are saved: one per line, trimmed, blank lines left out. */
+function withOwnNames(draft: AppSettings): AppSettings {
+  if (draft.ourNames === undefined) return draft;
+  return { ...draft, ourNames: draft.ourNames.map((name) => name.trim()).filter((name) => name.length > 0) };
+}
+
 function formatScanTime(lastScanAt: number | null): string {
   if (lastScanAt === null) return 'not yet';
   return new Date(lastScanAt * 1000).toLocaleTimeString();
@@ -203,7 +211,14 @@ interface Props {
   onSave(settings: AppSettings): Promise<void>;
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
-  onInstallUpdate(): Promise<void>;
+  onInstallUpdate(onProgress?: UpdateProgressListener): Promise<void>;
+  /**
+   * A rename is in its applying stage, which cannot be canceled. Installing
+   * closes Intern, so Install is not offered until the rename has finished,
+   * and the hint stays while a downloaded update waits for one that began
+   * during the download (`onInstallUpdate` does the waiting).
+   */
+  renameApplying?: boolean;
   /**
    * Leave out the SharePoint connection card. Onboarding opens Settings for
    * the hosted model before Microsoft is connected, where a card offering to
@@ -214,11 +229,13 @@ interface Props {
   onChooseFolder?(): void;
 }
 
-export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, hideSharePointConnection = false, onChooseFolder }: Props) {
+export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
+  const shortOwnNames = tooShortOwnNames(next.ourNames);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [installProgress, setInstallProgress] = useState<{ fraction: number | undefined }>();
   const [updateError, setUpdateError] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -351,10 +368,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaveError('');
     try {
       await storeKeyDraft();
+      const draft = withOwnNames(next);
       // "Only I add documents here" was said about the folder chosen in
       // folder setup; a different folder typed here has not been vouched for.
-      const vouched = next.intakeFolder === settings.intakeFolder ? next : { ...next, intakeMyFolder: false };
-      await onSave(managed ? withManagedValues(next, settings) : vouched);
+      const vouched = draft.intakeFolder === settings.intakeFolder ? draft : { ...draft, intakeMyFolder: false };
+      await onSave(managed ? withManagedValues(draft, settings) : vouched);
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -430,7 +448,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const runInstall = async () => {
     setInstalling(true);
     setUpdateError('');
-    try { await onInstallUpdate(); }
+    setInstallProgress(undefined);
+    try { await onInstallUpdate((fraction) => setInstallProgress({ fraction })); }
     catch (error) { setUpdateError(updateFailure(error)); }
     finally { setInstalling(false); }
   };
@@ -494,6 +513,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           {LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
         </select></label>
         <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder, never loose in the root. Undo removes a folder it empties.'}</p>
+        {/*
+          A firm's own name is on almost everything it files, so a name that
+          carries every party says the firm over and over, and the Party
+          layout files a client's document in the firm's own folder whenever
+          the firm happens to be named first. One name per line, because a
+          firm goes by several. Kept as typed while editing; trimmed, without
+          blank lines, on save.
+        */}
+        <label>Your organisation's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
+        <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
+        {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
         <p className="check-hint">Anything Intern is less sure about still waits for you in Needs Review.</p>
       </section>
@@ -659,21 +689,26 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         {/*
           Intern also checks on its own - once at launch, and again on a fixed
           interval while it keeps running - so a machine that is never
-          restarted is not left on an old build forever. This button is for
-          checking right now instead of waiting for the next one. Neither path
-          sends anything but a request for the release manifest, and nothing
-          is installed - by either path - unless it is signed by the key this
-          build was compiled with, and never without the separate click below.
+          restarted is not left on an old build forever. That is on by default
+          and can be switched off here, for an office that allows no traffic a
+          person did not ask for; the button checks right now either way.
+          Neither path sends anything but a request for the release manifest,
+          and nothing is installed - by either path - unless it is signed by
+          the key this build was compiled with, and never without the separate
+          click below.
         */}
-        <p className="section-lead">Intern also checks for updates on its own, at launch and periodically while it runs; this checks right now instead. Updates must be signed by this project's key or they are refused.</p>
+        <p className="section-lead">A check asks GitHub whether a newer release exists and sends nothing about your documents. Updates must be signed by this project's key or they are refused, and nothing installs until you click Install.</p>
+        <label className="check-label"><input type="checkbox" checked={!next.skipUpdateChecks} onChange={(event) => setNext({ ...next, skipUpdateChecks: !event.target.checked })} />Check for updates automatically (when Intern starts and every 6 hours)</label>
+        <p className="check-hint">{next.skipUpdateChecks ? 'Off: Intern asks only when you press Check for updates.' : 'Turn this off and Intern asks only when you press Check for updates.'}</p>
         {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
         {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">Updates are available in the installed desktop application.</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}
         {updateError && <p className="form-error" role="alert">{updateError}</p>}
         <div className="update-actions">
           <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check for updates'}</button>
-          {status?.state === 'available' && <button type="button" className="primary" disabled={busy} onClick={() => void runInstall()}>{installing ? 'Installing…' : `Install ${status.version} and restart`}</button>}
+          {status?.state === 'available' && <button type="button" className="primary" disabled={busy || renameApplying} onClick={() => void runInstall()}>{installing ? installingLabel(installProgress) : `Install ${status.version} and restart`}</button>}
         </div>
+        {status?.state === 'available' && renameApplying && (!installing || installProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
       </section>
       <section className="settings-group">
         <h3>Help & support</h3>

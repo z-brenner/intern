@@ -1,6 +1,6 @@
 //! Engine error codes.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, time::Duration};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum EngineErrorCode {
@@ -96,11 +96,23 @@ impl EngineErrorCode {
 pub struct EngineError {
     code: EngineErrorCode,
     message: &'static str,
+    /// How long a hosted service asked to be left alone, when it said.
+    retry_after_secs: Option<u32>,
 }
 
 impl EngineError {
     pub const fn new(code: EngineErrorCode, message: &'static str) -> Self {
-        Self { code, message }
+        Self {
+            code,
+            message,
+            retry_after_secs: None,
+        }
+    }
+
+    /// The same error, carrying the wait a service asked for.
+    pub const fn with_retry_after(mut self, seconds: Option<u32>) -> Self {
+        self.retry_after_secs = seconds;
+        self
     }
 
     pub const fn code(&self) -> EngineErrorCode {
@@ -109,6 +121,14 @@ impl EngineError {
 
     pub const fn message(&self) -> &'static str {
         self.message
+    }
+
+    /// The wait the service named in its `Retry-After`, if it named one.
+    pub const fn retry_after(&self) -> Option<Duration> {
+        match self.retry_after_secs {
+            Some(seconds) => Some(Duration::from_secs(seconds as u64)),
+            None => None,
+        }
     }
 }
 

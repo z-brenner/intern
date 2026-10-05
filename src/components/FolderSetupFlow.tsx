@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { describeAddReport } from '../lib/addReport';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import { contains, filedBeside, folderLabel, folderName, rootName } from '../features/intake/folderNames';
-import type { CloudRoot } from '../types';
+import type { AddReport, CloudRoot } from '../types';
 
 type Step = 'welcome' | 'pick' | 'filed' | 'existing' | 'ready';
 
@@ -36,6 +37,11 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   const [destination, setDestination] = useState('');
   const [existing, setExisting] = useState(0);
   const [problem, setProblem] = useState('');
+  // What renaming the documents already there came to, when some were left
+  // out. The add no longer fails whole for one unreadable file - or for a
+  // folder it cannot read - so without this the last step said they were
+  // being renamed while some, or all, were not.
+  const [leftOut, setLeftOut] = useState<AddReport>();
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -75,7 +81,8 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       runInBackground: true,
       startAtLogin: true,
     });
-    if (renameExisting) await bridge.addFolder({ path: watched, displayName: folderName(watched) });
+    const report = renameExisting ? await bridge.addFolder({ path: watched, displayName: folderName(watched) }) : undefined;
+    setLeftOut(report && report.skipped.length > 0 ? report : undefined);
     setStep('ready');
   };
   const fileInto = async (watched: string, filed: string) => {
@@ -181,6 +188,9 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
         <h1 ref={heading} tabIndex={-1} className="onboarding-finished">Watching {folderLabel(known, intake)}.</h1>
         <p>Renamed documents go to {folderLabel(known, destination)}.</p>
         <p>Intern keeps running in the system tray and starts when you sign in, so documents are filed while its window is closed. You can change this in Settings.</p>
+        {leftOut && <div className="note note--review" role="note" aria-label="Files not added">
+          <p>{describeAddReport(leftOut)} You can add them from the queue later.</p>
+        </div>}
         {alert}
         <div className="onboarding-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { await onDone(); })}>Done</button>

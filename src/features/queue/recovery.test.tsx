@@ -72,7 +72,7 @@ const ready: QueueItem = {
   });
 
   it('treats a canceled picker as a no-op, not a successful import or an error', async () => {
-    const addFiles = vi.fn(async () => {});
+    const addFiles = vi.fn(async () => ({ added: 0, alreadyQueued: 0, skipped: [] }));
     render(<App bridge={{ ...createInMemoryBridge({ items: [] }), addFiles }} selection={selection()} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Add files$/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /^Add files$/i })).toBeEnabled());
@@ -98,7 +98,7 @@ const ready: QueueItem = {
     const second = { ...ready, id: 'second', originalFilename: 'second.pdf' };
     const imported: QueueItem = { id: 'imported', originalFilename: 'new.pdf', status: 'waiting' };
     const items: QueueItem[] = [ready, second];
-    const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); });
+    const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); return { added: 1, alreadyQueued: 0, skipped: [] }; });
     const bridge = { ...createInMemoryBridge({ items: [] }), listItems: async () => [...items], addFiles };
     render(<App bridge={bridge} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Select agreement.pdf' }));
@@ -130,6 +130,69 @@ const ready: QueueItem = {
     act(() => listener({ type: 'changed', paused: false }));
 
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Queue stopped' })).not.toBeInTheDocument());
+  });
+
+  // An account out of credit fails every document behind it, so the queue
+  // stops at the first one. The reason arrives on the same change event that
+  // says the queue paused, and the banner says what to fix before resuming.
+  it('says the hosted account needs credit when billing stops the queue', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_BILLING' }));
+
+    expect(await screen.findByRole('alert', { name: 'Queue stopped' })).toHaveTextContent(
+      'The queue stopped taking new work. The hosted service refused the request for billing or quota reasons. Check your account\'s credit, then resume the queue.',
+    );
+    expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
+  });
+
+  // A second "slow down" from the hosted service stops the queue, and nothing
+  // retries it until the person resumes. The banner used to borrow the
+  // per-document sentence, which promised that Intern would retry.
+  it('tells the person to resume a queue the hosted service asked to slow down', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_RATE_LIMITED' }));
+
+    const banner = await screen.findByRole('alert', { name: 'Queue stopped' });
+    expect(banner).toHaveTextContent(
+      'The queue stopped taking new work. The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
+    );
+    expect(banner).not.toHaveTextContent('Intern will retry');
+  });
+
+  // The local model server stopped answering, or never came back after a
+  // restart. The document sentence for the same code says "Retry it", which
+  // names the wrong action for a stopped queue.
+  it('tells the person to resume a queue the local model stopped', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'MODEL_FAILED' }));
+
+    const banner = await screen.findByRole('alert', { name: 'Queue stopped' });
+    expect(banner).toHaveTextContent(
+      'The queue stopped taking new work. The local model stopped responding. Resume the queue to try again, and restart Intern if it stops again.',
+    );
+    expect(banner).not.toHaveTextContent('Retry it');
+    expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
   });
 
   // Tauri's own drag-drop is enabled, so on the desktop a dropped file never
