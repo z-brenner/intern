@@ -71,29 +71,33 @@ pub fn run() {
                 sharepoint_setup::PACKAGED_DEPLOYMENT,
             ));
             tray::sync_tray(app.handle(), settings.run_in_background);
-            // Lossy rather than `args()`, which panics on an argument that is
-            // not Unicode; such a path cannot be found anyway.
-            let arguments = std::env::args_os()
-                .map(|argument| argument.to_string_lossy().into_owned())
-                .collect::<Vec<_>>();
+            let arguments = commands::process_arguments();
             let minimized_launch = arguments.iter().any(|argument| argument == "--minimized");
+            // An update's installer starts Intern again with the arguments
+            // the old process had. Documents among them were added when they
+            // were sent; adding them again would file whatever is at those
+            // paths now, without anyone asking.
+            let relaunched = commands::is_update_relaunch(&data, &arguments, commands::unix_now());
+            let documents = !relaunched && commands::launch_names_documents(&arguments);
             let shows_window = startup::shows_window_after_setup(startup::Startup::Ready {
                 starts_hidden: tray::window_starts_hidden(
                     settings.start_minimized,
                     settings.run_in_background,
                     minimized_launch,
                 ),
-                documents: commands::launch_names_documents(&arguments),
+                documents,
             });
             app.resources_table()
                 .add(ShutdownGuard(app.handle().clone()));
             // "Send to > Intern" with Intern not yet running starts it with the
             // documents as arguments.
-            commands::queue_launch_documents(
-                app.handle(),
-                arguments,
-                std::env::current_dir().unwrap_or_default(),
-            );
+            if documents {
+                commands::queue_launch_documents(
+                    app.handle(),
+                    arguments,
+                    std::env::current_dir().unwrap_or_default(),
+                );
+            }
             if shows_window {
                 tray::show_main_window(app.handle());
             }
@@ -136,6 +140,7 @@ pub fn run() {
             commands::queue_add_files,
             commands::queue_add_folder,
             commands::queue_take_launch_report,
+            commands::update_relaunch_expected,
             commands::queue_pause,
             commands::queue_resume,
             commands::queue_cancel,

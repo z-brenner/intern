@@ -269,13 +269,25 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
 
   async installUpdate(): Promise<void> {
     if (!pendingUpdate) throw new Error('No update has been found to install');
+    // The installer starts Intern again with this process's arguments, and
+    // documents "Send to > Intern" named among them would be added again -
+    // whatever is at those paths by now. Told first, the backend knows that
+    // relaunch for what it is. Not being able to tell it is no reason to
+    // withhold an update.
+    await this.transport.invoke('update_relaunch_expected', { expected: true }).catch(() => undefined);
     // downloadAndInstall verifies the signature against the public key in
     // tauri.conf.json before it writes anything. An update signed by any other
     // key is rejected here, not after installation.
     // On Windows this hands off to the NSIS installer, which closes Intern to
     // replace it, so there is no relaunch call here to fail after the process
     // has already gone.
-    await pendingUpdate.downloadAndInstall();
+    try {
+      await pendingUpdate.downloadAndInstall();
+    } catch (error) {
+      // Nothing will relaunch, so the next launch is a person's own.
+      await this.transport.invoke('update_relaunch_expected', { expected: false }).catch(() => undefined);
+      throw error;
+    }
   }
 
   // Same shape as subscribeIntake. The event only says a report is waiting:

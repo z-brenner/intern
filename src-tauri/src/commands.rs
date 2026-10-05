@@ -1284,8 +1284,8 @@ const LAUNCH_FLAGS: &[&str] = &["--minimized"];
 /// against the launching process's directory, which for a second launch is not
 /// this process's. A path that does not exist is dropped here; one that exists
 /// but is not a document is reported by the add, like any other. The updater
-/// relaunches Intern with the arguments it had, documents included; whatever
-/// is still there unchanged is already in the queue and stays as it is.
+/// relaunches Intern with the arguments it had, documents included, and that
+/// relaunch adds none of them (`is_update_relaunch`).
 pub fn launch_documents(args: &[String], cwd: &Path) -> Vec<PathBuf> {
     launch_arguments(args)
         .map(|argument| cwd.join(argument))
@@ -1443,6 +1443,95 @@ pub fn queue_take_launch_report(
     state: State<'_, AppState>,
 ) -> Result<Option<AddReportDto>, CommandError> {
     Ok(state.launch_reports.take())
+}
+
+/// Where a launch about to be ended by an update leaves its arguments.
+const UPDATE_RELAUNCH: &str = "update-relaunch.json";
+/// How long the record of an update's relaunch is believed. An install
+/// that never relaunched leaves it behind; a launch long after is a
+/// person's, not the installer's.
+const UPDATE_RELAUNCH_SECONDS: i64 = 60 * 60;
+
+/// The arguments of the launch an update is about to end, and when.
+#[derive(Debug, Deserialize, Serialize)]
+struct UpdateRelaunch {
+    arguments: Vec<String>,
+    at: i64,
+}
+
+/// Records, before an update installs, that the next launch is the
+/// installer's relaunch of this one - or, with `expected` false, that the
+/// install did not go ahead after all.
+///
+/// The updater hands the installer this process's arguments and the
+/// installer starts Intern again with them, documents included. A launch
+/// from "Send to > Intern" days earlier would add the same paths again:
+/// whatever a scanner has since written to that path, or every new file in
+/// a folder that was sent, filed without anyone asking.
+#[tauri::command]
+pub fn update_relaunch_expected(
+    expected: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    if expected {
+        expect_update_relaunch(&state.data_dir, &process_arguments(), unix_now())
+    } else {
+        forget_update_relaunch(&state.data_dir);
+        Ok(())
+    }
+}
+
+fn forget_update_relaunch(data: &Path) {
+    let _ = std::fs::remove_file(data.join(UPDATE_RELAUNCH));
+}
+
+fn expect_update_relaunch(data: &Path, arguments: &[String], now: i64) -> Result<(), CommandError> {
+    let record = UpdateRelaunch {
+        arguments: arguments.iter().skip(1).cloned().collect(),
+        at: now,
+    };
+    let unavailable = |_| CommandError {
+        code: "APP_DATA_UNAVAILABLE".into(),
+        message: "the update could not be prepared".into(),
+    };
+    let json = serde_json::to_vec(&record).map_err(|_| CommandError {
+        code: "INVALID_DATA".into(),
+        message: "the update could not be prepared".into(),
+    })?;
+    std::fs::write(data.join(UPDATE_RELAUNCH), json).map_err(unavailable)
+}
+
+/// Whether this launch is an update's relaunch of one whose documents were
+/// already added: the same arguments the record holds, within the hour. The
+/// record is used up either way, so it can never stand in for a later
+/// launch of a person's own.
+pub fn is_update_relaunch(data: &Path, arguments: &[String], now: i64) -> bool {
+    let path = data.join(UPDATE_RELAUNCH);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_slice::<UpdateRelaunch>(&bytes).is_ok_and(|record| {
+        (0..=UPDATE_RELAUNCH_SECONDS).contains(&(now - record.at))
+            && record.arguments.iter().eq(arguments.iter().skip(1))
+    })
+}
+
+/// This process's command line. Lossy rather than `args()`, which panics on
+/// an argument that is not Unicode; such a path cannot be found anyway.
+pub fn process_arguments() -> Vec<String> {
+    std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Seconds since the Unix epoch, for the record of an update's relaunch.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 /// Whether a second launch means "show me the window". Someone who clicked
@@ -3607,8 +3696,9 @@ mod second_instance_tests {
     use intern_queue::Pipeline;
 
     use super::{
-        LaunchReports, LaunchTarget, SkippedDocumentDto, add_launch_documents,
-        is_short_windows_switch, launch_documents, launch_names_documents, refused_launch,
+        LaunchReports, LaunchTarget, SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents,
+        expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
+        is_update_relaunch, launch_documents, launch_names_documents, refused_launch,
         scratch_queue::{folder, queue, write},
         second_launch, second_launch_shows_window,
     };
@@ -3792,6 +3882,50 @@ mod second_instance_tests {
                 })
                 .to_vec()
         );
+    }
+
+    /// The updater hands the installer the old process's arguments, and the
+    /// installer starts Intern again with them. A launch from "Send to"
+    /// would add the same paths again - whatever is there now - without
+    /// anyone asking, so a launch about to be updated says so first, and the
+    /// relaunch that matches it adds nothing.
+    #[test]
+    fn an_update_relaunch_does_not_add_the_documents_again() {
+        let data = folder("relaunch");
+        let sent = args(&["C:\\Intern\\Intern.exe", "C:\\Scans\\scan.pdf"]);
+        assert!(!is_update_relaunch(&data, &sent, 1_000), "nothing recorded");
+
+        expect_update_relaunch(&data, &sent, 1_000).unwrap();
+        // The installer may spell Intern's own path differently.
+        let relaunch = args(&[
+            "C:\\Users\\pat\\AppData\\Local\\Intern\\intern.exe",
+            "C:\\Scans\\scan.pdf",
+        ]);
+        assert!(is_update_relaunch(&data, &relaunch, 1_030));
+        assert!(
+            !is_update_relaunch(&data, &relaunch, 1_060),
+            "used up: the same document sent later is a person's"
+        );
+
+        // A different launch is a person's, and uses the record up too.
+        expect_update_relaunch(&data, &sent, 2_000).unwrap();
+        assert!(!is_update_relaunch(
+            &data,
+            &args(&["intern.exe", "C:\\Scans\\other.pdf"]),
+            2_010
+        ));
+        assert!(!data.join(UPDATE_RELAUNCH).exists());
+
+        // An install that never relaunched is not believed an hour on.
+        expect_update_relaunch(&data, &sent, 3_000).unwrap();
+        assert!(!is_update_relaunch(&data, &sent, 3_000 + 60 * 60 + 1));
+        // Nor one that was abandoned, nor a record that cannot be read.
+        expect_update_relaunch(&data, &sent, 4_000).unwrap();
+        forget_update_relaunch(&data);
+        assert!(!is_update_relaunch(&data, &sent, 4_010));
+        std::fs::write(data.join(UPDATE_RELAUNCH), b"{").unwrap();
+        assert!(!is_update_relaunch(&data, &sent, 4_020));
+        std::fs::remove_dir_all(data).unwrap();
     }
 
     #[test]
