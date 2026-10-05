@@ -135,6 +135,7 @@ pub fn run() {
             commands::queue_list,
             commands::queue_add_files,
             commands::queue_add_folder,
+            commands::queue_take_launch_report,
             commands::queue_pause,
             commands::queue_resume,
             commands::queue_cancel,

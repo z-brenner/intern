@@ -26,7 +26,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-/// Where panics are recorded.
+/// Where panics are recorded, and what happened with no window to say it in.
 pub const PANIC_LOG: &str = "intern.log";
 /// Where startup failures are recorded.
 pub const STARTUP_ERROR_LOG: &str = "startup-error.log";
@@ -56,6 +56,16 @@ pub fn install_panic_hook() {
             previous(info);
         }
     }));
+}
+
+/// Appends a line to `logs/intern.log` about something that happened with
+/// no window to say it in, such as documents a launch named that could not be
+/// queued. Codes and counts only, never a document's name or text.
+pub fn log_line(message: &str) {
+    let record = format!("{} {message}", timestamp());
+    if append_log_line(&log_directory(), PANIC_LOG, &record).is_err() {
+        let _ = append_log_line(&fallback_log_directory(), PANIC_LOG, &record);
+    }
 }
 
 /// Points the logs at the app's data folder, as soon as setup knows it.

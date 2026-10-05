@@ -932,6 +932,9 @@ pub struct AppState {
     hosted: Arc<HostedModel>,
     settings_gate: Mutex<()>,
     sharepoint_activation: AtomicBool,
+    /// What the documents a launch named came to, when some could not be
+    /// added, until the window takes it.
+    launch_reports: LaunchReports,
 }
 
 impl AppState {
@@ -1066,6 +1069,7 @@ impl AppState {
             hosted,
             settings_gate: Mutex::new(()),
             sharepoint_activation: AtomicBool::new(false),
+            launch_reports: LaunchReports::default(),
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -1229,10 +1233,38 @@ impl AppState {
 /// including any documents it was given, which is how "Send to > Intern"
 /// reaches a copy that is already running.
 pub fn second_instance_launched(app: &AppHandle, arguments: Vec<String>, directory: String) {
+    second_launch(&AppLaunch(app), arguments, directory);
+}
+
+/// What a launch does to the running app: its documents are added, and its
+/// window shown. `AppLaunch` is the app; tests stand in a queue of their own.
+trait LaunchTarget {
+    /// Adds the documents `arguments` names, resolving a relative path
+    /// against `cwd`.
+    fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf);
+    fn show_window(&self);
+}
+
+struct AppLaunch<'a>(&'a AppHandle);
+
+impl LaunchTarget for AppLaunch<'_> {
+    fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf) {
+        queue_launch_documents(self.0, arguments, cwd);
+    }
+
+    fn show_window(&self) {
+        crate::tray::show_main_window(self.0);
+    }
+}
+
+/// [`second_instance_launched`], apart from the app. The documents are
+/// resolved against `directory`, the second process's working folder - a
+/// relative path in its command line means nothing against this one's.
+fn second_launch(target: &impl LaunchTarget, arguments: Vec<String>, directory: String) {
     let shows_window = second_launch_shows_window(&arguments);
-    queue_launch_documents(app, arguments, PathBuf::from(directory));
+    target.add_documents(arguments, PathBuf::from(directory));
     if shows_window {
-        crate::tray::show_main_window(app);
+        target.show_window();
     }
 }
 
@@ -1296,24 +1328,56 @@ fn is_short_windows_switch(argument: &str) -> bool {
 }
 
 /// What a launch's documents do to the queue, without the app around it:
-/// added like any other add, and the scheduler woken (`wake`) when anything
-/// was.
+/// added like any other add, the scheduler woken (`wake`) when anything was,
+/// and what came of it returned for the window. An add that failed outright,
+/// because the queue database could not be reached, names every document
+/// with the reason, as it would a file it refused: a launch has no window of
+/// its own to say so in, and nothing else will.
 fn add_launch_documents(
     pipeline: &Pipeline,
     arguments: &[String],
     cwd: &Path,
     wake: impl FnOnce() -> Result<(), CommandError>,
-) -> Result<AddReportDto, CommandError> {
-    let report = add_inputs(pipeline, &launch_documents(arguments, cwd))?;
-    wake_if_added(&report, wake)?;
-    Ok(report)
+) -> AddReportDto {
+    let documents = launch_documents(arguments, cwd);
+    let report = add_inputs(pipeline, &documents).unwrap_or_else(|error| {
+        // The code only: the message can name a document.
+        crate::startup::log_line(&format!(
+            "documents a launch named could not be queued: {}",
+            error.code
+        ));
+        refused_launch(&documents, &error.code)
+    });
+    // Queued, so not skipped; they wait for the scheduler's own timer.
+    if let Err(error) = wake_if_added(&report, wake) {
+        crate::startup::log_line(&format!(
+            "the queue could not be woken for documents a launch named: {}",
+            error.code
+        ));
+    }
+    report
+}
+
+/// A launch's documents, every one left out for `code`.
+fn refused_launch(documents: &[PathBuf], code: &str) -> AddReportDto {
+    AddReportDto {
+        skipped: documents
+            .iter()
+            .map(|path| SkippedDocumentDto {
+                name: document_name(path),
+                code: code.to_owned(),
+            })
+            .collect(),
+        ..AddReportDto::default()
+    }
 }
 
 /// Adds the documents a launch named, off the main thread: even asking
 /// whether a path on an offline share exists can take many seconds, hashing a
 /// folder of scans takes more, and the main thread is the window's. The
 /// queue's own change event refreshes the window; a document that could not
-/// be added is left where it is, exactly as it was.
+/// be added is left where it is, exactly as it was, and named in the window
+/// (`queue://launch-report`, then `queue_take_launch_report`).
 pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cwd: PathBuf) {
     if !launch_names_documents(&arguments) {
         return;
@@ -1324,16 +1388,61 @@ pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cw
         let Some(state) = app.try_state::<AppState>() else {
             return;
         };
-        // The code only: the message can name the document.
-        if let Err(error) =
-            add_launch_documents(&state.pipeline, &arguments, &cwd, || state.schedule())
-        {
-            eprintln!(
-                "intern: documents from the command line could not be queued: {}",
-                error.code
-            );
+        let report = add_launch_documents(&state.pipeline, &arguments, &cwd, || state.schedule());
+        if state.launch_reports.hold(report) {
+            let _ = app.emit(LAUNCH_REPORT_EVENT, ());
         }
     });
+}
+
+/// Says the window has a launch report to take.
+const LAUNCH_REPORT_EVENT: &str = "queue://launch-report";
+
+/// What launches' documents came to, held for the window when some could
+/// not be added: "Send to > Intern" with a `.zip` among the attachments said
+/// nothing at all, because only an add made from the window had anywhere to
+/// say "Skipped 1: notes.zip". Held rather than only sent, because the first
+/// launch's add can finish before the window is listening; and gathered,
+/// because Explorer can start one launch per document.
+#[derive(Debug, Default)]
+pub(crate) struct LaunchReports(Mutex<Option<AddReportDto>>);
+
+impl LaunchReports {
+    /// Keeps `report` when it left something out, adding it to whatever the
+    /// window has not taken yet, and says whether it did. A launch whose
+    /// documents were all added has nothing to tell: they are in the queue.
+    fn hold(&self, report: AddReportDto) -> bool {
+        if report.skipped.is_empty() {
+            return false;
+        }
+        let Ok(mut held) = self.0.lock() else {
+            return false;
+        };
+        match held.as_mut() {
+            Some(earlier) => {
+                earlier.added = earlier.added.saturating_add(report.added);
+                earlier.already_queued =
+                    earlier.already_queued.saturating_add(report.already_queued);
+                earlier.skipped.extend(report.skipped);
+            }
+            None => *held = Some(report),
+        }
+        true
+    }
+
+    /// Everything held since the window last asked, once.
+    fn take(&self) -> Option<AddReportDto> {
+        self.0.lock().ok().and_then(|mut held| held.take())
+    }
+}
+
+/// The documents launches named that could not all be added, since the
+/// window last asked: nothing when there is nothing to say.
+#[tauri::command]
+pub fn queue_take_launch_report(
+    state: State<'_, AppState>,
+) -> Result<Option<AddReportDto>, CommandError> {
+    Ok(state.launch_reports.take())
 }
 
 /// Whether a second launch means "show me the window". Someone who clicked
@@ -1578,6 +1687,19 @@ fn wake_if_added(
     if report.added > 0 { wake() } else { Ok(()) }
 }
 
+/// An add made from the window, whole: queued, reported, and the scheduler
+/// woken (`wake`) for whatever was queued. Both add commands are this and
+/// nothing else, so what is tested here is what they do.
+fn add_and_wake(
+    pipeline: &Pipeline,
+    inputs: &[PathBuf],
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<AddReportDto, CommandError> {
+    let report = add_inputs(pipeline, inputs)?;
+    wake_if_added(&report, wake)?;
+    Ok(report)
+}
+
 /// Adds files, folders, or a mixture of both - a drop carries whatever was
 /// dragged. Partial by design: what cannot be added is reported, and the
 /// scheduler is woken for whatever was, so nothing waits for its timer.
@@ -1586,18 +1708,17 @@ pub async fn queue_add_files(
     files: Vec<FileSelectionDto>,
     state: State<'_, AppState>,
 ) -> Result<AddReportDto, CommandError> {
-    let pipeline = state.pipeline.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
         let inputs = files
             .into_iter()
             .map(|file| PathBuf::from(file.path))
             .collect::<Vec<_>>();
-        add_inputs(&pipeline, &inputs)
+        add_and_wake(&state.pipeline, &inputs, || state.schedule())
     })
     .await
-    .map_err(|_| background_task_failed("file intake"))??;
-    wake_if_added(&report, || state.schedule())?;
-    Ok(report)
+    .map_err(|_| background_task_failed("file intake"))?
 }
 
 /// Adds the supported documents in a folder. The folder itself must exist -
@@ -1608,15 +1729,14 @@ pub async fn queue_add_folder(
     folder: FolderSelectionDto,
     state: State<'_, AppState>,
 ) -> Result<AddReportDto, CommandError> {
-    let pipeline = state.pipeline.clone();
-    let report = tauri::async_runtime::spawn_blocking(move || -> Result<_, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
         let folder = canonical_folder(Path::new(&folder.path))?;
-        add_inputs(&pipeline, &[folder])
+        add_and_wake(&state.pipeline, &[folder], || state.schedule())
     })
     .await
-    .map_err(|_| background_task_failed("folder intake"))??;
-    wake_if_added(&report, || state.schedule())?;
-    Ok(report)
+    .map_err(|_| background_task_failed("folder intake"))?
 }
 
 #[tauri::command]
@@ -3293,9 +3413,9 @@ mod scratch_queue {
 #[cfg(test)]
 mod add_report_tests {
     use super::{
-        AddReportDto, SkippedDocumentDto, add_inputs, partition_inputs,
+        AddReportDto, CommandError, LaunchReports, SkippedDocumentDto, add_and_wake,
+        partition_inputs,
         scratch_queue::{folder, queue, write},
-        wake_if_added,
     };
 
     #[test]
@@ -3345,10 +3465,15 @@ mod add_report_tests {
         std::fs::create_dir_all(&inner).unwrap();
         let fourth = write(&inner, "e.txt", b"a plain text letter");
         let (pipeline, changes) = queue(&root.join("data"));
+        let mut woken = 0;
 
-        let report = add_inputs(
+        let report = add_and_wake(
             &pipeline,
             &[first.clone(), archive, third.clone(), empty, inner],
+            || {
+                woken += 1;
+                Ok(())
+            },
         )
         .unwrap();
 
@@ -3380,23 +3505,29 @@ mod add_report_tests {
         assert_eq!(changes.count(), 1);
         // And the scheduler is woken for what was added, though two of the
         // five were not: nothing waits for its timer.
-        let mut woken = 0;
-        wake_if_added(&report, || {
-            woken += 1;
-            Ok(())
-        })
-        .unwrap();
         assert_eq!(woken, 1);
 
         // The same files again are already there, and say so.
-        let again = add_inputs(&pipeline, std::slice::from_ref(&first)).unwrap();
-        assert_eq!(again.added, 0);
-        assert_eq!(again.already_queued, 1);
-        assert_eq!(changes.count(), 1);
-        wake_if_added(&again, || {
+        let again = add_and_wake(&pipeline, std::slice::from_ref(&first), || {
             panic!("nothing new was queued, so nothing is woken")
         })
         .unwrap();
+        assert_eq!(again.added, 0);
+        assert_eq!(again.already_queued, 1);
+        assert_eq!(changes.count(), 1);
+
+        // A scheduler that cannot be woken is the add's error: what was
+        // queued stays queued, and the window hears why nothing will run.
+        let late = write(&documents, "f.pdf", b"%PDF-1.7 late");
+        let refused = add_and_wake(&pipeline, &[late], || {
+            Err(CommandError {
+                code: "STATE_CONFLICT".into(),
+                message: "pipeline scheduler is unavailable".into(),
+            })
+        })
+        .unwrap_err();
+        assert_eq!(refused.code, "STATE_CONFLICT");
+        assert_eq!(pipeline.list().unwrap().len(), 4);
 
         // The wire shape the window reads.
         assert_eq!(
@@ -3413,17 +3544,113 @@ mod add_report_tests {
         drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    fn skipped(added: u32, name: &str, code: &str) -> AddReportDto {
+        AddReportDto {
+            added,
+            already_queued: 0,
+            skipped: vec![SkippedDocumentDto {
+                name: name.into(),
+                code: code.into(),
+            }],
+        }
+    }
+
+    /// A launch has no window of its own to say what it left out, and the
+    /// first one's add can finish before the window is listening: what it
+    /// left out is held until the window asks, gathered across launches,
+    /// and handed over once.
+    #[test]
+    fn launch_reports_are_held_for_the_window_and_taken_once() {
+        let held = LaunchReports::default();
+        assert!(
+            !held.hold(AddReportDto {
+                added: 2,
+                ..AddReportDto::default()
+            }),
+            "everything was added: the queue shows it"
+        );
+        assert_eq!(held.take(), None);
+
+        assert!(held.hold(skipped(1, "notes.zip", "UNSUPPORTED_FORMAT")));
+        // Explorer can start one launch per document sent.
+        assert!(held.hold(skipped(0, "blank.pdf", "EMPTY_FILE")));
+
+        assert_eq!(
+            held.take(),
+            Some(AddReportDto {
+                added: 1,
+                already_queued: 0,
+                skipped: vec![
+                    SkippedDocumentDto {
+                        name: "notes.zip".into(),
+                        code: "UNSUPPORTED_FORMAT".into(),
+                    },
+                    SkippedDocumentDto {
+                        name: "blank.pdf".into(),
+                        code: "EMPTY_FILE".into(),
+                    },
+                ],
+            })
+        );
+        assert_eq!(held.take(), None, "said once");
+    }
 }
 
 #[cfg(test)]
 mod second_instance_tests {
-    use std::path::{MAIN_SEPARATOR, Path};
+    use std::{
+        cell::Cell,
+        path::{MAIN_SEPARATOR, PathBuf},
+    };
+
+    use intern_queue::Pipeline;
 
     use super::{
-        add_launch_documents, is_short_windows_switch, launch_documents, launch_names_documents,
+        LaunchReports, LaunchTarget, SkippedDocumentDto, add_launch_documents,
+        is_short_windows_switch, launch_documents, launch_names_documents, refused_launch,
         scratch_queue::{folder, queue, write},
-        second_launch_shows_window,
+        second_launch, second_launch_shows_window,
     };
+
+    /// The running app as a launch reaches it, over a scratch queue: the
+    /// documents added and what was left out held exactly as
+    /// `queue_launch_documents` does, and the window's showing counted.
+    struct ScratchApp<'a> {
+        pipeline: &'a Pipeline,
+        reports: LaunchReports,
+        woken: Cell<usize>,
+        told: Cell<usize>,
+        shown: Cell<usize>,
+    }
+
+    impl<'a> ScratchApp<'a> {
+        fn new(pipeline: &'a Pipeline) -> Self {
+            Self {
+                pipeline,
+                reports: LaunchReports::default(),
+                woken: Cell::new(0),
+                told: Cell::new(0),
+                shown: Cell::new(0),
+            }
+        }
+    }
+
+    impl LaunchTarget for ScratchApp<'_> {
+        fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf) {
+            let report = add_launch_documents(self.pipeline, &arguments, &cwd, || {
+                self.woken.set(self.woken.get() + 1);
+                Ok(())
+            });
+            if self.reports.hold(report) {
+                self.told.set(self.told.get() + 1);
+            }
+        }
+
+        fn show_window(&self) {
+            self.shown.set(self.shown.get() + 1);
+        }
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -3497,29 +3724,74 @@ mod second_instance_tests {
         let inbox = root.join("Saved attachments");
         std::fs::create_dir_all(&inbox).unwrap();
         let scan = write(&inbox, "scan.pdf", b"%PDF-1.7 a scan");
+        write(&inbox, "notes.zip", b"PK an archive");
         let (pipeline, changes) = queue(&root.join("data"));
+        let app = ScratchApp::new(&pipeline);
         // What Explorer's "Send to > Intern" hands the second process, and
-        // the single-instance plugin hands on: its arguments and its folder.
-        let arguments = args(&["C:\\Program Files\\Intern\\Intern.exe", "scan.pdf"]);
+        // the single-instance plugin hands on: its arguments, and its working
+        // folder as a string. The documents are relative to that folder, not
+        // to this process's.
+        let arguments = args(&[
+            "C:\\Program Files\\Intern\\Intern.exe",
+            "scan.pdf",
+            "notes.zip",
+        ]);
 
-        let mut woken = 0;
-        let report = add_launch_documents(&pipeline, &arguments, Path::new(&inbox), || {
-            woken += 1;
-            Ok(())
-        })
-        .unwrap();
+        second_launch(&app, arguments, inbox.to_string_lossy().into_owned());
 
-        assert_eq!(report.added, 1);
-        assert_eq!(woken, 1, "the scheduler is woken for the new document");
-        assert!(report.skipped.is_empty());
         let queued = pipeline.list().unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].source_path, scan);
         assert_eq!(changes.count(), 1);
-        // And the window comes up to show it.
-        assert!(second_launch_shows_window(&arguments));
+        assert_eq!(app.woken.get(), 1, "the scheduler is woken for it");
+        // And the window comes up to show it, told about the archive.
+        assert_eq!(app.shown.get(), 1);
+        assert_eq!(app.told.get(), 1);
+        let report = app.reports.take().unwrap();
+        assert_eq!(report.added, 1);
+        assert_eq!(
+            report.skipped,
+            vec![SkippedDocumentDto {
+                name: "notes.zip".into(),
+                code: "UNSUPPORTED_FORMAT".into(),
+            }]
+        );
+
+        // A sign-in launch handed on here asked for the tray: nothing is
+        // added, nothing is said, and the window stays where it is.
+        second_launch(
+            &app,
+            args(&["intern.exe", "--minimized"]),
+            inbox.to_string_lossy().into_owned(),
+        );
+        assert_eq!(app.shown.get(), 1);
+        assert_eq!(app.told.get(), 1);
+        assert_eq!(pipeline.list().unwrap().len(), 1);
         drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The queue could not take a launch's documents at all. Nothing else
+    /// will say so, so every document is named with the reason.
+    #[test]
+    fn a_launch_the_queue_refused_names_every_document() {
+        let report = refused_launch(
+            &[
+                PathBuf::from("/drop/scan.pdf"),
+                PathBuf::from("/drop/Scans"),
+            ],
+            "DATABASE_UNAVAILABLE",
+        );
+        assert_eq!(report.added, 0);
+        assert_eq!(
+            report.skipped,
+            ["scan.pdf", "Scans"]
+                .map(|name| SkippedDocumentDto {
+                    name: name.into(),
+                    code: "DATABASE_UNAVAILABLE".into(),
+                })
+                .to_vec()
+        );
     }
 
     #[test]

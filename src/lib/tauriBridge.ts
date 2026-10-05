@@ -10,6 +10,7 @@ import type {
   FileSelection,
   FolderSelection,
   IntakeEventSource,
+  LaunchReportSource,
   SelectionBoundary,
   SelectionResult,
   SupportLinkTarget,
@@ -111,7 +112,7 @@ export interface TauriSelectionBoundary extends SelectionBoundary {
   subscribeDrops(listener: (selection: SelectionResult) => void): Promise<() => void>;
 }
 
-export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource {
+export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource, LaunchReportSource {
   constructor(private readonly transport: TauriTransport = defaultTransport) {}
 
   microsoftIntakeStatus(): Promise<MicrosoftIntakeStatus> { return this.transport.invoke('microsoft_intake_status'); }
@@ -275,6 +276,32 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     // replace it, so there is no relaunch call here to fail after the process
     // has already gone.
     await pendingUpdate.downloadAndInstall();
+  }
+
+  // Same shape as subscribeIntake. The event only says a report is waiting:
+  // the backend holds it until it is taken, because the add for a launch
+  // that started Intern can finish before this window is listening - so it
+  // is also asked for once, as soon as the listener is in place.
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void {
+    let active = true;
+    let stop: (() => void) | undefined;
+    const take = async () => {
+      try {
+        const report = await this.transport.invoke<AddReportDto | null | undefined>('queue_take_launch_report');
+        if (active && report) handler(normalizeAddReport(report));
+      } catch { /* Nothing to show; the queue still shows what was added. */ }
+    };
+    void this.transport.listen<unknown>('queue://launch-report', () => {
+      if (active) void take();
+    }).then((unlisten) => {
+      if (active) { stop = unlisten; void take(); }
+      else unlisten();
+    }).catch(() => { if (active) void take(); });
+    return () => {
+      if (!active) return;
+      active = false;
+      stop?.();
+    };
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {

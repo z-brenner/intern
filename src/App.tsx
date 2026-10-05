@@ -13,7 +13,7 @@ import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
 import { describeAddReport } from './lib/addReport';
-import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
+import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -358,6 +358,18 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     }).catch(() => { /* No drop stream in this runtime; the pickers still work. */ });
     return () => { active = false; stop?.(); };
   }, [selection]);
+  // "Send to > Intern" and a document opened with Intern add outside the
+  // window, and had nowhere to say what they left out: the same note as an
+  // add made here, said as soon as the window can say it.
+  useEffect(() => {
+    const source = bridge as DesktopBridge & Partial<LaunchReportSource>;
+    if (!source.subscribeLaunchReports) return;
+    return source.subscribeLaunchReports((report) => {
+      const message = describeAddReport(report);
+      setActionMessage(message);
+      if (report.skipped.length > 0) setSkippedNotice(message);
+    });
+  }, [bridge]);
   // Opened from Settings. The queue stays subscribed underneath, and the
   // saved settings are read back afterwards so Settings shows the new folder.
   if (folderSetupOpen) return <FolderSetupFlow bridge={bridge} selection={selection} onCancel={() => setFolderSetupOpen(false)} onDone={async () => {

@@ -329,6 +329,40 @@ describe('TauriBridge', () => {
     expect(seen).toHaveBeenCalledTimes(1);
   });
 
+  it('hands over what a launch left out: one held from before it listened, then one per launch-report event', async () => {
+    const fake = fakeTransport();
+    const held: unknown[] = [
+      // Intern started by "Send to": the add finished before the window listened.
+      { added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] },
+      { added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] },
+      null,
+    ];
+    const taken: string[] = [];
+    const transport: TauriTransport = {
+      ...fake.transport,
+      invoke: async <T>(command: string) => {
+        taken.push(command);
+        return held.shift() as T;
+      },
+    };
+    const seen = vi.fn();
+    const unsubscribe = new TauriBridge(transport).subscribeLaunchReports(seen);
+
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    expect(seen).toHaveBeenLastCalledWith({ added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] });
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 1, payload: null });
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
+    expect(seen).toHaveBeenLastCalledWith({ added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] });
+    // Nothing held: nothing said.
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 2, payload: null });
+    await vi.waitFor(() => expect(taken).toHaveLength(3));
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(new Set(taken)).toEqual(new Set(['queue_take_launch_report']));
+
+    unsubscribe();
+    expect(fake.unlisten.get('queue://launch-report')).toHaveBeenCalledOnce();
+  });
+
   it('normalizes history entry ids to strings from the wire DTO', async () => {
     const fake = fakeTransport({
       history_list: [{

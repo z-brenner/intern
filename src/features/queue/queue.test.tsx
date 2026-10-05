@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
+import type { AddReport } from '../../types';
 
 describe('queue interactions', () => {
   const selectRow = async (row: HTMLElement) => {
@@ -76,6 +78,27 @@ describe('queue interactions', () => {
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Added 1 document. 2 were already in the queue.'));
     // Nothing was left out this time, so the earlier notice goes with it.
     expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
+  });
+
+  // "Send to > Intern" adds outside the window. What it left out used to be
+  // said nowhere at all; it is the same note as an add made here.
+  it('names what documents sent to Intern left out', async () => {
+    const base = createInMemoryBridge({ items: [] });
+    let deliver: ((report: AddReport) => void) | undefined;
+    const stop = vi.fn();
+    const subscribeLaunchReports = vi.fn((handler: (report: AddReport) => void) => { deliver = handler; return stop; });
+    const bridge: DesktopBridge & LaunchReportSource = { ...base, subscribeLaunchReports };
+    const view = render(<App bridge={bridge} />);
+    await screen.findByRole('main', { name: 'Intern' });
+    await waitFor(() => expect(deliver).toBeDefined());
+
+    act(() => deliver!({ added: 1, alreadyQueued: 0, skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
+
+    const message = 'Added 1 document. Skipped 2: Contract.doc (not a supported format), blank.pdf (the file is empty).';
+    expect(await screen.findByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message);
+    view.unmount();
+    expect(stop).toHaveBeenCalled();
   });
 
   it('focuses the existing result when the same unchanged path is dropped again', async () => {

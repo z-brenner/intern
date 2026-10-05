@@ -229,6 +229,16 @@ export interface DescriptionsEventSource {
   subscribeDescriptions(handler: (status: DescriptionsStatus) => void): () => void;
 }
 
+/**
+ * Optional capability, duck-typed like IntakeEventSource: documents sent to
+ * Intern from outside the window ("Send to > Intern", or named on its command
+ * line) that could not all be added. The handler is given each report once,
+ * including one from a launch that finished before it subscribed.
+ */
+export interface LaunchReportSource {
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void;
+}
+
 export type UpdateStatus =
   | { state: 'current'; currentVersion: string }
   | { state: 'available'; currentVersion: string; version: string; notes?: string; date?: string }
