@@ -39,6 +39,17 @@ const MAX_RUNNING_LINE_CHARACTERS: usize = 120;
 
 const GAP_MARKER: &str = "[...]";
 
+/// The SECTIONS line lists at most this many headings...
+const MAX_OUTLINE_HEADINGS: usize = 40;
+/// ...in at most this many characters, the cut marked by [`OUTLINE_CUT`].
+///
+/// The outline is a map, not the territory: a contract's article headings fit
+/// in a few hundred characters, and the corpus's longest is about 104. Every
+/// heading in a 500-line all-caps scan used to be listed, which made the
+/// outline most of the prompt and pushed it past the context window.
+const MAX_OUTLINE_CHARACTERS: usize = 1_500;
+const OUTLINE_CUT: &str = " | …";
+
 /// Cues that identify what kind of document this is.
 const TYPE_CUES: &[&str] = &[
     "agreement",
@@ -341,7 +352,10 @@ fn segment(source: &DocumentSource) -> Vec<Block> {
                 );
             }
             pending_table = table_line;
-            if is_heading_line(trimmed) {
+            // A table row is never a heading, however capitalised: a ledger's
+            // `| 4000 | SALES REVENUE | CR |` rows each became one, and a
+            // 600-row sheet filled the outline with 600 of them.
+            if !table_line && is_heading_line(trimmed) {
                 flush_pending(
                     &mut blocks,
                     &mut pending,
@@ -741,7 +755,7 @@ fn emit(
     let mut segments = Vec::with_capacity(kept.len());
     if compressed && !outline.is_empty() {
         text.push_str("SECTIONS: ");
-        text.push_str(&outline.join(" | "));
+        text.push_str(&capped_outline(outline));
         text.push_str("\n\n");
     }
     if date_lines.len() > 1 {
@@ -773,6 +787,33 @@ fn emit(
         previous_index = Some(*index);
     }
     (text.trim_end().to_owned(), segments)
+}
+
+/// The outline as the SECTIONS line shows it: the headings in order, joined,
+/// up to [`MAX_OUTLINE_HEADINGS`] and [`MAX_OUTLINE_CHARACTERS`] including the
+/// cut marker, so a document of a few dozen headings reads exactly as before.
+fn capped_outline(outline: &[String]) -> String {
+    const SEPARATOR: &str = " | ";
+    let full = outline.join(SEPARATOR);
+    if outline.len() <= MAX_OUTLINE_HEADINGS && full.chars().count() <= MAX_OUTLINE_CHARACTERS {
+        return full;
+    }
+    let room = MAX_OUTLINE_CHARACTERS - OUTLINE_CUT.chars().count();
+    let mut capped = String::new();
+    let mut used = 0;
+    for (index, heading) in outline.iter().take(MAX_OUTLINE_HEADINGS).enumerate() {
+        let cost = heading.chars().count() + if index == 0 { 0 } else { SEPARATOR.len() };
+        if used + cost > room {
+            break;
+        }
+        if index > 0 {
+            capped.push_str(SEPARATOR);
+        }
+        capped.push_str(heading);
+        used += cost;
+    }
+    capped.push_str(OUTLINE_CUT);
+    capped
 }
 
 /// Convenience constructor for callers that only have flat text.
@@ -1082,6 +1123,112 @@ mod tests {
             "I agree to the terms"
         );
         assert_eq!(strip_enumerators("Invoice 2026-001"), "Invoice 2026-001");
+    }
+
+    /// The SECTIONS line of a digest, without its label.
+    fn sections(digest: &DocumentDigest) -> &str {
+        digest
+            .text
+            .strip_prefix("SECTIONS: ")
+            .and_then(|rest| rest.split("\n\n").next())
+            .expect("a compressed digest with headings starts with its outline")
+    }
+
+    /// A general-ledger export renders as a markdown table of all-caps rows.
+    /// Each row used to read as a heading, so the outline listed all 600 of
+    /// them - 32,000 characters in a prompt meant to hold 12,000.
+    #[test]
+    fn table_rows_are_never_headings() {
+        let mut sheet = String::from(
+            "GENERAL LEDGER\n\n| ACCOUNT | DESCRIPTION | SIDE |\n| --- | --- | --- |\n",
+        );
+        for row in 0..600 {
+            sheet.push_str(&format!(
+                "| {} | SALES REVENUE REGION {} | CR |\n",
+                4000 + row,
+                row % 7
+            ));
+        }
+        let source = DocumentSource::from_pages(vec![page(1, &sheet)]);
+        assert!(source.character_count() > PASSTHROUGH_CHARACTERS);
+        let digest = distill(&source, DigestBudget::default());
+
+        assert!(digest.compressed);
+        assert_eq!(digest.outline, vec!["GENERAL LEDGER".to_owned()]);
+        let outline = sections(&digest);
+        assert!(!outline.contains('|'), "{outline}");
+        assert!(outline.chars().count() <= 1_500);
+        // The rows are still there to be read, as a table.
+        assert!(
+            digest
+                .text
+                .contains("| 4000 | SALES REVENUE REGION 0 | CR |")
+        );
+    }
+
+    /// An all-caps scan makes every line a heading. However many there are,
+    /// the outline stays a short map, and says that it was cut.
+    #[test]
+    fn sections_outline_is_capped() {
+        let mut scan = String::new();
+        for line in 0..500 {
+            scan.push_str(&format!(
+                "SCHEDULE {line} OF THE ASSET PURCHASE AGREEMENT\n"
+            ));
+            scan.push_str("The assets listed in this schedule transfer at closing.\n\n");
+        }
+        let source = DocumentSource::from_pages(vec![page(1, &scan)]);
+        let digest = distill(&source, DigestBudget::default());
+
+        assert_eq!(
+            digest.outline.len(),
+            500,
+            "the digest still knows every heading"
+        );
+        let outline = sections(&digest);
+        assert!(
+            outline.chars().count() <= 1_500,
+            "{}",
+            outline.chars().count()
+        );
+        assert!(outline.ends_with(" | …"), "{outline}");
+        let listed = outline.trim_end_matches(" | …").split(" | ").count();
+        assert!((1..=40).contains(&listed), "{listed}");
+        assert!(outline.starts_with("SCHEDULE 0 OF THE ASSET PURCHASE AGREEMENT | SCHEDULE 1 "));
+
+        // Long headings run into the character cap before the heading cap.
+        let wide = (0..60)
+            .map(|index| format!("{index:02} {}", "W".repeat(80)))
+            .collect::<Vec<_>>();
+        let capped = capped_outline(&wide);
+        assert!(
+            capped.chars().count() <= 1_500,
+            "{}",
+            capped.chars().count()
+        );
+        assert!(capped.ends_with(" | …"));
+        assert!(capped.trim_end_matches(" | …").split(" | ").count() < 40);
+    }
+
+    /// The corpus's outlines are about a hundred characters, and a prompt that
+    /// changes by a byte is a stale recording.
+    #[test]
+    fn a_short_outline_is_emitted_unchanged() {
+        let outline = [
+            "MASTER SERVICES AGREEMENT",
+            "1. DEFINITIONS",
+            "2. SERVICES",
+            "3. FEES",
+        ]
+        .map(str::to_owned);
+        assert_eq!(
+            capped_outline(&outline),
+            "MASTER SERVICES AGREEMENT | 1. DEFINITIONS | 2. SERVICES | 3. FEES"
+        );
+        let forty = (0..40)
+            .map(|index| format!("ARTICLE {index}"))
+            .collect::<Vec<_>>();
+        assert_eq!(capped_outline(&forty), forty.join(" | "));
     }
 
     #[test]
