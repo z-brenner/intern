@@ -23,11 +23,22 @@ use tempfile::TempDir;
 /// In-memory host: records what the watcher hands over and answers
 /// `item_state` from a scriptable map, defaulting to `Unknown` like a queue
 /// that has never seen the path.
+///
+/// It keeps the real queue's rules where the watcher depends on them: one row
+/// per path and content, so handing over a document it already has returns
+/// that row as it is - failed, canceled, finished - instead of starting it
+/// again; and a row the watcher itself withdrew starts again when the same
+/// document is handed over later.
 #[derive(Default)]
 struct FakeHost {
     enqueued: Mutex<Vec<PathBuf>>,
     abandoned: Mutex<Vec<PathBuf>>,
+    retried: Mutex<Vec<PathBuf>>,
     states: Mutex<HashMap<PathBuf, ItemState>>,
+    /// The content each path's row was made from.
+    contents: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    /// Rows the watcher's own `abandon` withdrew.
+    withdrawn: Mutex<HashSet<PathBuf>>,
     statuses: Mutex<Vec<IntakeStatus>>,
     fail_enqueue: AtomicBool,
     admission: Mutex<Option<IntakeAdmission>>,
@@ -41,6 +52,29 @@ impl FakeHost {
 
     fn abandoned(&self) -> Vec<PathBuf> {
         self.abandoned.lock().unwrap().clone()
+    }
+
+    fn retried(&self) -> Vec<PathBuf> {
+        self.retried.lock().unwrap().clone()
+    }
+
+    /// A person takes the item out of the queue: Remove on a review item, or
+    /// Discard waiting. The row is gone.
+    fn remove(&self, path: &Path) {
+        self.states.lock().unwrap().remove(path);
+        self.contents.lock().unwrap().remove(path);
+    }
+
+    /// A person cancels the item. The host reports a row they canceled as
+    /// kept where it is.
+    fn cancel(&self, path: &Path) {
+        self.set_state(
+            path,
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            },
+        );
     }
 
     fn admission_calls(&self) -> usize {
@@ -69,8 +103,18 @@ impl IntakeHost for FakeHost {
             return Err("the queue is unavailable".to_string());
         }
         let mut states = self.states.lock().unwrap();
+        let mut contents = self.contents.lock().unwrap();
+        let mut withdrawn = self.withdrawn.lock().unwrap();
         for path in paths {
+            let content = fs::read(path).map_err(|_| "FILE_UNREADABLE".to_string())?;
+            let same_row =
+                states.contains_key(path) && contents.get(path).is_some_and(|row| *row == content);
+            if same_row && !withdrawn.contains(path) {
+                continue;
+            }
+            withdrawn.remove(path);
             states.insert(path.clone(), ItemState::Active);
+            contents.insert(path.clone(), content);
         }
         self.enqueued.lock().unwrap().extend(paths.iter().cloned());
         Ok(())
@@ -85,8 +129,26 @@ impl IntakeHost for FakeHost {
             .unwrap_or(ItemState::Unknown)
     }
 
+    /// Like the real host: only a pending item can be withdrawn.
     fn abandon(&self, path: &Path) {
         self.abandoned.lock().unwrap().push(path.to_path_buf());
+        let mut states = self.states.lock().unwrap();
+        if let Some(state @ (ItemState::Active | ItemState::NeedsReview)) = states.get_mut(path) {
+            *state = ItemState::Unknown;
+            self.withdrawn.lock().unwrap().insert(path.to_path_buf());
+        }
+    }
+
+    fn retry(&self, path: &Path) -> bool {
+        let mut states = self.states.lock().unwrap();
+        match states.get_mut(path) {
+            Some(state @ ItemState::Failed) => {
+                *state = ItemState::Active;
+                self.retried.lock().unwrap().push(path.to_path_buf());
+                true
+            }
+            _ => false,
+        }
     }
 
     fn status_changed(&self, status: &IntakeStatus) {
@@ -102,6 +164,8 @@ struct Rig {
     clock: Arc<MockClock>,
     host: Arc<FakeHost>,
     hydration: Arc<FakeHydration>,
+    config: IntakeConfig,
+    identity: MachineIdentity,
     watcher: IntakeWatcher,
 }
 
@@ -168,15 +232,30 @@ impl Rig {
         for name in backlog_files {
             fs::write(temp.path().join(name), b"backlog content").unwrap();
         }
-        let clock = MockClock::at_real_now();
-        let host = Arc::new(FakeHost::default());
         let mut config = IntakeConfig::new(temp.path(), vec!["pdf".to_string(), "txt".to_string()]);
         config.process_others_uploads = process_others_uploads;
         config.scan_interval = Duration::from_secs(3600);
-        let hydration = Arc::new(FakeHydration::default());
-        let watcher = IntakeWatcher::start_with_seams(
+        Self::launch(
+            temp,
+            MockClock::at_real_now(),
+            Arc::new(FakeHost::default()),
+            Arc::new(FakeHydration::default()),
             config,
             identity,
+        )
+    }
+
+    fn launch(
+        temp: TempDir,
+        clock: Arc<MockClock>,
+        host: Arc<FakeHost>,
+        hydration: Arc<FakeHydration>,
+        config: IntakeConfig,
+        identity: MachineIdentity,
+    ) -> Rig {
+        let watcher = IntakeWatcher::start_with_seams(
+            config.clone(),
+            identity.clone(),
             host.clone(),
             clock.clone(),
             hydration.clone(),
@@ -189,8 +268,29 @@ impl Rig {
             clock,
             host,
             hydration,
+            config,
+            identity,
             watcher,
         }
+    }
+
+    /// Stops the watcher and starts a new one, as the app does on every
+    /// start, update restart, and intake settings save. The folder, the
+    /// queue, and the clock carry over; nothing the old watcher held in
+    /// memory does.
+    fn restart(self) -> Rig {
+        let Rig {
+            temp,
+            clock,
+            host,
+            hydration,
+            config,
+            identity,
+            watcher,
+        } = self;
+        drop(watcher);
+        clock.advance(1);
+        Self::launch(temp, clock, host, hydration, config, identity)
     }
 
     /// Triggers exactly one scan and waits for it to complete.
@@ -389,6 +489,128 @@ fn a_claimed_file_deleted_by_the_user_leaves_a_removed_tombstone() {
     let claim = rig.read_claim(&key);
     assert_eq!(claim.state, ClaimState::Done);
     assert_eq!(claim.outcome, Some(DoneOutcome::Removed));
+}
+
+/// Remove on a review item deletes the queue row. Releasing the claim because
+/// the row was gone put the document straight back into the queue on the next
+/// scan, to be analysed again seconds after the person said "Item removed."
+#[test]
+fn removed_review_item_is_tombstoned_not_reenqueued() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("bad-proposal.pdf", b"a document the person gave up on");
+    let key = facts_for(rig.temp.path(), "bad-proposal.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+    rig.host.set_state(&path, ItemState::NeedsReview);
+    rig.step();
+
+    rig.host.remove(&path);
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+
+    for _ in 0..3 {
+        rig.step();
+    }
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![path],
+        "a removed document is never handed over again"
+    );
+    assert_eq!(
+        rig.read_claim(&key),
+        tombstone,
+        "tombstoned exactly once, and left alone after"
+    );
+    assert_eq!(rig.watcher.status().processed_here, 1);
+}
+
+/// The queue keeps a canceled row, and handing the same document over again
+/// returns it canceled, so the old mapping (canceled reads as no item) made the
+/// claim file appear and vanish every two scans for ever - an upload to the
+/// sync client each time - and re-hashed the document on every cycle.
+#[test]
+fn user_cancel_is_tombstoned() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("not-this-one.pdf", b"a document the person canceled");
+    let key = facts_for(rig.temp.path(), "not-this-one.pdf").key();
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.cancel(&path);
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+    for _ in 0..4 {
+        rig.step();
+        assert_eq!(rig.read_claim(&key), tombstone, "no claim churn");
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// A claim with no queue row is not always a person's decision: a crash
+/// between taking the claim and handing the document over leaves exactly that,
+/// and the next run must still hand the document over.
+#[test]
+fn restart_adopted_claim_without_row_is_released() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("interrupted.pdf", b"claimed, then the app died");
+    let facts = facts_for(rig.temp.path(), "interrupted.pdf");
+    let rig = {
+        // The previous run got as far as the origin marker and the claim.
+        let store = ClaimStore::new(rig.temp.path(), rig.identity.clone()).unwrap();
+        store.write_origin(&facts).unwrap();
+        assert!(matches!(
+            store.acquire(&facts),
+            intern_intake::AcquireOutcome::Acquired
+        ));
+        rig.restart()
+    };
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert!(
+        !rig.claim_file(&facts.key()).exists(),
+        "an adopted claim with no item behind it is released"
+    );
+
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.read_claim(&facts.key()).state, ClaimState::Claimed);
+}
+
+/// The watcher's own withdrawal is not a person's decision. A document it
+/// let go of while its uploader could not be vouched for is handed over again
+/// once it can be, and starts again rather than being tombstoned.
+#[test]
+fn a_document_the_watcher_withdrew_is_handed_over_again_not_tombstoned() {
+    let rig = Rig::start(false, &[]);
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Verified);
+    let path = rig.write("contract.pdf", b"a document being processed");
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Revoked);
+    rig.step();
+    assert_eq!(rig.host.abandoned(), vec![path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Unknown);
+
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Verified);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone(), path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
 }
 
 #[test]
@@ -634,6 +856,7 @@ fn dropping_the_watcher_joins_the_scan_thread() {
         host,
         hydration,
         watcher,
+        ..
     } = rig;
     // A hang here (a detached or stuck thread) fails the test by timeout.
     drop(watcher);
@@ -752,15 +975,15 @@ fn a_document_that_failed_while_still_in_the_cloud_is_held_not_tombstoned() {
         "a document nothing could read must not be tombstoned"
     );
 
-    // Back online: the bytes arrive, so the claim is released and the next
-    // scan re-acquires it to give the document a real attempt.
+    // Back online: the bytes arrive, so the queue retries the document in
+    // place to give it a real attempt, and the claim stays this machine's.
     rig.hydration.set_dehydrated(&path, false);
     rig.step();
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    assert!(
-        !rig.claim_file(&key).exists(),
-        "the released claim leaves nothing behind to block a retry"
-    );
+    assert_eq!(rig.host.retried(), vec![path]);
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
 }
 
 #[test]
@@ -779,6 +1002,64 @@ fn a_failure_with_the_content_local_still_tombstones() {
     let claim = rig.read_claim(&key);
     assert_eq!(claim.state, ClaimState::Done);
     assert_eq!(claim.outcome, Some(DoneOutcome::Failed));
+}
+
+/// The queue keeps one row per path and content, so re-handing a failed
+/// document over returns the failed row unchanged. Forgiving a document that
+/// failed without its content therefore has to retry it through the host, or
+/// nothing is retried at all and the next scan tombstones it as failed.
+#[test]
+fn hydration_forgiveness_retries_through_host() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    rig.hydration.reachable.store(true, Ordering::SeqCst);
+    rig.step();
+    assert_eq!(rig.host.retried(), vec![path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    for _ in 0..2 {
+        rig.step();
+        let claim = rig.read_claim(&key);
+        assert_eq!(claim.state, ClaimState::Claimed, "the claim stays held");
+        assert_eq!(claim.machine_id, "here-machine");
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// Forgiveness is once per trip through the cloud: a document that fails
+/// again with its content on this disk failed for real.
+#[test]
+fn second_failure_tombstones() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document that is broken");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    rig.hydration.set_dehydrated(&path, false);
+    rig.step();
+    assert_eq!(rig.host.retried(), vec![path.clone()]);
+    rig.step();
+
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Done);
+    assert_eq!(claim.outcome, Some(DoneOutcome::Failed));
+    assert_eq!(rig.host.retried(), vec![path], "retried exactly once");
 }
 
 #[test]
@@ -1093,10 +1374,12 @@ fn a_held_placeholder_is_hydrated_when_the_host_can_reach_the_cloud() {
         "the scan must ask for the content it is waiting on"
     );
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    assert!(
-        !rig.claim_file(&key).exists(),
-        "the released claim lets the next scan give the document a real attempt"
+    assert_eq!(
+        rig.host.retried(),
+        vec![path],
+        "the document gets a real attempt now the content is here"
     );
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
 }
 
 /// A sync client can settle a file's size before it has finished with it and
@@ -1202,17 +1485,19 @@ fn a_placeholder_that_hydrates_is_given_a_real_attempt_rather_than_a_failure() {
     assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
     assert_eq!(rig.read_claim(&key).machine_id, "here-machine");
 
-    // The bytes arrive, the claim is released, and the next scan hands the
-    // document back to the queue with something to read.
+    // The bytes arrive and the queue runs the document again, with
+    // something to read, while the claim stays held.
     rig.hydration.reachable.store(true, Ordering::SeqCst);
     rig.step();
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    rig.step();
     assert_eq!(
-        rig.host.enqueued(),
-        vec![path.clone(), path.clone()],
+        rig.host.retried(),
+        vec![path.clone()],
         "the document deserves a second attempt now the content is here"
     );
+    rig.step();
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
 
     rig.host.set_state(
         &path,

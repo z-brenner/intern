@@ -2776,7 +2776,10 @@ mod intake_tests {
         );
         assert_eq!(
             item_fate(QueueStatus::Canceled, None, None),
-            ItemState::Unknown
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            }
         );
     }
 

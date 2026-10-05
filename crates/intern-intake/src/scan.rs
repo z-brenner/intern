@@ -37,6 +37,8 @@ impl IntakeConfig {
 /// What the host queue knows about a document it was handed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ItemState {
+    /// The queue has no live item for the path: none was ever made, the
+    /// person removed it, or the watcher's own `abandon` withdrew it.
     Unknown,
     Active,
     NeedsReview,
@@ -45,6 +47,9 @@ pub enum ItemState {
         result_filename: Option<String>,
     },
     Failed,
+    /// The queue could not be asked - its database refused the lookup. Not a
+    /// verdict about the document, so the claim is only kept alive.
+    Unavailable,
 }
 
 /// The boundary to whatever processes documents (the pipeline in the real
@@ -72,11 +77,22 @@ pub trait IntakeHost: Send + Sync {
     fn admission(&self, _path: &Path) -> IntakeAdmission {
         IntakeAdmission::Unknown
     }
+    /// Hands documents to the queue. Handing over a path and content the
+    /// queue already has must leave that item as it is, whatever state it is
+    /// in, rather than starting it again: the real queue keeps one row per
+    /// path and content.
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String>;
     fn item_state(&self, path: &Path) -> ItemState;
     /// The claim was lost to a takeover or sync conflict: cancel/remove the
-    /// local item if it is still pending.
+    /// local item if it is still pending. A withdrawn item reports `Unknown`,
+    /// and handing the same document over again later starts it again.
     fn abandon(&self, path: &Path);
+    /// Runs a `Failed` item again in place. True when it was failed and is
+    /// queued again; false when there was nothing to retry, or the host
+    /// cannot, in which case the watcher releases the claim instead.
+    fn retry(&self, _path: &Path) -> bool {
+        false
+    }
     fn status_changed(&self, status: &IntakeStatus);
 }
 

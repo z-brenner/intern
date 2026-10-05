@@ -149,6 +149,11 @@ struct ScanState {
     /// Claims kept open because the document failed while its content was
     /// still in the cloud. Their fate is decided once the bytes arrive.
     awaiting_hydration: HashSet<String>,
+    /// Owned keys whose queue item this run has seen working or waiting for
+    /// review. When such an item disappears while its file is still here, a
+    /// person removed or discarded it; an owned claim with no item that was
+    /// never seen live is the crash between acquire and enqueue instead.
+    seen_live: HashSet<String>,
 }
 
 fn run(
@@ -228,6 +233,7 @@ fn scan_once(
         backlog_recorded,
         owned,
         awaiting_hydration,
+        seen_live,
     } = state;
     if store.is_none() {
         match ClaimStore::with_clock(&config.intake_root, identity.clone(), clock.clone()) {
@@ -276,6 +282,7 @@ fn scan_once(
         record_backlog: !*backlog_recorded,
         owned,
         awaiting_hydration,
+        seen_live,
         status: &mut status,
         visited: HashSet::new(),
         live: HashSet::new(),
@@ -312,6 +319,7 @@ struct Scanner<'a> {
     record_backlog: bool,
     owned: &'a mut HashMap<String, PathBuf>,
     awaiting_hydration: &'a mut HashSet<String>,
+    seen_live: &'a mut HashSet<String>,
     status: &'a mut IntakeStatus,
     visited: HashSet<String>,
     live: HashSet<PathBuf>,
@@ -418,8 +426,7 @@ impl Scanner<'_> {
                 } else {
                     self.status.uploader_unknown += 1;
                 }
-                self.owned.remove(key);
-                self.host.abandon(&facts.path);
+                self.abandon(key, &facts.path);
                 let _ = self.store.release(key);
                 return;
             }
@@ -428,8 +435,7 @@ impl Scanner<'_> {
                 if self.store.verify(key) {
                     let _ = self.store.renew(key);
                 } else {
-                    self.owned.remove(key);
-                    self.host.abandon(&facts.path);
+                    self.abandon(key, &facts.path);
                 }
                 return;
             }
@@ -437,8 +443,7 @@ impl Scanner<'_> {
                 if self.store.verify(key) {
                     let _ = self.store.renew(key);
                 } else {
-                    self.owned.remove(key);
-                    self.host.abandon(&facts.path);
+                    self.abandon(key, &facts.path);
                 }
                 return;
             }
@@ -447,8 +452,7 @@ impl Scanner<'_> {
         if self.store.verify(key) {
             self.manage_owned(key, &facts.path, true);
         } else {
-            self.owned.remove(key);
-            self.host.abandon(&facts.path);
+            self.abandon(key, &facts.path);
         }
     }
 
@@ -525,31 +529,59 @@ impl Scanner<'_> {
     }
 
     /// Drives an owned claim according to what the host reports about the
-    /// item. `file_present` distinguishes a released document (still on disk,
-    /// claimable again) from one the user deleted (tombstoned as `Removed`
-    /// so the claim does not linger as a claimed lease forever).
+    /// item. `file_present` distinguishes a document still on disk from one
+    /// the user deleted (tombstoned as `Removed` so the claim does not linger
+    /// as a claimed lease forever).
+    ///
+    /// An item that vanishes while its file stays put is one of two things. If
+    /// this run saw it working or in review, a person took it out of the
+    /// queue - Remove, or Discard waiting - and that decision is recorded as
+    /// `KeptOriginal`: releasing the claim instead put the document straight
+    /// back into the queue on the next scan, to be analysed again. If it was
+    /// never seen live, the claim outlived a crash between acquire and
+    /// enqueue, and is released so the next scan hands the document over.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
         match self.host.item_state(path) {
             ItemState::Active | ItemState::NeedsReview => {
-                if self.store.renew(key).is_err() {
-                    self.owned.remove(key);
-                    self.host.abandon(path);
-                }
+                self.seen_live.insert(key.to_owned());
+                self.keep(key, path);
             }
+            // Nothing was learned about the document, so nothing is decided.
+            ItemState::Unavailable => self.keep(key, path),
             ItemState::Done {
                 outcome,
                 result_filename,
             } => self.finish_owned(key, outcome, result_filename.as_deref()),
             ItemState::Failed => self.finish_failed(key, path),
+            ItemState::Unknown if !file_present => {
+                let _ = self.store.mark_done(key, DoneOutcome::Removed, None);
+                self.owned.remove(key);
+            }
+            ItemState::Unknown if self.seen_live.contains(key) => {
+                self.finish_owned(key, DoneOutcome::KeptOriginal, None);
+            }
             ItemState::Unknown => {
-                if file_present {
-                    let _ = self.store.release(key);
-                } else {
-                    let _ = self.store.mark_done(key, DoneOutcome::Removed, None);
-                }
+                let _ = self.store.release(key);
                 self.owned.remove(key);
             }
         }
+    }
+
+    /// Renews the lease on a document still in hand; a claim that is no
+    /// longer this machine's lets the item go.
+    fn keep(&mut self, key: &str, path: &Path) {
+        if self.store.renew(key).is_err() {
+            self.abandon(key, path);
+        }
+    }
+
+    /// Withdraws the local item for a claim this machine is giving up. The
+    /// host reports a withdrawn item as `Unknown`, and that is the watcher's
+    /// own doing, so it must not read as a person's removal later.
+    fn abandon(&mut self, key: &str, path: &Path) {
+        self.owned.remove(key);
+        self.seen_live.remove(key);
+        self.host.abandon(path);
     }
 
     /// A document that failed while its bytes were still in the cloud has not
@@ -558,43 +590,57 @@ impl Scanner<'_> {
     /// the tombstone outlives the trip. So the claim is held, not closed, and
     /// the verdict waits for the content.
     ///
-    /// Once the bytes arrive the claim is released rather than retried in
-    /// place: the next scan re-acquires it and the document goes through the
-    /// pipeline again, now with something to read. A second failure with the
-    /// content local is a real failure and tombstones normally, so this can
-    /// forgive a document exactly once per trip through the cloud.
+    /// Once the bytes arrive the document is given the attempt it never had
+    /// (`forgive`). A second failure with the content local is a real failure
+    /// and tombstones normally, so this can forgive a document exactly once
+    /// per trip through the cloud.
     fn finish_failed(&mut self, key: &str, path: &Path) {
         if self.hydration.is_dehydrated(path) {
             // Nothing else will ever open a placeholder, and a placeholder is
             // only recalled when something opens it, so a claim held waiting
             // for content would wait for ever unless the scan asks for the
-            // bytes itself. Once they arrive the claim is released rather than
-            // retried in place, exactly as it is when they arrive some other
-            // way.
+            // bytes itself.
             if self.hydration.hydrate(path) {
-                let _ = self.store.release(key);
-                self.owned.remove(key);
-                self.awaiting_hydration.remove(key);
+                self.forgive(key, path);
                 return;
             }
             // Counted only once the lease is actually held: a document we just
             // abandoned is not one we are waiting on.
             if self.store.renew(key).is_err() {
-                self.owned.remove(key);
                 self.awaiting_hydration.remove(key);
-                self.host.abandon(path);
+                self.abandon(key, path);
                 return;
             }
             self.awaiting_hydration.insert(key.to_owned());
             self.status.awaiting_hydration += 1;
             return;
         }
-        if self.awaiting_hydration.remove(key) {
-            let _ = self.store.release(key);
-            self.owned.remove(key);
+        if self.awaiting_hydration.contains(key) {
+            // The bytes arrived some other way.
+            self.forgive(key, path);
             return;
         }
         self.finish_owned(key, DoneOutcome::Failed, None);
+    }
+
+    /// Gives a document that failed without its content the attempt it never
+    /// had, now that the content is here.
+    ///
+    /// The host retries the failed item in place and the claim stays held.
+    /// Releasing it instead, for the next scan to hand the document over
+    /// again, never retried anything against the real queue: it keeps one row
+    /// per path and content and hands back the failed row unchanged, which
+    /// the following scan then tombstoned. Only the document the claim names
+    /// is retried in place; a file that changed or vanished since, or a host
+    /// that cannot retry, gets the claim released as before.
+    fn forgive(&mut self, key: &str, path: &Path) {
+        self.awaiting_hydration.remove(key);
+        if self.visited.contains(key) && self.host.retry(path) {
+            self.keep(key, path);
+            return;
+        }
+        let _ = self.store.release(key);
+        self.owned.remove(key);
     }
 
     fn finish_owned(&mut self, key: &str, outcome: DoneOutcome, result_filename: Option<&str>) {
@@ -620,18 +666,18 @@ impl Scanner<'_> {
             .collect();
         for (key, path) in unseen {
             if !self.store.verify(&key) {
-                self.owned.remove(&key);
-                self.host.abandon(&path);
+                self.abandon(&key, &path);
                 continue;
             }
             self.manage_owned(&key, &path, path.exists());
         }
         // A claim we no longer hold - deleted, taken over, abandoned - is not
-        // one we are waiting on the cloud for. Without this the set grows for
-        // the life of the process and a later file landing on the same key
-        // would inherit a stale forgiveness.
+        // one we are waiting on the cloud for, nor one whose item we watched.
+        // Without this the sets grow for the life of the process and a later
+        // file landing on the same key would inherit a stale history.
         let owned = &*self.owned;
         self.awaiting_hydration
             .retain(|key| owned.contains_key(key));
+        self.seen_live.retain(|key| owned.contains_key(key));
     }
 }
