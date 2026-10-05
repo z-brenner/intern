@@ -173,6 +173,24 @@ function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings
   return result;
 }
 
+/*
+  Settings that arrive while the dialog is open replace what it shows, but not
+  what the person has already changed in it. App reads the settings a render
+  after it mounts, so a dialog opened at once - from the setup screen's "Set
+  up a hosted model" - showed placeholders, and when the read landed it
+  overwrote the draft whole: a hosted model chosen in that moment went back to
+  the local one, and Save stored that as the person's choice.
+*/
+function rebaseDraft(draft: AppSettings, shownFrom: AppSettings, arrived: AppSettings): AppSettings {
+  const result = { ...arrived };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(shownFrom)]) as Set<keyof AppSettings>) {
+    if (draft[key] === shownFrom[key]) continue;
+    if (key in draft) Object.assign(result, { [key]: draft[key] });
+    else delete (result as Partial<AppSettings>)[key];
+  }
+  return result;
+}
+
 function formatScanTime(lastScanAt: number | null): string {
   if (lastScanAt === null) return 'not yet';
   return new Date(lastScanAt * 1000).toLocaleTimeString();
@@ -239,7 +257,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // depending on its identity.
   const close = useRef(onClose);
   useEffect(() => { close.current = onClose; }, [onClose]);
-  useEffect(() => setNext(settings), [settings]);
+  // The settings the draft was started from, so settings that arrive later
+  // can tell the person's edits from the values they replace.
+  const shownFrom = useRef(settings);
+  useEffect(() => {
+    const previous = shownFrom.current;
+    if (previous === settings) return;
+    shownFrom.current = settings;
+    setNext((draft) => rebaseDraft(draft, previous, settings));
+  }, [settings]);
   const classify = useCallback((path: string) => bridge.classifyFolder(path), [bridge]);
   const destinationCloud = useCloudBadge(classify, next.destination);
   const intakeCloud = useCloudBadge(classify, next.intakeFolder);
