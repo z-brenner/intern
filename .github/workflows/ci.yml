@@ -284,7 +284,7 @@ jobs:
         run: |
           $Installer = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
           if (-not $Installer) { throw "NSIS installer was not produced" }
-          ./scripts/diag-close.ps1 -InstallerPath $Installer.FullName
+          ./scripts/smoke-installer.ps1 -InstallerPath $Installer.FullName
       - name: Upload Windows installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
