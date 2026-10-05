@@ -89,10 +89,12 @@ in its presence records. A second conflict on the same document is decorated
 further — the sync client numbers the repeat, `report-DESKTOP-A1B2C3 (2).pdf`,
 or stamps the day it happened — and those decorations come off before the
 machine name is looked for, so a numbered conflict copy is skipped like the
-first one. Both names a machine goes by count: the sync client
-uses the hostname, not the label someone may have typed into Settings, so
-presence records carry both and either one marks a conflict copy. Skipping a
-document someone meant to file is the
+first one. Only hostnames count: the sync client uses the hostname, not the
+label someone may have typed into Settings, so presence records carry the
+hostname and a label such as "Office" never makes `Lease-Office.pdf` a
+conflict copy. (A presence record written before hostnames were kept falls
+back to its display name, which was the hostname unless a label was set.)
+Skipping a document someone meant to file is the
 worse of the two mistakes, so the guess is never made on shape alone. Settings
 counts what was skipped; resolve the conflict in the folder and the survivor
 is picked up on the next scan.

@@ -253,12 +253,14 @@ fn scan_once(
     // Read before the walk is processed so a conflict copy is recognised on the
     // same scan it appears, and include this machine: OneDrive names the losing
     // side of a conflict after whichever machine wrote it, which is often us.
+    // Hostnames only: a label typed into Settings ("Office", "Jane") is not
+    // what a sync client writes, and matching it would silently skip an
+    // ordinary document such as "Lease-Office.pdf".
     let mut machines: Vec<String> = store
         .list_machines()
         .iter()
-        .flat_map(|presence| presence.names().map(str::to_owned))
+        .map(|presence| presence.conflict_name().to_owned())
         .collect();
-    machines.push(identity.name.clone());
     machines.push(identity.host_name.clone());
 
     let mut scanner = Scanner {

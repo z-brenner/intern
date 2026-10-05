@@ -1019,6 +1019,55 @@ fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
     assert_eq!(rig.watcher.status().sync_conflicts, 2);
 }
 
+/// A label someone typed into Settings is not a name any sync client writes.
+/// Treating it as a conflict suffix silently skipped ordinary documents that
+/// happen to end in it, with no per-file explanation.
+#[test]
+fn machine_label_is_not_a_conflict_suffix() {
+    let rig = Rig::start_as(
+        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        false,
+        &[],
+    );
+    rig.step();
+    // A teammate's labelled machine, and one whose presence record predates
+    // hostnames, when its display name was the hostname.
+    ClaimStore::new(
+        rig.temp.path(),
+        labelled_identity("other-machine", "Reception", "LAPTOP-Z9"),
+    )
+    .unwrap()
+    .touch_presence()
+    .unwrap();
+    fs::write(
+        rig.temp
+            .path()
+            .join(".intern")
+            .join("machines")
+            .join("legacy-machine.json"),
+        format!(
+            r#"{{"version":1,"machineId":"legacy-machine","machineName":"OLD-PC","userName":"pat","lastSeenAt":{}}}"#,
+            common::real_now()
+        ),
+    )
+    .unwrap();
+    let invoice = rig.write("Invoice-Office.pdf", b"an ordinary document");
+    let memo = rig.write("Memo-Reception.pdf", b"another ordinary document");
+    rig.write("report-DESKTOP-A1.pdf", b"our own conflict copy");
+    rig.write("minutes-LAPTOP-Z9.pdf", b"a teammate's conflict copy");
+    rig.write("notes-OLD-PC.pdf", b"a legacy machine's conflict copy");
+    rig.step();
+    rig.step();
+
+    assert_eq!(rig.host.enqueued(), vec![invoice, memo]);
+    assert_eq!(
+        rig.watcher.status().sync_conflicts,
+        3,
+        "{:?}",
+        rig.watcher.status()
+    );
+}
+
 /// Nothing else ever opens a placeholder, so a claim held waiting for content
 /// waits for ever unless the scan asks the sync client for the bytes.
 #[test]

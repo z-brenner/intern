@@ -163,10 +163,17 @@ pub struct MachinePresence {
 }
 
 impl MachinePresence {
-    /// Every name this machine might be called in a sync client's conflict
-    /// copy: the display name, which may be a label, and the hostname.
-    pub fn names(&self) -> [&str; 2] {
-        [&self.machine_name, &self.host_name]
+    /// The name a sync client gives this machine's conflict copies: its
+    /// hostname. `machine_name` may be a label someone typed into Settings,
+    /// and an ordinary document can end in a word like "Office". It is used
+    /// only for a record written before hostnames were kept, whose
+    /// `machine_name` was the hostname unless a label was set.
+    pub fn conflict_name(&self) -> &str {
+        if self.host_name.trim().is_empty() {
+            &self.machine_name
+        } else {
+            &self.host_name
+        }
     }
 }
 
