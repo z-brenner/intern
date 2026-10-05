@@ -134,6 +134,11 @@ off by default. The tray icon's tooltip says how many documents need review
 or are ready to rename, so a glance answers whether the window is worth
 opening.
 
+If Intern cannot start, a dialog says why and names its data folder
+(`%LOCALAPPDATA%\com.intern.app`), and the same is written to
+`logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:
+where and when it happened, never what the document said.
+
 ## Watched intake folders, OneDrive, and SharePoint
 
 Instead of dragging documents in, Settings can point Intern at an **intake

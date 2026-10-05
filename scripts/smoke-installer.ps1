@@ -25,6 +25,8 @@ New-Item -ItemType Directory -Path $UserDataDirectory -Force | Out-Null
 Set-Content -LiteralPath $Sentinel -Value "must survive uninstall" -Encoding utf8NoBOM
 
 if (Test-Path -LiteralPath $InstallDirectory) { throw "Smoke install target already exists: $InstallDirectory" }
+$StartupErrorLog = Join-Path $UserDataDirectory "logs/startup-error.log"
+if (Test-Path -LiteralPath $StartupErrorLog) { Remove-Item -LiteralPath $StartupErrorLog -Force }
 $AppProcess = $null
 $Install = Start-Process -FilePath $Installer -ArgumentList "/S" -Wait -PassThru
 if ($Install.ExitCode -ne 0) { throw "NSIS installer exited with $($Install.ExitCode)" }
@@ -65,6 +67,10 @@ try {
 
     & (Join-Path $PSScriptRoot "smoke-worker.ps1") -WorkerPath (Join-Path $InstallDirectory "intern-worker.exe") -RuntimeDirectory $InstallDirectory -FixtureDirectory $FixtureDirectory
 
+    # The main window is created hidden and shown as setup's last step, so a
+    # window handle here also means setup finished. A failed start shows the
+    # window too (behind a dialog saying why), so the startup error log is
+    # what tells the two apart.
     $AppProcess = Start-Process -FilePath $App -PassThru
     $WindowReady = $false
     for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
@@ -77,6 +83,9 @@ try {
         }
     }
     if (-not $WindowReady) { throw "Installed Intern.exe did not create a main window" }
+    if (Test-Path -LiteralPath $StartupErrorLog) {
+        throw "Installed Intern.exe could not start: $(Get-Content -LiteralPath $StartupErrorLog -Raw)"
+    }
     if (-not $AppProcess.CloseMainWindow()) { throw "Installed Intern.exe rejected a normal window close request" }
     # A WebView2 app on a shared CI runner can take well over fifteen seconds to
     # tear its browser process down, and a timeout here reads as "the app hangs on

@@ -1190,6 +1190,11 @@ impl AppState {
         Ok(())
     }
 
+    /// The local application data folder everything Intern keeps lives in.
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     /// The settings as currently stored, for startup decisions (tray,
     /// start-hidden). A missing file is the defaults, same as `load`.
     pub(crate) fn settings_snapshot(&self) -> AppSettings {
@@ -1260,6 +1265,16 @@ fn background_task_failed(task: &str) -> CommandError {
     CommandError {
         code: "INTERNAL_ERROR".into(),
         message: format!("{task} could not finish because of an internal error"),
+    }
+}
+
+/// The answer to every command when Intern could not start. The window is
+/// open behind the dialog that says why, and anything it asks for needs the
+/// state that failed to load.
+pub(crate) fn app_not_ready() -> CommandError {
+    CommandError {
+        code: "APP_NOT_READY".into(),
+        message: "Intern could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
     }
 }
 
