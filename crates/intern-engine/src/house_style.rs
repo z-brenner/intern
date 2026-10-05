@@ -16,9 +16,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{PartyRelation, ValidatedProposal};
+use crate::domain::{ComposedName, PartyRelation, ValidatedProposal};
 use crate::evidence::is_valid_iso_date;
-use crate::naming::{party_segment, sanitize_extension, sanitize_segment, type_segment};
+use crate::naming::{
+    Spelling, compose_spelled, party_segment, sanitize_extension, sanitize_segment, type_segment,
+};
 
 /// Which part of a name a rule rewrites.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -162,6 +164,34 @@ impl HouseStyle {
     }
 }
 
+/// The name for a proposal [`HouseStyle::apply`] respelled, given the rules
+/// that fired. A spelling a rule wrote is the reviewer's, and is carried
+/// exactly as they typed it - "ACME WIDGETS CORP" stays in capitals - while
+/// the document's own words are title-cased when printed in capitals, as
+/// [`compose_filename`](crate::naming::compose_filename) does for every
+/// word.
+pub fn compose_styled_filename(
+    styled: &ValidatedProposal,
+    applied: &[HouseRule],
+    extension: &str,
+    existing_names: &[&str],
+) -> ComposedName {
+    let chosen = |kind: RuleKind| {
+        applied
+            .iter()
+            .filter(|rule| rule.kind == kind)
+            .map(|rule| rule.to.as_str())
+            .collect::<Vec<_>>()
+    };
+    compose_spelled(
+        styled,
+        extension,
+        existing_names,
+        &chosen(RuleKind::DocumentType),
+        &chosen(RuleKind::Party),
+    )
+}
+
 /// What one edit teaches: the reviewer changed exactly one party or the
 /// type, and nothing else, so that field's spelling is a preference.
 ///
@@ -239,51 +269,97 @@ impl NameShape {
     /// truncated for length, or came from somewhere else - because guessing
     /// which words are which would teach the wrong thing.
     ///
-    /// The segments are built exactly as naming builds them, title-casing
-    /// included, so a name Intern proposed for a document printed in
-    /// capitals is still one this proposal composes.
+    /// The segments are built exactly as naming builds them, in every
+    /// [`Spelling`] a name can carry a word in: the document's words
+    /// title-cased, and a house-style rule's spelling as the reviewer typed
+    /// it. A name Intern proposed for a document printed in capitals, and
+    /// one carrying a spelling a reviewer typed in capitals, are both names
+    /// this proposal composes.
     fn of(proposal: &ValidatedProposal, stem: &str, extension: &str) -> Option<Self> {
-        let type_segment = type_segment(proposal.document_type.as_deref(), extension);
+        let types = every_spelling(|spelling| {
+            Some(type_segment(
+                proposal.document_type.as_deref(),
+                extension,
+                spelling,
+            ))
+        });
         let parties = proposal
             .parties
             .iter()
-            .filter_map(|party| party_segment(party).map(|segment| (party.clone(), segment)))
+            .map(|party| {
+                (
+                    party.clone(),
+                    every_spelling(|spelling| party_segment(party, spelling)),
+                )
+            })
+            .filter(|(_, spelled)| !spelled.is_empty())
             .collect::<Vec<_>>();
-        // The same order naming sheds detail in: both parties, one, none.
-        let mut candidates = Vec::new();
-        if let [first, second, ..] = parties.as_slice()
-            && proposal.party_relation == PartyRelation::Between
-        {
-            candidates.push(PartyClause {
-                connector: connector_word(PartyRelation::Between),
-                text: format!("{} and {}", first.1, second.1),
-                parties: vec![first.clone(), second.clone()],
-            });
-        }
-        if let Some(first) = parties.first() {
-            let relation = match proposal.party_relation {
-                PartyRelation::Between => PartyRelation::With,
-                other => other,
+        let single = match proposal.party_relation {
+            PartyRelation::Between => PartyRelation::With,
+            other => other,
+        };
+        let single_connectors = [connector_word(single)];
+        for type_segment in types {
+            let shape = |clause: PartyClause| {
+                Some(Self {
+                    type_segment: type_segment.clone(),
+                    clause: Some(clause),
+                })
             };
-            candidates.push(PartyClause {
-                connector: connector_word(relation),
-                text: first.1.clone(),
-                parties: vec![first.clone()],
-            });
-        }
-        for clause in candidates {
-            if stem == format!("{type_segment} {} {}", clause.connector, clause.text) {
+            // The same order naming sheds detail in: both parties, one, none.
+            if let [(first, first_spellings), (second, second_spellings), ..] = parties.as_slice()
+                && proposal.party_relation == PartyRelation::Between
+            {
+                let connector = connector_word(PartyRelation::Between);
+                for first_segment in first_spellings {
+                    for second_segment in second_spellings {
+                        let text = format!("{first_segment} and {second_segment}");
+                        if stem == format!("{type_segment} {connector} {text}") {
+                            return shape(PartyClause {
+                                connector,
+                                text,
+                                parties: vec![
+                                    (first.clone(), first_segment.clone()),
+                                    (second.clone(), second_segment.clone()),
+                                ],
+                            });
+                        }
+                    }
+                }
+            }
+            if let Some((first, first_spellings)) = parties.first() {
+                for &connector in &single_connectors {
+                    for segment in first_spellings {
+                        if stem == format!("{type_segment} {connector} {segment}") {
+                            return shape(PartyClause {
+                                connector,
+                                text: segment.clone(),
+                                parties: vec![(first.clone(), segment.clone())],
+                            });
+                        }
+                    }
+                }
+            }
+            if stem == type_segment {
                 return Some(Self {
                     type_segment,
-                    clause: Some(clause),
+                    clause: None,
                 });
             }
         }
-        (stem == type_segment).then_some(Self {
-            type_segment,
-            clause: None,
-        })
+        None
     }
+}
+
+/// Each distinct segment `spell` writes, in the order of [`Spelling::ALL`].
+fn every_spelling(spell: impl Fn(Spelling) -> Option<String>) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for segment in Spelling::ALL.into_iter().filter_map(spell) {
+        if !found.contains(&segment) {
+            found.push(segment);
+        }
+    }
+    found
 }
 
 impl PartyClause {
@@ -518,6 +594,66 @@ mod tests {
                 "2026-04-01 Work Order from HARBOR COMET REPAIRS LLC.pdf"
             ),
             None
+        );
+    }
+
+    /// A spelling a reviewer typed is theirs, capitals and all: the name
+    /// carried "ACME WIDGETS CORP" title-cased as "Acme Widgets Corp", and
+    /// typing the capitals back taught nothing, because case alone is not a
+    /// spelling - so the spelling they chose could never be had. The
+    /// document's own words beside it are still title-cased.
+    #[test]
+    fn a_spelling_a_rule_wrote_is_named_as_typed() {
+        let style = HouseStyle::new(vec![
+            HouseRule::new(
+                RuleKind::Party,
+                "Acme Widgets Corporation",
+                "ACME WIDGETS CORP",
+            ),
+            HouseRule::new(
+                RuleKind::DocumentType,
+                "Statement of Account",
+                "MONTHLY STATEMENT",
+            ),
+        ]);
+        let (styled, applied) = style.apply(&proposal(
+            Some("Statement of Account"),
+            &["Acme Widgets Corporation", "ORION GLASS STUDIO INC"],
+            PartyRelation::Between,
+        ));
+        let proposed = compose_styled_filename(&styled, &applied, "pdf", &[]).value;
+        assert_eq!(
+            proposed,
+            "2026-04-01 MONTHLY STATEMENT between ACME WIDGETS CORP and Orion Glass Studio Inc.pdf"
+        );
+        // Composed without the rules, every word is the document's.
+        assert_eq!(
+            name(&styled),
+            "2026-04-01 Monthly Statement between Acme Widgets Corp and Orion Glass Studio Inc.pdf"
+        );
+
+        // And the name still reads as one this proposal composed.
+        let lesson = lesson_from_edit(
+            &styled,
+            "pdf",
+            &proposed,
+            "2026-04-01 MONTHLY STATEMENT between ACME WIDGETS and Orion Glass Studio Inc.pdf",
+        )
+        .expect("the first party changed and nothing else did");
+        assert_eq!(
+            (lesson.from.as_str(), lesson.to.as_str()),
+            ("ACME WIDGETS CORP", "ACME WIDGETS")
+        );
+        let lesson = lesson_from_edit(
+            &styled,
+            "pdf",
+            &proposed,
+            "2026-04-01 MONTHLY STATEMENT between ACME WIDGETS CORP and Orion Glass.pdf",
+        )
+        .expect("the second party changed and nothing else did");
+        assert_eq!(
+            (lesson.from.as_str(), lesson.to.as_str()),
+            ("ORION GLASS STUDIO INC", "Orion Glass")
         );
     }
 

@@ -14,9 +14,10 @@
 //! document type.
 //!
 //! A type or a party printed in capitals - a letterhead, an OCR'd scan - is
-//! title-cased for the name (`display_case`); everything else Intern keeps
-//! about the document, the evidence and the description included, keeps the
-//! document's own casing.
+//! title-cased for the name (`display_case`); a spelling a reviewer chose
+//! for a house-style rule is carried as they typed it; everything else
+//! Intern keeps about the document, the evidence and the description
+//! included, keeps the document's own casing.
 
 use std::collections::HashSet;
 
@@ -35,17 +36,46 @@ pub fn compose_filename(
     extension: &str,
     existing_names: &[&str],
 ) -> ComposedName {
+    compose_spelled(proposal, extension, existing_names, &[], &[])
+}
+
+/// [`compose_filename`] for a proposal some of whose words a person chose:
+/// `chosen_types` and `chosen_parties` are the spellings house-style rules
+/// wrote into it. A type or a party spelled exactly one of those is carried
+/// as the reviewer typed it, capitals and all; only the document's own words
+/// are title-cased.
+pub(crate) fn compose_spelled(
+    proposal: &ValidatedProposal,
+    extension: &str,
+    existing_names: &[&str],
+    chosen_types: &[&str],
+    chosen_parties: &[&str],
+) -> ComposedName {
+    let spelling = |chosen: &[&str], value: &str| {
+        if chosen.contains(&value) {
+            Spelling::Chosen
+        } else {
+            Spelling::Document
+        }
+    };
     let extension = sanitize_extension(extension);
     let date = proposal
         .document_date
         .as_deref()
         .and_then(sanitize_segment)
         .unwrap_or_default();
-    let document_type = type_segment(proposal.document_type.as_deref(), &extension);
+    let document_type = type_segment(
+        proposal.document_type.as_deref(),
+        &extension,
+        proposal
+            .document_type
+            .as_deref()
+            .map_or(Spelling::Document, |value| spelling(chosen_types, value)),
+    );
     let parties = proposal
         .parties
         .iter()
-        .filter_map(|party| party_segment(party))
+        .filter_map(|party| party_segment(party, spelling(chosen_parties, party)))
         .collect::<Vec<_>>();
 
     let existing = existing_names
@@ -249,23 +279,48 @@ pub fn sanitize_folder_name(value: &str) -> Option<String> {
     })
 }
 
+/// How a name writes one of a proposal's words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Spelling {
+    /// The document's own words: made safe for a filename, and title-cased
+    /// when printed in capitals.
+    Document,
+    /// A spelling a person chose for a house-style rule: made safe for a
+    /// filename, and otherwise exactly as they typed it.
+    Chosen,
+}
+
+impl Spelling {
+    pub(crate) const ALL: [Self; 2] = [Self::Document, Self::Chosen];
+}
+
 /// The document type as a filename carries it: the extension a model
-/// sometimes appends dropped, made safe for a filename, title-cased when it
-/// was printed in capitals, and "Document" when there is none. House style
-/// reads proposed names back with this, so it must stay the one place the
-/// type segment is built.
-pub(crate) fn type_segment(document_type: Option<&str>, extension: &str) -> String {
+/// sometimes appends dropped, made safe for a filename, written the way
+/// `spelling` says, and "Document" when there is none. House style reads
+/// proposed names back with this, so it must stay the one place the type
+/// segment is built.
+pub(crate) fn type_segment(
+    document_type: Option<&str>,
+    extension: &str,
+    spelling: Spelling,
+) -> String {
     document_type
         .map(|value| strip_duplicate_extension(value, extension))
-        .and_then(sanitize_segment)
-        .map(|segment| display_case(&segment))
+        .and_then(|value| spell(value, spelling))
         .unwrap_or_else(|| DEFAULT_TYPE.to_owned())
 }
 
 /// A party as a filename carries it, or `None` when nothing printable is
 /// left of the name. The counterpart of [`type_segment`].
-pub(crate) fn party_segment(party: &str) -> Option<String> {
-    sanitize_segment(party).map(|segment| display_case(&segment))
+pub(crate) fn party_segment(party: &str, spelling: Spelling) -> Option<String> {
+    spell(party, spelling)
+}
+
+fn spell(value: &str, spelling: Spelling) -> Option<String> {
+    match spelling {
+        Spelling::Document => sanitize_segment(value).map(|segment| display_case(&segment)),
+        Spelling::Chosen => sanitize_segment(value),
+    }
 }
 
 /// Suffixes a company name writes in capitals that read in mixed case.

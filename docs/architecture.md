@@ -403,7 +403,10 @@ and before naming. A rule maps a spelling as the document writes it (matched
 with case, punctuation, and spacing disregarded, words never loosened) to the
 spelling the reviewer wrote, for one party or for the document type. The
 queue applies the rules in force to the validated proposal, composes the name
-from the result, and records which rules fired beside the proposal. The
+from the result, and records which rules fired beside the proposal. A rule's
+spelling is the reviewer's, so the name carries it exactly as typed -
+capitals included - while the document's own words beside it are
+title-cased as usual. The
 engine's analysis is untouched: the evidence panel still shows the document's
 words, and the description record and the layout folder follow the styled
 proposal, so the name, the folder, and the record agree.
