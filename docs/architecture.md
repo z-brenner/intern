@@ -706,7 +706,12 @@ that still matches, the next launch starts the server with neither check; when
 any of it changes, the model is hashed and self-tested once and stamped again,
 and a failed self-test removes the stamp. Within a session the digest is read
 at most once: restarts - a cancel, a recovery - start a file that still looks
-exactly as it did when it was checked, and refuse one that does not.
+exactly as it did when it was checked, and refuse one that does not. The
+setup thread is started only once the rest of launch has succeeded: a launch
+that fails later waits behind a dialog that says why, and a server started
+earlier went on loading the model for an app that could not run. Until then
+the model is held, so the queue cannot hand a document to a server that has
+not started.
 
 Starts and stops are serialized, and every deliberate stop - a cancel, a hosted
 model chosen, shutdown - moves a generation counter before it stops anything.

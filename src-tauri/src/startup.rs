@@ -213,8 +213,10 @@ pub enum Startup {
 /// Whether the window is shown before initialization, as well as when setup
 /// is done.
 ///
-/// Initialization checks an installed model by reading every byte of it, on
-/// this thread, and that takes seconds. A window kept hidden through it made
+/// Initialization runs on this thread and can take seconds: it opens and
+/// recovers the queue database and looks at the intake folder, which can be
+/// on a share that is slow to answer. (The model is no longer read here; its
+/// verification runs behind the window.) A window kept hidden through it made
 /// a launch look as though nothing had happened, and a second click could
 /// not help: its show waits for the same thread. So a launch that is going to
 /// show the window shows it first, as every launch did before the window was
