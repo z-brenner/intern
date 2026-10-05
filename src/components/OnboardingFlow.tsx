@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
-import { byteCount, byteSize } from '../lib/format';
+import { formatBytes } from '../lib/format';
 import type { MicrosoftDevicePrompt, MicrosoftIntakeStatus } from '../features/intake/microsoft';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { useSupportLink } from '../features/sharepoint/useSupportLink';
 import type { SharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { modelReady, useModelSetup } from '../features/setup/useModelSetup';
 import type { AppSettings, SetupState, SharePointSetupStatus } from '../types';
+import { DownloadProgress } from './DownloadProgress';
 import { SettingsDialog } from './SettingsDialog';
 
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
@@ -129,13 +130,12 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
   const closeHosted = () => { setHostedOpen(false); hostedTrigger.current?.focus(); };
   return <>
     <h1 ref={heading} tabIndex={-1}>Get the local model</h1>
-    <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${byteSize(setup.totalBytes)})` : ''}.</p>
+    <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}.</p>
     {!setup && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Checking the local model…</p>}
     {operationError && <p className="onboarding-alert" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Download canceled. Your progress was saved.</p>}
     {setup && (downloading || resumable) && <div className="onboarding-progress">
-      <progress aria-label="Model setup progress" value={setup.downloadedBytes} max={setup.totalBytes} />
-      <p aria-live="polite">{byteCount(setup.downloadedBytes)} of {byteCount(setup.totalBytes)} bytes</p>
+      <DownloadProgress setup={setup} />
     </div>}
     {setup && <div className="onboarding-actions">
       <button type="button" className="primary" onClick={model.start} disabled={downloading || busy}>{downloading ? 'Downloading model…' : failed ? 'Try download again' : resumable ? 'Resume download' : 'Download model'}</button>
