@@ -160,3 +160,61 @@ it('attests the installer, and only after its evidence has been accepted', async
     workflow.indexOf('gh release create'),
   );
 });
+
+/** One job of a workflow, from its key to the next job's. */
+function jobOf(workflow: string, id: string): string {
+  const lines = workflow.split('\n');
+  const start = lines.indexOf(`  ${id}:`);
+  expect(start, `job ${id}`).toBeGreaterThanOrEqual(0);
+  const end = lines.findIndex((line, index) => index > start && /^ {2}[\w-]+:\s*$/.test(line));
+  return lines.slice(start, end === -1 ? undefined : end).join('\n');
+}
+
+/** A workflow's steps, each from its `- ` line to the next step's. */
+function stepsOf(text: string): string[] {
+  return text.split(/\n(?= {6}- )/).slice(1);
+}
+
+// CI_RELEASE_DOCS-6. Dispatched after a run that tagged its commit and then
+// failed to publish, the old "no-op" branch exited 0, skipped the release job,
+// and showed a green run with nothing published.
+it('tag_mismatch_is_fatal: a tag at another commit fails the run and says how to recover', async () => {
+  const target = jobOf(await readFile('.github/workflows/release.yml', 'utf8'), 'release_target');
+  const mismatch = target.indexOf('!= "$GITHUB_SHA"');
+  expect(mismatch).toBeGreaterThan(0);
+  const after = target.slice(mismatch);
+  expect(after).toContain('echo "::error::$tag already points at $(git rev-parse "refs/tags/$tag^{commit}"), not $GITHUB_SHA. Delete the tag or bump the version."');
+  expect(after).toMatch(/::error::[^\n]*\n\s*exit 1\n/);
+  expect(after).not.toContain('exit 0');
+  expect(target).not.toContain('eligible=false');
+});
+
+// CI_RELEASE_DOCS-3. Everything the final evidence validation needs from the
+// commit itself is checked before the ninety-minute Windows job starts.
+it('preflights the sign-off, notes, and versions before the release job can start', async () => {
+  const release = await readFile('.github/workflows/release.yml', 'utf8');
+  const target = jobOf(release, 'release_target');
+  expect(target).toContain('runs-on: ubuntu-latest');
+  expect(target).toContain('run: node scripts/release-preflight.mjs --root=. --workflow="$GITHUB_WORKFLOW"');
+  expect(jobOf(release, 'release')).toContain('needs: release_target');
+  // The lead's call: no new code inspects whether a secret exists. The signing
+  // key is checked where it is used, in the build step, as it always was.
+  expect(target).not.toContain('secrets.');
+});
+
+it('sets a stale sign-off aside on the QA runner before anything else runs', async () => {
+  const steps = stepsOf(jobOf(await readFile('.github/workflows/qa.yml', 'utf8'), 'windows-whole-product-qa'));
+  expect(steps[0]).toContain('actions/checkout@');
+  expect(steps[1]).toContain('node scripts/hash-release-inputs.mjs');
+  expect(steps[1]).toContain('node scripts/release-preflight.mjs --set-aside-stale-signoff --root=.');
+});
+
+// CI_RELEASE_DOCS-8. Release bounds its scoring step at an hour because a wedged
+// llama-server once held a job open; QA had no bound and no log.
+it('qa_scoring_has_timeout_and_log', async () => {
+  const steps = stepsOf(jobOf(await readFile('.github/workflows/qa.yml', 'utf8'), 'windows-whole-product-qa'));
+  const scoring = steps.find((step) => step.includes('run-model-evaluation.ps1'))!;
+  expect(scoring).toMatch(/^ {8}timeout-minutes: 60$/m);
+  expect(scoring).toContain('-OutputPath docs\\qa\\model-evaluation.json 2>&1 | Tee-Object -FilePath docs\\qa\\logs\\model-evaluation.log');
+  expect(scoring).toContain('New-Item -ItemType Directory docs\\qa\\logs -Force');
+});

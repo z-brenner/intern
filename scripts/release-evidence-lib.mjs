@@ -47,7 +47,7 @@ function acceptedModel(report, context) {
     && report.acceptance?.status === 'accepted';
 }
 
-function acceptedFidelity(signoff, screenshot, model) {
+export function acceptedFidelity(signoff, screenshot, model) {
   return signoff?.schema_version === 1
     && signoff.status === 'accepted'
     && typeof model?.release_inputs_sha256 === 'string'

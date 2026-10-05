@@ -9,6 +9,16 @@ on:
 permissions:
   contents: read
 
+# One run per pull request (or branch) at a time. A new push to a pull request
+# makes its running checks obsolete, so they are cancelled rather than left to
+# hold a Windows runner for half an hour. On main nothing in progress is
+# cancelled: a run always finishes, and of the pushes that land meanwhile only
+# the newest waits to run next. A release is still gated on its own commit by
+# the release workflow, whichever main runs were skipped.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   frontend:
     name: Frontend checks (Ubuntu)
@@ -72,6 +82,71 @@ jobs:
           path: corpus-report.json
           if-no-files-found: ignore
 
+  # Rust feedback in minutes rather than the Windows job's half hour: format,
+  # Clippy with warnings denied, and the workspace tests. Code that only exists
+  # on Windows (#[cfg(windows)]) is still compiled and linted only there, so
+  # this job is the fast signal, not the last word.
+  rust-ubuntu:
+    name: Rust (Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      INTERN_REQUIRE_GENERATED_FIXTURES: "1"
+      # Every test binary links tauri, wry and webkit. Incremental state and
+      # full debug info would multiply the target directory, which is both the
+      # runner's disk and the cache entry saved below, and that entry competes
+      # under the repository's cache limit with the Windows runtime-asset cache.
+      # These are also the settings this job was proven green with.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.88.0
+      # The desktop crate links the system webview, tray, and SVG libraries
+      # even to be type-checked.
+      - name: Install the desktop shell's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          # Named for the settings above: an entry saved with incremental state and
+          # debug info would otherwise be restored as an exact hit, and never
+          # replaced, for as long as Cargo.lock stays the same.
+          key: cargo-ubuntu-nodebug-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo fmt --all -- --check
+      # The generator uses nothing but Node itself, so no npm install.
+      - name: Generate the clean-room fixtures the worker tests read
+        run: node fixtures/generate-fixtures.mjs
+      # Tauri's build script refuses to compile the desktop crate unless every
+      # sidecar and resource it bundles exists. The Windows job below stages
+      # the same placeholders under its own target triple.
+      - name: Stage parser worker and placeholder sidecars for desktop compile checks
+        run: |
+          cargo build --locked -p intern-worker
+          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars
+          cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
+          install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
+          install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
+          touch src-tauri/resources/licenses/compile-placeholder.txt
+          touch src-tauri/resources/tessdata/compile-placeholder.traineddata
+          touch src-tauri/resources/native/pdfium/compile-placeholder.dll
+          touch src-tauri/resources/native/sidecars/compile-placeholder.dll
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace --all-targets
+
   windows-release-gates:
     name: Windows Rust, assets, E2E, and NSIS
     runs-on: windows-latest
@@ -112,11 +187,22 @@ jobs:
       # of being cached: pinned downloads are still checked against their committed
       # size and SHA-256, and vcpkg verifies every archive against the baseline's
       # own hashes.
+      #
+      # The key is computed once, here, and the save steps reuse it. They used to
+      # recompute hashFiles() after the fetch, which rewrites runtime-assets.json
+      # in place (and records the freshly built worker's digest in it), so every
+      # run saved ~470 MB under a key no restore would ever ask for, and rebuilt
+      # Tesseract from nothing for 24 minutes. A complete cache is saved under
+      # this key; a failed fetch saves its progress under a "-partial-" key of
+      # its own, which the next run restores and then completes. A partial
+      # cache saved under the primary key would instead be restored as a hit
+      # for ever and never upgraded.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: assets-cache
         with:
           path: ${{ runner.temp }}\intern-assets-cache
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
+          restore-keys: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}-partial-
       - run: npm ci
       - run: npm run fixtures
       - run: npm run check
@@ -153,6 +239,7 @@ jobs:
           New-Item -ItemType Directory src-tauri\binaries -Force | Out-Null
           Copy-Item target\release\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe -Force
       - name: Fetch and verify pinned Windows assets
+        id: fetch-assets
         shell: pwsh
         run: |
           Remove-Item src-tauri\resources\licenses\compile-placeholder.txt -Force
@@ -160,13 +247,25 @@ jobs:
           Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
           Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
           ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
-      # Save even when the asset step above failed, so a partial fetch is progress
-      # rather than wasted. Skipped on a cache hit, where the key already exists.
+      # A complete fetch is saved under the key the restore step looked for.
+      # Skipped on an exact hit, where that key already exists.
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        if: always() && steps.assets-cache.outputs.cache-hit != 'true'
+        if: steps.fetch-assets.outcome == 'success' && steps.assets-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}\intern-assets-cache
-          key: runtime-assets-${{ runner.os }}-${{ hashFiles('src-tauri/resources/runtime-assets.json', 'scripts/fetch-windows-assets.ps1') }}
+          key: ${{ steps.assets-cache.outputs.cache-primary-key }}
+      # A failed fetch still keeps what it managed to download, under a key of
+      # its own: progress for the next run, never mistaken for a complete cache.
+      # Not a cancelled one. Cancelling can stop the script mid-write, before it
+      # can discard a truncated download, and the next run would restore that
+      # file, skip downloading it because it exists, fail its pinned size and
+      # SHA-256, and save it again as the newest partial: every later run would
+      # fail the same way until the manifest or the fetch script changed.
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: always() && steps.fetch-assets.outcome == 'failure'
+        with:
+          path: ${{ runner.temp }}\intern-assets-cache
+          key: ${{ steps.assets-cache.outputs.cache-primary-key }}-partial-${{ github.run_id }}-${{ github.run_attempt }}
       - run: npm run assets:verify -- --require-bundled
       - name: Run generated-fixture parser integration with native assets
         run: cargo test --locked -p intern-worker --test generated_fixtures --features windows-native

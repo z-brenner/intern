@@ -20,24 +20,30 @@ Alongside the name it produces one sentence saying what the document actually
 concerns, the verbatim excerpts behind every fact it used, and a confidence. If
 anything is unsupported, the document goes to review instead of being renamed.
 
+No account, no per-document cost, no file limit: the model runs on your own
+computer, so a thousand documents cost what one does, and nothing caps how many
+it names.
+
+## What leaves your machine
+
 With local inference selected, document text, extracted pages, OCR output and
 model prompts stay on the machine. There is no telemetry or automatic cloud
-inference fallback. Microsoft upload verification, in builds provisioned for
-the SharePoint deployment, reads account and file metadata only, never
-document content.
+inference fallback. This is the complete list of what Intern sends anywhere:
 
-Without either optional integration enabled, Intern has two network features,
-neither carrying document information:
+| Request | When | What it carries |
+| --- | --- | --- |
+| Model download | Once, when you start it (or never, if you choose existing model files) | A request for the pinned model file. Nothing about the machine or its documents. |
+| Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
+| Hosted model | Only if you turn it on, under your own API key | The condensed text of each document, to the service you name. |
+| Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
-1. The one-off download of the pinned model file — 1.19 GiB, the text model and
-   nothing else.
-2. A check for the GitHub release manifest, asking only "is there a newer,
-   signed build" — nothing else about the machine or its documents. It runs
-   once when Intern starts, again on a fixed interval for as long as it keeps
-   running, and on demand from **Check for updates** in Settings. A found
-   update is never installed by the check itself: installing is always a
-   separate, explicit click, and only ever happens if the update is signed by
-   this project's key — anything else is refused.
+The first two are all a default install ever sends, and neither carries
+document information. The model file is 1.19 GiB, the text model and nothing
+else. The update check asks only "is there a newer, signed build"; untick
+**Check for updates automatically** in Settings and only the button asks. A
+found update is never installed by the check itself: installing is always a
+separate, explicit click, and only ever happens if the update is signed by this
+project's key — anything else is refused.
 
 There are two optional integrations. Both require an explicit choice. Settings
 can point Intern at a **hosted model** — Anthropic's, OpenAI's, or any service
@@ -69,21 +75,29 @@ extraction nor OCR can read goes to review rather than being guessed at.
 ## Install and first run
 
 Windows 10 or 11, x86-64. Download `Intern_0.1.0-alpha.10_x64-setup.exe` from the
-[latest release](https://github.com/z-brenner/intern/releases/latest) and run it.
+[latest release](https://github.com/z-brenner/intern/releases/latest) and run it;
+earlier versions are on the [releases page](https://github.com/z-brenner/intern/releases).
 It installs per-user, so it does not ask for administrator rights, and
 uninstalling it leaves your documents and Intern's own data alone.
 
 **The installer is not Authenticode signed**, because this project has no
-code-signing certificate. Windows SmartScreen will call it an unrecognized app;
-to continue, choose **More info** and then **Run anyway**. Nothing in this
-release removes that warning, and you should not take an unrecognized-app
-warning lightly — so verify the download instead of trusting it. Every published
-installer carries a keyless Sigstore build-provenance attestation naming the
-repository, workflow, and commit that produced those exact bytes:
+code-signing certificate. Windows SmartScreen shows "Windows protected your PC"
+and calls it an unrecognized app; to continue, choose **More info** and then
+**Run anyway**. On a PC where **Smart App Control** is on (enforcement mode),
+Windows blocks the installer outright and offers no Run anyway, so Intern
+cannot be installed there until it is signed. Nothing in this release removes
+those warnings, and you should not take an unrecognized-app warning lightly —
+so verify the download instead of trusting it. Every published installer
+carries a keyless Sigstore build-provenance attestation naming the repository,
+workflow, and commit that produced those exact bytes:
 
 ```sh
-gh attestation verify Intern_0.1.0-alpha.10_x64-setup.exe --repo z-brenner/intern
+gh attestation verify Intern_0.1.0-alpha.10_x64-setup.exe --repo z-brenner/intern \
+  --signer-workflow z-brenner/intern/.github/workflows/release.yml
 ```
+
+`--signer-workflow` insists the attestation came from this repository's release
+workflow, not merely from some workflow in it.
 
 `SHA256SUMS.txt` is published beside the installer and catches a corrupted or
 truncated download, but it proves nothing about origin: it sits on the same page
@@ -368,6 +382,7 @@ A prompt change makes the recording stale and needs a live re-record;
 | `intern-core` | Crash-safe queue storage and journalled file operations. |
 | `intern-worker` | The out-of-process parser: PDFium, OCR, Office, and Outlook message extraction. |
 | `intern-app` | The Tauri desktop shell, including the switch between the local and hosted models and the credential store the hosted key lives in. |
+| `intern-release-verifier` | The offline release gate: verifies the installer's updater signature against the public key committed in `tauri.conf.json`, and binds it to `latest.json`, before anything is published. Not shipped in the app. |
 
 The engine is usable without the desktop app:
 
@@ -416,8 +431,10 @@ setup.
 
 CI runs fixture generation, TypeScript/Vitest/Vite, Playwright, Rust format,
 Clippy with warnings denied, workspace tests, native fixture integration, asset
-verification, the Windows Tauri build, and the installer smoke test. Runtime and
-dependency caches are keyed by lockfiles and the runtime asset manifest.
+verification, the Windows Tauri build, and the installer smoke test. A separate
+**Rust (Ubuntu)** job runs format, Clippy, and the workspace tests in minutes,
+for feedback before the Windows job finishes. Runtime and dependency caches are
+keyed by lockfiles and the runtime asset manifest.
 
 `scripts/run-model-evaluation.ps1` scores the whole gold corpus through the
 shipping pipeline with the exact pinned model and real inference, and
@@ -426,7 +443,9 @@ description accuracy, on never filing a document under a date the corpus marks
 as a trap, and on the review rate. Publishing is a deliberate
 `workflow_dispatch` against a chosen main commit, never a side effect of
 merging; the release job still refuses any commit but the one it was dispatched
-for.
+for, and a preflight refuses in seconds a commit whose sign-off, release notes,
+or versions cannot ship. [`docs/releasing.md`](docs/releasing.md) is the exact
+sequence, and [`SECURITY.md`](SECURITY.md) says how to report a vulnerability.
 
 ## License
 

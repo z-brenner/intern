@@ -2540,11 +2540,19 @@ mod intake_tests {
 
     #[test]
     fn the_filed_folder_is_offered_beside_the_watched_folder() {
+        // Built with the platform's own separator: on Windows this is exactly
+        // C:\Users\pat\Contoso\Legal - Documents\Inbox, and elsewhere a
+        // backslash is not a separator at all, so a literal Windows path would
+        // have no parent to put Filed beside.
+        let library = Path::new(if cfg!(windows) {
+            r"C:\Users\pat\Contoso"
+        } else {
+            "/home/pat/Contoso"
+        })
+        .join("Legal - Documents");
         assert_eq!(
-            filed_folder_for(Path::new(r"C:\Users\pat\Contoso\Legal - Documents\Inbox")),
-            Some(PathBuf::from(
-                r"C:\Users\pat\Contoso\Legal - Documents\Filed"
-            ))
+            filed_folder_for(&library.join("Inbox")),
+            Some(library.join("Filed"))
         );
     }
 
