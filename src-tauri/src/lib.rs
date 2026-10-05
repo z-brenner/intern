@@ -110,6 +110,8 @@ pub fn run() {
             commands::proposal_approve,
             commands::proposal_keep_original,
             commands::operation_undo,
+            commands::document_open,
+            commands::document_reveal,
             commands::settings_get,
             commands::settings_save,
             commands::setup_get,
