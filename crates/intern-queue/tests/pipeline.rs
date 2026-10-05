@@ -832,6 +832,141 @@ fn pause_starts_no_item_and_cancel_interrupts_the_active_worker_request() {
     assert_eq!(pipeline.list().unwrap()[0].status, QueueStatus::Canceled);
 }
 
+/// The intake watcher withdraws an item when its claim goes to another
+/// computer, and a person cancels one to leave the document alone. Both leave
+/// a canceled row and they mean opposite things, so the watcher's is marked
+/// on the row itself, where a restart cannot lose it.
+#[test]
+fn the_watchers_withdrawal_is_marked_on_the_row_and_a_persons_cancel_is_not() {
+    let temp = tempdir().unwrap();
+    let canceled = source(temp.path(), "canceled.pdf");
+    let withdrawn = source(temp.path(), "withdrawn.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&canceled, "canceled-hash");
+    files.trust(&withdrawn, "withdrawn-hash");
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::new(FakeWorker::new(vec![])),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    );
+    let items = pipeline.enqueue_files(&[canceled, withdrawn]).unwrap();
+    let (person, watcher) = (items[0].id, items[1].id);
+
+    pipeline.cancel(person).unwrap();
+    pipeline.withdraw(watcher).unwrap();
+    // A row a person canceled stays theirs, whoever asks next.
+    pipeline.withdraw(person).unwrap();
+    let row = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        (item.status, item.error_code)
+    };
+    assert_eq!(row(person), (QueueStatus::Canceled, None));
+    assert_eq!(
+        row(watcher),
+        (QueueStatus::Canceled, Some(ErrorCode::IntakeWithdrawn))
+    );
+
+    // Running it again takes the mark away with the cancel.
+    pipeline.retry(watcher).unwrap();
+    assert_eq!(row(watcher), (QueueStatus::Queued, None));
+}
+
+/// A worker that holds its request open until released, and refuses to be
+/// told to stop.
+#[derive(Default)]
+struct StubbornWorker {
+    started: AtomicBool,
+    gate: (Mutex<bool>, Condvar),
+}
+
+impl StubbornWorker {
+    fn release(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
+    }
+}
+
+impl WorkerBoundary for StubbornWorker {
+    fn extract(
+        &self,
+        _request_id: &str,
+        _path: &Path,
+        _progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, WorkerFailure> {
+        self.started.store(true, Ordering::SeqCst);
+        let (lock, wake) = &self.gate;
+        let mut released = lock.lock().unwrap();
+        while !*released {
+            released = wake.wait(released).unwrap();
+        }
+        Ok(parsed("Employment Agreement signed April 12, 2024."))
+    }
+
+    fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+        Err(WorkerFailure::new("WORKER_CANCEL_FAILED", false, false))
+    }
+
+    fn restart(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+
+    fn shutdown(&self) -> Result<(), WorkerFailure> {
+        Ok(())
+    }
+}
+
+/// The row is canceled before the worker is told to stop, so a worker that
+/// refuses still leaves a canceled row. The mark goes on in the same step:
+/// a withdrawal reported as failed must not leave a row that reads as a
+/// person's cancel, which would close the document for good.
+#[test]
+fn a_withdrawal_is_marked_even_when_the_worker_will_not_stop() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "withdrawn.pdf");
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&path, "withdrawn-hash");
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let worker = Arc::new(StubbornWorker::default());
+    let pipeline = Arc::new(
+        Pipeline::open(
+            temp.path().join("queue.sqlite3"),
+            Arc::clone(&worker) as Arc<dyn WorkerBoundary>,
+            Arc::new(FakeModel::new(vec![])),
+            files,
+            Arc::new(RecordingEvents::default()),
+            settings,
+        )
+        .unwrap(),
+    );
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+
+    let running = Arc::clone(&pipeline);
+    let join = thread::spawn(move || running.run_next());
+    while !worker.started.load(Ordering::SeqCst) {
+        thread::yield_now();
+    }
+    assert!(pipeline.withdraw(id).is_err(), "the worker refused to stop");
+    worker.release();
+    let _ = join.join().unwrap();
+
+    let item = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == id)
+        .unwrap();
+    assert_eq!(item.status, QueueStatus::Canceled);
+    assert_eq!(item.error_code, Some(ErrorCode::IntakeWithdrawn));
+}
+
 #[test]
 fn pause_during_extraction_returns_item_to_queue_before_analysis() {
     let temp = tempdir().unwrap();

@@ -1686,6 +1686,21 @@ impl Pipeline {
     }
 
     pub fn cancel(&self, id: i64) -> PipelineResult<()> {
+        self.cancel_marked(id, None)
+    }
+
+    /// Cancels on the intake watcher's behalf: the claim on the document went
+    /// to another computer, or its uploader could no longer be confirmed. The
+    /// row is marked `INTAKE_WITHDRAWN`, on the row itself so the mark
+    /// outlives a restart, because a person's cancel leaves the same status
+    /// and means the opposite - leave the document alone - where this one
+    /// may be handed over and run again. A row already canceled stays the
+    /// person's.
+    pub fn withdraw(&self, id: i64) -> PipelineResult<()> {
+        self.cancel_marked(id, Some(ErrorCode::IntakeWithdrawn))
+    }
+
+    fn cancel_marked(&self, id: i64, mark: Option<ErrorCode>) -> PipelineResult<()> {
         let item = self
             .store
             .list()?
@@ -1704,7 +1719,7 @@ impl Pipeline {
             | QueueStatus::Ready
             | QueueStatus::NeedsReview => {
                 self.store
-                    .transition(id, item.status, QueueStatus::Canceled, None)?;
+                    .transition(id, item.status, QueueStatus::Canceled, mark)?;
             }
             QueueStatus::Canceled => {}
             QueueStatus::Applying => {
