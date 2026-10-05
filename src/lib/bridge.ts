@@ -6,9 +6,14 @@ import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, 
  * in crates/intern-queue/src/paths.rs: the file picker's Documents filter, and
  * what the in-memory bridge skips, as the backend does.
  *
- * TODO(lead): WP-12 adds src/lib/formats.ts and new formats. When it merges,
- * move this list there (or import it from there) so there is one frontend
- * list, and extend it with whatever paths.rs then admits.
+ * scripts/supported-extensions.test.ts holds it to the backend's declaration,
+ * so a format added there and not here fails the build.
+ *
+ * TODO(lead): WP-12 adds src/lib/formats.ts and new formats, and moves the
+ * backend's list. When it merges, move this list there (or import it from
+ * there) so there is one frontend list, point that test at the list's new
+ * home, and move the demo's unsupported fixture off a format that becomes
+ * supported (`unsupported.csv` in queue.test.tsx and the e2e).
  */
 export const SUPPORTED_EXTENSIONS: readonly string[] = [
   'pdf', 'docx', 'pptx', 'pptm', 'ppsx', 'xlsx', 'eml', 'msg', 'txt', 'md', 'markdown', 'png',
