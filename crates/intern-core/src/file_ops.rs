@@ -642,14 +642,22 @@ impl FileApplier {
     /// Whether the file at the destination is provably someone else's: a
     /// different file from the source, holding different bytes from the
     /// document. Anything that cannot be read counts as not proven.
+    ///
+    /// The comparison waits out a transient hold like every other read of
+    /// these files. The usual way here is a teammate's document a sync client
+    /// has just written at the destination name, and this runs milliseconds
+    /// after the rename found it - while that client most likely still holds
+    /// it. Read once, the hold made the file unprovable and parked the item
+    /// for a person to compare two names that were never in doubt.
     fn destination_is_foreign(&self, receipt: &OperationReceipt) -> bool {
-        let compare = || -> io::Result<bool> {
-            let source = self.filesystem.lock_for_delete(&receipt.source)?;
-            let mut destination = self.filesystem.lock_for_delete(&receipt.destination)?;
-            Ok(destination.identity()? != source.identity()?
-                && destination.hash()? != receipt.pre_operation_hash)
-        };
-        compare().unwrap_or(false)
+        self.lock_retry
+            .run(|| {
+                let source = self.filesystem.lock_for_delete(&receipt.source)?;
+                let mut destination = self.filesystem.lock_for_delete(&receipt.destination)?;
+                Ok(destination.identity()? != source.identity()?
+                    && destination.hash()? != receipt.pre_operation_hash)
+            })
+            .unwrap_or(false)
     }
 
     fn reconcile_complete(&self, receipt: OperationReceipt) -> InternResult<QueueItem> {

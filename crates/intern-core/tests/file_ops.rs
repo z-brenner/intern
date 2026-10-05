@@ -1867,6 +1867,86 @@ fn foreign_destination_rolls_back_to_destination_unavailable() {
     );
 }
 
+/// The teammate's file at the destination name is still held by the sync
+/// client that just wrote it: the first `destination_holds` opens of it for
+/// deletion fail the way Windows reports ERROR_SHARING_VIOLATION.
+#[cfg(windows)]
+struct HeldArrivalFileSystem {
+    arriving: Arc<ArrivingFileSystem>,
+    destination_holds: AtomicUsize,
+}
+
+#[cfg(windows)]
+impl FileSystem for HeldArrivalFileSystem {
+    fn exists(&self, path: &Path) -> bool {
+        self.arriving.exists(path)
+    }
+    fn hash(&self, path: &Path) -> io::Result<String> {
+        self.arriving.hash(path)
+    }
+    fn same_volume(&self, source: &Path, destination: &Path) -> io::Result<bool> {
+        self.arriving.same_volume(source, destination)
+    }
+    fn rename_no_replace(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.arriving.rename_no_replace(source, destination)
+    }
+    fn copy_new_locked(
+        &self,
+        source: &Path,
+        destination: &Path,
+    ) -> io::Result<Box<dyn LockedFile>> {
+        self.arriving.copy_new_locked(source, destination)
+    }
+    fn lock_for_delete(&self, path: &Path) -> io::Result<Box<dyn LockedFile>> {
+        if is_named(path)
+            && self
+                .destination_holds
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+        {
+            return Err(io::Error::from_raw_os_error(32));
+        }
+        self.arriving.lock_for_delete(path)
+    }
+}
+
+/// The reconciliation looks at the teammate's file milliseconds after the
+/// rename found it, while the sync client that wrote it most likely still
+/// holds it. The comparison is waited out like every other read, so the item
+/// goes to review under the reason a person can act on, instead of being
+/// parked to compare two names that were never in doubt.
+#[cfg(windows)]
+#[test]
+fn a_foreign_destination_the_sync_client_still_holds_is_waited_out() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("source.pdf");
+    let destination = temp.path().join("named.pdf");
+    write(&source, b"original");
+    let filesystem = Arc::new(HeldArrivalFileSystem {
+        arriving: arriving(b"a teammate's invoice"),
+        destination_holds: AtomicUsize::new(2),
+    });
+    let (applier, store, item_id) = applying(&temp, &source, filesystem);
+    let applier = applier.with_lock_retry(LockRetry::new(5, Duration::from_millis(1)));
+    let fingerprint = applier.fingerprint(&source).unwrap();
+    applier
+        .apply(item_id, &source, &destination, &fingerprint)
+        .unwrap_err();
+
+    let resolved = applier.reconcile(item_id).unwrap();
+
+    assert_eq!(resolved.status, QueueStatus::NeedsReview);
+    assert_eq!(resolved.error_code, Some(ErrorCode::DestinationUnavailable));
+    assert_eq!(
+        store.load_receipt(item_id).unwrap().unwrap().stage,
+        OperationStage::RolledBack
+    );
+    assert!(store.load_unsettled_receipt(item_id).unwrap().is_none());
+    assert_eq!(fs::read(&source).unwrap(), b"original");
+}
+
 /// Records every operation as rolled back the moment it reaches `stage`, the
 /// way a recovery pass that took the operation over would.
 fn take_over_at(database: &Path, stage: &str) {
