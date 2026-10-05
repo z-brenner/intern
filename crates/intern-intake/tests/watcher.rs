@@ -14,11 +14,11 @@ use std::{
 
 use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
 use intern_intake::{
-    CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState, ClaimStore,
-    DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome, ENQUEUE_RETRY_CAP_SECONDS,
-    ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus,
-    IntakeWatcher, ItemState, MachineIdentity, SETTLING_SCAN_INTERVAL, StabilityTracker,
-    scan::is_conflict_copy,
+    BACKLOG_FORGET_SECONDS, CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState,
+    ClaimStore, DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome,
+    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig,
+    IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity, SETTLING_SCAN_INTERVAL,
+    StabilityTracker, scan::is_conflict_copy,
 };
 use tempfile::TempDir;
 
@@ -318,18 +318,27 @@ impl Rig {
     /// can do while no watcher is running: change the folder (handed its
     /// path) or the machine's settings.
     fn restart_with(self, while_off: impl FnOnce(&Path, &mut MachineIdentity)) -> Rig {
+        self.restart_changing(|folder, identity, _| while_off(folder, identity))
+    }
+
+    /// Like `restart_with`, and the host may start the new watcher on a
+    /// changed configuration, as it does after an intake settings save.
+    fn restart_changing(
+        self,
+        while_off: impl FnOnce(&Path, &mut MachineIdentity, &mut IntakeConfig),
+    ) -> Rig {
         let Rig {
             temp,
             data,
             clock,
             host,
             hydration,
-            config,
+            mut config,
             mut identity,
             watcher,
         } = self;
         drop(watcher);
-        while_off(temp.path(), &mut identity);
+        while_off(temp.path(), &mut identity, &mut config);
         clock.advance(1);
         Self::launch(temp, data, clock, host, hydration, config, identity)
     }
@@ -508,6 +517,9 @@ fn replaced_backlog_file_is_new() {
     let replaced = rig.temp.path().join("pre.pdf");
     assert_eq!(rig.host.enqueued(), vec![replaced.clone()]);
     assert_eq!(rig.watcher.status().held_for_others, 1);
+    // The old key names nothing now, and goes once whole scans have missed
+    // it for long enough to be sure.
+    rig.step_by(BACKLOG_FORGET_SECONDS);
     assert_eq!(
         rig.backlog_keys(),
         vec![facts_for(rig.temp.path(), "other.pdf").key()],
@@ -524,6 +536,7 @@ fn replaced_backlog_file_is_new() {
         vec![replaced, rig.temp.path().join("other.pdf")]
     );
     assert_eq!(rig.watcher.status().held_for_others, 0);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
     assert!(rig.backlog_keys().is_empty());
 }
 
@@ -562,6 +575,81 @@ fn label_restart_keeps_backlog() {
     );
 }
 
+/// Turning watching on, or changing how the folder's documents are admitted,
+/// is the person starting to watch it, and "Only new documents" means new from
+/// then. The snapshot kept from an earlier watch of the same folder said
+/// nothing about documents that arrived while it was off, and they were taken
+/// for this machine's own uploads and filed. The host asks for a fresh look.
+#[test]
+fn a_new_watch_of_the_same_folder_takes_the_first_look_again() {
+    let rig = Rig::start(false, &["pre.pdf"]);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        fs::write(
+            folder.join("while-off.pdf"),
+            b"added while watching was turned off",
+        )
+        .unwrap();
+        config.retake_backlog = true;
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty(), "both were already here");
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+    let mut taken = vec![
+        facts_for(rig.temp.path(), "pre.pdf").key(),
+        facts_for(rig.temp.path(), "while-off.pdf").key(),
+    ];
+    taken.sort();
+    assert_eq!(rig.backlog_keys(), taken);
+
+    // The next start carries that watch on.
+    let rig = rig.restart_changing(|folder, _, config| {
+        fs::write(folder.join("after.pdf"), b"arrived during the restart").unwrap();
+        config.retake_backlog = false;
+    });
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![rig.temp.path().join("after.pdf")]);
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+}
+
+/// A version that learns to read a new type of document finds files of that
+/// type that sat in the folder all along. The first look never covered them,
+/// so they are not this machine's new uploads; one that arrives later is.
+#[test]
+fn documents_of_a_newly_read_type_that_were_already_there_are_held() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["pre.pdf"],
+        |config| {
+            config.extensions = vec!["pdf".to_string()];
+            fs::write(config.intake_root.join("notes.txt"), b"there all along").unwrap();
+        },
+    );
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    let rig = rig.restart_changing(|_, _, config| {
+        config.extensions = vec!["pdf".to_string(), "txt".to_string()];
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+
+    let later = rig.write("later.txt", b"a note written after the update");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![later]);
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+}
+
 /// A backlog that cannot be written is said so, and written as soon as it can
 /// be: until then a restart would take it again and hold what arrived since.
 #[test]
@@ -587,41 +675,90 @@ fn a_backlog_that_cannot_be_written_is_reported_and_written_later() {
     );
 }
 
-/// A subfolder that cannot be listed hid its documents for one scan; it did
-/// not remove them. Forgetting them would admit them as new the moment the
-/// folder could be read again.
-#[cfg(unix)]
+/// The folder spelled so long that a subfolder named `out_of_reach()` takes
+/// it past the system's path limit: that subfolder cannot be listed, by
+/// anyone, until the folder is watched under its ordinary path again. A place
+/// a scan cannot look into, made without permission bits, which a test run
+/// as root ignores. The extra `.` components change nothing else: document
+/// keys and the snapshot's canonical folder come out the same.
+#[cfg(target_os = "linux")]
+fn long_spelling(folder: &Path) -> PathBuf {
+    let mut spelled = folder.as_os_str().to_owned();
+    while spelled.len() < 3900 {
+        spelled.push("/.");
+    }
+    PathBuf::from(spelled)
+}
+
+#[cfg(target_os = "linux")]
+fn out_of_reach() -> String {
+    "d".repeat(250)
+}
+
+/// A subfolder that cannot be listed hid its documents; it did not remove
+/// them. Forgetting them - after any length of time - would admit them as new
+/// the moment the folder could be read again.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_subfolder_that_cannot_be_listed_keeps_its_backlog() {
-    use std::os::unix::fs::PermissionsExt;
-
     let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
-        let locked = config.intake_root.join("locked");
-        fs::create_dir(&locked).unwrap();
-        fs::write(locked.join("old.pdf"), b"already here").unwrap();
+        let hidden = config.intake_root.join(out_of_reach());
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("old.pdf"), b"already here").unwrap();
     });
-    rig.step();
-    let locked = rig.temp.path().join("locked");
-    let key = facts_for(rig.temp.path(), "locked/old.pdf").key();
+    let key = facts_for(rig.temp.path(), &format!("{}/old.pdf", out_of_reach())).key();
     assert_eq!(rig.backlog_keys(), vec![key.clone()]);
 
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-    // Root runs skip permission checks, and the restoration below must happen
-    // even when the assertions fail, so the check is a guarded closure.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        rig.step();
-        if fs::read_dir(&locked).is_ok() {
-            return;
-        }
-        assert_eq!(rig.watcher.status().unreadable_folders, 1);
-        assert_eq!(rig.backlog_keys(), vec![key.clone()]);
-    }));
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
-    result.unwrap();
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = long_spelling(folder);
+    });
+    assert_eq!(rig.watcher.status().unreadable_folders, 1);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    assert_eq!(rig.backlog_keys(), vec![key.clone()]);
 
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = folder.to_path_buf();
+    });
     rig.step();
     rig.step();
     assert!(rig.host.enqueued().is_empty());
+    let status = rig.watcher.status();
+    assert_eq!(status.unreadable_folders, 0);
+    assert_eq!(status.held_for_others, 1);
+}
+
+/// A subfolder the first look could not list held documents that were there
+/// all along. Finishing the look without them had them taken for new uploads
+/// and filed the moment the folder could be read.
+#[cfg(target_os = "linux")]
+#[test]
+fn documents_the_first_look_could_not_list_are_held_once_they_can_be() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        let hidden = config.intake_root.join(out_of_reach());
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("old.pdf"), b"already here").unwrap();
+        config.intake_root = long_spelling(&config.intake_root);
+    });
+    assert_eq!(rig.watcher.status().unreadable_folders, 1);
+    rig.step();
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = folder.to_path_buf();
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    let old = facts_for(rig.temp.path(), &format!("{}/old.pdf", out_of_reach())).key();
+    assert_eq!(rig.backlog_keys(), vec![old]);
+
+    // Seen into once, the place is settled: a document that lands there now
+    // is new.
+    let later = rig.write(&format!("{}/later.pdf", out_of_reach()), b"arrived since");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![later]);
     assert_eq!(rig.watcher.status().held_for_others, 1);
 }
 
@@ -1278,7 +1415,7 @@ fn update_config_rearms_on_a_new_folder_and_rebuilds_the_backlog() {
     assert_eq!(
         record["folder"],
         fs::canonicalize(second.path()).unwrap().to_str().unwrap(),
-        "a new folder is the one thing that retakes the snapshot"
+        "a new folder retakes the snapshot"
     );
     assert_eq!(
         rig.backlog_keys(),

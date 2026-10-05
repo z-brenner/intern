@@ -38,6 +38,11 @@ pub struct IntakeConfig {
     /// puts it in its own data directory, never in the shared `.intern`
     /// folder. `None` keeps it in memory, retaken by every new watcher.
     pub backlog_file: Option<PathBuf>,
+    /// Takes that record again, whatever was kept: the person has just
+    /// started watching the folder - turned watching on, or chose how its
+    /// documents are admitted - so what is in it now is what they chose to
+    /// leave alone. A restart or a changed label leaves this false.
+    pub retake_backlog: bool,
 }
 
 impl IntakeConfig {
@@ -50,6 +55,7 @@ impl IntakeConfig {
             settling_interval: SETTLING_SCAN_INTERVAL,
             min_quiet_seconds: DEFAULT_MIN_QUIET_SECONDS,
             backlog_file: None,
+            retake_backlog: false,
         }
     }
 
@@ -223,6 +229,12 @@ pub(crate) struct Walk {
     pub files: Vec<FileFacts>,
     /// Subfolders that could not be listed and were skipped.
     pub unreadable_folders: u32,
+    /// Where the walk could not look, relative to the root and
+    /// `/`-separated: subfolders that could not be listed, a folder whose
+    /// listing broke off (`""` for the root), and files whose type or
+    /// attributes could not be read. A walk with any of these did not see
+    /// every document in the folder.
+    pub hidden: Vec<String>,
 }
 
 /// Recursive walk with the same skip rules as intern-queue's path handling:
@@ -238,16 +250,20 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
     let mut pending = vec![root.to_path_buf()];
     let mut walk = Walk::default();
     while let Some(directory) = pending.pop() {
+        let place = || relative_slash_path(root, &directory).unwrap_or_default();
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if directory == root => return Err(error),
             Err(_) => {
                 walk.unreadable_folders += 1;
+                walk.hidden.push(place());
                 continue;
             }
         };
         for entry in entries {
             let Ok(entry) = entry else {
+                // The listing broke off, and whatever came after is unknown.
+                walk.hidden.push(place());
                 continue;
             };
             let path = entry.path();
@@ -255,6 +271,7 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
                 continue;
             }
             let Ok(file_type) = entry.file_type() else {
+                walk.hidden.extend(relative_slash_path(root, &path));
                 continue;
             };
             if file_type.is_symlink() {
@@ -273,8 +290,10 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
             // settled. Opening the file for its attributes costs a handle but
             // hydrates nothing, and a file held so exclusively that even this
             // is refused is one that is still being written, so skipping it is
-            // the right answer too.
+            // the right answer too - though not proof the file is new, so it
+            // is reported as unseen.
             let Ok(metadata) = fs::metadata(&path) else {
+                walk.hidden.extend(relative_slash_path(root, &path));
                 continue;
             };
             if metadata.len() == 0 {
@@ -605,6 +624,7 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["keep.pdf".to_string()]);
         assert_eq!(walk.unreadable_folders, 0);
+        assert!(walk.hidden.is_empty(), "skipped on purpose is not unseen");
     }
 
     /// Windows updates a file's directory entry lazily, so the size a listing
@@ -653,15 +673,53 @@ mod tests {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
         let walk = outcome.unwrap();
         if listable {
-            // Root ignores permission bits; nothing to prove here.
+            eprintln!("skipped: permission bits do not stop this user listing a folder");
             return;
         }
         assert_eq!(walk.unreadable_folders, 1);
+        assert_eq!(walk.hidden, vec!["locked".to_string()]);
         let names: Vec<String> = walk
             .files
             .iter()
             .map(|facts| facts.relative_path.clone())
             .collect();
         assert_eq!(names, vec!["open.pdf".to_string()]);
+    }
+
+    /// Everything the walk could not reach is reported where it is, so the
+    /// backlog can tell a hidden document from a gone one: a subfolder it
+    /// could not list, and a file it could not read the attributes of. Made
+    /// by spelling the root so long that both names take it past the path
+    /// limit, which stops every user alike - permission bits do not stop
+    /// root.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_the_walk_could_not_reach_is_reported_as_hidden() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let long = "d".repeat(250);
+        fs::create_dir(temp.path().join(&long)).unwrap();
+        fs::write(temp.path().join(&long).join("inside.pdf"), b"x").unwrap();
+        fs::write(temp.path().join(format!("{long}.pdf")), b"x").unwrap();
+        fs::write(temp.path().join("open.pdf"), b"x").unwrap();
+        let mut root = temp.path().as_os_str().to_owned();
+        while root.len() < 3900 {
+            root.push("/.");
+        }
+
+        let walk = walk_intake(std::path::Path::new(&root), &extensions()).unwrap();
+        let names: Vec<&str> = walk
+            .files
+            .iter()
+            .map(|facts| facts.relative_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["open.pdf"]);
+        assert_eq!(walk.unreadable_folders, 1);
+        let mut hidden = walk.hidden.clone();
+        hidden.sort();
+        assert_eq!(hidden, vec![long.clone(), format!("{long}.pdf")]);
+
+        let plain = walk_intake(temp.path(), &extensions()).unwrap();
+        assert_eq!(plain.files.len(), 3);
+        assert!(plain.hidden.is_empty());
     }
 }

@@ -25,6 +25,7 @@ pub mod onedrive_identity;
 pub mod scan;
 pub mod watcher;
 
+pub use backlog::BACKLOG_FORGET_SECONDS;
 pub use cloud::{
     CloudLocation, CloudProviderKind, CloudRoot, EnvProbe, RegistryHive, SystemEnv, classify,
     detect_cloud_roots, detect_cloud_roots_with, matching_root, network_share, paths_overlap,

@@ -113,7 +113,7 @@ impl IntakeWatcher {
     /// Re-arms the running watcher on a new configuration. Per-folder scan
     /// state (stability, owned claims) is discarded, exactly as a
     /// stop-and-start would discard it; the backlog is retaken only if the
-    /// folder changed.
+    /// folder changed or the configuration asks for it.
     pub fn update_config(&self, config: IntakeConfig) {
         {
             let mut control = lock(&self.shared.control);
@@ -171,7 +171,7 @@ impl ScanState {
     fn new(config: &IntakeConfig) -> Self {
         Self {
             stability: StabilityTracker::new(config.min_quiet_seconds),
-            backlog: Backlog::load(config.backlog_file.as_deref(), &config.intake_root),
+            backlog: Backlog::load(config),
             ..Self::default()
         }
     }
@@ -276,7 +276,7 @@ fn scan_once(
         }
     };
     status.unreadable_folders = walk.unreadable_folders;
-    let unreadable_folders = walk.unreadable_folders;
+    let hidden = walk.hidden;
     let files = walk.files;
 
     // Read before the walk is processed so a conflict copy is recognised on the
@@ -327,17 +327,7 @@ fn scan_once(
         .enqueue_failures
         .retain(|key, _| visited.contains(key));
     let Scanner { live, seen, .. } = scanner;
-    // Only a whole pass says what is in the folder. A walk cut short by
-    // shutdown never ends the snapshot, and a subfolder that could not be
-    // listed hid its documents rather than removed them: forgetting them
-    // would admit them as new the moment the folder could be read again.
-    if !interrupted {
-        if !backlog.is_recorded() {
-            backlog.finish_recording();
-        } else if unreadable_folders == 0 {
-            backlog.retain_seen(&seen);
-        }
-    }
+    backlog.end_pass(&seen, &hidden, interrupted, clock.now());
     if let Err(error) = backlog.save() {
         status.error = Some(format!("BACKLOG_WRITE_FAILED: {error}"));
     }
@@ -386,7 +376,7 @@ impl Scanner<'_> {
         // settled or not: a file still being written gets a new key once it
         // settles, and that key is new.
         self.seen.insert(key.clone());
-        self.backlog.note(&key);
+        self.backlog.note(&key, &facts.relative_path);
         // A conflict copy is the sync client's bookkeeping, not a new document.
         // Naming it would file a second copy of something already filed, so it
         // is counted and left where it is for a person to resolve.
