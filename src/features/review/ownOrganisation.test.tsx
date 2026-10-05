@@ -30,7 +30,7 @@ describe('a name filed by the other side', () => {
     const note = screen.getByRole('note', { name: 'Filed by the other side' });
     expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organisation, so it is left out of the name. Change this under Settings.');
     expect(within(note).getByText('Contoso Worldwide, Inc.').tagName).toBe('Q');
-    expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work with Ridgeline Cartography LLC');
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
     expect(within(evidence).getByText('Contoso Worldwide, Inc.')).toBeVisible();
     expect(within(evidence).getByText('Ridgeline Cartography LLC')).toBeVisible();

@@ -42,10 +42,26 @@ export function folderLabel(roots: CloudRoot[], path: string): string {
   return [rootName(root), ...below].join(' › ');
 }
 
-/** The "Filed" folder setup offers beside `folder`, spelled with the folder's own separator. */
-export function filedBeside(folder: string): string {
+/**
+ * A folder with nothing above it: a drive ("E:\"), a share ("\\server\share",
+ * also spelled "\\?\UNC\server\share"), or "/".
+ */
+const ROOTS = [
+  /^(?:\\\\\?\\)?[A-Za-z]:[\\/]?$/,
+  /^(?:\\\\\?\\UNC\\|\\\\)[^\\]+\\[^\\]+\\?$/i,
+  /^\/$/,
+];
+
+/**
+ * The "Filed" folder setup offers beside `folder`, spelled with the folder's
+ * own separator - or undefined for a root, which has nothing beside it. The
+ * backend refuses to make one there, and "E:\" used to come out as "E/Filed".
+ */
+export function filedBeside(folder: string): string | undefined {
+  if (ROOTS.some((root) => root.test(folder))) return undefined;
   const trimmed = folder.replace(/[\\/]+$/, '');
   const cut = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
+  if (cut < 0) return undefined;
   const separator = trimmed.includes('\\') ? '\\' : '/';
   return `${trimmed.slice(0, cut)}${separator}Filed`;
 }

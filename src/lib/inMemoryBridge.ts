@@ -2,10 +2,19 @@ import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
 import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
-import { leadingDate } from './filenames';
+import { filenameExtension, leadingDate, validateFilename, validateLeafFilename } from './filenames';
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
+import { humanizeReason } from './reasons';
+import type { QueueBridgeEvent } from './tauriBridge';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
+import { isParked, retryAccepted } from '../features/review/actions';
+
+/** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
+const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
+
+/** A filename as Windows compares two in one folder, as pipeline.rs name_key does: regardless of case and of trailing dots and spaces. */
+const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
 
 /** Exact size of the single pinned model file this build downloads. */
 export const PINNED_MODEL_BYTES = 1_280_835_840;
@@ -17,12 +26,28 @@ const seedItems: QueueItem[] = [
   // Stays a PDF even though .xlsx is now supported: the reviewed QA capture
   // pins this queue's rendered contents, and changing a demo row would force a
   // re-sign-off for no product reason.
-  { id: 'financials', originalFilename: 'Q1 Financials.pdf', status: 'processing', proposedFilename: '2024-03-31 Q1 Financial Statements.pdf', progress: 60 },
+  // A stage and no percentage, as the desktop backend reports it: no figure
+  // ever arrives from it, and a seeded "60%" hid that from every screenshot.
+  { id: 'financials', originalFilename: 'Q1 Financials.pdf', status: 'processing', proposedFilename: '2024-03-31 Q1 Financial Statements.pdf', stage: 'naming' },
   { id: 'service', originalFilename: 'Service Agreement - BlueSky LLC.pdf', status: 'ready', proposedFilename: '2024-02-28 Service Agreement with BlueSky LLC.pdf', confidence: 0.96 },
   { id: 'minutes', originalFilename: 'Board Meeting Minutes - May 7, 2024.docx', status: 'waiting' },
   { id: 'invoice', originalFilename: 'Invoice INV-1001.pdf', status: 'waiting' },
   { id: 'notes', originalFilename: 'Notes from Call - 2024-05-02.txt', status: 'waiting' },
-  { id: 'completed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', confidence: 0.93, undoable: true, description: 'Residential lease agreement for a twelve-month term beginning January 22, 2024.' },
+  { id: 'completed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement.pdf', filedPath: 'C:\\Filed\\2024-01-22 Lease Agreement.pdf', confidence: 0.93, undoable: true, description: 'Residential lease agreement for a twelve-month term beginning January 22, 2024.' },
+];
+
+/**
+ * A morning's scans waiting on a reviewer: enough undecided items to clear
+ * the queue from the keyboard, for the browser build's `?reviewBatch=1`.
+ */
+const reviewBatchItems: QueueItem[] = [
+  { id: 'scan-0101', originalFilename: 'Scan 0101.pdf', status: 'review', proposedFilename: '2024-02-01 Engagement Letter with Northwind Traders.pdf', confidence: 0.74, description: 'Engagement letter between Northwind Traders and the firm for 2024 advisory work.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0102', originalFilename: 'Scan 0102.pdf', status: 'review', proposedFilename: '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', confidence: 0.81, description: 'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.', reason: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.', errorCode: 'DATE_AMBIGUOUS' },
+  { id: 'scan-0103', originalFilename: 'Scan 0103.pdf', status: 'ready', proposedFilename: '2024-03-14 Notice of Termination to Contoso Ltd.pdf', confidence: 0.95, description: 'Notice terminating the services agreement with Contoso Ltd.' },
+  { id: 'scan-0104', originalFilename: 'Scan 0104.pdf', status: 'review', proposedFilename: '2024-03-30 Statement of Work with Litware Inc.pdf', confidence: 0.69, description: 'Statement of work with Litware Inc. for the spring data migration.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0105', originalFilename: 'Scan 0105.pdf', status: 'ready', proposedFilename: '2024-04-02 Board Resolution of Tailspin Toys.pdf', confidence: 0.97, description: 'Board resolution of Tailspin Toys approving the annual budget.' },
+  { id: 'scan-0106', originalFilename: 'Scan 0106.pdf', status: 'review', proposedFilename: '2024-04-18 Lease Amendment for 500 Pine St.pdf', confidence: 0.77, description: 'First amendment to the lease of 500 Pine St.', reason: 'The model reported low confidence in its own proposal.', errorCode: 'LOW_CONFIDENCE' },
+  { id: 'scan-0107', originalFilename: 'Scan 0107.pdf', status: 'waiting' },
 ];
 
 /**
@@ -69,14 +94,15 @@ const ownNames = (names: string[]) => names.map((name) => name.trim()).filter((n
 /**
  * Plausible finished operations for browser dev and tests, newest first —
  * the order the desktop backend returns. Timestamps are fixed so renders are
- * deterministic.
+ * deterministic. Only the lease (receipt 3) belongs to an item still in the
+ * seeded queue; the others were cleared from it long ago.
  */
 const seedHistory: HistoryEntry[] = [
-  { receiptId: '9', queueItemId: 'completed', at: 1716282900, direction: 'undo', kind: 'rename', stage: 'complete', originalPath: 'C:\\Filed\\2024-05-07 Board Meeting Minutes.docx', newPath: 'C:\\Drop\\Board Meeting Minutes - May 7, 2024.docx' },
-  { receiptId: '7', queueItemId: 'completed', at: 1716282600, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\Drop\\Board Meeting Minutes - May 7, 2024.docx', newPath: 'C:\\Filed\\2024-05-07 Board Meeting Minutes.docx' },
-  { receiptId: '5', queueItemId: 'completed', at: 1716196500, direction: 'apply', kind: 'verified_copy', stage: 'complete', originalPath: 'C:\\Drop\\Invoice INV-1001.pdf', newPath: 'D:\\Archive\\2024-05-02 Invoice INV-1001 from BlueSky LLC.pdf', },
+  { receiptId: '9', queueItemId: 'minutes-filed', at: 1716282900, direction: 'undo', kind: 'rename', stage: 'complete', originalPath: 'C:\\Filed\\2024-05-07 Board Meeting Minutes.docx', newPath: 'C:\\Drop\\Board Meeting Minutes - May 7, 2024.docx' },
+  { receiptId: '7', queueItemId: 'minutes-filed', at: 1716282600, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\Drop\\Board Meeting Minutes - May 7, 2024.docx', newPath: 'C:\\Filed\\2024-05-07 Board Meeting Minutes.docx' },
+  { receiptId: '5', queueItemId: 'invoice-filed', at: 1716196500, direction: 'apply', kind: 'verified_copy', stage: 'complete', originalPath: 'C:\\Drop\\Invoice INV-1001.pdf', newPath: 'D:\\Archive\\2024-05-02 Invoice INV-1001 from BlueSky LLC.pdf', },
   { receiptId: '3', queueItemId: 'completed', at: 1716108300, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\Drop\\Completed lease.pdf', newPath: 'C:\\Filed\\2024-01-22 Lease Agreement.pdf' },
-  { receiptId: '1', queueItemId: 'completed', at: 1716021900, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\Drop\\NDA - Acme Corp.docx', newPath: 'C:\\Filed\\2024-03-01 Non-Disclosure Agreement with Acme Corp.docx' },
+  { receiptId: '1', queueItemId: 'nda-filed', at: 1716021900, direction: 'apply', kind: 'rename', stage: 'complete', originalPath: 'C:\\Drop\\NDA - Acme Corp.docx', newPath: 'C:\\Filed\\2024-03-01 Non-Disclosure Agreement with Acme Corp.docx' },
 ];
 
 export interface InMemoryBridgeOptions {
@@ -102,6 +128,22 @@ export interface InMemoryBridgeOptions {
   sharePointFake?: FakeSharePointOptions;
   /** Documents folder setup finds already in a chosen folder. */
   existingDocuments?: number;
+  /**
+   * Push queue changes the bridge makes on its own - a re-analysis coming
+   * back - the way the desktop backend's `queue://changed` does. Off by
+   * default: a subscription makes the queue read itself once more on start,
+   * which tests that script the first read do not expect.
+   */
+  liveEvents?: boolean;
+  /** How long a re-analysis takes before the item is back in review. */
+  analysisDelayMs?: number;
+  /**
+   * File an approval only while no other document is being processed, as
+   * the backend's begin_applying does; otherwise keep the approved name and
+   * leave the item ready, for the queue to file between documents. Off by
+   * default: the demo's processing document never finishes.
+   */
+  deferApprovalsWhileBusy?: boolean;
 }
 
 export type FakeSharePointCall = 'microsoftSignInStart' | 'microsoftSignInPoll' | 'microsoftOpenSignIn' | 'microsoftDisconnect' | 'getSharePointSetup' | 'startSharePointSync' | 'activateOnboarding' | 'completeOnboarding';
@@ -319,6 +361,33 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const idByPath = new Map<string, string>();
   const pathById = new Map<string, string>();
   const update = (id: string, change: Partial<QueueItem>) => { items = items.map((item) => item.id === id ? { ...item, ...change } : item); };
+  // Replaces an item outright, so a field cleared here is gone rather than
+  // carried over by the spread in `update`.
+  const replace = (next: QueueItem) => { items = items.map((item) => item.id === next.id ? next : item); };
+  const find = (id: string) => {
+    const item = items.find((entry) => entry.id === id);
+    if (!item) throw { code: 'ITEM_NOT_FOUND', message: 'queue item does not exist' };
+    return item;
+  };
+  // The backend's refusal for a parked item (unsettled_files), word for word.
+  const parkedRefusal = () => ({ code: 'RECONCILIATION_REQUIRED', message: 'files need checking: use Check again' });
+  const queueListeners = new Set<(event: QueueBridgeEvent) => void>();
+  const queueChanged = () => queueListeners.forEach((listener) => listener({ type: 'changed' }));
+  // Long enough to see the item wait before it is back in review.
+  const analysisDelayMs = options.analysisDelayMs ?? 800;
+  /** What review leaves behind, by queue status: no proposal while waiting, no failure once settled. */
+  const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, ...rest }: QueueItem): QueueItem => rest;
+  // Pipeline::check_again, for a parked item: here the files are always
+  // found in order. A renamed copy whose original could not be deleted was
+  // safe all along, so checking finishes the filing; any other rename that
+  // stopped part-way had not happened, and the item is back in review.
+  const checkAgain = (item: QueueItem): QueueItem => {
+    const checked: QueueItem = item.errorCode === 'SOURCE_DELETE_FAILED'
+      ? { ...settledFields(item), status: 'completed', filedName: item.proposedFilename, undoable: true, keptOriginal: false }
+      : { ...settledFields(item), status: 'review', parked: false };
+    replace(checked);
+    return checked;
+  };
   // The seeded proposals still named from their facts. A name a person
   // approved is theirs: it leaves this map and keeps what they typed.
   const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
@@ -371,25 +440,117 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     listItems: async () => items.map((item) => ({ ...item })),
     addFiles: async (files) => addSelections(files, { added: 0, alreadyQueued: 0, skipped: [] }),
     addFolder: async (folder) => addFolder(folder),
-    pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const } : item); },
-    resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', progress: 0 }); },
-    cancel: async (id) => update(id, { status: 'failed', progress: undefined, reason: 'Canceled.' }),
-    // Mirrors the backend's gate: a rename carries a date or it does not happen.
+    pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
+    resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
+    cancel: async (id) => update(id, { status: 'failed', stage: undefined, progress: undefined, reason: 'Canceled.' }),
+    // Mirrors Pipeline::approve, in its order: the name itself, its date,
+    // then whether this item can take it - its files settled, the source's
+    // extension kept, and a proposal in review or ready.
     approve: async (id, filename, description) => {
-      if (!leadingDate(filename)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
+      const name = filename.trim();
+      if (validateLeafFilename(name) !== undefined) throw { code: 'NAME_INVALID', message: 'filename must be one nonblank path component' };
+      if (!leadingDate(name)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
+      let item = find(id);
+      // Approving is how a person asks for a stopped rename to be settled, so
+      // a parked item's files are checked first. The check can find the
+      // document filed already: approving what that rename was filing is
+      // then done, and anything else is refused rather than reported as
+      // applied (Pipeline::already_filed).
+      if (isParked(item)) {
+        item = checkAgain(item);
+        if (item.status === 'completed') {
+          if ((name === item.proposedFilename || name === item.filedName) && description.trim() === (item.description ?? '')) return;
+          throw { code: 'ALREADY_FILED', message: `The earlier rename had already finished, so the document is filed as ${item.filedName ?? item.originalFilename} and your changes were not applied. Undo it to rename it again.` };
+        }
+      }
+      if (isParked(item)) throw parkedRefusal();
+      if (validateFilename(name, filenameExtension(item.originalFilename)) !== undefined) throw { code: 'NAME_INVALID', message: 'approved filename must preserve the source extension' };
+      if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'proposal is not reviewable' };
+      // A name a person approved is theirs: Settings' organisation names no
+      // longer recompose it.
       composedNames.delete(id);
-      update(id, { status: 'completed', proposedFilename: filename, description, undoable: true });
+      // Pipeline::complete_already_named: filed in its own folder (no
+      // destination, flat), a name that is already the document's has
+      // nowhere to go. It completes as kept, with nothing to undo, and says
+      // why nothing moved - before any wait for a busy queue, as there.
+      if (!settings.destination.trim() && settings.destinationLayout === 'flat' && fileNameKey(name) === fileNameKey(item.originalFilename)) {
+        replace({ ...settledFields(item), status: 'completed', proposedFilename: name, description: description.trim(), undoable: false, keptOriginal: true, reason: humanizeReason('ALREADY_NAMED') });
+        return;
+      }
+      // APPLY_DEFERRED: the approval is kept and the command succeeds, but
+      // the document is not renamed yet.
+      if (options.deferApprovalsWhileBusy && items.some((entry) => entry.id !== id && entry.status === 'processing')) {
+        replace({ ...settledFields(item), status: 'ready', proposedFilename: name, description: description.trim(), approved: true, proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        return;
+      }
+      // Approval clears the proposal's review reasons, and the filing is
+      // recorded under the name it was given.
+      replace({ ...settledFields(item), status: 'completed', proposedFilename: name, filedName: name, description: description.trim(), undoable: true, keptOriginal: false });
       noteRecorded();
     },
-    keepOriginal: async (id) => update(id, { status: 'completed', proposedFilename: undefined, undoable: true }),
-    retry: async (id) => update(id, { status: 'waiting', progress: undefined }),
-    remove: async (id) => {
+    // complete_keep_original changes the status and nothing else: the
+    // proposal stays, unapplied, and with no rename there is nothing to undo.
+    keepOriginal: async (id) => {
+      const item = find(id);
+      if (isParked(item)) throw parkedRefusal();
+      if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only ready or review items can keep their original name' };
+      update(id, { status: 'completed', keptOriginal: true, undoable: false });
+    },
+    // Pipeline::retry: failed and canceled items, and only the review items
+    // whose code says what a retry would do. A parked item's retry is
+    // "Check again", which here finds the files in order.
+    retry: async (id) => {
+      const item = find(id);
+      if (!retryAccepted(item)) throw { code: 'INVALID_TRANSITION', message: 'only failed or canceled items can be retried' };
+      if (isParked(item)) {
+        checkAgain(item);
+        return;
+      }
+      replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
+    },
+    // Re-analysis forgets the proposal and reads the document again. Here the
+    // reading takes `analysisDelayMs`, after which the same proposal returns
+    // as a new revision for review - without a flag raised before any reading
+    // (a duplicate, an unverified uploader), which a new reading never raises.
+    reanalyze: async (id) => {
+      const item = find(id);
+      if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only a document waiting for review can be analyzed again' };
+      // requeue_for_analysis refuses while an operation of the item never
+      // finished, with INVALID_TRANSITION rather than unsettled_files' code.
+      if (isParked(item)) throw { code: 'INVALID_TRANSITION', message: 'an earlier rename of this document did not finish; check it again first' };
+      replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
+      setTimeout(() => {
+        const current = items.find((entry) => entry.id === id);
+        if (current?.status !== 'waiting') return;
+        const read = PRE_ANALYSIS_CODES.has(item.errorCode ?? '') ? settledFields(item) : item;
+        replace({ ...read, status: 'review', proposalRevision: `${Number(item.proposalRevision ?? 0) + 1}` });
+        queueChanged();
+      }, analysisDelayMs);
+    },
+    // remove_item never deletes an item mid-flight, and a parked one only
+    // with the person's word that they resolved its files themselves.
+    remove: async (id, removal) => {
+      const item = find(id);
+      if (item.status === 'processing') throw { code: 'STATE_CONFLICT', message: 'active or missing item cannot be removed' };
+      if (isParked(item) && removal?.confirmed !== true) throw parkedRefusal();
       const path = pathById.get(id);
       if (path) idByPath.delete(path);
       pathById.delete(id);
-      items = items.filter((item) => item.id !== id);
+      items = items.filter((entry) => entry.id !== id);
     },
-    undo: async (id) => update(id, { status: 'review', undoable: false }),
+    // Pipeline::undo: only a filed rename, and the document then waits for a
+    // decision again rather than being renamed by the next pass.
+    undo: async (id) => {
+      const item = find(id);
+      if (item.status !== 'completed') throw { code: 'INVALID_TRANSITION', message: 'only completed operations can be undone' };
+      if (!item.undoable) throw { code: 'STATE_CONFLICT', message: 'completed item has no durable operation receipt' };
+      const { filedName: _filedName, filedPath: _filedPath, keptOriginal: _keptOriginal, ...rest } = item;
+      replace({ ...rest, status: 'review', undoable: false, reason: humanizeReason('UNDONE') });
+    },
+    // There are no files behind the browser preview to hand to a program,
+    // so after the same checks the desktop makes it says so.
+    openItem: async (id) => { find(id); throw new Error('Opening documents is only available in the desktop application'); },
+    revealItem: async (id) => { find(id); throw new Error('Showing documents in their folder is only available in the desktop application'); },
     getSettings: async () => ({ ...settings }),
     // Mirrors the backend: a hosted model is refused at save time without a
     // stored key or a usable address, never silently kept.
@@ -496,7 +657,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     cloudRoots: async () => roots.map((root) => ({ ...root })),
     intakeFolderDocuments: async () => options.existingDocuments ?? 0,
     createInboxFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Inbox`,
-    createFiledFolder: async (intakeFolder) => filedBeside(intakeFolder),
+    // Mirrors the backend: a drive or share root has no folder beside it.
+    createFiledFolder: async (intakeFolder) => {
+      const filed = filedBeside(intakeFolder);
+      if (filed === undefined) throw { code: 'FILED_FOLDER_UNAVAILABLE', message: 'a drive\'s top folder has nothing beside it to file into' };
+      return filed;
+    },
     openOneDrive: async () => { /* No OneDrive in the browser. */ },
     descriptionsStatus: async () => descriptionsStatus(),
     // Mirrors the backend: refused until the setting is saved on, otherwise
@@ -537,6 +703,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (!learnedRules.some((rule) => rule.id === id)) throw { code: 'RULE_NOT_FOUND', message: 'learned spelling does not exist' };
       learnedRules = learnedRules.map((rule) => rule.id === id ? { ...rule, seen: Math.max(rule.seen, 2), active: true } : rule);
     },
+    ...(options.liveEvents ? {
+      subscribeQueue: async (listener: (event: QueueBridgeEvent) => void) => {
+        queueListeners.add(listener);
+        return () => { queueListeners.delete(listener); };
+      },
+    } : {}),
   };
 }
 
@@ -546,6 +718,11 @@ export function createInMemoryBridge(options: InMemoryBridgeOptions = {}): Deskt
 
 export function createFixtureBatchBridge(): DesktopBridge {
   return createBridge({ items: [] }, true);
+}
+
+/** Seven scans, six of them undecided, for clearing a review queue from the keyboard. */
+export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): DesktopBridge {
+  return createBridge({ items: reviewBatchItems, ...options }, false);
 }
 
 type BrowserFile = File & { webkitRelativePath?: string };

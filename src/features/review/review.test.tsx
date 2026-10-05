@@ -22,13 +22,275 @@ describe('review actions', () => {
     expect((await bridge.listItems()).find((item) => item.id === 'lease')?.status).toBe('review');
   });
 
+  // FRONTEND_UX-6. A reserved character used to go to the backend and come
+  // back as "filename must be one nonblank path component" in a toast.
+  it('names a character Windows refuses as it is typed, and never sends the name', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement: ABC Properties LLC' } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('\u201c:\u201d cannot be used in a Windows filename.');
+    expect(filename).toHaveAttribute('aria-invalid', 'true');
+    expect(filename.getAttribute('aria-describedby')).toContain(screen.getByRole('alert').id);
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+    fireEvent.keyDown(filename, { key: 'Enter' });
+    expect(approve).not.toHaveBeenCalled();
+
+    // Fixing the name clears the error without a click.
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement - ABC Properties LLC' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(filename).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('keeps the extension out of the field, so it cannot be changed, and adds it back on approve', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    expect(filename.tagName).toBe('TEXTAREA');
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
+    expect(filename).toHaveAccessibleDescription('The name ends in .pdf, which cannot change.');
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease.pdf', expect.any(String)));
+  });
+
+  it('files the name on Enter, and turns pasted line breaks into spaces', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease\r\nAgreement\n' } });
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement ');
+    fireEvent.keyDown(filename, { key: 'Enter' });
+
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease Agreement.pdf', expect.any(String)));
+  });
+
+  it('catches a name pasted whole, extension and all, before it is filed as ".pdf.pdf"', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+
+    fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2023-09-15 Lease.PDF' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Leave \u201c.pdf\u201d off: Intern adds the extension itself.');
+    expect(approve).not.toHaveBeenCalled();
+  });
+
+  // The backstop for a rule the window does not know: the backend's own
+  // refusal, in words, and a way to put it away.
+  it('explains a filename the backend refused in words, and can be dismissed', async () => {
+    const approve = vi.fn(async () => { throw { code: 'NAME_INVALID', message: 'filename must be one nonblank path component' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('That filename cannot be used.');
+    expect(feedback).not.toHaveTextContent('nonblank path component');
+    fireEvent.click(within(feedback).getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
+  });
+
+  // FRONTEND_UX-8: a filed document's inspector called its old name its
+  // current one and never said what it became. And the reviewer could not
+  // open the document, or find it once filed.
+  // Open, read, Approve: on Windows the viewer still holds the file, and the
+  // rename failed with the system's "being used by another process".
+  it('says to close a document another program holds, rather than the system error', async () => {
+    const approve = vi.fn(async () => { throw { code: 'SOURCE_LOCKED', message: 'atomic no-replace rename failed (The process cannot access the file because it is being used by another process. (os error 32))' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('The document is open in another program, or a sync client is still writing it. Close it, then try again.');
+    expect(feedback).not.toHaveTextContent('os error 32');
+  });
+
+  // Pipeline::apply_if_unchanged refuses an approval of a file that changed
+  // since it was read with "Re-analyze it.", and the panel has no control by
+  // that name: it says Analyze again, from the panel and from Apply all ready.
+  it('points an approval refused because the file changed at Analyze again', async () => {
+    const approve = vi.fn(async () => { throw { code: 'FILE_CHANGED', message: 'The file changed after it was analyzed. Re-analyze it.' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('Use Analyze again, under More review actions');
+    expect(feedback).not.toHaveTextContent('Re-analyze');
+    fireEvent.click(within(feedback).getByRole('button', { name: 'Dismiss' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    const batch = await screen.findByRole('alert', { name: 'Action error' });
+    expect(batch).toHaveTextContent('could not be applied. The file changed after it was analyzed, so this name may no longer fit it. Use Analyze again');
+    expect(batch).not.toHaveTextContent('Re-analyze');
+  });
+
+  // Check again (retry on a parked item) queues nothing: it finishes the
+  // stopped rename or rolls it back. It can also fail for the reason the item
+  // was parked, and then sending the person back to Check again is a loop.
+  it('says what Check again found, and never answers a failed check with Check again', async () => {
+    const parked = (id: string, errorCode: string) => ({ id, originalFilename: `${id}.pdf`, status: 'review' as const, proposedFilename: `2024-05-01 ${id}.pdf`, errorCode, parked: true });
+    const base = createInMemoryBridge({ items: [parked('stuck', 'RECONCILIATION_REQUIRED'), parked('copied', 'SOURCE_DELETE_FAILED'), parked('ambiguous', 'RECONCILIATION_REQUIRED')] });
+    const retry = vi.fn(async (id: string) => {
+      if (id === 'ambiguous') throw { code: 'RECONCILIATION_REQUIRED', message: 'an incomplete operation left a file at both of its paths' };
+      await base.retry(id);
+    });
+    render(<App bridge={{ ...base, retry }} />);
+    const status = () => screen.getByRole('status', { name: 'Action status' });
+
+    selectRow(await screen.findByRole('row', { name: /stuck\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(status()).toHaveTextContent('Checked stuck.pdf: it was not renamed, and waits for your decision.'));
+
+    selectRow(screen.getByRole('row', { name: /copied\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(status()).toHaveTextContent('Checked copied.pdf: it is filed.'));
+    expect(status()).not.toHaveTextContent('queued for retry');
+
+    selectRow(screen.getByRole('row', { name: /ambiguous\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).not.toHaveTextContent('Check again');
+    expect(feedback).toHaveTextContent('Remove from queue and choose \u201cI have resolved the files myself\u201d');
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['stuck', 'copied', 'ambiguous']);
+  });
+
+  // Pipeline::approve checks a parked item's files first and approves when
+  // the rename never happened, so the panel offers it; a check that fails
+  // inside the approval is the same dead end as a failed Check again.
+  it('approves a parked item\'s name, checking its files first', async () => {
+    const parked = (id: string) => ({ id, originalFilename: `${id}.pdf`, status: 'review' as const, proposedFilename: `2024-05-01 ${id}.pdf`, errorCode: 'FILE_CHANGED', parked: true });
+    const base = createInMemoryBridge({ items: [parked('stuck'), parked('ambiguous')] });
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      if (id === 'ambiguous') throw { code: 'RECONCILIATION_REQUIRED', message: 'an incomplete operation left a file at both of its paths' };
+      await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    selectRow(await screen.findByRole('row', { name: /ambiguous\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).not.toHaveTextContent('Check again');
+    expect(feedback).toHaveTextContent('I have resolved the files myself');
+
+    selectRow(screen.getByRole('row', { name: /stuck\.pdf/ }));
+    fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2024-05-01 Stuck renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed stuck.pdf.'));
+    expect((await base.listItems()).find((item) => item.id === 'stuck')).toMatchObject({ status: 'completed', filedName: '2024-05-01 Stuck renamed.pdf' });
+  });
+
+  it('completed_item_labels_and_open_reveal_buttons', async () => {
+    const base = createInMemoryBridge({ items: [
+      { id: 'filed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement (2).pdf', undoable: true },
+      { id: 'kept', originalFilename: 'Board minutes.docx', status: 'completed', proposedFilename: '2024-05-07 Board Meeting Minutes.docx', keptOriginal: true, undoable: false },
+      { id: 'named', originalFilename: '2024-02-01 Invoice.pdf', status: 'completed', proposedFilename: '2024-02-01 Invoice.pdf', filedName: '2024-02-01 Invoice.pdf', reason: 'This document already had this name, so nothing was renamed.' },
+    ] });
+    const openItem = vi.fn(async () => undefined);
+    const revealItem = vi.fn(async () => undefined);
+    render(<App bridge={{ ...base, openItem, revealItem }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
+
+    // The table names what each file is called now.
+    expect(await screen.findByRole('row', { name: /Completed lease\.pdf/ })).toHaveTextContent('2024-01-22 Lease Agreement (2).pdf');
+    expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).toHaveTextContent('Kept original');
+    expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.docx');
+
+    selectRow(screen.getByRole('row', { name: /Completed lease\.pdf/ }));
+    const inspector = screen.getByRole('complementary', { name: 'Review item' });
+    expect(within(inspector).getByRole('heading', { level: 2 })).toHaveTextContent('Filed document');
+    expect(within(inspector).getByText('Original name')).toBeVisible();
+    expect(within(inspector).queryByText('Current name')).not.toBeInTheDocument();
+    expect(within(inspector).getByText(/^Renamed to/)).toHaveTextContent('Renamed to 2024-01-22 Lease Agreement (2).pdf');
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Show in folder' }));
+    await waitFor(() => expect(openItem).toHaveBeenCalledWith('filed'));
+    expect(revealItem).toHaveBeenCalledWith('filed');
+    expect(within(inspector).getByRole('button', { name: 'Undo' })).toBeEnabled();
+
+    selectRow(screen.getByRole('row', { name: /Board minutes\.docx/ }));
+    await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
+    expect(inspector).not.toHaveTextContent('Renamed to');
+    expect(within(inspector).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+
+    // A settled item's reason is a note about what happened, not a reason it waits.
+    selectRow(screen.getByRole('row', { name: /2024-02-01 Invoice\.pdf/ }));
+    await waitFor(() => expect(within(inspector).getByRole('heading', { name: 'Note' })).toBeVisible());
+    expect(within(inspector).queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
+  });
+
+  // The backend on this branch sends neither filedName nor keptOriginal, and
+  // keeps the unapplied proposal on a kept original. The fallback to that
+  // proposal said "Renamed to" a name the file never had.
+  it('tells a kept original from a rename before the backend reports filings', async () => {
+    render(<App bridge={createInMemoryBridge({ items: [
+      { id: 'filed', originalFilename: 'Scan 0401.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', undoable: true },
+      { id: 'kept', originalFilename: 'Scan 0402.pdf', status: 'completed', proposedFilename: '2024-05-07 Board Meeting Minutes.pdf', undoable: false },
+    ] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
+
+    expect(await screen.findByRole('row', { name: /Scan 0401\.pdf/ })).toHaveTextContent('2024-01-22 Lease Agreement.pdf');
+    expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).toHaveTextContent('Kept original');
+    expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.pdf');
+
+    selectRow(screen.getByRole('row', { name: /Scan 0401\.pdf/ }));
+    const inspector = screen.getByRole('complementary', { name: 'Review item' });
+    await waitFor(() => expect(inspector).toHaveTextContent('Renamed to 2024-01-22 Lease Agreement.pdf'));
+    selectRow(screen.getByRole('row', { name: /Scan 0402\.pdf/ }));
+    await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
+    expect(inspector).not.toHaveTextContent('Renamed to');
+  });
+
+  it('says plainly when the document is no longer where Intern saw it', async () => {
+    const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), openItem }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('It may have been moved, renamed, or deleted outside Intern.');
+    // Opening is not a decision: the item is still there to decide.
+    expect(screen.getByRole('button', { name: /Approve & rename/i })).toBeEnabled();
+  });
+
+  it('sends an ordinary review item back to be analyzed again, and it returns for review', async () => {
+    const bridge = createInMemoryBridge({ liveEvents: true, analysisDelayMs: 20 });
+    const reanalyze = vi.spyOn(bridge, 'reanalyze');
+    const retry = vi.spyOn(bridge, 'retry');
+    render(<App bridge={bridge} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'More review actions' }));
+    expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze again' }));
+
+    await waitFor(() => expect(reanalyze).toHaveBeenCalledWith('lease'));
+    expect(retry).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('Waiting'));
+    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('Needs review'));
+  });
+
   // The description is half of what Intern produces, and it used to be rendered
   // only while an item was still ready or in review. Applying a rename made the
   // item `completed`, which hid the sentence for good - so the fact describing
   // the document disappeared exactly when the document was filed.
   it('still shows the description after a file has been renamed', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Completed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
     selectRow(await screen.findByRole('row', { name: /Completed lease.pdf/i }));
 
     const inspector = screen.getByRole('complementary', { name: 'Review item' });
@@ -50,10 +312,10 @@ describe('review actions', () => {
     render(<App bridge={bridge} />);
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
-    fireEvent.change(filename, { target: { value: 'My local draft.pdf' } });
+    fireEvent.change(filename, { target: { value: 'My local draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
-    await waitFor(() => expect(filename).toHaveValue('My local draft.pdf'));
+    await waitFor(() => expect(filename).toHaveValue('My local draft'));
   });
 
   it('traps keyboard focus in settings and restores it to the invoking control', async () => {
@@ -372,15 +634,24 @@ describe('review actions', () => {
       .toHaveTextContent('https://z-brenner.github.io/intern/guide.html');
   });
 
-  it('moves Keep original to Completed and lets the user undo it', async () => {
+  // Keeping the original name renames nothing, so the backend has no rename
+  // to undo and refuses one. The in-memory bridge used to offer it anyway.
+  it('moves Keep original to Completed without offering an undo the backend would refuse', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Keep original/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
 
-    expect((await bridge.listItems()).find((item) => item.id === 'lease')?.status).toBe('review');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect((await bridge.listItems()).find((item) => item.id === 'lease')).toMatchObject({
+      status: 'completed',
+      keptOriginal: true,
+      undoable: false,
+      // The proposal stays, unapplied, as the backend leaves it.
+      proposedFilename: '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf',
+    });
+    await expect(bridge.undo('lease')).rejects.toMatchObject({ code: 'STATE_CONFLICT' });
   });
 });

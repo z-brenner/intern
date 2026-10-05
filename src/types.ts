@@ -1,18 +1,49 @@
 export type QueueStatus = 'ready' | 'review' | 'processing' | 'waiting' | 'completed' | 'failed';
 export type QueueView = 'queue' | 'review' | 'completed';
+/** What a processing document is doing: reading its text, proposing a name, or being renamed. */
+export type ProcessingStage = 'reading' | 'naming' | 'filing';
 
 export interface QueueItem {
   id: string;
   originalFilename: string;
   status: QueueStatus;
+  stage?: ProcessingStage;
   proposedFilename?: string;
   confidence?: number;
   description?: string;
   evidence?: { date?: string; type?: string; parties?: string };
   reason?: string;
+  /**
+   * The backend's code for why the item is in review or failed, kept beside
+   * the humanized `reason`: which actions the backend accepts depends on it
+   * (only some review codes can be retried), and the sentence cannot say.
+   */
+  errorCode?: string;
+  /** The name the document was filed under, which can differ from the proposal (a " (2)" suffix, a layout folder). */
+  filedName?: string;
+  /** Where the filed document is, for showing it in its folder. */
+  filedPath?: string;
+  /** Completed without a rename: the document kept the name it arrived with. */
+  keptOriginal?: boolean;
+  /**
+   * A rename stopped part-way and its files need checking: "Check again" is
+   * what moves it on. Keep, cancel and Analyze again are refused until then,
+   * and removing it needs the person to say they sorted the files out
+   * themselves. Approving is accepted, because the backend checks the files
+   * first: it approves when the rename turns out never to have happened, and
+   * when it had finished, takes only the name that rename filed.
+   */
+  parked?: boolean;
   progress?: number;
   cancelable?: boolean;
   undoable?: boolean;
+  /**
+   * A ready item whose name a person has already approved. While the queue
+   * is busy with another document the backend keeps the approval and files
+   * it between documents, so the item stays ready: decided, and waiting only
+   * for the queue.
+   */
+  approved?: boolean;
   proposalRevision?: string;
   /**
    * A date the model proposed that Intern could not find written in the

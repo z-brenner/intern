@@ -248,7 +248,7 @@ const ready: QueueItem = {
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply rename' }));
 
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Rename applied.'));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed agreement.pdf.'));
     expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
     expect(await screen.findByRole('alert', { name: 'Queue connection error' })).toHaveTextContent('Queue database is busy.');
   });

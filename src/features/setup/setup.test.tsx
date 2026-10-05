@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import type { ExistingModelFiles, SelectionBoundary } from '../../lib/bridge';
@@ -30,10 +30,46 @@ describe('setup and queue controls', () => {
     expect(screen.queryByRole('button', { name: /Download model/i })).not.toBeInTheDocument();
   });
 
-  it('reports exact local model download bytes', async () => {
+  // Readable sizes and a percentage, with the exact count kept for support.
+  // "123,456,789 of 3,221,225,472 bytes" said neither how far along nor how long.
+  it('reports local model download progress in readable sizes, with exact bytes on hand', async () => {
     render(<App bridge={createInMemoryBridge({ setup: { state: 'downloading', downloadedBytes: 123_456_789, totalBytes: 3_221_225_472 } })} />);
 
-    expect(await screen.findByText('123,456,789 of 3,221,225,472 bytes')).toBeVisible();
+    const progress = await screen.findByText('118 MiB of 3.00 GiB · 3%');
+    expect(progress).toBeVisible();
+    expect(progress).toHaveAttribute('title', '123,456,789 of 3,221,225,472 bytes');
+  });
+
+  it('quotes only what has arrived while the total is not yet known', async () => {
+    render(<App bridge={createInMemoryBridge({ setup: { state: 'downloading', downloadedBytes: 2_097_152, totalBytes: 0 } })} />);
+
+    const progress = await screen.findByText('2 MiB');
+    expect(progress).toHaveAttribute('title', '2,097,152 bytes');
+  });
+
+  it('adds the time left once the download has been moving for a few seconds', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const total = PINNED_MODEL_BYTES;
+      const MiB = 1024 ** 2;
+      let setup: SetupState = { state: 'downloading', downloadedBytes: 363 * MiB, totalBytes: total };
+      let listener!: (next: SetupState) => void;
+      const bridge = { ...createInMemoryBridge(), getSetup: async () => ({ ...setup }), subscribeSetup: async (next: typeof listener) => { listener = next; return () => {}; } };
+      vi.setSystemTime(0);
+      render(<App bridge={bridge} />);
+      expect(await screen.findByText('363 MiB of 1.19 GiB · 29%')).toBeVisible();
+
+      // Three megabytes a second, by the samples, with 828 MiB still to come.
+      for (const [at, mib] of [[5_000, 378], [10_000, 393]] as const) {
+        vi.setSystemTime(at);
+        setup = { ...setup, downloadedBytes: mib * MiB };
+        act(() => listener({ ...setup }));
+      }
+
+      expect(await screen.findByText('393 MiB of 1.19 GiB · 32% · about 5 min left')).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('quotes the download size the manifest will actually fetch, not a hardcoded one', async () => {
@@ -73,7 +109,8 @@ describe('setup and queue controls', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Pause queue' }));
     expect(await screen.findByRole('button', { name: 'Resume queue' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Resume queue' }));
-    expect(await screen.findByText('Processing (0%)')).toBeVisible();
+    expect(await screen.findByRole('row', { name: /Q1 Financials/ })).toHaveTextContent('Reading document…');
+    expect(screen.queryByText(/\(0%\)/)).not.toBeInTheDocument();
   });
 
   it('keeps the queue inaccessible after local setup failure', async () => {
@@ -89,8 +126,8 @@ describe('setup and queue controls', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Download model' }));
 
     expect(await screen.findByRole('button', { name: 'Downloading model…' })).toBeDisabled();
-    expect(await screen.findByText('0 of 300 bytes')).toBeVisible();
-    await waitFor(() => expect(screen.getByText('100 of 300 bytes')).toBeVisible(), { timeout: 1_200 });
+    expect(await screen.findByText('0 bytes of 300 bytes · 0%')).toBeVisible();
+    await waitFor(() => expect(screen.getByText('100 bytes of 300 bytes · 33%')).toBeVisible(), { timeout: 1_200 });
   });
 
   it('cancels an active setup and offers resume without losing progress', async () => {
@@ -109,7 +146,7 @@ describe('setup and queue controls', () => {
     fireEvent.click(cancel);
 
     expect(await screen.findByRole('button', { name: 'Resume download' })).toBeEnabled();
-    expect(screen.getByText('120 of 300 bytes')).toBeVisible();
+    expect(screen.getByText('120 bytes of 300 bytes · 40%')).toBeVisible();
     expect(screen.getByRole('status', { name: 'Setup status' })).toHaveTextContent(/progress was saved/i);
     expect(setupCancel).toHaveBeenCalledOnce();
   });

@@ -79,6 +79,31 @@ describe('queue synchronization', () => {
     expect(result.current.items.map((entry) => entry.status)).toEqual(['processing', 'processing', 'ready', 'review', 'completed', 'failed']);
   });
 
+  // The worker reports `extracting` while it reads; that used to be thrown
+  // away and the row went on saying nothing about what it was doing.
+  it('takes the stage from progress events and drops a figure from an earlier stage', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [item] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    const { result } = renderHook(() => useQueue(bridge));
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    const current = () => result.current.items[0];
+
+    act(() => listener({ type: 'progress', itemId: item.id, stage: 'extracting' }));
+    expect(current()).toMatchObject({ status: 'processing', stage: 'reading' });
+    act(() => listener({ type: 'progress', itemId: item.id, stage: 'ocr', progress: 40 }));
+    expect(current()).toMatchObject({ stage: 'reading', progress: 40 });
+    // A stage that names no stage leaves the last one, and its figure, alone.
+    act(() => listener({ type: 'progress', itemId: item.id, stage: 'cancel_requested' }));
+    expect(current()).toMatchObject({ stage: 'reading', progress: 40 });
+    // Reading's 40% says nothing about naming.
+    act(() => listener({ type: 'progress', itemId: item.id, stage: 'analyzing' }));
+    expect(current().stage).toBe('naming');
+    expect(current()).not.toHaveProperty('progress');
+  });
+
   it('ignores events and results from a replaced bridge', async () => {
     let oldListener!: (event: QueueBridgeEvent) => void;
     const pending = deferred<QueueItem[]>();

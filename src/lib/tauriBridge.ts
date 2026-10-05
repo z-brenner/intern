@@ -3,7 +3,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 // Types only: the plugin itself is still imported lazily, below.
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
@@ -77,12 +77,19 @@ interface QueueItemDto {
   errorCode?: string;
   progress?: number;
   undoable?: boolean;
+  approved?: boolean;
   proposalRevision?: string | number;
   suggestedDate?: string;
   datesInDocument?: string[];
   houseRules?: HouseRule[];
   nearDuplicateOf?: string;
   fileModifiedDate?: string;
+  // From the receipt the backend keeps for each filing (WP-07). An older
+  // backend omits them, and the window falls back to the proposal.
+  filedPath?: string | null;
+  filedName?: string | null;
+  keptOriginal?: boolean;
+  parked?: boolean;
   omittedParties?: string[];
 }
 
@@ -122,8 +129,12 @@ export interface SetupEventSource {
   subscribeSetup(listener: (state: SetupState) => void): Promise<() => void>;
 }
 
+/** Whether files are being dragged over the window, and how many, for the drop overlay. */
+export interface DragState { dragging: boolean; count: number }
+
 export interface TauriSelectionBoundary extends SelectionBoundary {
   subscribeDrops(listener: (selection: SelectionResult) => void): Promise<() => void>;
+  subscribeDragState?(listener: (state: DragState) => void): Promise<() => void>;
 }
 
 export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource, LaunchReportSource {
@@ -153,7 +164,15 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   resumeQueue(): Promise<void> { return this.transport.invoke('queue_resume'); }
   cancel(id: string): Promise<void> { return this.transport.invoke('queue_cancel', { id }); }
   retry(id: string): Promise<void> { return this.transport.invoke('queue_retry', { id }); }
-  remove(id: string): Promise<void> { return this.transport.invoke('queue_remove', { id }); }
+  reanalyze(id: string): Promise<void> { return this.transport.invoke('queue_reanalyze', { id }); }
+  // Always sent, false unless the person said so: a backend from before the
+  // confirmation existed ignores the extra argument, and one after it reads
+  // a missing value as "not confirmed" anyway.
+  remove(id: string, options?: { confirmed?: boolean }): Promise<void> {
+    return this.transport.invoke('queue_remove', { id, confirmed: options?.confirmed === true });
+  }
+  openItem(id: string): Promise<void> { return this.transport.invoke('document_open', { id }); }
+  revealItem(id: string): Promise<void> { return this.transport.invoke('document_reveal', { id }); }
 
   approve(id: string, filename: string, description: string): Promise<void> {
     return this.transport.invoke('proposal_approve', { id, filename, description });
@@ -473,9 +492,15 @@ export function createTauriSelectionBoundary(transport: TauriTransport = default
       }
       return { files: selections(paths) };
     },
+    // The raw window event, not Webview.onDragDropEvent: the runtime sends
+    // `{ paths, position }` and nothing else. The `type: 'drop'` this used to
+    // insist on is added only by that JS wrapper, which Intern does not use, so
+    // every desktop drop was silently thrown away. A folder is passed on as a
+    // path like any file; queue_add_files expands directories itself.
     subscribeDrops: async (listener) => {
-      const stop = await transport.listen<{ type?: string; paths?: unknown }>('tauri://drag-drop', ({ payload }) => {
-        if (payload.type === 'drop') listener({ files: selections(stringPaths(payload.paths)) });
+      const stop = await transport.listen<{ paths?: unknown } | null>('tauri://drag-drop', ({ payload }) => {
+        const paths = stringPaths(payload?.paths);
+        if (paths.length) listener({ files: selections(paths) });
       });
       let active = true;
       return () => {
@@ -484,11 +509,60 @@ export function createTauriSelectionBoundary(transport: TauriTransport = default
         stop();
       };
     },
+    // Only drag-enter carries the paths, so it alone decides whether a drag is
+    // something Intern can take: dragged text arrives with none, and offering
+    // "Drop to add 0 files" for it would promise a drop that is then ignored.
+    // A drop ends the drag as surely as a leave does - the runtime sends no
+    // leave after it. drag-over is not listened to: it carries only a
+    // position, fires continuously, and one arriving after the drop would put
+    // the overlay back up with nothing left to take it down.
+    subscribeDragState: async (listener) => {
+      let dragging = false;
+      const report = (count: number) => {
+        const next = count > 0;
+        if (!next && !dragging) return;
+        dragging = next;
+        listener({ dragging, count });
+      };
+      const stops: Array<() => void> = [];
+      try {
+        stops.push(await transport.listen<{ paths?: unknown } | null>('tauri://drag-enter', ({ payload }) => report(stringPaths(payload?.paths).length)));
+        stops.push(await transport.listen<unknown>('tauri://drag-leave', () => report(0)));
+        stops.push(await transport.listen<unknown>('tauri://drag-drop', () => report(0)));
+      } catch (error) {
+        stops.forEach((stop) => stop());
+        throw error;
+      }
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        stops.forEach((stop) => stop());
+      };
+    },
   };
 }
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
+/**
+ * What a processing document is doing, from either vocabulary the backend
+ * speaks: a row's status (extracting, analyzing, applying) or a progress
+ * event's stage (the worker reports `extracting`; `reading` and `ocr` are
+ * accepted too). Anything else - a cancel being requested, the worker shutting
+ * down - says nothing about the stage, so the one already shown stands.
+ */
+export function processingStage(name: string): ProcessingStage | undefined {
+  switch (name) {
+    case 'extracting':
+    case 'reading':
+    case 'ocr': return 'reading';
+    case 'analyzing': return 'naming';
+    case 'applying': return 'filing';
+  }
+  return undefined;
 }
 
 // Fresh arrays and plain numbers, whatever arrived: the report is shown, and
@@ -504,10 +578,15 @@ function normalizeAddReport(report: AddReportDto | undefined): AddReport {
 function normalizeItem(item: QueueItemDto): QueueItem {
   const status = normalizeStatus(item.status);
   const waiting = status === 'waiting';
+  // The backend has three working statuses and the queue used to fold them
+  // into one "Processing (0%)": no figure ever arrives, so every document read
+  // as stalled at nothing. The stage is the honest part of what it knows.
+  const stage = status === 'processing' ? processingStage(item.status) : undefined;
   return {
     id: String(item.id),
     originalFilename: item.originalFilename,
     status,
+    ...(stage ? { stage } : {}),
     ...(waiting ? {} : {
       ...(item.proposedFilename === undefined ? {} : { proposedFilename: item.proposedFilename }),
       ...(item.confidence === undefined ? {} : { confidence: item.confidence }),
@@ -517,9 +596,17 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.reason === undefined && item.errorCode === undefined
       ? {}
       : { reason: humanizeReason(item.reason ?? item.errorCode ?? '') }),
+    // The sentence above is for people; the code is what decides which
+    // actions the backend will accept, so it is kept as sent.
+    ...(item.errorCode ? { errorCode: item.errorCode } : {}),
+    ...(typeof item.filedName === 'string' && item.filedName ? { filedName: item.filedName } : {}),
+    ...(typeof item.filedPath === 'string' && item.filedPath ? { filedPath: item.filedPath } : {}),
+    ...(item.keptOriginal === undefined ? {} : { keptOriginal: item.keptOriginal }),
+    ...(item.parked === undefined ? {} : { parked: item.parked }),
     ...(item.progress === undefined ? {} : { progress: item.progress }),
     ...(status === 'processing' ? { cancelable: item.status !== 'applying' } : {}),
     ...(item.undoable === undefined ? {} : { undoable: item.undoable }),
+    ...(status === 'ready' && item.approved === true ? { approved: true } : {}),
     ...(item.proposalRevision === undefined ? {} : { proposalRevision: String(item.proposalRevision) }),
     ...(item.suggestedDate === undefined ? {} : { suggestedDate: item.suggestedDate }),
     ...(item.datesInDocument?.length ? { datesInDocument: [...item.datesInDocument] } : {}),

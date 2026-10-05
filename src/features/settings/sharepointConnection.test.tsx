@@ -425,6 +425,8 @@ describe('SharePoint connection in Settings', () => {
     expect(screen.queryByLabelText('Intake folder')).not.toBeInTheDocument();
   });
 
+  // A failed read is not an answer: the build may well carry the
+  // deployment, so the Microsoft panel stays and asks the backend itself.
   it('keeps the manual controls when the onboarding status cannot be read', async () => {
     const bridge = managedBridge({ getOnboarding: vi.fn(async () => { throw { code: 'ONBOARDING_STATE_UNREADABLE', message: 'corrupt' }; }) });
     renderDialog(bridge);
@@ -435,7 +437,7 @@ describe('SharePoint connection in Settings', () => {
     expect(screen.queryByRole('region', { name: 'SharePoint connection' })).not.toBeInTheDocument();
   });
 
-  it('leaves Settings unchanged when this build has no SharePoint deployment', async () => {
+  it('keeps the manual settings, without Microsoft verification, when this build has no SharePoint deployment', async () => {
     const base = createInMemoryBridge();
     const getSharePointSetup = vi.fn(base.getSharePointSetup);
     const getOnboarding = vi.fn(base.getOnboarding);
@@ -448,7 +450,7 @@ describe('SharePoint connection in Settings', () => {
     expect(screen.getByLabelText('Intake folder')).toBeVisible();
     expect(screen.getByLabelText("This machine's name")).toBeVisible();
     expect(screen.getByLabelText('Also process documents uploaded by others')).toBeVisible();
-    expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
     expect(getSharePointSetup).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("This machine's name"), { target: { value: 'Reception' } });
@@ -456,14 +458,62 @@ describe('SharePoint connection in Settings', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ machineLabel: 'Reception' })));
   });
 
+  // The deployment-unavailable error is what every shipping build reports.
+  // Whether the build said so (no deployment) or the read failed and the
+  // panel asked for itself, Settings must not show a broken Microsoft panel
+  // that calls the installed app a browser preview.
+  it('hides the Microsoft panel when the deployment is unavailable', async () => {
+    const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
+    const microsoftIntakeStatus = vi.fn(async (): Promise<MicrosoftIntakeStatus> => ({ connected: false, account: null, binding: null, documents: [], error: unavailable }));
+    const settings = { ...managedSettings, intakeLocalOnly: false };
+    const unmanaged = { currentVersion: 1, completedVersion: 1, required: false, sharePointAvailable: false };
+
+    const view = render(<SettingsDialog settings={settings} bridge={managedBridge({ getOnboarding: vi.fn(async () => unmanaged), microsoftIntakeStatus })} onSave={vi.fn(async () => {})} onClose={() => {}} onCheckForUpdate={async () => ({ state: 'unsupported' })} onInstallUpdate={async () => {}} />);
+    expect(await screen.findByLabelText('Intake folder')).toBeVisible();
+    await act(async () => {});
+    expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/deployment configuration/i)).not.toBeInTheDocument();
+    view.unmount();
+
+    renderDialog(managedBridge({ getOnboarding: vi.fn(async () => { throw new Error('unreadable'); }), microsoftIntakeStatus }), settings);
+    expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent('Microsoft upload verification is not part of this build.');
+    expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/deployment configuration/i)).not.toBeInTheDocument();
+  });
+
+  // Focus moves when `managed` lands. It used to move in a passive effect,
+  // which React flushes in a later scheduler task, while findByRole resolves
+  // on the DOM mutation of the commit itself: under a loaded run the
+  // assertions could look before the effect had run. The product now moves
+  // focus in a layout effect, inside that commit; the test also waits rather
+  // than looking once.
   it('moves focus into the dialog when the manual fields it started on are replaced', async () => {
     renderDialog(managedBridge());
-    await screen.findByRole('region', { name: 'SharePoint connection' });
-    // Focus moves in an effect that runs after the card is committed. On a
-    // loaded machine React's scheduler yields between the two and the card
-    // is found in that gap, with focus still on the page; wait for the effect.
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Arrange filed documents')));
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(document.activeElement as HTMLElement);
+    await screen.findByRole('region', { name: 'SharePoint connection' }, { timeout: 5_000 });
+    await waitFor(() => {
+      const active = document.activeElement as HTMLElement;
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(active);
+      expect(screen.getByLabelText('Arrange filed documents')).toHaveFocus();
+    });
+  });
+
+  // The layout effect is the product half of the fix: by the time the commit
+  // that inserts the region has finished, focus has already moved.
+  it('has moved focus by the time the managed region is in the document', async () => {
+    renderDialog(managedBridge());
+    const seen: Array<Element | null> = [];
+    const observer = new MutationObserver(() => {
+      if (!seen.length && document.querySelector('section.sharepoint-connection')) seen.push(document.activeElement);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      await screen.findByRole('region', { name: 'SharePoint connection' }, { timeout: 5_000 });
+    } finally {
+      observer.disconnect();
+    }
+    expect(seen[0]).toBe(screen.getByLabelText('Arrange filed documents'));
   });
 
   it('lets the keyboard reach the support details disclosure', async () => {

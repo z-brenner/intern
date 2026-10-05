@@ -39,6 +39,20 @@ test('an older response cannot overwrite a newer queue snapshot', async () => {
   expect(snapshots).toEqual([['completed']]);
 });
 
+// A caller that has just run a command needs the queue as it is after it,
+// even when a queue event started a newer read in the meantime.
+test('every read resolves with what it read, published or not', async () => {
+  const { reader, requests, snapshots } = harness();
+  const own = reader.refresh();
+  const background = reader.refresh();
+  requests[0].resolve(['completed']);
+  expect(await own).toEqual(['completed']);
+  expect(snapshots).toEqual([]);
+  requests[1].resolve(['completed', 'waiting']);
+  expect(await background).toEqual(['completed', 'waiting']);
+  expect(snapshots).toEqual([['completed', 'waiting']]);
+});
+
 test('an obsolete snapshot is ignored even while the latest read is pending', async () => {
   const { reader, requests, snapshots } = harness();
   const older = reader.refresh();

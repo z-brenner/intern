@@ -106,6 +106,11 @@ pub struct QueueItemDto {
     reason: Option<String>,
     error_code: Option<String>,
     undoable: bool,
+    /// A ready item whose name a person has already approved. An approval
+    /// that arrives while the queue is busy with another document is kept
+    /// and filed between documents, so the item stays ready - decided, and
+    /// waiting only for the queue, which the status alone cannot say.
+    approved: bool,
     proposal_revision: Option<String>,
     reconciliation: Option<ReconciliationDto>,
     /// A date the model proposed that validation withheld from the filename,
@@ -2838,6 +2843,139 @@ pub async fn operation_undo(id: String, state: State<'_, AppState>) -> Result<()
     Ok(())
 }
 
+/// Opens the document a queue item names in the program the system uses for
+/// it, so a reviewer can read the page they are being asked to name.
+///
+/// The window sends an id and never a path: which file that is - the filed
+/// copy or the one that arrived - is decided here, from the queue's own
+/// record. Blocking: the document can be on a network share, and the shell
+/// hand-off waits on it.
+#[tauri::command]
+pub async fn document_open(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
+        let items = pipeline.list()?;
+        let path = document_to_open(items.iter().find(|item| item.id == id))?;
+        tauri_plugin_opener::open_path(shell_path(&path), None::<&str>).map_err(|_| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: "the system could not open the document".into(),
+        })
+    })
+    .await
+    .map_err(|_| background_task_failed("open document"))?
+}
+
+/// Shows the document a queue item names, selected in its folder. Same id-only
+/// contract as `document_open`; nothing is run, so any document the queue
+/// holds can be shown.
+#[tauri::command]
+pub async fn document_reveal(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
+        let items = pipeline.list()?;
+        let path = locate_document(items.iter().find(|item| item.id == id))?;
+        tauri_plugin_opener::reveal_item_in_dir(&path).map_err(|_| CommandError {
+            code: "OPEN_FAILED".into(),
+            message: "the system could not show the document in its folder".into(),
+        })
+    })
+    .await
+    .map_err(|_| background_task_failed("show document"))?
+}
+
+/// Where a queue item's document is now: the filed copy once a rename has
+/// finished, and the file as it arrived for everything else - including a
+/// document kept under its own name, which never moved. `None` while an
+/// operation is moving the file, when neither name can be trusted.
+///
+/// The filing is the item's completed apply (`filed_receipt`), not its newest
+/// receipt: an undo refused and rolled back since sits on top of it having
+/// moved nothing, and the document is still where the apply put it.
+fn document_path(item: &PipelineItem) -> Option<PathBuf> {
+    match item.status {
+        QueueStatus::Applying => None,
+        QueueStatus::Completed => Some(item.filed_receipt.as_ref().map_or_else(
+            || item.source_path.clone(),
+            |receipt| receipt.destination.clone(),
+        )),
+        _ => Some(item.source_path.clone()),
+    }
+}
+
+/// The document an item names, provided it is on disk now. A file moved or
+/// deleted behind Intern's back is reported as such rather than handed to the
+/// shell, which would show its own, less helpful, error.
+fn locate_document(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError> {
+    let item = item.ok_or_else(|| CommandError {
+        code: "ITEM_NOT_FOUND".into(),
+        message: "queue item does not exist".into(),
+    })?;
+    document_path(item)
+        .filter(|path| path.is_file())
+        .ok_or_else(|| CommandError {
+            code: "PATH_UNAVAILABLE".into(),
+            message: "the document is not where Intern last saw it".into(),
+        })
+}
+
+/// The spelling of a queue path to hand to the shell. Queue paths are stored
+/// canonical, which on Windows is the verbatim `\\?\C:\...` form: every file
+/// API takes it, but `open_path` puts a file's path into ShellExecuteExW as it
+/// is, the shell namespace does not reliably accept the prefix, and the
+/// viewer it starts receives it through `"%1"` unchanged. Both libraries
+/// simplify the path on their other shell routes (Show in folder, a folder's
+/// Open); this does the same for a file, keeping the verbatim form only where
+/// the plain one would not name it - too long, or a trailing dot or space.
+fn shell_path(path: &Path) -> PathBuf {
+    PathBuf::from(display_path(path))
+}
+
+/// The document Open hands to its program for an item. One held because
+/// Intern could not verify who uploaded it is not opened from here: the hold
+/// means nobody vouched for the file, and Open would start whatever program
+/// handles it from Intern's own window. Show in folder still finds it.
+fn document_to_open(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError> {
+    if item.is_some_and(|item| {
+        item.status == QueueStatus::NeedsReview
+            && item.error_code == Some(intern_core::ErrorCode::UploaderUnverified)
+    }) {
+        return Err(CommandError {
+            code: "UPLOADER_UNVERIFIED".into(),
+            message:
+                "a document from an uploader Intern could not verify is not opened from Intern"
+                    .into(),
+        });
+    }
+    openable_document(locate_document(item)?)
+}
+
+/// Opening hands the file to whatever program the system associates with it,
+/// so only the document formats Intern itself reads are handed over - never
+/// an executable, a shortcut or a script. The queue only ever takes those, so
+/// this refuses nothing in practice; it is here so that no future path into
+/// the queue can make Open launch a program file. A format Intern reads can
+/// still carry macros (a .pptm presentation): Office's own macro settings
+/// govern those, as when the file is opened from Explorer, and a document
+/// from an unverified uploader is not opened at all (`document_to_open`).
+fn openable_document(path: PathBuf) -> Result<PathBuf, CommandError> {
+    let supported = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        });
+    if supported {
+        Ok(path)
+    } else {
+        Err(CommandError {
+            code: "UNSUPPORTED_FORMAT".into(),
+            message: "Intern opens only the document formats it reads".into(),
+        })
+    }
+}
+
 /// The settings as the interface should show them: folders in their readable
 /// spelling. Storage keeps the canonical form (on Windows, the verbatim
 /// `\\?\` prefix that long and oddly named paths need), and `settings_save`
@@ -3971,6 +4109,8 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
         // that was refused and rolled back used to take the Undo button away
         // from a document that was still filed.
         undoable: item.status == QueueStatus::Completed && item.filed_receipt.is_some(),
+        approved: item.status == QueueStatus::Ready
+            && proposal.is_some_and(|record| record.approved),
         proposal_revision: proposal.map(|record| record.revision.to_string()),
         reconciliation,
         suggested_date: proposal.and_then(|record| suggested_date(&record.analysis)),
@@ -5273,10 +5413,11 @@ mod queue_event_tests {
 #[cfg(test)]
 mod ipc_thread_tests {
     use super::{
-        cloud_roots, descriptions_backfill, filed_folder_create, history_clear, history_count,
-        history_export, history_list, hosted_model_test, house_rule_forget, house_rule_use,
-        inbox_folder_create, intake_status, operation_undo, proposal_keep_original, queue_cancel,
-        queue_list, queue_reanalyze, queue_remove, queue_retry, settings_save,
+        cloud_roots, descriptions_backfill, document_open, document_reveal, filed_folder_create,
+        history_clear, history_count, history_export, history_list, hosted_model_test,
+        house_rule_forget, house_rule_use, inbox_folder_create, intake_status, operation_undo,
+        proposal_keep_original, queue_cancel, queue_list, queue_reanalyze, queue_remove,
+        queue_retry, settings_save,
     };
 
     /// Accepts a command only if calling it returns a future. WebView2
@@ -5299,6 +5440,10 @@ mod ipc_thread_tests {
         leaves_the_ipc_thread_2(settings_save);
         // One file stat per reviewable item, on whatever the documents live on.
         leaves_the_ipc_thread(queue_list);
+        // Check a document that can be on a network share, then wait on the
+        // shell to take it.
+        leaves_the_ipc_thread_2(document_open);
+        leaves_the_ipc_thread_2(document_reveal);
     }
 
     #[test]
@@ -5334,6 +5479,231 @@ mod ipc_thread_tests {
         // Folders on whatever the person chose, a network share included.
         leaves_the_ipc_thread(filed_folder_create);
         leaves_the_ipc_thread(inbox_folder_create);
+    }
+}
+
+#[cfg(test)]
+mod document_path_tests {
+    use std::path::{Path, PathBuf};
+
+    use intern_core::{
+        ErrorCode, OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
+    };
+    use intern_queue::PipelineItem;
+
+    use super::{document_path, document_to_open, locate_document, openable_document, shell_path};
+
+    /// The one queue item this module's tests build field by field; the
+    /// others start from it. `filed` is the completed apply the item is filed
+    /// by, which is then also its newest receipt.
+    pub(super) fn item(status: QueueStatus, filed: Option<OperationReceipt>) -> PipelineItem {
+        PipelineItem {
+            id: 4,
+            source_path: PathBuf::from("/intake/scan.pdf"),
+            source_hash: "hash".into(),
+            status,
+            processing_failures: 0,
+            error_code: None,
+            proposal: None,
+            receipt: filed.clone(),
+            filed_receipt: filed,
+            unsettled_receipt: None,
+            duplicate_of: None,
+        }
+    }
+
+    fn receipt(
+        direction: OperationDirection,
+        stage: OperationStage,
+        source: &str,
+        destination: &str,
+    ) -> OperationReceipt {
+        OperationReceipt {
+            id: 9,
+            queue_item_id: 4,
+            direction,
+            source: PathBuf::from(source),
+            destination: PathBuf::from(destination),
+            temporary_path: None,
+            pre_operation_hash: "hash".into(),
+            post_operation_hash: Some("hash".into()),
+            kind: OperationKind::Rename,
+            stage,
+            source_exists: false,
+            destination_exists: true,
+            temporary_exists: false,
+        }
+    }
+
+    #[test]
+    fn document_path_prefers_filed_destination_for_completed() {
+        let filed = receipt(
+            OperationDirection::Apply,
+            OperationStage::Complete,
+            "/intake/scan.pdf",
+            "/filed/2024-03-01 Lease.pdf",
+        );
+        assert_eq!(
+            document_path(&item(QueueStatus::Completed, Some(filed.clone()))),
+            Some(PathBuf::from("/filed/2024-03-01 Lease.pdf"))
+        );
+
+        // Kept under its own name: nothing moved, so the document is where
+        // it arrived.
+        assert_eq!(
+            document_path(&item(QueueStatus::Completed, None)),
+            Some(PathBuf::from("/intake/scan.pdf"))
+        );
+        // An undo that rolled back left the filed copy in place: it is the
+        // newest receipt, and the apply under it still says where the
+        // document is.
+        let rolled_back_undo = receipt(
+            OperationDirection::Undo,
+            OperationStage::RolledBack,
+            "/filed/2024-03-01 Lease.pdf",
+            "/intake/scan.pdf",
+        );
+        assert_eq!(
+            document_path(&PipelineItem {
+                receipt: Some(rolled_back_undo),
+                ..item(QueueStatus::Completed, Some(filed.clone()))
+            }),
+            Some(PathBuf::from("/filed/2024-03-01 Lease.pdf"))
+        );
+        // A finished undo put it back, and the item waits in review with no
+        // filing behind it.
+        let undone = receipt(
+            OperationDirection::Undo,
+            OperationStage::Complete,
+            "/filed/2024-03-01 Lease.pdf",
+            "/intake/scan.pdf",
+        );
+        assert_eq!(
+            document_path(&PipelineItem {
+                receipt: Some(undone),
+                ..item(QueueStatus::NeedsReview, None)
+            }),
+            Some(PathBuf::from("/intake/scan.pdf"))
+        );
+
+        // Anything not yet filed is the source, whatever receipt it carries:
+        // a review item whose renamed copy could not replace the original
+        // still has the original where it was.
+        for status in [
+            QueueStatus::Queued,
+            QueueStatus::Extracting,
+            QueueStatus::Analyzing,
+            QueueStatus::Ready,
+            QueueStatus::NeedsReview,
+            QueueStatus::Failed,
+            QueueStatus::Canceled,
+        ] {
+            assert_eq!(
+                document_path(&item(status, Some(filed.clone()))),
+                Some(PathBuf::from("/intake/scan.pdf")),
+                "{status:?}"
+            );
+        }
+        // Mid-operation the file is between its two names.
+        assert_eq!(document_path(&item(QueueStatus::Applying, None)), None);
+    }
+
+    // Held because nobody could vouch for who uploaded it: Open would start
+    // its program from Intern's window. Show in folder still finds it.
+    #[test]
+    fn a_document_from_an_unverified_uploader_is_not_opened() {
+        let temp = std::env::temp_dir().join(format!("intern-unverified-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let present = temp.join("Invoice.pptm");
+        std::fs::write(&present, b"pptm").unwrap();
+        let mut held = item(QueueStatus::NeedsReview, None);
+        held.source_path = present.clone();
+        held.error_code = Some(ErrorCode::UploaderUnverified);
+        assert_eq!(
+            document_to_open(Some(&held)).unwrap_err().code,
+            "UPLOADER_UNVERIFIED"
+        );
+        assert_eq!(locate_document(Some(&held)).unwrap(), present);
+
+        // Any other review item, once verified, opens as before.
+        held.error_code = Some(ErrorCode::Duplicate);
+        assert_eq!(document_to_open(Some(&held)).unwrap(), present);
+        assert_eq!(document_to_open(None).unwrap_err().code, "ITEM_NOT_FOUND");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn the_shell_is_given_the_plain_spelling_of_a_verbatim_path() {
+        let shell = |path: &str| shell_path(Path::new(path));
+        assert_eq!(
+            shell(r"\\?\C:\Drop\scan.pdf"),
+            PathBuf::from(r"C:\Drop\scan.pdf")
+        );
+        assert_eq!(
+            shell(r"\\?\UNC\server\share\Filed\2024-03-01 Lease.pdf"),
+            PathBuf::from(r"\\server\share\Filed\2024-03-01 Lease.pdf")
+        );
+        // Without the prefix a trailing space or dot is dropped, which would
+        // name another file; such a path keeps it.
+        assert_eq!(
+            shell(r"\\?\C:\Drop\Old \scan.pdf"),
+            PathBuf::from(r"\\?\C:\Drop\Old \scan.pdf")
+        );
+        // A path that was never verbatim - every one outside Windows - is left alone.
+        assert_eq!(shell("/intake/scan.pdf"), PathBuf::from("/intake/scan.pdf"));
+    }
+
+    #[test]
+    fn a_document_is_located_only_when_it_is_on_disk() {
+        let error = locate_document(None).unwrap_err();
+        assert_eq!(error.code, "ITEM_NOT_FOUND");
+
+        let temp = std::env::temp_dir().join(format!("intern-document-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let present = temp.join("scan.pdf");
+        std::fs::write(&present, b"%PDF").unwrap();
+        let mut found = item(QueueStatus::NeedsReview, None);
+        found.source_path = present.clone();
+        found.error_code = Some(ErrorCode::Duplicate);
+        assert_eq!(locate_document(Some(&found)).unwrap(), present);
+
+        // Moved or deleted behind Intern's back, a directory where the file
+        // was, or mid-operation: none of them is handed to the shell.
+        found.source_path = temp.join("gone.pdf");
+        assert_eq!(
+            locate_document(Some(&found)).unwrap_err().code,
+            "PATH_UNAVAILABLE"
+        );
+        found.source_path = temp.clone();
+        assert_eq!(
+            locate_document(Some(&found)).unwrap_err().code,
+            "PATH_UNAVAILABLE"
+        );
+        found.source_path = present;
+        found.status = QueueStatus::Applying;
+        assert_eq!(
+            locate_document(Some(&found)).unwrap_err().code,
+            "PATH_UNAVAILABLE"
+        );
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn only_document_formats_are_handed_to_their_program() {
+        assert!(openable_document(PathBuf::from("/filed/2024-03-01 Lease.PDF")).is_ok());
+        assert!(openable_document(PathBuf::from("/filed/notes.md")).is_ok());
+        for refused in [
+            "/intake/setup.exe",
+            "/intake/link.lnk",
+            "/intake/script",
+            "/intake/.pdf",
+        ] {
+            assert_eq!(
+                openable_document(PathBuf::from(refused)).unwrap_err().code,
+                "UNSUPPORTED_FORMAT",
+                "{refused}"
+            );
+        }
     }
 }
 
@@ -7335,6 +7705,69 @@ mod file_date_tests {
         assert!(date == today || date == yesterday, "{date}");
         let _ = std::fs::remove_file(&temp);
         assert_eq!(file_modified_date(&temp), None);
+    }
+}
+
+#[cfg(test)]
+mod approval_dto_tests {
+    use intern_core::QueueStatus;
+    use intern_queue::{PipelineItem, ProposalRecord};
+
+    use super::queue_item_dto;
+
+    /// An item whose proposal is stored as the queue stores it - JSON, which
+    /// every later field must be able to read with its serde default.
+    fn item(status: QueueStatus, approved: bool) -> PipelineItem {
+        let proposal: ProposalRecord = serde_json::from_value(serde_json::json!({
+            "analysis": {
+                "filename": "2024-02-09 Invoice from Fabrikam Inc.pdf",
+                "description": "An invoice from Fabrikam Inc.",
+                "status": "ready",
+                "reviewReasons": [],
+                "proposal": {
+                    "document_type": "Invoice",
+                    "document_date": "2024-02-09",
+                    "date_role": null,
+                    "parties": ["Fabrikam Inc"],
+                    "party_relation": "from",
+                    "description": "An invoice from Fabrikam Inc.",
+                    "confidence": 0.9,
+                    "evidence": { "date": null, "document_type": null, "parties": [] }
+                },
+                "telemetry": {
+                    "sourceCharacters": 0, "digestCharacters": 0, "compressionRatio": 0.0,
+                    "distillMicros": 0, "inferenceMillis": 0
+                }
+            },
+            "status": "ready",
+            "filename": "2024-02-09 Invoice from Fabrikam Inc.pdf",
+            "description": "An invoice from Fabrikam Inc.",
+            "reasons": [],
+            "revision": 2,
+            "approved": approved
+        }))
+        .unwrap();
+        PipelineItem {
+            proposal: Some(proposal),
+            ..super::document_path_tests::item(status, None)
+        }
+    }
+
+    // The queue was busy with another document, so the approved name waits
+    // in the proposal and the item stays ready. Without the flag the window
+    // counted it as still to decide and review came back round to it.
+    #[test]
+    fn an_approval_waiting_for_the_queue_is_reported_as_decided() {
+        let dto = |status, approved| queue_item_dto(item(status, approved)).unwrap();
+        assert!(dto(QueueStatus::Ready, true).approved);
+        // Ready alone is a proposal still waiting for a person.
+        assert!(!dto(QueueStatus::Ready, false).approved);
+        // Once filed, or sent back, there is nothing left waiting on it.
+        for status in [QueueStatus::Completed, QueueStatus::NeedsReview] {
+            assert!(!dto(status, true).approved, "{status:?}");
+        }
+        let json = serde_json::to_value(dto(QueueStatus::Ready, true)).unwrap();
+        assert_eq!(json["approved"], serde_json::json!(true));
     }
 }
 

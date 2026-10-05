@@ -6,6 +6,7 @@ import { SUPPORTED_EXTENSIONS } from './formats';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
+  processingStage,
   type TauriEvent,
   type TauriTransport,
 } from './tauriBridge';
@@ -184,7 +185,7 @@ describe('TauriBridge', () => {
       { command: 'queue_resume', args: undefined },
       { command: 'queue_cancel', args: { id: '7' } },
       { command: 'queue_retry', args: { id: '7' } },
-      { command: 'queue_remove', args: { id: '7' } },
+      { command: 'queue_remove', args: { id: '7', confirmed: false } },
       { command: 'proposal_approve', args: { id: '7', filename: '2024-04-12 - Agreement.pdf', description: 'Agreement description.' } },
       { command: 'proposal_keep_original', args: { id: '7' } },
       { command: 'operation_undo', args: { id: '7' } },
@@ -208,6 +209,73 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  // The review menu, Open and Show in folder name an item by id and nothing
+  // else; which file that is stays the backend's decision.
+  it('reanalyze_open_reveal_invoke_expected_commands', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.reanalyze('7');
+    await bridge.openItem('7');
+    await bridge.revealItem('7');
+    await bridge.remove('8', { confirmed: true });
+    await bridge.remove('9', {});
+
+    expect(fake.calls).toEqual([
+      { command: 'queue_reanalyze', args: { id: '7' } },
+      { command: 'document_open', args: { id: '7' } },
+      { command: 'document_reveal', args: { id: '7' } },
+      { command: 'queue_remove', args: { id: '8', confirmed: true } },
+      { command: 'queue_remove', args: { id: '9', confirmed: false } },
+    ]);
+  });
+
+  // The humanized reason cannot say which review items the backend will
+  // retry; the code can, so it is kept beside the sentence.
+  it('normalize_keeps_error_code_and_filed_fields', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'low.pdf', status: 'needs_review', proposedFilename: '2024-01-02 Letter.pdf', reason: 'LOW_CONFIDENCE', errorCode: null },
+        { id: 2, originalFilename: 'copy.pdf', status: 'needs_review', reason: 'Duplicate of 2024 Filed.pdf', errorCode: 'DUPLICATE' },
+        { id: 3, originalFilename: 'scan.pdf', status: 'completed', proposedFilename: '2024-03-01 Lease.pdf', filedName: '2024-03-01 Lease (2).pdf', filedPath: 'C:\\Filed\\2024-03-01 Lease (2).pdf', keptOriginal: false, parked: false, undoable: true },
+        { id: 4, originalFilename: 'kept.pdf', status: 'completed', proposedFilename: '2024-03-02 Notice.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false },
+        { id: 5, originalFilename: 'stuck.pdf', status: 'needs_review', errorCode: 'RECONCILIATION_REQUIRED', parked: true },
+        // An older backend sends none of the filing fields.
+        { id: 6, originalFilename: 'old.pdf', status: 'completed', proposedFilename: '2024-03-03 Memo.pdf', undoable: true },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0]).not.toHaveProperty('errorCode');
+    expect(items[0].reason).toBe('The model reported low confidence in its own proposal.');
+    expect(items[1]).toMatchObject({ errorCode: 'DUPLICATE', reason: 'Duplicate of 2024 Filed.pdf' });
+    expect(items[2]).toMatchObject({ filedName: '2024-03-01 Lease (2).pdf', filedPath: 'C:\\Filed\\2024-03-01 Lease (2).pdf', keptOriginal: false, parked: false });
+    expect(items[3]).toMatchObject({ keptOriginal: true });
+    expect(items[3]).not.toHaveProperty('filedName');
+    expect(items[3]).not.toHaveProperty('filedPath');
+    expect(items[4]).toMatchObject({ status: 'review', errorCode: 'RECONCILIATION_REQUIRED', parked: true });
+    for (const field of ['filedName', 'filedPath', 'keptOriginal', 'parked']) expect(items[5]).not.toHaveProperty(field);
+  });
+
+  // An approval the queue was too busy to file stays ready; the flag is what
+  // says it is decided rather than still waiting for a person.
+  it('keeps the approved flag of a ready item waiting for the queue', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'approved.pdf', status: 'ready', proposedFilename: '2024-01-02 Letter.pdf', approved: true },
+        { id: 2, originalFilename: 'proposed.pdf', status: 'ready', proposedFilename: '2024-01-03 Letter.pdf', approved: false },
+        { id: 3, originalFilename: 'old.pdf', status: 'ready', proposedFilename: '2024-01-04 Letter.pdf' },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0]).toMatchObject({ status: 'ready', approved: true });
+    expect(items[1]).not.toHaveProperty('approved');
+    expect(items[2]).not.toHaveProperty('approved');
+  });
+
   it('keeps a history description only when the backend sent a sentence', async () => {
     const fake = fakeTransport({
       history_list: [
@@ -226,6 +294,36 @@ describe('TauriBridge', () => {
     const fake = fakeTransport({ cloud_roots: undefined });
 
     await expect(new TauriBridge(fake.transport).cloudRoots()).resolves.toEqual([]);
+  });
+
+  // The three working statuses used to collapse into one "Processing (0%)".
+  it('normalize maps backend status to stage', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'extracting.pdf', status: 'extracting' },
+        { id: 2, originalFilename: 'analyzing.pdf', status: 'analyzing' },
+        { id: 3, originalFilename: 'applying.pdf', status: 'applying' },
+        { id: 4, originalFilename: 'queued.pdf', status: 'queued' },
+        { id: 5, originalFilename: 'review.pdf', status: 'needs_review', proposedFilename: 'reviewed.pdf' },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items.map((item) => [item.status, item.stage])).toEqual([
+      ['processing', 'reading'],
+      ['processing', 'naming'],
+      ['processing', 'filing'],
+      ['waiting', undefined],
+      ['review', undefined],
+    ]);
+    expect(items[3]).not.toHaveProperty('stage');
+    expect(items[0]).not.toHaveProperty('progress');
+  });
+
+  it('names the stage from either the status or a progress event, and nothing else', () => {
+    expect(['extracting', 'reading', 'ocr', 'analyzing', 'applying'].map(processingStage)).toEqual(['reading', 'reading', 'reading', 'naming', 'filing']);
+    expect(['accepted', 'cancel_requested', 'shutdown', ''].map(processingStage)).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it('normalizes backend statuses and never exposes a proposal for waiting items', async () => {
@@ -569,7 +667,12 @@ describe('TauriBridge', () => {
     expect(fake.calls).toHaveLength(1);
   });
 
-  it('converts native drag-drop paths at the same selection boundary and unsubscribes', async () => {
+  // The shape the locked Tauri runtime actually emits: DragDropPayload is
+  // `{ paths, position }`. The test this replaces sent `{ type: 'drop', paths }`
+  // - a field only the unused Webview.onDragDropEvent wrapper adds - so it
+  // passed against a payload no desktop drop ever produced, while every real
+  // drop was filtered out.
+  it('drop listener accepts the real raw payload, folders included, and unsubscribes', async () => {
     const fake = fakeTransport();
     const selection = createTauriSelectionBoundary(fake.transport);
     const seen = vi.fn();
@@ -577,7 +680,7 @@ describe('TauriBridge', () => {
 
     fake.listeners.get('tauri://drag-drop')?.({
       event: 'tauri://drag-drop', id: 4,
-      payload: { type: 'drop', paths: ['C:\\Docs\\Dropped.pdf', 'C:\\Docs\\Folder'] },
+      payload: { paths: ['C:\\Docs\\Dropped.pdf', 'C:\\Docs\\Folder'], position: { x: 1, y: 2 } },
     });
 
     expect(seen).toHaveBeenCalledWith({ files: [
@@ -585,7 +688,67 @@ describe('TauriBridge', () => {
       { path: 'C:\\Docs\\Folder', displayName: 'Folder' },
     ] });
     unsubscribe();
+    unsubscribe();
     expect(fake.unlisten.get('tauri://drag-drop')).toHaveBeenCalledTimes(1);
+  });
+
+  it('payload without paths is ignored', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    await createTauriSelectionBoundary(fake.transport).subscribeDrops(seen);
+    const drop = (payload: unknown) => fake.listeners.get('tauri://drag-drop')?.({ event: 'tauri://drag-drop', id: 5, payload });
+
+    drop({ position: { x: 1, y: 2 } });
+    drop({ paths: [], position: { x: 1, y: 2 } });
+    drop({ paths: [42, null], position: { x: 1, y: 2 } });
+    drop(null);
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('drag state events map to overlay state', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    const unsubscribe = await createTauriSelectionBoundary(fake.transport).subscribeDragState!(seen);
+    const emit = (event: string, payload: unknown) => fake.listeners.get(event)?.({ event, id: 6, payload });
+
+    emit('tauri://drag-enter', { paths: ['C:\\Docs\\a.pdf', 'C:\\Docs\\b.pdf'], position: { x: 1, y: 2 } });
+    emit('tauri://drag-leave', null);
+    // Dragged text brings no paths, and a drop would be ignored, so nothing is offered.
+    emit('tauri://drag-enter', { paths: [], position: { x: 1, y: 2 } });
+    emit('tauri://drag-leave', null);
+    emit('tauri://drag-enter', { paths: ['C:\\Docs\\a.pdf'], position: { x: 1, y: 2 } });
+    // The runtime sends no leave after a drop; the drop itself ends the drag.
+    emit('tauri://drag-drop', { paths: ['C:\\Docs\\a.pdf'], position: { x: 1, y: 2 } });
+
+    expect(seen.mock.calls.map(([state]) => state)).toEqual([
+      { dragging: true, count: 2 },
+      { dragging: false, count: 0 },
+      { dragging: true, count: 1 },
+      { dragging: false, count: 0 },
+    ]);
+    unsubscribe();
+    unsubscribe();
+    for (const event of ['tauri://drag-enter', 'tauri://drag-leave', 'tauri://drag-drop']) {
+      expect(fake.unlisten.get(event)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('releases the drag listeners already registered when a later one fails', async () => {
+    const stops = new Map<string, ReturnType<typeof vi.fn>>();
+    const transport: TauriTransport = {
+      invoke: async <T>() => undefined as T,
+      listen: async (event) => {
+        if (event === 'tauri://drag-drop') throw new Error('drop listener failed');
+        const stop = vi.fn();
+        stops.set(event, stop);
+        return stop;
+      },
+    };
+
+    await expect(createTauriSelectionBoundary(transport).subscribeDragState!(vi.fn())).rejects.toThrow('drop listener failed');
+    expect(stops.get('tauri://drag-enter')).toHaveBeenCalledOnce();
+    expect(stops.get('tauri://drag-leave')).toHaveBeenCalledOnce();
   });
 
   it('reports an update download as the share of its advertised size that has arrived', async () => {

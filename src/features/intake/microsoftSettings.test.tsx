@@ -35,13 +35,49 @@ describe('Microsoft upload identity setup', () => {
       view.unmount();
     }
   });
-  it('shows a disabled deployment as persistent status rather than masking action alerts', async () => {
+  // Every shipping build lacks the deployment. The panel used to show the
+  // backend's sentence as a red error, a Connect button that could never be
+  // enabled, steps starting at 2, and a "browser preview" hint in the
+  // installed app; now it says one true thing.
+  it('says plainly that verification is not part of a build without the deployment', async () => {
     const unavailable = 'SharePoint deployment configuration is unavailable: provisioned identifiers are not available in this build.';
     render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, error: unavailable })} savedFolder="C:/Intake" unsavedFolder={false} />);
 
-    expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent(unavailable);
+    expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent('Microsoft upload verification is not part of this build.');
+    expect(screen.queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Connect my Microsoft account' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/deployment configuration/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps any other failure as persistent status, numbered from the first step', async () => {
+    const broken = 'Private Microsoft upload snapshots are unavailable.';
+    render(<MicrosoftIntakeSettings bridge={bridge({ ...initial, error: broken })} savedFolder="C:/Intake" unsavedFolder={false} />);
+
+    expect(await screen.findByRole('status', { name: 'Microsoft connection status' })).toHaveTextContent(broken);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect my Microsoft account' })).toBeDisabled();
+    expect(screen.getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      'Microsoft upload identity', '1. Connect your Microsoft account', '2. Pair the intake folder',
+    ]);
+  });
+
+  it('calls only the browser build a browser preview', async () => {
+    const withoutMicrosoft = { ...bridge(), microsoftIntakeStatus: undefined, microsoftSignInStart: undefined };
+    const view = render(<MicrosoftIntakeSettings bridge={withoutMicrosoft} savedFolder="C:/Intake" unsavedFolder={false} />);
+    expect(screen.getByText(/This browser preview cannot verify any uploads/)).toBeVisible();
+    view.unmount();
+
+    const runtime = window as unknown as Record<string, unknown>;
+    runtime.__TAURI_INTERNALS__ = {};
+    try {
+      render(<MicrosoftIntakeSettings bridge={withoutMicrosoft} savedFolder="C:/Intake" unsavedFolder={false} />);
+      expect(screen.getByRole('group', { name: 'Microsoft upload identity' })).toBeVisible();
+      expect(screen.queryByText(/browser preview/i)).not.toBeInTheDocument();
+    } finally {
+      delete runtime.__TAURI_INTERNALS__;
+    }
   });
 
   it('describes the proof as Microsoft metadata about who created and last modified a document', async () => {

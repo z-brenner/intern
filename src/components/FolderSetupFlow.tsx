@@ -104,6 +104,11 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   // A Filed folder beside a synced location's own top folder would sit
   // outside it, where OneDrive does not reach.
   const besideLeavesSync = known.some((root) => contains(intake, root.path));
+  // A drive's or a share's top folder has nothing beside it: the backend
+  // refuses to make a Filed folder there, so the button that asked it to
+  // could only ever fail.
+  const filed = besideLeavesSync ? undefined : filedBeside(intake);
+  const nothingBeside = !besideLeavesSync && filed === undefined;
   const steps: Array<[Step, string]> = [
     ...(welcome ? [['welcome', 'Welcome'] as [Step, string]] : []),
     ['pick', 'Folder'], ['filed', 'Filed'], ['existing', 'Existing documents'], ['ready', 'Ready'],
@@ -154,19 +159,21 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
           ? <p>You chose all of <strong>{folderLabel(known, intake)}</strong>. Intern will make two folders in it: <strong>Inbox</strong>, where you put documents to rename, and <strong>Filed</strong>, where they go once renamed.</p>
           : <>
             <p>Intern will watch <strong>{folderLabel(known, intake)}</strong>.</p>
-            <p>Renamed documents can go to a new folder called Filed, next to the one you chose.</p>
+            <p>{nothingBeside
+              ? 'A drive\'s top folder has nothing beside it. Choose where renamed documents should go.'
+              : 'Renamed documents can go to a new folder called Filed, next to the one you chose.'}</p>
           </>}
         {alert}
         <div className="onboarding-actions">
           {besideLeavesSync
             ? <button type="button" className="primary" disabled={busy} onClick={() => void run(makeInboxAndFiled)}>Create Inbox and Filed folders</button>
             : <>
-              <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { await fileInto(intake, await bridge.createFiledFolder(intake)); })}>Create a “Filed” folder here</button>
-              {selection && <button type="button" disabled={busy} onClick={() => void run(async () => { const path = await browse(); if (path) await fileInto(intake, path); })}>Choose another folder…</button>}
+              {!nothingBeside && <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => { await fileInto(intake, await bridge.createFiledFolder(intake)); })}>Create a “Filed” folder here</button>}
+              {selection && <button type="button" className={nothingBeside ? 'primary' : undefined} disabled={busy} onClick={() => void run(async () => { const path = await browse(); if (path) await fileInto(intake, path); })}>Choose another folder…</button>}
             </>}
           <button type="button" disabled={busy} onClick={() => { setProblem(''); setStep('pick'); }}>Back</button>
         </div>
-        {!besideLeavesSync && <p className="onboarding-support">Filed folder: {filedBeside(intake)}</p>}
+        {filed !== undefined && <p className="onboarding-support">Filed folder: {filed}</p>}
       </>}
       {step === 'existing' && <>
         <h1 ref={heading} tabIndex={-1}>Rename what is already there?</h1>

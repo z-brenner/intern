@@ -34,7 +34,8 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
 
   await page.getByRole('button', { name: 'Needs Review' }).click();
   await page.getByRole('button', { name: 'Select duplicate-invoice-a.pdf' }).click();
-  await page.getByLabel('Filename').fill('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co.pdf');
+  // The extension is locked beside the field; only the name before it is typed.
+  await page.getByLabel('Filename').fill('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co');
   await page.getByLabel('Description').fill('Invoice INV-2048 dated April 30, 2025 for Atlas Threadworks LLC.');
   await page.getByRole('button', { name: 'Approve & rename' }).click();
 
@@ -42,7 +43,8 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   const completed = page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i });
   await expect(completed).toContainText('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co.pdf');
   await completed.getByRole('button', { name: /Select/ }).click();
-  await page.getByRole('button', { name: 'Undo' }).click();
+  // The panel's Undo: the toast from the rename offers one for the same item.
+  await page.getByRole('complementary', { name: 'Review item' }).getByRole('button', { name: 'Undo', exact: true }).click();
 
   await page.getByRole('button', { name: 'Needs Review' }).click();
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toBeVisible();
@@ -66,7 +68,8 @@ test('naming your organisation in Settings files a waiting proposal by the other
   await expect(lease).toContainText('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
   await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
   const inspector = page.getByRole('complementary', { name: 'Review item' });
-  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
+  // The extension is locked beside the field; the field holds the name before it.
+  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
   await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organisation, so it is left out of the name. Change this under Settings.');
   await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
 

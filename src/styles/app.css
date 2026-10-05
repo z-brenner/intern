@@ -6,9 +6,25 @@
 */
 
 /* ---------- shell ---------- */
-.app-shell { min-height: 100vh; display: grid; grid-template: 72px 1fr / 230px minmax(0, 1fr); background: var(--surface); }
-.workspace { min-width: 0; display: flex; overflow: hidden; }
-.queue-panel { min-width: 0; flex: 1; padding: 18px 10px 0; display: flex; flex-direction: column; }
+/*
+  Bounded to the window. The shell used to be min-height: 100vh over a 1fr
+  row, so it grew with its content: at the default 1200x800 window the
+  Approve button sat below the fold, and selecting a late row in a long queue
+  scrolled the whole page - header, nav and all - away from the inspector.
+  Now the page never scrolls; the table and the inspector each scroll in
+  their own box. The update banner has a row of its own above the header:
+  as an unplaced grid child it was auto-placed into the 230x72 corner cell
+  and painted under the header.
+*/
+.app-shell {
+  height: 100vh; overflow: hidden; display: grid; background: var(--surface);
+  grid-template: auto 72px minmax(0, 1fr) / 230px minmax(0, 1fr);
+  grid-template-areas: 'banner banner' 'header header' 'nav main';
+}
+.app-shell > .note--update { grid-area: banner; margin: 0; border-width: 0 0 1px 3px; border-radius: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px; }
+.app-shell > .note--update .update-actions { margin: 0 0 0 auto; }
+.workspace { grid-area: main; min-width: 0; min-height: 0; display: flex; overflow: hidden; position: relative; }
+.queue-panel { min-width: 0; min-height: 0; flex: 1; padding: 18px 10px 0; display: flex; flex-direction: column; }
 
 /* ---------- controls ---------- */
 button, input, textarea { font: inherit; }
@@ -76,7 +92,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .section-lead { margin: 0 0 14px; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
 
 /* ---------- header ---------- */
-.app-header { grid-column: 1 / -1; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 24px 0 28px; background: var(--surface); }
+.app-header { grid-area: header; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 24px 0 28px; background: var(--surface); }
 .product { display: flex; align-items: center; gap: 24px; min-width: 0; }
 .product strong { font-family: var(--font-display); font-size: 34px; font-weight: 700; letter-spacing: -.85px; line-height: 1; color: var(--brand-navy); white-space: nowrap; }
 .brand-tag { font-size: 13px; font-weight: 400; font-variant-caps: small-caps; letter-spacing: .06em; color: var(--text-muted); margin-left: 10px; }
@@ -87,12 +103,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .header-actions { display: flex; gap: 10px; align-items: center; }
 
 /* ---------- sidebar ---------- */
-.sidebar { display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
+.sidebar { grid-area: nav; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
 .sidebar .nav-item { border: 0; border-left: 3px solid transparent; background: transparent; width: 100%; min-height: 44px; padding: 0 18px; display: flex; gap: 13px; align-items: center; text-align: left; font-size: 13px; font-weight: 500; color: var(--text); transition: background-color .12s ease; }
 .sidebar .nav-item:hover { background: var(--surface-subtle); }
 .sidebar .nav-item.active { background: var(--brand-tint); border-left-color: var(--accent); color: var(--brand-navy); font-weight: 600; }
 .sidebar .nav-item b { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .sidebar .nav-item.active b { color: var(--brand-navy); }
+.sidebar .nav-icon { position: relative; flex: none; display: inline-grid; place-items: center; }
+/* The count rides on the icon only when the sidebar is collapsed. */
+.sidebar .nav-badge { display: none; }
 .sidebar-footer { display: flex; align-items: center; gap: 4px; padding: 0 15px; }
 .footer-nav { border: 0; background: transparent; border-radius: var(--radius-sm); min-width: 40px; min-height: 40px; display: inline-grid; place-items: center; color: var(--text-muted); transition: background-color .12s ease, color .12s ease; }
 .footer-nav:hover { background: var(--surface-subtle); color: var(--text); }
@@ -129,7 +148,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .queue-filter input::placeholder { color: var(--text-muted); }
 .queue-filter-empty { margin: 0; padding: 32px 10px; color: var(--text-muted); font-size: 13px; }
 
-.table-wrap { overflow-x: auto; }
+/* The table is the queue's vertical scroller, not the panel: it is already the
+   horizontal one, which makes it the box a sticky header sticks to. */
+.table-wrap { flex: 1; min-height: 0; overflow: auto; }
+/* A collapsed border belongs to the table and scrolls away; the shadow stays with the header. */
+.table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
 .table-wrap th { text-align: left; padding: 6px 16px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table-wrap th:nth-child(1) { width: 29%; }
@@ -153,8 +176,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap tr.selected td { border-top: 1px solid var(--selected-border); border-bottom: 1px solid var(--selected-border); }
 .table-wrap tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .row-description { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+.kept-original { color: var(--text-muted); font-style: italic; }
 
-.status { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
+/* Wraps rather than painting over the next column. Beside the inspector at
+   1200px the Status column used to be 84px of content, narrower than "Needs
+   review" and its icon; a label that will not fit now takes a second line. */
+.status { display: inline-flex; align-items: flex-start; gap: 8px; white-space: normal; font-weight: 500; }
+.status svg { flex: none; margin-top: 2px; }
 .status.ready, .status.completed, .confidence.ready, .confidence.completed { color: var(--ready); }
 .status.review, .confidence.review { color: var(--review); }
 .status.waiting { color: var(--waiting); }
@@ -175,13 +203,30 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .item-count { color: var(--text-muted); padding: 14px 10px; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: auto; }
 
 /* ---------- review inspector ---------- */
-.inspector { flex: 0 0 370px; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); }
+/* min-height: 0 lets the inspector be shorter than its content, so it scrolls
+   by itself and the sticky actions below have a scrollport to stick to. */
+.inspector { flex: 0 0 370px; min-height: 0; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); }
 .inspector-title, .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .inspector h2, .dialog-head h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; }
 .inspector h3 { font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+/* Focused from code when a row is selected, so a keyboard user lands here;
+   the ring shows for them and not after a click. */
+.inspector h2:focus { outline: none; }
+.inspector h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.review-position { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.review-position .link-button { display: inline-flex; align-items: center; gap: 2px; font-size: 12.5px; text-decoration: none; }
+.review-position .link-button:hover { text-decoration: underline; }
+.review-position svg { width: 15px; height: 15px; }
 .source-file { display: grid; gap: 6px; margin: 16px 0 20px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 .selected-file { margin: 0; display: flex; align-items: flex-start; gap: 8px; font-size: 14px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
 .selected-file .file-kind { flex: 0 0 22px; }
+.filed-outcome { margin: 0 0 2px 30px; font-size: 13px; line-height: 1.45; color: var(--text-soft); overflow-wrap: anywhere; }
+.filed-outcome strong { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; color: var(--text); }
+/* The file's own actions, beside the file: quieter than the decision below. */
+.document-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.document-actions button { min-height: 30px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 12.5px; font-weight: 500; transition: background-color .12s ease, border-color .12s ease; }
+.document-actions button:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
+.document-actions svg { width: 15px; height: 15px; }
 
 .inspector label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 14px; }
 .inspector input, .inspector textarea, .settings-dialog input:not([type=checkbox]) { width: 100%; display: block; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 9px 10px; margin-top: 6px; font-weight: 400; background: var(--surface); font-size: 14px; }
@@ -189,8 +234,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .inspector textarea { min-height: 92px; resize: vertical; line-height: 1.45; }
 /* The proposed name is a string that will exist on disk exactly as typed, so
    it is set in the system's monospace face: a doubled space or a "1" standing
-   in for an "l" is visible in the field where it can still be corrected. */
-.inspector .filename-input { font-family: var(--font-mono); font-size: 13px; line-height: 1.5; }
+   in for an "l" is visible in the field where it can still be corrected.
+   It wraps and grows rather than scrolling, so the whole name is always on
+   screen - a one-line input showed about half of it - and the extension sits
+   after it, outside the editable text, because it cannot change. */
+.filename-field { display: flex; align-items: flex-end; margin-top: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); font-family: var(--font-mono); font-size: 13px; font-weight: 400; line-height: 1.5; }
+.filename-field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.filename-field:has([aria-invalid='true']) { border-color: var(--failed); }
+.inspector .filename-field .filename-input { flex: 1; min-width: 0; min-height: 0; margin: 0; padding: 8px 0 8px 10px; border: 0; border-radius: var(--radius-sm) 0 0 var(--radius-sm); background: transparent; font: inherit; resize: none; overflow: hidden; overflow-wrap: anywhere; field-sizing: content; }
+.inspector .filename-field .filename-input:focus-visible { outline: none; }
+.filename-extension { flex: none; padding: 8px 10px 8px 0; color: var(--text-muted); white-space: nowrap; cursor: text; }
 .proposal .form-error { margin: -8px 0 12px; }
 .proposal .date-hint { margin: -8px 0 14px; }
 .suggestion { margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-left: 3px solid var(--review); border-radius: var(--radius-md); background: var(--surface-subtle); }
@@ -237,6 +290,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .inspector-actions .more-actions { grid-column: 2; }
 .review-menu { display: grid; gap: 8px; }
 .review-menu button { min-height: 36px; justify-content: flex-start; }
+/* The key that does the same, said quietly at the end of the button. The
+   panel's own buttons keep their label centred, with the key pushed to the
+   edge; a menu entry stays aligned with the entries around it. */
+.shortcut { margin-left: auto; padding: 1px 6px; border: 1px solid currentColor; border-radius: 4px; font-family: var(--font-ui); font-size: 11px; font-weight: 500; line-height: 1.4; opacity: .6; }
+.inspector-actions button:has(.shortcut) { justify-content: flex-start; }
+.inspector-actions > button:has(.shortcut) > svg:first-child { margin-left: auto; }
+/* Removing asks first from the Delete key, and always for a parked item. */
+.remove-confirm { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.remove-confirm p { grid-column: 1 / -1; margin: 0 0 2px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.remove-confirm q { font-weight: 600; overflow-wrap: anywhere; }
 
 .form-error { color: var(--failed); font-size: 12.5px; line-height: 1.45; margin: 0 0 10px; }
 
@@ -314,9 +377,31 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .history-dialog [role='status'] { margin: 0 0 10px; font-size: 13px; }
 .history-dialog .form-error { margin: 0 0 10px; }
 .history-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.history-document-actions { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.history-document-actions .link-button { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.history-document-actions svg { width: 14px; height: 14px; }
 
 /* ---------- feedback and setup ---------- */
-.operation-feedback { position: fixed; z-index: 5; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); margin: 0; padding: 11px 15px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); color: #8f231a; background: #fff5f3; box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
+/* Files dragged over the desktop window. It must not take the drop itself:
+   the runtime delivers that to the window, not to anything under the pointer. */
+.drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: rgba(23, 26, 31, .22); }
+.drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-navy); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
+/* The outcome of a queue action, at the bottom left of the queue. The error
+   banner this replaces was centred on the window, so in the narrow window it
+   sat over the drawer's own buttons; the drawer (z-index 3) now sits above
+   these, and beside the wide panel they stop short of it. */
+.toasts { position: absolute; z-index: 2; left: 20px; bottom: 16px; display: grid; justify-items: start; gap: 8px; max-width: min(520px, calc(100% - 40px)); pointer-events: none; }
+.toast { pointer-events: auto; margin: 0; padding: 4px 4px 4px 15px; display: flex; align-items: flex-start; gap: 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); color: var(--text); background: var(--surface); box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
+.toast p { margin: 0 8px 0 0; padding: 7px 0; font-variant-numeric: tabular-nums; }
+.toast--progress p { color: var(--text-muted); }
+.toast--error { border-color: #e6a9a2; color: #8f231a; background: #fff5f3; }
+.toast .icon-button, .toast-action { flex: none; min-height: 34px; border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; }
+.toast .icon-button { min-width: 34px; display: inline-grid; place-items: center; }
+.toast-action { padding: 0 10px; color: var(--accent); font-size: 13px; font-weight: 600; }
+.toast .icon-button:hover, .toast-action:hover:not(:disabled) { background: var(--surface-subtle); }
+.toast--error .icon-button:hover { background: rgba(143, 35, 26, .08); }
+.toast-action:disabled { color: var(--text-muted); cursor: default; }
+@media (min-width: 1101px) { .workspace:has(> .inspector) > .toasts { max-width: min(520px, calc(100% - 370px - 40px)); } }
 .setup-screen { min-height: 100vh; display: grid; place-items: center; text-align: center; padding: 24px; }
 .setup-screen section { width: min(500px, calc(100vw - 32px)); }
 .setup-screen > section > svg { color: var(--brand-navy); }
@@ -331,11 +416,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
+/* With the side inspector open below 1440px the table is about 600px wide, and
+   a fifth of it left the status label 56px: "Reading document…" broke inside
+   its words. The status column takes a larger share until the window is wide
+   enough not to need it; at 1100px and below the inspector is a drawer and
+   the table has the width back. */
+@media (min-width: 1101px) and (max-width: 1439px) {
+  .table-wrap th:nth-child(2) { width: 25%; }
+  .table-wrap th:nth-child(3) { width: 32%; }
+}
+
 /* ---------- narrow ---------- */
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 64px minmax(0, 1fr); }
   .sidebar .nav-item { justify-content: center; padding: 0; }
-  .sidebar .nav-item span, .sidebar .nav-item b { display: none; }
+  .sidebar .nav-item .nav-label, .sidebar .nav-item b { display: none; }
+  .sidebar .nav-badge { position: absolute; top: -7px; left: 12px; display: grid; place-items: center; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--brand-tint); color: var(--brand-navy); font-size: 10.5px; font-style: normal; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
   .sidebar-footer { flex-direction: column; padding: 0; }
   .inspector { position: fixed; z-index: 3; right: 0; top: 72px; bottom: 0; width: 370px; background: var(--surface); box-shadow: -16px 0 40px rgba(23, 26, 31, .16); }
   .product { gap: 16px; }

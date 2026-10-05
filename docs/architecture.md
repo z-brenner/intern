@@ -541,15 +541,15 @@ is called moved or deleted.
 
 A document that changed after it was read - signed, edited, saved over - is
 never filed under a name that described the earlier version: approving it
-sends it back to review as `FILE_CHANGED` and says so. **Re-analyze** reads it
-again from the start under its new fingerprint, dropping the earlier proposal
-and any approval in it; it is refused while an operation of the document
-never finished, because what is on disk is an open question until that is
-checked again. A filing to another volume is a verified copy rather than a
-rename, and the copy keeps what a rename would: the document's modified and
-accessed times (and its creation time on Windows) and its Mark-of-the-Web,
-the `Zone.Identifier` stream that keeps Office's Protected View on for a
-downloaded or e-mailed file.
+sends it back to review as `FILE_CHANGED` and says so. **Re-analyze** (the
+review panel's *Analyze again*) reads it again from the start under its new
+fingerprint, dropping the earlier proposal and any approval in it; it is
+refused while an operation of the document never finished, because what is
+on disk is an open question until that is checked again. A filing to another
+volume is a verified copy rather than a rename, and the copy keeps what a
+rename would: the document's modified and accessed times (and its creation
+time on Windows) and its Mark-of-the-Web, the `Zone.Identifier` stream that
+keeps Office's Protected View on for a downloaded or e-mailed file.
 
 ### House style
 

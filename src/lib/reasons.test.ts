@@ -1,9 +1,46 @@
 import { describe, expect, it } from 'vitest';
+import { describeActionError } from './actionErrors';
 import { describeQueueStop, humanizeReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
-    expect(humanizeReason('SOURCE_LOCKED')).toContain('sync client mid-upload');
+    expect(humanizeReason('SOURCE_LOCKED')).toBe('The document is open in another program, or a sync client is still writing it. Close it, then try again.');
+  });
+
+  // A rename refused by a held file is rolled back and the document waits in
+  // review under SOURCE_LOCKED: the refusal shown at the moment of approving
+  // and the reason shown on the item afterwards are the same sentence.
+  it('says one thing about a held file, as a reason and as a refusal', () => {
+    expect(describeActionError({ code: 'SOURCE_LOCKED', message: 'atomic no-replace rename failed (os error 32)' })).toBe(humanizeReason('SOURCE_LOCKED'));
+  });
+
+  // Pipeline::apply_if_unchanged refuses an approval of a file that changed
+  // since it was read with "Re-analyze it.", and the panel calls that action
+  // Analyze again. The refusal and the item's reason afterwards both name the
+  // control a person can find.
+  it('points a refused approval of a changed file at Analyze again, the action the panel offers', () => {
+    const refusal = { code: 'FILE_CHANGED', message: 'The file changed after it was analyzed. Re-analyze it.' };
+    for (const sentence of [describeActionError(refusal, { approve: true }), humanizeReason('FILE_CHANGED')]) {
+      expect(sentence).toContain('Use Analyze again');
+      expect(sentence).not.toMatch(/Re-analyze/);
+    }
+    // An undo refused with the same code is about a filed copy that was
+    // moved; the backend names where it was, and that is kept.
+    const undo = { code: 'FILE_CHANGED', message: 'The filed document is no longer at C:\\Filed\\Lease.pdf; it was moved or deleted.' };
+    expect(describeActionError(undo)).toBe(undo.message);
+  });
+
+  // Check again runs reconciliation, which refuses with the same code the
+  // item was parked under when the files are still ambiguous. Sending the
+  // person back to Check again from its own failure was a loop.
+  it('does not send a failed Check again back to Check again', () => {
+    const refusal = { code: 'RECONCILIATION_REQUIRED', message: 'an incomplete operation left a file at both of its paths' };
+    const afterCheck = describeActionError(refusal, { checkedFiles: true });
+    expect(afterCheck).not.toMatch(/Check again/);
+    expect(afterCheck).toContain('\u201cI have resolved the files myself\u201d');
+    // Keep or remove of an item that was parked after the panel last showed
+    // it: checking is the way on, and the panel now offers it.
+    expect(describeActionError(refusal)).toContain('Use Check again.');
   });
 
   it('translates the pipeline comma-joined list into sentences', () => {
@@ -25,7 +62,8 @@ describe('humanizeReason', () => {
   });
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {
-    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already. Retry to process it anyway, or remove it.');
+    // Named as the review menu names it: a review item has no Retry.
+    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already. Choose Process anyway to process it all the same, or remove it.');
   });
 
   it('names the date gate and the hosted-model failures in plain words', () => {

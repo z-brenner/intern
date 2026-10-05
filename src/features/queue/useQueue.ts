@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DesktopBridge } from '../../lib/bridge';
+import { processingStage } from '../../lib/tauriBridge';
 import type { QueueBridgeEvent, QueueEventSource } from '../../lib/tauriBridge';
 import type { QueueItem } from '../../types';
 import { createQueueReader } from './queueReader';
@@ -17,10 +18,14 @@ export function useQueue(bridge: DesktopBridge) {
   const [readError, setReadError] = useState<QueueIssue | null>(null);
   const [subscriptionError, setSubscriptionError] = useState<QueueIssue | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
-  const connection = useRef<{ bridge: DesktopBridge; reader: QueueReader } | null>(null);
+  const connection = useRef<{ bridge: DesktopBridge; reader: QueueReader<QueueItem[]> } | null>(null);
+  // Resolves with the list it read. State reaches the screen a render later,
+  // and the read on screen may by then be a newer one a queue event started;
+  // a caller that has just acted needs the queue as it is after its action,
+  // to choose what to show next and to say what the action did.
   const refresh = useCallback(async () => {
     const current = connection.current;
-    if (current?.bridge === bridge) await current.reader.refresh();
+    return current?.bridge === bridge ? current.reader.refresh() : undefined;
   }, [bridge]);
   const reconnect = useCallback(() => setConnectionAttempt((attempt) => attempt + 1), []);
 
@@ -29,7 +34,7 @@ export function useQueue(bridge: DesktopBridge) {
     let stop: (() => void) | undefined;
     const reader = createQueueReader(
       () => bridge.listItems(),
-      (snapshot) => { setItems(snapshot); setReadError(null); },
+      (read) => { setItems(read); setReadError(null); },
       (cause) => setReadError({ kind: 'snapshot', cause }),
     );
     connection.current = { bridge, reader };
@@ -43,10 +48,18 @@ export function useQueue(bridge: DesktopBridge) {
     const onEvent = (event: QueueBridgeEvent) => {
       if (!active) return;
       if (event.type === 'progress') {
-        setItems((current) => current.map((item) => item.id === event.itemId
-          && (item.status === 'waiting' || item.status === 'processing')
-          ? { ...item, status: 'processing', ...(event.progress === undefined ? {} : { progress: event.progress }) }
-          : item));
+        setItems((current) => current.map((item) => {
+          if (item.id !== event.itemId || (item.status !== 'waiting' && item.status !== 'processing')) return item;
+          // A figure belongs to the stage that reported it; carried into the
+          // next one it would claim progress on work that has not started.
+          const stage = processingStage(event.stage) ?? item.stage;
+          const progress = event.progress ?? (stage === item.stage ? item.progress : undefined);
+          const next: QueueItem = { ...item, status: 'processing' };
+          if (stage) next.stage = stage;
+          if (progress === undefined) delete next.progress;
+          else next.progress = progress;
+          return next;
+        }));
         return;
       }
       if (event.paused !== undefined) setPaused(event.paused);

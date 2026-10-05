@@ -769,7 +769,7 @@
           </li>
           <li>
             <b>Watch it change status.</b>
-            <p>It goes from <strong>Waiting</strong> to <strong>Processing</strong>, then lands on <strong>Ready</strong> or <strong>Needs review</strong>.</p>
+            <p>It goes from <strong>Waiting</strong> to processing — the row says <strong>Reading document…</strong>, then <strong>Proposing a name…</strong> — and lands on <strong>Ready</strong> or <strong>Needs review</strong>.</p>
           </li>
           <li>
             <b>Open it and read the evidence.</b>
@@ -852,7 +852,19 @@
         <dl class="kv">
           <div>
             <dt>Approving in bulk</dt>
-            <dd>Approve one document at a time, or use <strong>Apply all ready</strong>. Every rename can be undone from Completed.</dd>
+            <dd>Approve one document at a time, or use <strong>Apply all ready</strong>. After either, a note at the foot of the queue says what was renamed and offers <strong>Undo</strong> for ten seconds; it puts back every rename that batch made. Every rename can also be undone later from Completed.</dd>
+          </div>
+          <div>
+            <dt>Reviewing from the keyboard</dt>
+            <dd><kbd>J</kbd> and <kbd>K</kbd> (or the arrow keys) move through the queue, <kbd>Enter</kbd> or <kbd>F2</kbd> goes to the proposed name, <kbd>Ctrl</kbd>+<kbd>Enter</kbd> approves it, <kbd>Alt</kbd>+<kbd>K</kbd> keeps the original name, <kbd>Delete</kbd> removes the document after asking, and <kbd>/</kbd> jumps to the filter. After each decision Intern moves on to the next document still waiting for you.</dd>
+          </div>
+          <div>
+            <dt>Send to Intern</dt>
+            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. They join the queue whether or not Intern is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is queued.</dd>
+          </div>
+          <div>
+            <dt>Your organisation's names</dt>
+            <dd>Your own firm's name is on almost everything you file. List it under <strong>Your organisation's names</strong> in Settings, one name per line, and a document that names your firm and someone else is named after the other side and, with <strong>By first party</strong>, filed in the other side's folder. The review panel says which party was left out, and the evidence still shows it. A name shorter than four letters is too short to match safely and is not used.</dd>
           </div>
           <div>
             <dt>Every name has a date</dt>
@@ -864,7 +876,7 @@
           </div>
           <div>
             <dt>Duplicates</dt>
-            <dd>A document whose content Intern has already filed is flagged as a duplicate of the filed name, rather than renamed again. Choose <strong>Retry</strong> to process it anyway. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
+            <dd>A document whose content Intern has already filed is flagged as a duplicate of the filed name, rather than renamed again. Choose <strong>Process anyway</strong> to process it all the same. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
           </div>
           <div>
             <dt>Where files land</dt>
@@ -1306,14 +1318,26 @@
             <summary>The queue paused with a hosted-model error</summary>
             <div class="answer">
               <p>
-                A rejected key, an unreachable service, or an account out of
-                credit would fail every document in turn, so Intern pauses
-                instead and says which it was. Open Settings, use <strong>Test
-                connection</strong> until it succeeds (or add credit to the
-                account), then resume the queue.
+                A rejected key or an unreachable service would fail every
+                document in turn, so Intern pauses instead and says which it
+                was. Open Settings, use <strong>Test connection</strong> until
+                it succeeds, then press <strong>Resume</strong>. An account
+                that cannot pay is the next entry.
                 A document the hosted model <em>declined</em> to read is not a
                 pause: it fails on its own, and the rest carry on. Rename that
                 file yourself, or retry it.
+              </p>
+            </div>
+          </details>
+          <details>
+            <summary>The hosted model reported a billing or quota problem</summary>
+            <div class="answer">
+              <p>
+                Intern pauses the queue once instead of failing every document
+                against an account that cannot pay for them. Nothing is lost:
+                the documents wait in the queue. Sort out the billing or the
+                quota with the provider, then press <strong>Resume</strong>,
+                the play button beside <strong>Add folder</strong>.
               </p>
             </div>
           </details>
@@ -1339,12 +1363,14 @@
             </div>
           </details>
           <details>
-            <summary>It says “Another program is still holding this file open”</summary>
+            <summary>It says the document is open in another program</summary>
             <div class="answer">
               <p>
-                Usually the sync client, mid-upload. Intern already waited a few
-                seconds for the lock to clear before reporting this. Retry once
-                the sync settles.
+                Something still has the file open: the program you opened it in
+                to check it, or the sync client, mid-upload. Intern already
+                waited a few seconds for it to let go, then put the rename back
+                as it was. Close the document, or let the sync finish, and
+                approve it again.
               </p>
             </div>
           </details>

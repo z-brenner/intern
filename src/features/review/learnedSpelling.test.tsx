@@ -24,7 +24,7 @@ describe('a name in the reviewer\'s own spelling', () => {
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
     expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso. Change or forget it under Settings.');
-    expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso');
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
     expect(within(evidence).getByText('Contoso Worldwide, Inc.')).toBeVisible();
   });

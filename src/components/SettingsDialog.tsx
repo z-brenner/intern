@@ -3,7 +3,7 @@ import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSetti
 import { SharePointConnection } from '../features/settings/SharePointConnection';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
@@ -175,6 +175,24 @@ function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings
   return result;
 }
 
+/*
+  Settings that arrive while the dialog is open replace what it shows, but not
+  what the person has already changed in it. App reads the settings a render
+  after it mounts, so a dialog opened at once - from the setup screen's "Set
+  up a hosted model" - showed placeholders, and when the read landed it
+  overwrote the draft whole: a hosted model chosen in that moment went back to
+  the local one, and Save stored that as the person's choice.
+*/
+function rebaseDraft(draft: AppSettings, shownFrom: AppSettings, arrived: AppSettings): AppSettings {
+  const result = { ...arrived };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(shownFrom)]) as Set<keyof AppSettings>) {
+    if (draft[key] === shownFrom[key]) continue;
+    if (key in draft) Object.assign(result, { [key]: draft[key] });
+    else delete (result as Partial<AppSettings>)[key];
+  }
+  return result;
+}
+
 /** The organisation's names as they are saved: one per line, trimmed, blank lines left out. */
 function withOwnNames(draft: AppSettings): AppSettings {
   if (draft.ourNames === undefined) return draft;
@@ -244,6 +262,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // manual pairing; a build without the deployment, or a failed read, shows
   // them exactly as it always has.
   const [managed, setManaged] = useState<boolean>();
+  // What the backend said about the deployment, kept apart from `managed`:
+  // a failed read also leaves the manual controls up, but only an explicit
+  // "not in this build" means Microsoft verification can never work here.
+  const [sharePointAvailable, setSharePointAvailable] = useState<boolean>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
@@ -252,7 +274,15 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // depending on its identity.
   const close = useRef(onClose);
   useEffect(() => { close.current = onClose; }, [onClose]);
-  useEffect(() => setNext(settings), [settings]);
+  // The settings the draft was started from, so settings that arrive later
+  // can tell the person's edits from the values they replace.
+  const shownFrom = useRef(settings);
+  useEffect(() => {
+    const previous = shownFrom.current;
+    if (previous === settings) return;
+    shownFrom.current = settings;
+    setNext((draft) => rebaseDraft(draft, previous, settings));
+  }, [settings]);
   const classify = useCallback((path: string) => bridge.classifyFolder(path), [bridge]);
   const destinationCloud = useCloudBadge(classify, next.destination);
   const intakeCloud = useCloudBadge(classify, next.intakeFolder);
@@ -282,14 +312,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   useEffect(() => {
     let active = true;
     void Promise.resolve().then(() => bridge.getOnboarding())
-      .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
+      .then((onboarding) => { if (active) { setManaged(onboarding.sharePointAvailable); setSharePointAvailable(onboarding.sharePointAvailable); } })
       // Without an answer the manual settings stay, and the backend still enforces its policy on save.
       .catch(() => { if (active) setManaged(false); });
     return () => { active = false; };
   }, [bridge]);
   // The destination field focused on open is not rendered once the connection
   // is managed; keep focus inside the dialog rather than dropping it on the page.
-  useEffect(() => {
+  // A layout effect, so focus moves in the same commit that removes the field:
+  // as a passive effect it ran a scheduler task later, and anything that
+  // looked in between - a person's keystroke, a test - found focus on <body>.
+  useLayoutEffect(() => {
     if (managed && !dialog.current?.contains(document.activeElement)) layout.current?.focus();
   }, [managed]);
   useEffect(() => {
@@ -584,7 +617,13 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="check-hint">Off by default: only your verified uploads are eligible. Turning this on accepts other verified uploaders too, never unknown ones.</p>
         <label className="check-label"><input type="checkbox" checked={Boolean(next.intakeLocalOnly)} disabled={Boolean(intakeCloud)} onChange={(event) => setNext({ ...next, intakeLocalOnly: event.target.checked })} />This is a private local intake, not a shared or synced folder</label>
         <p className="check-hint">Private local mode does not verify Microsoft uploaders. Never use it for shared intake. Previously paired Microsoft folders remain protected.</p>
-        {!next.intakeLocalOnly && <MicrosoftIntakeSettings bridge={bridge} savedFolder={settings.intakeFolder} unsavedFolder={next.intakeFolder !== settings.intakeFolder} />}
+        {/*
+          Not in a build without the SharePoint deployment: Microsoft upload
+          verification reads the same provisioned identifiers, so the panel
+          could only show an internal error and a Connect button that never
+          works. Every build shipped so far is such a build.
+        */}
+        {!next.intakeLocalOnly && sharePointAvailable !== false && <MicrosoftIntakeSettings bridge={bridge} savedFolder={settings.intakeFolder} unsavedFolder={next.intakeFolder !== settings.intakeFolder} />}
         <label>This machine's name<input value={next.machineLabel} onChange={(event) => setNext({ ...next, machineLabel: event.target.value })} /></label>
         {/*
           The folder a SharePoint library syncs to lives under the user's

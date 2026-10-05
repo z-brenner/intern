@@ -73,7 +73,7 @@ describe('your organisation\'s names', () => {
     // Open in the inspector before the rename, so the name it shows is one
     // it had already taken as the starting draft.
     fireEvent.click(within(lease).getByRole('button', { name: /select/i }));
-    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     const dialog = await openSettings();
     fireEvent.change(within(dialog).getByLabelText('Your organisation\'s names'), { target: { value: 'TenantCo Inc.' } });
@@ -82,7 +82,7 @@ describe('your organisation\'s names', () => {
     await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('2023-09-15 Lease Agreement with ABC Properties LLC.pdf'));
     // The inspector follows the new proposal rather than offering the old
     // name to approve.
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC.pdf'));
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC'));
     expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('TenantCo Inc. is your organisation');
   });
 });

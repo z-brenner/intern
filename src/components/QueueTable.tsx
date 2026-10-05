@@ -1,12 +1,20 @@
+import { keptOriginal } from '../features/review/actions';
 import type { QueueItem } from '../types';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { StatusCell } from './StatusCell';
 
+/**
+ * One row is in the tab order - the selected one, or the first - and the
+ * arrow keys and J/K move between them (useReviewShortcuts). Every row used
+ * to be a tab stop of its own, so the review panel after the table was a
+ * row count of Tab presses away.
+ */
 export function QueueTable({ items, selectedId, onSelect }: { items: QueueItem[]; selectedId?: string; onSelect(item: QueueItem, trigger: HTMLButtonElement): void }) {
+  const tabStop = items.some((item) => item.id === selectedId) ? selectedId : items[0]?.id;
   return <div className="table-wrap"><table><thead><tr><th scope="col">Original filename</th><th scope="col">Status</th><th scope="col">Proposed filename</th><th scope="col">Confidence</th></tr></thead>
     <tbody>{items.map((item) => <tr key={item.id} className={selectedId === item.id ? 'selected' : ''} aria-selected={selectedId === item.id}>
-      <td><button type="button" className="row-select" data-item-id={item.id} onClick={(event) => onSelect(item, event.currentTarget)} aria-label={`Select ${item.originalFilename}`}><FileKindIcon filename={item.originalFilename} /><span>{item.originalFilename}</span></button></td><td><StatusCell item={item} /></td>
+      <td><button type="button" className="row-select" data-item-id={item.id} tabIndex={item.id === tabStop ? 0 : -1} onClick={(event) => onSelect(item, event.currentTarget)} aria-label={`Select ${item.originalFilename}`}><FileKindIcon filename={item.originalFilename} /><span>{item.originalFilename}</span></button></td><td><StatusCell item={item} /></td>
       {/*
         The description is half of what Intern produces and it used to be
         visible only inside the review panel, for items still awaiting a
@@ -15,6 +23,17 @@ export function QueueTable({ items, selectedId, onSelect }: { items: QueueItem[]
         width, which matters because the table already scrolls horizontally on
         a 1200px window.
       */}
-      <td>{item.status === 'waiting' ? '—' : <>{item.proposedFilename ?? '—'}{item.description && <span className="row-description">{item.description}</span>}</>}</td><td className={`confidence ${item.status}`}>{item.status === 'waiting' ? '—' : <ConfidenceMeter value={item.confidence} status={item.status} />}</td>
+      <td>{item.status === 'waiting' ? '—' : <>{nameCell(item)}{item.description && <span className="row-description">{item.description}</span>}</>}</td><td className={`confidence ${item.status}`}>{item.status === 'waiting' ? '—' : <ConfidenceMeter value={item.confidence} status={item.status} />}</td>
     </tr>)}</tbody></table></div>;
+}
+
+/**
+ * A filed row shows the name the file was given, which can differ from the
+ * proposal (a " (2)" the destination needed). A kept original shows that it
+ * kept its name, not a proposal that was never applied.
+ */
+function nameCell(item: QueueItem) {
+  if (item.status !== 'completed') return item.proposedFilename ?? '—';
+  if (keptOriginal(item)) return <span className="kept-original">Kept original</span>;
+  return item.filedName ?? item.proposedFilename ?? '—';
 }

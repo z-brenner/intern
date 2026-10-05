@@ -9,18 +9,24 @@ import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { Sidebar } from './components/Sidebar';
+import { Toast } from './components/Toast';
 import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
+import { describeActionError } from './lib/actionErrors';
+import type { RefusedAction } from './lib/actionErrors';
 import { describeAddReport } from './lib/addReport';
 import { installingLabel } from './lib/format';
 import { describeQueueStop } from './lib/reasons';
 import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
-import type { TauriSelectionBoundary } from './lib/tauriBridge';
+import type { DragState, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
+import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
+import { useReviewShortcuts } from './features/review/useReviewShortcuts';
+import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
 import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
@@ -30,7 +36,9 @@ type Gate =
   | { kind: 'onboarding' | 'folder-setup' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
-  const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge());
+  // The demo pushes its own changes, as the desktop backend does, so an item
+  // sent back to be analyzed again is seen coming back.
+  const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge({ liveEvents: true }));
   const bridge = suppliedBridge ?? bridgeRef.current;
   // The built-in demo bridge carries no SharePoint deployment, so it opens
   // straight into the app exactly as it always has.
@@ -90,6 +98,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const reviewTrigger = useRef<{ element: HTMLButtonElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
   const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
+  const inspectorHandle = useRef<ReviewInspectorHandle>(null);
+  // Where focus goes once the item it is meant for is on screen: its row, or
+  // its name or heading in the review panel.
+  const [focusRequest, setFocusRequest] = useState<{ id: string; target: 'row' | 'filename' | 'heading' }>();
   const [view, setView] = useState<QueueView>('queue');
   const [filter, setFilter] = useState('');
   const [selectedId, setSelectedId] = useState<string>();
@@ -115,6 +127,12 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // twenty-five files and sees twenty-four rows needs to see which and why.
   const [skippedNotice, setSkippedNotice] = useState('');
   const [actionError, setActionError] = useState('');
+  // The toast at the foot of the queue: a batch under way, or one finished,
+  // with the renames it made for Undo to put back. Each new one has a new key,
+  // so its ten seconds start again rather than running on from the last.
+  const [toast, setToast] = useState<{ key: number; kind: 'progress' | 'done'; text: string; undo?: string[] }>();
+  const toastKey = useRef(0);
+  const showToast = (kind: 'progress' | 'done', text: string, undo?: string[]) => setToast({ key: ++toastKey.current, kind, text, undo });
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>();
   // The version dismissed from the banner, so "Not now" does not reappear on
   // every later poll - but a newer release than the one dismissed still does.
@@ -123,6 +141,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const [updateProgress, setUpdateProgress] = useState<{ fraction: number | undefined }>();
   const [updateError, setUpdateError] = useState('');
   const narrowInspector = useMediaQuery('(max-width: 1100px)');
+  // Files dragged over the desktop window. The webview never sees them - the
+  // runtime takes the drop - so without this nothing on screen said a drop
+  // would land anywhere.
+  const [drag, setDrag] = useState<DragState>({ dragging: false, count: 0 });
 
   useEffect(() => {
     void (pendingSettings ?? bridge.getSettings()).then((loaded) => { setSettings(loaded); setSettingsLoaded(true); }).catch(() => setSettingsLoaded(false));
@@ -166,12 +188,14 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       if (firstReview) setSelectedId(firstReview.id);
     }
   }, [items]);
-  const filtered = items.filter((item) => view === 'queue' ? item.status !== 'completed' : view === 'review' ? item.status === 'review' : item.status === 'completed');
+  const inCurrentView = (item: QueueItem) => view === 'queue' ? item.status !== 'completed' : view === 'review' ? item.status === 'review' : item.status === 'completed';
+  const filtered = items.filter(inCurrentView);
   // A folder of four hundred documents is a wall of rows. The filter narrows
   // the current view by anything a person is likely to remember: the name the
   // file arrived with, the name it was given, or a word from its description.
   const query = filter.trim().toLowerCase();
-  const visible = query ? filtered.filter((item) => matchesQuery(item, query)) : filtered;
+  const shown = (list: QueueItem[]) => list.filter((item) => inCurrentView(item) && (!query || matchesQuery(item, query)));
+  const visible = shown(items);
   const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
   const selected = items.find((item) => item.id === selectedId);
   const drawerOpen = Boolean(selected && selectedByPerson && narrowInspector);
@@ -187,27 +211,67 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // or already renamed is deliberately out of reach of the discard action.
   const waitingItems = items.filter((item) => item.status === 'waiting');
   const queueStatus = queueStatusAnnouncement(items, paused);
-  const select = (item: QueueItem, trigger: HTMLButtonElement) => { seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = { element: trigger, itemId: item.id }; setSelectedId(item.id); setSelectedByPerson(true); };
-  const restoreQueueFocus = () => {
-    const invocation = reviewTrigger.current;
-    const version = ++focusRestoreVersion.current;
-    reviewTrigger.current = null;
-    queueMicrotask(() => {
-      if (focusRestoreVersion.current !== version) return;
-      const refreshedTrigger = [...document.querySelectorAll<HTMLButtonElement>('.row-select')]
-        .find((button) => button.dataset.itemId === invocation?.itemId);
-      // Prefer the primary action by name rather than "the first button in the
-      // panel". That positional fallback silently moved the moment the toolbar
-      // gained a second control, sending focus to a destructive Discard button
-      // instead of Apply all ready.
-      const target = invocation?.element.isConnected
-        ? invocation.element
-        : refreshedTrigger
-          ?? document.querySelector<HTMLButtonElement>('.queue-panel .queue-actions button.primary')
-          ?? document.querySelector<HTMLButtonElement>('.queue-panel button');
-      target?.focus();
-    });
+  const rowButton = (id: string) => [...document.querySelectorAll<HTMLButtonElement>('.row-select')].find((button) => button.dataset.itemId === id);
+  const rowTrigger = (id: string) => { const element = rowButton(id); return element ? { element, itemId: id } : null; };
+  // Wide, the panel sits after the whole queue in the tab order, so a click
+  // brings focus to its heading rather than leaving it a row count of Tab
+  // presses away. Narrow, the drawer takes focus itself.
+  const select = (item: QueueItem, trigger: HTMLButtonElement) => {
+    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = { element: trigger, itemId: item.id }; setSelectedId(item.id); setSelectedByPerson(true);
+    if (!narrowInspector) setFocusRequest({ id: item.id, target: 'heading' });
   };
+  // J/K and the arrow keys: the selection moves and focus goes with it, onto
+  // the row - unless the drawer is open over the rows, where it moves to the
+  // item's name instead.
+  const moveSelection = (item: QueueItem) => {
+    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = rowTrigger(item.id); setSelectedId(item.id);
+    if (!drawerOpen) setFocusRequest({ id: item.id, target: 'row' });
+  };
+  // Enter on a row, and Next undecided: select it and go straight to its name.
+  const openItem = (item: QueueItem) => {
+    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = rowTrigger(item.id); setSelectedId(item.id); setSelectedByPerson(true);
+    setFocusRequest({ id: item.id, target: itemActions(item).approve ? 'filename' : 'heading' });
+  };
+  useEffect(() => {
+    if (!focusRequest) return;
+    setFocusRequest(undefined);
+    if (focusRequest.target === 'row') rowButton(focusRequest.id)?.focus();
+    else if (selected?.id === focusRequest.id) inspectorHandle.current?.focus(focusRequest.target);
+  }, [focusRequest, selected?.id]);
+  // Review works through what is left to decide: needing review first, then
+  // ready, in table order.
+  const undecided = undecidedOrder(visible);
+  const nextToDecide = selected ? nextUndecided(undecided, selected.id, visible) : undefined;
+  // Where focus goes back to in the queue is decided once the queue shows
+  // what the action did. Decided straight after the command, as it was, the
+  // row being filed was still on screen a moment before it left the view, and
+  // every toolbar button was still disabled for the action in flight - so
+  // focus went to <body> whenever there was no next item to go to.
+  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLButtonElement; itemId?: string }>();
+  // `itemId`: a row to go to instead, once it is on screen - the document an
+  // undo has just put back in the queue.
+  const restoreQueueFocus = (itemId?: string) => {
+    const invocation = reviewTrigger.current;
+    reviewTrigger.current = null;
+    setQueueFocus({ version: ++focusRestoreVersion.current, ...(itemId ? { itemId } : { element: invocation?.element, itemId: invocation?.itemId }) });
+  };
+  useEffect(() => {
+    if (!queueFocus) return;
+    setQueueFocus(undefined);
+    const { version, element, itemId } = queueFocus;
+    if (focusRestoreVersion.current !== version) return;
+    const refreshedTrigger = itemId ? rowButton(itemId) : undefined;
+    // Prefer the primary action by name rather than "the first button in the
+    // panel". That positional fallback silently moved the moment the toolbar
+    // gained a second control, sending focus to a destructive Discard button
+    // instead of Apply all ready.
+    const target = element?.isConnected
+      ? element
+      : refreshedTrigger
+        ?? document.querySelector<HTMLButtonElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
+        ?? document.querySelector<HTMLButtonElement>('.queue-panel button:not(:disabled)');
+    target?.focus();
+  }, [queueFocus]);
   const closeReview = () => {
     setSelectedId(undefined);
     restoreQueueFocus();
@@ -218,70 +282,191 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     restoreQueueFocus();
   }, [selected, selectedId]);
   // Promise<unknown>: some commands report what they did - discardWaiting
-  // resolves with a count - and the result is not needed here.
-  const runQueueAction = async (run: () => Promise<unknown>, success: string) => {
+  // resolves with a count - and the result is not needed here. False when
+  // the command failed; otherwise the queue as read after it, for a caller
+  // that says what the command did - undefined when that reread failed.
+  // `success` can be worked out from that read, for a command whose outcome
+  // only the queue afterwards can say; `refused` says which command it was,
+  // where a code means different things to different commands.
+  const runQueueAction = async (run: () => Promise<unknown>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction): Promise<false | { read?: QueueItem[] }> => {
     if (actionInFlight.current) return false;
     actionInFlight.current = true;
     setActionPending(true);
     setActionError('');
     setActionMessage('');
+    // An Undo still on screen would read as undoing this action instead.
+    setToast(undefined);
     try {
       try { await run(); }
       catch (error) {
         try { await refresh(); } catch { /* Preserve the original command error. */ }
-        setActionError(describeActionError(error));
+        setActionError(describeActionError(error, refused));
         return false;
       }
       // The command has already happened. A reread that fails afterwards is
       // reported by the queue's own connection banner, and calling the command
       // failed would send someone looking for a file under its old name.
-      try { await refresh(); } catch { /* Reported as a queue connection error. */ }
-      setActionMessage(success);
-      return true;
+      let read: QueueItem[] | undefined;
+      try { read = await refresh(); } catch { /* Reported as a queue connection error. */ }
+      setActionMessage(typeof success === 'string' ? success : success(read));
+      return { read };
     } finally {
       actionInFlight.current = false;
       setActionPending(false);
     }
   };
-  const refreshAndClear = async (run: () => Promise<void>, success: string) => {
+  // Approve, keep and remove decide an item, and review moves on to the next
+  // one still to decide - selected, its name focused, and announced - rather
+  // than sending focus back to the toolbar to find it again (FRONTEND_UX-10).
+  // When none is left, focus goes back to the queue as before.
+  const decide = async (item: QueueItem, decision: 'approve' | 'keep' | 'remove', run: () => Promise<void>) => {
+    const before = undecidedOrder(visible);
     const selectionVersion = focusRestoreVersion.current;
-    if (!await runQueueAction(run, success)) return;
+    // Approving a parked item checks its files first, and that check can be
+    // what refuses it.
+    const outcome = await runQueueAction(run, '', decision === 'approve' ? { approve: true, checkedFiles: isParked(item) } : undefined);
+    if (!outcome) return;
+    // Only a list read after the command says what it did; when that reread
+    // failed, the command still happened and the queue as last read stands.
+    const fresh = outcome.read;
+    const now = decision === 'approve' ? fresh?.find((entry) => entry.id === item.id) : undefined;
+    const after = now?.status;
+    // An approval the backend accepted can still leave the document unrenamed:
+    // it files the name between documents while the queue is busy, and sends
+    // the item back to review when the file changed since it was read. Each is
+    // said as it is, and an item sent back stays on screen with its reason.
+    // Only review is "back": an approval being filed as the queue was read
+    // shows as processing, and that is a rename under way.
+    if (after === 'review') {
+      setActionMessage(`${item.originalFilename} was not renamed. It needs review again.`);
+      return;
+    }
+    // A name that was already the document's own completes it with nothing
+    // renamed (ALREADY_NAMED): completed, but kept, and nothing to undo.
+    const done = decision === 'keep' ? `Kept ${item.originalFilename} under its own name.`
+      : decision === 'remove' ? `Removed ${item.originalFilename} from the queue.`
+        : after === 'ready' ? `${item.originalFilename} will be renamed when the queue is free.`
+          : after === 'processing' ? `${item.originalFilename} is being renamed.`
+            : now && keptOriginal(now) ? `${item.originalFilename} already had this name, so nothing was renamed.` : `Renamed ${item.originalFilename}.`;
+    setActionMessage(done);
+    // A rename the queue shows as filed can be put back from the toast.
+    if (after === 'completed' && now?.undoable) showToast('done', renamedCount(1), [item.id]);
+    if (focusRestoreVersion.current !== selectionVersion) return;
+    const next = nextUndecided(before, item.id, shown(fresh ?? items));
+    if (!next) {
+      setSelectedId(undefined);
+      restoreQueueFocus();
+      return;
+    }
+    // A selection change of its own, so the focus restore that a disappearing
+    // row would otherwise start does not pull focus back to the toolbar.
+    focusRestoreVersion.current += 1;
+    reviewTrigger.current = rowTrigger(next.id);
+    setSelectedId(next.id);
+    setFocusRequest({ id: next.id, target: 'filename' });
+    setActionMessage(`${done} Next: ${next.originalFilename}.`);
+  };
+  const refreshAndClear = async (run: () => Promise<void>, success: string | ((read?: QueueItem[]) => string), refused?: RefusedAction) => {
+    const selectionVersion = focusRestoreVersion.current;
+    if (!await runQueueAction(run, success, refused)) return;
     if (focusRestoreVersion.current !== selectionVersion) return;
     setSelectedId(undefined);
     restoreQueueFocus();
   };
+  // Retry queues a failed item, a duplicate or an unverified upload to be
+  // read again. A parked item's is Check again, which queues nothing: it
+  // finishes the stopped rename or rolls it back, and only the queue after
+  // it says which; it can also fail for the reason the item was parked.
+  const retryItem = (item: QueueItem) => isParked(item)
+    ? refreshAndClear(() => bridge.retry(item.id), (read) => checkedOutcome(item, read), { checkedFiles: true })
+    : refreshAndClear(() => bridge.retry(item.id), 'Item queued for retry.');
   const applyAllReady = async () => {
     if (actionInFlight.current) return;
     actionInFlight.current = true;
     const selectionVersion = focusRestoreVersion.current;
     const selectedAtStart = selected;
+    const batch = readyItems;
     setActionPending(true);
     setActionError('');
-    setActionMessage('');
+    // Said once, not at every step: the toast shows how far along it is.
+    setActionMessage(`Applying ${batch.length} ${batch.length === 1 ? 'rename' : 'renames'}…`);
     const failed = new Map<string, unknown>();
-    let applied = 0;
+    const applied: string[] = [];
     try {
-      for (const item of readyItems) {
-        try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied += 1; }
+      for (const [index, item] of batch.entries()) {
+        // Forty renames take a while, and the button alone said nothing.
+        showToast('progress', `Applying ${index + 1} of ${batch.length}…`);
+        try { await bridge.approve(item.id, item.proposedFilename!, item.description ?? ''); applied.push(item.id); }
         catch (error) { failed.set(item.id, error); }
       }
-      await refresh();
+      // Said from the batch's own read. The one on screen can be older: a
+      // queue event the renames raised starts a newer read, and the read
+      // made for the batch is then never shown.
+      const outcome = batchOutcome(applied, await refresh() ?? await bridge.listItems());
+      if (applied.length) showToast('done', outcome.text, outcome.undoable.length ? outcome.undoable : undefined);
+      else setToast(undefined);
       if (failed.size) {
         const firstError = failed.values().next().value;
-        setActionError(`${applied} ${applied === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError)}`);
+        setActionMessage('');
+        setActionError(`${applied.length} ${applied.length === 1 ? 'rename' : 'renames'} applied. ${failed.size} could not be applied. ${describeActionError(firstError, { approve: true })}`);
       } else {
-        setActionMessage(`${applied} ${applied === 1 ? 'rename' : 'renames'} applied.`);
+        setActionMessage(outcome.text);
       }
       if (focusRestoreVersion.current === selectionVersion && selectedAtStart?.status === 'ready' && !failed.has(selectedAtStart.id)) {
         setSelectedId(undefined);
         restoreQueueFocus();
       }
     } catch (error) {
+      setToast(undefined);
+      setActionMessage('');
       setActionError(`The queue could not refresh. ${describeActionError(error)}`);
     } finally {
       actionInFlight.current = false;
       setActionPending(false);
     }
+  };
+  // Undo from the toast puts back every rename that batch made, one at a time
+  // as the backend undoes them; one it refuses is reported and the rest are
+  // still undone.
+  const undoRenames = async (ids: string[]) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionPending(true);
+    setActionError('');
+    setActionMessage('');
+    const failed: unknown[] = [];
+    try {
+      for (const [index, id] of ids.entries()) {
+        showToast('progress', `Undoing ${index + 1} of ${ids.length}…`);
+        try { await bridge.undo(id); }
+        catch (error) { failed.push(error); }
+      }
+      // Undone or not, each command has happened; a reread that fails is
+      // reported by the queue's own connection banner.
+      try { await refresh(); } catch { /* Reported as a queue connection error. */ }
+      const undone = ids.length - failed.length;
+      const text = `Undid ${undone} ${undone === 1 ? 'rename' : 'renames'}.`;
+      if (failed.length) {
+        setToast(undefined);
+        setActionError(`${text} ${failed.length} could not be undone. ${describeActionError(failed[0])}`);
+      } else {
+        showToast('done', text);
+        setActionMessage(text);
+      }
+    } finally {
+      actionInFlight.current = false;
+      setActionPending(false);
+    }
+    // Undo went with its toast. Focus goes to the first document put back,
+    // waiting in review again, rather than being left nowhere.
+    if (!document.activeElement || document.activeElement === document.body) restoreQueueFocus(ids[0]);
+  };
+  // Opening a document changes nothing in the queue, so it takes no part in
+  // the one-action-at-a-time guard; it only reports a refusal.
+  const openDocument = async (id: string, reveal: boolean) => {
+    setActionError('');
+    try { await (reveal ? bridge.revealItem(id) : bridge.openItem(id)); }
+    catch (error) { setActionError(describeActionError(error)); }
   };
   // Help leaves the app on purpose. Inside Tauri the webview has nowhere to
   // put a new tab, so the bridge hands the address to the system browser; if
@@ -408,6 +593,30 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     }).catch(() => { /* No drop stream in this runtime; the pickers still work. */ });
     return () => { active = false; stop?.(); };
   }, [selection]);
+  useEffect(() => {
+    const source = selection as (SelectionBoundary & Partial<TauriSelectionBoundary>) | undefined;
+    if (!source?.subscribeDragState) return;
+    let active = true;
+    let stop: (() => void) | undefined;
+    void source.subscribeDragState((state) => { if (active) setDrag(state); }).then((unsubscribe) => {
+      if (active) stop = unsubscribe;
+      else unsubscribe();
+    }).catch(() => { /* No drag events in this runtime; drops still land, unannounced. */ });
+    return () => { active = false; stop?.(); setDrag({ dragging: false, count: 0 }); };
+  }, [selection]);
+  useReviewShortcuts({
+    enabled: modelReady(model.setup) && !folderSetupOpen && !settingsOpen && !historyOpen,
+    rows: visible,
+    selected,
+    inspector: inspectorHandle,
+    onMove: moveSelection,
+    onOpen: openItem,
+    onFilter: () => {
+      const box = document.querySelector<HTMLInputElement>('.queue-filter input');
+      box?.focus();
+      return Boolean(box);
+    },
+  });
   // "Send to > Intern" and a document opened with Intern add outside the
   // window, and had nowhere to say what they left out: the same note as an
   // add made here, said as soon as the window can say it.
@@ -444,12 +653,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
     <p className="sr-only" role="status" aria-label="Action status" aria-live="polite" aria-atomic="true">{actionMessage}</p>
-    {/*
-      An alert, not a polite status: this paragraph is created with its
-      sentence already in it, and a live region that arrives complete is not
-      reliably spoken. Every other error banner in the app is an alert too.
-    */}
-    {actionError && <p className="operation-feedback" role="alert" aria-label="Action error">{actionError}</p>}
+    {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{drag.count > 0 ? `Drop to add ${drag.count} ${drag.count === 1 ? 'file' : 'files'}` : 'Drop to add files'}</p></div>}
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
        offered twice. */}
@@ -502,7 +706,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       </div>}
       {view === 'completed' && filtered.length > 0 && <div className="queue-actions">
         <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-        <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[aria-label="Completed"]')?.focus()); })()}>Clear history</button>
+        <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[data-view="completed"]')?.focus()); })()}>Clear history</button>
       </div>}
       {filterShown && <div className="queue-filter" role="search">
         <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
@@ -517,9 +721,24 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
           ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
       <p className="item-count">{query ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p></section>
-      {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
+      {/*
+        At the foot of the queue, beside the panel rather than in it: the
+        panel is inert under the narrow drawer, and an error in an inert
+        subtree is never announced. The drawer sits above it, so it never
+        covers the drawer's actions, as the centred error banner did.
+      */}
+      {(toast || actionError) && <div className="toasts">
+        {toast && <Toast key={toast.key} tone={toast.kind === 'progress' ? 'progress' : 'success'} label={toast.kind === 'progress' ? 'Action progress' : 'Action result'}
+          action={toast.undo ? { label: 'Undo', name: toast.undo.length === 1 ? 'Undo this rename' : `Undo these ${toast.undo.length} renames`, disabled: actionPending, onClick: () => void undoRenames(toast.undo!) } : undefined}
+          onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
+        {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
+      </div>}
+      {selected && <ReviewInspector ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
+        position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
+        onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
+        onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
-    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
+    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
 }
@@ -543,11 +762,45 @@ function matchesQuery(item: QueueItem, query: string) {
     .some((text) => text !== undefined && text.toLowerCase().includes(query));
 }
 
-function describeActionError(error: unknown) {
-  if (typeof error === 'string' && error.trim()) return error.trim();
-  if (error instanceof Error && error.message.trim()) return error.message.trim();
-  if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
-  return 'The operation could not be completed.';
+/** "Renamed 3 documents." */
+function renamedCount(count: number) {
+  return `Renamed ${count} ${count === 1 ? 'document' : 'documents'}.`;
+}
+
+/**
+ * What a batch of approvals the backend accepted did, read from the queue
+ * after it. Accepted is not the same as renamed: while the queue is busy the
+ * backend files an approved name between documents, it sends an item back
+ * to review when the file changed since it was read, and it completes one
+ * whose name was already its own without renaming it (ALREADY_NAMED). Each
+ * is said as it is, and only what was filed is offered to Undo.
+ */
+function batchOutcome(ids: string[], queue: QueueItem[]) {
+  const now = (id: string) => queue.find((item) => item.id === id);
+  const completed = ids.flatMap((id) => { const item = now(id); return item?.status === 'completed' ? [item] : []; });
+  const filed = completed.filter((item) => !keptOriginal(item));
+  const named = completed.length - filed.length;
+  const later = ids.filter((id) => now(id)?.status === 'ready').length;
+  const back = ids.filter((id) => now(id)?.status === 'review').length;
+  const text = [
+    filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
+    named ? `${named} already had ${named === 1 ? 'its name' : 'their names'}.` : '',
+    later ? `${later} will be renamed when the queue is free.` : '',
+    back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',
+  ].filter(Boolean).join(' ');
+  return { text, undoable: filed.filter((item) => item.undoable === true).map((item) => item.id) };
+}
+
+/**
+ * What Check again did, read from the queue after it: the rename had
+ * finished and the document is filed, or it had not happened and the
+ * document waits for a decision again.
+ */
+function checkedOutcome(item: QueueItem, queue?: QueueItem[]) {
+  const now = queue?.find((entry) => entry.id === item.id);
+  if (now?.status === 'completed') return `Checked ${item.originalFilename}: it is filed.`;
+  if (now?.status === 'review') return `Checked ${item.originalFilename}: it was not renamed, and waits for your decision.`;
+  return `Checked ${item.originalFilename}.`;
 }
 
 function queueStatusAnnouncement(items: QueueItem[], paused: boolean) {

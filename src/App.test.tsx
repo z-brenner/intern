@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App, UPDATE_POLL_INTERVAL_MS } from './App';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { InMemoryBridgeOptions } from './lib/inMemoryBridge';
+import { createTauriSelectionBoundary } from './lib/tauriBridge';
+import type { TauriEvent, TauriTransport } from './lib/tauriBridge';
 import type { AppSettings, QueueItem } from './types';
 
 describe('App', () => {
@@ -52,6 +54,54 @@ describe('App', () => {
     const banner = await screen.findByRole('status', { name: 'Update available' });
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
     expect(banner).not.toBeInTheDocument();
+  });
+});
+
+/*
+  The desktop window, end to end from the runtime's own events: Tauri takes
+  every drop (dragDropEnabled), so these raw window events are the only way a
+  dragged file reaches the queue - and every one used to be discarded.
+*/
+describe('desktop drag and drop', () => {
+  function windowEvents() {
+    const handlers = new Map<string, Array<(event: TauriEvent<unknown>) => void>>();
+    const transport: TauriTransport = {
+      invoke: async <T,>() => undefined as T,
+      listen: async <T,>(event: string, handler: (event: TauriEvent<T>) => void) => {
+        const list = handlers.get(event) ?? [];
+        list.push(handler as (event: TauriEvent<unknown>) => void);
+        handlers.set(event, list);
+        return () => { handlers.set(event, (handlers.get(event) ?? []).filter((entry) => entry !== handler)); };
+      },
+    };
+    const emit = (event: string, payload: unknown) => act(() => { for (const handler of handlers.get(event) ?? []) handler({ event, id: 1, payload }); });
+    const listening = (event: string) => (handlers.get(event)?.length ?? 0) > 0;
+    return { transport, emit, listening };
+  }
+
+  it('queues a file from the raw drop payload and shows how many are coming while dragging', async () => {
+    const desktop = windowEvents();
+    const bridge = createInMemoryBridge({ items: [] });
+    const addFiles = vi.spyOn(bridge, 'addFiles');
+    render(<App bridge={bridge} selection={createTauriSelectionBoundary(desktop.transport)} />);
+    await screen.findByRole('main', { name: 'Intern' });
+    await waitFor(() => expect(desktop.listening('tauri://drag-enter') && desktop.listening('tauri://drag-drop')).toBe(true));
+
+    desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
+    expect(screen.getByText('Drop to add 1 file')).toBeVisible();
+    desktop.emit('tauri://drag-leave', null);
+    expect(screen.queryByText(/Drop to add/)).not.toBeInTheDocument();
+
+    desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf', 'C:/Docs/Scans'], position: { x: 1, y: 2 } });
+    expect(screen.getByText('Drop to add 2 files')).toBeVisible();
+    desktop.emit('tauri://drag-leave', null);
+
+    desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
+    desktop.emit('tauri://drag-drop', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
+
+    expect(screen.queryByText(/Drop to add/)).not.toBeInTheDocument();
+    expect(await screen.findByRole('row', { name: /a\.pdf/ })).toBeVisible();
+    expect(addFiles).toHaveBeenCalledWith([{ path: 'C:/Docs/a.pdf', displayName: 'a.pdf' }]);
   });
 });
 

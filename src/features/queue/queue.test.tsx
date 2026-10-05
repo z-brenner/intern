@@ -4,7 +4,8 @@ import { App } from '../../App';
 import { SUPPORTED_FORMATS_LABEL } from '../../lib/formats';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
-import type { AddReport } from '../../types';
+import type { AddReport, QueueItem } from '../../types';
+import type { QueueBridgeEvent } from '../../lib/tauriBridge';
 
 describe('queue interactions', () => {
   const selectRow = async (row: HTMLElement) => {
@@ -248,7 +249,9 @@ describe('queue interactions', () => {
 
     expect(action).toBeDisabled();
     finish?.();
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply rename' })).not.toBeInTheDocument());
+    // Done, review moves on to the next ready item, whose action is enabled.
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('NDA - Acme Corp.docx'));
+    expect(screen.getByRole('button', { name: 'Apply rename' })).toBeEnabled();
   });
 
   it('does not close a newer selection when an earlier item action completes', async () => {
@@ -262,7 +265,7 @@ describe('queue interactions', () => {
     await selectRow(screen.getByRole('row', { name: /NDA - Acme Corp/i }));
     finish?.();
 
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp.docx'));
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp'));
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
   });
 
@@ -280,7 +283,7 @@ describe('queue interactions', () => {
     await selectRow(screen.getByRole('row', { name: /Lease Agreement - 123 Main St/i }));
     finish?.();
 
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf'));
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc'));
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
   });
 
@@ -304,7 +307,7 @@ describe('queue interactions', () => {
   it('reports Clear history failures without emptying the completed view', async () => {
     const clearHistory = vi.fn(async () => { throw new Error('History is locked.'); });
     render(<App bridge={{ ...createInMemoryBridge(), clearHistory }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Completed' }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear history' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('History is locked.');
@@ -338,6 +341,35 @@ describe('queue interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel processing' }));
 
     await waitFor(() => expect(cancel).toHaveBeenCalledWith('active'));
+  });
+
+  // No figure ever comes from the backend, and "Processing (0%)" on every
+  // row read as stalled for the whole of a long OCR run.
+  it('processing without progress shows stage', async () => {
+    const bridge = createInMemoryBridge({ items: [
+      { id: 'reading', originalFilename: 'reading.pdf', status: 'processing', stage: 'reading' },
+      { id: 'naming', originalFilename: 'naming.pdf', status: 'processing', stage: 'naming' },
+      { id: 'filing', originalFilename: 'filing.pdf', status: 'processing', stage: 'filing', cancelable: false },
+      { id: 'counted', originalFilename: 'counted.pdf', status: 'processing', stage: 'reading', progress: 33.3333 },
+    ] });
+    render(<App bridge={bridge} />);
+
+    expect(await screen.findByRole('row', { name: /reading\.pdf/ })).toHaveTextContent('Reading document…');
+    expect(screen.getByRole('row', { name: /naming\.pdf/ })).toHaveTextContent('Proposing a name…');
+    expect(screen.getByRole('row', { name: /filing\.pdf/ })).toHaveTextContent('Renaming…');
+    expect(screen.getByRole('row', { name: /counted\.pdf/ })).toHaveTextContent('Reading document… (33%)');
+    expect(screen.queryByText(/\(0%\)/)).not.toBeInTheDocument();
+
+    await selectRow(screen.getByRole('row', { name: /naming\.pdf/ }));
+    expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('Proposing a name…');
+  });
+
+  it('shows the demo queue working without a made-up percentage', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+
+    const row = await screen.findByRole('row', { name: /Q1 Financials/ });
+    expect(row).toHaveTextContent('Proposing a name…');
+    expect(row).not.toHaveTextContent('%');
   });
 
   it('does not offer cancellation during the atomic apply stage', async () => {
@@ -379,7 +411,7 @@ describe('queue interactions', () => {
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
 
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
-    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   });
 
   it('filters the table from Queue to Completed navigation', async () => {
@@ -431,10 +463,220 @@ describe('queue interactions', () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
-    await bridge.keepOriginal('lease');
+    await bridge.approve('lease', '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf', '');
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeVisible();
     expect(screen.queryByRole('button', { name: /Approve & rename/i })).not.toBeInTheDocument();
   });
+
+  // A batch of forty used to run behind a disabled button with nothing said
+  // until the end, and nothing offered to take it back.
+  it('apply_all_shows_progress_and_undo_toast', async () => {
+    const base = createInMemoryBridge();
+    const release: Array<() => void> = [];
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      await new Promise<void>((resolve) => { release.push(resolve); });
+      await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    for (const step of [1, 2, 3]) {
+      await waitFor(() => expect(screen.getByRole('group', { name: 'Action progress' })).toHaveTextContent(`Applying ${step} of 3…`));
+      // Work still running cannot be dismissed, or undone half-way.
+      expect(within(screen.getByRole('group', { name: 'Action progress' })).queryByRole('button')).not.toBeInTheDocument();
+      await waitFor(() => expect(release).toHaveLength(step));
+      release[step - 1]();
+    }
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 3 documents.');
+    expect(within(result).getByRole('button', { name: 'Undo these 3 renames' })).toHaveTextContent('Undo');
+    expect(screen.queryByRole('group', { name: 'Action progress' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed 3 documents.');
+  });
+
+  it('undo_from_toast_reverts_batch', async () => {
+    const base = createInMemoryBridge();
+    let releaseFirst: (() => void) | undefined;
+    const undo = vi.fn(async (id: string) => {
+      if (id === 'employment') await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      await base.undo(id);
+    });
+    render(<App bridge={{ ...base, undo }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
+
+    // One at a time, as the backend undoes them: the next waits on the first.
+    await waitFor(() => expect(undo).toHaveBeenCalledWith('employment'));
+    expect(screen.getByRole('group', { name: 'Action progress' })).toHaveTextContent('Undoing 1 of 3…');
+    expect(undo).toHaveBeenCalledTimes(1);
+    releaseFirst?.();
+
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 3 renames.'));
+    expect(undo.mock.calls.map(([id]) => id)).toEqual(['employment', 'nda', 'service']);
+    for (const name of [/Employment Agreement/, /NDA - Acme Corp/, /Service Agreement/]) {
+      expect(screen.getByRole('row', { name })).toHaveTextContent('Needs review');
+    }
+    expect(screen.queryByRole('button', { name: /^Undo these/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Undid 3 renames.');
+    // Undo left with its toast; focus goes to the first document put back.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' })).toHaveFocus());
+  });
+
+  it('reports an undo the backend refuses and still undoes the rest', async () => {
+    const base = createInMemoryBridge();
+    const undo = vi.fn(async (id: string) => {
+      if (id === 'nda') throw { code: 'STATE_CONFLICT', message: 'The filed copy changed after it was renamed.' };
+      await base.undo(id);
+    });
+    render(<App bridge={{ ...base, undo }} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+    fireEvent.click(within(await screen.findByRole('group', { name: 'Action result' })).getByRole('button', { name: 'Undo these 3 renames' }));
+
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Undid 2 renames. 1 could not be undone. The filed copy changed after it was renamed.');
+    expect(undo).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole('row', { name: /Service Agreement/ })).toHaveTextContent('Needs review');
+    expect(screen.queryByRole('row', { name: /NDA - Acme Corp/ })).not.toBeInTheDocument();
+  });
+
+  it('offers Undo after a single rename, and Undo puts the document back', async () => {
+    const base = createInMemoryBridge();
+    const undo = vi.fn(base.undo);
+    render(<App bridge={{ ...base, undo }} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document.');
+    fireEvent.click(within(result).getByRole('button', { name: 'Undo this rename' }));
+
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 1 rename.'));
+    expect(undo).toHaveBeenCalledWith('employment');
+    expect(screen.getByRole('row', { name: /Employment Agreement/i })).toHaveTextContent('Needs review');
+  });
+
+  it('takes Undo away once another action follows, so it cannot read as undoing that one', async () => {
+    render(<App bridge={createInMemoryBridge()} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+    await screen.findByRole('group', { name: 'Action result' });
+
+    // Review has moved on to the next ready item; keeping it is not a rename.
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('NDA - Acme Corp.docx'));
+    fireEvent.click(screen.getByRole('button', { name: /Keep original/ }));
+
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Kept NDA - Acme Corp.docx under its own name.'));
+    expect(screen.queryByRole('group', { name: 'Action result' })).not.toBeInTheDocument();
+  });
+
+  // Accepted is not renamed: while the queue is busy the backend files an
+  // approved name between documents, and the item stays ready until then.
+  it('does not call an approval renamed until the queue shows it filed', async () => {
+    const base = createInMemoryBridge();
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      if (id === 'employment') await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document. 2 will be renamed when the queue is free.');
+    expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+  });
+
+  // Pipeline::complete_already_named: approving the name a document already
+  // has completes it as kept, with nothing renamed and nothing to undo. It
+  // was announced as "Renamed", and counted among the renames Undo offered.
+  it('does not call an approval of the name a document already has a rename', async () => {
+    const items: QueueItem[] = [
+      { id: 'named', originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' },
+      { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
+    ];
+    render(<App bridge={createInMemoryBridge({ items })} />);
+    await selectRow(await screen.findByRole('row', { name: /2024-05-01 Lease\.pdf/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('2024-05-01 Lease.pdf already had this name, so nothing was renamed. Next: memo.pdf.'));
+    expect(screen.getByRole('status', { name: 'Action status' })).not.toHaveTextContent('Renamed');
+    expect(screen.queryByRole('group', { name: 'Action result' })).not.toBeInTheDocument();
+  });
+
+  it('counts what Apply all ready found already named apart from what it renamed', async () => {
+    const items: QueueItem[] = [
+      { id: 'named', originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' },
+      { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
+      { id: 'notice', originalFilename: 'notice.pdf', status: 'ready', proposedFilename: '2024-05-03 Notice.pdf' },
+    ];
+    const base = createInMemoryBridge({ items });
+    const undo = vi.fn(base.undo);
+    render(<App bridge={{ ...base, undo }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 2 documents. 1 already had its name.');
+    fireEvent.click(within(result).getByRole('button', { name: 'Undo these 2 renames' }));
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 2 renames.'));
+    expect(undo.mock.calls.map(([id]) => id)).toEqual(['memo', 'notice']);
+  });
+
+  /**
+   * The desktop raises queue://changed as a command files a document, and
+   * the event can arrive after the command's reply - while the action's own
+   * reread is under way. The background read it starts supersedes that
+   * reread, which is then never shown; here the newer read is held until the
+   * test lets it go, so what is on screen is still the queue from before.
+   */
+  const eventAfterReply = () => {
+    const base = createInMemoryBridge();
+    let listener: ((event: QueueBridgeEvent) => void) | undefined;
+    let phase: 'idle' | 'decided' | 'event' = 'idle';
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const bridge = {
+      ...base,
+      approve: async (id: string, filename: string, description: string) => { await base.approve(id, filename, description); phase = 'decided'; },
+      listItems: async () => {
+        if (phase === 'event') { phase = 'idle'; await held; }
+        const read = await base.listItems();
+        if (phase === 'decided') { phase = 'event'; queueMicrotask(() => listener?.({ type: 'changed' })); }
+        return read;
+      },
+      subscribeQueue: async (next: (event: QueueBridgeEvent) => void) => { listener = next; return () => { listener = undefined; }; },
+    };
+    return { bridge, release };
+  };
+
+  it('says what a rename did from its own read, not one a queue event overtook', async () => {
+    const { bridge, release } = eventAfterReply();
+    render(<App bridge={bridge} />);
+    await selectRow(await screen.findByRole('row', { name: /Employment Agreement/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    // Filed and undoable, which only the read made after the rename can say.
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 1 document.');
+    expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+    release();
+  });
+
+  it('says what Apply all ready did from its own read, not one a queue event overtook', async () => {
+    const { bridge, release } = eventAfterReply();
+    render(<App bridge={bridge} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 3 documents.');
+    expect(result).not.toHaveTextContent('when the queue is free');
+    expect(within(result).getByRole('button', { name: 'Undo these 3 renames' })).toBeEnabled();
+    release();
+  });
 });
+

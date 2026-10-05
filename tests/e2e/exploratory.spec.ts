@@ -40,7 +40,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   for (const [name, status] of [
     ['Employment Agreement - John Smith.pdf', 'Ready'],
     ['Lease Agreement - 123 Main St.pdf', 'Needs review'],
-    ['Q1 Financials.pdf', 'Processing'],
+    ['Q1 Financials.pdf', 'Proposing a name'],
     ['Invoice INV-1001.pdf', 'Waiting'],
   ] as const) {
     await expect(page.getByRole('row', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })).toContainText(status);
@@ -71,7 +71,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   const drawer = page.getByRole('complementary', { name: 'Review item' });
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('Lease Agreement - 123 Main St.pdf');
-  await expect(drawer.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await expect(drawer.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await expect(drawer).toContainText('ABC Properties LLC');
   await expect(drawer).toContainText('TenantCo Inc.');
   await shot(page, 'review-drawer');
@@ -105,7 +105,7 @@ test('a rename without a date is refused, and one with a date is applied and und
   const drawer = page.getByRole('complementary', { name: 'Review item' });
 
   // Every applied name must start with the document's date.
-  await drawer.getByLabel('Filename').fill('Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await drawer.getByLabel('Filename').fill('Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await drawer.getByRole('button', { name: /Approve & rename/i }).click();
   await shot(page, 'date-required-refusal');
   await expect(page.getByRole('alert').filter({ hasText: /date/i }).first()).toBeVisible();
@@ -113,19 +113,65 @@ test('a rename without a date is refused, and one with a date is applied and und
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toContainText('Needs review');
 
   // With a date it applies.
-  await drawer.getByLabel('Filename').fill('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await drawer.getByLabel('Filename').fill('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await drawer.getByRole('button', { name: /Approve & rename/i }).click();
   await page.getByRole('button', { name: /^Completed/ }).click();
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toBeVisible();
   await shot(page, 'applied-shows-under-completed');
 
   // Undo returns the file and leaves the document waiting for a person.
+  // The panel's Undo: the toast from the rename offers one for the same item.
   await page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i }).getByRole('button', { name: /Select/ }).click();
-  await page.getByRole('button', { name: /^Undo/ }).click();
+  await drawer.getByRole('button', { name: 'Undo', exact: true }).click();
   await shot(page, 'after-undo');
   await page.getByRole('button', { name: /Needs Review/ }).click();
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toBeVisible();
   await shot(page, 'undone-waits-in-review');
+});
+
+// Retry used to be on every review item's menu, and the backend refused it
+// for an ordinary review reason. The menu offers re-analysis instead, which
+// forgets the proposal and reads the document again.
+test('analyze_again_on_review_item', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  await inspector.getByRole('button', { name: 'More review actions' }).click();
+  await expect(inspector.getByRole('button', { name: /Retry/i })).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Analyze again' }).click();
+
+  const row = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/ });
+  await expect(row).toContainText('Waiting');
+  await shot(page, 'analyze-again-waiting');
+  await expect(row).toContainText('Needs review');
+  await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
+});
+
+// The error banner was centred on the window, and in the narrow window it sat
+// over the drawer's own buttons. The toast is anchored at the bottom left of
+// the queue, and stays clear of the review panel beside it or over it.
+test('the undo toast stays clear of the review panel', async ({ page }) => {
+  for (const width of [1024, 1200]) {
+    await page.setViewportSize({ width, height: 768 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' }).click();
+    await page.getByRole('button', { name: /Apply rename/ }).click();
+    const result = page.getByRole('group', { name: 'Action result' });
+    await expect(result).toContainText('Renamed 1 document.');
+    // Review has gone on to the next ready item, panel and all.
+    await expect(page.locator('.inspector')).toContainText('NDA - Acme Corp.docx');
+    const overlaps = await page.evaluate(() => {
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+      const meet = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      return { panel: meet(box('.toasts'), box('.inspector')), actions: meet(box('.toasts'), box('.inspector-actions')) };
+    });
+    expect(overlaps, `at ${width} pixels`).toEqual({ panel: false, actions: false });
+    await shot(page, `undo-toast-${width}`);
+
+    await result.getByRole('button', { name: 'Undo this rename' }).click();
+    await expect(page.getByRole('group', { name: 'Action result' })).toContainText('Undid 1 rename.');
+    await expect(page.getByRole('row', { name: /Employment Agreement - John Smith\.pdf/ })).toContainText('Needs review');
+  }
 });
 
 test('pause, resume, apply all ready, and discard waiting all report what they did', async ({ page }) => {
@@ -219,6 +265,57 @@ test('the queue can be driven from the keyboard alone', async ({ page }) => {
   await shot(page, 'keyboard-opened-panel');
 });
 
+// FRONTEND_UX-10. Reaching Approve from a selected row took a Tab press per
+// remaining row, and after each decision focus went back to the toolbar. Five
+// decisions here, without the mouse: J and K to move, Enter to the name, and
+// Ctrl+Enter, Enter or Alt+K to decide - each landing in the next name.
+test('keyboard_only_review_of_five_items', async ({ page }) => {
+  await page.goto('/?reviewBatch=1');
+  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  const filename = inspector.getByLabel('Filename');
+  const row = (name: string) => page.getByRole('button', { name: `Select ${name}` });
+  await expect(inspector).toContainText('Scan 0101.pdf');
+
+  for (let press = 0; press < 30; press += 1) {
+    if (await page.evaluate(() => document.activeElement?.classList.contains('row-select'))) break;
+    await page.keyboard.press('Tab');
+  }
+  await expect(row('Scan 0101.pdf')).toBeFocused();
+  // The table is one Tab stop however many rows it has: the next press is
+  // already in the review panel.
+  await page.keyboard.press('Tab');
+  await expect(inspector.getByRole('button', { name: 'Close review' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+
+  await page.keyboard.press('j');
+  await expect(row('Scan 0102.pdf')).toBeFocused();
+  await expect(inspector).toContainText('Scan 0102.pdf');
+  await page.keyboard.press('k');
+  await expect(row('Scan 0101.pdf')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(filename).toBeFocused();
+  await expect(filename).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders');
+
+  const decide = async (keys: () => Promise<void>, next: string) => {
+    await keys();
+    await expect(filename).toHaveValue(next);
+    await expect(filename).toBeFocused();
+  };
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+  // A name corrected in place, and Enter files it.
+  await decide(async () => { await page.keyboard.press('End'); await page.keyboard.type(' (paid)'); await page.keyboard.press('Enter'); }, '2024-03-30 Statement of Work with Litware Inc');
+  await decide(() => page.keyboard.press('Alt+KeyK'), '2024-04-18 Lease Amendment for 500 Pine St');
+  // Needing review first, then ready.
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-03-14 Notice of Termination to Contoso Ltd');
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-04-02 Board Resolution of Tailspin Toys');
+  await shot(page, 'keyboard-review-five-decided');
+
+  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Renamed Scan 0103.pdf. Next: Scan 0105.pdf.');
+  await expect(inspector).toContainText('1 of 1 to decide');
+  await expect(page.getByRole('button', { name: /^Completed, / })).toHaveAccessibleName('Completed, 5');
+  await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
+});
+
 test('history lists finished operations newest first', async ({ page }) => {
   await page.goto('/');
   // History lives under Completed, beside Clear history.
@@ -256,6 +353,24 @@ test('the window stays usable at 1024 pixels and the drawer does not overflow', 
   await shot(page, 'narrow-1024');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow, 'the page must not scroll horizontally at 1024 pixels').toBeLessThanOrEqual(0);
+});
+
+// At 1200px the side inspector is still open, so the Status column is about
+// 84px of content. Unwrapped, "Needs review" and a processing label painted
+// over the proposed filename beside them.
+test('status cells do not overflow at 1200', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.goto('/');
+  await expect(page.getByRole('complementary', { name: 'Review item' })).toBeVisible();
+
+  const statuses = await page.locator('.table-wrap .status').evaluateAll((elements) => elements.map((status) => {
+    const cell = status.closest('td')!;
+    const style = getComputedStyle(cell);
+    const content = cell.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+    return { text: status.textContent, scrollWidth: status.scrollWidth, content };
+  }));
+  expect(statuses.length).toBeGreaterThanOrEqual(8);
+  for (const status of statuses) expect(status.scrollWidth, `"${status.text}" overflows its cell`).toBeLessThanOrEqual(status.content);
 });
 
 test('no console errors or failed requests during an ordinary session', async ({ page }) => {

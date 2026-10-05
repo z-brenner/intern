@@ -85,6 +85,48 @@ describe('rename history', () => {
     expect(await bridge.historyList()).toHaveLength(0);
   });
 
+  // Open and Show in folder reach a document where it is now, which the
+  // queue knows only for an item still in it, and only its newest row
+  // describes that place.
+  it('opens a filed document still in the queue from its newest history row', async () => {
+    const bridge = createInMemoryBridge();
+    const openItem = vi.fn(async () => undefined);
+    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    render(<App bridge={{ ...bridge, openItem, revealItem }} />);
+    const dialog = await openHistory();
+
+    expect(within(dialog).getAllByRole('button', { name: /^Open / })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open 2024-01-22 Lease Agreement.pdf' }));
+    await waitFor(() => expect(openItem).toHaveBeenCalledWith('completed'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show 2024-01-22 Lease Agreement.pdf in its folder' }));
+
+    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where Intern last saw it.');
+    expect(revealItem).toHaveBeenCalledWith('completed');
+  });
+
+  // An undo refused because the filed copy was held is rolled back and moves
+  // nothing; its row names the original as its new path, while the document
+  // is still filed. Open beside it said "Open Completed lease.pdf" and opened
+  // the filed copy.
+  it('names the filed copy, not a rolled-back undo\'s path, on the buttons that open it', async () => {
+    const bridge = createInMemoryBridge();
+    const listed = await bridge.historyList();
+    const historyList = async () => [
+      { receiptId: '11', queueItemId: 'completed', at: 1716400000, direction: 'undo' as const, kind: 'rename' as const, stage: 'rolled_back' as const, originalPath: 'C:\\Filed\\2024-01-22 Lease Agreement.pdf', newPath: 'C:\\Drop\\Completed lease.pdf' },
+      ...listed,
+    ];
+    const openItem = vi.fn(async () => undefined);
+    render(<App bridge={{ ...bridge, historyList, openItem }} />);
+    const dialog = await openHistory();
+
+    expect(within(dialog).getAllByRole('row')[1]).toHaveTextContent('Undo rolled back');
+    expect(within(dialog).getAllByRole('button', { name: /^Open / })).toHaveLength(1);
+    expect(within(dialog).queryByRole('button', { name: 'Open Completed lease.pdf' })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open 2024-01-22 Lease Agreement.pdf' }));
+    await waitFor(() => expect(openItem).toHaveBeenCalledWith('completed'));
+    expect(within(dialog).getByRole('button', { name: 'Show 2024-01-22 Lease Agreement.pdf in its folder' })).toBeVisible();
+  });
+
   it('closes on Escape and returns focus to the History trigger', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openHistory();

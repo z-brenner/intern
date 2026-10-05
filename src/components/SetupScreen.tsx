@@ -1,6 +1,7 @@
 import { Download, TriangleAlert } from 'lucide-react';
-import { byteCount, byteSize } from '../lib/format';
+import { formatBytes } from '../lib/format';
 import type { SetupState } from '../types';
+import { DownloadProgress } from './DownloadProgress';
 import { Icon } from './Icon';
 
 interface SetupScreenProps {
@@ -32,11 +33,11 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
       projector, from a design this pipeline no longer uses. The first screen a
       new user saw overstated the download by more than two and a half times.
     */}
-    <p>Download {setup.totalBytes > 0 ? `${byteSize(setup.totalBytes)} of ` : ''}model files, or choose matching files already on this computer.</p>
+    <p>Download {setup.totalBytes > 0 ? `${formatBytes(setup.totalBytes)} of ` : ''}model files, or choose matching files already on this computer.</p>
     <p>Your documents and filenames stay on this device. After setup, processing runs fully locally with no network dependency.</p>
     {operationError && <p className="setup-error" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-label="Setup status" aria-live="polite">Download canceled. Your progress was saved.</p>}
-    {showProgress && <><progress aria-label="Model setup progress" value={setup.downloadedBytes} max={setup.totalBytes} /><p aria-live="polite">{byteCount(setup.downloadedBytes)} of {byteCount(setup.totalBytes)} bytes</p></>}
+    {showProgress && <DownloadProgress setup={setup} />}
     <div className="setup-actions">
       <button type="button" className="primary" onClick={onStart} disabled={downloading || busy}>{downloading ? 'Downloading model…' : failed ? 'Try download again' : resumable ? 'Resume download' : 'Download model'}</button>
       {downloading && <button type="button" onClick={onCancel} disabled={busy}>Cancel setup</button>}
