@@ -173,6 +173,12 @@ function withManagedValues(draft: AppSettings, loaded: AppSettings): AppSettings
   return result;
 }
 
+/** The organisation's names as they are saved: one per line, trimmed, blank lines left out. */
+function withOwnNames(draft: AppSettings): AppSettings {
+  if (draft.ourNames === undefined) return draft;
+  return { ...draft, ourNames: draft.ourNames.map((name) => name.trim()).filter((name) => name.length > 0) };
+}
+
 function formatScanTime(lastScanAt: number | null): string {
   if (lastScanAt === null) return 'not yet';
   return new Date(lastScanAt * 1000).toLocaleTimeString();
@@ -318,10 +324,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setSaveError('');
     try {
       await storeKeyDraft();
+      const draft = withOwnNames(next);
       // "Only I add documents here" was said about the folder chosen in
       // folder setup; a different folder typed here has not been vouched for.
-      const vouched = next.intakeFolder === settings.intakeFolder ? next : { ...next, intakeMyFolder: false };
-      await onSave(managed ? withManagedValues(next, settings) : vouched);
+      const vouched = draft.intakeFolder === settings.intakeFolder ? draft : { ...draft, intakeMyFolder: false };
+      await onSave(managed ? withManagedValues(draft, settings) : vouched);
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -461,6 +468,16 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           {LAYOUTS.map((layout) => <option key={layout.value} value={layout.value}>{layout.label}</option>)}
         </select></label>
         <p className="check-hint">{LAYOUTS.find((layout) => layout.value === next.destinationLayout)?.example}{next.destinationLayout === 'flat' ? '.' : ' — a document missing that fact goes in an “Undated” or “Unsorted” folder, never loose in the root. Undo removes a folder it empties.'}</p>
+        {/*
+          A firm's own name is on almost everything it files, so a name that
+          carries every party says the firm over and over, and the Party
+          layout files a client's document in the firm's own folder whenever
+          the firm happens to be named first. One name per line, because a
+          firm goes by several. Kept as typed while editing; trimmed, without
+          blank lines, on save.
+        */}
+        <label>Your organisation's names<textarea rows={3} aria-describedby="own-names-hint" value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
+        <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
         <p className="check-hint">Anything Intern is less sure about still waits for you in Needs Review.</p>
       </section>

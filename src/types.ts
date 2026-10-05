@@ -35,6 +35,12 @@ export interface QueueItem {
    * document waits for a person instead of being filed twice.
    */
   nearDuplicateOf?: string;
+  /**
+   * Parties left out of the proposed name because they are the person's own
+   * organisation (Settings, "Your organisation's names"), as the document
+   * spells them. The evidence still shows them.
+   */
+  omittedParties?: string[];
 }
 
 /**
@@ -58,6 +64,12 @@ export type HostedProvider = 'anthropic' | 'openai_compatible';
 export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
+  /**
+   * The person's own organisation, one name per entry. A document that names
+   * it and someone else is named, and filed in the Party layout, by the
+   * someone else. Absent from an older backend.
+   */
+  ourNames?: string[];
   startMinimized: boolean;
   automaticRename: boolean;
   /** Watched intake folder path; "" = none configured. */

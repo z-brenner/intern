@@ -279,6 +279,14 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     await bridge.saveSettings(next);
     setSettings(next);
   };
+  // Naming the organisation renames what is still waiting. The desktop
+  // backend says so with a queue event; reading the queue once more shows it
+  // on a bridge that has no events, at the cost of one extra read on one that
+  // does. The settings are saved either way, so a failed read is left to the
+  // queue's own connection banner.
+  const refreshAfterSettings = async () => {
+    try { await refresh(); } catch { /* Reported as a queue connection error. */ }
+  };
   const installUpdate = async () => {
     setUpdateInstalling(true);
     setUpdateError('');
@@ -449,7 +457,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
   </main>;
 }
 

@@ -68,6 +68,7 @@ interface QueueItemDto {
   houseRules?: HouseRule[];
   nearDuplicateOf?: string;
   fileModifiedDate?: string;
+  omittedParties?: string[];
 }
 
 interface AddReportDto {
@@ -424,6 +425,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.houseRules?.length ? { houseRules: item.houseRules.map((rule) => ({ ...rule })) } : {}),
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
+    ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
   };
 }
 

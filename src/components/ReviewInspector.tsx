@@ -63,6 +63,7 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   const editable = item.status === 'ready' || item.status === 'review';
+  const omitted = item.omittedParties ?? [];
   // Each row is a claim the proposed filename makes, paired with the text in
   // the document that supports it. A bare definition list read as metadata
   // about the file; attributing a quotation to the part of the name it
@@ -92,6 +93,14 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
       */}
       {item.houseRules && item.houseRules.length > 0 && <p className="check-hint house-style-hint" role="note" aria-label="Learned spellings applied">
         Uses your spelling: {item.houseRules.map((rule, index) => <span key={`${rule.kind}-${rule.from}`}>{index > 0 ? '; ' : ''}<q>{rule.from}</q> written as <strong>{rule.to}</strong></span>)}. Change or forget it under Settings.
+      </p>}
+      {/*
+        The same for a party the evidence names and the name does not: the
+        person's own organisation, left out so the name says who the
+        document is with.
+      */}
+      {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
+        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organisation, so it is' : 'are your organisation, so they are'} left out of the name. Change this under Settings.
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:

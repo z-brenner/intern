@@ -67,6 +67,12 @@ const alpha9Settings: AppSettings = {
   runInBackground: false, startAtLogin: false, recordDescriptions: true,
   modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: 'https://models.example.test/v1', hostedModel: 'example-model',
 };
+/*
+  The same file as this build reads it back: every saved value as it was, and
+  the organisation's names - which alpha.9 never wrote - as the empty list the
+  backend's serde default gives them, which names nobody.
+*/
+const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [] };
 const alpha9Items: QueueItem[] = [
   { id: 'alpha9-filed', originalFilename: 'scan-0001.pdf', status: 'completed', proposedFilename: '2025-03-04 Invoice from Northwind.pdf', confidence: 0.94, undoable: true },
   { id: 'alpha9-review', originalFilename: 'scan-0002.pdf', status: 'review', proposedFilename: '2025-03-05 Lease Amendment.pdf', confidence: 0.61 },
@@ -88,7 +94,7 @@ describe('updating from alpha.9', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Yes, this is my account' }));
     // Nothing is overwritten before the person turns filing on.
     await screen.findByRole('heading', { name: 'Turn on filing' });
-    expect(await bridge.getSettings()).toEqual(alpha9Settings);
+    expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on filing' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open Intern' }));
@@ -132,7 +138,7 @@ describe('updating from alpha.9', () => {
     expect(await screen.findByRole('row', { name: /scan-0002.pdf/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set up Intern' })).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Setup steps' })).not.toBeInTheDocument();
-    expect(await bridge.getSettings()).toEqual(alpha9Settings);
+    expect(await bridge.getSettings()).toEqual(alpha9SettingsAsRead);
     expect(await bridge.listItems()).toEqual(alpha9Items);
   });
 });

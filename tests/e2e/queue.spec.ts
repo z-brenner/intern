@@ -47,3 +47,30 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await page.getByRole('button', { name: 'Needs Review' }).click();
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toBeVisible();
 });
+
+test('naming your organisation in Settings files a waiting proposal by the other side', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
+  const lease = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i });
+  await expect(lease).toContainText('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+
+  await page.getByRole('button', { name: /Settings/i }).click();
+  const dialog = page.getByRole('dialog', { name: /Settings/i });
+  // One name per line; the blank line a list picks up is not a name.
+  await dialog.getByLabel('Your organisation\'s names').fill('TenantCo Inc.\n\n');
+  await dialog.getByRole('button', { name: 'Save settings' }).click();
+  await expect(dialog).toBeHidden();
+
+  // The queue shows the new name at once, by the counterparty alone, and the
+  // inspector says why the evidence names a party the name does not.
+  await expect(lease).toContainText('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
+  await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
+  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organisation, so it is left out of the name. Change this under Settings.');
+  await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
+
+  // Saved as the backend stores it.
+  await page.getByRole('button', { name: /Settings/i }).click();
+  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organisation\'s names')).toHaveValue('TenantCo Inc.');
+});

@@ -218,6 +218,20 @@ describe('TauriBridge', () => {
     expect(items[5].cancelable).toBe(false);
   });
 
+  it('carries the parties a name left out as the organisation\'s own, and nothing when there are none', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'sow.pdf', status: 'ready', proposedFilename: '2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf', omittedParties: ['Contoso Worldwide, Inc.'] },
+        { id: 2, originalFilename: 'nda.pdf', status: 'ready', proposedFilename: '2026-04-01 NDA with Acme.pdf', omittedParties: [] },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0].omittedParties).toEqual(['Contoso Worldwide, Inc.']);
+    expect(items[1]).not.toHaveProperty('omittedParties');
+  });
+
   // The backend's status vocabulary can grow ahead of this build. An unmapped
   // one used to fall out of the switch as undefined, and the row then failed
   // every view's status filter and disappeared from the queue entirely.

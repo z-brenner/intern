@@ -24,6 +24,52 @@ const seedItems: QueueItem[] = [
 ];
 
 /**
+ * What a seeded proposal naming two parties was composed from, so that naming
+ * the organisation in Settings renames it the way the desktop backend's
+ * counterparty view does. A row naming one party needs no entry: the only
+ * party is never left out.
+ */
+interface SeedName { stem: string; parties: [string, string]; extension: string }
+
+const seedNames: Record<string, SeedName> = {
+  lease: { stem: '2023-09-15 Lease Agreement', parties: ['ABC Properties LLC', 'TenantCo Inc.'], extension: 'pdf' },
+};
+
+/** HouseRule::key: case, punctuation and spacing disregarded. */
+function nameKey(value: string): string {
+  return value.replace(/[^\p{L}\p{N}\s]/gu, '').toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+}
+
+/**
+ * The backend's is_own_name: the same key, or that key followed by more whole
+ * words, either way round. An own name under four characters names nobody.
+ */
+function isOwnName(party: string, own: string): boolean {
+  const ownKey = nameKey(own);
+  const partyKey = nameKey(party);
+  if ([...ownKey].length < 4 || !partyKey) return false;
+  return partyKey === ownKey || partyKey.startsWith(`${ownKey} `) || ownKey.startsWith(`${partyKey} `);
+}
+
+/** A party as a filename carries it, without the trailing period a name segment cannot end in. */
+const nameSegment = (party: string) => party.replace(/[. ]+$/, '');
+
+/** The counterparty view of a seeded two-party proposal, composed as its name. */
+function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFilename' | 'omittedParties'> {
+  const mine = (party: string) => own.some((entry) => isOwnName(party, entry));
+  const others = name.parties.filter((party) => !mine(party));
+  const omitted = name.parties.filter(mine);
+  if (!omitted.length || !others.length) {
+    return { proposedFilename: `${name.stem} between ${nameSegment(name.parties[0])} and ${nameSegment(name.parties[1])}.${name.extension}` };
+  }
+  // "between" needs two sides; the one left is "with" it.
+  return { proposedFilename: `${name.stem} with ${nameSegment(others[0])}.${name.extension}`, omittedParties: omitted };
+}
+
+/** Own names as the backend stores them: trimmed, blank lines left out. */
+const ownNames = (names: string[]) => names.map((name) => name.trim()).filter((name) => name.length > 0);
+
+/**
  * Plausible finished operations for browser dev and tests, newest first —
  * the order the desktop backend returns. Timestamps are fixed so renders are
  * deterministic.
@@ -121,7 +167,7 @@ function skipCode(file: FileSelection): string | undefined {
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -273,6 +319,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const idByPath = new Map<string, string>();
   const pathById = new Map<string, string>();
   const update = (id: string, change: Partial<QueueItem>) => { items = items.map((item) => item.id === id ? { ...item, ...change } : item); };
+  // The seeded proposals still named from their facts. A name a person
+  // approved is theirs: it leaves this map and keeps what they typed.
+  const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
+  // Mirrors the backend's refresh_own_names: a document still waiting for a
+  // decision is named by the other side when Settings names the organisation,
+  // and by both sides again when it no longer does.
+  const renameWaiting = () => {
+    const own = settings.ourNames ?? [];
+    items = items.map((item) => {
+      const name = composedNames.get(item.id);
+      if (!name || (item.status !== 'ready' && item.status !== 'review')) return item;
+      const { proposedFilename, omittedParties } = seededName(name, own);
+      if (proposedFilename === item.proposedFilename && omittedParties?.join('\n') === item.omittedParties?.join('\n')) return item;
+      // A new revision, as the backend's recompose records one, so an open
+      // inspector takes the new name instead of keeping the old one as a draft.
+      const renamed: QueueItem = { ...item, proposedFilename, proposalRevision: String(Number(item.proposalRevision ?? 1) + 1) };
+      delete renamed.omittedParties;
+      return omittedParties ? { ...renamed, omittedParties } : renamed;
+    });
+  };
+  renameWaiting();
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
   // Mirrors the backend's partial add: what it would leave out is reported by
   // name, everything else is queued, and a path already queued says so.
@@ -310,6 +377,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // Mirrors the backend's gate: a rename carries a date or it does not happen.
     approve: async (id, filename, description) => {
       if (!leadingDate(filename)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
+      composedNames.delete(id);
       update(id, { status: 'completed', proposedFilename: filename, description, undoable: true });
       noteRecorded();
     },
@@ -330,7 +398,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         if (hostedKey === undefined) throw { code: 'HOSTED_MODEL_KEY_MISSING', message: 'no API key is stored for the hosted model' };
         if (hostedEndpoint(next) === null) throw { code: 'HOSTED_MODEL_MISCONFIGURED', message: 'the hosted model\'s address or model name is not usable' };
       }
-      settings = { ...next };
+      settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
+      renameWaiting();
     },
     getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
     getOnboarding: async (): Promise<OnboardingStatus> => ({
