@@ -1486,7 +1486,7 @@ pub async fn document_open(id: String, state: State<'_, AppState>) -> Result<(),
     tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
         let items = pipeline.list()?;
         let path = openable_document(locate_document(items.iter().find(|item| item.id == id))?)?;
-        tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|_| CommandError {
+        tauri_plugin_opener::open_path(shell_path(&path), None::<&str>).map_err(|_| CommandError {
             code: "OPEN_FAILED".into(),
             message: "the system could not open the document".into(),
         })
@@ -1556,6 +1556,18 @@ fn locate_document(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError>
             code: "PATH_UNAVAILABLE".into(),
             message: "the document is not where Intern last saw it".into(),
         })
+}
+
+/// The spelling of a queue path to hand to the shell. Queue paths are stored
+/// canonical, which on Windows is the verbatim `\\?\C:\...` form: every file
+/// API takes it, but `open_path` puts a file's path into ShellExecuteExW as it
+/// is, the shell namespace does not reliably accept the prefix, and the
+/// viewer it starts receives it through `"%1"` unchanged. Both libraries
+/// simplify the path on their other shell routes (Show in folder, a folder's
+/// Open); this does the same for a file, keeping the verbatim form only where
+/// the plain one would not name it - too long, or a trailing dot or space.
+fn shell_path(path: &Path) -> PathBuf {
+    PathBuf::from(display_path(path))
 }
 
 /// Opening hands the file to whatever program the system associates with it,
@@ -3088,14 +3100,14 @@ mod ipc_thread_tests {
 
 #[cfg(test)]
 mod document_path_tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use intern_core::{
         ErrorCode, OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
     };
     use intern_queue::PipelineItem;
 
-    use super::{document_path, locate_document, openable_document};
+    use super::{document_path, locate_document, openable_document, shell_path};
 
     fn item(status: QueueStatus, receipt: Option<OperationReceipt>) -> PipelineItem {
         PipelineItem {
@@ -3196,6 +3208,27 @@ mod document_path_tests {
         }
         // Mid-operation the file is between its two names.
         assert_eq!(document_path(&item(QueueStatus::Applying, None)), None);
+    }
+
+    #[test]
+    fn the_shell_is_given_the_plain_spelling_of_a_verbatim_path() {
+        let shell = |path: &str| shell_path(Path::new(path));
+        assert_eq!(
+            shell(r"\\?\C:\Drop\scan.pdf"),
+            PathBuf::from(r"C:\Drop\scan.pdf")
+        );
+        assert_eq!(
+            shell(r"\\?\UNC\server\share\Filed\2024-03-01 Lease.pdf"),
+            PathBuf::from(r"\\server\share\Filed\2024-03-01 Lease.pdf")
+        );
+        // Without the prefix a trailing space or dot is dropped, which would
+        // name another file; such a path keeps it.
+        assert_eq!(
+            shell(r"\\?\C:\Drop\Old \scan.pdf"),
+            PathBuf::from(r"\\?\C:\Drop\Old \scan.pdf")
+        );
+        // A path that was never verbatim - every one outside Windows - is left alone.
+        assert_eq!(shell("/intake/scan.pdf"), PathBuf::from("/intake/scan.pdf"));
     }
 
     #[test]
