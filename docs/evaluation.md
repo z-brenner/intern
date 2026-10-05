@@ -131,6 +131,32 @@ the same, with `INTERN_RUNTIME_DIR` pointing at a directory holding
 `libpdfium.so`, a `tesseract.exe` symlink to the Tesseract binary, and
 `tessdata/`.
 
+## Re-recording only some fixtures
+
+A change to how the worker reads one kind of document - how scans are OCR'd,
+say - changes the prompts of only the fixtures of that kind, and only those
+need recording again. The rest of the committed recording cannot simply be
+recorded again with them: its text fixtures were edited by hand after they
+were recorded (see the `note`), and a live run does not reproduce those
+replies byte for byte. So record the corpus live into a scratch file and
+splice in just the fixtures the change touched:
+
+```text
+intern-evaluate ... --record /tmp/live-recording.json --output /tmp/after.json
+node scripts/splice-recording.mjs fixtures/corpus-recording.json /tmp/live-recording.json \
+  --note "what was re-recorded, when, and on what" scanned-lease.pdf document-image.png ...
+intern-evaluate ... --replay fixtures/corpus-recording.json --write-baseline fixtures/corpus-baseline.json
+```
+
+The script refuses recordings made for a different model or budget, a
+fixture recorded from different bytes (the fixture changed, so everything
+needs re-recording), and a live run that *read* any fixture it was not asked
+to splice differently - that is a finding about the change, not something to
+commit. A fixture whose reply alone differs is reported and left as it was.
+It splices the file as text, so every entry it did not touch stays
+byte-for-byte as `intern-evaluate` wrote it. The OCR fixtures were last
+re-recorded this way, after OCR began keeping Tesseract's line structure.
+
 ## Reading a report
 
 `--output report.json` writes the full report; without it, the report goes to

@@ -160,7 +160,8 @@ pub(crate) struct Walk {
 
 /// Recursive walk with the same skip rules as intern-queue's path handling:
 /// dot-names (which covers `.intern` itself), `~$` office lock files,
-/// unsupported extensions, zero-byte files, and symlinks.
+/// Intern's own history export, unsupported extensions, zero-byte files, and
+/// symlinks.
 ///
 /// Only the root has to be readable. A subfolder that refuses to be listed -
 /// a shared drive grants permissions per folder, and a sync client can remove
@@ -434,7 +435,9 @@ fn strip_iso_date(text: &str) -> Option<&str> {
 fn skipped_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
-        .is_none_or(|name| name.starts_with('.') || name.starts_with("~$"))
+        .is_none_or(|name| {
+            name.starts_with('.') || name.starts_with("~$") || intern_core::is_history_export(name)
+        })
 }
 
 fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
@@ -495,6 +498,60 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["keep.pdf".to_string()]);
         assert_eq!(walk.unreadable_folders, 0);
+    }
+
+    /// The host hands intake the one admission list, so a legacy Word or
+    /// Excel file is claimed like any other - and the `~$` lock file Office
+    /// keeps beside an open one still is not.
+    #[test]
+    fn the_shared_list_admits_legacy_formats_and_still_skips_their_lock_files() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for name in ["letter.doc", "ledger.xls", "~$letter.doc", "~$ledger.xls"] {
+            fs::write(temp.path().join(name), b"x").unwrap();
+        }
+        let extensions = intern_core::SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect::<Vec<_>>();
+        let walk = walk_intake(temp.path(), &extensions).unwrap();
+        let names: Vec<String> = walk
+            .files
+            .iter()
+            .map(|facts| facts.relative_path.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["ledger.xls".to_string(), "letter.doc".to_string()]
+        );
+    }
+
+    /// Intern's history export is a CSV, and CSV is admitted. Saved into the
+    /// watched folder - the save dialog opens wherever the person last was -
+    /// it was claimed as a new upload, its every filed path and description
+    /// went to the model, and it was filed as a client document. A bank
+    /// export beside it is still claimed.
+    #[test]
+    fn interns_own_history_export_is_never_claimed() {
+        let temp = tempfile::TempDir::new().unwrap();
+        for name in [
+            "intern-history.csv",
+            "Intern-History (2).CSV",
+            "intern-history-march.csv",
+            "statement.csv",
+        ] {
+            fs::write(temp.path().join(name), b"at,direction\r\n").unwrap();
+        }
+        let extensions = intern_core::SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect::<Vec<_>>();
+        let walk = walk_intake(temp.path(), &extensions).unwrap();
+        let names: Vec<String> = walk
+            .files
+            .iter()
+            .map(|facts| facts.relative_path.clone())
+            .collect();
+        assert_eq!(names, vec!["statement.csv".to_string()]);
     }
 
     /// Windows updates a file's directory entry lazily, so the size a listing

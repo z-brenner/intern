@@ -2,9 +2,9 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
-use intern_worker::extract::{CancellationToken, PageSource};
+use intern_worker::extract::{CancellationToken, ExtractionWarning, PageSource};
 use intern_worker::limits::ResourceLimits;
-use intern_worker::sheet::{MAX_SHEET_COLS, MAX_SHEET_ROWS, extract_xlsx};
+use intern_worker::sheet::{MAX_CELL_CHARS, MAX_SHEET_COLS, MAX_SHEET_ROWS, extract_xlsx};
 use tempfile::TempDir;
 use zip::write::SimpleFileOptions;
 
@@ -179,11 +179,8 @@ fn rows_beyond_the_cap_are_elided_with_a_marker_instead_of_flooding_the_page() {
         "{text}"
     );
     assert!(text.ends_with("[... 25 more rows not shown]\n"), "{text}");
-    assert!(document.truncated);
-    assert_eq!(
-        document.warnings,
-        vec![intern_worker::extract::ExtractionWarning::TextTruncated]
-    );
+    assert!(!document.truncated);
+    assert_eq!(document.warnings, vec![ExtractionWarning::ContentElided]);
 }
 
 #[test]
@@ -207,7 +204,8 @@ fn columns_beyond_the_cap_are_elided_with_a_marker() {
         "{text}"
     );
     assert!(text.ends_with("[... 5 more columns not shown]\n"), "{text}");
-    assert!(document.truncated);
+    assert!(!document.truncated);
+    assert_eq!(document.warnings, vec![ExtractionWarning::ContentElided]);
 }
 
 #[test]
@@ -279,5 +277,74 @@ fn a_sheet_with_a_far_away_cell_renders_the_cap_without_allocating_the_bounding_
         text.ends_with("[... 1048575 more rows and 16383 more columns not shown]\n"),
         "{text}"
     );
-    assert!(document.truncated);
+    assert!(!document.truncated);
+    assert_eq!(document.warnings, vec![ExtractionWarning::ContentElided]);
+}
+
+/// An expense ledger runs to hundreds of rows, and what names it - the
+/// title, the date, the vendor - sits in the first five. Leaving the rest
+/// out is the window doing its job, marked where it happens, so it is
+/// reported as elision: a note the host can pass over, not a truncation
+/// that sends every long spreadsheet to review.
+#[test]
+fn deliberate_window_elision_is_content_elided_not_truncated() {
+    let mut rows = vec![
+        vec!["Expense Ledger".to_owned()],
+        vec!["Period".to_owned(), "March 2025".to_owned()],
+        vec![
+            "Vendor".to_owned(),
+            "Juniper Ridge Holdings Inc.".to_owned(),
+        ],
+        vec!["Prepared".to_owned(), "April 2, 2025".to_owned()],
+        vec!["Date".to_owned(), "Item".to_owned(), "Amount".to_owned()],
+    ];
+    rows.extend((0..345).map(|index| {
+        vec![
+            "2025-03-01".to_owned(),
+            format!("Line item {}", index + 1),
+            "12.50".to_owned(),
+        ]
+    }));
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_xlsx(&directory, &[("Ledger", inline_rows(&rows))]);
+
+    let document =
+        extract_xlsx(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap();
+    let text = &document.pages[0].text;
+
+    assert!(
+        text.contains("| Vendor | Juniper Ridge Holdings Inc. |"),
+        "{text}"
+    );
+    assert!(text.ends_with("[... 150 more rows not shown]\n"), "{text}");
+    assert!(!document.truncated);
+    assert_eq!(document.warnings, vec![ExtractionWarning::ContentElided]);
+    // The wire name the host reads.
+    assert_eq!(
+        serde_json::to_value(&document.warnings).unwrap(),
+        serde_json::json!(["CONTENT_ELIDED"])
+    );
+}
+
+/// A cell may hold 32,767 characters. One repeated across the window would
+/// render a table hundreds of megabytes long before any page cap saw it.
+#[test]
+fn an_oversized_cell_is_cut_before_it_is_rendered() {
+    let long = "x".repeat(MAX_CELL_CHARS * 3);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_xlsx(
+        &directory,
+        &[("Notes", inline_rows(&[vec!["Memo".to_owned(), long]]))],
+    );
+
+    let document =
+        extract_xlsx(&path, &ResourceLimits::default(), &CancellationToken::new()).unwrap();
+    let text = &document.pages[0].text;
+
+    assert!(
+        text.contains(&format!("| Memo | {}… |", "x".repeat(MAX_CELL_CHARS))),
+        "{}",
+        text.len()
+    );
+    assert!(!text.contains(&"x".repeat(MAX_CELL_CHARS + 1)));
 }

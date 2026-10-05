@@ -54,7 +54,7 @@ describe('clean-room fixture generator', () => {
       'order-form.docx',
       'mixed-batch/duplicate-invoice-a.pdf',
       'mixed-batch/duplicate-invoice-b.pdf',
-      'mixed-batch/unsupported.csv',
+      'mixed-batch/unsupported.zip',
       'mixed-batch/~$nda.docx',
     ]));
     expect((await readFile(join(first, 'long-document-100-pages.pdf'), 'latin1')).match(/\/Type \/Page\b/g)).toHaveLength(100);

@@ -111,9 +111,10 @@ built into the installer. If you already have the file, **Choose existing model
 files** points Intern at it and skips the download. Nothing else needs
 installing — PDF text extraction, OCR, and inference all ship inside the app.
 
-Then drag documents or a folder onto the window — PDFs, Word documents, Excel
-workbooks, PowerPoint decks, `.eml` and Outlook `.msg` emails, plain text,
-Markdown, and scanned images. Names
+Then drag documents or a folder onto the window — PDFs, Word documents
+(`.docx`, `.doc`, `.rtf`, `.odt`), Excel workbooks and exports (`.xlsx`,
+`.xls`, `.ods`, `.csv`), PowerPoint decks (`.pptx`, `.ppt`, `.odp`), `.eml` and
+Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
 Intern can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
 until you approve it, either one item at a time or with **Apply all ready**,

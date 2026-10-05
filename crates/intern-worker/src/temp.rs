@@ -8,6 +8,16 @@ use crate::extract::{CancellationToken, ExtractionError};
 
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
+/// A private directory of files one request needs for as long as it runs,
+/// removed with everything in it when the request is done.
+///
+/// Nothing written here is ever flushed to the disk. Every file is read back
+/// by this process or by a Tesseract it starts, and both see the bytes
+/// through the operating system's cache the moment the write returns, and
+/// none of it is wanted after a crash: the host clears whatever a crashed
+/// worker left behind. Syncing every page image and every OCR output bought
+/// a disk flush per Tesseract pass - on Windows a full `FlushFileBuffers` -
+/// for durability nothing here needs.
 #[derive(Debug)]
 pub struct TempWorkspace {
     path: PathBuf,
@@ -90,8 +100,8 @@ impl TempWorkspace {
                 .create_new(true)
                 .open(&path)
                 .map_err(ExtractionError::io)?;
+            // Not synced: see the type's documentation.
             file.write_all(bytes).map_err(ExtractionError::io)?;
-            file.sync_all().map_err(ExtractionError::io)?;
             Ok(path.clone())
         })();
         if result.is_err() {
@@ -149,7 +159,6 @@ impl TempWorkspace {
                     .write_all(&buffer[..read])
                     .map_err(ExtractionError::io)?;
             }
-            output.sync_all().map_err(ExtractionError::io)?;
             Ok(path.clone())
         })();
         if result.is_err() {
@@ -196,7 +205,11 @@ impl Drop for TempWorkspace {
         if let Err(error) = fs::remove_dir_all(&self.path)
             && error.kind() != std::io::ErrorKind::NotFound
         {
-            eprintln!(
+            // Not eprintln!: stderr is a log file now, and eprintln! panics
+            // when the write fails - inside Drop, possibly while unwinding,
+            // which would abort the worker over a warning.
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "{{\"level\":\"warning\",\"code\":\"TEMP_CLEANUP_FAILED\",\"message\":{}}}",
                 serde_json::to_string(&error.to_string())
                     .unwrap_or_else(|_| "\"temporary cleanup failed\"".to_owned())

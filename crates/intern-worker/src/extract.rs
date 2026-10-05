@@ -15,7 +15,10 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::limits::{MAX_EXTRACTION_DURATION, MAX_VISION_LONG_EDGE, ResourceLimits, VISION_GRID};
+use crate::limits::{
+    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI,
+    ResourceLimits, VISION_GRID,
+};
 use crate::temp::TempWorkspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +28,7 @@ enum ExtractionErrorKind {
     Unsupported,
     NativeAssetsMissing,
     ParseFailed,
+    Encrypted,
     Io,
 }
 
@@ -71,6 +75,16 @@ impl ExtractionError {
         }
     }
 
+    /// A document that cannot be read without its password. Retrying cannot
+    /// help, and saying so plainly is what lets the person fix it: remove the
+    /// password and add the file again.
+    pub fn encrypted() -> Self {
+        Self {
+            kind: ExtractionErrorKind::Encrypted,
+            message: "document is password-protected".to_owned(),
+        }
+    }
+
     pub fn io(error: std::io::Error) -> Self {
         Self {
             kind: ExtractionErrorKind::Io,
@@ -84,6 +98,7 @@ impl ExtractionError {
             ExtractionErrorKind::ResourceLimit => "RESOURCE_LIMIT_EXCEEDED",
             ExtractionErrorKind::Unsupported => "UNSUPPORTED_FORMAT",
             ExtractionErrorKind::NativeAssetsMissing => "NATIVE_ASSETS_MISSING",
+            ExtractionErrorKind::Encrypted => "PASSWORD_PROTECTED",
             ExtractionErrorKind::ParseFailed | ExtractionErrorKind::Io => "PARSE_FAILED",
         }
     }
@@ -93,12 +108,38 @@ impl ExtractionError {
     }
 }
 
-#[derive(Debug)]
+/// Where a reader reports how far through a document it is: a stage name,
+/// how many pages it has finished, and how many there are, if it knows.
+///
+/// Finished, not reached: the window shows `current / total` as a
+/// percentage, and a one-page scan that announced page 1 of 1 as it went to
+/// OCR read as done for the whole of the OCR it was about to spend.
+pub type ProgressSink = Arc<dyn Fn(&'static str, usize, Option<usize>) + Send + Sync>;
+
 struct CancellationState {
     canceled: AtomicBool,
     deadline: Instant,
+    progress: Option<ProgressSink>,
 }
 
+impl std::fmt::Debug for CancellationState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationState")
+            .field("canceled", &self.canceled)
+            .field("deadline", &self.deadline)
+            .field("progress", &self.progress.is_some())
+            .finish()
+    }
+}
+
+/// What a reader carries for one request: whether to stop, and where to say
+/// how far it has got.
+///
+/// Progress rides on the token because the token already reaches every
+/// reader and every page loop, and because neither belongs in the readers'
+/// signatures: a reader that has nothing to report never sees a sink, and
+/// one that does report cannot tell a sink from none.
 #[derive(Clone, Debug)]
 pub struct CancellationToken(Arc<CancellationState>);
 
@@ -110,11 +151,30 @@ impl Default for CancellationToken {
 
 impl CancellationToken {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// A token whose readers' progress goes to `sink`.
+    pub fn reporting_to(sink: ProgressSink) -> Self {
+        Self::build(Some(sink))
+    }
+
+    fn build(progress: Option<ProgressSink>) -> Self {
         Self(Arc::new(CancellationState {
             canceled: AtomicBool::new(false),
             deadline: Instant::now() + MAX_EXTRACTION_DURATION,
+            progress,
         }))
     }
+
+    /// Says how far through the document a reader is. Cheap enough to call
+    /// once per page: deciding whether it is worth sending is the sink's.
+    pub fn report_progress(&self, stage: &'static str, current: usize, total: Option<usize>) {
+        if let Some(sink) = &self.0.progress {
+            sink(stage, current, total);
+        }
+    }
+
     pub fn cancel(&self) {
         self.0.canceled.store(true, Ordering::SeqCst);
     }
@@ -209,6 +269,80 @@ pub fn better_reading(incumbent: OcrResult, challenger: OcrResult) -> OcrResult 
     }
 }
 
+/// Words an upright reading has to find, besides being confident, to be
+/// accepted without asking which way up the page is.
+pub const UPRIGHT_WORDS: usize = 3;
+
+/// Whether a page read as it came is done, with no orientation detection at
+/// all.
+///
+/// Nearly every page is upright, and reading it upright first means the
+/// common case costs one recognition pass. Orientation detection used to run
+/// first on every page - and on dense all-caps pages it was confidently
+/// wrong, reporting 180 degrees on the corpus's upright lease and buying
+/// four recognition passes to find the orientation the page already had.
+/// A sideways or inverted page read as-is comes back as low-confidence
+/// gibberish, so confidence is the test; the word floor stops two
+/// confident specks on an otherwise unread page from passing it.
+pub fn upright_reading_is_accepted(reading: &OcrResult) -> bool {
+    reading.mean_confidence >= CONFIDENT_READING
+        && reading.text.split_whitespace().count() >= UPRIGHT_WORDS
+}
+
+/// The passes reading one page can cost, as [`read_upright`] sees them.
+///
+/// The Tesseract adapter runs each one as a process. The decisions between
+/// them need no Tesseract at all, which is what lets them be held to account
+/// on the platform this ships on.
+pub trait OrientationPasses {
+    /// Reads the page turned clockwise by `rotation_degrees`. Asked at most
+    /// once for any one rotation.
+    fn recognize(&mut self, rotation_degrees: u16) -> Result<OcrResult, ExtractionError>;
+
+    /// The clockwise rotation orientation detection says the page needs.
+    fn detect_orientation(&mut self) -> Result<u16, ExtractionError>;
+}
+
+/// Reads a page the right way up, in as few passes as the page allows.
+///
+/// The page is read as it came, first. A confident reading of it is done -
+/// that is nearly every page, at one recognition and no detection - and so
+/// is a reading that found nothing: a blank page is blank in every
+/// orientation, and asking which way up it is buys nothing. Only an
+/// unconvincing reading asks orientation detection, and then the search
+/// over the other orientations runs as it always has. The upright reading
+/// is one of its candidates and is never read twice: it is compared as it
+/// already came back.
+pub fn read_upright(passes: &mut dyn OrientationPasses) -> Result<OcrResult, ExtractionError> {
+    let upright = passes.recognize(0)?;
+    if upright_reading_is_accepted(&upright) || upright.text.trim().is_empty() {
+        return Ok(upright);
+    }
+    let rotation = passes.detect_orientation()?;
+    let mut best = if rotation == 0 {
+        upright.clone()
+    } else {
+        passes.recognize(rotation)?
+    };
+    // A page that reads confidently in the orientation detection asked for
+    // is done, and so is one that read as blank.
+    for candidate in [270, 90, 180, 0] {
+        if !orientation_search_is_worthwhile(&best) {
+            break;
+        }
+        if candidate == rotation {
+            continue;
+        }
+        let attempt = if candidate == 0 {
+            upright.clone()
+        } else {
+            passes.recognize(candidate)?
+        };
+        best = better_reading(best, attempt);
+    }
+    Ok(best)
+}
+
 /// Whether reading this page again in another orientation could tell us
 /// anything.
 ///
@@ -243,12 +377,26 @@ pub trait PdfBackend {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError>;
+
+    /// Renders a page at 300 DPI, or, if that would be more than
+    /// `max_pixels`, at the highest resolution that is not.
+    fn render_within(
+        &self,
+        path: &Path,
+        page_index: usize,
+        max_pixels: u64,
+        cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError>;
+
+    /// Renders a page at 300 DPI.
     fn render(
         &self,
         path: &Path,
         page_index: usize,
         cancel: &CancellationToken,
-    ) -> Result<RenderedPage, ExtractionError>;
+    ) -> Result<RenderedPage, ExtractionError> {
+        self.render_within(path, page_index, u64::MAX, cancel)
+    }
 }
 
 pub trait OcrBackend {
@@ -282,7 +430,15 @@ pub struct ExtractedPage {
 pub enum ExtractionWarning {
     LowOcrConfidence,
     NativeTextCorrupt,
+    /// Text that was lost: a page cut at the size cap, frames of a TIFF that
+    /// were never read. What was dropped is unknown, so it may be the fact
+    /// that names the document.
     TextTruncated,
+    /// Content deliberately left out by design and marked where it was left
+    /// out - the rows and columns past a spreadsheet's rendered window. The
+    /// reader chose what to show and says what it skipped, so this is a note
+    /// about the document's size, not a doubt about what was read.
+    ContentElided,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -379,12 +535,15 @@ pub fn extract_pdf(
     timed_check(cancel, started, limits)?;
     let inspections = pdf.inspect(path, cancel)?;
     limits.validate_page_count(inspections.len())?;
-    let mut pages = Vec::with_capacity(inspections.len());
+    let page_count = inspections.len();
+    let mut pages = Vec::with_capacity(page_count);
     let mut warnings = Vec::new();
     let mut vision_candidate: Option<VisionImage> = None;
 
     for inspection in inspections {
         timed_check(cancel, started, limits)?;
+        let page_number = inspection.page_index + 1;
+        cancel.report_progress("reading", inspection.page_index, Some(page_count));
         // The render cap belongs to rendering. A large-format sheet - an A1
         // drawing, a plan set - is over it at 300 DPI while carrying a
         // perfectly good text layer, and failing the whole document over a
@@ -407,7 +566,7 @@ pub fn extract_pdf(
                 )?);
             }
             pages.push(ExtractedPage {
-                page_number: inspection.page_index + 1,
+                page_number,
                 text: inspection.native_text,
                 source: PageSource::Native,
                 ocr_confidence: None,
@@ -422,12 +581,24 @@ pub fn extract_pdf(
             warnings.push(ExtractionWarning::NativeTextCorrupt);
         }
         // This page has no text worth keeping, so it has to be rendered to be
-        // read at all, and being too large to render is a resource limit.
-        limits.validate_page_pixels(inspection.width_pixels, inspection.height_pixels)?;
-        let rendered = pdf.render(path, inspection.page_index, cancel)?;
+        // read at all. A page too large to render at 300 DPI within the cap -
+        // a phone photo some tool turned into a PDF at 72 DPI, an A2 scan -
+        // is rendered at the resolution that fits, which Tesseract reads
+        // perfectly well; only a page that would need less than the floor
+        // to fit is a resource limit, and that is decided before anything
+        // is rendered.
+        if ocr_render_dpi(&inspection, limits.max_page_pixels) < MIN_OCR_DPI {
+            return Err(ExtractionError::resource_limit(
+                "page is too large to read within 25 megapixels at 50 DPI",
+            ));
+        }
+        let rendered =
+            pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel)?;
+        // The backend sized the render; this is what holds it to that.
         let (render_width, render_height) = rendered.image.dimensions();
         limits.validate_page_pixels(render_width, render_height)?;
         timed_check(cancel, started, limits)?;
+        cancel.report_progress("ocr", inspection.page_index, Some(page_count));
         let result = ocr.recognize(&rendered, cancel)?;
         let vision_escalated =
             vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
@@ -443,7 +614,7 @@ pub fn extract_pdf(
             )?);
         }
         pages.push(ExtractedPage {
-            page_number: inspection.page_index + 1,
+            page_number,
             text: result.text,
             source: PageSource::Ocr,
             ocr_confidence: Some(result.mean_confidence),
@@ -457,6 +628,18 @@ pub fn extract_pdf(
         truncated: false,
         optional_image: vision_candidate,
     })
+}
+
+/// The resolution a page that has to be OCR'd is rendered at: 300 DPI, or as
+/// much less as brings its render within `max_pixels`. The inspection
+/// measured the page at 300 DPI, so the budget scales that.
+fn ocr_render_dpi(inspection: &PdfPageInspection, max_pixels: u64) -> f64 {
+    let pixels = u64::from(inspection.width_pixels) * u64::from(inspection.height_pixels);
+    if pixels <= max_pixels {
+        RENDER_DPI
+    } else {
+        RENDER_DPI * (max_pixels as f64 / pixels as f64).sqrt()
+    }
 }
 
 pub fn normalize_vision_image(
@@ -495,15 +678,8 @@ pub fn extract_anydoc(
     limits: &ResourceLimits,
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
-    cancel.check()?;
-    let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
-    limits.validate_source_size(metadata.len())?;
-    let bytes = std::fs::read(path).map_err(ExtractionError::io)?;
-    let format = expected_anydoc_format(path, &bytes)?;
-    enforce_office_decompressed_limit(path, limits, cancel)?;
-    cancel.check()?;
-    let markdown = anydoc::to_markdown_bytes(&bytes, format)
-        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let (bytes, format) = office_source(path, limits, cancel)?;
+    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(office_error)?;
     cancel.check()?;
     Ok(ExtractedDocument {
         pages: vec![ExtractedPage {
@@ -519,15 +695,65 @@ pub fn extract_anydoc(
     })
 }
 
-/// The parser an extension names, refusing content that disagrees with it.
+/// [`extract_anydoc`]'s parse as anydoc's document model rather than
+/// Markdown, for a reader that renders the content itself.
+pub(crate) fn anydoc_document(
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<anydoc::model::Document, ExtractionError> {
+    let (bytes, format) = office_source(path, limits, cancel)?;
+    let document = anydoc::to_document(&bytes, format).map_err(office_error)?;
+    cancel.check()?;
+    Ok(document)
+}
+
+/// An Office file read whole, with the parser its content and its extension
+/// agree on.
+fn office_source(
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<(Vec<u8>, anydoc::Format), ExtractionError> {
+    reject_encrypted_ole(path)?;
+    cancel.check()?;
+    let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
+    limits.validate_source_size(metadata.len())?;
+    let bytes = std::fs::read(path).map_err(ExtractionError::io)?;
+    let format = expected_anydoc_format(path, &bytes)?;
+    // The pre-pass follows what the file is rather than what it is called,
+    // so a `.doc` that is really a Word 2007 package is inflated under the
+    // same bound a `.docx` is, and a `.docx` that is really a binary Word
+    // file is not handed to a zip reader at all.
+    if format == anydoc::Format::Docx {
+        enforce_office_decompressed_limit(path, limits, cancel)?;
+    }
+    cancel.check()?;
+    Ok((bytes, format))
+}
+
+fn office_error(error: anydoc::ConvertError) -> ExtractionError {
+    match error {
+        anydoc::ConvertError::Encrypted => ExtractionError::encrypted(),
+        other => ExtractionError::parse_failed(other.to_string()),
+    }
+}
+
+/// The parser an extension names, refusing content of another kind.
 ///
 /// Left to itself anydoc picks its parser from the file's content and treats
 /// the extension as a fallback, so a workbook renamed `.docx` is rendered by
 /// its Excel path with none of the row and column caps spreadsheets are
 /// routed through here, and a PDF renamed `.pptx` reaches a PDF reader with
 /// no page cap, no OCR, and no page image. Routing in this crate is by
-/// extension, so content that is not what the extension names is a routing
-/// failure that belongs in review, not a document to parse anyway.
+/// extension, so content of a different kind than the extension names is a
+/// routing failure that belongs in review, not a document to parse anyway.
+///
+/// Content of the same kind is a different matter. Word has saved RTF under
+/// `.doc` for decades, and a `.doc` that is really a Word 2007 package (or a
+/// `.pptx` that is really a 97-2003 deck) is a mislabelled file of exactly
+/// the kind the extension promised. None of those reaches a reader without
+/// the caps it would otherwise have had, so they are read as what they are.
 fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, ExtractionError> {
     let extension = path
         .extension()
@@ -537,31 +763,87 @@ fn expected_anydoc_format(path: &Path, bytes: &[u8]) -> Result<anydoc::Format, E
     let named = anydoc::Format::from_extension(&extension).ok_or_else(|| {
         ExtractionError::unsupported(format!("no Office reader handles a .{extension} file"))
     })?;
-    // Content that identifies as nothing at all - an encrypted package, a
-    // container this version cannot recognise - is still handed to the parser
-    // the extension names, which reports what is actually wrong with it far
-    // better than a routing refusal would.
-    if anydoc::Format::from_bytes(bytes).is_some_and(|detected| detected != named) {
-        return Err(ExtractionError::unsupported(format!(
+    match anydoc::Format::from_bytes(bytes) {
+        // Content that identifies as nothing at all - a container this
+        // version cannot recognise - is still handed to the parser the
+        // extension names, which reports what is actually wrong with it far
+        // better than a routing refusal would.
+        None => Ok(named),
+        Some(detected) if detected == named => Ok(named),
+        Some(detected)
+            if office_family(detected)
+                .is_some_and(|family| Some(family) == office_family(named)) =>
+        {
+            Ok(detected)
+        }
+        Some(_) => Err(ExtractionError::unsupported(format!(
             "file content is not what its .{extension} extension names"
-        )));
+        ))),
     }
-    Ok(named)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfficeFamily {
+    WordProcessing,
+    Presentation,
+}
+
+/// The kinds of document whose formats are interchangeable for routing:
+/// every member is read by anydoc, uncapped, as one page of prose. Workbooks
+/// and PDFs belong to no family, because each has its own capped reader.
+fn office_family(format: anydoc::Format) -> Option<OfficeFamily> {
+    use anydoc::Format;
+    match format {
+        Format::Doc | Format::Docx | Format::Rtf | Format::Odt => {
+            Some(OfficeFamily::WordProcessing)
+        }
+        Format::Ppt | Format::Pptx | Format::Odp => Some(OfficeFamily::Presentation),
+        _ => None,
+    }
+}
+
+/// The signature every OLE compound file - binary Office, Outlook `.msg`, an
+/// encrypted Office package - starts with.
+pub(crate) const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Refuses an Office package that was saved with a password to open.
+///
+/// Office encrypts a `.docx` or `.xlsx` by wrapping it in an OLE compound
+/// file that holds an `EncryptionInfo` stream and the encrypted zip as
+/// `EncryptedPackage`. Nothing downstream can read that: the zip pre-pass
+/// rejects it as a corrupt archive and anydoc's detection identifies it as
+/// nothing, so without this check the person is told the file is damaged
+/// when it only needs its password removed.
+pub(crate) fn reject_encrypted_ole(path: &Path) -> Result<(), ExtractionError> {
+    let mut file = File::open(path).map_err(ExtractionError::io)?;
+    let mut magic = [0_u8; 8];
+    match file.read_exact(&mut magic) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
+        Err(error) => return Err(ExtractionError::io(error)),
+    }
+    if magic != OLE_MAGIC {
+        return Ok(());
+    }
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    // A compound file too damaged to open is not this check's to report: the
+    // reader the extension names says what is wrong with it.
+    let Ok(compound) = cfb::CompoundFile::open(file) else {
+        return Ok(());
+    };
+    if compound.exists("EncryptionInfo") || compound.exists("EncryptedPackage") {
+        return Err(ExtractionError::encrypted());
+    }
+    Ok(())
+}
+
+/// Inflates every entry of a zip-packaged Office file once, counting, and
+/// refuses the file before any parser does if the total passes the bound.
 pub(crate) fn enforce_office_decompressed_limit(
     path: &Path,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
 ) -> Result<(), ExtractionError> {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if !matches!(extension.as_str(), "docx" | "docm" | "xlsx") {
-        return Ok(());
-    }
     let file = File::open(path).map_err(ExtractionError::io)?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
@@ -591,6 +873,14 @@ pub(crate) fn enforce_office_decompressed_limit(
     Ok(())
 }
 
+/// The most of a text file that is ever read.
+///
+/// One page carries at most [`MAX_PAGE_CHARS`] characters and a character is
+/// at most four bytes, so this many bytes always fill a page; reading a
+/// gigabyte log file whole to keep its first two million characters only
+/// costs memory.
+pub const MAX_TEXT_FILE_BYTES: u64 = 4 * MAX_PAGE_CHARS as u64;
+
 pub fn extract_text(
     path: &Path,
     limits: &ResourceLimits,
@@ -600,7 +890,7 @@ pub fn extract_text(
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
     limits.validate_source_size(metadata.len())?;
     let file = File::open(path).map_err(ExtractionError::io)?;
-    let mut reader = BufReader::new(file).take(limits.max_source_bytes + 1);
+    let mut reader = BufReader::new(file).take(MAX_TEXT_FILE_BYTES + 1);
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -611,9 +901,17 @@ pub fn extract_text(
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
-    limits.validate_source_size(bytes.len() as u64)?;
-    let (text, lossy) = decode_text(&bytes);
+    let truncated = bytes.len() as u64 > MAX_TEXT_FILE_BYTES;
+    bytes.truncate(MAX_TEXT_FILE_BYTES as usize);
+    let (text, suspect) = decode_text(&bytes, truncated);
     cancel.check()?;
+    let mut warnings = Vec::new();
+    if suspect {
+        warnings.push(ExtractionWarning::NativeTextCorrupt);
+    }
+    if truncated {
+        warnings.push(ExtractionWarning::TextTruncated);
+    }
     Ok(ExtractedDocument {
         pages: vec![ExtractedPage {
             page_number: 1,
@@ -622,27 +920,32 @@ pub fn extract_text(
             ocr_confidence: None,
             vision_escalated: false,
         }],
-        warnings: if lossy {
-            vec![ExtractionWarning::NativeTextCorrupt]
-        } else {
-            vec![]
-        },
-        truncated: false,
+        warnings,
+        truncated,
         optional_image: None,
     })
 }
 
-/// Decodes a text file by its byte-order mark, and says whether anything was
-/// replaced on the way.
+/// Decodes a text file by its byte-order mark, and says whether the result
+/// is suspect.
 ///
 /// Notepad and PowerShell's redirection still write UTF-16, and a mark on a
 /// UTF-8 file is ordinary; neither is a document to refuse, and the mark
-/// itself is not a character of the document. Bytes that decode as nothing
-/// known are read lossily rather than lost: half a document with a warning
-/// beats a file the queue cannot open at all.
-fn decode_text(bytes: &[u8]) -> (String, bool) {
-    fn from_utf16(units: impl Iterator<Item = u16>) -> (String, bool) {
-        let units = units.collect::<Vec<_>>();
+/// itself is not a character of the document. Unmarked text that is not
+/// UTF-8 is, on the Windows machines these files come from, almost always
+/// Windows-1252 - an accounting export, a note saved by an old editor - and
+/// reads correctly as that. `cut` says the bytes stop where reading stopped
+/// rather than where the file did, so a character split there is dropped
+/// instead of condemning the whole file.
+fn decode_text(bytes: &[u8], cut: bool) -> (String, bool) {
+    fn from_utf16(mut units: Vec<u16>, cut: bool) -> (String, bool) {
+        if cut
+            && units
+                .last()
+                .is_some_and(|unit| (0xD800..0xDC00).contains(unit))
+        {
+            units.pop();
+        }
         match String::from_utf16(&units) {
             Ok(text) => (text, false),
             Err(_) => (String::from_utf16_lossy(&units), true),
@@ -651,22 +954,53 @@ fn decode_text(bytes: &[u8]) -> (String, bool) {
     match bytes {
         [0xFF, 0xFE, rest @ ..] => from_utf16(
             rest.chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect(),
+            cut,
         ),
         [0xFE, 0xFF, rest @ ..] => from_utf16(
             rest.chunks_exact(2)
-                .map(|pair| u16::from_be_bytes([pair[0], pair[1]])),
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect(),
+            cut,
         ),
-        [0xEF, 0xBB, 0xBF, rest @ ..] => from_utf8(rest),
-        _ => from_utf8(bytes),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => from_utf8(rest, cut),
+        _ => from_utf8(bytes, cut),
     }
 }
 
-fn from_utf8(bytes: &[u8]) -> (String, bool) {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_owned(), false),
-        Err(_) => (String::from_utf8_lossy(bytes).into_owned(), true),
+fn from_utf8(bytes: &[u8], cut: bool) -> (String, bool) {
+    let bytes = match std::str::from_utf8(bytes) {
+        Ok(text) => return (text.to_owned(), false),
+        // Only an incomplete character at the very end, where reading
+        // stopped: everything before it is good UTF-8.
+        Err(error) if cut && error.error_len().is_none() => &bytes[..error.valid_up_to()],
+        Err(_) => bytes,
+    };
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return (text.to_owned(), false);
     }
+    if holds_utf8_text(bytes) {
+        // UTF-8 with a damaged byte or two. Reading it as Windows-1252
+        // would turn every accented letter in it into two wrong ones.
+        return (String::from_utf8_lossy(bytes).into_owned(), true);
+    }
+    let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
+    // Windows-1252 leaves five byte values undefined, and the WHATWG
+    // decoder maps them to C1 controls. No Windows-1252 text contains them,
+    // so a file that does is in some other encoding altogether.
+    let suspect = text
+        .chars()
+        .any(|character| ('\u{80}'..='\u{9f}').contains(&character));
+    (text.into_owned(), suspect)
+}
+
+/// Whether bytes that are not valid UTF-8 nevertheless contain well-formed
+/// multi-byte UTF-8 characters. Windows-1252 text almost never does: an
+/// accented letter there is one byte, followed by an ordinary letter that a
+/// UTF-8 lead byte cannot be followed by.
+fn holds_utf8_text(bytes: &[u8]) -> bool {
+    bytes.utf8_chunks().any(|chunk| !chunk.valid().is_ascii())
 }
 
 /// Reads a standalone image file as a one-page document. There is no text
@@ -686,6 +1020,7 @@ pub fn extract_image(
     cancel.check()?;
     let image = load_oriented_image(path, limits)?;
     let rendered = RenderedPage::new(0, image);
+    cancel.report_progress("ocr", 0, Some(1));
     let result = ocr.recognize(&rendered, cancel)?;
     let mut warnings = Vec::new();
     if result.mean_confidence < CONFIDENT_READING {
@@ -794,6 +1129,20 @@ fn has_unread_frames(path: &Path) -> bool {
     next_directory(path).is_some_and(|next| next != 0)
 }
 
+/// Decodes an image file the right way up and no larger than a rendered page
+/// may be.
+///
+/// The file's own size is checked before any pixel is decoded, against a cap
+/// four times the page cap: a 48- or 50-megapixel phone photo of a receipt is
+/// an ordinary document, and refusing it outright lost the document. What is
+/// decoded is then scaled down to the page cap, so OCR, the page image, and
+/// everything after them see exactly the size a rendered PDF page would be.
+///
+/// The decoded image is the largest thing this holds, and nothing else of its
+/// size is made: it is scaled down before it is turned upright, so turning it
+/// copies a page-sized image rather than the photo, and the scaling writes
+/// straight into the page-sized copy. A 100-megapixel photo costs its 300 MB
+/// of pixels and a 75 MB page beside them.
 pub fn load_oriented_image(
     path: &Path,
     limits: &ResourceLimits,
@@ -807,15 +1156,40 @@ pub fn load_oriented_image(
         .into_decoder()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let (encoded_width, encoded_height) = decoder.dimensions();
-    limits.validate_page_pixels(encoded_width, encoded_height)?;
+    limits.validate_image_file_pixels(encoded_width, encoded_height)?;
+    limits.validate_image_file_bytes(decoder.total_bytes())?;
     let orientation = decoder
         .orientation()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
-    let mut image = DynamicImage::from_decoder(decoder)
+    let image = DynamicImage::from_decoder(decoder)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let mut image = within_page_pixels(image, limits.max_page_pixels);
+    // Turning an image keeps its pixel count, so the page it was scaled to
+    // is still within the cap once it is upright.
     image.apply_orientation(orientation);
     limits.validate_page_pixels(image.width(), image.height())?;
     Ok(image.into_rgb8().into())
+}
+
+/// The image scaled down, keeping its proportions, to at most `max_pixels`;
+/// an image already within them is returned as it is.
+fn within_page_pixels(image: DynamicImage, max_pixels: u64) -> DynamicImage {
+    let (width, height) = image.dimensions();
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels <= max_pixels {
+        return image;
+    }
+    // Each edge rounded down, so the two together cannot round back over
+    // the budget they were scaled to meet.
+    let scale = (max_pixels as f64 / pixels as f64).sqrt();
+    let scaled_width = (f64::from(width) * scale).floor().max(1.0) as u32;
+    let scaled_height = (f64::from(height) * scale).floor().max(1.0) as u32;
+    // Each page pixel is the average of the photo pixels it covers, summed in
+    // integers straight into the page. The filtered resamplers first build a
+    // full-width copy in 32-bit floats per channel - half a gigabyte for a
+    // 48-megapixel photo - and at a reduction this large an area average is
+    // all OCR can see of the difference.
+    image.thumbnail_exact(scaled_width, scaled_height)
 }
 
 #[derive(Debug)]

@@ -280,6 +280,25 @@ describe('TauriBridge', () => {
     expect(fake.unlisten.get('queue://progress')).toHaveBeenCalledTimes(1);
   });
 
+  // The worker reports pages finished out of the page count, and a ratio that
+  // does not divide evenly reached the row as "Processing (33.33333333333333%)".
+  it('reports progress as a whole percent of the pages finished', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    await new TauriBridge(fake.transport).subscribeQueue(seen);
+    const report = (current: number, total: number | null) => fake.listeners.get('queue://progress')?.({
+      event: 'queue://progress', id: 3, payload: { itemId: 9, stage: 'reading', current, total },
+    });
+
+    report(1, 3);
+    report(2, 3);
+    report(39, 40);
+    report(0, 1);
+    report(1, null);
+
+    expect(seen.mock.calls.map(([event]) => event.progress)).toEqual([33, 66, 97, 0, undefined]);
+  });
+
   // The queue pauses itself when a failure would repeat for every document -
   // a refused key, a model that cannot be reached - and says so on the change
   // event. Dropping that here left the app with a queue that had stopped and

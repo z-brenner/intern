@@ -34,28 +34,106 @@ page is covered by images. A page goes to OCR only when it has fewer than 20
 meaningful characters under heavy image coverage, when it has fewer than 200 on
 a page that is essentially all image — a scan whose text layer is a Bates
 number or a "CONFIDENTIAL" stamp and nothing else — or when more than 3% of its
-characters came back as replacement glyphs. Office containers go through AnyDoc
-to Markdown, which preserves headings and tables, and only when the container's
-content is not something else: routing here is by extension, so a workbook
-renamed `.docx` — which AnyDoc would otherwise render through its uncapped
-Excel path — is a routing failure for review rather than a document, while
-content that identifies as nothing at all (an encrypted package) still reaches
-the parser its extension names, which says what is wrong with it.
-Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
-either order and a marked UTF-8 file all decode, the mark itself never reaches
-the text, and bytes in some legacy encoding are read lossily with a corruption
-warning rather than failing the document. Excel workbooks are read
-sheet-per-page as Markdown tables, capped at 200 rows by 30 columns per sheet
-with an elision marker so a large workbook cannot flood distillation. A
-standalone image is OCR'd as one page; a TIFF holding a frame per page — a fax,
-a batch scan — yields its first frame and reports the rest as truncated rather
-than dropping them silently. PowerPoint decks go through the same Office reader
-as Word documents, slide by slide in order. `.eml` emails and Outlook `.msg`
-messages emit a fixed-order header block — the `Date:` line verbatim, so the
-sent date is checkable against the document like any other fact — followed by
-the plain-text body and a listing (never an extraction) of attachments.
+characters came back as replacement glyphs. Word processing and presentation
+files — `.docx`, `.docm`, legacy `.doc`, `.rtf`, `.odt`, `.pptx`, `.pptm`,
+`.ppsx`, legacy `.ppt`, `.odp` — go through AnyDoc to Markdown, which preserves
+headings and tables, and only when the container's content is not something
+else: routing here is by extension, so a workbook renamed `.docx` — which
+AnyDoc would otherwise render through its uncapped Excel path — is a routing
+failure for review rather than a document. Content of the same kind as its
+extension is read as what it is: Word has saved RTF under `.doc` for decades,
+and a `.doc` that is really a Word 2007 package (or a `.pptx` that is really a
+97-2003 deck) reaches no reader without the caps it would have had. A file
+saved with a password to open is reported as `PASSWORD_PROTECTED` rather than
+as damage: an encrypted Office package is an OLE compound file holding
+`EncryptionInfo` and `EncryptedPackage` streams, recognised before the zip
+pre-pass would have called it a corrupt archive; a legacy workbook carries a
+`FilePass` record; and PDFium's password error on a PDF maps to the same code.
+Every error message is one line, never a debug dump.
 
-Two consequences of "OCR only when necessary" are enforced in code rather than
+Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
+either order and a marked UTF-8 file all decode, and the mark itself never
+reaches the text. Unmarked text that is not UTF-8 is, on the Windows machines
+these files come from, almost always Windows-1252, and is read as that; only
+a result holding C1 control characters — bytes Windows-1252 leaves undefined —
+carries a corruption warning. A text file is never read past four times the
+page cap in bytes, which always fills a page.
+
+Workbooks — `.xlsx`, `.xlsm`, Excel 97-2003 `.xls`, and OpenDocument `.ods` —
+are read sheet-per-page as Markdown tables, capped at 200 rows by 30 columns
+per sheet with an elision marker so a large workbook cannot flood
+distillation, and a cell's text at 1,000 characters. That window is a design
+choice, marked where it applies, so it is reported as `CONTENT_ELIDED`, which
+the host treats as a note rather than a reason for review: a ledger whose
+facts sit in its first rows can be Ready however long it runs. Text that was
+actually lost — a page cut at the size cap, unread TIFF frames — is still
+`TEXT_TRUNCATED` and still forces review. A `.xlsx` is streamed cell by cell;
+calamine reads a binary `.xls` whole as it opens it, so its record stream is
+first surveyed for what that would allocate (dense ranges spanning a sheet's
+corners, forged `Dimensions` claims, shared strings copied into every cell
+that names them) and refused if calamine would hold more than 512 MiB at once,
+counting the sheets already built and the one being built; a year of monthly
+ledgers stays far inside that. Its formulas' token streams are then emptied
+(only cached values are rendered, and spelling out a formula can be far longer
+than its record), and it is handed to calamine in a fresh compound file. An
+`.ods` is parsed by AnyDoc, whose OpenDocument reader charges repeated rows
+and cells against a fixed expansion budget, and each sheet's table is then cut
+to the same window rather than rendered whole. CSV exports are read through
+the same window: the delimiter is the one of comma, semicolon, tab, and pipe
+that splits the leading records most consistently, fields that are not UTF-8
+read as Windows-1252, and a UTF-16 export is transcoded as it streams.
+
+A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
+the 25-megapixel render cap, at the highest resolution that fits it. A phone
+photo that some tool wrapped in a PDF at 72 DPI is a 4032 × 3024 point page,
+about 212 megapixels at 300 DPI; it is rendered at about 103 DPI, which
+Tesseract reads perfectly well, instead of failing the document. Only a page
+that would have to go below 50 DPI to fit is a resource limit, and the size of
+what was actually rendered is still checked against the cap. A standalone
+image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
+are ordinary — and up to 400 MB of decoded pixels, which holds a scanner's
+16-bit colour mode to the memory an 8-bit image takes. It is scaled down to
+the page cap before OCR by averaging the pixels each page pixel covers,
+straight into the page-sized copy, and only then turned upright, so a
+48-megapixel photo costs the worker about 220 MB at its peak rather than the
+760 MB a filtered resample's floating-point intermediate took.
+
+OCR text keeps the layout Tesseract found. The worker rebuilds it from
+Tesseract's TSV output: words on a line joined with a space, lines with a
+newline, and a new block or paragraph with a blank line, the way Tesseract's
+own text output separates them. It used to be one line per page, which left
+distillation no headings, no labelled lines, and no date lines on exactly the
+documents where dates go missing; the scanned lease's evidence for its date
+was its whole page.
+
+A standalone image is OCR'd as one page; a TIFF holding a frame per page — a
+fax, a batch scan — yields its first frame and reports the rest as truncated
+rather than dropping them silently. `.eml` emails and Outlook `.msg` messages
+emit a fixed-order header block followed by the body and a listing (never an
+extraction) of attachments. The `Date:` line is the message's own `Date`
+header, verbatim — for a `.msg`, the one in the transport headers it
+travelled with — so the sent date is checkable against the document like any
+other fact, in the sender's own offset. A `.msg` that never travelled (a
+draft, a sent item) has only a UTC submit time, and is dated in this
+machine's zone with its offset written out. No second, UTC rendering of the
+date is added: for every evening email west of Greenwich it falls on the
+next day, and validation would accept it because it is in the text. An HTML
+body is read the way it renders: whitespace in its text collapses to a space
+and only its structure starts a line, so neither Outlook's indented, wrapped
+source nor a receipt laid out in one big table cell loses or gains a line.
+Table cells are kept apart (` | `), comments and the head dropped (its title
+kept as the first line), and named and hexadecimal entities decoded;
+Outlook's binary HTML property is decoded from the hex
+msg_parser hands over, by its declared charset. Strings an ANSI `.msg` stores
+in its code page, which msg_parser drops when they are not UTF-8, are read
+back and decoded in the code page the message declares.
+
+Whatever the reader, a page carries at most two million characters and a
+document eight million, and the host reads the worker's reply lines with a
+64 MiB bound, failing a longer one as a crashed worker rather than allocating
+it in the app's own process.
+
+What "OCR only when necessary" means is enforced in code rather than
 documented as intent:
 
 * The OCR engine is constructed the first time a page actually needs it. A text
@@ -64,19 +142,36 @@ documented as intent:
 * PDFium is bound once per process and shared. Binding it per document made
   every PDF after the first one in a queue fail as "native assets missing";
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
-* A page that does not read confidently is re-read in the other orientations.
-  Tesseract's orientation detection is trained on prose with ascenders and
-  descenders; on a dense all-caps form it can be confidently 180 degrees wrong,
-  and OCR then returns a full page of gibberish with the same word count and
-  shape as a real reading. Volume cannot tell those apart, so mean word
-  confidence arbitrates: one corpus page scored 23, 14, 14, and 76 across the
-  four orientations. Confidence is a mean, though, so a reading only displaces
+* A page is read as it came first, in grey: Tesseract binarises whatever it is
+  given, and grey is a third of the bytes to encode for every pass. A reading
+  of at least three words at a mean confidence of 75 or more is done — one
+  recognition pass and no orientation detection — and so is a reading that
+  found nothing, since a blank page, every other sheet of a duplex scan, is
+  blank in every orientation. Orientation detection used to run first on every
+  page, and on the corpus's upright lease it was confidently 180 degrees wrong
+  and bought three more recognition passes to find the orientation the page
+  already had. Reading upright first took that page from four passes to one
+  and from 3.8 s to 0.6 s, and the median upright scan in the corpus from
+  1.2 s to 0.6 s (whole document, Linux, Tesseract 5.3.4 on one thread).
+* A page that does not read confidently asks orientation detection, on a
+  half-scale copy, and is then re-read in the other orientations. Tesseract's
+  orientation detection is trained on prose with ascenders and descenders; on
+  a dense all-caps form it can be confidently 180 degrees wrong, and OCR then
+  returns a full page of gibberish with the same word count and shape as a
+  real reading. Volume cannot tell those apart, so mean word confidence
+  arbitrates: one corpus page scored 23, 14, 14, and 76 across the four
+  orientations. Confidence is a mean, though, so a reading only displaces
   another when it read a comparable amount; three confident tokens are not a
-  better reading of a page than three hundred words just under the bar. A page
-  that reads well the first time — every upright document — still costs exactly
-  one pass, and so does a page that reads as blank, which is every other sheet
-  of a duplex scan; only a page already headed for a low-confidence warning
-  pays for the search.
+  better reading of a page than three hundred words just under the bar. The
+  upright reading is one of the candidates, compared as it already came back
+  rather than read again.
+
+A PDF reports its progress as it goes: a `reading` event as each page is
+reached and an `ocr` event as each goes to OCR, carrying how many pages are
+finished and the page count, at most four of each a second; a standalone
+image reports none of its one page finished as it goes to OCR. The window
+shows that as a whole percentage. A 200-page scan used to sit at 0% until it
+was done.
 
 ## Distillation
 

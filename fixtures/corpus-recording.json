@@ -3,7 +3,7 @@
   "model_id": "intern-local",
   "budget_characters": 12000,
   "recorded_at_unix": 1788749572,
-  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp b10361 CPU build, 4 threads, 8192 context; worker built on Linux with pdfium chromium/7881 and tesseract 5.3.4 over the pinned tessdata_fast files; 2026-10-01: the counterparty name was mechanically changed to Contoso (same length) in fixtures, extracted text and replies, with hashes recomputed, not re-recorded live",
+  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp b10361 CPU build, 4 threads, 8192 context; worker built on Linux with pdfium chromium/7881 and tesseract 5.3.4 over the pinned tessdata_fast files; 2026-10-01: the counterparty name was mechanically changed to Contoso (same length) in fixtures, extracted text and replies, with hashes recomputed, not re-recorded live; 2026-10-05: the six OCR fixtures (scanned-lease.pdf, mixed-signature.pdf, rotated-low-resolution-scan.png, document-image.png, document-image.jpg, document-image.tiff) were re-recorded live on the same rig with a worker whose OCR keeps Tesseract's line structure and reads each page upright first, and spliced in with scripts/splice-recording.mjs; every other fixture is as it was",
   "fixtures": [
     {
       "file": "employment-agreement.pdf",
@@ -55,7 +55,7 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "LEASE AGREEMENT EFFECTIWE SEPTEMBER 1 24h24 PROPERTY 4° JUNIPER LOOP LEDAR FINCH PROPERTIES LLC ORION GLASS STUDIO INC",
+              "text": "LEASE AGREEMENT\n\nEFFECTIWE SEPTEMBER 1 24h24\nPROPERTY 4° JUNIPER LOOP\nLEDAR FINCH PROPERTIES LLC\nORION GLASS STUDIO INC",
               "origin": "ocr",
               "ocr_confidence": 80
             }
@@ -64,7 +64,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "d62016de202d5488f2134627b97604091c4b389b01b32fdd428de85c4088ad39",
+      "prompt_sha256": "5b0461b11db3784f05fbe4678c5b8045e29875df004c18074944c033040e48d7",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -72,16 +72,16 @@
           "document_date": "2024-09-01",
           "date_role": "effective",
           "parties": [
-            "LENDAR FINCH PROPERTIES LLC",
+            "LEDAR FINCH PROPERTIES LLC",
             "ORION GLASS STUDIO INC"
           ],
           "party_relation": "between",
-          "description": "A lease agreement effective September 1, 2024, between Finch Properties LLC and Orion Glass Studio Inc.",
+          "description": "A lease agreement between LEDAR FINCH PROPERTIES LLC and ORION GLASS STUDIO INC for property at 4° JUNIPER LOOP.",
           "confidence": 0.9,
           "needs_review": false,
           "evidence": {
-            "date": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 24h24 PROPERTY 4° JUNIPER LOOP LEDAR FINCH PROPERTIES LLC ORION GLASS STUDIO INC",
-            "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 24h24 PROPERTY 4° JUNIPER LOOP LEDAR FINCH PROPERTIES LLC ORION GLASS STUDIO INC",
+            "date": "EFFECTIVE SEPTEMBER 1 24h24",
+            "document_type": "LEASE AGREEMENT",
             "parties": []
           }
         }
@@ -102,7 +102,7 @@
             },
             {
               "page_number": 2,
-              "text": "SIGHATURE PAGE LUMEN KITE COOPERATIVE SOLSTICE INDEs LLC JANUARY & 2e25",
+              "text": "SIGHATURE PAGE\n\nLUMEN KITE COOPERATIVE\nSOLSTICE INDEs LLC\nJANUARY & 2e25",
               "origin": "ocr",
               "ocr_confidence": 62
             }
@@ -120,7 +120,7 @@
           }
         }
       },
-      "prompt_sha256": "1d174f7c8fe6a50fa0f98ab42fb43f1cb84b508b75620d4134bfc4354d05f8b4",
+      "prompt_sha256": "f06a56036b5ff3bb4481c205e8b053e066ed1f860ab16e70e76aba2442888285",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -132,12 +132,12 @@
             "Solstice Index LLC"
           ],
           "party_relation": "between",
-          "description": "Services Agreement dated January 8, 2025, between Lumen Kite Cooperative and Solstice Index LLC for the Aurora Catalog Project.",
+          "description": "Services Agreement dated January 8, 2025 between Lumen Kite Cooperative and Solstice Index LLC for the Aurora Catalog Project.",
           "confidence": 1.0,
           "needs_review": false,
           "evidence": {
-            "date": "Dated January 8, 2025",
-            "document_type": "Services Agreement",
+            "date": "January 8, 2025",
+            "document_type": "SERVICES AGREEMENT",
             "parties": []
           }
         }
@@ -272,7 +272,7 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "DELIVERY RECEIPT OR-?F71 JUNE 12 2a25 PINE ECHO COURTERS LLC VIOLET CARTOGRAPHY STUDIO",
+              "text": "DELIVERY RECEIPT OR-?F71\nJUNE 12 2a25\n\nPINE ECHO COURTERS LLC\nVIOLET CARTOGRAPHY STUDIO",
               "origin": "ocr",
               "ocr_confidence": 78
             }
@@ -285,7 +285,7 @@
           }
         }
       },
-      "prompt_sha256": "0e8c04d2f79cf5fca396bc7ea66b6cfba438227c9e2b02ea1efeb2c712c466fd",
+      "prompt_sha256": "2a3328bee22bb407dfbdf95c97f82a6f71afdedfc69c09d870c47ad83cb7f8d6",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -296,16 +296,16 @@
             "Pine Echo Courters LLC",
             "Violet Cartography Studio"
           ],
-          "party_relation": "between",
-          "description": "A delivery receipt issued to Violet Cartography Studio by Pine Echo Courters LLC on June 12, 2025.",
+          "party_relation": "none",
+          "description": "A delivery receipt issued to Pine Echo Courters LLC by Violet Cartography Studio on June 12, 2025.",
           "confidence": 0.9,
           "needs_review": false,
           "evidence": {
-            "date": "DELIVERY RECEIPT OR-?F71 JUNE 12 2a25",
-            "document_type": "DELIVERY RECEIPT OR-?F71 JUNE 12 2a25 PINE ECHO COURTERS LLC VIOLET CARTOGRAPHY STUDIO",
+            "date": "JUNE 12 2a25",
+            "document_type": "DELIVERY RECEIPT OR-?F71",
             "parties": [
-              "Pine Echo Courters LLC",
-              "Violet Cartography Studio"
+              "PINE ECHO COURTERS LLC",
+              "VIOLET CARTOGRAPHY STUDIO"
             ]
           }
         }
@@ -316,7 +316,7 @@
       "sha256": "5268313932f5977e852bb93fcab20ed4d47a7f4bd8d3e78b18419d1cd9e5a621",
       "extraction": {
         "outcome": "failed",
-        "code": "PARSE_FAILED"
+        "code": "PASSWORD_PROTECTED"
       },
       "prompt_sha256": null,
       "reply": null
@@ -972,7 +972,7 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PURCHASE ORDER FPO-Sie DATE JULY 14 2625 EMBER POST MANUFACTURING LLC",
+              "text": "PURCHASE ORDER FPO-Sie\nDATE JULY 14 2625\nEMBER POST MANUFACTURING LLC",
               "origin": "ocr",
               "ocr_confidence": 75
             }
@@ -990,7 +990,7 @@
           }
         }
       },
-      "prompt_sha256": "7d718abe0ec8bc2cc6890ebd2292d0b1ad8d925bdb0104019eb750fc63acd968",
+      "prompt_sha256": "651ea74b64875303e5bef8938e4d98f0e85d877639919834dee1b78b6e77e3d2",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -998,19 +998,16 @@
           "document_date": "2025-07-14",
           "date_role": "issuance",
           "parties": [
-            "FPO-Sie",
-            "Postman Manufacturing LLC"
+            "EMBER POST MANUFACTURING LLC"
           ],
           "party_relation": "none",
-          "description": "A purchase order dated July 14, 2025, issued to FPO-Sie by Postman Manufacturing LLC.",
-          "confidence": 1.0,
+          "description": "A purchase order for EMBER POST MANUFACTURING LLC dated July 14, 2025.",
+          "confidence": 0.9,
           "needs_review": false,
           "evidence": {
             "date": "DATE JULY 14 2625",
-            "document_type": "PURCHASE ORDER",
-            "parties": [
-              "PURCHASE ORDER FPO-Sie DATE JULY 14 2625 EMBER POST MANUFACTURING LLC"
-            ]
+            "document_type": "PURCHASE ORDER FPO-Sie",
+            "parties": []
           }
         }
       }
@@ -1024,7 +1021,7 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PACKING SLIP PS-311 DATE JULY 15 2025 QUARTZ MEADOW RETAIL LLC",
+              "text": "PACKING SLIP PS-311\nDATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC",
               "origin": "ocr",
               "ocr_confidence": 95
             }
@@ -1037,7 +1034,7 @@
           }
         }
       },
-      "prompt_sha256": "590192b6e15e4bc69aa28afb46902c913efe2311c9058f88229296f05a093854",
+      "prompt_sha256": "b29b5013a9c5b04ded2e4460a66037526aa79ad430e0569a9b375e1864ec31c4",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1048,13 +1045,15 @@
             "Quartz Meadow Retail LLC"
           ],
           "party_relation": "from",
-          "description": "A packing slip for Quartz Meadow Retail LLC dated July 15, 2025.",
+          "description": "An invoice from Quartz Meadow Retail LLC dated July 15, 2025, for unspecified goods or services.",
           "confidence": 0.9,
           "needs_review": false,
           "evidence": {
             "date": "DATE JULY 15 2025",
             "document_type": "PACKING SLIP PS-311",
-            "parties": []
+            "parties": [
+              "QUARTZ MEADOW RETAIL LLC"
+            ]
           }
         }
       }
@@ -1068,7 +1067,7 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "WORK ORDER WO-312 DATE JULY 16 26275 HARBOR COMET REPAIRS LLC",
+              "text": "WORK ORDER WO-312\nDATE JULY 16 26275\nHARBOR COMET REPAIRS LLC",
               "origin": "ocr",
               "ocr_confidence": 79
             }
@@ -1081,7 +1080,7 @@
           }
         }
       },
-      "prompt_sha256": "c66d61d2a9017e7d81677072929158880daa8fb07fc55581cd75fb125535bc2e",
+      "prompt_sha256": "bef88097cf0fb0e4bcc9d7b2a2c9d86140cae0df9e1a35ef3a557388a647ae3e",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -1089,17 +1088,17 @@
           "document_date": "2026-07-16",
           "date_role": "issuance",
           "parties": [
-            "HARBOR COMET REPAIRS LLC"
+            "Harbor Comet Repairs LLC"
           ],
           "party_relation": "none",
-          "description": "A work order dated July 16, 2026 for Harbor Comet Repairs LLC,",
+          "description": "A work order issued to Harbor Comet Repairs LLC for repair work on July 16, 2026.",
           "confidence": 1.0,
           "needs_review": false,
           "evidence": {
             "date": "DATE JULY 16 26275",
             "document_type": "WORK ORDER WO-312",
             "parties": [
-              "WORK ORDER WO-312 DATE JULY 16 26275 HARBOR COMET REPAIRS LLC"
+              "HARBOR COMET REPAIRS LLC"
             ]
           }
         }
