@@ -65,7 +65,7 @@ describe('what the site says about the network', () => {
       const words = text(html);
       expect(words, name).toMatch(/hosted model/i);
       // Each promise is qualified in the same sentence, not somewhere else on the page.
-      for (const promise of words.matchAll(/never leaves? the (machine|computer)|no remote processing/gi)) {
+      for (const promise of words.matchAll(/never leaves? the (machine|computer)|no remote processing|start to finish/gi)) {
         const following = words.slice(promise.index, promise.index + promise[0].length + 80);
         expect(following, `${name}: "${promise[0]}"`).toMatch(/unless you turn on a hosted model/i);
       }
@@ -74,9 +74,40 @@ describe('what the site says about the network', () => {
 
   it('lists every kind of request on the download page', async () => {
     const index = text(await readFile('site/index.html', 'utf8'));
-    for (const request of ['Model file', 'Update check', 'Hosted model, if you choose one', 'Microsoft Graph, provisioned builds only']) {
+    for (const request of ['Model file', 'Update check', 'Hosted model, if you choose one', 'Microsoft sign-in and Graph, provisioned builds only']) {
       expect(index).toContain(request);
     }
+  });
+
+  // The list is for the IT reviewer allow-listing traffic, so it names hosts,
+  // read from the one function every Microsoft request has to pass. It once
+  // named Graph alone, while sign-in and every token renewal go elsewhere.
+  it('names every Microsoft host a provisioned build may contact, on the download page and in the README', async () => {
+    const transport = await readFile('crates/intern-intake/src/microsoft/transport.rs', 'utf8');
+    const allowed = /pub fn deployment_allows_endpoint[\s\S]*?\n\}\n/.exec(transport)?.[0] ?? '';
+    const hosts = [...allowed.matchAll(/\(Some\("([\w.-]+)"\),/g)].map((match) => match[1]);
+    expect(hosts).toContain('graph.microsoft.com');
+    expect(hosts.length).toBeGreaterThan(1);
+    const [index, readme] = await Promise.all([readFile('site/index.html', 'utf8'), readFile('README.md', 'utf8')]);
+    for (const host of hosts) {
+      expect(text(index), host).toContain(host);
+      expect(readme, host).toContain(host);
+    }
+  });
+
+  // Unticking the automatic check stops only the check. A hosted model is
+  // sent each arriving document without a click, and a provisioned build asks
+  // Microsoft about each upload, so the answer to "nothing on its own" has to
+  // say both.
+  it('says what else contacts the network when asked how to stop all unrequested traffic', async () => {
+    const guide = text(await readFile('site/guide.html', 'utf8'));
+    const start = guide.indexOf('Intern must not contact anything on its own');
+    expect(start).toBeGreaterThan(0);
+    const answer = guide.slice(start, guide.indexOf('NAMING AND THE HOSTED MODEL', start));
+    expect(answer).toContain('Check for updates automatically');
+    expect(answer).toMatch(/hosted/i);
+    expect(answer).toMatch(/provisioned[\s\S]*Microsoft|Microsoft[\s\S]*provisioned/);
+    expect(guide).not.toContain('makes no request it was not asked to make');
   });
 });
 

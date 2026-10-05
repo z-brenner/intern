@@ -35,7 +35,7 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 | Model download | Once, when you start it (or never, if you choose existing model files) | A request for the pinned model file. Nothing about the machine or its documents. |
 | Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
 | Hosted model | Only if you turn it on, under your own API key | The condensed text of each document, to the service you name. |
-| Microsoft Graph | Only in a build an administrator provisioned for the SharePoint deployment | Account and file metadata for upload verification, never document content. The build published here has none. |
+| Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
 document information. The model file is 1.19 GiB, the text model and nothing

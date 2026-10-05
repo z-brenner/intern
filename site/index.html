@@ -960,7 +960,7 @@
       </div>
       <div class="sec-body plate-cols">
       <div>
-        <p class="lead">Intern does its work on your computer, start to finish.</p>
+        <p class="lead">Intern does its work on your computer, start to finish, unless you turn on a hosted model.</p>
         <p class="body-text">
           Document text, extracted pages, OCR output, and the prompts sent to the
           model never leave the machine, unless you turn on a hosted model
@@ -986,8 +986,8 @@
             <dd>Off unless you turn it on. Then each document's condensed text goes to the service you name, under your own API key.</dd>
           </div>
           <div>
-            <dt>Microsoft Graph, provisioned builds only</dt>
-            <dd>Account and file metadata, to verify who uploaded a document to a team Inbox; never its content. Not in the build published here.</dd>
+            <dt>Microsoft sign-in and Graph, provisioned builds only</dt>
+            <dd>login.microsoftonline.com, to sign in and keep the sign-in current, and graph.microsoft.com, for account and file metadata that verifies who uploaded a document to a team Inbox; never its content. Not in the build published here.</dd>
           </div>
         </dl>
         <p class="note">That is every network request Intern makes, and there is no telemetry. A default install sends only the first two, and neither carries anything about your documents.</p>

@@ -910,7 +910,7 @@
         <figure>
           <svg class="fig-topo" viewBox="0 0 420 398" role="img" aria-labelledby="tp-t tp-d">
             <title id="tp-t">How Intern reaches a SharePoint library</title>
-            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. Intern reads and renames files in that folder only. Intern never connects to Microsoft's servers itself.</desc>
+            <desc id="tp-d">A SharePoint library syncs to the OneDrive sync client on your machine, which keeps a folder on disk. Intern reads and renames files in that folder only. In the build published here, Intern never connects to Microsoft's servers itself.</desc>
 
             <rect class="f-dash" x="60.5" y="8.5" width="349" height="75" rx="12"/>
             <rect class="f-knock" x="72" y="1" width="118" height="14"/>
@@ -1235,9 +1235,10 @@
             <div class="answer">
               <p>
                 It is the only network call Intern makes besides the model
-                download (and a hosted model, if you chose one), so check your
-                connectivity. An update that is not signed by this project's key
-                is refused outright — that is deliberate.
+                download (and a hosted model, if you chose one, or Microsoft, in
+                a build provisioned for a team), so check your connectivity. An
+                update that is not signed by this project's key is refused
+                outright — that is deliberate.
               </p>
             </div>
           </details>
@@ -1246,9 +1247,14 @@
             <div class="answer">
               <p>
                 Untick <strong>Check for updates automatically</strong> in
-                Settings → Updates and save. Intern then makes no request it was
-                not asked to make; <strong>Check for updates</strong> still works
-                when you press it (<a href="#updates">section 10</a>).
+                Settings → Updates and save, and keep the local model rather than
+                a hosted one: with a hosted model, each document's text is sent
+                as the document arrives, watched folders included, without a
+                click. Intern then makes no request you did not ask for;
+                <strong>Check for updates</strong> still works when you press it
+                (<a href="#updates">section 10</a>).
+                A build provisioned for a team also asks Microsoft about each
+                upload to its Inbox; the build published here has no such code.
               </p>
             </div>
           </details>
