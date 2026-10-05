@@ -264,6 +264,15 @@ pub enum ReviewReason {
     ModelRequestedReview,
     /// Extraction reported a problem that can corrupt the read facts.
     ParserWarning,
+    /// The accepted date's year is implausible for a document (an OCR
+    /// misread such as 2625, or a year before 1900).
+    DateImplausible,
+    /// The date the model chose is labelled in the document as a due,
+    /// renewal, or expiry date rather than the document's own date.
+    DateIsDeadline,
+    /// The date is written only as numbers whose day and month could be
+    /// read either way round, and nothing in the document settles which.
+    DateAmbiguous,
 }
 
 impl ReviewReason {
@@ -280,6 +289,9 @@ impl ReviewReason {
             Self::LowConfidence => "LOW_CONFIDENCE",
             Self::ModelRequestedReview => "MODEL_REQUESTED_REVIEW",
             Self::ParserWarning => "PARSER_WARNING",
+            Self::DateImplausible => "DATE_IMPLAUSIBLE",
+            Self::DateIsDeadline => "DATE_IS_DEADLINE",
+            Self::DateAmbiguous => "DATE_AMBIGUOUS",
         }
     }
 }

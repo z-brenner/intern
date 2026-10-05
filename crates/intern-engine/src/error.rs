@@ -47,6 +47,20 @@ pub enum EngineErrorCode {
     /// The hosted model declined to answer about this document.
     #[serde(rename = "HOSTED_MODEL_REFUSED")]
     HostedModelRefused,
+    /// Validation or naming failed internally on this one document. The
+    /// document is failed on its own; nothing about the model is implied.
+    #[serde(rename = "ANALYSIS_FAILED")]
+    AnalysisFailed,
+    /// The distilled document does not fit the model's context window even
+    /// after it was condensed further.
+    #[serde(rename = "MODEL_INPUT_TOO_LARGE")]
+    ModelInputTooLarge,
+    /// The model ran out of reply tokens before finishing its answer.
+    #[serde(rename = "MODEL_REPLY_TRUNCATED")]
+    ModelReplyTruncated,
+    /// The hosted service refused the request for billing or quota reasons.
+    #[serde(rename = "HOSTED_MODEL_BILLING")]
+    HostedModelBilling,
 }
 
 impl EngineErrorCode {
@@ -70,6 +84,10 @@ impl EngineErrorCode {
             Self::HostedModelRateLimited => "HOSTED_MODEL_RATE_LIMITED",
             Self::HostedModelRejected => "HOSTED_MODEL_REJECTED",
             Self::HostedModelRefused => "HOSTED_MODEL_REFUSED",
+            Self::AnalysisFailed => "ANALYSIS_FAILED",
+            Self::ModelInputTooLarge => "MODEL_INPUT_TOO_LARGE",
+            Self::ModelReplyTruncated => "MODEL_REPLY_TRUNCATED",
+            Self::HostedModelBilling => "HOSTED_MODEL_BILLING",
         }
     }
 }

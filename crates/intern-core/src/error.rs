@@ -25,6 +25,22 @@ pub enum ErrorCode {
     /// Reconciliation could not prove what a half-applied operation left on
     /// disk, so the item was handed to a person instead of held in `applying`.
     ReconciliationRequired,
+    /// The document is encrypted and cannot be read without its password.
+    PasswordProtected,
+    /// The file's content is not the format its extension claims.
+    UnsupportedContent,
+    /// The document is beyond what Intern will read or send to the model.
+    DocumentTooLarge,
+    /// Text recognition is needed but its runtime files are missing.
+    OcrUnavailable,
+    /// The parser could not read the document, and retrying will not help.
+    ExtractionFailed,
+    /// Analysis failed internally on this one document.
+    AnalysisFailed,
+    /// The model could not finish reading this document.
+    ModelFailed,
+    /// The hosted model could not be used for this document.
+    HostedModelUnavailable,
 }
 
 impl ErrorCode {
@@ -45,6 +61,14 @@ impl ErrorCode {
             Self::ModelDeclined => "MODEL_DECLINED",
             Self::UploaderUnverified => "UPLOADER_UNVERIFIED",
             Self::ReconciliationRequired => "RECONCILIATION_REQUIRED",
+            Self::PasswordProtected => "PASSWORD_PROTECTED",
+            Self::UnsupportedContent => "UNSUPPORTED_CONTENT",
+            Self::DocumentTooLarge => "DOCUMENT_TOO_LARGE",
+            Self::OcrUnavailable => "OCR_UNAVAILABLE",
+            Self::ExtractionFailed => "EXTRACTION_FAILED",
+            Self::AnalysisFailed => "ANALYSIS_FAILED",
+            Self::ModelFailed => "MODEL_FAILED",
+            Self::HostedModelUnavailable => "HOSTED_MODEL_UNAVAILABLE",
         }
     }
 
@@ -65,6 +89,14 @@ impl ErrorCode {
             "MODEL_DECLINED" => Self::ModelDeclined,
             "UPLOADER_UNVERIFIED" => Self::UploaderUnverified,
             "RECONCILIATION_REQUIRED" => Self::ReconciliationRequired,
+            "PASSWORD_PROTECTED" => Self::PasswordProtected,
+            "UNSUPPORTED_CONTENT" => Self::UnsupportedContent,
+            "DOCUMENT_TOO_LARGE" => Self::DocumentTooLarge,
+            "OCR_UNAVAILABLE" => Self::OcrUnavailable,
+            "EXTRACTION_FAILED" => Self::ExtractionFailed,
+            "ANALYSIS_FAILED" => Self::AnalysisFailed,
+            "MODEL_FAILED" => Self::ModelFailed,
+            "HOSTED_MODEL_UNAVAILABLE" => Self::HostedModelUnavailable,
             _ => return None,
         })
     }
@@ -115,3 +147,43 @@ impl From<rusqlite::Error> for InternError {
 }
 
 pub type InternResult<T> = Result<T, InternError>;
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorCode;
+
+    /// Every code a queue row can carry must read back as itself; a code that
+    /// writes but cannot be read would hide the whole row from the queue.
+    #[test]
+    fn every_error_code_round_trips_through_its_stored_string() {
+        let all = [
+            ErrorCode::FileChanged,
+            ErrorCode::SourceLocked,
+            ErrorCode::DestinationUnavailable,
+            ErrorCode::MoveVerificationFailed,
+            ErrorCode::SourceDeleteFailed,
+            ErrorCode::InvalidTransition,
+            ErrorCode::StateConflict,
+            ErrorCode::DatabaseUnavailable,
+            ErrorCode::IoError,
+            ErrorCode::InvalidData,
+            ErrorCode::ModelOutputInvalid,
+            ErrorCode::Duplicate,
+            ErrorCode::ModelDeclined,
+            ErrorCode::UploaderUnverified,
+            ErrorCode::ReconciliationRequired,
+            ErrorCode::PasswordProtected,
+            ErrorCode::UnsupportedContent,
+            ErrorCode::DocumentTooLarge,
+            ErrorCode::OcrUnavailable,
+            ErrorCode::ExtractionFailed,
+            ErrorCode::AnalysisFailed,
+            ErrorCode::ModelFailed,
+            ErrorCode::HostedModelUnavailable,
+        ];
+        for code in all {
+            assert_eq!(ErrorCode::from_str(code.as_str()), Some(code));
+        }
+        assert_eq!(ErrorCode::from_str("NOT_A_CODE"), None);
+    }
+}
