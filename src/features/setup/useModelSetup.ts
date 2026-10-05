@@ -87,6 +87,12 @@ export function modelReady(setup: SetupState | undefined) {
   return Boolean(setup && (setup.state === 'ready' || setup.hostedModelReady));
 }
 
+/**
+ * Where llama-server and the parser worker keep what they print: the app's
+ * local data folder (Tauri's identifier under %LOCALAPPDATA%).
+ */
+const LOG_FOLDER = '%LOCALAPPDATA%\\com.intern.app\\logs';
+
 export function describeSetupError(error: unknown) {
   const code = typeof error === 'string'
     ? error
@@ -102,7 +108,12 @@ export function describeSetupError(error: unknown) {
     // pins instead.
     case 'MODEL_FILE_INVALID':
     case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match the model Intern pins. Choose the exact Qwen3.5-2B-Q4_K_M.gguf file, or let Intern download it. (MODEL_FILE_INVALID)';
-    case 'MODEL_SELF_TEST_FAILED': return 'Intern installed the model, but its local self-test failed. Try the download again or choose a verified model file. (MODEL_SELF_TEST_FAILED)';
+    // The runtime failures below happen after the model file has passed its
+    // checksum, so a fresh download re-hashes the same 1.2 GB and fails the
+    // same way. They point at the runtime's own log instead.
+    case 'MODEL_SELF_TEST_FAILED': return `Intern installed the model, but its local self-test failed. The model file itself checked out, so downloading it again will not help; what the model runtime reported is in llama-server.log in ${LOG_FOLDER}. (MODEL_SELF_TEST_FAILED)`;
+    case 'MODEL_SERVER_START_FAILED': return `The local model is installed, but its runtime would not start on this computer. Security software blocking one of its files is a common cause; the reason is in llama-server.log in ${LOG_FOLDER}. Downloading the model again will not fix this. (MODEL_SERVER_START_FAILED)`;
+    case 'MODEL_SERVER_UNHEALTHY': return `The local model's runtime started but did not become ready in time. Close other heavy programs and try again; if it keeps happening, llama-server.log in ${LOG_FOLDER} says why. (MODEL_SERVER_UNHEALTHY)`;
     case 'INSUFFICIENT_DISK': return 'There is not enough free disk space to install the local model. Free space and try again. (INSUFFICIENT_DISK)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();

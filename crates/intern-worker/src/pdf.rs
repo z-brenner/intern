@@ -4,7 +4,7 @@ use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
-use crate::limits::MAX_PAGE_COUNT;
+use crate::limits::{MAX_PAGE_COUNT, render_size_within};
 
 #[cfg(feature = "native-pdfium")]
 use pdfium_render::prelude::*;
@@ -16,9 +16,10 @@ use pdfium_render::prelude::*;
 #[cfg(feature = "native-pdfium")]
 static PDFIUM: std::sync::OnceLock<Result<Pdfium, String>> = std::sync::OnceLock::new();
 
+/// Only [`PdfiumBackend::new`] makes one, so holding one means PDFium bound.
 #[cfg(feature = "native-pdfium")]
 pub struct PdfiumBackend {
-    render_dpi: f32,
+    _bound: (),
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -34,9 +35,9 @@ impl PdfiumBackend {
         match PDFIUM.get_or_init(|| {
             Pdfium::bind_to_library(&library_path)
                 .map(Pdfium::new)
-                .map_err(|error| error.to_string())
+                .map_err(|error| format!("PDFium did not load: {error:?}"))
         }) {
-            Ok(_) => Ok(Self { render_dpi: 300.0 }),
+            Ok(_) => Ok(Self { _bound: () }),
             Err(message) => Err(ExtractionError::native_assets_missing(message.clone())),
         }
     }
@@ -50,13 +51,26 @@ impl PdfiumBackend {
             )),
         }
     }
+}
 
-    fn page_dimensions(&self, width_points: f32, height_points: f32) -> (u32, u32) {
-        let scale = self.render_dpi / 72.0;
-        let width = (width_points * scale).ceil().max(1.0) as u32;
-        let height = (height_points * scale).ceil().max(1.0) as u32;
-        (width, height)
+/// Why PDFium would not open a document, as something a person can act on.
+///
+/// A PDF that needs a password to open is the one failure worth naming. The
+/// rest are reported in one line: `PdfiumError`'s `Display` is its
+/// pretty-printed `Debug`, which spreads one enum variant over several lines.
+#[cfg(feature = "native-pdfium")]
+fn load_error(error: PdfiumError) -> ExtractionError {
+    match error {
+        PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError) => {
+            ExtractionError::encrypted()
+        }
+        other => one_line(&other),
     }
+}
+
+#[cfg(feature = "native-pdfium")]
+fn one_line(error: &PdfiumError) -> ExtractionError {
+    ExtractionError::parse_failed(format!("PDFium could not read the document: {error:?}"))
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -101,9 +115,7 @@ impl PdfBackend for PdfiumBackend {
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
         cancel.check()?;
         let pdfium = self.pdfium()?;
-        let document = pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
         if document.pages().len() as usize > MAX_PAGE_COUNT {
             return Err(ExtractionError::resource_limit(
                 "document exceeds 500 pages",
@@ -112,12 +124,11 @@ impl PdfBackend for PdfiumBackend {
         let mut inspections = Vec::with_capacity(document.pages().len() as usize);
         for (page_index, page) in document.pages().iter().enumerate() {
             cancel.check()?;
-            let native_text = page
-                .text()
-                .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
-                .all();
-            let (width_pixels, height_pixels) =
-                self.page_dimensions(page.width().value, page.height().value);
+            let native_text = page.text().map_err(|error| one_line(&error))?.all();
+            // The size at full resolution, unbudgeted: whether a page fits
+            // the render cap is the caller's question to ask of it.
+            let size = render_size_within(page.width().value, page.height().value, u64::MAX);
+            let (width_pixels, height_pixels) = (size.width, size.height);
             let page_area = page.width().value.abs() * page.height().value.abs();
             let image_area = page
                 .objects()
@@ -140,30 +151,32 @@ impl PdfBackend for PdfiumBackend {
         Ok(inspections)
     }
 
-    fn render(
+    fn render_within(
         &self,
         path: &Path,
         page_index: usize,
+        max_pixels: u64,
         cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         cancel.check()?;
         let pdfium = self.pdfium()?;
-        let document = pdfium
-            .load_pdf_from_file(path, None)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
         let page = document
             .pages()
             .get(page_index as i32)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
-        let (width, height) = self.page_dimensions(page.width().value, page.height().value);
+            .map_err(|error| one_line(&error))?;
+        let size = render_size_within(page.width().value, page.height().value, max_pixels);
+        // PDFium scales to the target width and then, if the height that
+        // gives passes the maximum, scales down to that instead, so the
+        // bitmap it allocates is never larger than the size computed here.
         let config = PdfRenderConfig::new()
-            .set_target_width(width as i32)
-            .set_maximum_height(height as i32);
+            .set_target_width(size.width as i32)
+            .set_maximum_height(size.height as i32);
         let image = page
             .render_with_config(&config)
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
+            .map_err(|error| one_line(&error))?
             .as_image()
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
+            .map_err(|error| one_line(&error))?
             .into_rgb8();
         cancel.check()?;
         Ok(RenderedPage::new(page_index, image.into()))
@@ -195,10 +208,11 @@ impl PdfBackend for PdfiumBackend {
         ))
     }
 
-    fn render(
+    fn render_within(
         &self,
         _path: &Path,
         _page_index: usize,
+        _max_pixels: u64,
         _cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         Err(ExtractionError::native_assets_missing(

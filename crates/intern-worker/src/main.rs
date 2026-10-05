@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use intern_worker::extract::{
@@ -53,6 +54,69 @@ impl OcrBackend for LazyOcr {
     }
 }
 
+/// The reader a file is handed to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reader {
+    /// Word processing and presentation formats, through anydoc to Markdown.
+    Office,
+    /// Excel 2007 workbooks through the capped streaming reader.
+    Workbook,
+    /// Excel 97-2003 workbooks through the guarded binary reader.
+    LegacyWorkbook,
+    /// OpenDocument workbooks, parsed by anydoc and cut to the same window.
+    OpenWorkbook,
+    Delimited,
+    Eml,
+    Msg,
+    Text,
+    Pdf,
+    Image,
+}
+
+/// Every extension the worker reads, and what reads it. intern-core's
+/// `SUPPORTED_EXTENSIONS` is what the app admits; a test below holds the two
+/// to exactly the same set, so nothing is admitted that cannot be read and
+/// nothing is readable that is never admitted.
+const ROUTES: &[(&str, Reader)] = &[
+    ("pdf", Reader::Pdf),
+    ("docx", Reader::Office),
+    ("docm", Reader::Office),
+    ("doc", Reader::Office),
+    ("rtf", Reader::Office),
+    ("odt", Reader::Office),
+    ("pptx", Reader::Office),
+    ("pptm", Reader::Office),
+    ("ppsx", Reader::Office),
+    ("ppt", Reader::Office),
+    ("odp", Reader::Office),
+    // anydoc's OpenDocument reader has its own expansion limits, which a
+    // spreadsheet format built on repeated-row runs needs; what it parsed is
+    // then rendered through the same window as every other workbook.
+    ("ods", Reader::OpenWorkbook),
+    ("xlsx", Reader::Workbook),
+    ("xlsm", Reader::Workbook),
+    ("xls", Reader::LegacyWorkbook),
+    ("csv", Reader::Delimited),
+    ("eml", Reader::Eml),
+    ("msg", Reader::Msg),
+    ("txt", Reader::Text),
+    ("md", Reader::Text),
+    ("markdown", Reader::Text),
+    ("png", Reader::Image),
+    ("jpg", Reader::Image),
+    ("jpeg", Reader::Image),
+    ("tif", Reader::Image),
+    ("tiff", Reader::Image),
+];
+
+/// The reader for a lowercase extension, if any reads it.
+fn route(extension: &str) -> Option<Reader> {
+    ROUTES
+        .iter()
+        .find(|(routed, _)| *routed == extension)
+        .map(|(_, reader)| *reader)
+}
+
 fn extract_path(
     path: PathBuf,
     cancel: CancellationToken,
@@ -65,28 +129,38 @@ fn extract_path(
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
-    match extension.as_str() {
-        "docx" | "docm" | "pptx" | "pptm" | "ppsx" => extract_anydoc(path, &limits, &cancel),
-        "xlsx" => intern_worker::sheet::extract_xlsx(path, &limits, &cancel),
-        "eml" => intern_worker::email::extract_eml(path, &limits, &cancel),
-        "msg" => intern_worker::email::extract_msg(path, &limits, &cancel),
-        "txt" | "md" | "markdown" => extract_text(path, &limits, &cancel),
-        "pdf" => extract_pdf(path, &pdf_backend()?, &LAZY_OCR, &limits, &cancel),
-        "png" | "jpg" | "jpeg" | "tif" | "tiff" => extract_image(path, &LAZY_OCR, &limits, &cancel),
-        _ => Err(ExtractionError::unsupported(
-            "supported formats are PDF, DOCX, PPTX, XLSX, EML, MSG, TXT, Markdown, PNG, JPEG, and TIFF",
-        )),
+    let Some(reader) = route(&extension) else {
+        return Err(ExtractionError::unsupported(format!(
+            "no reader handles a .{extension} file"
+        )));
+    };
+    match reader {
+        Reader::Office => extract_anydoc(path, &limits, &cancel),
+        Reader::Workbook => intern_worker::sheet::extract_xlsx(path, &limits, &cancel),
+        Reader::LegacyWorkbook => intern_worker::sheet::extract_xls(path, &limits, &cancel),
+        Reader::OpenWorkbook => intern_worker::sheet::extract_ods(path, &limits, &cancel),
+        Reader::Delimited => intern_worker::delimited::extract_delimited(path, &limits, &cancel),
+        Reader::Eml => intern_worker::email::extract_eml(path, &limits, &cancel),
+        Reader::Msg => intern_worker::email::extract_msg(path, &limits, &cancel),
+        Reader::Text => extract_text(path, &limits, &cancel),
+        Reader::Pdf => extract_pdf(path, &pdf_backend()?, &LAZY_OCR, &limits, &cancel),
+        Reader::Image => extract_image(path, &LAZY_OCR, &limits, &cancel),
     }
 }
 
 fn main() {
+    // First, before anything can panic: standard error is kept in a log file,
+    // and the default hook would print a panic's message there, document text
+    // and all.
+    intern_worker::panic_hook::install();
     if let Err(error) = intern_worker::protocol::run_concurrent_worker(
         std::io::stdin(),
         std::io::stdout(),
         std::io::stderr(),
         extract_path,
     ) {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr().lock(),
             "{{\"level\":\"error\",\"code\":\"WORKER_IO_FAILED\",\"message\":{}}}",
             serde_json::to_string(&error.to_string())
                 .unwrap_or_else(|_| "\"worker I/O failed\"".to_owned())
@@ -124,5 +198,57 @@ mod tests {
             extract_path(snapshot.path().to_path_buf(), CancellationToken::new()).unwrap();
 
         assert_eq!(document.pages[0].text, "Verified snapshot routing\n");
+    }
+
+    /// The admission list and the router are two lists that must name the
+    /// same formats. They drifted once: `.docm` was routed here and refused
+    /// by every admission check, so the reader for it could never run.
+    #[test]
+    fn every_admitted_extension_routes_and_every_route_is_admitted() {
+        for extension in intern_core::SUPPORTED_EXTENSIONS {
+            assert!(
+                route(extension).is_some(),
+                ".{extension} is admitted but unrouted"
+            );
+        }
+        for (extension, _) in ROUTES {
+            assert!(
+                intern_core::SUPPORTED_EXTENSIONS.contains(extension),
+                ".{extension} is routed but never admitted"
+            );
+        }
+        assert_eq!(ROUTES.len(), intern_core::SUPPORTED_EXTENSIONS.len());
+    }
+
+    /// The dispatch itself, not just the table: a committed fixture of each
+    /// new kind reaches a reader that reads it.
+    #[test]
+    fn the_new_formats_reach_a_reader_through_the_actual_dispatch() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/formats");
+        for name in [
+            "letter.doc",
+            "letter.docm",
+            "letter.rtf",
+            "letter.odt",
+            "deck.ppt",
+            "deck.odp",
+            "ledger.xls",
+            "ledger.xlsm",
+            "ledger.ods",
+            "ledger.csv",
+        ] {
+            let document = extract_path(fixtures.join(name), CancellationToken::new())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let text = document
+                .pages
+                .iter()
+                .map(|page| page.text.as_str())
+                .collect::<String>();
+            assert!(
+                text.contains("Juniper Ridge Holdings Inc."),
+                "{name}: {text}"
+            );
+        }
     }
 }

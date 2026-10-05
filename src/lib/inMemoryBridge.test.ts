@@ -120,3 +120,19 @@ describe('createInMemoryBridge support links', () => {
     open.mockRestore();
   });
 });
+
+describe('createInMemoryBridge update switch', () => {
+  // The desktop backend reads a file that never mentions the switch as checks
+  // on, and the browser bridge has to agree with it.
+  it('starts with automatic checks on and round-trips the choice', async () => {
+    const bridge = createInMemoryBridge();
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
+
+    await bridge.saveSettings({ ...await bridge.getSettings(), skipUpdateChecks: true });
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(true);
+
+    await bridge.saveSettings({ ...await bridge.getSettings(), skipUpdateChecks: false });
+    expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
+    expect((await createInMemoryBridge({ settings: { skipUpdateChecks: true } }).getSettings()).skipUpdateChecks).toBe(true);
+  });
+});

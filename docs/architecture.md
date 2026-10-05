@@ -34,28 +34,106 @@ page is covered by images. A page goes to OCR only when it has fewer than 20
 meaningful characters under heavy image coverage, when it has fewer than 200 on
 a page that is essentially all image — a scan whose text layer is a Bates
 number or a "CONFIDENTIAL" stamp and nothing else — or when more than 3% of its
-characters came back as replacement glyphs. Office containers go through AnyDoc
-to Markdown, which preserves headings and tables, and only when the container's
-content is not something else: routing here is by extension, so a workbook
-renamed `.docx` — which AnyDoc would otherwise render through its uncapped
-Excel path — is a routing failure for review rather than a document, while
-content that identifies as nothing at all (an encrypted package) still reaches
-the parser its extension names, which says what is wrong with it.
-Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
-either order and a marked UTF-8 file all decode, the mark itself never reaches
-the text, and bytes in some legacy encoding are read lossily with a corruption
-warning rather than failing the document. Excel workbooks are read
-sheet-per-page as Markdown tables, capped at 200 rows by 30 columns per sheet
-with an elision marker so a large workbook cannot flood distillation. A
-standalone image is OCR'd as one page; a TIFF holding a frame per page — a fax,
-a batch scan — yields its first frame and reports the rest as truncated rather
-than dropping them silently. PowerPoint decks go through the same Office reader
-as Word documents, slide by slide in order. `.eml` emails and Outlook `.msg`
-messages emit a fixed-order header block — the `Date:` line verbatim, so the
-sent date is checkable against the document like any other fact — followed by
-the plain-text body and a listing (never an extraction) of attachments.
+characters came back as replacement glyphs. Word processing and presentation
+files — `.docx`, `.docm`, legacy `.doc`, `.rtf`, `.odt`, `.pptx`, `.pptm`,
+`.ppsx`, legacy `.ppt`, `.odp` — go through AnyDoc to Markdown, which preserves
+headings and tables, and only when the container's content is not something
+else: routing here is by extension, so a workbook renamed `.docx` — which
+AnyDoc would otherwise render through its uncapped Excel path — is a routing
+failure for review rather than a document. Content of the same kind as its
+extension is read as what it is: Word has saved RTF under `.doc` for decades,
+and a `.doc` that is really a Word 2007 package (or a `.pptx` that is really a
+97-2003 deck) reaches no reader without the caps it would have had. A file
+saved with a password to open is reported as `PASSWORD_PROTECTED` rather than
+as damage: an encrypted Office package is an OLE compound file holding
+`EncryptionInfo` and `EncryptedPackage` streams, recognised before the zip
+pre-pass would have called it a corrupt archive; a legacy workbook carries a
+`FilePass` record; and PDFium's password error on a PDF maps to the same code.
+Every error message is one line, never a debug dump.
 
-Two consequences of "OCR only when necessary" are enforced in code rather than
+Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
+either order and a marked UTF-8 file all decode, and the mark itself never
+reaches the text. Unmarked text that is not UTF-8 is, on the Windows machines
+these files come from, almost always Windows-1252, and is read as that; only
+a result holding C1 control characters — bytes Windows-1252 leaves undefined —
+carries a corruption warning. A text file is never read past four times the
+page cap in bytes, which always fills a page.
+
+Workbooks — `.xlsx`, `.xlsm`, Excel 97-2003 `.xls`, and OpenDocument `.ods` —
+are read sheet-per-page as Markdown tables, capped at 200 rows by 30 columns
+per sheet with an elision marker so a large workbook cannot flood
+distillation, and a cell's text at 1,000 characters. That window is a design
+choice, marked where it applies, so it is reported as `CONTENT_ELIDED`, which
+the host treats as a note rather than a reason for review: a ledger whose
+facts sit in its first rows can be Ready however long it runs. Text that was
+actually lost — a page cut at the size cap, unread TIFF frames — is still
+`TEXT_TRUNCATED` and still forces review. A `.xlsx` is streamed cell by cell;
+calamine reads a binary `.xls` whole as it opens it, so its record stream is
+first surveyed for what that would allocate (dense ranges spanning a sheet's
+corners, forged `Dimensions` claims, shared strings copied into every cell
+that names them) and refused if calamine would hold more than 512 MiB at once,
+counting the sheets already built and the one being built; a year of monthly
+ledgers stays far inside that. Its formulas' token streams are then emptied
+(only cached values are rendered, and spelling out a formula can be far longer
+than its record), and it is handed to calamine in a fresh compound file. An
+`.ods` is parsed by AnyDoc, whose OpenDocument reader charges repeated rows
+and cells against a fixed expansion budget, and each sheet's table is then cut
+to the same window rather than rendered whole. CSV exports are read through
+the same window: the delimiter is the one of comma, semicolon, tab, and pipe
+that splits the leading records most consistently, fields that are not UTF-8
+read as Windows-1252, and a UTF-16 export is transcoded as it streams.
+
+A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
+the 25-megapixel render cap, at the highest resolution that fits it. A phone
+photo that some tool wrapped in a PDF at 72 DPI is a 4032 × 3024 point page,
+about 212 megapixels at 300 DPI; it is rendered at about 103 DPI, which
+Tesseract reads perfectly well, instead of failing the document. Only a page
+that would have to go below 50 DPI to fit is a resource limit, and the size of
+what was actually rendered is still checked against the cap. A standalone
+image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
+are ordinary — and up to 400 MB of decoded pixels, which holds a scanner's
+16-bit colour mode to the memory an 8-bit image takes. It is scaled down to
+the page cap before OCR by averaging the pixels each page pixel covers,
+straight into the page-sized copy, and only then turned upright, so a
+48-megapixel photo costs the worker about 220 MB at its peak rather than the
+760 MB a filtered resample's floating-point intermediate took.
+
+OCR text keeps the layout Tesseract found. The worker rebuilds it from
+Tesseract's TSV output: words on a line joined with a space, lines with a
+newline, and a new block or paragraph with a blank line, the way Tesseract's
+own text output separates them. It used to be one line per page, which left
+distillation no headings, no labelled lines, and no date lines on exactly the
+documents where dates go missing; the scanned lease's evidence for its date
+was its whole page.
+
+A standalone image is OCR'd as one page; a TIFF holding a frame per page — a
+fax, a batch scan — yields its first frame and reports the rest as truncated
+rather than dropping them silently. `.eml` emails and Outlook `.msg` messages
+emit a fixed-order header block followed by the body and a listing (never an
+extraction) of attachments. The `Date:` line is the message's own `Date`
+header, verbatim — for a `.msg`, the one in the transport headers it
+travelled with — so the sent date is checkable against the document like any
+other fact, in the sender's own offset. A `.msg` that never travelled (a
+draft, a sent item) has only a UTC submit time, and is dated in this
+machine's zone with its offset written out. No second, UTC rendering of the
+date is added: for every evening email west of Greenwich it falls on the
+next day, and validation would accept it because it is in the text. An HTML
+body is read the way it renders: whitespace in its text collapses to a space
+and only its structure starts a line, so neither Outlook's indented, wrapped
+source nor a receipt laid out in one big table cell loses or gains a line.
+Table cells are kept apart (` | `), comments and the head dropped (its title
+kept as the first line), and named and hexadecimal entities decoded;
+Outlook's binary HTML property is decoded from the hex
+msg_parser hands over, by its declared charset. Strings an ANSI `.msg` stores
+in its code page, which msg_parser drops when they are not UTF-8, are read
+back and decoded in the code page the message declares.
+
+Whatever the reader, a page carries at most two million characters and a
+document eight million, and the host reads the worker's reply lines with a
+64 MiB bound, failing a longer one as a crashed worker rather than allocating
+it in the app's own process.
+
+What "OCR only when necessary" means is enforced in code rather than
 documented as intent:
 
 * The OCR engine is constructed the first time a page actually needs it. A text
@@ -64,19 +142,36 @@ documented as intent:
 * PDFium is bound once per process and shared. Binding it per document made
   every PDF after the first one in a queue fail as "native assets missing";
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
-* A page that does not read confidently is re-read in the other orientations.
-  Tesseract's orientation detection is trained on prose with ascenders and
-  descenders; on a dense all-caps form it can be confidently 180 degrees wrong,
-  and OCR then returns a full page of gibberish with the same word count and
-  shape as a real reading. Volume cannot tell those apart, so mean word
-  confidence arbitrates: one corpus page scored 23, 14, 14, and 76 across the
-  four orientations. Confidence is a mean, though, so a reading only displaces
+* A page is read as it came first, in grey: Tesseract binarises whatever it is
+  given, and grey is a third of the bytes to encode for every pass. A reading
+  of at least three words at a mean confidence of 75 or more is done — one
+  recognition pass and no orientation detection — and so is a reading that
+  found nothing, since a blank page, every other sheet of a duplex scan, is
+  blank in every orientation. Orientation detection used to run first on every
+  page, and on the corpus's upright lease it was confidently 180 degrees wrong
+  and bought three more recognition passes to find the orientation the page
+  already had. Reading upright first took that page from four passes to one
+  and from 3.8 s to 0.6 s, and the median upright scan in the corpus from
+  1.2 s to 0.6 s (whole document, Linux, Tesseract 5.3.4 on one thread).
+* A page that does not read confidently asks orientation detection, on a
+  half-scale copy, and is then re-read in the other orientations. Tesseract's
+  orientation detection is trained on prose with ascenders and descenders; on
+  a dense all-caps form it can be confidently 180 degrees wrong, and OCR then
+  returns a full page of gibberish with the same word count and shape as a
+  real reading. Volume cannot tell those apart, so mean word confidence
+  arbitrates: one corpus page scored 23, 14, 14, and 76 across the four
+  orientations. Confidence is a mean, though, so a reading only displaces
   another when it read a comparable amount; three confident tokens are not a
-  better reading of a page than three hundred words just under the bar. A page
-  that reads well the first time — every upright document — still costs exactly
-  one pass, and so does a page that reads as blank, which is every other sheet
-  of a duplex scan; only a page already headed for a low-confidence warning
-  pays for the search.
+  better reading of a page than three hundred words just under the bar. The
+  upright reading is one of the candidates, compared as it already came back
+  rather than read again.
+
+A PDF reports its progress as it goes: a `reading` event as each page is
+reached and an `ocr` event as each goes to OCR, carrying how many pages are
+finished and the page count, at most four of each a second; a standalone
+image reports none of its one page finished as it goes to OCR. The window
+shows that as a whole percentage. A 200-page scan used to sit at 0% until it
+was done.
 
 ## Distillation
 
@@ -170,15 +265,35 @@ taste: prefill on the target machine runs at about 160 tokens/second, so every
 1,000 characters of budget costs about 1.5 seconds of wall clock on every
 document. A larger budget buys nothing on the corpus and costs seconds per file.
 
+"Roughly 3,000 tokens" holds for prose. Qwen's tokenizer reads every digit, and
+every CJK, Hangul, or Kana character, as a token of its own, so a bank statement
+or a Chinese contract inside the character budget can come to 8,000 tokens or
+more and no longer fit the 8,192-token context. Before a prompt is sent the
+engine estimates it - one token per digit or wide-script character, one per
+three and a half characters of anything else - and when the estimate plus the
+reply's 1,024 tokens passes 8,000 it distills again, scaled towards 6,500
+tokens and condensed even if the source was small enough to pass through, at
+most twice. If the server still answers that the prompt does not fit, the
+document is condensed to half once more and sent once more; after that it fails
+on its own as `MODEL_INPUT_TOO_LARGE`, without restarting the server. Only
+prompts that did not fit change, so every recorded prompt is sent as it was.
+The estimate guards the local server's context only: a hosted model's is many
+times larger, so it is sent the digest whole, and condensed only if it answers
+that the prompt did not fit.
+
+The SECTIONS line that opens a condensed digest lists at most 40 headings in at
+most 1,500 characters, ending in ` | …` when cut. A table row is never a
+heading, however capitalised: a 600-row ledger used to put 600 of them there.
+
 ## The prompt and the grammar
 
 One inference per document. The reply is constrained by a GBNF grammar, so
 whole classes of mistake are impossible rather than filtered afterwards:
 
 * `document_date` can only be `YYYY-MM-DD`.
-* `date_role` has no "due", "deadline", or "renewal" member. The model cannot
-  propose a payment due date as the document's date because it has no vocabulary
-  for it.
+* `date_role` has no "due", "deadline", or "renewal" member. The model has no
+  vocabulary for a payment due date as the document's date; it can still pick
+  one and call it something else, which validation catches (below).
 * `parties` is capped at three entries.
 * The reply contains no whitespace at all. Pretty-printing costs generated
   tokens, and generation is the slowest thing on a CPU.
@@ -200,10 +315,10 @@ The goal is calibration, not timidity. A proposal goes to review only when a
 
 | Fact | Accepted when |
 | --- | --- |
-| Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1 |
+| Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, `01/04/26`, `01.04.26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1. A two-digit year is read in either order; dotted or dashed, only padded, so a section number like `1.4.26` is never a date |
 | Type | at least 60% of its significant words appear in the document |
-| Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`); the words themselves are never loosened |
-| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, or a hyphen the sentence added |
+| Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`, and `&` read as `and`); the words themselves are never loosened. Two spellings of one name (`ACME CORP`, `Acme Corp.`) are one party, but a name is never merged into a longer one (`Acme`, `Acme Holdings`) |
+| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
 
 The date rule is deliberately about the *date*, not about the model's quoted
 line. Small models paraphrase their own quotes — answering
@@ -212,6 +327,50 @@ reads "Effective date: February 14, 2025". The first version of this validation
 gated on the quoted wrapper and threw away correct dates on half the corpus. What
 must be true is that the date is really in the document, and that is what is
 checked. The model's quoted line is still stored and shown to the reviewer.
+
+A date the document states is not yet the document's date, so four more
+checks read the document around it:
+
+* **Another document's date.** "the Master Services Agreement dated June 2,
+  2023" dates somebody else's agreement. A date stated only that way is
+  withheld, or replaced by the one date the document states on an effective
+  or commencement line. The determiner on the nearest document noun decides:
+  `This Consulting Agreement dated`, and a defined term like `(the
+  "Agreement")` standing for it, are the document dating itself. Document
+  nouns are whole words, plural and `sub-` forms included (`the Loan
+  Agreements`, `the Subcontract`), so a contractor or a border is none. A
+  citation (`issued under`, `pursuant to`) taints only a date it runs
+  straight into, with no clause punctuation in between; a comma that only
+  sets off the cited date (`the Master Services Agreement, as amended,
+  effective June 2, 2023`) does not end it, while one followed by a clause
+  of its own (`..., your employment will terminate effective`) does.
+* **A deadline.** When every statement of the chosen date is labelled a
+  deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
+  date the document labels as its issue date (`Invoice Date:`, `Dated`, a
+  bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none
+  or several, the date is withheld for a person, and the model's date is
+  offered to them. Either way the proposal goes to review with
+  `DATE_IS_DEADLINE`. `payable` and `return` do not set it off, and a
+  numeric date that reads either way round counts as two - unless the
+  document's other numeric dates show which way round it writes them, as
+  they do for the date chips.
+* **An implausible year.** A year more than ten years ahead or before 1900 is
+  usually an OCR misread the model copied faithfully (2625 for 2025). The
+  date is kept and the proposal goes to review with `DATE_IMPLAUSIBLE`.
+* **A date that reads either way round.** `04/01/2026` is 1 April in London
+  and 4 January in New York, and both are dates the document prints. When
+  the day and the month are both 12 or under and differ, the document
+  writes the date only in numbers (never in words, never year first), and
+  nothing settles the document's order - no other numeric date that can
+  only be read one way round, like `30/01/2026` - the date is kept and the
+  proposal goes to review with `DATE_AMBIGUOUS`. A date read against the
+  order the document does show (`03/04/2026` as 4 March beside a
+  `30/01/2026`) goes to review the same way.
+
+All of this is string handling over text nobody controls. A panic in it -
+one slice inside an `é` once panicked on every French invoice - fails that
+one document as `ANALYSIS_FAILED`, with a fixed message that never carries
+the document's text, instead of taking the model thread down with it.
 
 Self-reported confidence below 0.60 also routes to review, as does any
 fact-affecting parser warning, and any document with no defining date or no
@@ -274,7 +433,7 @@ validated name for the reviewer to read. Real names from the scored corpus:
 2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf
 2026-12-29 Notice of Termination - John Smith.pdf
 2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf
-Lease Agreement with ORION GLASS STUDIO INC.pdf
+Lease Agreement with Orion Glass Studio Inc.pdf
 ```
 
 Those are outputs, not illustrations. The last one carries no date because the
@@ -287,25 +446,48 @@ validated facts for exactly that offer — a date the document never states
 verbatim is withheld from the name, not lost — and lists every date the
 document does state, so a document the model could not date is dated from
 its own page in a click, with the file's last-modified date as the labelled
-last resort. Whatever date the applied name carries is the date the queue
+last resort. A date printed only in numbers is listed when it can be read
+one way: `30/01/2026`, a year-first date, or `03/04/2026` in a document
+whose other numeric dates show which way round it writes them. One that
+could be either, and any two-digit year, is left off rather than offered
+under a guess. Whatever date the applied name carries is the date the queue
 files under: the layout's year folder and the description record read it
 from the name, never from the fact validation withheld.
 
 The party clause is composed from a validated relation and validated names, not
 from free text, so every name in a filename has been found in the document.
+`between` needs two names: when a house-style merge or an unprintable name
+leaves one, the clause reads `with`. A type or a party a letterhead or a scan
+printed in capitals is title-cased for the name — `ORION GLASS STUDIO INC.`
+becomes `Orion Glass Studio Inc.` — when it has no lowercase letter and at
+least two words of four letters or more, so `IBM` and `KPMG LLP` stay as they
+are; company suffixes read as usual (`Inc`, `Corp`, `Ltd`, `GmbH`, while
+`LLC`, `LLP`, `PLC` stay in capitals), a word with a full stop is an
+abbreviation (`No. 2`, `St. Louis`), common short words are cased (`Bank of
+New York`, `Wage and Tax Statement`), other words of three letters or fewer
+and vowel-less initialisms (`ABC`, `HSBC`) stay in capitals, and a word with
+a digit, an apostrophe, or a `Mc`/`Mac` surname prefix is left alone
+(`MACHINES` is a word, not a surname). Only the name changes; the evidence
+and the description keep the document's casing.
 Names longer than 120 characters shed the second party, then the party clause,
 then truncate the type — detail is lost from the least identifying end first.
-Windows-hostile characters, reserved device names, trailing dots and spaces, and
+Typographic ligatures (`ﬁ`) and full-width letters (`ＡＣＭＥ`) are folded to the
+letters a person types and every segment is composed to NFC, so two spellings
+of one accented name make one filename. Windows-hostile characters, reserved
+device names, trailing dots and spaces, and
 invisible formatting characters — the bidirectional controls, a soft hyphen, a
 zero-width space, a byte-order mark — are removed; the original extension is
-always preserved; collisions get a ` (2)` suffix. The engine checks collisions
+always preserved; collisions get a ` (2)` suffix, judged the way Windows
+compares names. The engine checks collisions
 against the only folder it knows, the document's own; the queue recomposes the
 name against the folder the document is actually going to, so a suffix means
 a real collision at the destination and never a phantom one at the source.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
-type, the type, or the first party (`2026/Statement of Work/`). A fact the
+type, the type, or the first party (`2026/Statement of Work/`). A folder
+name is cut to 80 characters and never ends in a space or a dot, which the
+queue's verbatim paths would otherwise create as written. A fact the
 layout needs but the document lacks sends it to `Undated` or `Unsorted`, never
 the root. Folders are created on first use and removed by the undo that
 empties them; the destination itself is never removed, and neither is
@@ -336,7 +518,10 @@ and before naming. A rule maps a spelling as the document writes it (matched
 with case, punctuation, and spacing disregarded, words never loosened) to the
 spelling the reviewer wrote, for one party or for the document type. The
 queue applies the rules in force to the validated proposal, composes the name
-from the result, and records which rules fired beside the proposal. The
+from the result, and records which rules fired beside the proposal. A rule's
+spelling is the reviewer's, so the name carries it exactly as typed -
+capitals included - while the document's own words beside it are
+title-cased as usual. The
 engine's analysis is untouched: the evidence panel still shows the document's
 words, and the description record and the layout folder follow the styled
 proposal, so the name, the folder, and the record agree.
@@ -347,7 +532,9 @@ proposed one - type, connecting word, party, `and`, party - after stripping
 the extension, the date, and any collision suffix, so a reviewer who typed a
 date and shortened a party in one go still teaches the party. An edit that
 touches two fields, the connecting word, or a name the engine did not compose
-teaches nothing: it is a decision about that document. Reading the grammar
+teaches nothing: it is a decision about that document. A name an earlier
+version proposed is read the way that version composed it, so a document
+still waiting when Intern is upgraded teaches as before. Reading the grammar
 rather than diffing matters, because the smallest edit lies: "Acme and
 Contoso" becomes "Acme Corp and Contoso Inc" by inserting text one character
 into the connector, and a diff would credit it all to one party.
@@ -387,7 +574,37 @@ said so. Both statements could not be true.
 
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
-Windows stutter — the product's premise is that it runs while you work.
+Windows stutter — the product's premise is that it runs while you work. For the
+same reason both sidecars run at below-normal priority on Windows: they still
+get every cycle nothing else wants, and the window in front never waits on them.
+
+A reply may run to 1,024 tokens. The grammar's closing brace ends it long
+before that - the corpus's longest is about 200 - but a contract whose opening
+paragraph names the date and both parties is quoted as evidence three times
+over, and at the old 420 that reply was cut off mid-string. A reply that does
+hit the limit is reported as `MODEL_REPLY_TRUNCATED` and not sent again:
+decoding is greedy, so the same request stops at the same token. Only a reply
+that finished but cannot be read gets its one second attempt.
+
+What llama-server and `intern-worker` print on standard error - a missing CPU
+feature, a quarantined runtime library, a model that will not load - is kept in
+`llama-server.log` and `worker.log` under the app's local data folder
+(`%LOCALAPPDATA%\com.intern.app\logs`), each emptied when it is next opened
+past 256 KiB. Setup's messages for a runtime that will not start, will not
+become ready, or fails its self-test point there rather than at a download the
+checksum has already vouched for. At its default verbosity llama-server logs no
+prompt text and not its `--api-key`, and it is never started with `-v`; the
+worker's panic hook writes where a panic happened and how long its message
+was, never the message, which can quote the document.
+
+The model download, a hosted model, and Microsoft Graph trust the operating
+system's root certificates as well as the Mozilla set bundled into the binary.
+Firms that inspect TLS install their own root in the Windows store, and with
+the bundled set alone the first-run download failed behind such a proxy with
+nothing saying why. A store with nothing usable in it would stop a client from
+being built at all, so each client is built again without it rather than not
+at all. The clients for the local server never read the store: they speak plain
+HTTP to this machine.
 
 The server is started once and kept warm between documents, so how it stops
 matters as much as how it starts: it holds well over a gigabyte, and a second
@@ -402,6 +619,46 @@ that: Tauri's exit events stop the pipeline while it is still whole, and the
 updater's before-exit hook — Tauri's `cleanup_before_exit`, reached through a
 guard parked in the app's resource table — does the same before the installer
 is launched. The job object is the backstop, not the plan.
+
+Launch never reads the model file. Tauri's setup hook asks only whether it is
+there at the size the manifest pins; the digest is checked behind the window,
+on the setup thread, and used to be read twice in the hook, a white window for
+five seconds or more on an office laptop. A model that has passed its digest
+and the semantic self-test is stamped in `models/.verified.json` with its size
+and modification time, the digest it was checked against, the llama-server
+binary's size and date, and the version of Intern that checked it. While all of
+that still matches, the next launch starts the server with neither check; when
+any of it changes, the model is hashed and self-tested once and stamped again,
+and a failed self-test removes the stamp. Within a session the digest is read
+at most once: restarts - a cancel, a recovery - start a file that still looks
+exactly as it did when it was checked, and refuse one that does not.
+
+Starts and stops are serialized, and every deliberate stop - a cancel, a hosted
+model chosen, shutdown - moves a generation counter before it stops anything.
+A cancel interrupts a request by restarting the server under it, and that
+request used to fail like a server that had died: it was recovered, restarting
+the server again, and the canceled document was read a second time, while two
+servers could load at once. Now a request that fails after a cancel reports
+`MODEL_CANCELED`, a recovery for a failure older than the last restart does
+nothing, the queue skips recovery for a request it has itself canceled, and
+the canceled item no longer pauses the queue through the lease its cancel took
+away. A document the model failed on its own terms - too large, a reply cut
+off or unreadable - fails without a restart. A cancel no longer holds the
+queue while it restarts the server, so the next document can reach the model
+before the new server has loaded; a request that finds a restart under way - a
+cancel's, or the start that choosing the local model again begins - waits for
+it, and is never sent to a server a stop is about to take away. One that still
+finds no server running is handed back to the queue as `MODEL_NOT_READY`, which
+ends that pass with nothing counted against the document; counted, it used to
+fail as a file error the second time it met a restart.
+
+Choosing a hosted model stops the local server, and a launch with a hosted
+model chosen never starts it: it would hold 1.3 to 2.6 GB with nothing to ask
+it. Choosing the local model again starts and verifies it as a launch does, and
+the queue waits until that has finished. A request the switch interrupts goes
+back to be read again, by the hosted model. While a model downloads, the window
+hears about it at most about four times a second, besides every change of
+status and the final byte; it used to hear about every network chunk.
 
 ### A hosted model
 
@@ -419,10 +676,19 @@ cap. No sampling knobs, because a parameter one provider rejects is a document
 that never gets filed. What goes out is the distilled digest of the document,
 condensed but verbatim; what comes back is read through the same JSON
 recovery and the same evidence checks as a local reply. A refusal from the
-model is reported as one and sends the document to review, never re-routed
+model - Anthropic's `refusal`, OpenAI's `refusal` field, a `content_filter`
+finish - is reported as one and sends the document to review, never re-routed
 elsewhere; a rejected key, an unreachable service, a model name the service
-does not know, and an address that has moved all pause the queue rather than
-failing the backlog one item at a time; a busy service earns one retry.
+does not know, an address that has moved, and an account out of credit
+(`HOSTED_MODEL_BILLING`: a 402, Anthropic's `billing_error` or its 400 about the
+credit balance, OpenAI's `insufficient_quota`) all pause the queue rather than
+failing the backlog one item at a time; a busy service earns one retry. That
+retry waits as long as the service's `Retry-After` asked, up to a minute, and
+otherwise about eight seconds, spread by a fifth either way. A request to a
+service on the internet may take three minutes; one to a server on this
+machine - LM Studio or Ollama on a laptop CPU - may take 400 seconds, so that a
+request that timed out, the wait, and its one retry all end inside the queue's
+fifteen-minute deadline rather than running on past it.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address

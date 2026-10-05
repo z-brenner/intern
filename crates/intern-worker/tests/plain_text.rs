@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 
 use intern_worker::extract::{
-    CancellationToken, ExtractedDocument, ExtractionWarning, PageSource, extract_text,
+    CancellationToken, ExtractedDocument, ExtractionWarning, MAX_TEXT_FILE_BYTES, PageSource,
+    extract_text,
 };
 use intern_worker::limits::ResourceLimits;
 use tempfile::TempDir;
@@ -64,18 +65,69 @@ fn plain_utf8_is_unchanged() {
     assert!(document.warnings.is_empty());
 }
 
-/// A legacy single-byte encoding is not decodable here, but losing the whole
-/// document over one accented character is worse than reading it with the
-/// character replaced and saying so.
+/// Text that is not UTF-8 and carries no mark is, on the Windows machines
+/// these files come from, Windows-1252: an accounting export, a note saved
+/// by an older editor. It reads correctly as that, so there is nothing to
+/// warn about.
 #[test]
-fn text_that_is_not_valid_utf8_is_read_lossily_and_flagged() {
-    let document = extract(b"Fee schedule for Caf\xE9 Med\r\n");
-    let text = &document.pages[0].text;
+fn windows_1252_text_decodes_without_warning() {
+    let document = extract(b"Invoice for Caf\xE9 M\xFCller GmbH \xA3420 \x96 paid\r\n");
 
-    assert!(text.starts_with("Fee schedule for Caf"), "{text}");
-    assert!(text.contains("Med"), "{text}");
+    assert_eq!(
+        document.pages[0].text,
+        "Invoice for Caf\u{e9} M\u{fc}ller GmbH \u{a3}420 \u{2013} paid\r\n"
+    );
+    assert!(document.warnings.is_empty(), "{:?}", document.warnings);
+    assert!(!document.truncated);
+}
+
+/// Five byte values mean nothing in Windows-1252 and decode as C1 control
+/// characters. A file that has them is in some other encoding, and what was
+/// read from it is not to be trusted.
+#[test]
+fn bytes_windows_1252_leaves_undefined_are_flagged() {
+    let document = extract(b"Payee \x81\x8D\x90 ref 1182\r\n");
+
+    assert!(document.pages[0].text.starts_with("Payee "));
     assert_eq!(
         document.warnings,
         vec![ExtractionWarning::NativeTextCorrupt]
     );
+}
+
+/// A UTF-8 file with a damaged byte is still a UTF-8 file. Reading all of
+/// it as Windows-1252 would turn every accented letter into two wrong ones,
+/// so it is read as UTF-8, with the damage replaced and flagged.
+#[test]
+fn damaged_utf8_is_read_as_utf8_and_flagged() {
+    let mut bytes = "Caf\u{e9} M\u{fc}ller ".as_bytes().to_vec();
+    bytes.push(0xFF);
+    bytes.extend_from_slice(" GmbH".as_bytes());
+    let document = extract(&bytes);
+    let text = &document.pages[0].text;
+
+    assert!(text.starts_with("Caf\u{e9} M\u{fc}ller "), "{text}");
+    assert!(text.ends_with(" GmbH"), "{text}");
+    assert_eq!(
+        document.warnings,
+        vec![ExtractionWarning::NativeTextCorrupt]
+    );
+}
+
+/// No page holds more than two million characters, so a text file is never
+/// read past the bytes that could fill one. What is left unread is reported,
+/// and a character cut in half where reading stopped is dropped rather than
+/// condemning the whole file as not UTF-8.
+#[test]
+fn reading_stops_past_what_one_page_can_hold_and_says_so() {
+    let mut bytes = "a".repeat(MAX_TEXT_FILE_BYTES as usize - 1).into_bytes();
+    // A two-byte character straddling the read limit, then more beyond it.
+    bytes.extend_from_slice("\u{e9}tail".as_bytes());
+    let document = extract(&bytes);
+    let text = &document.pages[0].text;
+
+    assert_eq!(text.len(), MAX_TEXT_FILE_BYTES as usize - 1);
+    assert!(text.bytes().all(|byte| byte == b'a'));
+    assert!(document.truncated);
+    assert_eq!(document.warnings, vec![ExtractionWarning::TextTruncated]);
 }

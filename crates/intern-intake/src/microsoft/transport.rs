@@ -30,11 +30,19 @@ impl MicrosoftTransport {
         deployment
             .validate()
             .map_err(|_| "Microsoft deployment boundary is invalid.")?;
-        Client::builder()
-            .redirect(Policy::none())
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
+        let build = |native_roots: bool| {
+            Client::builder()
+                .redirect(Policy::none())
+                .timeout(Duration::from_secs(10))
+                .connect_timeout(Duration::from_secs(5))
+                .tls_built_in_native_certs(native_roots)
+                .build()
+        };
+        // The operating system's roots let Graph through a firm's inspecting
+        // proxy, but a store with nothing usable in it fails the build; the
+        // bundled roots alone still reach Microsoft everywhere else.
+        build(true)
+            .or_else(|_| build(false))
             .map(|client| Self {
                 client,
                 deployment: deployment.clone(),
@@ -259,6 +267,53 @@ mod tests {
             .as_bytes(),
         )
         .unwrap()
+    }
+
+    const BROKEN_STORE_CHILD: &str = "INTERN_TEST_BROKEN_CERT_STORE";
+
+    /// A certificate store that yields nothing usable - here an
+    /// `SSL_CERT_FILE` holding one block that is not a certificate - makes
+    /// reqwest refuse to build a client at all. Graph must still be reachable
+    /// with the bundled roots. Run in a child process because the variable is
+    /// process-wide and setting it in this one would be unsound.
+    #[test]
+    fn a_broken_certificate_store_does_not_stop_the_transport() {
+        let directory = tempfile::tempdir().unwrap();
+        let broken = directory.path().join("broken.pem");
+        std::fs::write(
+            &broken,
+            "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "microsoft::transport::tests::the_transport_builds_over_a_broken_store",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(BROKEN_STORE_CHILD, "1")
+            .env("SSL_CERT_FILE", &broken)
+            .env_remove("SSL_CERT_DIR")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+    }
+
+    /// The child half of the test above; inert unless that test started it.
+    #[test]
+    #[ignore = "child process of a_broken_certificate_store_does_not_stop_the_transport"]
+    fn the_transport_builds_over_a_broken_store() {
+        if std::env::var_os(BROKEN_STORE_CHILD).is_none() {
+            return;
+        }
+        assert!(MicrosoftTransport::new(&deployment()).is_ok());
     }
 
     #[test]

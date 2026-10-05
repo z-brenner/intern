@@ -16,13 +16,13 @@
 
 use std::time::Instant;
 
-use crate::client::{ModelClient, ModelRequest, Proposer};
+use crate::client::{MAX_REPLY_TOKENS, ModelClient, ModelRequest, Proposer};
 use crate::distill::{DigestBudget, DocumentDigest, distill};
 use crate::domain::{
     AnalysisTelemetry, DocumentAnalysis, DocumentSource, ProposalStatus, ReviewReason,
     ValidationOutcome,
 };
-use crate::error::EngineResult;
+use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::stated_dates;
 use crate::fingerprint::{self, source_fingerprint};
 use crate::naming::compose_filename;
@@ -35,6 +35,19 @@ use crate::validate::validate;
 /// runs without a projector, so a page nothing could read is a page for a human
 /// to look at, not one to guess about.
 pub const MIN_READABLE_CHARACTERS: usize = 200;
+
+/// What the system turn and the chat template take from the context: the
+/// local server's 8,192 tokens leave 8,000 for the prompt and the reply.
+const TEMPLATE_TOKENS: usize = 192;
+/// How far below that ceiling a prompt that did not fit is condensed to - to
+/// 6,500 tokens on the local server - so one re-distillation usually lands
+/// inside it despite the fixed instructions.
+const CONDENSING_MARGIN_TOKENS: usize = 1_500;
+/// A condensed document smaller than this has lost what it is.
+const MIN_REDISTILLED_CHARACTERS: usize = 2_000;
+/// How many times a prompt that will not fit is condensed further before it
+/// is sent anyway, for the server to have the last word.
+const MAX_REDISTILLATIONS: usize = 2;
 
 pub struct Engine {
     client: Box<dyn Proposer>,
@@ -81,6 +94,19 @@ impl Engine {
 
     /// Reads one document and proposes a name, a description, and the evidence
     /// behind both.
+    ///
+    /// The budget is in characters, the model's context in tokens, and the
+    /// two part ways on exactly the documents a firm files: Qwen reads every
+    /// digit, and every CJK character, as a token of its own, so a bank
+    /// statement or a Chinese contract inside the character budget can still
+    /// overflow the local server's 8,192 tokens. For a model with a context
+    /// that small the prompt is estimated first and condensed further until
+    /// it fits; a hosted model, whose context is many times larger, is sent
+    /// it whole - condensing it there only dropped the blocks that named the
+    /// date and the parties from a request that was paid for anyway. Either
+    /// way, a model that still finds the prompt too large gets it condensed
+    /// to half once more. Only a document that does not fit changes, so every
+    /// prompt that fitted before is sent byte for byte as it was.
     pub fn analyze(
         &self,
         source: &DocumentSource,
@@ -88,10 +114,34 @@ impl Engine {
         existing_names: &[&str],
     ) -> EngineResult<DocumentAnalysis> {
         let distill_started = Instant::now();
-        let digest = distill(source, self.budget);
-        let distill_micros =
-            u64::try_from(distill_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-        self.analyze_digest(source, &digest, distill_micros, extension, existing_names)
+        let mut budget = self.budget;
+        let mut digest = distill(source, budget);
+        if let Some(context) = self.client.context_tokens() {
+            let ceiling = context.saturating_sub(TEMPLATE_TOKENS);
+            let target = ceiling.saturating_sub(CONDENSING_MARGIN_TOKENS).max(1);
+            for _ in 0..MAX_REDISTILLATIONS {
+                let estimate = estimated_tokens(&ModelRequest::from_digest(&digest).prompt);
+                if estimate + MAX_REPLY_TOKENS as usize <= ceiling {
+                    break;
+                }
+                let scaled = sent_characters(&digest, budget) * target / estimate.max(1);
+                budget = condensed(scaled.max(MIN_REDISTILLED_CHARACTERS));
+                digest = distill(source, budget);
+            }
+        }
+        let distill_micros = micros_since(distill_started);
+        match self.analyze_digest(source, &digest, distill_micros, extension, existing_names) {
+            // The estimate is an estimate. The server counts exactly, and when
+            // it says the prompt did not fit, half as much document is sent
+            // once more rather than the same prompt again.
+            Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+                let redistill_started = Instant::now();
+                let digest = distill(source, condensed(sent_characters(&digest, budget) / 2));
+                let distill_micros = distill_micros.saturating_add(micros_since(redistill_started));
+                self.analyze_digest(source, &digest, distill_micros, extension, existing_names)
+            }
+            result => result,
+        }
     }
 
     /// Runs inference, validation, and naming over an already-built digest.
@@ -109,39 +159,42 @@ impl Engine {
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        let mut outcome = validate(proposal, digest);
-        if barely_readable(source) {
-            // A page that yielded almost no text cannot support a confident
-            // name, whatever the model returned about it.
-            if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
-                outcome.reasons.push(ReviewReason::ParserWarning);
+        guard_analysis(|| {
+            let mut outcome = validate(proposal, digest);
+            if barely_readable(source) {
+                // A page that yielded almost no text cannot support a
+                // confident name, whatever the model returned about it.
+                if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
+                    outcome.reasons.push(ReviewReason::ParserWarning);
+                }
+                outcome.status = ProposalStatus::NeedsReview;
             }
-            outcome.status = ProposalStatus::NeedsReview;
-        }
-        if let (Some(threshold), Some(confidence)) = (self.min_token_confidence, token_confidence)
-            && confidence.min < threshold
-        {
-            if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
-                outcome.reasons.push(ReviewReason::LowConfidence);
+            if let (Some(threshold), Some(confidence)) =
+                (self.min_token_confidence, token_confidence)
+                && confidence.min < threshold
+            {
+                if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
+                    outcome.reasons.push(ReviewReason::LowConfidence);
+                }
+                outcome.status = ProposalStatus::NeedsReview;
             }
-            outcome.status = ProposalStatus::NeedsReview;
-        }
-        let mut analysis = finish(
-            outcome,
-            digest,
-            extension,
-            existing_names,
-            AnalysisTelemetry {
-                source_characters: digest.source_characters,
-                digest_characters: digest.digest_characters,
-                compression_ratio: digest.compression_ratio(),
-                distill_micros,
-                inference_millis,
-            },
-        );
-        analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
-        analysis.token_confidence = token_confidence;
-        Ok(analysis)
+            let mut analysis = finish(
+                outcome,
+                digest,
+                extension,
+                existing_names,
+                AnalysisTelemetry {
+                    source_characters: digest.source_characters,
+                    digest_characters: digest.digest_characters,
+                    compression_ratio: digest.compression_ratio(),
+                    distill_micros,
+                    inference_millis,
+                },
+            );
+            analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
+            analysis.token_confidence = token_confidence;
+            analysis
+        })
     }
 
     pub fn distill(&self, source: &DocumentSource) -> DocumentDigest {
@@ -173,6 +226,81 @@ pub fn finish(
         text_fingerprint: None,
         token_confidence: None,
     }
+}
+
+/// Roughly how many tokens `text` costs Qwen's tokenizer: one per digit and
+/// per CJK, Hangul, or Kana character, which it splits singly, and one per
+/// three and a half characters of anything else. Deliberately on the high
+/// side; underestimating is what costs a request.
+pub(crate) fn estimated_tokens(text: &str) -> usize {
+    let mut single = 0_usize;
+    let mut other = 0_usize;
+    for character in text.chars() {
+        if character.is_numeric() || is_wide_script(character) {
+            single += 1;
+        } else {
+            other += 1;
+        }
+    }
+    single + (other * 2).div_ceil(7)
+}
+
+/// CJK ideographs, Hangul, and Kana - the scripts a BPE vocabulary built
+/// mostly from English spends about a token per character on.
+fn is_wide_script(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x1100..=0x11FF       // Hangul Jamo
+            | 0x3040..=0x30FF // Hiragana, Katakana
+            | 0x3130..=0x318F // Hangul Compatibility Jamo
+            | 0x31F0..=0x31FF // Katakana Phonetic Extensions
+            | 0x3400..=0x4DBF // CJK Extension A
+            | 0x4E00..=0x9FFF // CJK Unified Ideographs
+            | 0xAC00..=0xD7AF // Hangul Syllables
+            | 0xF900..=0xFAFF // CJK Compatibility Ideographs
+            | 0xFF66..=0xFF9F // Halfwidth Katakana
+            | 0x20000..=0x3134F // CJK Extensions B-G
+    )
+}
+
+fn micros_since(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
+/// How many characters of document the digest actually carried: the budget,
+/// or the whole text when it was small enough to pass through.
+fn sent_characters(digest: &DocumentDigest, budget: DigestBudget) -> usize {
+    budget.max_characters.min(digest.digest_characters)
+}
+
+/// A budget that keeps `max_characters` of the document and always condenses,
+/// even a document small enough to have been passed through whole.
+fn condensed(max_characters: usize) -> DigestBudget {
+    DigestBudget {
+        passthrough_characters: 0,
+        max_characters,
+    }
+}
+
+/// Runs the work that follows the model's reply - validation, naming,
+/// fingerprinting - so that a panic in it fails this one document instead of
+/// taking the model thread down with it.
+///
+/// That work is plain string handling over text nobody controls, and a slip
+/// in it once panicked on every French invoice: the panic ended the thread
+/// that runs the model request, the queue read the lost reply as the model
+/// failing, and paused everything. Caught here, it is
+/// [`EngineErrorCode::AnalysisFailed`], a failure of this document alone.
+///
+/// The panic's payload is dropped unread and the error carries a fixed
+/// message: a failed slice reports the string it was slicing, which is
+/// document text, and document text never goes into an error. Retrying the
+/// same document would only panic the same way again. `AssertUnwindSafe` is
+/// sound because nothing the closure touched is used again after a panic:
+/// what it owned is dropped, and what it borrowed it only read.
+fn guard_analysis<F: FnOnce() -> DocumentAnalysis>(f: F) -> EngineResult<DocumentAnalysis> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .map_err(|_| EngineError::new(EngineErrorCode::AnalysisFailed, "document analysis failed"))
 }
 
 /// True when extraction produced too little text to name a document from.
@@ -333,6 +461,268 @@ mod tests {
             Engine::with_proposer(Box::new(Scored(None))).with_min_token_confidence(0.5),
         );
         assert_eq!(unmeasured.status, ProposalStatus::Ready);
+    }
+
+    /// A proposer that records every prompt it is sent and answers the `n`th
+    /// with `answers[n]` (the last again once they run out). It has the local
+    /// server's context unless built as a hosted one.
+    struct Recording {
+        prompts: std::sync::Mutex<Vec<String>>,
+        answers: Vec<Result<(), crate::error::EngineErrorCode>>,
+        context: Option<usize>,
+    }
+
+    impl Recording {
+        fn new(answers: Vec<Result<(), crate::error::EngineErrorCode>>) -> Self {
+            Self {
+                prompts: std::sync::Mutex::new(Vec::new()),
+                answers,
+                context: Some(crate::server::CONTEXT_TOKENS as usize),
+            }
+        }
+
+        fn hosted(answers: Vec<Result<(), crate::error::EngineErrorCode>>) -> Self {
+            Self {
+                context: None,
+                ..Self::new(answers)
+            }
+        }
+
+        fn prompts(&self) -> Vec<String> {
+            self.prompts.lock().unwrap().clone()
+        }
+    }
+
+    impl Proposer for std::sync::Arc<Recording> {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<crate::domain::ModelProposal> {
+            let mut prompts = self.prompts.lock().unwrap();
+            prompts.push(request.prompt.clone());
+            let answer = self.answers[(prompts.len() - 1).min(self.answers.len() - 1)];
+            match answer {
+                Ok(()) => Scored(None)
+                    .propose_scored(request)
+                    .map(|(proposal, _)| proposal),
+                Err(code) => Err(crate::error::EngineError::new(code, "scripted")),
+            }
+        }
+
+        fn context_tokens(&self) -> Option<usize> {
+            self.context
+        }
+    }
+
+    /// A bank statement: a short heading, then line after line of dates,
+    /// references, and amounts. Under the 12,000-character passthrough limit,
+    /// so it used to go to the model whole - about 8,000 tokens of digits.
+    fn digit_dense_statement() -> DocumentSource {
+        let mut text = String::from("ACCOUNT STATEMENT\n\nStatement date: January 31, 2026\n\n");
+        let mut line = 0_u32;
+        while text.chars().count() < 11_500 {
+            text.push_str(&format!(
+                "{:02}/01/2026 {:010} {:>9}.{:02} {:>10}.{:02}\n",
+                line % 28 + 1,
+                7_340_000_000_u64 + u64::from(line) * 7_919,
+                (line * 7_573) % 100_000,
+                line % 100,
+                (line * 15_377) % 1_000_000,
+                (line * 31) % 100
+            ));
+            line += 1;
+        }
+        source_from_text(text)
+    }
+
+    #[test]
+    fn digits_and_cjk_are_counted_a_token_each() {
+        assert_eq!(estimated_tokens("2026"), 4);
+        assert_eq!(estimated_tokens("契約書"), 3);
+        assert_eq!(estimated_tokens("계약서"), 3);
+        assert_eq!(estimated_tokens("けいやく"), 4);
+        assert_eq!(estimated_tokens("agreement"), 3, "nine letters, rounded up");
+        assert_eq!(estimated_tokens(""), 0);
+    }
+
+    /// Nothing that fitted before changes: an ordinary document's prompt is
+    /// exactly the one its plain digest makes.
+    #[test]
+    fn a_prompt_that_fits_is_sent_unchanged() {
+        let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)));
+        let source = source_from_text(
+            "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
+             It is made between Acme Corporation and the consultant for advisory services.",
+        );
+        engine.analyze(&source, "pdf", &[]).unwrap();
+        let expected = ModelRequest::from_digest(&distill(&source, DigestBudget::default()));
+        assert_eq!(recording.prompts(), vec![expected.prompt]);
+    }
+
+    /// A digit-dense statement inside the character budget overflowed the
+    /// token context: the server refused it, was restarted, refused it again,
+    /// and the queue paused. It is now condensed before it is ever sent.
+    #[test]
+    fn oversized_digest_is_redistilled_before_sending() {
+        let source = digit_dense_statement();
+        let whole = ModelRequest::from_digest(&distill(&source, DigestBudget::default()));
+        assert!(
+            estimated_tokens(&whole.prompt) + 1_024 > 8_000,
+            "the fixture must overflow as sent whole: {}",
+            estimated_tokens(&whole.prompt)
+        );
+
+        let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)));
+        let analysis = engine.analyze(&source, "pdf", &[]).unwrap();
+
+        let prompts = recording.prompts();
+        assert_eq!(prompts.len(), 1, "condensed before sending, not retried");
+        let estimate = estimated_tokens(&prompts[0]);
+        assert!(estimate + 1_024 <= 8_000, "{estimate}");
+        assert!(
+            prompts[0].contains("faithful condensation"),
+            "a passthrough-sized document is condensed when it does not fit"
+        );
+        assert!(prompts[0].contains("Statement date: January 31, 2026"));
+        assert!(analysis.telemetry.digest_characters < whole.prompt.chars().count());
+    }
+
+    /// The 8,192-token ceiling is the local server's. A hosted model's
+    /// context is many times larger, and condensing the statement for it
+    /// dropped the blocks that named the date and the parties from a request
+    /// it was paid for anyway: it is sent the digest whole.
+    #[test]
+    fn a_model_without_the_local_context_is_sent_the_whole_digest() {
+        let source = digit_dense_statement();
+        let whole = ModelRequest::from_digest(&distill(&source, DigestBudget::default()));
+        assert!(estimated_tokens(&whole.prompt) + 1_024 > 8_000);
+
+        let hosted = std::sync::Arc::new(Recording::hosted(vec![Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&hosted)));
+        engine.analyze(&source, "pdf", &[]).unwrap();
+        assert_eq!(hosted.prompts(), vec![whole.prompt]);
+
+        // Which models those are: the local client knows its server's
+        // context, and anything else is not condensed to it.
+        let local = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        assert_eq!(local.context_tokens(), Some(8_192));
+        assert_eq!(Scored(None).context_tokens(), None);
+    }
+
+    /// When the server counts more tokens than the estimate did, the document
+    /// is condensed to half once and sent again - once, and never reported as
+    /// a failed request that restarts the server and pauses the queue.
+    #[test]
+    fn server_too_large_triggers_one_half_budget_retry() {
+        use crate::error::EngineErrorCode::ModelInputTooLarge;
+
+        let mut long = String::from(
+            "MASTER SERVICES AGREEMENT\n\nThis Master Services Agreement is effective as of March 1, 2025 by and between Acme Corporation and Contoso Ltd.\n\n",
+        );
+        for clause in 0..120 {
+            long.push_str(&format!(
+                "{clause}. The Supplier shall perform the services described in statement of work {clause} with due care, and the Customer shall pay each undisputed invoice within thirty days.\n\n"
+            ));
+        }
+        let source = source_from_text(long);
+
+        let recovering = std::sync::Arc::new(Recording::new(vec![Err(ModelInputTooLarge), Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recovering)));
+        engine.analyze(&source, "pdf", &[]).unwrap();
+        let prompts = recovering.prompts();
+        assert_eq!(prompts.len(), 2);
+        let (first, second) = (prompts[0].chars().count(), prompts[1].chars().count());
+        let instructions =
+            ModelRequest::from_digest(&distill(&source_from_text(""), DigestBudget::default()))
+                .prompt
+                .chars()
+                .count();
+        // Half the document, give or take a block and the date index.
+        assert!(
+            second - instructions < (first - instructions) * 6 / 10,
+            "{first} -> {second}"
+        );
+
+        let refusing = std::sync::Arc::new(Recording::new(vec![Err(ModelInputTooLarge)]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refusing)));
+        let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
+        assert_eq!(error.code(), ModelInputTooLarge);
+        assert_eq!(refusing.prompts().len(), 2, "one smaller retry, no more");
+
+        // Any other failure is reported as it was, with no second attempt.
+        let failing = std::sync::Arc::new(Recording::new(vec![Err(
+            crate::error::EngineErrorCode::ModelRequestFailed,
+        )]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&failing)));
+        let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
+        assert_eq!(
+            error.code(),
+            crate::error::EngineErrorCode::ModelRequestFailed
+        );
+        assert_eq!(failing.prompts().len(), 1);
+    }
+
+    /// The same, end to end against llama-server's own 400: one smaller
+    /// retry, then either an answer or MODEL_INPUT_TOO_LARGE - never the
+    /// MODEL_REQUEST_FAILED that restarted the server and paused the queue.
+    #[test]
+    fn a_context_overflow_from_the_local_server_is_retried_smaller_once() {
+        use crate::test_support::{VALID_REPLY, completion_reply, http_reply, scripted_server};
+
+        let overflow = http_reply(
+            "400 Bad Request",
+            &[("Content-Type", "application/json")],
+            r#"{"error":{"code":400,"message":"request (9214 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9214,"n_ctx":8192}}"#,
+        );
+        let source = digit_dense_statement();
+        let endpoint = |server: &crate::test_support::ScriptedServer| {
+            format!("http://{}/v1/chat/completions", server.address)
+        };
+
+        let server = scripted_server(vec![
+            overflow.clone(),
+            completion_reply("stop", VALID_REPLY),
+        ]);
+        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap());
+        engine
+            .analyze(&source, "pdf", &[])
+            .expect("the smaller retry is answered");
+        assert_eq!(server.attempts(), 2);
+        let bodies = server.bodies();
+        assert!(bodies[1].len() < bodies[0].len());
+
+        let server = scripted_server(vec![overflow]);
+        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap());
+        let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
+        assert_eq!(
+            error.code(),
+            crate::error::EngineErrorCode::ModelInputTooLarge
+        );
+        assert_eq!(server.attempts(), 2);
+    }
+
+    /// A panic after the model answered is this document's failure, under
+    /// its own code and a fixed message - never the panic's text, which for
+    /// a bad slice is the document's own words.
+    #[test]
+    fn guard_analysis_turns_a_panic_into_analysis_failed() {
+        let error = guard_analysis(|| {
+            // What a bad slice reports: the text it was slicing.
+            panic!(
+                "byte index 4 is not a char boundary; it is inside 'é' (bytes 3..5) of \
+                 `La présente convention`"
+            )
+        })
+        .expect_err("a panic must come back as an error");
+        assert_eq!(error.code(), EngineErrorCode::AnalysisFailed);
+        assert_eq!(error.code().as_str(), "ANALYSIS_FAILED");
+        assert_eq!(error.message(), "document analysis failed");
+        assert!(!error.to_string().contains("convention"));
+
+        // Work that does not panic passes straight through.
+        let analysis =
+            guard_analysis(|| analyze_with(Engine::with_proposer(Box::new(Scored(None)))))
+                .expect("no panic, no error");
+        assert_eq!(analysis.status, ProposalStatus::Ready);
     }
 
     #[test]
