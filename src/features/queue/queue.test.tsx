@@ -176,7 +176,9 @@ describe('queue interactions', () => {
 
     expect(action).toBeDisabled();
     finish?.();
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply rename' })).not.toBeInTheDocument());
+    // Done, review moves on to the next ready item, whose action is enabled.
+    await waitFor(() => expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('NDA - Acme Corp.docx'));
+    expect(screen.getByRole('button', { name: 'Apply rename' })).toBeEnabled();
   });
 
   it('does not close a newer selection when an earlier item action completes', async () => {

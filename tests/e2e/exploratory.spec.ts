@@ -237,6 +237,57 @@ test('the queue can be driven from the keyboard alone', async ({ page }) => {
   await shot(page, 'keyboard-opened-panel');
 });
 
+// FRONTEND_UX-10. Reaching Approve from a selected row took a Tab press per
+// remaining row, and after each decision focus went back to the toolbar. Five
+// decisions here, without the mouse: J and K to move, Enter to the name, and
+// Ctrl+Enter, Enter or Alt+K to decide - each landing in the next name.
+test('keyboard_only_review_of_five_items', async ({ page }) => {
+  await page.goto('/?reviewBatch=1');
+  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  const filename = inspector.getByLabel('Filename');
+  const row = (name: string) => page.getByRole('button', { name: `Select ${name}` });
+  await expect(inspector).toContainText('Scan 0101.pdf');
+
+  for (let press = 0; press < 30; press += 1) {
+    if (await page.evaluate(() => document.activeElement?.classList.contains('row-select'))) break;
+    await page.keyboard.press('Tab');
+  }
+  await expect(row('Scan 0101.pdf')).toBeFocused();
+  // The table is one Tab stop however many rows it has: the next press is
+  // already in the review panel.
+  await page.keyboard.press('Tab');
+  await expect(inspector.getByRole('button', { name: 'Close review' })).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+
+  await page.keyboard.press('j');
+  await expect(row('Scan 0102.pdf')).toBeFocused();
+  await expect(inspector).toContainText('Scan 0102.pdf');
+  await page.keyboard.press('k');
+  await expect(row('Scan 0101.pdf')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(filename).toBeFocused();
+  await expect(filename).toHaveValue('2024-02-01 Engagement Letter with Northwind Traders');
+
+  const decide = async (keys: () => Promise<void>, next: string) => {
+    await keys();
+    await expect(filename).toHaveValue(next);
+    await expect(filename).toBeFocused();
+  };
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-02-09 Invoice INV-3301 from Fabrikam Inc');
+  // A name corrected in place, and Enter files it.
+  await decide(async () => { await page.keyboard.press('End'); await page.keyboard.type(' (paid)'); await page.keyboard.press('Enter'); }, '2024-03-30 Statement of Work with Litware Inc');
+  await decide(() => page.keyboard.press('Alt+KeyK'), '2024-04-18 Lease Amendment for 500 Pine St');
+  // Needing review first, then ready.
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-03-14 Notice of Termination to Contoso Ltd');
+  await decide(() => page.keyboard.press('Control+Enter'), '2024-04-02 Board Resolution of Tailspin Toys');
+  await shot(page, 'keyboard-review-five-decided');
+
+  await expect(page.getByRole('status', { name: 'Action status' })).toHaveText('Renamed Scan 0103.pdf. Next: Scan 0105.pdf.');
+  await expect(inspector).toContainText('1 of 1 to decide');
+  await expect(page.getByRole('button', { name: /^Completed, / })).toHaveAccessibleName('Completed, 5');
+  await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
+});
+
 test('history lists finished operations newest first', async ({ page }) => {
   await page.goto('/');
   // History lives under Completed, beside Clear history.

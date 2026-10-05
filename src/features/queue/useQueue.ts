@@ -19,6 +19,11 @@ export function useQueue(bridge: DesktopBridge) {
   const [subscriptionError, setSubscriptionError] = useState<QueueIssue | null>(null);
   const [connectionAttempt, setConnectionAttempt] = useState(0);
   const connection = useRef<{ bridge: DesktopBridge; reader: QueueReader } | null>(null);
+  // The last list read, as soon as it is read. State reaches the screen a
+  // render later; a caller that has just awaited refresh() needs it now, to
+  // choose what to show next from the queue as it is after its own action.
+  const latest = useRef<QueueItem[]>([]);
+  const snapshot = useCallback(() => latest.current, []);
   const refresh = useCallback(async () => {
     const current = connection.current;
     if (current?.bridge === bridge) await current.reader.refresh();
@@ -30,7 +35,7 @@ export function useQueue(bridge: DesktopBridge) {
     let stop: (() => void) | undefined;
     const reader = createQueueReader(
       () => bridge.listItems(),
-      (snapshot) => { setItems(snapshot); setReadError(null); },
+      (read) => { latest.current = read; setItems(read); setReadError(null); },
       (cause) => setReadError({ kind: 'snapshot', cause }),
     );
     connection.current = { bridge, reader };
@@ -87,5 +92,5 @@ export function useQueue(bridge: DesktopBridge) {
   }, [bridge, connectionAttempt]);
 
   const execute = useCallback(async (action: () => Promise<void>) => { await action(); await refresh(); }, [refresh]);
-  return { items, paused, setPaused, refresh, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
+  return { items, paused, setPaused, refresh, snapshot, execute, error: readError ?? subscriptionError, pipelineError, reconnect };
 }

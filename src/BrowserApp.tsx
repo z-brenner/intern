@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { App } from './App';
-import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge } from './lib/inMemoryBridge';
+import { createBrowserSelectionBoundary, createFixtureBatchBridge, createInMemoryBridge, createReviewBatchBridge } from './lib/inMemoryBridge';
 import { TauriBridge, createTauriSelectionBoundary, isTauriRuntime } from './lib/tauriBridge';
 
 /**
@@ -20,6 +20,8 @@ function browserBridge() {
   if (import.meta.env.DEV && params.get('folderSetup') === 'fake') return createInMemoryBridge({ completedOnboardingVersion: 0 });
   // An update on offer, for checking where its banner sits in the window.
   if (import.meta.env.DEV && params.get('update') === 'available') return createInMemoryBridge({ update: { state: 'available', currentVersion: '0.1.0', version: '0.2.0' } });
+  // A morning's scans to clear from the keyboard, six of them undecided.
+  if (import.meta.env.DEV && params.get('reviewBatch') === '1') return createReviewBatchBridge();
   return undefined;
 }
 

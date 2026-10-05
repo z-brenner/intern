@@ -3,10 +3,17 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { StatusCell } from './StatusCell';
 
+/**
+ * One row is in the tab order - the selected one, or the first - and the
+ * arrow keys and J/K move between them (useReviewShortcuts). Every row used
+ * to be a tab stop of its own, so the review panel after the table was a
+ * row count of Tab presses away.
+ */
 export function QueueTable({ items, selectedId, onSelect }: { items: QueueItem[]; selectedId?: string; onSelect(item: QueueItem, trigger: HTMLButtonElement): void }) {
+  const tabStop = items.some((item) => item.id === selectedId) ? selectedId : items[0]?.id;
   return <div className="table-wrap"><table><thead><tr><th scope="col">Original filename</th><th scope="col">Status</th><th scope="col">Proposed filename</th><th scope="col">Confidence</th></tr></thead>
     <tbody>{items.map((item) => <tr key={item.id} className={selectedId === item.id ? 'selected' : ''} aria-selected={selectedId === item.id}>
-      <td><button type="button" className="row-select" data-item-id={item.id} onClick={(event) => onSelect(item, event.currentTarget)} aria-label={`Select ${item.originalFilename}`}><FileKindIcon filename={item.originalFilename} /><span>{item.originalFilename}</span></button></td><td><StatusCell item={item} /></td>
+      <td><button type="button" className="row-select" data-item-id={item.id} tabIndex={item.id === tabStop ? 0 : -1} onClick={(event) => onSelect(item, event.currentTarget)} aria-label={`Select ${item.originalFilename}`}><FileKindIcon filename={item.originalFilename} /><span>{item.originalFilename}</span></button></td><td><StatusCell item={item} /></td>
       {/*
         The description is half of what Intern produces and it used to be
         visible only inside the review panel, for items still awaiting a

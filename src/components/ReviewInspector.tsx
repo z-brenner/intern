@@ -1,11 +1,12 @@
-import { Ban, CalendarPlus, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import { Ban, CalendarPlus, ChevronRight, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import type { KeyboardEvent, Ref } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
 import { itemActions } from '../features/review/actions';
+import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { QueueItem } from '../types';
 
@@ -39,10 +40,19 @@ function quotations(value?: string): string[] {
   return (value ?? '').split(';').map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/** A key's name beside the button it presses; read out through aria-keyshortcuts instead. */
+const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-hidden="true">{keys}</kbd>;
+
 interface Props {
   item: QueueItem;
   drawer: boolean;
   busy?: boolean;
+  /** How the keyboard shortcuts reach the panel. */
+  ref?: Ref<ReviewInspectorHandle>;
+  /** Where this item stands among those still to decide: "2 of 5". */
+  position?: { index?: number; total: number };
+  /** Go to the next item still to decide, when there is another. */
+  onNext?(): void;
   onClose(): void;
   onApprove(filename: string, description: string): void;
   onKeep(): void;
@@ -55,7 +65,7 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
 }
-export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
+export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -73,6 +83,7 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
   const inspectorRef = useRef<HTMLElement>(null);
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const fieldId = useId();
   useEffect(() => { setStem(proposedStem); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); setConfirmingRemove(false); }, [item.id, item.proposalRevision]);
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
@@ -145,6 +156,17 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
   // once from the menu, and asks first only from the Delete key.
   const chooseRemove = () => { setMoreOpen(false); if (remove?.resolvedFiles) setConfirmingRemove(true); else onRemove(false); };
   const cancelRemove = () => { setConfirmingRemove(false); queueMicrotask(() => inspectorRef.current?.querySelector<HTMLElement>('.inspector-actions button:not(:disabled)')?.focus()); };
+  // The shortcuts act only where the matching button is offered and enabled,
+  // so a key can never do what a click could not.
+  useImperativeHandle(ref, () => ({
+    approve: () => { if (actions.approve && !busy && !confirmingRemove) approve(); },
+    keep: () => { if (actions.keep && !busy && !confirmingRemove) onKeep(); },
+    requestRemove: () => { if (remove && !busy) { setMoreOpen(false); setConfirmingRemove(true); } },
+    focus: (target) => {
+      if (target === 'filename' && filenameRef.current) filenameRef.current.focus();
+      else headingRef.current?.focus();
+    },
+  }));
   // Each row is a claim the proposed filename makes, paired with the text in
   // the document that supports it. A bare definition list read as metadata
   // about the file; attributing a quotation to the part of the name it
@@ -156,7 +178,12 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
   ].filter((entry) => entry.quotes.length > 0);
   return <aside ref={inspectorRef} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
-    <div className="inspector-title"><h2>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
+    {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
+    <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
+    {position && position.total > 0 && <div className="review-position">
+      <span>{position.index ? `${position.index} of ${position.total} to decide` : `${position.total} to decide`}</span>
+      {onNext && <button type="button" className="link-button" onClick={onNext}>Next undecided<Icon icon={ChevronRight} /></button>}
+    </div>}
     <div className="source-file">
       <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
       <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
@@ -255,20 +282,20 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
         <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); }}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
-        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={approve}><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}</button>}
+        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={approve} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.retry?.primary && <button type="button" className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
         {actions.keep && <>
-          <button type="button" className="secondary-action" disabled={busy} onClick={onKeep}><Icon icon={FileText} />Keep original</button>
+          <button type="button" className="secondary-action" disabled={busy} onClick={onKeep} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
           <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
           {moreOpen && <div className="review-menu" role="group" aria-label="More review actions">
             {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
             {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
-            {remove && <button type="button" disabled={busy} onClick={chooseRemove}><Icon icon={Trash2} />{remove.label}</button>}
+            {remove && <button type="button" disabled={busy} onClick={chooseRemove} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
           </div>}
         </>}
         {/* Parked, failed or waiting: no keep and no menu, so the rest stand on their own. */}
         {!actions.keep && actions.retry && !actions.retry.primary && <button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
-        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={chooseRemove}><Icon icon={Trash2} />{remove.label}</button>}
+        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={chooseRemove} aria-keyshortcuts="Delete"><Icon icon={Trash2} />{remove.label}<Shortcut keys="Del" /></button>}
         {actions.cancel && <button type="button" disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
         {actions.undo && <button type="button" disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
       </>}

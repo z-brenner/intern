@@ -582,7 +582,7 @@ export function createFixtureBatchBridge(): DesktopBridge {
   return createBridge({ items: [] }, true);
 }
 
-/** Seven scans, five of them undecided, for clearing a review queue from the keyboard. */
+/** Seven scans, six of them undecided, for clearing a review queue from the keyboard. */
 export function createReviewBatchBridge(options: InMemoryBridgeOptions = {}): DesktopBridge {
   return createBridge({ items: reviewBatchItems, ...options }, false);
 }
