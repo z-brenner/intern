@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicI64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering},
     },
 };
 
@@ -597,6 +597,12 @@ pub struct Pipeline {
     admission: Arc<dyn AdmissionGuard>,
     settings: SettingsStore,
     paused: AtomicBool,
+    /// Why the queue stopped itself, as a code the window has a sentence
+    /// for; `None` when it is running or a person paused it.
+    pause_reason: Mutex<Option<String>>,
+    /// Documents in a row whose model reply could not be used. One such
+    /// reply is that document's problem; several in a row is the model's.
+    consecutive_unreadable_replies: AtomicU32,
     active_item: AtomicI64,
     shutting_down: AtomicBool,
     model_timeout: std::time::Duration,
@@ -645,6 +651,8 @@ impl Pipeline {
             admission: Arc::new(LocalAdmission),
             settings,
             paused: AtomicBool::new(false),
+            pause_reason: Mutex::new(None),
+            consecutive_unreadable_replies: AtomicU32::new(0),
             active_item: AtomicI64::new(0),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
@@ -676,6 +684,8 @@ impl Pipeline {
             admission: Arc::new(LocalAdmission),
             settings,
             paused: AtomicBool::new(false),
+            pause_reason: Mutex::new(None),
+            consecutive_unreadable_replies: AtomicU32::new(0),
             active_item: AtomicI64::new(0),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
@@ -1010,11 +1020,29 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Ok(true);
                 }
+                let code = extraction_error_code(&error.code, error.retryable);
+                // A failure the worker calls permanent - a password, a file
+                // that is not what its name says, a document past the limits
+                // - reads the same on every attempt, and a second attempt
+                // only re-ran it (thirty minutes of it, for a document that
+                // hit the time limit). It fails now, with its own reason.
+                // A crash, or a failure the worker says may pass, still gets
+                // its second attempt.
+                if !error.retryable && !error.crashed && code != ErrorCode::IoError {
+                    self.store.record_terminal_failure(item.id, code)?;
+                    // Without the text-recognition files every document that
+                    // needs them fails the same way, so the queue stops and
+                    // says why rather than failing the backlog one by one.
+                    if code == ErrorCode::OcrUnavailable {
+                        self.pause_for(code.as_str());
+                    }
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
                 let restart_failed = error.crashed
                     && item.processing_failures == 0
                     && self.worker.restart().is_err();
-                self.store
-                    .record_processing_failure(item.id, ErrorCode::IoError)?;
+                self.store.record_processing_failure(item.id, code)?;
                 // A worker that will not come back cannot read this
                 // document on a second attempt either, so the failure is
                 // counted twice and the document fails now rather than
@@ -1074,7 +1102,11 @@ impl Pipeline {
             return Ok(keep_draining);
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
-            Ok(analysis) => analysis,
+            Ok(analysis) => {
+                self.consecutive_unreadable_replies
+                    .store(0, Ordering::SeqCst);
+                analysis
+            }
             Err(error) => {
                 self.active_item.store(0, Ordering::SeqCst);
                 if self.shutting_down.load(Ordering::SeqCst) {
@@ -1094,23 +1126,61 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Ok(true);
                 }
-                self.store
-                    .record_processing_failure(item.id, model_error_code(&error))?;
-                // Failures that would repeat for every document - a model
-                // that cannot be reached, a key that was refused - pause the
-                // queue rather than fail the backlog one item at a time.
-                if matches!(
-                    error.code.as_str(),
-                    "MODEL_CANCEL_FAILED"
-                        | "MODEL_RECOVERY_FAILED"
-                        | "MODEL_REQUEST_FAILED"
-                        | "MODEL_RESPONSE_INVALID"
-                        | "HOSTED_MODEL_MISCONFIGURED"
-                        | "HOSTED_MODEL_UNAUTHORIZED"
-                        | "HOSTED_MODEL_UNREACHABLE"
-                        | "HOSTED_MODEL_RATE_LIMITED"
-                ) {
-                    self.paused.store(true, Ordering::SeqCst);
+                let code = model_error_code(&error);
+                match model_failure_action(&error.code) {
+                    ModelFailureAction::Requeue => {
+                        // Nothing was asked: no model was loaded to ask, as
+                        // happens for a moment while switching between the
+                        // hosted and the local one. The document goes back to
+                        // wait with nothing counted against it, and this drain
+                        // ends rather than claiming it again at once; the
+                        // scheduler's next pass finds the model in place.
+                        lease.stop_and_check()?;
+                        self.store.transition(
+                            item.id,
+                            QueueStatus::Analyzing,
+                            QueueStatus::Queued,
+                            None,
+                        )?;
+                        self.events.queue_changed();
+                        return Ok(false);
+                    }
+                    ModelFailureAction::Terminal => {
+                        // Asking again gets the same answer about this
+                        // document, and from a hosted model bills for it
+                        // again, so it fails now and the queue moves on.
+                        self.store.record_terminal_failure(item.id, code)?;
+                        if is_unreadable_reply(&error.code) {
+                            // One reply that cannot be used is that
+                            // document's problem. Several documents in a row
+                            // is the model's, and every document behind them
+                            // would fail the same way. Resuming does not
+                            // clear the count: only a document read
+                            // successfully ends the row, so a model still
+                            // broken after a resume stops the queue again at
+                            // the next such reply rather than three later.
+                            let streak = self
+                                .consecutive_unreadable_replies
+                                .fetch_add(1, Ordering::SeqCst)
+                                .saturating_add(1);
+                            if streak >= UNREADABLE_REPLIES_BEFORE_PAUSE {
+                                self.pause_for(pause_reason_code(&error.code, code));
+                            }
+                        }
+                    }
+                    ModelFailureAction::Pause => {
+                        // Failures that would repeat for every document - a
+                        // model that cannot be reached, a key that was
+                        // refused, an account out of credit - pause the queue
+                        // rather than fail the backlog one item at a time.
+                        // The document keeps its second attempt for when the
+                        // queue is resumed.
+                        self.store.record_processing_failure(item.id, code)?;
+                        self.pause_for(pause_reason_code(&error.code, code));
+                    }
+                    ModelFailureAction::Retry => {
+                        self.store.record_processing_failure(item.id, code)?;
+                    }
                 }
                 self.events.queue_changed();
                 return Ok(true);
@@ -1667,11 +1737,40 @@ impl Pipeline {
         self.events.queue_changed();
     }
     pub fn resume(&self) {
+        *self
+            .pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.paused.store(false, Ordering::SeqCst);
         self.events.queue_changed();
     }
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Why the queue stopped itself, while it is stopped: a code the window
+    /// turns into a sentence. `None` while it runs, and for a pause a person
+    /// asked for.
+    pub fn pause_reason(&self) -> Option<String> {
+        if !self.is_paused() {
+            return None;
+        }
+        self.pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Stops the queue for a failure every following document would share,
+    /// and keeps the reason. The queue used to stop with nothing to say: the
+    /// window heard only that it was paused, and a person resuming it had no
+    /// way to know there was a key or an account to fix first.
+    fn pause_for(&self, reason: &str) {
+        *self
+            .pause_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.to_owned());
+        self.paused.store(true, Ordering::SeqCst);
     }
 
     pub fn shutdown(&self) -> PipelineResult<()> {
@@ -2656,11 +2755,94 @@ fn unix_now() -> i64 {
         .map_or(0, |duration| duration.as_secs() as i64)
 }
 
+/// The queue code an extraction failure is stored under, from the worker's
+/// code and its own word on whether trying again can help.
+///
+/// Anything this does not recognise stays IO_ERROR and keeps its second
+/// attempt: crashes, a busy or misbehaving worker, and the worker's I/O
+/// failures, which it reports as retryable PARSE_FAILED.
+fn extraction_error_code(code: &str, retryable: bool) -> ErrorCode {
+    match code {
+        "PASSWORD_PROTECTED" => ErrorCode::PasswordProtected,
+        "UNSUPPORTED_FORMAT" => ErrorCode::UnsupportedContent,
+        // The worker's own limits, and the host's deadline on the worker.
+        "RESOURCE_LIMIT_EXCEEDED" | "RESOURCE_LIMIT" => ErrorCode::DocumentTooLarge,
+        "NATIVE_ASSETS_MISSING" => ErrorCode::OcrUnavailable,
+        "PARSE_FAILED" if !retryable => ErrorCode::ExtractionFailed,
+        _ => ErrorCode::IoError,
+    }
+}
+
+/// The queue code a model failure is stored under. Nothing here is a file
+/// operation, so nothing here is IO_ERROR: a code the table does not name
+/// still failed at the model's step, and says so.
 fn model_error_code(error: &ModelFailure) -> ErrorCode {
     match error.code.as_str() {
-        "MODEL_RESPONSE_INVALID" => ErrorCode::ModelOutputInvalid,
+        "MODEL_RESPONSE_INVALID" | "MODEL_REPLY_TRUNCATED" => ErrorCode::ModelOutputInvalid,
         "HOSTED_MODEL_REFUSED" => ErrorCode::ModelDeclined,
-        _ => ErrorCode::IoError,
+        "MODEL_INPUT_TOO_LARGE" => ErrorCode::DocumentTooLarge,
+        "ANALYSIS_FAILED" => ErrorCode::AnalysisFailed,
+        code if code.starts_with("HOSTED_MODEL_") => ErrorCode::HostedModelUnavailable,
+        _ => ErrorCode::ModelFailed,
+    }
+}
+
+/// How many documents in a row may come back with a reply that cannot be
+/// used before the queue stops to say the model itself is the problem.
+const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
+
+/// What the queue does with a document whose analysis failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModelFailureAction {
+    /// Back to waiting, nothing counted: the document was never analysed.
+    Requeue,
+    /// Fail this document now; another attempt would answer the same.
+    Terminal,
+    /// Count the failure and stop the queue; the next document would fail
+    /// the same way.
+    Pause,
+    /// Count the failure; the document gets its one more attempt.
+    Retry,
+}
+
+fn model_failure_action(code: &str) -> ModelFailureAction {
+    match code {
+        "MODEL_NOT_READY" => ModelFailureAction::Requeue,
+        "MODEL_INPUT_TOO_LARGE"
+        | "HOSTED_MODEL_REFUSED"
+        | "ANALYSIS_FAILED"
+        | "MODEL_RESPONSE_INVALID"
+        | "MODEL_REPLY_TRUNCATED" => ModelFailureAction::Terminal,
+        "MODEL_CANCEL_FAILED"
+        | "MODEL_RECOVERY_FAILED"
+        | "MODEL_REQUEST_FAILED"
+        | "MODEL_SERVER_START_FAILED"
+        | "HOSTED_MODEL_MISCONFIGURED"
+        | "HOSTED_MODEL_KEY_MISSING"
+        | "HOSTED_MODEL_UNAUTHORIZED"
+        | "HOSTED_MODEL_UNREACHABLE"
+        | "HOSTED_MODEL_RATE_LIMITED"
+        | "HOSTED_MODEL_BILLING" => ModelFailureAction::Pause,
+        // MODEL_CANCELED among them: a request that was called off says
+        // nothing about the next document, so it never stops the queue.
+        _ => ModelFailureAction::Retry,
+    }
+}
+
+/// A reply that came back but could not be used.
+fn is_unreadable_reply(code: &str) -> bool {
+    matches!(code, "MODEL_RESPONSE_INVALID" | "MODEL_REPLY_TRUNCATED")
+}
+
+/// The reason a pause reports. A hosted failure's own code names what to
+/// fix - the key, the address, the account's credit - and the window has a
+/// sentence for each; anything else reports the code the document was
+/// stored under, which it also has a sentence for.
+fn pause_reason_code(failure: &str, stored: ErrorCode) -> &str {
+    if failure.starts_with("HOSTED_MODEL_") {
+        failure
+    } else {
+        stored.as_str()
     }
 }
 
@@ -3038,4 +3220,134 @@ fn validate_leaf_filename(value: &str) -> PipelineResult<String> {
         return Err(PipelineError::new("NAME_INVALID", "filename must be one nonblank path component"));
     }
     Ok(trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod failure_policy_tests {
+    use intern_core::ErrorCode;
+
+    use super::{
+        ModelFailure, ModelFailureAction, extraction_error_code, model_error_code,
+        model_failure_action, pause_reason_code,
+    };
+
+    #[test]
+    fn extraction_failures_the_worker_may_get_past_keep_the_generic_code() {
+        assert_eq!(
+            extraction_error_code("PARSE_FAILED", false),
+            ErrorCode::ExtractionFailed
+        );
+        // The worker reports its own I/O failures as retryable PARSE_FAILED.
+        assert_eq!(
+            extraction_error_code("PARSE_FAILED", true),
+            ErrorCode::IoError
+        );
+        for code in [
+            "WORKER_CRASHED",
+            "WORKER_BUSY",
+            "WORKER_PROTOCOL_INVALID",
+            "SOMETHING_NEW",
+        ] {
+            assert_eq!(
+                extraction_error_code(code, false),
+                ErrorCode::IoError,
+                "{code}"
+            );
+        }
+    }
+
+    /// Every model failure the queue can meet, with where it is stored and
+    /// what the queue does about it. Nothing on the model's side of the line
+    /// is a file operation, so none of it is IO_ERROR any more.
+    #[test]
+    fn every_model_failure_has_a_code_and_a_policy() {
+        use ModelFailureAction::{Pause, Requeue, Retry, Terminal};
+        let table = [
+            (
+                "MODEL_RESPONSE_INVALID",
+                ErrorCode::ModelOutputInvalid,
+                Terminal,
+            ),
+            (
+                "MODEL_REPLY_TRUNCATED",
+                ErrorCode::ModelOutputInvalid,
+                Terminal,
+            ),
+            ("HOSTED_MODEL_REFUSED", ErrorCode::ModelDeclined, Terminal),
+            (
+                "MODEL_INPUT_TOO_LARGE",
+                ErrorCode::DocumentTooLarge,
+                Terminal,
+            ),
+            ("ANALYSIS_FAILED", ErrorCode::AnalysisFailed, Terminal),
+            ("MODEL_CANCEL_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_RECOVERY_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_REQUEST_FAILED", ErrorCode::ModelFailed, Pause),
+            ("MODEL_SERVER_START_FAILED", ErrorCode::ModelFailed, Pause),
+            (
+                "HOSTED_MODEL_MISCONFIGURED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_KEY_MISSING",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_UNAUTHORIZED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_UNREACHABLE",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_RATE_LIMITED",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_BILLING",
+                ErrorCode::HostedModelUnavailable,
+                Pause,
+            ),
+            (
+                "HOSTED_MODEL_REJECTED",
+                ErrorCode::HostedModelUnavailable,
+                Retry,
+            ),
+            ("MODEL_TIMEOUT", ErrorCode::ModelFailed, Retry),
+            ("MODEL_CANCELED", ErrorCode::ModelFailed, Retry),
+            ("MODEL_SERVER_UNHEALTHY", ErrorCode::ModelFailed, Retry),
+            ("SETTINGS_UNAVAILABLE", ErrorCode::ModelFailed, Retry),
+            ("MODEL_NOT_READY", ErrorCode::ModelFailed, Requeue),
+        ];
+        for (code, stored, action) in table {
+            assert_eq!(
+                model_error_code(&ModelFailure::fatal(code)),
+                stored,
+                "{code}"
+            );
+            assert_eq!(model_failure_action(code), action, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_pause_names_the_hosted_failure_or_the_stored_code() {
+        assert_eq!(
+            pause_reason_code("HOSTED_MODEL_BILLING", ErrorCode::HostedModelUnavailable),
+            "HOSTED_MODEL_BILLING"
+        );
+        assert_eq!(
+            pause_reason_code("MODEL_REQUEST_FAILED", ErrorCode::ModelFailed),
+            "MODEL_FAILED"
+        );
+        assert_eq!(
+            pause_reason_code("MODEL_REPLY_TRUNCATED", ErrorCode::ModelOutputInvalid),
+            "MODEL_OUTPUT_INVALID"
+        );
+    }
 }

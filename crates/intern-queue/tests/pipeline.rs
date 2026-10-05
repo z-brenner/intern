@@ -722,6 +722,405 @@ fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
     assert_eq!(items[1].status, QueueStatus::Ready);
 }
 
+const READABLE: &str =
+    "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+
+/// Enqueues one trusted document per name, in order, and returns the paths.
+fn documents(dir: &Path, files: &FakeFiles, names: &[&str]) -> Vec<PathBuf> {
+    names
+        .iter()
+        .map(|name| {
+            let path = source(dir, name);
+            files.trust(&path, &format!("{name}-hash"));
+            path
+        })
+        .collect()
+}
+
+/// Every extraction failure used to be stored as IO_ERROR ("A file operation
+/// failed.") and extracted a second time, whatever the worker said. A failure
+/// the worker calls permanent now fails the document on the first attempt,
+/// under a code that says what is wrong with it.
+#[test]
+fn non_retryable_extraction_failure_is_terminal_with_its_code() {
+    let cases = [
+        ("PASSWORD_PROTECTED", ErrorCode::PasswordProtected),
+        ("UNSUPPORTED_FORMAT", ErrorCode::UnsupportedContent),
+        ("RESOURCE_LIMIT_EXCEEDED", ErrorCode::DocumentTooLarge),
+        // The host's own deadline on the worker.
+        ("RESOURCE_LIMIT", ErrorCode::DocumentTooLarge),
+        ("PARSE_FAILED", ErrorCode::ExtractionFailed),
+    ];
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let names = ["a.docx", "b.pdf", "c.xlsx", "d.tif", "e.pdf"];
+    let paths = documents(temp.path(), &files, &names);
+    let worker = Arc::new(FakeWorker::new(
+        cases
+            .iter()
+            .map(|(code, _)| Err(WorkerFailure::reported(*code, "the worker's words", false)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(vec![]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(
+        worker.calls.load(Ordering::SeqCst),
+        cases.len(),
+        "each document is read once"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    let items = pipeline.list().unwrap();
+    for (item, (code, expected)) in items.iter().zip(cases) {
+        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.error_code, Some(expected), "{code}");
+    }
+    assert!(!pipeline.is_paused());
+}
+
+/// A crash, or a failure the worker says may pass, keeps its second attempt.
+#[test]
+fn crashed_extraction_is_retried_once() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["crashes-once.pdf", "busy-disk.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![
+        Err(WorkerFailure::crashed()),
+        Ok(parsed(READABLE)),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        model,
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(worker.restarts.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Ready);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[1].status, QueueStatus::Failed);
+    assert_eq!(items[1].error_code, Some(ErrorCode::IoError));
+    assert_eq!(items[1].processing_failures, 2);
+    assert!(!pipeline.is_paused());
+}
+
+/// Without its text-recognition files the worker fails every document that
+/// needs them, so the first such failure stops the queue and says why.
+#[test]
+fn native_assets_missing_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["scan.pdf", "next-scan.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Err(WorkerFailure::reported(
+        "NATIVE_ASSETS_MISSING",
+        "tessdata is missing",
+        false,
+    ))]));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::new(FakeModel::new(vec![])),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Failed);
+    assert_eq!(items[0].error_code, Some(ErrorCode::OcrUnavailable));
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert!(pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason().as_deref(), Some("OCR_UNAVAILABLE"));
+
+    pipeline.resume();
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// A refusal, a document too long for the model, and an internal failure on
+/// one document are that document's answer. Each used to be re-queued - and,
+/// on a hosted model, re-sent and re-billed - before failing anyway.
+#[test]
+fn refused_and_too_large_are_terminal_and_do_not_pause() {
+    let cases = [
+        ("HOSTED_MODEL_REFUSED", ErrorCode::ModelDeclined),
+        ("MODEL_INPUT_TOO_LARGE", ErrorCode::DocumentTooLarge),
+        ("ANALYSIS_FAILED", ErrorCode::AnalysisFailed),
+    ];
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(
+        temp.path(),
+        &files,
+        &["refused.pdf", "too-long.pdf", "internal.pdf", "fine.pdf"],
+    );
+    let worker = Arc::new(FakeWorker::new(
+        (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let mut replies = cases
+        .iter()
+        .map(|(code, _)| Err(ModelFailure::fatal(*code)))
+        .collect::<Vec<_>>();
+    replies.push(Ok(proposal(0.94, false)));
+    let model = Arc::new(FakeModel::new(replies));
+    let pipeline = pipeline(
+        temp.path(),
+        Arc::clone(&worker),
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert_eq!(model.calls.load(Ordering::SeqCst), paths.len());
+    assert_eq!(worker.calls.load(Ordering::SeqCst), paths.len());
+    let items = pipeline.list().unwrap();
+    for (item, (code, expected)) in items.iter().zip(cases) {
+        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.error_code, Some(expected), "{code}");
+    }
+    assert_eq!(items[3].status, QueueStatus::Ready);
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// One reply that cannot be used fails that document. A model that keeps
+/// answering that way is broken for every document, so the third in a row
+/// stops the queue - but only in a row: a document read successfully in
+/// between starts the count again.
+#[test]
+fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
+    let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
+    let truncated = || Err(ModelFailure::fatal("MODEL_REPLY_TRUNCATED"));
+    let run = |names: &[&str], replies: Vec<Result<ModelProposal, ModelFailure>>| {
+        let temp = tempdir().unwrap();
+        let files = Arc::new(FakeFiles::default());
+        let paths = documents(temp.path(), &files, names);
+        let worker = Arc::new(FakeWorker::new(
+            (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+        ));
+        let model = Arc::new(FakeModel::new(replies));
+        let pipeline = pipeline(
+            temp.path(),
+            worker,
+            Arc::clone(&model),
+            files,
+            AppSettings::default(),
+        );
+        pipeline.enqueue_files(&paths).unwrap();
+        pipeline.run_until_idle().unwrap();
+        let items = pipeline.list().unwrap();
+        let calls = model.calls.load(Ordering::SeqCst);
+        (
+            pipeline.is_paused(),
+            pipeline.pause_reason(),
+            items,
+            calls,
+            temp,
+        )
+    };
+
+    let (paused, _, items, calls, _temp) = run(
+        &["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"],
+        vec![
+            invalid(),
+            truncated(),
+            Ok(proposal(0.94, false)),
+            invalid(),
+            truncated(),
+        ],
+    );
+    assert!(
+        !paused,
+        "two, a success, and two more is never three in a row"
+    );
+    assert_eq!(calls, 5, "each document is asked once");
+    let statuses = items.iter().map(|item| item.status).collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        [
+            QueueStatus::Failed,
+            QueueStatus::Failed,
+            QueueStatus::Ready,
+            QueueStatus::Failed,
+            QueueStatus::Failed,
+        ]
+    );
+    assert!(
+        items
+            .iter()
+            .filter(|item| item.status == QueueStatus::Failed)
+            .all(|item| item.error_code == Some(ErrorCode::ModelOutputInvalid))
+    );
+
+    let (paused, reason, items, calls, _temp) = run(
+        &["a.pdf", "b.pdf", "c.pdf", "waits.pdf"],
+        vec![invalid(), truncated(), invalid()],
+    );
+    assert!(paused);
+    assert_eq!(reason.as_deref(), Some("MODEL_OUTPUT_INVALID"));
+    assert_eq!(calls, 3);
+    assert!(items[..3].iter().all(|item| {
+        item.status == QueueStatus::Failed && item.error_code == Some(ErrorCode::ModelOutputInvalid)
+    }));
+    assert_eq!(items[3].status, QueueStatus::Queued);
+}
+
+/// An account out of credit fails every document behind it. The queue stops
+/// at the first one and names the reason, and that document keeps its second
+/// attempt for when the queue is resumed.
+#[test]
+fn billing_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(READABLE))]));
+    let model = Arc::new(FakeModel::new(vec![Err(ModelFailure::fatal(
+        "HOSTED_MODEL_BILLING",
+    ))]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert!(pipeline.is_paused());
+    assert_eq!(
+        pipeline.pause_reason().as_deref(),
+        Some("HOSTED_MODEL_BILLING")
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Queued);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[0].error_code, Some(ErrorCode::HostedModelUnavailable));
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(items[1].processing_failures, 0);
+
+    pipeline.resume();
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason(), None);
+}
+
+/// A request that was called off says nothing about the next document. It is
+/// counted like any failure and never stops the queue.
+#[test]
+fn canceled_never_pauses() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["called-off.pdf", "next.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..3).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let model = Arc::new(FakeModel::new(vec![
+        Err(ModelFailure::fatal("MODEL_CANCELED")),
+        Err(ModelFailure::fatal("MODEL_CANCELED")),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+
+    pipeline.enqueue_files(&paths).unwrap();
+    pipeline.run_until_idle().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Failed);
+    assert_eq!(items[0].error_code, Some(ErrorCode::ModelFailed));
+    assert_eq!(items[1].status, QueueStatus::Ready);
+}
+
+/// Switching from the hosted model to the local one leaves a moment with no
+/// model loaded. A document that meets that moment was never analysed: it
+/// goes back to wait with nothing counted against it, however often it
+/// happens, and the drain ends instead of claiming it again at once.
+#[test]
+fn model_not_ready_requeues_without_counting_a_failure() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..5).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        Ok(proposal(0.94, false)),
+    ]));
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&paths).unwrap();
+
+    for attempt in 1..=3 {
+        pipeline.run_until_idle().unwrap();
+        assert_eq!(model.calls.load(Ordering::SeqCst), attempt);
+        assert!(!pipeline.is_paused());
+        let items = pipeline.list().unwrap();
+        for item in &items {
+            assert_eq!(item.status, QueueStatus::Queued);
+            assert_eq!(item.processing_failures, 0);
+            assert_eq!(item.error_code, None);
+        }
+    }
+
+    pipeline.run_until_idle().unwrap();
+    let items = pipeline.list().unwrap();
+    assert!(
+        items
+            .iter()
+            .all(|item| item.status == QueueStatus::Ready && item.processing_failures == 0)
+    );
+}
+
 /// A crash the worker cannot be restarted from used to reclaim whatever the
 /// queue offered next, which is not always the document that crashed. Another
 /// waiting document was claimed instead and left extracting, under a lease
