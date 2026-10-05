@@ -1475,8 +1475,10 @@
           update shows a banner; nothing is downloaded or installed until you
           click <strong>Install … and restart</strong>, which shows how much of
           the download has arrived. Only a build signed with this project's key
-          is accepted; anything else is refused. While a rename is part-way
-          through its move, Install waits for it to finish.
+          is accepted; anything else is refused. Installing waits for renames:
+          once the download is in, the queue pauses so it starts no more,
+          and a rename part-way through its move, even one that began during
+          the download, finishes before Intern closes for the installer.
         </p>
         <ul class="bullets">
           <li><strong>To stop the automatic check</strong>, untick <strong>Check for updates automatically (when Intern starts and every 6 hours)</strong> in Settings → Updates and save.</li>

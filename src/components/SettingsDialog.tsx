@@ -189,7 +189,9 @@ interface Props {
   onInstallUpdate(onProgress?: UpdateProgressListener): Promise<void>;
   /**
    * A rename is in its applying stage, which cannot be canceled. Installing
-   * closes Intern, so Install waits until the rename has finished.
+   * closes Intern, so Install is not offered until the rename has finished,
+   * and the hint stays while a downloaded update waits for one that began
+   * during the download (`onInstallUpdate` does the waiting).
    */
   renameApplying?: boolean;
   /**
@@ -647,7 +649,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           <button type="button" disabled={busy} onClick={() => void runCheck()}>{checking ? 'Checking…' : 'Check for updates'}</button>
           {status?.state === 'available' && <button type="button" className="primary" disabled={busy || renameApplying} onClick={() => void runInstall()}>{installing ? installingLabel(installProgress) : `Install ${status.version} and restart`}</button>}
         </div>
-        {status?.state === 'available' && renameApplying && !installing && <p className="check-hint">Waiting for a rename to finish</p>}
+        {status?.state === 'available' && renameApplying && (!installing || installProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
       </section>
       <section className="settings-group">
         <h3>Help & support</h3>

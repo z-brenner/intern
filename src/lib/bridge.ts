@@ -118,9 +118,12 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   checkForUpdate(): Promise<UpdateStatus>;
   /**
    * Download and install the update found by the last check. `onProgress`
-   * hears how much of the download has arrived as it arrives.
+   * hears how much of the download has arrived as it arrives. `beforeInstall`
+   * runs once every byte is in and its signature has been verified, just
+   * before the installer takes over (on Windows it closes Intern). Installing
+   * waits for it, and does not happen if it throws.
    */
-  installUpdate(onProgress?: UpdateProgressListener): Promise<void>;
+  installUpdate(onProgress?: UpdateProgressListener, beforeInstall?: () => Promise<void>): Promise<void>;
   /** Current shared-intake watcher status. Resolves with zeros when intake is disabled. */
   intakeStatus(): Promise<IntakeStatus>;
   /** Wake the intake watcher for an immediate scan. No-op when intake is disabled. */

@@ -14,11 +14,14 @@ vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }));
 vi.mock('@tauri-apps/api/app', () => ({ getVersion: async () => '0.1.0-alpha.10' }));
 
 /** An update whose download replays `events`, as the updater plugin reports them. */
-function updateDownloading(events: DownloadEvent[]) {
+/** An update whose download sends these events; each step is recorded, in order, in `steps`. */
+function updateDownloading(events: DownloadEvent[], steps: string[] = []) {
   vi.mocked(check).mockResolvedValue({
     version: '0.1.0-alpha.11',
-    downloadAndInstall: async (onEvent?: (event: DownloadEvent) => void) => { events.forEach((event) => onEvent?.(event)); },
+    download: async (onEvent?: (event: DownloadEvent) => void) => { steps.push('download'); events.forEach((event) => onEvent?.(event)); },
+    install: async () => { steps.push('install'); },
   } as unknown as Awaited<ReturnType<typeof check>>);
+  return steps;
 }
 
 function fakeTransport(responses: Record<string, unknown> = {}) {
@@ -485,7 +488,8 @@ describe('TauriBridge', () => {
     const seen: Array<number | undefined> = [];
     await bridge.installUpdate((fraction) => seen.push(fraction));
 
-    expect(seen).toEqual([0, 0.42, 1, 1]);
+    // Finished adds nothing to a download already at 100%.
+    expect(seen).toEqual([0, 0.42, 1]);
   });
 
   it('reports a download of unknown size without inventing a percentage', async () => {
@@ -500,6 +504,56 @@ describe('TauriBridge', () => {
     const seen: Array<number | undefined> = [];
     await bridge.installUpdate((fraction) => seen.push(fraction));
 
-    expect(seen).toEqual([undefined, undefined, 1]);
+    expect(seen).toEqual([undefined, 1]);
+  });
+
+  // The plugin sends one event per network chunk. Each report re-renders the
+  // whole window, queue and all, so thousands of them for a label that can
+  // only change a hundred times was all cost.
+  it('passes on a download chunk only when the whole percent it shows changes', async () => {
+    const chunks = Array.from({ length: 10_000 }, () => ({ event: 'Progress' as const, data: { chunkLength: 100 } }));
+    updateDownloading([{ event: 'Started', data: { contentLength: 1_000_000 } }, ...chunks, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    const seen: number[] = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction!));
+
+    expect(seen).toHaveLength(101);
+    expect(seen.map((fraction) => Math.floor(fraction * 100))).toEqual(Array.from({ length: 101 }, (_, percent) => percent));
+    expect(seen.at(-1)).toBe(1);
+
+    updateDownloading([{ event: 'Started', data: {} }, ...chunks, { event: 'Finished' }]);
+    await bridge.checkForUpdate();
+    const unsized: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => unsized.push(fraction));
+    expect(unsized).toEqual([undefined, 1]);
+  });
+
+  // Installing closes Intern on Windows. What must happen first gets its turn
+  // after the download, however long that took, and can stop the install.
+  it('downloads, runs what must happen before Intern closes, and only then installs', async () => {
+    const steps = updateDownloading([{ event: 'Started', data: { contentLength: 10 } }, { event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    await bridge.installUpdate(undefined, async () => { steps.push('before install'); });
+    expect(steps).toEqual(['download', 'before install', 'install']);
+
+    steps.length = 0;
+    await expect(bridge.installUpdate(undefined, async () => { throw new Error('a rename is still moving'); })).rejects.toThrow('a rename is still moving');
+    expect(steps).toEqual(['download']);
+  });
+
+  it('installs the update it downloaded even when a later check finds another', async () => {
+    const first = updateDownloading([{ event: 'Finished' }]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+    const second = updateDownloading([{ event: 'Finished' }]);
+
+    await bridge.installUpdate(undefined, async () => { await bridge.checkForUpdate(); });
+
+    expect(first).toEqual(['download', 'install']);
+    expect(second).toEqual([]);
   });
 });

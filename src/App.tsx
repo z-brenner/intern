@@ -13,7 +13,7 @@ import { ViewEmpty } from './components/ViewEmpty';
 import { GUIDE_URL } from './lib/bridge';
 import { installingLabel } from './lib/format';
 import { humanizeReason } from './lib/reasons';
-import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
+import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateProgressListener, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -175,8 +175,9 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move
   // on the next launch - recoverable, but not something to start on purpose
-  // while a person is watching the file move. Install waits for it instead.
-  const renameApplying = items.some((item) => item.status === 'processing' && item.cancelable === false);
+  // while a person is watching the file move. Install waits for it instead:
+  // here, before the click, and in installUpdateBetweenRenames after it.
+  const renameApplying = items.some(applyingRename);
   // Only items that have not started. Anything mid-flight, awaiting a decision,
   // or already renamed is deliberately out of reach of the discard action.
   const waitingItems = items.filter((item) => item.status === 'waiting');
@@ -291,11 +292,39 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     await bridge.saveSettings(next);
     setSettings(next);
   };
+  // The click is not the moment Intern closes. The download comes first and
+  // can take minutes, and a rename can begin its move meanwhile, which the
+  // disabled button cannot see. So once every byte is in and verified, the
+  // queue stops starting new work and the installer waits for any rename
+  // still part-way through its move, read from the queue itself rather than
+  // from the last render. A pause made here is undone if installing then
+  // fails; a pause the person made is left as it was.
+  const pausedNow = useRef(paused);
+  useEffect(() => { pausedNow.current = paused; }, [paused]);
+  const installUpdateBetweenRenames = async (onProgress?: UpdateProgressListener) => {
+    let pausedForInstall = false;
+    const settleRenames = async () => {
+      if (!pausedNow.current) {
+        await bridge.pauseQueue();
+        pausedForInstall = true;
+        setPaused(true);
+      }
+      while ((await bridge.listItems()).some(applyingRename)) {
+        await new Promise((resolve) => window.setTimeout(resolve, RENAME_SETTLE_POLL_MS));
+      }
+    };
+    try {
+      await bridge.installUpdate(onProgress, settleRenames);
+    } catch (error) {
+      if (pausedForInstall) await bridge.resumeQueue().then(() => setPaused(false), () => {});
+      throw error;
+    }
+  };
   const installUpdate = async () => {
     setUpdateInstalling(true);
     setUpdateError('');
     setUpdateProgress(undefined);
-    try { await bridge.installUpdate((fraction) => setUpdateProgress({ fraction })); }
+    try { await installUpdateBetweenRenames((fraction) => setUpdateProgress({ fraction })); }
     // On success this hands off to the installer and Intern is closed from
     // outside; there is nothing left to un-set `updateInstalling` for.
     catch (error) { setUpdateError(describeActionError(error)); setUpdateInstalling(false); }
@@ -374,7 +403,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       onChooseExisting={model.chooseExisting}
       onUseHostedModel={() => setSettingsOpen(true)}
     />
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={(onProgress) => bridge.installUpdate(onProgress)} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </>;
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
@@ -395,7 +424,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         <button type="button" className="primary" disabled={updateInstalling || renameApplying} onClick={() => void installUpdate()}>{updateInstalling ? installingLabel(updateProgress) : `Install ${updateStatus.version} and restart`}</button>
         <button type="button" disabled={updateInstalling} onClick={() => setUpdateDismissed(updateStatus.version)}>Not now</button>
       </div>
-      {renameApplying && !updateInstalling && <p className="check-hint">Waiting for a rename to finish</p>}
+      {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
     <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
@@ -450,7 +479,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={(onProgress) => bridge.installUpdate(onProgress)} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
 }
 
@@ -462,6 +491,11 @@ const DEMO_SETUP: SetupState = { state: 'ready', downloadedBytes: 0, totalBytes:
 
 /** How often Intern asks GitHub for the release manifest while it keeps running, on top of the check at launch. */
 export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** A rename in its applying stage: the file is moving, and that cannot be canceled. */
+const applyingRename = (item: QueueItem) => item.status === 'processing' && item.cancelable === false;
+/** How often an install that is waiting on a rename asks the queue again. A move takes moments. */
+const RENAME_SETTLE_POLL_MS = 250;
 
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]

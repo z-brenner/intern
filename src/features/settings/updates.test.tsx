@@ -23,8 +23,10 @@ describe('the update settings', () => {
     let dialog = await openSettings();
     const toggle = () => within(dialog).getByLabelText('Check for updates automatically (when Intern starts and every 6 hours)');
     expect(toggle()).toBeChecked();
+    expect(within(dialog).getByText('Turn this off and Intern asks only when you press Check for updates.')).toBeVisible();
     fireEvent.click(toggle());
-    expect(within(dialog).getByText(/Intern asks only when you press Check for updates/)).toBeVisible();
+    expect(within(dialog).getByText('Off: Intern asks only when you press Check for updates.')).toBeVisible();
+    expect(within(dialog).queryByText('Turn this off and Intern asks only when you press Check for updates.')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument());
     expect((await bridge.getSettings()).skipUpdateChecks).toBe(true);
@@ -53,6 +55,71 @@ describe('the update settings', () => {
     expect(await within(dialog).findByRole('button', { name: 'Install 0.1.0-alpha.11 and restart' })).toBeDisabled();
     expect(within(dialog).getByText('Waiting for a rename to finish')).toBeVisible();
     expect(installUpdate).not.toHaveBeenCalled();
+  });
+
+  // The disabled button covers the click. The download that follows can take
+  // minutes, and a rename that begins its move meanwhile would be cut off by
+  // the installer closing Intern, so the install waits for it too, with the
+  // queue paused so that no further rename starts.
+  it('install_waits_for_a_rename_that_starts_during_the_download, with the queue paused', async () => {
+    let queue: QueueItem[] = [];
+    let installed = false;
+    let downloaded: () => void = () => {};
+    const download = new Promise<void>((resolve) => { downloaded = resolve; });
+    const bridge = createInMemoryBridge({ update: available, items: [] });
+    vi.spyOn(bridge, 'listItems').mockImplementation(async () => queue.map((item) => ({ ...item })));
+    const pauseQueue = vi.spyOn(bridge, 'pauseQueue').mockResolvedValue();
+    const resumeQueue = vi.spyOn(bridge, 'resumeQueue').mockResolvedValue();
+    vi.spyOn(bridge, 'installUpdate').mockImplementation(async (onProgress, beforeInstall) => {
+      queue = [applying];
+      onProgress?.(1);
+      downloaded();
+      await beforeInstall?.();
+      installed = true;
+    });
+    render(<App bridge={bridge} />);
+
+    const banner = await screen.findByRole('status', { name: 'Update available' });
+    fireEvent.click(within(banner).getByRole('button', { name: 'Install 0.1.0-alpha.11 and restart' }));
+    await download;
+    await waitFor(() => expect(pauseQueue).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Resume queue' })).toBeVisible();
+    // Long enough for the queue to have been asked again more than once.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(installed).toBe(false);
+
+    queue = [{ ...applying, status: 'completed', progress: undefined, cancelable: undefined }];
+    await waitFor(() => expect(installed).toBe(true));
+    // Intern is about to close for the installer; nothing to resume.
+    expect(resumeQueue).not.toHaveBeenCalled();
+  });
+
+  it('undoes its own pause when installing fails, and leaves a pause the person made', async () => {
+    const bridge = createInMemoryBridge({ update: available, items: [] });
+    const pauseQueue = vi.spyOn(bridge, 'pauseQueue').mockResolvedValue();
+    const resumeQueue = vi.spyOn(bridge, 'resumeQueue').mockResolvedValue();
+    vi.spyOn(bridge, 'installUpdate').mockImplementation(async (_onProgress, beforeInstall) => {
+      await beforeInstall?.();
+      throw new Error('The installer could not be started.');
+    });
+    render(<App bridge={bridge} />);
+
+    let banner = await screen.findByRole('status', { name: 'Update available' });
+    fireEvent.click(within(banner).getByRole('button', { name: 'Install 0.1.0-alpha.11 and restart' }));
+    expect(await within(banner).findByRole('alert')).toHaveTextContent('The installer could not be started.');
+    expect(pauseQueue).toHaveBeenCalledTimes(1);
+    expect(resumeQueue).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Pause queue' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
+    expect(await screen.findByRole('button', { name: 'Resume queue' })).toBeVisible();
+    expect(pauseQueue).toHaveBeenCalledTimes(2);
+    banner = screen.getByRole('status', { name: 'Update available' });
+    fireEvent.click(within(banner).getByRole('button', { name: 'Install 0.1.0-alpha.11 and restart' }));
+    await waitFor(() => expect(within(banner).getByRole('button', { name: 'Install 0.1.0-alpha.11 and restart' })).toBeEnabled());
+    expect(pauseQueue).toHaveBeenCalledTimes(2);
+    expect(resumeQueue).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
   });
 
   it('allows installing while other work is only processing, since that can be canceled and picked up again', async () => {
