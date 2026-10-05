@@ -3132,7 +3132,9 @@ mod document_path_tests {
 
     use super::{document_path, document_to_open, locate_document, openable_document, shell_path};
 
-    fn item(status: QueueStatus, receipt: Option<OperationReceipt>) -> PipelineItem {
+    /// The one queue item this branch's tests build field by field; the
+    /// others start from it.
+    pub(super) fn item(status: QueueStatus, receipt: Option<OperationReceipt>) -> PipelineItem {
         PipelineItem {
             id: 4,
             source_path: PathBuf::from("/intake/scan.pdf"),
@@ -3741,8 +3743,6 @@ mod file_date_tests {
 
 #[cfg(test)]
 mod approval_dto_tests {
-    use std::path::PathBuf;
-
     use intern_core::QueueStatus;
     use intern_queue::{PipelineItem, ProposalRecord};
 
@@ -3781,15 +3781,8 @@ mod approval_dto_tests {
         }))
         .unwrap();
         PipelineItem {
-            id: 12,
-            source_path: PathBuf::from("/intake/scan.pdf"),
-            source_hash: "hash".into(),
-            status,
-            processing_failures: 0,
-            error_code: None,
             proposal: Some(proposal),
-            receipt: None,
-            duplicate_of: None,
+            ..super::document_path_tests::item(status, None)
         }
     }
 
