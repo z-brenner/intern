@@ -450,6 +450,40 @@ updater's before-exit hook — Tauri's `cleanup_before_exit`, reached through a
 guard parked in the app's resource table — does the same before the installer
 is launched. The job object is the backstop, not the plan.
 
+Launch never reads the model file. Tauri's setup hook asks only whether it is
+there at the size the manifest pins; the digest is checked behind the window,
+on the setup thread, and used to be read twice in the hook, a white window for
+five seconds or more on an office laptop. A model that has passed its digest
+and the semantic self-test is stamped in `models/.verified.json` with its size
+and modification time, the digest it was checked against, the llama-server
+binary's size and date, and the version of Intern that checked it. While all of
+that still matches, the next launch starts the server with neither check; when
+any of it changes, the model is hashed and self-tested once and stamped again,
+and a failed self-test removes the stamp. Within a session the digest is read
+at most once: restarts - a cancel, a recovery - start a file that still looks
+exactly as it did when it was checked, and refuse one that does not.
+
+Starts and stops are serialized, and every deliberate stop - a cancel, a hosted
+model chosen, shutdown - moves a generation counter before it stops anything.
+A cancel interrupts a request by restarting the server under it, and that
+request used to fail like a server that had died: it was recovered, restarting
+the server again, and the canceled document was read a second time, while two
+servers could load at once. Now a request that fails after a cancel reports
+`MODEL_CANCELED`, a recovery for a failure older than the last restart does
+nothing, the queue skips recovery for a request it has itself canceled, and
+the canceled item no longer pauses the queue through the lease its cancel took
+away. A document the model failed on its own terms - too large, a reply cut
+off or unreadable - fails without a restart. A request that finds no server
+running is handed back as `MODEL_NOT_READY`, not counted against the document.
+
+Choosing a hosted model stops the local server, and a launch with a hosted
+model chosen never starts it: it would hold 1.3 to 2.6 GB with nothing to ask
+it. Choosing the local model again starts and verifies it as a launch does, and
+the queue waits until that has finished. A request the switch interrupts goes
+back to be read again, by the hosted model. While a model downloads, the window
+hears about it at most about four times a second, besides every change of
+status and the final byte; it used to hear about every network chunk.
+
 ### A hosted model
 
 The inference is local by default and the local server is the product. The
