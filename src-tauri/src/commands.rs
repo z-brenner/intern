@@ -128,6 +128,11 @@ pub struct QueueItemDto {
     /// the name it was filed under, and the machine when it was not this one.
     #[serde(skip_serializing_if = "Option::is_none")]
     near_duplicate_of: Option<String>,
+    /// The parties left out of the proposed name because they are the
+    /// person's own organisation, as the document spells them, so the
+    /// inspector can say why a party in the evidence is not in the name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    omitted_parties: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1767,6 +1772,9 @@ pub(crate) trait SettingsRuntime {
     fn sync_tray(&self, run_in_background: bool);
     fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
+    /// The organisation's names changed: documents still waiting are named
+    /// by the other side, or by every side again, at once.
+    fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
         &self,
@@ -1835,6 +1843,12 @@ impl SettingsRuntime for AppState {
 
     fn emit_intake_changed(&self) -> Result<(), CommandError> {
         AppState::emit_intake_changed(self)
+    }
+
+    fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
+        self.pipeline
+            .refresh_own_names(names)
+            .map_err(CommandError::from)
     }
 
     fn managed_sharepoint(
@@ -1934,6 +1948,9 @@ fn save_settings_with_microsoft_protection(
             .into_owned();
     }
     validate_description_settings(&settings)?;
+    // Stored the way they are matched, so a blank line or a stray space
+    // typed in the list is not a change that renames anything.
+    settings.our_names = settings.own_names();
     // A hosted model that could not be sent to is refused at save time, like
     // every other configuration that could never do anything: the key must
     // be in the credential store and the address must be one a key may be
@@ -1966,6 +1983,11 @@ fn save_settings_with_microsoft_protection(
     {
         state.restart_intake(&settings)?;
         state.emit_intake_changed()?;
+    }
+    // Last, because it renames only what is still waiting: a queue that
+    // could not be renamed must not leave the watcher on the old folder.
+    if previous.own_names() != settings.our_names {
+        state.own_names_changed(&settings.our_names)?;
     }
     Ok(())
 }
@@ -2085,6 +2107,13 @@ fn restore_settings_unlocked(
         failures.push(error);
     }
     if let Err(error) = runtime.emit_intake_changed() {
+        failures.push(error);
+    }
+    if current
+        .as_ref()
+        .is_none_or(|current| current.own_names() != previous.own_names())
+        && let Err(error) = runtime.own_names_changed(&previous.own_names())
+    {
         failures.push(error);
     }
     let Some(first) = failures.first() else {
@@ -2710,6 +2739,9 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .map(|record| record.house_rules.iter().map(HouseRuleDto::from).collect())
             .unwrap_or_default(),
         near_duplicate_of: proposal.and_then(|record| record.near_duplicate_of.clone()),
+        omitted_parties: proposal
+            .map(|record| record.name_view().1)
+            .unwrap_or_default(),
     })
 }
 
@@ -4046,6 +4078,103 @@ mod settings_report_tests {
     }
 }
 
+#[cfg(test)]
+mod own_names_tests {
+    use intern_queue::AppSettings;
+
+    use super::test_runtime::RecordingRuntime;
+    use super::{restore_sharepoint_settings, save_settings};
+
+    /// Naming the organisation renames what is waiting, so the queue hears
+    /// about a change to the list - and only about a change: a save of
+    /// anything else, or the same names typed with stray spaces and blank
+    /// lines, renames nothing.
+    #[test]
+    fn settings_save_reports_own_names_change_to_runtime() {
+        let dir = std::env::temp_dir().join(format!("intern-own-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let heard = || runtime.own_names.lock().unwrap().clone();
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec![
+                    " Contoso Worldwide, Inc. ".into(),
+                    String::new(),
+                    "Contoso".into(),
+                ],
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        let named = vec!["Contoso Worldwide, Inc.".to_owned(), "Contoso".to_owned()];
+        assert_eq!(heard(), vec![named.clone()]);
+        assert_eq!(
+            runtime.store.load().unwrap().our_names,
+            named,
+            "stored the way they are matched"
+        );
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec![
+                    "Contoso Worldwide, Inc.".into(),
+                    "  Contoso".into(),
+                    " ".into(),
+                ],
+                machine_label: "Front desk".into(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(heard().len(), 1, "the same names are not a change");
+
+        save_settings(&runtime, AppSettings::default()).unwrap();
+        assert_eq!(heard(), vec![named, Vec::new()], "nobody named any more");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Putting back the settings stored before a failed SharePoint
+    /// activation puts back the organisation the waiting documents are named
+    /// by - and, like a save, says nothing when the names did not change.
+    #[test]
+    fn restoring_settings_renames_by_the_restored_organisation() {
+        let dir =
+            std::env::temp_dir().join(format!("intern-own-names-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime
+            .store
+            .save(&AppSettings {
+                our_names: vec!["Northwind Traders".into()],
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let previous = AppSettings {
+            our_names: vec!["Contoso".into(), " ".into()],
+            ..AppSettings::default()
+        };
+
+        restore_sharepoint_settings(&runtime, &previous).unwrap();
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()]]
+        );
+        restore_sharepoint_settings(&runtime, &previous).unwrap();
+        assert_eq!(
+            runtime.own_names.lock().unwrap().len(),
+            1,
+            "the same names are not a change"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A `SettingsRuntime` over a real settings file whose live effects are
 /// recorded instead of reaching Tauri. Shared by the settings and SharePoint
 /// activation tests so both drive the production application code.
@@ -4087,6 +4216,8 @@ pub(crate) mod test_runtime {
         pub fail_hosted_model: bool,
         pub fail_intake_events: AtomicBool,
         pub after_persist: Mutex<Option<Hook>>,
+        /// Every list of own names the queue was told about, in order.
+        pub own_names: Mutex<Vec<Vec<String>>>,
         gate: Mutex<()>,
         activation: AtomicBool,
     }
@@ -4102,6 +4233,7 @@ pub(crate) mod test_runtime {
                 fail_hosted_model: false,
                 fail_intake_events: AtomicBool::new(false),
                 after_persist: Mutex::new(None),
+                own_names: Mutex::new(Vec::new()),
                 gate: Mutex::new(()),
                 activation: AtomicBool::new(false),
             }
@@ -4214,6 +4346,11 @@ pub(crate) mod test_runtime {
                 ));
             }
             self.live.lock().unwrap().intake_events += 1;
+            Ok(())
+        }
+
+        fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
+            self.own_names.lock().unwrap().push(names.to_vec());
             Ok(())
         }
 
