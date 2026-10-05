@@ -36,21 +36,20 @@ a page that is essentially all image — a scan whose text layer is a Bates
 number or a "CONFIDENTIAL" stamp and nothing else — or when more than 3% of its
 characters came back as replacement glyphs. Word processing and presentation
 files — `.docx`, `.docm`, legacy `.doc`, `.rtf`, `.odt`, `.pptx`, `.pptm`,
-`.ppsx`, legacy `.ppt`, `.odp` — and OpenDocument spreadsheets (`.ods`) go
-through AnyDoc to Markdown, which preserves headings and tables, and only when
-the container's content is not something else: routing here is by extension,
-so a workbook renamed `.docx` — which AnyDoc would otherwise render through its
-uncapped Excel path — is a routing failure for review rather than a document.
-Content of the same kind as its extension is read as what it is: Word has
-saved RTF under `.doc` for decades, and a `.doc` that is really a Word 2007
-package (or a `.pptx` that is really a 97-2003 deck) reaches no reader without
-the caps it would have had. A file saved with a password to open is reported
-as `PASSWORD_PROTECTED` rather than as damage: an encrypted Office package is
-an OLE compound file holding `EncryptionInfo` and `EncryptedPackage` streams,
-recognised before the zip pre-pass would have called it a corrupt archive; a
-legacy workbook carries a `FilePass` record; and PDFium's password error on a
-PDF maps to the same code. Every error message is one line, never a debug
-dump.
+`.ppsx`, legacy `.ppt`, `.odp` — go through AnyDoc to Markdown, which preserves
+headings and tables, and only when the container's content is not something
+else: routing here is by extension, so a workbook renamed `.docx` — which
+AnyDoc would otherwise render through its uncapped Excel path — is a routing
+failure for review rather than a document. Content of the same kind as its
+extension is read as what it is: Word has saved RTF under `.doc` for decades,
+and a `.doc` that is really a Word 2007 package (or a `.pptx` that is really a
+97-2003 deck) reaches no reader without the caps it would have had. A file
+saved with a password to open is reported as `PASSWORD_PROTECTED` rather than
+as damage: an encrypted Office package is an OLE compound file holding
+`EncryptionInfo` and `EncryptedPackage` streams, recognised before the zip
+pre-pass would have called it a corrupt archive; a legacy workbook carries a
+`FilePass` record; and PDFium's password error on a PDF maps to the same code.
+Every error message is one line, never a debug dump.
 
 Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
 either order and a marked UTF-8 file all decode, and the mark itself never
@@ -60,26 +59,29 @@ a result holding C1 control characters — bytes Windows-1252 leaves undefined �
 carries a corruption warning. A text file is never read past four times the
 page cap in bytes, which always fills a page.
 
-Excel workbooks — `.xlsx`, `.xlsm`, and Excel 97-2003 `.xls` — are read
-sheet-per-page as Markdown tables, capped at 200 rows by 30 columns per sheet
-with an elision marker so a large workbook cannot flood distillation, and a
-cell's text at 1,000 characters. That window is a design choice, marked where
-it applies, so it is reported as `CONTENT_ELIDED`, which the host treats as a
-note rather than a reason for review: a ledger whose facts sit in its first
-rows can be Ready however long it runs. Text that was actually lost — a page
-cut at the size cap, unread TIFF frames — is still `TEXT_TRUNCATED` and still
-forces review. A `.xlsx` is streamed cell by cell; calamine reads a binary
-`.xls` whole as it opens it, so its record stream is first surveyed for what
-that would allocate (dense ranges spanning a sheet's corners, forged
-`Dimensions` claims, shared strings copied into every cell that names them)
-and refused if calamine would hold more than 512 MiB at once, counting the
-sheets already built and the one being built; a year of monthly ledgers
-stays far inside that. Its formulas' token streams are then emptied (only
-cached values are rendered, and spelling out a formula can be far longer than
-its record), and it is handed to calamine in a fresh compound file. CSV exports are read through the same
-window: the delimiter is the one of comma, semicolon, tab, and pipe that
-splits the leading records most consistently, fields that are not UTF-8 read
-as Windows-1252, and a UTF-16 export is transcoded as it streams.
+Workbooks — `.xlsx`, `.xlsm`, Excel 97-2003 `.xls`, and OpenDocument `.ods` —
+are read sheet-per-page as Markdown tables, capped at 200 rows by 30 columns
+per sheet with an elision marker so a large workbook cannot flood
+distillation, and a cell's text at 1,000 characters. That window is a design
+choice, marked where it applies, so it is reported as `CONTENT_ELIDED`, which
+the host treats as a note rather than a reason for review: a ledger whose
+facts sit in its first rows can be Ready however long it runs. Text that was
+actually lost — a page cut at the size cap, unread TIFF frames — is still
+`TEXT_TRUNCATED` and still forces review. A `.xlsx` is streamed cell by cell;
+calamine reads a binary `.xls` whole as it opens it, so its record stream is
+first surveyed for what that would allocate (dense ranges spanning a sheet's
+corners, forged `Dimensions` claims, shared strings copied into every cell
+that names them) and refused if calamine would hold more than 512 MiB at once,
+counting the sheets already built and the one being built; a year of monthly
+ledgers stays far inside that. Its formulas' token streams are then emptied
+(only cached values are rendered, and spelling out a formula can be far longer
+than its record), and it is handed to calamine in a fresh compound file. An
+`.ods` is parsed by AnyDoc, whose OpenDocument reader charges repeated rows
+and cells against a fixed expansion budget, and each sheet's table is then cut
+to the same window rather than rendered whole. CSV exports are read through
+the same window: the delimiter is the one of comma, semicolon, tab, and pipe
+that splits the leading records most consistently, fields that are not UTF-8
+read as Windows-1252, and a UTF-16 export is transcoded as it streams.
 
 A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
 the 25-megapixel render cap, at the highest resolution that fits it. A phone

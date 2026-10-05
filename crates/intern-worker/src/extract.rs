@@ -678,6 +678,43 @@ pub fn extract_anydoc(
     limits: &ResourceLimits,
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
+    let (bytes, format) = office_source(path, limits, cancel)?;
+    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(office_error)?;
+    cancel.check()?;
+    Ok(ExtractedDocument {
+        pages: vec![ExtractedPage {
+            page_number: 1,
+            text: markdown,
+            source: PageSource::AnyDoc,
+            ocr_confidence: None,
+            vision_escalated: false,
+        }],
+        warnings: vec![],
+        truncated: false,
+        optional_image: None,
+    })
+}
+
+/// [`extract_anydoc`]'s parse as anydoc's document model rather than
+/// Markdown, for a reader that renders the content itself.
+pub(crate) fn anydoc_document(
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<anydoc::model::Document, ExtractionError> {
+    let (bytes, format) = office_source(path, limits, cancel)?;
+    let document = anydoc::to_document(&bytes, format).map_err(office_error)?;
+    cancel.check()?;
+    Ok(document)
+}
+
+/// An Office file read whole, with the parser its content and its extension
+/// agree on.
+fn office_source(
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<(Vec<u8>, anydoc::Format), ExtractionError> {
     reject_encrypted_ole(path)?;
     cancel.check()?;
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
@@ -692,23 +729,14 @@ pub fn extract_anydoc(
         enforce_office_decompressed_limit(path, limits, cancel)?;
     }
     cancel.check()?;
-    let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(|error| match error {
+    Ok((bytes, format))
+}
+
+fn office_error(error: anydoc::ConvertError) -> ExtractionError {
+    match error {
         anydoc::ConvertError::Encrypted => ExtractionError::encrypted(),
         other => ExtractionError::parse_failed(other.to_string()),
-    })?;
-    cancel.check()?;
-    Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: markdown,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
-        warnings: vec![],
-        truncated: false,
-        optional_image: None,
-    })
+    }
 }
 
 /// The parser an extension names, refusing content of another kind.

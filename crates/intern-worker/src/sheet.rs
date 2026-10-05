@@ -1,5 +1,6 @@
-//! Spreadsheet extraction via calamine: Excel 2007 workbooks (`.xlsx`,
-//! `.xlsm`) and Excel 97-2003 binary workbooks (`.xls`).
+//! Spreadsheet extraction: Excel 2007 workbooks (`.xlsx`, `.xlsm`) and Excel
+//! 97-2003 binary workbooks (`.xls`) via calamine, and OpenDocument
+//! spreadsheets (`.ods`) via anydoc's document model.
 //!
 //! Each non-empty worksheet becomes one Markdown page: the sheet name as a
 //! heading, then the used range as a pipe table. Output is capped at
@@ -8,20 +9,22 @@
 //! Formula cells surface as their cached values (calamine reads values, not
 //! formulas), and empty cells collapse to empty table cells.
 //!
-//! anydoc also reads workbooks, but it renders every cell of every sheet into
-//! a single page with no row or column cap, so spreadsheets route through
-//! this capped renderer instead.
+//! anydoc's Markdown renders every cell of every sheet into a single page with
+//! no row or column cap, so spreadsheets route through this capped renderer
+//! instead - an OpenDocument one as anydoc parsed it, before it is rendered.
 
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
+use anydoc::model::{Block, CellSlot, Table, inlines_to_plain_text};
 use calamine::{Data, DataRef, Range, Reader, Xls, XlsError, XlsOptions, Xlsx};
 
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractedPage, ExtractionError, ExtractionWarning,
-    OLE_MAGIC, PageSource, enforce_office_decompressed_limit, reject_encrypted_ole,
+    OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit,
+    reject_encrypted_ole,
 };
 use crate::limits::ResourceLimits;
 
@@ -170,9 +173,105 @@ pub fn extract_xlsx(
         let sheet = contained("worksheet read", || {
             read_capped_sheet(&mut workbook, &name, cancel)
         })??;
-        sheets.push((name, sheet));
+        sheets.push((Some(name), sheet));
     }
     workbook_document(sheets)
+}
+
+/// Reads an OpenDocument spreadsheet (`.ods`) through the same window as
+/// every other workbook.
+///
+/// anydoc parses it. Its OpenDocument reader charges every repeated row and
+/// cell against a fixed expansion budget, which a format built on repeat
+/// runs needs: calamine's would materialise a dense range of up to a hundred
+/// million cells from a few kilobytes of `number-rows-repeated`. Rendered by
+/// anydoc, though, every cell of every sheet went into one page, so a long
+/// ledger was cut at the page cap as `TEXT_TRUNCATED` and could never be
+/// Ready, where the same ledger saved as `.xlsx`, `.xls` or `.csv` is a
+/// window marked `CONTENT_ELIDED`. Each sheet's table is cut to that window
+/// here instead, and becomes a page of its own.
+///
+/// anydoc names the sheets of a workbook with more than one; a lone sheet's
+/// page has no heading.
+pub fn extract_ods(
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<ExtractedDocument, ExtractionError> {
+    let document = anydoc_document(path, limits, cancel)?;
+    let mut sheets = Vec::new();
+    let mut name = None;
+    for block in &document.blocks {
+        match block {
+            Block::Heading { content, .. } => name = Some(inlines_to_plain_text(content)),
+            Block::Table(table) => {
+                cancel.check()?;
+                sheets.push((name.take(), table_window(table, cancel)?));
+            }
+            _ => {}
+        }
+    }
+    limits.validate_page_count(sheets.len())?;
+    workbook_document(sheets)
+}
+
+/// The window of a sheet anydoc has already read whole.
+fn table_window(
+    table: &Table,
+    cancel: &CancellationToken,
+) -> Result<Option<CappedSheet>, ExtractionError> {
+    let mut window = WindowBuilder::default();
+    for (row, slots) in table.grid.iter().enumerate() {
+        if row % 1_024 == 0 {
+            cancel.check()?;
+        }
+        let row = u32::try_from(row).unwrap_or(u32::MAX);
+        for (column, slot) in slots.iter().enumerate() {
+            // A covered slot is the shadow of a merged cell, whose text
+            // belongs to the cell that covers it.
+            if let CellSlot::Origin(cell) = slot
+                && !cell.is_empty()
+            {
+                let column = u32::try_from(column).unwrap_or(u32::MAX);
+                window.push(row, column, || sanitize_cell(&blocks_text(&cell.blocks)));
+            }
+        }
+    }
+    Ok(window.finish())
+}
+
+/// The text of an OpenDocument cell: its paragraphs, and anything nested in
+/// them, one after another.
+fn blocks_text(blocks: &[Block]) -> String {
+    fn collect(blocks: &[Block], parts: &mut Vec<String>) {
+        for block in blocks {
+            match block {
+                Block::Paragraph(inlines)
+                | Block::Heading {
+                    content: inlines, ..
+                } => parts.push(inlines_to_plain_text(inlines)),
+                Block::List(list) => {
+                    for item in &list.items {
+                        collect(&item.blocks, parts);
+                    }
+                }
+                Block::BlockQuote(blocks) => collect(blocks, parts),
+                Block::CodeBlock { text, .. } => parts.push(text.clone()),
+                Block::Table(table) => {
+                    for slot in table.grid.iter().flatten() {
+                        if let CellSlot::Origin(cell) = slot {
+                            collect(&cell.blocks, parts);
+                        }
+                    }
+                }
+                Block::Rule => {}
+            }
+        }
+    }
+    let mut parts = Vec::new();
+    collect(blocks, &mut parts);
+    parts.retain(|part| !part.trim().is_empty());
+    parts.join(" ")
 }
 
 /// Reads an Excel 97-2003 binary workbook (`.xls`).
@@ -226,7 +325,7 @@ fn extract_legacy_workbook(
         let range = contained("worksheet read", || workbook.worksheet_range(&name))?
             .map_err(legacy_workbook_error)?;
         let sheet = capped_range(&range, cancel)?;
-        sheets.push((name, sheet));
+        sheets.push((Some(name), sheet));
     }
     workbook_document(sheets)
 }
@@ -694,7 +793,7 @@ fn capped_range(
 /// Renders each sheet that has any cells as a page, numbering pages in the
 /// order the workbook lists its sheets.
 fn workbook_document(
-    sheets: Vec<(String, Option<CappedSheet>)>,
+    sheets: Vec<(Option<String>, Option<CappedSheet>)>,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut pages = Vec::new();
     let mut elided = false;
@@ -702,7 +801,7 @@ fn workbook_document(
         let Some(sheet) = sheet else {
             continue;
         };
-        let (text, sheet_elided) = render_sheet(Some(&name), &sheet);
+        let (text, sheet_elided) = render_sheet(name.as_deref(), &sheet);
         elided |= sheet_elided;
         pages.push(ExtractedPage {
             page_number: pages.len() + 1,

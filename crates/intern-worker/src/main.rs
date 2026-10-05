@@ -62,6 +62,8 @@ enum Reader {
     Workbook,
     /// Excel 97-2003 workbooks through the guarded binary reader.
     LegacyWorkbook,
+    /// OpenDocument workbooks, parsed by anydoc and cut to the same window.
+    OpenWorkbook,
     Delimited,
     Eml,
     Msg,
@@ -87,9 +89,9 @@ const ROUTES: &[(&str, Reader)] = &[
     ("ppt", Reader::Office),
     ("odp", Reader::Office),
     // anydoc's OpenDocument reader has its own expansion limits, which a
-    // spreadsheet format built on repeated-row runs needs more than a cap on
-    // what is rendered; the page and document caps bound what it renders.
-    ("ods", Reader::Office),
+    // spreadsheet format built on repeated-row runs needs; what it parsed is
+    // then rendered through the same window as every other workbook.
+    ("ods", Reader::OpenWorkbook),
     ("xlsx", Reader::Workbook),
     ("xlsm", Reader::Workbook),
     ("xls", Reader::LegacyWorkbook),
@@ -135,6 +137,7 @@ fn extract_path(
         Reader::Office => extract_anydoc(path, &limits, &cancel),
         Reader::Workbook => intern_worker::sheet::extract_xlsx(path, &limits, &cancel),
         Reader::LegacyWorkbook => intern_worker::sheet::extract_xls(path, &limits, &cancel),
+        Reader::OpenWorkbook => intern_worker::sheet::extract_ods(path, &limits, &cancel),
         Reader::Delimited => intern_worker::delimited::extract_delimited(path, &limits, &cancel),
         Reader::Eml => intern_worker::email::extract_eml(path, &limits, &cancel),
         Reader::Msg => intern_worker::email::extract_msg(path, &limits, &cancel),

@@ -3,6 +3,7 @@
 //! `fixtures/formats/README.md`). Each holds the same one-page engagement
 //! letter: a date and two parties, which is what naming a document needs.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use intern_worker::delimited::extract_delimited;
@@ -10,7 +11,7 @@ use intern_worker::extract::{
     CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, extract_anydoc,
 };
 use intern_worker::limits::ResourceLimits;
-use intern_worker::sheet::{MAX_SHEET_ROWS, extract_xls, extract_xlsx};
+use intern_worker::sheet::{MAX_SHEET_ROWS, extract_ods, extract_xls, extract_xlsx};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -38,6 +39,7 @@ fn read_path(path: &Path) -> Result<ExtractedDocument, ExtractionError> {
     match path.extension().and_then(|value| value.to_str()) {
         Some("xlsx" | "xlsm") => extract_xlsx(path, &limits, &cancel),
         Some("xls") => extract_xls(path, &limits, &cancel),
+        Some("ods") => extract_ods(path, &limits, &cancel),
         Some("csv") => extract_delimited(path, &limits, &cancel),
         _ => extract_anydoc(path, &limits, &cancel),
     }
@@ -104,6 +106,11 @@ fn workbook_dates_and_tables_survive_every_workbook_format() {
     }
     let csv = text_of(&read("ledger.csv").unwrap());
     assert!(csv.contains("| Letter date | March 3, 2025 |"), "{csv}");
+    // A lone OpenDocument sheet is not named, but its table is the same.
+    let ods = text_of(&read("ledger.ods").unwrap());
+    assert!(ods.starts_with("| Engagement Letter |"), "{ods}");
+    assert!(ods.contains("| Fieldwork starts | 2025-04-14 |"), "{ods}");
+    assert!(ods.contains("| Fee with expenses | 50000 |"), "{ods}");
 }
 
 /// Word has saved RTF under `.doc` for as long as both have existed.
@@ -242,4 +249,117 @@ fn a_utf16_export_reads_like_any_other() {
         ),
         "{text}"
     );
+}
+
+/// An OpenDocument spreadsheet holding the given sheets, each a name and its
+/// rows of text cells.
+fn write_ods(path: &Path, sheets: &[(&str, Vec<Vec<String>>)]) {
+    let mut content = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+         <office:document-content \
+         xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+         xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" \
+         xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" office:version=\"1.3\">\
+         <office:body><office:spreadsheet>",
+    );
+    for (name, rows) in sheets {
+        content.push_str(&format!("<table:table table:name=\"{name}\">"));
+        for row in rows {
+            content.push_str("<table:table-row>");
+            for cell in row {
+                content.push_str(&format!(
+                    "<table:table-cell office:value-type=\"string\">\
+                     <text:p>{cell}</text:p></table:table-cell>"
+                ));
+            }
+            content.push_str("</table:table-row>");
+        }
+        content.push_str("</table:table>");
+    }
+    content.push_str("</office:spreadsheet></office:body></office:document-content>");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    zip.start_file("mimetype", stored).unwrap();
+    zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet")
+        .unwrap();
+    zip.start_file("content.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(content.as_bytes()).unwrap();
+    zip.finish().unwrap();
+}
+
+/// A ledger saved as OpenDocument used to be rendered whole into one page:
+/// a long one was cut at the page cap as truncated and forced to review,
+/// where the same ledger as `.xlsx`, `.xls` or `.csv` is a window marked
+/// as elided. It is read through that same window now.
+#[test]
+fn a_long_open_document_ledger_is_windowed_and_marked_as_elided() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("ledger.ods");
+    let mut rows = vec![vec![
+        "Date".to_owned(),
+        "Payee".to_owned(),
+        "Amount".to_owned(),
+    ]];
+    for day in 0..MAX_SHEET_ROWS + 99 {
+        rows.push(vec![
+            format!("2025-03-{:02}", day % 28 + 1),
+            "Juniper Ridge Holdings Inc.".to_owned(),
+            "12.50".to_owned(),
+        ]);
+    }
+    write_ods(&path, &[("Ledger", rows)]);
+
+    let document = read_path(&path).unwrap();
+    let text = text_of(&document);
+
+    assert_eq!(document.pages.len(), 1);
+    assert!(
+        text.starts_with("| Date | Payee | Amount |\n| --- | --- | --- |\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("| 2025-03-01 | Juniper Ridge Holdings Inc. | 12.50 |"),
+        "{text}"
+    );
+    assert!(text.ends_with("[... 100 more rows not shown]\n"), "{text}");
+    assert_eq!(document.warnings, vec![ExtractionWarning::ContentElided]);
+    assert!(!document.truncated);
+}
+
+/// Each sheet of an OpenDocument workbook is a page of its own under its
+/// name, as each sheet of an Excel workbook is.
+#[test]
+fn each_open_document_sheet_is_a_named_page() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("quarter.ods");
+    let sheet = |payee: &str| {
+        vec![
+            vec!["Payee".to_owned(), "Amount".to_owned()],
+            vec![payee.to_owned(), "40".to_owned()],
+        ]
+    };
+    write_ods(
+        &path,
+        &[
+            ("January", sheet("Harbor Lantern Accounting LLP")),
+            ("February", sheet("Juniper Ridge Holdings Inc.")),
+        ],
+    );
+
+    let document = read_path(&path).unwrap();
+
+    assert_eq!(document.pages.len(), 2);
+    assert_eq!(
+        document.pages[0].text,
+        "## January\n\n| Payee | Amount |\n| --- | --- |\n| Harbor Lantern Accounting LLP | 40 |\n"
+    );
+    assert!(
+        document.pages[1].text.starts_with("## February\n\n"),
+        "{}",
+        document.pages[1].text
+    );
+    assert_eq!(document.pages[1].page_number, 2);
+    assert!(document.warnings.is_empty());
 }
