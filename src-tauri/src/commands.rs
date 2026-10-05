@@ -232,11 +232,14 @@ impl TauriPipelineEvents {
         let _ = self.pipeline.set(Arc::downgrade(pipeline));
     }
 
-    fn paused(&self) -> bool {
+    /// Whether the queue is paused, and why, when it stopped itself.
+    fn pause_state(&self) -> (bool, Option<String>) {
         self.pipeline
             .get()
             .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|pipeline| pipeline.is_paused())
+            .map_or((false, None), |pipeline| {
+                (pipeline.is_paused(), pipeline.pause_reason())
+            })
     }
 }
 
@@ -245,16 +248,24 @@ impl TauriPipelineEvents {
 /// The queue pauses itself - a hosted model that refuses the key, a shared
 /// lease that cannot be taken - and the window only heard "something
 /// changed", so it went on offering to pause a queue that had already
-/// stopped. Every change now says which it is.
-fn queue_changed_payload(paused: bool) -> serde_json::Value {
-    serde_json::json!({ "paused": paused })
+/// stopped. Every change now says which it is, and a queue that stopped
+/// itself for a failure every document would share - an account out of
+/// credit, missing text-recognition files - says which failure, so the
+/// window can say what to fix before resuming.
+fn queue_changed_payload(paused: bool, reason: Option<&str>) -> serde_json::Value {
+    match reason {
+        Some(reason) if paused => serde_json::json!({ "paused": true, "error": reason }),
+        _ => serde_json::json!({ "paused": paused }),
+    }
 }
 
 impl PipelineEventSink for TauriPipelineEvents {
     fn queue_changed(&self) {
-        let _ = self
-            .app
-            .emit("queue://changed", queue_changed_payload(self.paused()));
+        let (paused, reason) = self.pause_state();
+        let _ = self.app.emit(
+            "queue://changed",
+            queue_changed_payload(paused, reason.as_deref()),
+        );
     }
     fn progress(&self, progress: PipelineProgress) {
         let _ = self.app.emit("queue://progress", progress);
@@ -2931,11 +2942,26 @@ mod queue_event_tests {
     #[test]
     fn a_queue_change_says_whether_the_queue_is_paused() {
         assert_eq!(
-            queue_changed_payload(true),
+            queue_changed_payload(true, None),
             serde_json::json!({ "paused": true })
         );
         assert_eq!(
-            queue_changed_payload(false),
+            queue_changed_payload(false, None),
+            serde_json::json!({ "paused": false })
+        );
+    }
+
+    /// The window shows `error` as the reason the queue stopped, so a queue
+    /// that stopped itself names the failure, and one that is running again
+    /// names none even if a stale reason were offered.
+    #[test]
+    fn a_queue_that_stopped_itself_says_why() {
+        assert_eq!(
+            queue_changed_payload(true, Some("HOSTED_MODEL_BILLING")),
+            serde_json::json!({ "paused": true, "error": "HOSTED_MODEL_BILLING" })
+        );
+        assert_eq!(
+            queue_changed_payload(false, Some("HOSTED_MODEL_BILLING")),
             serde_json::json!({ "paused": false })
         );
     }

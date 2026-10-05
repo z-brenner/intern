@@ -132,6 +132,26 @@ const ready: QueueItem = {
     await waitFor(() => expect(screen.queryByRole('alert', { name: 'Queue stopped' })).not.toBeInTheDocument());
   });
 
+  // An account out of credit fails every document behind it, so the queue
+  // stops at the first one. The reason arrives on the same change event that
+  // says the queue paused, and the banner says what to fix before resuming.
+  it('says the hosted account needs credit when billing stops the queue', async () => {
+    let listener!: (event: QueueBridgeEvent) => void;
+    const bridge = {
+      ...createInMemoryBridge({ items: [ready] }),
+      subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
+    };
+    render(<App bridge={bridge} />);
+    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+
+    act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_BILLING' }));
+
+    expect(await screen.findByRole('alert', { name: 'Queue stopped' })).toHaveTextContent(
+      'The queue stopped taking new work. The hosted service refused the request for billing or quota reasons. Check your account\'s credit, then resume the queue.',
+    );
+    expect(screen.getByRole('button', { name: 'Resume queue' })).toBeVisible();
+  });
+
   // Tauri's own drag-drop is enabled, so on the desktop a dropped file never
   // reaches the HTML5 handler the tests above drive: the paths arrive as a
   // window event. That path called the bridge directly, so a refusal was
