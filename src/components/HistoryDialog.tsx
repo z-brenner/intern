@@ -107,11 +107,14 @@ export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props)
 
   // Open and Show in folder reach the item's document where it is now, so
   // they belong on its newest row only: an older row describes a rename the
-  // document has since moved on from.
+  // document has since moved on from. A rolled-back row moved nothing and
+  // says nothing about where the document is - an undo refused because the
+  // filed copy was held names the original as its new path, while the
+  // document is still filed - so the row under it is the one that does.
   const newest = new Set<string>();
   const openable = new Set<string>();
   for (const entry of entries ?? []) {
-    if (newest.has(entry.queueItemId)) continue;
+    if (entry.stage === 'rolled_back' || newest.has(entry.queueItemId)) continue;
     newest.add(entry.queueItemId);
     if (filedItems?.has(entry.queueItemId)) openable.add(entry.receiptId);
   }
