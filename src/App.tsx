@@ -24,7 +24,7 @@ import { useMediaQuery } from './lib/useMediaQuery';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
-import { isParked, itemActions, nextUndecided, undecidedOrder } from './features/review/actions';
+import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
@@ -329,7 +329,8 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     // Only a list read after the command says what it did; when that reread
     // failed, the command still happened and the queue as last read stands.
     const fresh = outcome.read;
-    const after = decision === 'approve' ? fresh?.find((entry) => entry.id === item.id)?.status : undefined;
+    const now = decision === 'approve' ? fresh?.find((entry) => entry.id === item.id) : undefined;
+    const after = now?.status;
     // An approval the backend accepted can still leave the document unrenamed:
     // it files the name between documents while the queue is busy, and sends
     // the item back to review when the file changed since it was read. Each is
@@ -340,13 +341,16 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       setActionMessage(`${item.originalFilename} was not renamed. It needs review again.`);
       return;
     }
+    // A name that was already the document's own completes it with nothing
+    // renamed (ALREADY_NAMED): completed, but kept, and nothing to undo.
     const done = decision === 'keep' ? `Kept ${item.originalFilename} under its own name.`
       : decision === 'remove' ? `Removed ${item.originalFilename} from the queue.`
         : after === 'ready' ? `${item.originalFilename} will be renamed when the queue is free.`
-          : after === 'processing' ? `${item.originalFilename} is being renamed.` : `Renamed ${item.originalFilename}.`;
+          : after === 'processing' ? `${item.originalFilename} is being renamed.`
+            : now && keptOriginal(now) ? `${item.originalFilename} already had this name, so nothing was renamed.` : `Renamed ${item.originalFilename}.`;
     setActionMessage(done);
     // A rename the queue shows as filed can be put back from the toast.
-    if (after === 'completed' && fresh?.find((entry) => entry.id === item.id)?.undoable) showToast('done', renamedCount(1), [item.id]);
+    if (after === 'completed' && now?.undoable) showToast('done', renamedCount(1), [item.id]);
     if (focusRestoreVersion.current !== selectionVersion) return;
     const next = nextUndecided(before, item.id, shown(fresh ?? items));
     if (!next) {
@@ -766,21 +770,25 @@ function renamedCount(count: number) {
 /**
  * What a batch of approvals the backend accepted did, read from the queue
  * after it. Accepted is not the same as renamed: while the queue is busy the
- * backend files an approved name between documents, and it sends an item back
- * to review when the file changed since it was read. Each is said as it is,
- * and only what was filed is offered to Undo.
+ * backend files an approved name between documents, it sends an item back
+ * to review when the file changed since it was read, and it completes one
+ * whose name was already its own without renaming it (ALREADY_NAMED). Each
+ * is said as it is, and only what was filed is offered to Undo.
  */
 function batchOutcome(ids: string[], queue: QueueItem[]) {
   const now = (id: string) => queue.find((item) => item.id === id);
-  const filed = ids.filter((id) => now(id)?.status === 'completed');
+  const completed = ids.flatMap((id) => { const item = now(id); return item?.status === 'completed' ? [item] : []; });
+  const filed = completed.filter((item) => !keptOriginal(item));
+  const named = completed.length - filed.length;
   const later = ids.filter((id) => now(id)?.status === 'ready').length;
   const back = ids.filter((id) => now(id)?.status === 'review').length;
   const text = [
-    filed.length > 0 || (!later && !back) ? renamedCount(filed.length) : '',
+    filed.length > 0 || (!named && !later && !back) ? renamedCount(filed.length) : '',
+    named ? `${named} already had ${named === 1 ? 'its name' : 'their names'}.` : '',
     later ? `${later} will be renamed when the queue is free.` : '',
     back ? `${back} ${back === 1 ? 'needs' : 'need'} review again.` : '',
   ].filter(Boolean).join(' ');
-  return { text, undoable: filed.filter((id) => now(id)?.undoable === true) };
+  return { text, undoable: filed.filter((item) => item.undoable === true).map((item) => item.id) };
 }
 
 /**

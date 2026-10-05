@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SUPPORT_LINKS } from './bridge';
 import { createInMemoryBridge } from './inMemoryBridge';
+import { humanizeReason } from './reasons';
 import type { QueueItem } from '../types';
 
 describe('createInMemoryBridge onboarding state', () => {
@@ -274,6 +275,26 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
     await bridge.approve('lease', '  2024-05-01 Lease.PDF ', ' A lease. ');
 
     expect((await bridge.listItems())[0]).toMatchObject({ status: 'completed', proposedFilename: '2024-05-01 Lease.PDF', filedName: '2024-05-01 Lease.PDF', description: 'A lease.', undoable: true });
+  });
+
+  // Pipeline::complete_already_named: filed where it is, a name that is the
+  // document's own (as Windows compares names) completes it without a rename,
+  // with nothing to undo, and says why.
+  it('completes an approval of the name a document already has as kept, not renamed', async () => {
+    const named = (id: string): QueueItem => ({ id, originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' });
+    const bridge = createInMemoryBridge({ items: [named('same'), named('case')] });
+
+    await bridge.approve('same', '2024-05-01 Lease.pdf', '');
+    await bridge.approve('case', '2024-05-01 lease.PDF', '');
+
+    for (const item of await bridge.listItems()) {
+      expect(item, item.id).toMatchObject({ status: 'completed', keptOriginal: true, undoable: false, reason: humanizeReason('ALREADY_NAMED') });
+      expect(item, item.id).not.toHaveProperty('filedName');
+    }
+    // Filed into a destination folder, the same name is a rename into it.
+    const filing = createInMemoryBridge({ items: [named('same')], settings: { destination: 'C:\\Filed' } });
+    await filing.approve('same', '2024-05-01 Lease.pdf', '');
+    expect((await filing.listItems())[0]).toMatchObject({ status: 'completed', keptOriginal: false, undoable: true, filedName: '2024-05-01 Lease.pdf' });
   });
 
   it('can keep an approval for later while another document is processing, as begin_applying does', async () => {

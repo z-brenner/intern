@@ -4,7 +4,7 @@ import { App } from '../../App';
 import { SUPPORTED_FORMATS_LABEL } from '../../lib/formats';
 import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
-import type { AddReport } from '../../types';
+import type { AddReport, QueueItem } from '../../types';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
 
 describe('queue interactions', () => {
@@ -586,6 +586,43 @@ describe('queue interactions', () => {
     const result = await screen.findByRole('group', { name: 'Action result' });
     expect(result).toHaveTextContent('Renamed 1 document. 2 will be renamed when the queue is free.');
     expect(within(result).getByRole('button', { name: 'Undo this rename' })).toBeEnabled();
+  });
+
+  // Pipeline::complete_already_named: approving the name a document already
+  // has completes it as kept, with nothing renamed and nothing to undo. It
+  // was announced as "Renamed", and counted among the renames Undo offered.
+  it('does not call an approval of the name a document already has a rename', async () => {
+    const items: QueueItem[] = [
+      { id: 'named', originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' },
+      { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
+    ];
+    render(<App bridge={createInMemoryBridge({ items })} />);
+    await selectRow(await screen.findByRole('row', { name: /2024-05-01 Lease\.pdf/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
+
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('2024-05-01 Lease.pdf already had this name, so nothing was renamed. Next: memo.pdf.'));
+    expect(screen.getByRole('status', { name: 'Action status' })).not.toHaveTextContent('Renamed');
+    expect(screen.queryByRole('group', { name: 'Action result' })).not.toBeInTheDocument();
+  });
+
+  it('counts what Apply all ready found already named apart from what it renamed', async () => {
+    const items: QueueItem[] = [
+      { id: 'named', originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' },
+      { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
+      { id: 'notice', originalFilename: 'notice.pdf', status: 'ready', proposedFilename: '2024-05-03 Notice.pdf' },
+    ];
+    const base = createInMemoryBridge({ items });
+    const undo = vi.fn(base.undo);
+    render(<App bridge={{ ...base, undo }} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply all ready' }));
+
+    const result = await screen.findByRole('group', { name: 'Action result' });
+    expect(result).toHaveTextContent('Renamed 2 documents. 1 already had its name.');
+    fireEvent.click(within(result).getByRole('button', { name: 'Undo these 2 renames' }));
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Action result' })).toHaveTextContent('Undid 2 renames.'));
+    expect(undo.mock.calls.map(([id]) => id)).toEqual(['memo', 'notice']);
   });
 
   /**

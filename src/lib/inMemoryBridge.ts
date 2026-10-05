@@ -13,6 +13,9 @@ import { isParked, retryAccepted } from '../features/review/actions';
 /** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
 const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
 
+/** A filename as Windows compares two in one folder, as pipeline.rs name_key does: regardless of case and of trailing dots and spaces. */
+const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
+
 /** Exact size of the single pinned model file this build downloads. */
 export const PINNED_MODEL_BYTES = 1_280_835_840;
 
@@ -466,6 +469,14 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       // A name a person approved is theirs: Settings' organisation names no
       // longer recompose it.
       composedNames.delete(id);
+      // Pipeline::complete_already_named: filed in its own folder (no
+      // destination, flat), a name that is already the document's has
+      // nowhere to go. It completes as kept, with nothing to undo, and says
+      // why nothing moved - before any wait for a busy queue, as there.
+      if (!settings.destination.trim() && settings.destinationLayout === 'flat' && fileNameKey(name) === fileNameKey(item.originalFilename)) {
+        replace({ ...settledFields(item), status: 'completed', proposedFilename: name, description: description.trim(), undoable: false, keptOriginal: true, reason: humanizeReason('ALREADY_NAMED') });
+        return;
+      }
       // APPLY_DEFERRED: the approval is kept and the command succeeds, but
       // the document is not renamed yet.
       if (options.deferApprovalsWhileBusy && items.some((entry) => entry.id !== id && entry.status === 'processing')) {
