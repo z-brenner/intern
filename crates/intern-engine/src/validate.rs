@@ -547,11 +547,7 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
         // Amendment to the Consulting Agreement dated September 1, 2020"
         // states the *consulting agreement's* date, and opens with "This".
         let wide = window_start(normalized, position, WIDE);
-        let noun_at = DOCUMENT_NOUNS
-            .iter()
-            .filter_map(|noun| rfind_word(before, noun))
-            .filter(|&at| at >= wide)
-            .max();
+        let noun_at = last_document_noun(before).filter(|&at| at >= wide);
         return noun_at.is_some_and(|at| !determined_by_this(before, at));
     }
     // A citation runs straight into the date it cites: "issued under the MSA
@@ -665,11 +661,49 @@ fn determined_by_this(before: &str, noun_at: usize) -> bool {
 /// the "Agreement" a defined term's parenthesis follows.
 fn noun_ending(text: &str) -> Option<usize> {
     let text = text.trim_end();
-    DOCUMENT_NOUNS.iter().find_map(|noun| {
-        text.strip_suffix(noun)
-            .filter(|lead| !lead.chars().next_back().is_some_and(char::is_alphanumeric))
-            .map(str::len)
-    })
+    last_word_start(text).filter(|&start| is_document_noun(&text[start..]))
+}
+
+/// Where the last document noun in `text` begins: a word [`is_document_noun`]
+/// accepts, read whole.
+fn last_document_noun(text: &str) -> Option<usize> {
+    let mut end = text.len();
+    loop {
+        let lead = text[..end].trim_end_matches(|character: char| !character.is_alphanumeric());
+        let start = last_word_start(lead)?;
+        if is_document_noun(&lead[start..]) {
+            return Some(start);
+        }
+        end = start;
+    }
+}
+
+/// Where the run of letters and digits `text` ends on begins, or `None`
+/// when `text` does not end on one.
+fn last_word_start(text: &str) -> Option<usize> {
+    if !text.chars().next_back().is_some_and(char::is_alphanumeric) {
+        return None;
+    }
+    Some(
+        text.char_indices()
+            .rev()
+            .find(|(_, character)| !character.is_alphanumeric())
+            .map_or(0, |(at, character)| at + character.len_utf8()),
+    )
+}
+
+/// Whether a whole word names a document: one of [`DOCUMENT_NOUNS`], in the
+/// plural as well ("the Loan Agreements", "Change Orders", "memoranda"),
+/// and with "sub" in front ("the Subcontract"). Nothing else runs into the
+/// noun, so a contractor, a subcontractor, a border and a disagreement name
+/// no document.
+fn is_document_noun(word: &str) -> bool {
+    let word = word.strip_prefix("sub").unwrap_or(word);
+    word == "memoranda"
+        || DOCUMENT_NOUNS.iter().any(|noun| {
+            word.strip_prefix(noun)
+                .is_some_and(|plural| plural.is_empty() || plural == "s")
+        })
 }
 
 /// The last place `word` stands in `haystack` as a whole word, with no
@@ -1681,6 +1715,8 @@ The Consultant will provide services commencing April 15, 2026.
             "Signed at the border, dated April 1, 2026",
             "Settled after a long disagreement, dated April 1, 2026",
             "Work performed by a subcontractor dated April 1, 2026",
+            "Work performed by our subcontractors dated April 1, 2026",
+            "Signed by both contractors dated April 1, 2026",
             // Nor is "updated" the word "dated".
             "Exhibit B to the Agreement, updated April 1, 2026",
         ] {
@@ -1690,9 +1726,39 @@ The Consultant will provide services commencing April 15, 2026.
             "under the Contract dated April 1, 2026",
             "the Purchase Order dated April 1, 2026",
             "a Memorandum dated April 1, 2026",
+            // Whole words are still nouns in the plural and with "sub" in
+            // front: matching the singular exactly let each of these cited
+            // dates through as the document's own.
+            "It supersedes the prior agreements dated April 1, 2026",
+            "This Amendment amends the Loan Agreements dated April 1, 2026",
+            "Invoice for Purchase Orders dated April 1, 2026",
+            "This Change Order supplements the Change Orders dated April 1, 2026",
+            "Issued under the Subcontract dated April 1, 2026",
+            "the Board memoranda dated April 1, 2026",
+            "under the Loan Agreements (the \"Agreements\") dated April 1, 2026",
         ] {
             assert!(reference_at(line, "2026-04-01"), "{line}");
         }
+
+        // End to end: the cited agreements' date was filed Ready as the
+        // amendment's own, with the amendment's real date beside it.
+        let mut candidate = proposal();
+        candidate.document_type = Some("Amendment".into());
+        candidate.document_date = Some("2023-06-02".into());
+        candidate.date_role = Some(DateRole::Amendment);
+        let outcome = validate_at(
+            candidate,
+            &digest_of(
+                "AMENDMENT\nThis Amendment amends the Loan Agreements dated June 2, 2023 between Acme Corporation and Contoso Worldwide, Inc.\nThis Amendment is effective as of April 1, 2026.\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-01"),
+            "{:?}",
+            outcome.reasons
+        );
 
         let mut candidate = proposal();
         candidate.document_type = Some("Services Schedule".into());
