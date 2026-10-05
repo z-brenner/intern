@@ -40,8 +40,14 @@ describe('what the site says about the network', () => {
     expect(hours).toBe(6);
     const pages = await sitePages();
     expect(pages.map((page) => page.name)).toEqual(['guide.html', 'index.html']);
+    const retracted = /no background poll|no timer|only when you press|only two network requests/i;
     for (const { name, html } of pages) {
-      expect(text(html), name).not.toMatch(/no background poll|no timer|only when you press|only two network requests/i);
+      // The words a reader sees, and the markup as well, whitespace collapsed:
+      // an attribute, an SVG label, or a comment is where an old promise
+      // survives a rewrite of the prose. Only the offending phrase is
+      // reported, not the whole page.
+      expect(retracted.exec(text(html))?.[0], name).toBeUndefined();
+      expect(retracted.exec(html.replace(/\s+/g, ' '))?.[0], `${name} markup`).toBeUndefined();
       // Both pages describe the check, so both must name its schedule.
       expect(text(html), name).toContain(`every ${hours} hours`);
     }
