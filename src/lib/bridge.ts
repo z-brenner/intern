@@ -110,12 +110,17 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
    * sends nothing but a request for the release manifest - no filenames, no
    * document contents, no identifier of any kind - and runs once when Intern
    * starts, again on a fixed interval for as long as it keeps running, and
-   * whenever someone presses the button in Settings. Nothing is downloaded or
-   * installed by a check on its own; that is always a separate, explicit click.
+   * whenever someone presses the button in Settings. The first two stop when
+   * `skipUpdateChecks` is set; the button always works. Nothing is downloaded
+   * or installed by a check on its own; that is always a separate, explicit
+   * click.
    */
   checkForUpdate(): Promise<UpdateStatus>;
-  /** Download and install the update found by the last check. */
-  installUpdate(): Promise<void>;
+  /**
+   * Download and install the update found by the last check. `onProgress`
+   * hears how much of the download has arrived as it arrives.
+   */
+  installUpdate(onProgress?: UpdateProgressListener): Promise<void>;
   /** Current shared-intake watcher status. Resolves with zeros when intake is disabled. */
   intakeStatus(): Promise<IntakeStatus>;
   /** Wake the intake watcher for an immediate scan. No-op when intake is disabled. */
@@ -208,6 +213,12 @@ export interface IntakeEventSource {
 export interface DescriptionsEventSource {
   subscribeDescriptions(handler: (status: DescriptionsStatus) => void): () => void;
 }
+
+/**
+ * How far an update download has got, from 0 to 1, or `undefined` while it
+ * downloads from a server that did not say how large it is.
+ */
+export type UpdateProgressListener = (fraction: number | undefined) => void;
 
 export type UpdateStatus =
   | { state: 'current'; currentVersion: string }

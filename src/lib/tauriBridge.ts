@@ -1,6 +1,8 @@
 import type { MicrosoftIntakeStatus, MicrosoftDevicePrompt, MicrosoftSignInProgress, MicrosoftFolderBinding } from '../features/intake/microsoft';
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
+// Types only: the plugin itself is still imported lazily, below.
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import type {
@@ -13,6 +15,7 @@ import type {
   SelectionBoundary,
   SelectionResult,
   SupportLinkTarget,
+  UpdateProgressListener,
   UpdateStatus,
 } from './bridge';
 import { humanizeReason } from './reasons';
@@ -21,7 +24,7 @@ import { humanizeReason } from './reasons';
  * The update found by the last check, held so that installing it cannot race a
  * second lookup and install something other than what the user was shown.
  */
-let pendingUpdate: { version: string; body?: string; date?: string; downloadAndInstall(): Promise<void> } | undefined;
+let pendingUpdate: { version: string; body?: string; date?: string; downloadAndInstall(onEvent?: (event: DownloadEvent) => void): Promise<void> } | undefined;
 
 export interface TauriEvent<T> {
   event: string;
@@ -259,15 +262,32 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return { state: 'available', currentVersion, version: update.version, notes: update.body, date: update.date };
   }
 
-  async installUpdate(): Promise<void> {
+  async installUpdate(onProgress?: UpdateProgressListener): Promise<void> {
     if (!pendingUpdate) throw new Error('No update has been found to install');
+    // The plugin reports the size once and then each chunk as it lands, so
+    // the fraction is a running total. A server that sends no length gets an
+    // honest "downloading" rather than a percentage of nothing.
+    let total: number | undefined;
+    let received = 0;
+    const report = (event: DownloadEvent) => {
+      if (event.event === 'Started') {
+        total = event.data.contentLength || undefined;
+        received = 0;
+        onProgress?.(total === undefined ? undefined : 0);
+      } else if (event.event === 'Progress') {
+        received += event.data.chunkLength;
+        onProgress?.(total === undefined ? undefined : Math.min(1, received / total));
+      } else {
+        onProgress?.(1);
+      }
+    };
     // downloadAndInstall verifies the signature against the public key in
     // tauri.conf.json before it writes anything. An update signed by any other
     // key is rejected here, not after installation.
     // On Windows this hands off to the NSIS installer, which closes Intern to
     // replace it, so there is no relaunch call here to fail after the process
     // has already gone.
-    await pendingUpdate.downloadAndInstall();
+    await pendingUpdate.downloadAndInstall(report);
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {

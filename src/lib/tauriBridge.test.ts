@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { check } from '@tauri-apps/plugin-updater';
+import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import {
   TauriBridge,
@@ -6,6 +8,18 @@ import {
   type TauriEvent,
   type TauriTransport,
 } from './tauriBridge';
+
+// The bridge imports both lazily, so these stand in for them when it does.
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: vi.fn() }));
+vi.mock('@tauri-apps/api/app', () => ({ getVersion: async () => '0.1.0-alpha.10' }));
+
+/** An update whose download replays `events`, as the updater plugin reports them. */
+function updateDownloading(events: DownloadEvent[]) {
+  vi.mocked(check).mockResolvedValue({
+    version: '0.1.0-alpha.11',
+    downloadAndInstall: async (onEvent?: (event: DownloadEvent) => void) => { events.forEach((event) => onEvent?.(event)); },
+  } as unknown as Awaited<ReturnType<typeof check>>);
+}
 
 function fakeTransport(responses: Record<string, unknown> = {}) {
   const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
@@ -456,5 +470,36 @@ describe('TauriBridge', () => {
     ] });
     unsubscribe();
     expect(fake.unlisten.get('tauri://drag-drop')).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an update download as the share of its advertised size that has arrived', async () => {
+    updateDownloading([
+      { event: 'Started', data: { contentLength: 200 } },
+      { event: 'Progress', data: { chunkLength: 84 } },
+      { event: 'Progress', data: { chunkLength: 116 } },
+      { event: 'Finished' },
+    ]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    expect(await bridge.checkForUpdate()).toMatchObject({ state: 'available', version: '0.1.0-alpha.11' });
+
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction));
+
+    expect(seen).toEqual([0, 0.42, 1, 1]);
+  });
+
+  it('reports a download of unknown size without inventing a percentage', async () => {
+    updateDownloading([
+      { event: 'Started', data: {} },
+      { event: 'Progress', data: { chunkLength: 84 } },
+      { event: 'Finished' },
+    ]);
+    const bridge = new TauriBridge(fakeTransport().transport);
+    await bridge.checkForUpdate();
+
+    const seen: Array<number | undefined> = [];
+    await bridge.installUpdate((fraction) => seen.push(fraction));
+
+    expect(seen).toEqual([undefined, undefined, 1]);
   });
 });

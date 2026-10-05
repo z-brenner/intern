@@ -81,6 +81,12 @@ export interface AppSettings {
   /** Start Intern automatically when the user signs in. */
   startAtLogin: boolean;
   /**
+   * Do not ask GitHub for a newer release at launch or on the six-hour timer.
+   * Off (checks on) unless a person turns it on; Check for updates in Settings
+   * still works either way. Absent in a file written before alpha.11.
+   */
+  skipUpdateChecks?: boolean;
+  /**
    * Write a description record beside every document filed into the
    * destination (`<destination>/.intern/descriptions/`), so a SharePoint
    * column can be filled from it. Needs a destination folder.
