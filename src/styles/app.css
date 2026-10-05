@@ -6,9 +6,25 @@
 */
 
 /* ---------- shell ---------- */
-.app-shell { min-height: 100vh; display: grid; grid-template: 72px 1fr / 230px minmax(0, 1fr); background: var(--surface); }
-.workspace { min-width: 0; display: flex; overflow: hidden; }
-.queue-panel { min-width: 0; flex: 1; padding: 18px 10px 0; display: flex; flex-direction: column; }
+/*
+  Bounded to the window. The shell used to be min-height: 100vh over a 1fr
+  row, so it grew with its content: at the default 1200x800 window the
+  Approve button sat below the fold, and selecting a late row in a long queue
+  scrolled the whole page - header, nav and all - away from the inspector.
+  Now the page never scrolls; the table and the inspector each scroll in
+  their own box. The update banner has a row of its own above the header:
+  as an unplaced grid child it was auto-placed into the 230x72 corner cell
+  and painted under the header.
+*/
+.app-shell {
+  height: 100vh; overflow: hidden; display: grid; background: var(--surface);
+  grid-template: auto 72px minmax(0, 1fr) / 230px minmax(0, 1fr);
+  grid-template-areas: 'banner banner' 'header header' 'nav main';
+}
+.app-shell > .note--update { grid-area: banner; margin: 0; border-width: 0 0 1px 3px; border-radius: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 24px; }
+.app-shell > .note--update .update-actions { margin: 0 0 0 auto; }
+.workspace { grid-area: main; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.queue-panel { min-width: 0; min-height: 0; flex: 1; padding: 18px 10px 0; display: flex; flex-direction: column; }
 
 /* ---------- controls ---------- */
 button, input, textarea { font: inherit; }
@@ -76,7 +92,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .section-lead { margin: 0 0 14px; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
 
 /* ---------- header ---------- */
-.app-header { grid-column: 1 / -1; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 24px 0 28px; background: var(--surface); }
+.app-header { grid-area: header; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 0 24px 0 28px; background: var(--surface); }
 .product { display: flex; align-items: center; gap: 24px; min-width: 0; }
 .product strong { font-family: var(--font-display); font-size: 34px; font-weight: 700; letter-spacing: -.85px; line-height: 1; color: var(--brand-navy); white-space: nowrap; }
 .brand-tag { font-size: 13px; font-weight: 400; font-variant-caps: small-caps; letter-spacing: .06em; color: var(--text-muted); margin-left: 10px; }
@@ -87,7 +103,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .header-actions { display: flex; gap: 10px; align-items: center; }
 
 /* ---------- sidebar ---------- */
-.sidebar { display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
+.sidebar { grid-area: nav; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
 .sidebar .nav-item { border: 0; border-left: 3px solid transparent; background: transparent; width: 100%; min-height: 44px; padding: 0 18px; display: flex; gap: 13px; align-items: center; text-align: left; font-size: 13px; font-weight: 500; color: var(--text); transition: background-color .12s ease; }
 .sidebar .nav-item:hover { background: var(--surface-subtle); }
 .sidebar .nav-item.active { background: var(--brand-tint); border-left-color: var(--accent); color: var(--brand-navy); font-weight: 600; }
@@ -129,7 +145,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .queue-filter input::placeholder { color: var(--text-muted); }
 .queue-filter-empty { margin: 0; padding: 32px 10px; color: var(--text-muted); font-size: 13px; }
 
-.table-wrap { overflow-x: auto; }
+/* The table is the queue's vertical scroller, not the panel: it is already the
+   horizontal one, which makes it the box a sticky header sticks to. */
+.table-wrap { flex: 1; min-height: 0; overflow: auto; }
+/* A collapsed border belongs to the table and scrolls away; the shadow stays with the header. */
+.table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
 .table-wrap th { text-align: left; padding: 6px 16px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table-wrap th:nth-child(1) { width: 29%; }
@@ -173,7 +193,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .item-count { color: var(--text-muted); padding: 14px 10px; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: auto; }
 
 /* ---------- review inspector ---------- */
-.inspector { flex: 0 0 370px; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); }
+/* min-height: 0 lets the inspector be shorter than its content, so it scrolls
+   by itself and the sticky actions below have a scrollport to stick to. */
+.inspector { flex: 0 0 370px; min-height: 0; border-left: 1px solid var(--border); box-shadow: var(--shadow-inspector); padding: 22px 24px 0; overflow-y: auto; font-size: 14px; background: var(--surface); }
 .inspector-title, .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .inspector h2, .dialog-head h2 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -.2px; }
 .inspector h3 { font-family: var(--font-display); font-size: 14px; font-weight: 600; margin: 0 0 10px; }

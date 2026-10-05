@@ -91,6 +91,74 @@ test.describe('whole-product browser QA', () => {
     await expect(page.getByRole('button', { name: 'Clear history' })).toBeVisible();
   });
 
+  // The Tauri window opens at 1200x800. The shell used to grow with its
+  // content, so the decision buttons sat at y=931 - below the fold on first
+  // launch, with the seeded review item already open beside the queue.
+  test('approve is visible at the default window', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.goto('/');
+    const inspector = page.getByRole('complementary', { name: 'Review item' });
+    await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+
+    await expect(inspector.getByRole('button', { name: 'Approve & rename' })).toBeInViewport({ ratio: 1 });
+    await expect(inspector.getByRole('button', { name: 'Keep original' })).toBeInViewport({ ratio: 1 });
+    // The page itself never scrolls; the table and the inspector do.
+    expect(await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight)).toBeLessThanOrEqual(0);
+  });
+
+  // With a long queue, selecting a late row used to scroll the whole page:
+  // the inspector's content stayed at the top, thousands of pixels above, and
+  // the header and navigation scrolled away with it.
+  test('inspector visible after selecting the last of 60', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.goto('/');
+    await expect(page.getByRole('row')).toHaveCount(9);
+    // Eight seeded rows in the Queue view, plus 52 dropped.
+    await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((zone) => {
+      const transfer = new DataTransfer();
+      for (let index = 1; index <= 52; index += 1) transfer.items.add(new File(['scan'], `Scan ${String(index).padStart(2, '0')}.pdf`, { type: 'application/pdf' }));
+      zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    });
+    await expect(page.getByRole('row')).toHaveCount(61);
+    await expect(page.getByText('60 items')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' }).click();
+    await page.getByRole('button', { name: 'Select Scan 52.pdf' }).click();
+
+    const inspector = page.getByRole('complementary', { name: 'Review item' });
+    await expect(inspector).toContainText('Scan 52.pdf');
+    await expect(inspector.getByRole('heading', { name: 'Review item' })).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole('row', { name: /Scan 52\.pdf/ })).toBeInViewport();
+    expect((await page.locator('.app-header').boundingBox())?.y).toBe(0);
+    await expect(page.getByRole('navigation', { name: 'Queue navigation' })).toBeInViewport();
+    // The column headings stay put above the rows that scrolled under them.
+    const heading = await page.getByRole('columnheader', { name: 'Status' }).boundingBox();
+    const table = await page.locator('.table-wrap').boundingBox();
+    expect(heading && table && Math.abs(heading.y - table.y)).toBeLessThanOrEqual(1);
+  });
+
+  // The banner was an unplaced grid child: auto-placement put it in the
+  // 230x72 top-left cell, pushed the header to the second row, and painted
+  // its Install and Not now buttons underneath the header.
+  test('update banner does not overlap header', async ({ page }) => {
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.goto('/?update=available');
+    const banner = page.getByRole('status', { name: 'Update available' });
+    const install = banner.getByRole('button', { name: /^Install .+ and restart$/ });
+    await expect(install).toBeVisible();
+
+    const [bannerBox, headerBox] = await Promise.all([banner.boundingBox(), page.locator('.app-header').boundingBox()]);
+    expect(bannerBox).toMatchObject({ x: 0, y: 0, width: 1200 });
+    expect(headerBox?.height).toBe(72);
+    expect(headerBox!.y).toBeGreaterThanOrEqual(bannerBox!.y + bannerBox!.height);
+    await expect(banner.getByRole('button', { name: 'Not now' })).toBeInViewport({ ratio: 1 });
+
+    // A real click: Playwright refuses one that something else would receive.
+    await install.click();
+    await expect(banner.getByRole('alert')).toContainText('only available in the desktop application');
+    await expect(page.getByRole('button', { name: 'Approve & rename' })).toBeInViewport({ ratio: 1 });
+  });
+
   test('preserves labels, focus targets, and a non-overflowing inspector drawer at 1024 pixels', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.goto('/');
