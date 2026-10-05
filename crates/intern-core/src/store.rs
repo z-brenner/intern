@@ -1118,6 +1118,36 @@ impl QueueStore {
         Ok(status)
     }
 
+    /// Fails owned processing work at once, for a failure that would come out
+    /// the same on a second attempt: a password, a document past the limits,
+    /// a hosted model that declined it.
+    ///
+    /// `record_processing_failure` gives every failure one more attempt, and
+    /// for these that attempt only re-read the file, or re-sent and re-billed
+    /// the request, before failing anyway. The failure count is raised to at
+    /// least the automatic-retry limit so the row reads like any other
+    /// document that has used its attempts.
+    pub fn record_terminal_failure(&self, id: i64, error: ErrorCode) -> InternResult<()> {
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "UPDATE queue_items
+             SET status = 'failed', processing_failures = MAX(processing_failures + 1, 2),
+                 error_code = ?1, owner_session = NULL, lease_expires_at = NULL,
+                 updated_at = ?2
+             WHERE id = ?3 AND status IN ('extracting', 'analyzing') AND owner_session = ?4",
+                params![error.as_str(), now(), id, self.session_id],
+            )
+            .map_err(InternError::from)?;
+        if changed != 1 {
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "item is not owned processing work",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn create_receipt(
         &self,
         queue_item_id: i64,

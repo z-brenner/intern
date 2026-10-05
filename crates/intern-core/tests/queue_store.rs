@@ -224,6 +224,71 @@ fn automatic_processing_retries_stop_after_two_failures() {
     assert!(db.claim_next().unwrap().is_none());
 }
 
+/// A failure that a second attempt would only repeat fails the document on
+/// the first one, with its own code, and only for the session doing the work.
+#[test]
+fn record_terminal_failure_fails_owned_work_once() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("queue.sqlite3");
+    let db = QueueStore::open(&path).unwrap();
+
+    let locked = db.enqueue(Path::new("locked.docx"), "hl").unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, locked.id);
+    db.record_terminal_failure(locked.id, ErrorCode::PasswordProtected)
+        .unwrap();
+    let failed = &db.list().unwrap()[0];
+    assert_eq!(failed.status, QueueStatus::Failed);
+    assert_eq!(failed.error_code, Some(ErrorCode::PasswordProtected));
+    assert_eq!(failed.processing_failures, 2);
+    assert!(
+        db.claim_next().unwrap().is_none(),
+        "nothing re-queues a terminal failure"
+    );
+    // Once failed it is no longer processing work, so a second report is
+    // refused rather than rewriting the reason.
+    assert_eq!(
+        db.record_terminal_failure(locked.id, ErrorCode::ExtractionFailed)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+
+    // Work that is waiting, or owned by another session, is not this
+    // session's to fail.
+    let waiting = db.enqueue(Path::new("waiting.pdf"), "hw").unwrap();
+    assert_eq!(
+        db.record_terminal_failure(waiting.id, ErrorCode::DocumentTooLarge)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    let other = QueueStore::open(&path).unwrap();
+    assert_eq!(other.claim_next().unwrap().unwrap().id, waiting.id);
+    assert_eq!(
+        db.record_terminal_failure(waiting.id, ErrorCode::DocumentTooLarge)
+            .unwrap_err()
+            .code(),
+        ErrorCode::StateConflict
+    );
+    assert_eq!(other.list().unwrap()[1].status, QueueStatus::Extracting);
+
+    // An item that already used attempts keeps counting up from there.
+    let inspector = rusqlite::Connection::open(&path).unwrap();
+    inspector
+        .execute(
+            "UPDATE queue_items SET processing_failures = 4 WHERE id = ?1",
+            [waiting.id],
+        )
+        .unwrap();
+    other
+        .record_terminal_failure(waiting.id, ErrorCode::ModelDeclined)
+        .unwrap();
+    let declined = &other.list().unwrap()[1];
+    assert_eq!(declined.status, QueueStatus::Failed);
+    assert_eq!(declined.error_code, Some(ErrorCode::ModelDeclined));
+    assert_eq!(declined.processing_failures, 5);
+}
+
 #[test]
 fn clear_terminal_removes_only_terminal_rows() {
     let temp = TempDir::new().unwrap();
