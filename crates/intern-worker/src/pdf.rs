@@ -4,7 +4,7 @@ use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
-use crate::limits::MAX_PAGE_COUNT;
+use crate::limits::{MAX_PAGE_COUNT, render_size_within};
 
 #[cfg(feature = "native-pdfium")]
 use pdfium_render::prelude::*;
@@ -16,9 +16,10 @@ use pdfium_render::prelude::*;
 #[cfg(feature = "native-pdfium")]
 static PDFIUM: std::sync::OnceLock<Result<Pdfium, String>> = std::sync::OnceLock::new();
 
+/// Only [`PdfiumBackend::new`] makes one, so holding one means PDFium bound.
 #[cfg(feature = "native-pdfium")]
 pub struct PdfiumBackend {
-    render_dpi: f32,
+    _bound: (),
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -36,7 +37,7 @@ impl PdfiumBackend {
                 .map(Pdfium::new)
                 .map_err(|error| format!("PDFium did not load: {error:?}"))
         }) {
-            Ok(_) => Ok(Self { render_dpi: 300.0 }),
+            Ok(_) => Ok(Self { _bound: () }),
             Err(message) => Err(ExtractionError::native_assets_missing(message.clone())),
         }
     }
@@ -49,13 +50,6 @@ impl PdfiumBackend {
                 "PDFium was not initialised",
             )),
         }
-    }
-
-    fn page_dimensions(&self, width_points: f32, height_points: f32) -> (u32, u32) {
-        let scale = self.render_dpi / 72.0;
-        let width = (width_points * scale).ceil().max(1.0) as u32;
-        let height = (height_points * scale).ceil().max(1.0) as u32;
-        (width, height)
     }
 }
 
@@ -131,8 +125,10 @@ impl PdfBackend for PdfiumBackend {
         for (page_index, page) in document.pages().iter().enumerate() {
             cancel.check()?;
             let native_text = page.text().map_err(|error| one_line(&error))?.all();
-            let (width_pixels, height_pixels) =
-                self.page_dimensions(page.width().value, page.height().value);
+            // The size at full resolution, unbudgeted: whether a page fits
+            // the render cap is the caller's question to ask of it.
+            let size = render_size_within(page.width().value, page.height().value, u64::MAX);
+            let (width_pixels, height_pixels) = (size.width, size.height);
             let page_area = page.width().value.abs() * page.height().value.abs();
             let image_area = page
                 .objects()
@@ -155,10 +151,11 @@ impl PdfBackend for PdfiumBackend {
         Ok(inspections)
     }
 
-    fn render(
+    fn render_within(
         &self,
         path: &Path,
         page_index: usize,
+        max_pixels: u64,
         cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         cancel.check()?;
@@ -168,10 +165,13 @@ impl PdfBackend for PdfiumBackend {
             .pages()
             .get(page_index as i32)
             .map_err(|error| one_line(&error))?;
-        let (width, height) = self.page_dimensions(page.width().value, page.height().value);
+        let size = render_size_within(page.width().value, page.height().value, max_pixels);
+        // PDFium scales to the target width and then, if the height that
+        // gives passes the maximum, scales down to that instead, so the
+        // bitmap it allocates is never larger than the size computed here.
         let config = PdfRenderConfig::new()
-            .set_target_width(width as i32)
-            .set_maximum_height(height as i32);
+            .set_target_width(size.width as i32)
+            .set_maximum_height(size.height as i32);
         let image = page
             .render_with_config(&config)
             .map_err(|error| one_line(&error))?
@@ -208,10 +208,11 @@ impl PdfBackend for PdfiumBackend {
         ))
     }
 
-    fn render(
+    fn render_within(
         &self,
         _path: &Path,
         _page_index: usize,
+        _max_pixels: u64,
         _cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         Err(ExtractionError::native_assets_missing(

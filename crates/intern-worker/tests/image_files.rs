@@ -4,12 +4,14 @@
 //! so the frame count is exactly what the test says it is.
 
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
+use image::{GenericImageView, Rgb, RgbImage};
 use intern_worker::extract::{
-    CancellationToken, ExtractionError, ExtractionWarning, OcrBackend, OcrResult, RenderedPage,
-    extract_image,
+    CancellationToken, ExtractionError, ExtractionWarning, OcrBackend, OcrResult, PageSource,
+    RenderedPage, extract_image,
 };
-use intern_worker::limits::ResourceLimits;
+use intern_worker::limits::{MAX_IMAGE_FILE_PIXELS, MAX_PAGE_PIXELS, ResourceLimits};
 
 struct FakeOcr;
 
@@ -126,4 +128,91 @@ fn a_png_is_never_reported_as_truncated() {
 
     assert!(!document.truncated);
     assert!(Path::new(&path).exists());
+}
+
+/// An OCR engine that keeps a copy of every page it was given.
+#[derive(Clone, Default)]
+struct KeepingOcr {
+    pages: Arc<Mutex<Vec<image::DynamicImage>>>,
+}
+
+impl OcrBackend for KeepingOcr {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        self.pages.lock().unwrap().push(page.image.clone());
+        Ok(OcrResult::new("RECEIPT 0417 TOTAL 42.10", 91.0))
+    }
+}
+
+/// A phone's 48-megapixel photo of a receipt used to be refused outright for
+/// being over the 25-megapixel page cap, and the document was lost. It is
+/// decoded and scaled down to the cap instead, keeping its proportions, and
+/// read like any other page.
+///
+/// The limits are the real ones at a thousandth of the size - a 25,000-pixel
+/// page cap and a 100,000-pixel file cap - so the test decodes and scales
+/// 48,000 pixels rather than 48 million.
+#[test]
+fn oversized_photo_is_downscaled_before_ocr() {
+    let limits = ResourceLimits {
+        max_page_pixels: MAX_PAGE_PIXELS / 1_000,
+        max_image_file_pixels: MAX_IMAGE_FILE_PIXELS / 1_000,
+        ..ResourceLimits::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("receipt.jpg");
+    // 240 x 200, black on the left and white on the right, so a crop would
+    // show as a page of one colour.
+    RgbImage::from_fn(240, 200, |x, _| {
+        if x < 120 {
+            Rgb([0, 0, 0])
+        } else {
+            Rgb([255, 255, 255])
+        }
+    })
+    .save(&path)
+    .unwrap();
+    let ocr = KeepingOcr::default();
+
+    let document = extract_image(&path, &ocr, &limits, &CancellationToken::new()).unwrap();
+
+    let pages = ocr.pages.lock().unwrap();
+    assert_eq!(pages.len(), 1);
+    let (width, height) = pages[0].dimensions();
+    assert!(
+        u64::from(width) * u64::from(height) <= limits.max_page_pixels,
+        "{width} x {height}"
+    );
+    // As large as fits, in the photo's proportions: 0.72 of each edge.
+    assert_eq!((width, height), (173, 144));
+    let left = pages[0].to_rgb8().get_pixel(10, height / 2).0[0];
+    let right = pages[0].to_rgb8().get_pixel(width - 10, height / 2).0[0];
+    assert!(left < 64 && right > 192, "left {left}, right {right}");
+    assert_eq!(document.pages[0].source, PageSource::Ocr);
+    assert_eq!(document.pages[0].text, "RECEIPT 0417 TOTAL 42.10");
+    assert!(document.optional_image.is_some());
+}
+
+/// The decode cap still holds: a file over it is refused before any pixel
+/// of it is decoded, and nothing reaches OCR.
+#[test]
+fn a_photo_over_the_decode_cap_is_still_refused() {
+    let limits = ResourceLimits {
+        max_page_pixels: MAX_PAGE_PIXELS / 1_000,
+        max_image_file_pixels: MAX_IMAGE_FILE_PIXELS / 1_000,
+        ..ResourceLimits::default()
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("panorama.png");
+    // 100,001 pixels.
+    RgbImage::new(100_001, 1).save(&path).unwrap();
+    let ocr = KeepingOcr::default();
+
+    let error = extract_image(&path, &ocr, &limits, &CancellationToken::new()).unwrap_err();
+
+    assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
+    assert!(ocr.pages.lock().unwrap().is_empty());
 }

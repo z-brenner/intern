@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -10,12 +10,30 @@ use intern_worker::extract::{
     PdfPageInspection, RenderedPage, apply_detected_rotation, extract_pdf, normalize_vision_image,
     page_needs_ocr,
 };
-use intern_worker::limits::{MAX_PAGE_MEGAPIXELS, ResourceLimits};
+use intern_worker::limits::{
+    MAX_PAGE_MEGAPIXELS, MAX_PAGE_PIXELS, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
+    render_size_within,
+};
 
+/// A PDF whose pages are the inspections it is given, sized the way PDFium
+/// sizes them: an inspection's pixels are its page at 300 DPI, and a render
+/// within a budget is the size [`render_size_within`] gives that page.
 #[derive(Clone)]
 struct FakePdf {
     pages: Vec<PdfPageInspection>,
     renders: Arc<AtomicUsize>,
+    /// The pixel budget each render was asked to keep within.
+    budgets: Arc<Mutex<Vec<u64>>>,
+}
+
+impl FakePdf {
+    fn new(pages: Vec<PdfPageInspection>) -> Self {
+        Self {
+            pages,
+            renders: Arc::new(AtomicUsize::new(0)),
+            budgets: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
 }
 
 impl PdfBackend for FakePdf {
@@ -27,15 +45,23 @@ impl PdfBackend for FakePdf {
         Ok(self.pages.clone())
     }
 
-    fn render(
+    fn render_within(
         &self,
         _path: &Path,
         page_index: usize,
+        max_pixels: u64,
         _cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         self.renders.fetch_add(1, Ordering::SeqCst);
+        self.budgets.lock().unwrap().push(max_pixels);
         let page = &self.pages[page_index];
-        let image = DynamicImage::ImageRgb8(RgbImage::new(page.width_pixels, page.height_pixels));
+        let points = |pixels: u32| (f64::from(pixels) * 72.0 / RENDER_DPI) as f32;
+        let size = render_size_within(
+            points(page.width_pixels),
+            points(page.height_pixels),
+            max_pixels,
+        );
+        let image = DynamicImage::ImageRgb8(RgbImage::new(size.width, size.height));
         Ok(RenderedPage::new(page_index, image))
     }
 }
@@ -55,6 +81,23 @@ impl OcrBackend for FakeOcr {
     }
 }
 
+/// An OCR engine that remembers the size of every page it was given.
+#[derive(Clone, Default)]
+struct MeasuringOcr {
+    sizes: Arc<Mutex<Vec<(u32, u32)>>>,
+}
+
+impl OcrBackend for MeasuringOcr {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        self.sizes.lock().unwrap().push(page.image.dimensions());
+        Ok(OcrResult::new("RECEIPT 0417 TOTAL 42.10", 91.0))
+    }
+}
+
 fn page(text: &str, coverage: f32) -> PdfPageInspection {
     PdfPageInspection {
         page_index: 0,
@@ -69,11 +112,7 @@ fn route(
     pages: Vec<PdfPageInspection>,
     ocr: Vec<OcrResult>,
 ) -> (intern_worker::extract::ExtractedDocument, usize) {
-    let renders = Arc::new(AtomicUsize::new(0));
-    let pdf = FakePdf {
-        pages,
-        renders: Arc::clone(&renders),
-    };
+    let pdf = FakePdf::new(pages);
     let result = extract_pdf(
         Path::new("fixture.pdf"),
         &pdf,
@@ -82,7 +121,7 @@ fn route(
         &CancellationToken::new(),
     )
     .unwrap();
-    (result, renders.load(Ordering::SeqCst))
+    (result, pdf.renders.load(Ordering::SeqCst))
 }
 
 #[test]
@@ -231,20 +270,40 @@ fn osd_rotation_is_applied_clockwise_for_all_supported_quarter_turns() {
     assert_eq!(two_seventy.to_rgb8().get_pixel(0, 1), &Rgb([255, 0, 0]));
 }
 
+/// The budget is what the render is asked for, and the cap is still what
+/// the render is held to: a backend that hands back more than it was asked
+/// for is refused on the size it actually produced.
 #[test]
-fn render_over_twenty_five_megapixels_is_rejected_before_allocation() {
-    let mut oversized = page("", 1.0);
-    oversized.width_pixels = 5_001;
-    oversized.height_pixels = 5_000;
-    let renders = Arc::new(AtomicUsize::new(0));
-    let pdf = FakePdf {
-        pages: vec![oversized],
-        renders: Arc::clone(&renders),
-    };
+fn a_render_over_twenty_five_megapixels_is_still_refused() {
+    struct IgnoresTheBudget;
+
+    impl PdfBackend for IgnoresTheBudget {
+        fn inspect(
+            &self,
+            _path: &Path,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+            let mut oversized = page("", 1.0);
+            oversized.width_pixels = 5_001;
+            oversized.height_pixels = 5_000;
+            Ok(vec![oversized])
+        }
+
+        fn render_within(
+            &self,
+            _path: &Path,
+            page_index: usize,
+            _max_pixels: u64,
+            _cancel: &CancellationToken,
+        ) -> Result<RenderedPage, ExtractionError> {
+            let image = DynamicImage::ImageRgb8(RgbImage::new(5_001, 5_000));
+            Ok(RenderedPage::new(page_index, image))
+        }
+    }
 
     let error = extract_pdf(
         Path::new("oversized.pdf"),
-        &pdf,
+        &IgnoresTheBudget,
         &FakeOcr { results: vec![] },
         &ResourceLimits::default(),
         &CancellationToken::new(),
@@ -253,7 +312,6 @@ fn render_over_twenty_five_megapixels_is_rejected_before_allocation() {
 
     assert_eq!(MAX_PAGE_MEGAPIXELS, 25);
     assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
-    assert_eq!(renders.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -278,10 +336,7 @@ fn cancellation_stops_between_pages() {
     first.page_index = 0;
     let mut second = page("", 1.0);
     second.page_index = 1;
-    let pdf = FakePdf {
-        pages: vec![first, second],
-        renders: Arc::new(AtomicUsize::new(0)),
-    };
+    let pdf = FakePdf::new(vec![first, second]);
 
     let error = extract_pdf(
         Path::new("cancel.pdf"),
@@ -374,29 +429,90 @@ fn a_large_format_text_page_is_extracted_without_rendering() {
     assert!(document.pages[0].text.contains("FOUNDATION PLAN"));
 }
 
-/// The same sheet with nothing in its text layer still cannot be read
-/// without rendering it, and that is a resource limit rather than a silent
-/// empty page.
+/// The same sheet with nothing in its text layer has to be rendered to be
+/// read, and at 300 DPI it is over the render cap. It used to fail the whole
+/// document; it is rendered at the resolution that fits instead - a phone
+/// photo of a receipt that some tool turned into a PDF at 72 DPI is a
+/// 4032 x 3024 point page, about 212 megapixels at 300 DPI, and Tesseract
+/// reads it perfectly well at the hundred or so that fit.
 #[test]
-fn a_large_format_scanned_page_is_still_a_resource_limit() {
-    let mut scan = page("", 1.0);
-    scan.width_pixels = 7_020;
-    scan.height_pixels = 9_930;
-    let renders = Arc::new(AtomicUsize::new(0));
-    let pdf = FakePdf {
-        pages: vec![scan],
-        renders: Arc::clone(&renders),
-    };
+fn large_format_scanned_page_renders_within_budget() {
+    let mut photo = page("", 1.0);
+    // 4032 x 3024 points at 300 DPI.
+    photo.width_pixels = 16_800;
+    photo.height_pixels = 12_600;
+    let pdf = FakePdf::new(vec![photo]);
+    let ocr = MeasuringOcr::default();
 
-    let error = extract_pdf(
-        Path::new("drawing.pdf"),
+    let document = extract_pdf(
+        Path::new("receipt.pdf"),
         &pdf,
-        &FakeOcr { results: vec![] },
+        &ocr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 1);
+    assert_eq!(*pdf.budgets.lock().unwrap(), vec![MAX_PAGE_PIXELS]);
+    let sizes = ocr.sizes.lock().unwrap();
+    assert_eq!(sizes.len(), 1);
+    let (width, height) = sizes[0];
+    assert!(
+        u64::from(width) * u64::from(height) <= MAX_PAGE_PIXELS,
+        "{width} x {height}"
+    );
+    // Downscaled, not cropped: the page keeps its proportions.
+    assert!(
+        (f64::from(width) / f64::from(height) - 4.0 / 3.0).abs() < 0.001,
+        "{width} x {height}"
+    );
+    // And no smaller than it has to be: about 103 DPI, within a pixel of
+    // the most that fits.
+    assert_eq!((width, height), (5_773, 4_330));
+    assert_eq!(document.pages[0].source, PageSource::Ocr);
+    assert_eq!(document.pages[0].text, "RECEIPT 0417 TOTAL 42.10");
+}
+
+/// Downscaling has a floor. A page that would have to be rendered below
+/// 50 DPI to fit is a degenerate file rather than a scan - its text would be
+/// a few pixels tall - and that is still a resource limit, decided before
+/// anything is rendered.
+#[test]
+fn below_floor_dpi_is_resource_limit() {
+    // 30,000 pixels a side at 300 DPI fits 25 megapixels at exactly 50 DPI.
+    let mut at_the_floor = page("", 1.0);
+    at_the_floor.width_pixels = 30_000;
+    at_the_floor.height_pixels = 30_000;
+    let mut below_the_floor = at_the_floor.clone();
+    below_the_floor.width_pixels = 30_001;
+    assert_eq!(MIN_OCR_DPI, 50.0);
+
+    let pdf = FakePdf::new(vec![below_the_floor]);
+    let error = extract_pdf(
+        Path::new("banner.pdf"),
+        &pdf,
+        &MeasuringOcr::default(),
         &ResourceLimits::default(),
         &CancellationToken::new(),
     )
     .unwrap_err();
 
     assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
-    assert_eq!(renders.load(Ordering::SeqCst), 0);
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 0);
+
+    let pdf = FakePdf::new(vec![at_the_floor]);
+    let ocr = MeasuringOcr::default();
+    extract_pdf(
+        Path::new("banner.pdf"),
+        &pdf,
+        &ocr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    assert_eq!(pdf.renders.load(Ordering::SeqCst), 1);
+    let (width, height) = ocr.sizes.lock().unwrap()[0];
+    assert!(u64::from(width) * u64::from(height) <= MAX_PAGE_PIXELS);
 }

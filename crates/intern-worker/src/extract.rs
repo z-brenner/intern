@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::limits::{
-    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, ResourceLimits, VISION_GRID,
+    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI,
+    ResourceLimits, VISION_GRID,
 };
 use crate::temp::TempWorkspace;
 
@@ -331,12 +332,26 @@ pub trait PdfBackend {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError>;
+
+    /// Renders a page at 300 DPI, or, if that would be more than
+    /// `max_pixels`, at the highest resolution that is not.
+    fn render_within(
+        &self,
+        path: &Path,
+        page_index: usize,
+        max_pixels: u64,
+        cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError>;
+
+    /// Renders a page at 300 DPI.
     fn render(
         &self,
         path: &Path,
         page_index: usize,
         cancel: &CancellationToken,
-    ) -> Result<RenderedPage, ExtractionError>;
+    ) -> Result<RenderedPage, ExtractionError> {
+        self.render_within(path, page_index, u64::MAX, cancel)
+    }
 }
 
 pub trait OcrBackend {
@@ -518,9 +533,20 @@ pub fn extract_pdf(
             warnings.push(ExtractionWarning::NativeTextCorrupt);
         }
         // This page has no text worth keeping, so it has to be rendered to be
-        // read at all, and being too large to render is a resource limit.
-        limits.validate_page_pixels(inspection.width_pixels, inspection.height_pixels)?;
-        let rendered = pdf.render(path, inspection.page_index, cancel)?;
+        // read at all. A page too large to render at 300 DPI within the cap -
+        // a phone photo some tool turned into a PDF at 72 DPI, an A2 scan -
+        // is rendered at the resolution that fits, which Tesseract reads
+        // perfectly well; only a page that would need less than the floor
+        // to fit is a resource limit, and that is decided before anything
+        // is rendered.
+        if ocr_render_dpi(&inspection, limits.max_page_pixels) < MIN_OCR_DPI {
+            return Err(ExtractionError::resource_limit(
+                "page is too large to read within 25 megapixels at 50 DPI",
+            ));
+        }
+        let rendered =
+            pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel)?;
+        // The backend sized the render; this is what holds it to that.
         let (render_width, render_height) = rendered.image.dimensions();
         limits.validate_page_pixels(render_width, render_height)?;
         timed_check(cancel, started, limits)?;
@@ -553,6 +579,18 @@ pub fn extract_pdf(
         truncated: false,
         optional_image: vision_candidate,
     })
+}
+
+/// The resolution a page that has to be OCR'd is rendered at: 300 DPI, or as
+/// much less as brings its render within `max_pixels`. The inspection
+/// measured the page at 300 DPI, so the budget scales that.
+fn ocr_render_dpi(inspection: &PdfPageInspection, max_pixels: u64) -> f64 {
+    let pixels = u64::from(inspection.width_pixels) * u64::from(inspection.height_pixels);
+    if pixels <= max_pixels {
+        RENDER_DPI
+    } else {
+        RENDER_DPI * (max_pixels as f64 / pixels as f64).sqrt()
+    }
 }
 
 pub fn normalize_vision_image(
@@ -1013,6 +1051,14 @@ fn has_unread_frames(path: &Path) -> bool {
     next_directory(path).is_some_and(|next| next != 0)
 }
 
+/// Decodes an image file the right way up and no larger than a rendered page
+/// may be.
+///
+/// The file's own size is checked before any pixel is decoded, against a cap
+/// four times the page cap: a 48- or 50-megapixel phone photo of a receipt is
+/// an ordinary document, and refusing it outright lost the document. What is
+/// decoded is then scaled down to the page cap, so OCR, the page image, and
+/// everything after them see exactly the size a rendered PDF page would be.
 pub fn load_oriented_image(
     path: &Path,
     limits: &ResourceLimits,
@@ -1026,15 +1072,34 @@ pub fn load_oriented_image(
         .into_decoder()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let (encoded_width, encoded_height) = decoder.dimensions();
-    limits.validate_page_pixels(encoded_width, encoded_height)?;
+    limits.validate_image_file_pixels(encoded_width, encoded_height)?;
     let orientation = decoder
         .orientation()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let mut image = DynamicImage::from_decoder(decoder)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     image.apply_orientation(orientation);
+    let image = within_page_pixels(image, limits.max_page_pixels);
     limits.validate_page_pixels(image.width(), image.height())?;
     Ok(image.into_rgb8().into())
+}
+
+/// The image scaled down, keeping its proportions, to at most `max_pixels`;
+/// an image already within them is returned as it is.
+fn within_page_pixels(image: DynamicImage, max_pixels: u64) -> DynamicImage {
+    let (width, height) = image.dimensions();
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels <= max_pixels {
+        return image;
+    }
+    // Each edge rounded down, so the two together cannot round back over
+    // the budget they were scaled to meet.
+    let scale = (max_pixels as f64 / pixels as f64).sqrt();
+    let scaled_width = (f64::from(width) * scale).floor().max(1.0) as u32;
+    let scaled_height = (f64::from(height) * scale).floor().max(1.0) as u32;
+    // A triangle filter is a fraction of Lanczos's cost on a 48-megapixel
+    // image and loses nothing OCR can see at this reduction.
+    image.resize_exact(scaled_width, scaled_height, FilterType::Triangle)
 }
 
 #[derive(Debug)]
