@@ -296,12 +296,16 @@ const CONNECTORS: &[&str] = &["of", "and", "the", "for", "to", "with"];
 ///
 /// - a word holding a digit, an apostrophe, or starting "MC" or "MAC" is
 ///   left alone: "O'BRIEN" and "MCDONALD" have capitals in the middle that
-///   only the person who owns the name knows, and "Mcdonald" would be wrong;
+///   only the person who owns the name knows, and "Mcdonald" would be wrong.
+///   "MACHINES" and "MACRO" are words, not surnames, and are cased;
 /// - a company suffix reads the way it is usually written ("INC." becomes
 ///   "Inc.", "GMBH" becomes "GmbH"), and LLC, LLP, PLC, PC, NA and LP stay
 ///   in capitals;
 /// - of, and, the, for, to and with are lower case, except as the first
 ///   word, where they are capitalised like any other word;
+/// - a word followed by a full stop is an abbreviation and is capitalised
+///   ("NO. 2" becomes "No. 2", "ST. LOUIS" becomes "St. Louis"); an
+///   initialism with stops carries them inside ("N.A.") and is kept;
 /// - a word of three letters or fewer stays in capitals ("ABC", "USA"), and
 ///   so does a longer word with no vowel, which is an initialism ("HSBC");
 /// - every other word keeps its first letter and lowercases the rest, after
@@ -350,8 +354,7 @@ fn display_word(word: &str, first: bool) -> String {
     let (lead, core, trail) = (&word[..start], &word[start..end], &word[end..]);
     if core.chars().any(char::is_numeric)
         || word.contains(['\'', '\u{2019}', '\u{02bc}'])
-        || core.starts_with("MC")
-        || core.starts_with("MAC")
+        || may_be_mc_surname(core)
     {
         return word.to_owned();
     }
@@ -370,12 +373,27 @@ fn display_word(word: &str, first: bool) -> String {
         } else {
             lowered
         }
+    } else if trail.starts_with('.') && core.chars().all(char::is_alphabetic) {
+        // A word cut short by a full stop is an abbreviation, not an
+        // initialism, which carries its stops inside ("N.A.", "U.S."):
+        // "AMENDMENT NO. 2" reads "No.", "ST. LOUIS" reads "St.".
+        capitalize_runs(core)
     } else if letters <= 3 || is_initialism(core) {
         core.to_owned()
     } else {
         capitalize_runs(core)
     };
     format!("{lead}{cased}{trail}")
+}
+
+/// A word that may be a Mc or Mac surname, whose capital after the prefix -
+/// "McDonald", "MacKenzie", but "Macy" - only its owner knows. Words that
+/// start MACH or MACRO - "MACHINES" in "INTERNATIONAL BUSINESS MACHINES",
+/// "MACHINERY", "MACRO" - are ordinary words a company name prints in
+/// capitals, and are cased like any other.
+fn may_be_mc_surname(core: &str) -> bool {
+    core.starts_with("MC")
+        || (core.starts_with("MAC") && !core.starts_with("MACH") && !core.starts_with("MACRO"))
 }
 
 /// A word of capitals with no vowel - "HSBC", "KPMG" - is letters, not a
@@ -860,6 +878,45 @@ mod tests {
             ),
             "2026-04-01 Invoice from KPMG LLP.pdf"
         );
+    }
+
+    /// The Mc and Mac rule protects surnames, not every word that happens to
+    /// start that way, and a short word with a full stop is an abbreviation
+    /// rather than an initialism.
+    #[test]
+    fn machine_words_and_abbreviations_with_a_full_stop_are_cased() {
+        for (printed, expected) in [
+            (
+                "INTERNATIONAL BUSINESS MACHINES CORP",
+                "International Business Machines Corp",
+            ),
+            (
+                "MACRO PRECISION MACHINING LLC",
+                "Macro Precision Machining LLC",
+            ),
+            (
+                "AMENDMENT NO. 2 TO MASTER SERVICES AGREEMENT",
+                "Amendment No. 2 to Master Services Agreement",
+            ),
+            ("ST. LOUIS FREIGHT HOLDINGS", "St. Louis Freight Holdings"),
+            (
+                "NORTHWIND MFG. AND SUPPLY PTY. LTD",
+                "Northwind Mfg. and Supply Pty. Ltd",
+            ),
+            ("JOHN A. SMITH", "John A. Smith"),
+            // Stops inside an initialism keep it in capitals, and a surname
+            // is still the owner's to case.
+            (
+                "HARBOR SAVINGS BANK, N.A. U.S. BRANCH",
+                "Harbor Savings Bank, N.A. U.S. Branch",
+            ),
+            (
+                "MACKENZIE MACDONALD HOLDINGS",
+                "MACKENZIE MACDONALD Holdings",
+            ),
+        ] {
+            assert_eq!(display_case(printed), expected, "{printed}");
+        }
     }
 
     /// "between" with one name says the document has a second side it does
