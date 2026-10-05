@@ -326,6 +326,34 @@ fn html_only_msg_body_is_decoded() {
     assert!(!text.contains('<'), "{text}");
 }
 
+/// Outlook writes its HTML through Word: each cell on lines of its own, its
+/// text in a paragraph, all of it indented. Copied through as written, the
+/// label and the value came out on separate lines with a stray `|` between
+/// them.
+#[test]
+fn an_outlook_formatted_table_keeps_label_and_value_together() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("outlook-table.msg");
+    let html = b"<html>\r\n<body lang=EN-US>\r\n<div class=WordSection1>\r\n\
+        <table class=MsoNormalTable border=0 cellspacing=0 cellpadding=0>\r\n <tr>\r\n\
+        \x20 <td width=200 valign=top style='padding:0in 5.4pt 0in 5.4pt'>\r\n\
+        \x20 <p class=MsoNormal>Invoice date<o:p></o:p></p>\r\n  </td>\r\n\
+        \x20 <td width=200 valign=top style='padding:0in 5.4pt 0in 5.4pt'>\r\n\
+        \x20 <p class=MsoNormal>March 3, 2025<o:p></o:p></p>\r\n  </td>\r\n </tr>\r\n\
+        </table>\r\n</div>\r\n</body>\r\n</html>\r\n"
+        .to_vec();
+    message(
+        &path,
+        &[("0037001F", utf16("Invoice")), ("10130102", html)],
+        &[],
+    );
+
+    let text = extract_in(&path, &TimeZone::UTC);
+
+    assert!(text.contains("\nInvoice date | March 3, 2025\n"), "{text}");
+    assert!(!text.contains("\n|"), "{text}");
+}
+
 /// The same property stored as a string is the HTML itself, and must not
 /// be mistaken for hex.
 #[test]

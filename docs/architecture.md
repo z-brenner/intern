@@ -109,9 +109,12 @@ draft, a sent item) has only a UTC submit time, and is dated in this
 machine's zone with its offset written out. No second, UTC rendering of the
 date is added: for every evening email west of Greenwich it falls on the
 next day, and validation would accept it because it is in the text. An HTML
-body is de-tagged with table cells kept apart (` | `), comments and the head
-dropped (its title kept as the first line), and named and hexadecimal
-entities decoded; Outlook's binary HTML property is decoded from the hex
+body is read the way it renders: whitespace in its text collapses to a space
+and only its structure starts a line, so neither Outlook's indented, wrapped
+source nor a receipt laid out in one big table cell loses or gains a line.
+Table cells are kept apart (` | `), comments and the head dropped (its title
+kept as the first line), and named and hexadecimal entities decoded;
+Outlook's binary HTML property is decoded from the hex
 msg_parser hands over, by its declared charset. Strings an ANSI `.msg` stores
 in its code page, which msg_parser drops when they are not UTF-8, are read
 back and decoded in the code page the message declares.

@@ -575,8 +575,6 @@ fn collect_parts(part: &ParsedMail, parts: &mut MessageParts, depth: usize) {
     }
 }
 
-/// Collapses folded or multi-line header values onto one line so the header
-/// block always has exactly one line per header.
 /// Collapses a header value onto one line. Control characters count as
 /// space: MAPI string properties end in the NUL terminator their stream
 /// stores, and msg_parser keeps it.
@@ -600,28 +598,19 @@ fn blank(value: &str) -> bool {
     trimmed(value).is_empty()
 }
 
-/// Where a table cell's text is going, for one level of table nesting.
-#[derive(Default)]
-struct TableRow {
-    cells: usize,
-    in_cell: bool,
-}
-
 /// Naive HTML-to-text: drops comments, the document head (keeping its title
-/// as the first line), and `<style>`/`<script>` blocks; turns structural tags
-/// into line breaks and table cells into ` | `-separated columns; strips
-/// every other tag; and decodes the entities that turn up in prose.
+/// as the first line), and `<style>`/`<script>` blocks; reads the rest the
+/// way it renders - whitespace collapsed, structural tags as line breaks,
+/// table cells as ` | `-separated columns - strips every other tag, and
+/// decodes the entities that turn up in prose.
 ///
 /// A receipt's `<tr><td>Invoice date</td><td>March 3, 2025</td></tr>` must
-/// come out as one line with the label and the value told apart, and Word -
-/// which writes Outlook's HTML - wraps the text of every cell in a
-/// paragraph, so a paragraph inside a cell is a space, not a new line.
+/// come out as one line with the label and the value told apart, however
+/// the source is indented, and a receipt laid out inside one big table cell
+/// must keep the lines its paragraphs and `<br>`s give it.
 fn html_to_text(html: &str) -> String {
     let without_comments = strip_comments(html);
-    // Entities in the title are decoded with everything else, once.
-    let title = element_text(&without_comments, "title")
-        .map(|title| single_line(&title))
-        .filter(|title| !title.is_empty());
+    let title = element_text(&without_comments, "title");
     // The title is taken out with the head, or on its own when the head
     // has no end to take it out with, so it is not read a second time.
     let mut without_head = strip_head(&without_comments);
@@ -629,15 +618,14 @@ fn html_to_text(html: &str) -> String {
         without_head = strip_container(&without_head, "title");
     }
     let without_blocks = strip_container(&strip_container(&without_head, "script"), "style");
-    let mut text = String::with_capacity(without_blocks.len());
+    let mut output = HtmlText::default();
     if let Some(title) = title {
-        text.push_str(&title);
-        text.push('\n');
+        output.text(&title);
+        output.line_break();
     }
-    let mut tables: Vec<TableRow> = Vec::new();
     let mut rest = without_blocks.as_str();
     while let Some(open) = rest.find('<') {
-        text.push_str(&rest[..open]);
+        output.text(&rest[..open]);
         let after = &rest[open + 1..];
         let Some(close) = after.find('>') else {
             rest = "";
@@ -651,51 +639,205 @@ fn html_to_text(html: &str) -> String {
             .unwrap_or_default()
             .to_ascii_lowercase();
         match tag.as_str() {
-            "table" => {
-                if closing {
-                    tables.pop();
+            "table" if closing => output.close_table(),
+            "table" => output.open_table(),
+            "tr" | "thead" | "tbody" | "tfoot" => output.row_edge(),
+            "td" | "th" if closing => output.close_cell(),
+            "td" | "th" => output.open_cell(),
+            "pre" => {
+                output.line_break();
+                output.preformatted = if closing {
+                    output.preformatted.saturating_sub(1)
                 } else {
-                    tables.push(TableRow::default());
-                }
-                text.push('\n');
+                    output.preformatted + 1
+                };
             }
-            // A row is a line: one break where it opens, so consecutive
-            // rows do not come out double-spaced.
-            "tr" if !closing => {
-                if let Some(row) = tables.last_mut() {
-                    *row = TableRow::default();
-                }
-                text.push('\n');
-            }
-            "td" | "th" => {
-                if let Some(row) = tables.last_mut() {
-                    if closing {
-                        row.in_cell = false;
-                    } else {
-                        if row.cells > 0 {
-                            text.truncate(text.trim_end_matches(' ').len());
-                            text.push_str(" | ");
-                        }
-                        row.cells += 1;
-                        row.in_cell = true;
-                    }
-                }
-            }
-            "br" | "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                if !tables.last().is_some_and(|row| row.in_cell) {
-                    text.push('\n');
-                } else if !text.ends_with(char::is_whitespace) {
-                    text.push(' ');
-                }
-            }
-            "thead" | "tbody" | "tfoot" | "blockquote" | "hr" | "ul" | "ol" | "dl" | "dt"
-            | "dd" => text.push('\n'),
+            "br" | "p" | "div" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "blockquote"
+            | "hr" | "ul" | "ol" | "dl" | "dt" | "dd" => output.line_break(),
             _ => {}
         }
         rest = &after[close + 1..];
     }
-    text.push_str(rest);
-    collapse_blank_lines(&decode_entities(&text))
+    output.text(rest);
+    collapse_blank_lines(&output.text)
+}
+
+/// One open table, and what its cells have held so far: that decides
+/// whether a break inside it separates anything and where a ` | ` goes.
+#[derive(Default)]
+struct OpenTable {
+    /// Whether any cell of the table has had text.
+    has_text: bool,
+    /// Whether any cell of the current row has had text.
+    row_has_text: bool,
+    in_cell: bool,
+    /// Whether the open cell has had text.
+    cell_has_text: bool,
+}
+
+/// An HTML body's text, built the way a browser lays it out.
+///
+/// HTML collapses every run of whitespace in its text to one space, and only
+/// its structure starts a line. Outlook's HTML is indented and wrapped at
+/// seventy-odd columns, and copying those newlines through split a label
+/// from the value in the next cell, and a date across two lines. So
+/// whitespace here is at most a space, and a line break is owed rather than
+/// written: it is written when more text follows, two at most, and dropped
+/// when nothing does. That is also what lets a table cell drop the breaks
+/// its own first and last paragraph put around it - Word wraps every cell's
+/// text in one - while keeping every break between two pieces of its text,
+/// which is all a receipt laid out in one big cell has for lines.
+#[derive(Default)]
+struct HtmlText {
+    text: String,
+    tables: Vec<OpenTable>,
+    /// Newlines owed before the next text: one for a line, two for a paragraph.
+    breaks: usize,
+    /// A ` | ` owed before the next text: a cell opened after one with text.
+    separator: bool,
+    /// A space owed before the next text.
+    space: bool,
+    /// Open `<pre>` elements; inside one, a newline in the text is a line.
+    preformatted: usize,
+}
+
+impl HtmlText {
+    /// Text between two tags, entities and all.
+    ///
+    /// What collapses is what HTML collapses - ASCII whitespace - plus
+    /// control characters and the no-break space, which is how a spacer cell
+    /// is written and which nobody's name or date is spelled with. A thin
+    /// space in `1,250&#x2009;€` is a character the author chose, and stays.
+    fn text(&mut self, raw: &str) {
+        let decoded = decode_entities(raw);
+        let mut word_start = None;
+        for (index, character) in decoded.char_indices() {
+            let line = character == '\n' && self.preformatted > 0;
+            if line
+                || character.is_ascii_whitespace()
+                || character.is_control()
+                || character == '\u{a0}'
+            {
+                if let Some(start) = word_start.take() {
+                    self.word(&decoded[start..index]);
+                }
+                if line {
+                    self.line_break();
+                } else {
+                    self.space = true;
+                }
+            } else if word_start.is_none() {
+                word_start = Some(index);
+            }
+        }
+        if let Some(start) = word_start {
+            self.word(&decoded[start..]);
+        }
+    }
+
+    /// Writes one word after whatever is owed before it: line breaks first,
+    /// then a cell separator, then a space.
+    fn word(&mut self, word: &str) {
+        if !self.text.is_empty() {
+            if self.breaks > 0 {
+                self.text.extend(std::iter::repeat_n('\n', self.breaks));
+            } else if self.separator {
+                self.text.push_str(" | ");
+            } else if self.space {
+                self.text.push(' ');
+            }
+        }
+        self.breaks = 0;
+        self.separator = false;
+        self.space = false;
+        self.text.push_str(word);
+        if let Some(table) = self.tables.last_mut() {
+            table.has_text = true;
+            if table.in_cell {
+                table.row_has_text = true;
+                table.cell_has_text = true;
+            }
+        }
+    }
+
+    /// Whether a break here would stand between two pieces of text. One
+    /// before a cell's first text, or before a table's first row, would only
+    /// push the cell off the line its row is on.
+    fn breaks_here(&self) -> bool {
+        match self.tables.last() {
+            None => true,
+            Some(table) if table.in_cell => table.cell_has_text,
+            Some(table) => table.has_text,
+        }
+    }
+
+    /// `<br>` or a block's edge. Two in a row are a paragraph.
+    fn line_break(&mut self) {
+        if self.breaks_here() {
+            self.breaks = (self.breaks + 1).min(2);
+        }
+    }
+
+    /// A table's or a row's edge, which starts a line but never a paragraph.
+    fn row_break(&mut self) {
+        if self.breaks_here() {
+            self.breaks = self.breaks.max(1);
+        }
+    }
+
+    fn open_table(&mut self) {
+        self.row_break();
+        self.tables.push(OpenTable::default());
+    }
+
+    /// `</table>`. A table left open runs to the end of the document, and
+    /// its last cell with it, which costs nothing but the breaks around
+    /// that cell's first and last text.
+    fn close_table(&mut self) {
+        self.close_cell();
+        if let Some(closed) = self.tables.pop()
+            && closed.has_text
+            && let Some(table) = self.tables.last_mut()
+        {
+            // A nested table's text is text in the cell that holds it.
+            table.has_text = true;
+            if table.in_cell {
+                table.row_has_text = true;
+                table.cell_has_text = true;
+            }
+        }
+        self.row_break();
+    }
+
+    /// `<tr>`, `</tr>`, or a row group's edge; each also ends a cell whose
+    /// `</td>` was left out, as HTML allows.
+    fn row_edge(&mut self) {
+        self.close_cell();
+        self.row_break();
+        if let Some(table) = self.tables.last_mut() {
+            table.row_has_text = false;
+        }
+    }
+
+    fn open_cell(&mut self) {
+        self.close_cell();
+        if let Some(table) = self.tables.last_mut() {
+            self.separator |= table.row_has_text;
+            table.in_cell = true;
+            table.cell_has_text = false;
+        }
+    }
+
+    /// The breaks still owed when a cell with text ends came after its last
+    /// text: they would only split it from the next cell.
+    fn close_cell(&mut self) {
+        if let Some(table) = self.tables.last_mut() {
+            if table.in_cell && table.cell_has_text {
+                self.breaks = 0;
+            }
+            table.in_cell = false;
+        }
+    }
 }
 
 /// Removes `<!-- ... -->` comments, an unterminated one to the end. Word's
@@ -974,6 +1116,87 @@ mod tests {
                  <tr><td>Due</td><td>May 1</td></tr></table></td></tr></table>"
             ),
             "Total | $40\nDue | May 1"
+        );
+    }
+
+    /// Transactional email - receipts, statements, notifications - wraps its
+    /// whole body in one layout cell. The lines its headings, paragraphs and
+    /// `<br>`s give it are all it has for structure, and headings, labelled
+    /// lines and the date index all read lines; only the breaks that would
+    /// split one cell from the next are dropped.
+    #[test]
+    fn a_layout_cell_keeps_the_lines_inside_it() {
+        assert_eq!(
+            html_to_text(
+                "<table><tr><td><table><tr><td><h1>Receipt from Acme Corporation</h1>\
+                 <p>Invoice number: INV-1001</p><p>Date paid: March 3, 2025</p>\
+                 <p>Billed to:<br>Juniper Ridge Holdings Inc.<br>12 Elm Street</p>\
+                 <p>Thanks for your business.</p></td></tr></table></td></tr></table>"
+            ),
+            "Receipt from Acme Corporation\n\nInvoice number: INV-1001\n\n\
+             Date paid: March 3, 2025\n\nBilled to:\nJuniper Ridge Holdings Inc.\n\
+             12 Elm Street\n\nThanks for your business."
+        );
+        // A table left open runs to the end of the document, cell and all,
+        // and its lines are still lines.
+        assert_eq!(
+            html_to_text(
+                "<table><tr><td><p>Statement for March</p><p>Balance due: $40</p>\
+                 <p>Due date: April 1, 2025</p>"
+            ),
+            "Statement for March\n\nBalance due: $40\n\nDue date: April 1, 2025"
+        );
+        // A `<br>` that ends a label cell does not push its value away.
+        assert_eq!(
+            html_to_text(
+                "<table><tr><td>Invoice date<br></td><td><br>March 3, 2025</td></tr></table>"
+            ),
+            "Invoice date | March 3, 2025"
+        );
+    }
+
+    /// HTML collapses whitespace in text, and only its structure starts a
+    /// line. Outlook's HTML is indented and wrapped, and copying those
+    /// newlines through put a label and its value - and the two halves of
+    /// a date - on separate lines.
+    #[test]
+    fn source_indentation_and_wrapping_are_not_lines() {
+        assert_eq!(
+            html_to_text(
+                "<table>\n  <tr>\n    <td>Invoice date</td>\n    <td>March 3, 2025</td>\n  </tr>\n\
+                 \x20 <tr>\n    <td>Bill to</td>\n    <td>O&rsquo;Brien &amp; Co</td>\n  </tr>\n</table>"
+            ),
+            "Invoice date | March 3, 2025\nBill to | O\u{2019}Brien & Co"
+        );
+        // Word, which writes Outlook's HTML: each cell on lines of its own,
+        // its text in a paragraph, and long text wrapped in the source.
+        assert_eq!(
+            html_to_text(
+                "<table class=MsoNormalTable border=0 cellpadding=0>\r\n <tr>\r\n\
+                 \x20 <td width=200 valign=top style='padding:0in 5.4pt'>\r\n\
+                 \x20 <p class=MsoNormal>Invoice date<o:p></o:p></p>\r\n  </td>\r\n\
+                 \x20 <td width=200 valign=top style='padding:0in 5.4pt'>\r\n\
+                 \x20 <p class=MsoNormal>March 3,\r\n  2025<o:p></o:p></p>\r\n  </td>\r\n\
+                 \x20</tr>\r\n</table>"
+            ),
+            "Invoice date | March 3, 2025"
+        );
+        assert_eq!(
+            html_to_text("<p>The invoice for March\r\n2025 is attached.</p>"),
+            "The invoice for March 2025 is attached."
+        );
+        // Spacer cells hold nothing to separate.
+        assert_eq!(
+            html_to_text(
+                "<table><tr><td>Total</td><td>&nbsp;</td><td width=20></td><td>$40</td>\
+                 <td>&nbsp;</td></tr></table>"
+            ),
+            "Total | $40"
+        );
+        // Preformatted text keeps the lines it was written with.
+        assert_eq!(
+            html_to_text("<p>Notes:</p><pre>Line one\n  Line two\n</pre><p>End.</p>"),
+            "Notes:\n\nLine one\nLine two\n\nEnd."
         );
     }
 

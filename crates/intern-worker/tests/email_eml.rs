@@ -137,6 +137,39 @@ fn html_tables_and_entities() {
     assert!(!text.contains("&rsquo;"), "{text}");
 }
 
+/// Real receipts are not written on one line. The table above, indented the
+/// way a person or a template writes it, and the body laid out in one big
+/// cell the way transactional email is, still read as the lines a reader
+/// sees: the heading, the address under its label, and label | value.
+#[test]
+fn an_indented_html_receipt_reads_as_it_renders() {
+    let document = extract(
+        b"From: billing@example.com\r\n\
+          Date: Mon, 3 Mar 2025 08:00:00 +0000\r\n\
+          Subject: Your receipt\r\n\
+          Content-Type: text/html; charset=utf-8\r\n\
+          \r\n\
+          <html>\r\n<body>\r\n<table width=\"100%\">\r\n  <tr>\r\n    <td>\r\n\
+          \x20     <h1>Receipt from Acme Corporation</h1>\r\n\
+          \x20     <p>Billed to:<br>\r\n      Juniper Ridge Holdings Inc.</p>\r\n\
+          \x20     <table>\r\n        <tr>\r\n          <td>Invoice date</td>\r\n\
+          \x20         <td>March 3, 2025</td>\r\n        </tr>\r\n      </table>\r\n\
+          \x20   </td>\r\n  </tr>\r\n</table>\r\n</body>\r\n</html>\r\n",
+    )
+    .unwrap();
+    let text = &document.pages[0].text;
+
+    assert!(
+        text.contains("\n\nReceipt from Acme Corporation\n\nBilled to:\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nBilled to:\nJuniper Ridge Holdings Inc.\n"),
+        "{text}"
+    );
+    assert!(text.contains("\nInvoice date | March 3, 2025\n"), "{text}");
+}
+
 #[test]
 fn nested_multiparts_yield_the_plain_body_and_list_the_attachment_without_extracting_it() {
     let document = extract(NESTED_MULTIPART).unwrap();
