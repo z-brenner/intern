@@ -1673,10 +1673,9 @@ fn a_retryable_recheck_keeps_the_owned_claim_without_recording_a_verdict() {
     assert!(!rig.claim_file(&key).exists());
 }
 
-/// Verifying an uploader costs a Microsoft audit search, and only 32 can be
-/// pending at once. Spending them on documents this machine has already
-/// finished, or that another machine is processing, starves the documents that
-/// actually need a verdict.
+/// Verifying an uploader can cost a request to Microsoft. Spending those on
+/// documents this machine has already finished, or that another machine is
+/// processing, starves the documents that actually need a verdict.
 #[test]
 fn held_and_done_files_are_not_reverified_each_scan() {
     let rig = Rig::start(false, &[]);

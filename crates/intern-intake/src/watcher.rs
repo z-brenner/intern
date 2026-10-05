@@ -412,10 +412,9 @@ impl Scanner<'_> {
         }
 
         // Asking the host about a document only when this machine might act on
-        // it: an uploader check can cost a Microsoft audit search, and only 32
-        // of those can be pending at once. Spending them on documents already
-        // tombstoned here, or claimed by another machine, starves the ones that
-        // actually need a verdict.
+        // it: an uploader check can cost a request to Microsoft. Spending those
+        // on documents already tombstoned here, or claimed by another machine,
+        // starves the ones that actually need a verdict.
         match self.store.read(&key) {
             Some(claim) if claim.machine_id == self.identity.id => match claim.state {
                 ClaimState::Claimed => {
@@ -464,11 +463,11 @@ impl Scanner<'_> {
     /// drives the claim.
     ///
     /// Only a verdict ends the work. "We could not check right now" — an
-    /// unreachable Microsoft, a throttled connection, an audit event that has
-    /// not been delivered yet — leaves the claim and the queue item alone: the
-    /// queue authorizes again at every stage of its own, so nothing is
-    /// processed on stale evidence, and cancelling here would throw away work
-    /// that was legitimately admitted a moment ago.
+    /// unreachable Microsoft, a throttled connection, metadata that has not
+    /// caught up with an upload yet — leaves the claim and the queue item
+    /// alone: the queue authorizes again at every stage of its own, so nothing
+    /// is processed on stale evidence, and cancelling here would throw away
+    /// work that was legitimately admitted a moment ago.
     fn manage_admitted(&mut self, key: &str, facts: &FileFacts) {
         let admission = self.host.admission(&facts.path);
         match admission {
