@@ -975,8 +975,16 @@ impl AppState {
             Arc::clone(&runtime),
             &manifest,
         ));
-        if runtime.installed(&manifest) {
-            setup.verify_installed();
+        // Verified only once nothing below can fail. Verification starts
+        // llama-server and loads the model into it, and a start that then
+        // failed - and now waits behind the dialog that says why, instead of
+        // ending at once - left it doing that for an app that could not run.
+        // Held until then, so the queue cannot hand a document to a server
+        // that has not started. Read from what setup already found rather
+        // than checked again: the check reads the whole model.
+        let verify_model = setup.local_ready.load(Ordering::SeqCst);
+        if verify_model {
+            setup.hold_local_model();
         }
         let settings = SettingsStore::new(data.join("settings.json"));
         let worker_temp_root = data.join("worker-temp");
@@ -1080,6 +1088,9 @@ impl AppState {
             && let Ok(mut slot) = state.intake_error.lock()
         {
             *slot = Some(format!("{}: {}", error.code, error.message));
+        }
+        if verify_model {
+            state.setup.verify_installed();
         }
         Ok(state)
     }
@@ -1291,6 +1302,20 @@ pub fn launch_documents(args: &[String], cwd: &Path) -> Vec<PathBuf> {
         .map(|argument| cwd.join(argument))
         .filter(|path| path.exists())
         .collect()
+}
+
+/// Whether this launch keeps the window in the tray: settings read from the
+/// data folder as initialization reads them, where a file that cannot be read
+/// is the defaults, and the autostart entry's `--minimized`.
+pub fn launch_starts_hidden(data: &Path, arguments: &[String]) -> bool {
+    let settings = SettingsStore::new(data.join("settings.json"))
+        .load()
+        .unwrap_or_default();
+    crate::tray::window_starts_hidden(
+        settings.start_minimized,
+        settings.run_in_background,
+        arguments.iter().any(|argument| argument == "--minimized"),
+    )
 }
 
 /// Whether a launch names anything besides Intern's own flags. Touches no
@@ -3693,12 +3718,13 @@ mod second_instance_tests {
         path::{MAIN_SEPARATOR, PathBuf},
     };
 
-    use intern_queue::Pipeline;
+    use intern_queue::{AppSettings, Pipeline, SettingsStore};
 
     use super::{
         LaunchReports, LaunchTarget, SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents,
         expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
-        is_update_relaunch, launch_documents, launch_names_documents, refused_launch,
+        is_update_relaunch, launch_documents, launch_names_documents, launch_starts_hidden,
+        refused_launch,
         scratch_queue::{folder, queue, write},
         second_launch, second_launch_shows_window,
     };
@@ -3925,6 +3951,30 @@ mod second_instance_tests {
         assert!(!is_update_relaunch(&data, &sent, 4_010));
         std::fs::write(data.join(UPDATE_RELAUNCH), b"{").unwrap();
         assert!(!is_update_relaunch(&data, &sent, 4_020));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    /// The window is shown before initialization unless the launch keeps it
+    /// in the tray, so this reads the settings file before anything else
+    /// has: as initialization does, and as the defaults when it cannot.
+    #[test]
+    fn whether_a_launch_starts_in_the_tray_is_read_before_initialization() {
+        let data = folder("starts-hidden");
+        let minimized = args(&["intern.exe", "--minimized"]);
+        let clicked = args(&["intern.exe"]);
+        assert!(!launch_starts_hidden(&data, &minimized), "no settings yet");
+
+        SettingsStore::new(data.join("settings.json"))
+            .save(&AppSettings {
+                run_in_background: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert!(launch_starts_hidden(&data, &minimized));
+        assert!(!launch_starts_hidden(&data, &clicked));
+
+        std::fs::write(data.join("settings.json"), b"not json").unwrap();
+        assert!(!launch_starts_hidden(&data, &minimized));
         std::fs::remove_dir_all(data).unwrap();
     }
 

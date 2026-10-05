@@ -49,8 +49,20 @@ pub fn run() {
         // explicit permissions/privacy notices.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            if let Ok(data) = app.path().app_local_data_dir() {
-                startup::set_log_directory(&data);
+            let data = app.path().app_local_data_dir().ok();
+            if let Some(data) = &data {
+                startup::set_log_directory(data);
+            }
+            let arguments = commands::process_arguments();
+            // Decided before initialization, which can take seconds on this
+            // thread (see `shows_window_before_initialize`), from the settings
+            // as it will read them: a file that cannot be read is the
+            // defaults, which show the window.
+            let starts_hidden = data
+                .as_deref()
+                .is_some_and(|data| commands::launch_starts_hidden(data, &arguments));
+            if startup::shows_window_before_initialize(starts_hidden) {
+                tray::show_main_window(app.handle());
             }
             // Returning the error made Tauri panic with "Failed to setup app"
             // and the process vanish with nothing said anywhere. A failed start
@@ -71,8 +83,6 @@ pub fn run() {
                 sharepoint_setup::PACKAGED_DEPLOYMENT,
             ));
             tray::sync_tray(app.handle(), settings.run_in_background);
-            let arguments = commands::process_arguments();
-            let minimized_launch = arguments.iter().any(|argument| argument == "--minimized");
             // An update's installer starts Intern again with the arguments
             // the old process had. Documents among them were added when they
             // were sent; adding them again would file whatever is at those
@@ -80,11 +90,7 @@ pub fn run() {
             let relaunched = commands::is_update_relaunch(&data, &arguments, commands::unix_now());
             let documents = !relaunched && commands::launch_names_documents(&arguments);
             let shows_window = startup::shows_window_after_setup(startup::Startup::Ready {
-                starts_hidden: tray::window_starts_hidden(
-                    settings.start_minimized,
-                    settings.run_in_background,
-                    minimized_launch,
-                ),
+                starts_hidden,
                 documents,
             });
             app.resources_table()

@@ -210,15 +210,29 @@ pub enum Startup {
     },
 }
 
-/// Whether setup ends by showing the main window.
+/// Whether the window is shown before initialization, as well as when setup
+/// is done.
+///
+/// Initialization checks an installed model by reading every byte of it, on
+/// this thread, and that takes seconds. A window kept hidden through it made
+/// a launch look as though nothing had happened, and a second click could
+/// not help: its show waits for the same thread. So a launch that is going to
+/// show the window shows it first, as every launch did before the window was
+/// created hidden, and one meant for the tray still shows nothing, which is
+/// what creating it hidden is for.
+pub fn shows_window_before_initialize(starts_hidden: bool) -> bool {
+    !starts_hidden
+}
+
+/// Whether setup ends by showing the main window, and bringing it forward.
 ///
 /// The window is created hidden (tauri.conf.json): created visible, it sat
 /// blank and unresponsive through initialization, so a sign-in launch meant
 /// for the tray flashed an empty window that could read "Not Responding"
-/// before it hid. Showing it is now setup's last act, and this is the only
-/// place the choice is made. A failed start always shows it, even for a
-/// launch meant for the tray, or a failing launch would be wholly invisible;
-/// documents sent to Intern show it, because someone just asked for them.
+/// before it hid. Only a launch that wants the window shows it. A failed
+/// start always does, even for a launch meant for the tray, or a failing
+/// launch would be wholly invisible; documents sent to Intern do, because
+/// someone just asked for them.
 pub fn shows_window_after_setup(startup: Startup) -> bool {
     match startup {
         Startup::Failed => true,
@@ -269,7 +283,8 @@ mod tests {
 
     use super::{
         PANIC_LOG, STARTUP_ERROR_LOG, Startup, append_log_line, panic_record, record_failure,
-        record_startup_failure, shows_window_after_setup, startup_failure_text,
+        record_startup_failure, shows_window_after_setup, shows_window_before_initialize,
+        startup_failure_text,
     };
 
     fn scratch(name: &str) -> std::path::PathBuf {
@@ -372,8 +387,13 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    /// What a corrupt queue database leaves behind and says, from the error
+    /// the queue gives for one. `AppState::initialize`, setup's handing of
+    /// that error to `report_failure`, and the dialog itself need a running
+    /// app, which a unit test does not have: only the record and the text
+    /// are checked here.
     #[test]
-    fn a_corrupt_queue_database_fails_startup_with_a_logged_and_reported_code() {
+    fn a_corrupt_queue_database_is_logged_and_described_with_its_code() {
         // The failure TAURI_SHELL-6 describes: queue.sqlite3 in the data
         // folder is not a database. Opening it is AppState::initialize's
         // first use of the queue, and setup hands the error it gets to
@@ -464,5 +484,14 @@ mod tests {
             documents: true,
         }));
         assert!(shows_window_after_setup(Startup::Failed));
+    }
+
+    #[test]
+    fn a_launch_that_will_show_the_window_shows_it_before_the_slow_part() {
+        // Seconds of reading the model with nothing on screen looked like a
+        // launch that had not happened.
+        assert!(shows_window_before_initialize(false));
+        // A sign-in launch meant for the tray shows nothing at any point.
+        assert!(!shows_window_before_initialize(true));
     }
 }
