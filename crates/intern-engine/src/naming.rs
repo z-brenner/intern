@@ -15,6 +15,8 @@
 
 use std::collections::HashSet;
 
+use unicode_normalization::UnicodeNormalization;
+
 use crate::domain::{ComposedName, PartyRelation, ValidatedProposal};
 
 /// Long enough to stay specific, short enough to read in a folder listing.
@@ -247,10 +249,41 @@ pub fn sanitize_folder_name(value: &str) -> Option<String> {
     })
 }
 
+/// Typographic ligatures and full-width forms are the letters a person types,
+/// drawn differently. A PDF that sets "Office" with the "ffi" ligature
+/// (U+FB03) or an East Asian form that writes "ＡＣＭＥ" in full-width
+/// letters gives a filename nobody can search for by typing it, so both are
+/// folded to plain ASCII before anything else looks at the name - which also
+/// lets the hostile-character check see a full-width "：" as the colon it is.
+fn fold_presentation_forms(value: &str) -> String {
+    let mut folded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\u{fb00}' => folded.push_str("ff"),
+            '\u{fb01}' => folded.push_str("fi"),
+            '\u{fb02}' => folded.push_str("fl"),
+            '\u{fb03}' => folded.push_str("ffi"),
+            '\u{fb04}' => folded.push_str("ffl"),
+            '\u{fb05}' | '\u{fb06}' => folded.push_str("st"),
+            '\u{ff01}'..='\u{ff5e}' => {
+                folded.push(char::from_u32(character as u32 - 0xfee0).unwrap_or(character));
+            }
+            other => folded.push(other),
+        }
+    }
+    folded
+}
+
+/// A filename segment: presentation forms folded, hostile and invisible
+/// characters dropped, whitespace collapsed, composed to NFC, trailing dots
+/// and spaces removed, reserved device names escaped. NFC because macOS and
+/// some PDFs hand over "é" as "e" and a combining accent, and the two
+/// spellings of one name must make one filename.
 pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
+    let folded = fold_presentation_forms(value);
     let mut output = String::new();
     let mut pending_space = false;
-    for character in value.chars() {
+    for character in folded.chars() {
         if character.is_whitespace() {
             pending_space = !output.is_empty();
             continue;
@@ -270,6 +303,11 @@ pub(crate) fn sanitize_segment(value: &str) -> Option<String> {
         }
         output.push(character);
     }
+    // Composing never produces whitespace or one of the characters dropped
+    // above, so it can follow them; it follows the invisible characters'
+    // removal so that one between a letter and its accent cannot keep the
+    // two apart.
+    let mut output = output.nfc().collect::<String>();
     while output.ends_with(' ') || output.ends_with('.') {
         output.pop();
     }
@@ -331,8 +369,16 @@ fn is_reserved_number(value: &str) -> bool {
     value.len() == 1 && matches!(value.as_bytes()[0], b'1'..=b'9')
 }
 
-fn windows_name_key(value: &str) -> String {
-    value.trim_end_matches([' ', '.']).to_lowercase()
+/// The form Windows compares two names in: trailing dots and spaces
+/// disregarded, case folded. Composed to NFC first, because a name copied
+/// from macOS can spell "Café" with a combining accent, and NTFS would hold
+/// both spellings side by side as two files a person cannot tell apart.
+pub fn windows_name_key(value: &str) -> String {
+    value
+        .trim_end_matches([' ', '.'])
+        .nfc()
+        .collect::<String>()
+        .to_lowercase()
 }
 
 #[cfg(test)]
@@ -617,6 +663,59 @@ mod tests {
             sanitize_folder_name("Acme Holdings LLC").as_deref(),
             Some("Acme Holdings LLC")
         );
+    }
+
+    /// A ligature or a full-width letter is the same letter a person types,
+    /// and the composed and decomposed spellings of an accent are one name.
+    #[test]
+    fn ligatures_and_fullwidth_fold_and_nfc_collides() {
+        assert_eq!(
+            name(
+                &proposal(
+                    Some("2026-04-01"),
+                    Some("O\u{fb03}ce Lease"),
+                    &["Paci\u{fb01}c Freight"],
+                    PartyRelation::With
+                ),
+                "pdf"
+            ),
+            "2026-04-01 Office Lease with Pacific Freight.pdf"
+        );
+        assert_eq!(
+            sanitize_segment("\u{ff21}\u{ff43}\u{ff4d}\u{ff45} \u{ff23}\u{ff4f}\u{ff52}\u{ff50}")
+                .as_deref(),
+            Some("Acme Corp")
+        );
+        // A full-width colon and solidus are hostile once folded.
+        assert_eq!(
+            sanitize_segment("Invoice\u{ff1a} 3\u{ff0f}4").as_deref(),
+            Some("Invoice 34")
+        );
+        let composed = "Caf\u{e9} Rouge";
+        let decomposed = "Cafe\u{301} Rouge";
+        assert_eq!(sanitize_segment(decomposed).as_deref(), Some(composed));
+        assert_eq!(
+            windows_name_key(&format!("{composed}.pdf")),
+            windows_name_key(&format!("{decomposed}.pdf"))
+        );
+        // An invisible character between a letter and its accent does not
+        // keep them apart.
+        assert_eq!(
+            sanitize_segment("Cafe\u{200b}\u{301}").as_deref(),
+            Some("Caf\u{e9}")
+        );
+        let existing = ["2026-04-01 Invoice from Cafe\u{301} Rouge.pdf"];
+        let composed_name = compose_filename(
+            &proposal(
+                Some("2026-04-01"),
+                Some("Invoice"),
+                &[composed],
+                PartyRelation::From,
+            ),
+            "pdf",
+            &existing,
+        );
+        assert_eq!(composed_name.collision_index, 2);
     }
 
     #[test]
