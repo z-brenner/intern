@@ -439,7 +439,12 @@ describe('TauriBridge', () => {
     expect(fake.calls).toHaveLength(1);
   });
 
-  it('converts native drag-drop paths at the same selection boundary and unsubscribes', async () => {
+  // The shape the locked Tauri runtime actually emits: DragDropPayload is
+  // `{ paths, position }`. The test this replaces sent `{ type: 'drop', paths }`
+  // - a field only the unused Webview.onDragDropEvent wrapper adds - so it
+  // passed against a payload no desktop drop ever produced, while every real
+  // drop was filtered out.
+  it('drop listener accepts the real raw payload, folders included, and unsubscribes', async () => {
     const fake = fakeTransport();
     const selection = createTauriSelectionBoundary(fake.transport);
     const seen = vi.fn();
@@ -447,7 +452,7 @@ describe('TauriBridge', () => {
 
     fake.listeners.get('tauri://drag-drop')?.({
       event: 'tauri://drag-drop', id: 4,
-      payload: { type: 'drop', paths: ['C:\\Docs\\Dropped.pdf', 'C:\\Docs\\Folder'] },
+      payload: { paths: ['C:\\Docs\\Dropped.pdf', 'C:\\Docs\\Folder'], position: { x: 1, y: 2 } },
     });
 
     expect(seen).toHaveBeenCalledWith({ files: [
@@ -455,6 +460,66 @@ describe('TauriBridge', () => {
       { path: 'C:\\Docs\\Folder', displayName: 'Folder' },
     ] });
     unsubscribe();
+    unsubscribe();
     expect(fake.unlisten.get('tauri://drag-drop')).toHaveBeenCalledTimes(1);
+  });
+
+  it('payload without paths is ignored', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    await createTauriSelectionBoundary(fake.transport).subscribeDrops(seen);
+    const drop = (payload: unknown) => fake.listeners.get('tauri://drag-drop')?.({ event: 'tauri://drag-drop', id: 5, payload });
+
+    drop({ position: { x: 1, y: 2 } });
+    drop({ paths: [], position: { x: 1, y: 2 } });
+    drop({ paths: [42, null], position: { x: 1, y: 2 } });
+    drop(null);
+
+    expect(seen).not.toHaveBeenCalled();
+  });
+
+  it('drag state events map to overlay state', async () => {
+    const fake = fakeTransport();
+    const seen = vi.fn();
+    const unsubscribe = await createTauriSelectionBoundary(fake.transport).subscribeDragState!(seen);
+    const emit = (event: string, payload: unknown) => fake.listeners.get(event)?.({ event, id: 6, payload });
+
+    emit('tauri://drag-enter', { paths: ['C:\\Docs\\a.pdf', 'C:\\Docs\\b.pdf'], position: { x: 1, y: 2 } });
+    emit('tauri://drag-leave', null);
+    // Dragged text brings no paths, and a drop would be ignored, so nothing is offered.
+    emit('tauri://drag-enter', { paths: [], position: { x: 1, y: 2 } });
+    emit('tauri://drag-leave', null);
+    emit('tauri://drag-enter', { paths: ['C:\\Docs\\a.pdf'], position: { x: 1, y: 2 } });
+    // The runtime sends no leave after a drop; the drop itself ends the drag.
+    emit('tauri://drag-drop', { paths: ['C:\\Docs\\a.pdf'], position: { x: 1, y: 2 } });
+
+    expect(seen.mock.calls.map(([state]) => state)).toEqual([
+      { dragging: true, count: 2 },
+      { dragging: false, count: 0 },
+      { dragging: true, count: 1 },
+      { dragging: false, count: 0 },
+    ]);
+    unsubscribe();
+    unsubscribe();
+    for (const event of ['tauri://drag-enter', 'tauri://drag-leave', 'tauri://drag-drop']) {
+      expect(fake.unlisten.get(event)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('releases the drag listeners already registered when a later one fails', async () => {
+    const stops = new Map<string, ReturnType<typeof vi.fn>>();
+    const transport: TauriTransport = {
+      invoke: async <T>() => undefined as T,
+      listen: async (event) => {
+        if (event === 'tauri://drag-drop') throw new Error('drop listener failed');
+        const stop = vi.fn();
+        stops.set(event, stop);
+        return stop;
+      },
+    };
+
+    await expect(createTauriSelectionBoundary(transport).subscribeDragState!(vi.fn())).rejects.toThrow('drop listener failed');
+    expect(stops.get('tauri://drag-enter')).toHaveBeenCalledOnce();
+    expect(stops.get('tauri://drag-leave')).toHaveBeenCalledOnce();
   });
 });

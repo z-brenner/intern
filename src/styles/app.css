@@ -313,6 +313,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .history-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* ---------- feedback and setup ---------- */
+/* Files dragged over the desktop window. It must not take the drop itself:
+   the runtime delivers that to the window, not to anything under the pointer. */
+.drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: rgba(23, 26, 31, .22); }
+.drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-navy); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
 .operation-feedback { position: fixed; z-index: 5; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px)); margin: 0; padding: 11px 15px; border: 1px solid #e6a9a2; border-radius: var(--radius-sm); color: #8f231a; background: #fff5f3; box-shadow: 0 8px 24px rgba(23, 26, 31, .12); font-size: 13px; line-height: 1.45; }
 .setup-screen { min-height: 100vh; display: grid; place-items: center; text-align: center; padding: 24px; }
 .setup-screen section { width: min(500px, calc(100vw - 32px)); }

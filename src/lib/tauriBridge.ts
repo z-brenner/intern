@@ -100,8 +100,12 @@ export interface SetupEventSource {
   subscribeSetup(listener: (state: SetupState) => void): Promise<() => void>;
 }
 
+/** Whether files are being dragged over the window, and how many, for the drop overlay. */
+export interface DragState { dragging: boolean; count: number }
+
 export interface TauriSelectionBoundary extends SelectionBoundary {
   subscribeDrops(listener: (selection: SelectionResult) => void): Promise<() => void>;
+  subscribeDragState?(listener: (state: DragState) => void): Promise<() => void>;
 }
 
 export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource {
@@ -365,15 +369,52 @@ export function createTauriSelectionBoundary(transport: TauriTransport = default
       }
       return { files: selections(paths) };
     },
+    // The raw window event, not Webview.onDragDropEvent: the runtime sends
+    // `{ paths, position }` and nothing else. The `type: 'drop'` this used to
+    // insist on is added only by that JS wrapper, which Intern does not use, so
+    // every desktop drop was silently thrown away. A folder is passed on as a
+    // path like any file; queue_add_files expands directories itself.
     subscribeDrops: async (listener) => {
-      const stop = await transport.listen<{ type?: string; paths?: unknown }>('tauri://drag-drop', ({ payload }) => {
-        if (payload.type === 'drop') listener({ files: selections(stringPaths(payload.paths)) });
+      const stop = await transport.listen<{ paths?: unknown } | null>('tauri://drag-drop', ({ payload }) => {
+        const paths = stringPaths(payload?.paths);
+        if (paths.length) listener({ files: selections(paths) });
       });
       let active = true;
       return () => {
         if (!active) return;
         active = false;
         stop();
+      };
+    },
+    // Only drag-enter carries the paths, so it alone decides whether a drag is
+    // something Intern can take: dragged text arrives with none, and offering
+    // "Drop to add 0 files" for it would promise a drop that is then ignored.
+    // A drop ends the drag as surely as a leave does - the runtime sends no
+    // leave after it. drag-over is not listened to: it carries only a
+    // position, fires continuously, and one arriving after the drop would put
+    // the overlay back up with nothing left to take it down.
+    subscribeDragState: async (listener) => {
+      let dragging = false;
+      const report = (count: number) => {
+        const next = count > 0;
+        if (!next && !dragging) return;
+        dragging = next;
+        listener({ dragging, count });
+      };
+      const stops: Array<() => void> = [];
+      try {
+        stops.push(await transport.listen<{ paths?: unknown } | null>('tauri://drag-enter', ({ payload }) => report(stringPaths(payload?.paths).length)));
+        stops.push(await transport.listen<unknown>('tauri://drag-leave', () => report(0)));
+        stops.push(await transport.listen<unknown>('tauri://drag-drop', () => report(0)));
+      } catch (error) {
+        stops.forEach((stop) => stop());
+        throw error;
+      }
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        stops.forEach((stop) => stop());
       };
     },
   };

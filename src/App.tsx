@@ -14,7 +14,7 @@ import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
-import type { TauriSelectionBoundary } from './lib/tauriBridge';
+import type { DragState, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
@@ -116,6 +116,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const [updateInstalling, setUpdateInstalling] = useState(false);
   const [updateError, setUpdateError] = useState('');
   const narrowInspector = useMediaQuery('(max-width: 1100px)');
+  // Files dragged over the desktop window. The webview never sees them - the
+  // runtime takes the drop - so without this nothing on screen said a drop
+  // would land anywhere.
+  const [drag, setDrag] = useState<DragState>({ dragging: false, count: 0 });
 
   useEffect(() => {
     void (pendingSettings ?? bridge.getSettings()).then((loaded) => { setSettings(loaded); setSettingsLoaded(true); }).catch(() => setSettingsLoaded(false));
@@ -337,6 +341,17 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     }).catch(() => { /* No drop stream in this runtime; the pickers still work. */ });
     return () => { active = false; stop?.(); };
   }, [selection]);
+  useEffect(() => {
+    const source = selection as (SelectionBoundary & Partial<TauriSelectionBoundary>) | undefined;
+    if (!source?.subscribeDragState) return;
+    let active = true;
+    let stop: (() => void) | undefined;
+    void source.subscribeDragState((state) => { if (active) setDrag(state); }).then((unsubscribe) => {
+      if (active) stop = unsubscribe;
+      else unsubscribe();
+    }).catch(() => { /* No drag events in this runtime; drops still land, unannounced. */ });
+    return () => { active = false; stop?.(); setDrag({ dragging: false, count: 0 }); };
+  }, [selection]);
   // Opened from Settings. The queue stays subscribed underneath, and the
   // saved settings are read back afterwards so Settings shows the new folder.
   if (folderSetupOpen) return <FolderSetupFlow bridge={bridge} selection={selection} onCancel={() => setFolderSetupOpen(false)} onDone={async () => {
@@ -367,6 +382,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       reliably spoken. Every other error banner in the app is an alert too.
     */}
     {actionError && <p className="operation-feedback" role="alert" aria-label="Action error">{actionError}</p>}
+    {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{drag.count > 0 ? `Drop to add ${drag.count} ${drag.count === 1 ? 'file' : 'files'}` : 'Drop to add files'}</p></div>}
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
        offered twice. */}
