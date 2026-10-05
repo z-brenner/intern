@@ -96,8 +96,12 @@ describe('the update settings', () => {
 
   it('undoes its own pause when installing fails, and leaves a pause the person made', async () => {
     const bridge = createInMemoryBridge({ update: available, items: [] });
-    const pauseQueue = vi.spyOn(bridge, 'pauseQueue').mockResolvedValue();
-    const resumeQueue = vi.spyOn(bridge, 'resumeQueue').mockResolvedValue();
+    // Spies that call through: the queue must really be paused and resumed.
+    // A stub that only resolves leaves the in-memory queue running, and its
+    // next state event then reports it unpaused - which reads to the app as
+    // the person's own pause having gone away.
+    const pauseQueue = vi.spyOn(bridge, 'pauseQueue');
+    const resumeQueue = vi.spyOn(bridge, 'resumeQueue');
     vi.spyOn(bridge, 'installUpdate').mockImplementation(async (_onProgress, beforeInstall) => {
       await beforeInstall?.();
       throw new Error('The installer could not be started.');

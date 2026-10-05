@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
@@ -299,8 +299,11 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // still part-way through its move, read from the queue itself rather than
   // from the last render. A pause made here is undone if installing then
   // fails; a pause the person made is left as it was.
+  // Updated in the same commit as the screen, not after paint: an Install
+  // clicked the moment a pause shows must already see that pause, or it
+  // pauses again and later undoes a pause the person made.
   const pausedNow = useRef(paused);
-  useEffect(() => { pausedNow.current = paused; }, [paused]);
+  useLayoutEffect(() => { pausedNow.current = paused; }, [paused]);
   const installUpdateBetweenRenames = async (onProgress?: UpdateProgressListener) => {
     let pausedForInstall = false;
     const settleRenames = async () => {
