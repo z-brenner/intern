@@ -459,8 +459,11 @@ describe('SharePoint connection in Settings', () => {
   it('moves focus into the dialog when the manual fields it started on are replaced', async () => {
     renderDialog(managedBridge());
     await screen.findByRole('region', { name: 'SharePoint connection' });
+    // Focus moves in an effect that runs after the card is committed. On a
+    // loaded machine React's scheduler yields between the two and the card
+    // is found in that gap, with focus still on the page; wait for the effect.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Arrange filed documents')));
     expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(document.activeElement as HTMLElement);
-    expect(document.activeElement).toBe(screen.getByLabelText('Arrange filed documents'));
   });
 
   it('lets the keyboard reach the support details disclosure', async () => {
