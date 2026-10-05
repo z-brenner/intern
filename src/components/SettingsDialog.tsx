@@ -227,6 +227,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // manual pairing; a build without the deployment, or a failed read, shows
   // them exactly as it always has.
   const [managed, setManaged] = useState<boolean>();
+  // What the backend said about the deployment, kept apart from `managed`:
+  // a failed read also leaves the manual controls up, but only an explicit
+  // "not in this build" means Microsoft verification can never work here.
+  const [sharePointAvailable, setSharePointAvailable] = useState<boolean>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
   const destination = useRef<HTMLInputElement>(null);
@@ -265,7 +269,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   useEffect(() => {
     let active = true;
     void Promise.resolve().then(() => bridge.getOnboarding())
-      .then((onboarding) => { if (active) setManaged(onboarding.sharePointAvailable); })
+      .then((onboarding) => { if (active) { setManaged(onboarding.sharePointAvailable); setSharePointAvailable(onboarding.sharePointAvailable); } })
       // Without an answer the manual settings stay, and the backend still enforces its policy on save.
       .catch(() => { if (active) setManaged(false); });
     return () => { active = false; };
@@ -554,7 +558,13 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="check-hint">Off by default: only your verified uploads are eligible. Turning this on accepts other verified uploaders too, never unknown ones.</p>
         <label className="check-label"><input type="checkbox" checked={Boolean(next.intakeLocalOnly)} disabled={Boolean(intakeCloud)} onChange={(event) => setNext({ ...next, intakeLocalOnly: event.target.checked })} />This is a private local intake, not a shared or synced folder</label>
         <p className="check-hint">Private local mode does not verify Microsoft uploaders. Never use it for shared intake. Previously paired Microsoft folders remain protected.</p>
-        {!next.intakeLocalOnly && <MicrosoftIntakeSettings bridge={bridge} savedFolder={settings.intakeFolder} unsavedFolder={next.intakeFolder !== settings.intakeFolder} />}
+        {/*
+          Not in a build without the SharePoint deployment: Microsoft upload
+          verification reads the same provisioned identifiers, so the panel
+          could only show an internal error and a Connect button that never
+          works. Every build shipped so far is such a build.
+        */}
+        {!next.intakeLocalOnly && sharePointAvailable !== false && <MicrosoftIntakeSettings bridge={bridge} savedFolder={settings.intakeFolder} unsavedFolder={next.intakeFolder !== settings.intakeFolder} />}
         <label>This machine's name<input value={next.machineLabel} onChange={(event) => setNext({ ...next, machineLabel: event.target.value })} /></label>
         {/*
           The folder a SharePoint library syncs to lives under the user's

@@ -1,9 +1,21 @@
 import type { DesktopBridge } from '../../lib/bridge';
+import { isTauriRuntime } from '../../lib/tauriBridge';
+import { describeSharePointProblem } from '../sharepoint/sharePointProblems';
 import { useMicrosoftSignIn } from './useMicrosoftSignIn';
 
 export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: { bridge: DesktopBridge; savedFolder: string; unsavedFolder: boolean }) {
   const { status, prompt, busy, error, run, refresh, begin, disconnect } = useMicrosoftSignIn(bridge);
-  const available = Boolean(bridge.microsoftIntakeStatus && bridge.microsoftSignInStart && bridge.microsoftSignInPoll && bridge.microsoftDisconnect && bridge.microsoftBindIntake && !status?.error);
+  const supported = Boolean(bridge.microsoftIntakeStatus && bridge.microsoftSignInStart && bridge.microsoftSignInPoll && bridge.microsoftDisconnect && bridge.microsoftBindIntake);
+  const available = supported && !status?.error;
+  /*
+    A build without the provisioned identifiers has nothing here to set up.
+    It used to show the backend's own sentence as a red error, a Connect
+    button that could never be enabled, and the hint that this was a browser
+    preview - inside the installed app. One plain line says what is true.
+  */
+  if (status?.error && describeSharePointProblem(status.error).code === 'SHAREPOINT_DEPLOYMENT_UNAVAILABLE') {
+    return <p className="check-hint" role="status" aria-label="Microsoft connection status">Microsoft upload verification is not part of this build.</p>;
+  }
 
   const documents = status?.documents ?? [];
   const counts = {
@@ -14,8 +26,10 @@ export function MicrosoftIntakeSettings({ bridge, savedFolder, unsavedFolder }: 
   return <div className="microsoft-intake" role="group" aria-label="Microsoft upload identity">
     <div className="identity-heading"><h4>Microsoft upload identity</h4><span className="identity-policy">Unknown uploader = held</span></div>
     <p className="section-lead">Unverified uploads are never processed. Intern checks Microsoft's own file metadata for who created the document and who last modified it, never a typed name or the computer that synced it first.</p>
-    {!available && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
+    {/* Only the browser preview lacks the Microsoft commands; the desktop app never calls itself one. */}
+    {!supported && !isTauriRuntime() && <p className="check-hint">Microsoft account connection is available in the installed desktop app. This browser preview cannot verify any uploads.</p>}
     {status?.error && <p className="form-error" role="status" aria-label="Microsoft connection status">{status.error}</p>}
+    <h4>1. Connect your Microsoft account</h4>
     {status?.connected ? <div className="identity-account">
       <p className="field-label">Processing for</p>
       <strong>{status.account?.displayName ?? 'Microsoft account awaiting revalidation'}</strong>
