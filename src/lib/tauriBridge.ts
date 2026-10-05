@@ -68,6 +68,12 @@ interface QueueItemDto {
   houseRules?: HouseRule[];
   nearDuplicateOf?: string;
   fileModifiedDate?: string;
+  // From the receipt the backend keeps for each filing (WP-07). An older
+  // backend omits them, and the window falls back to the proposal.
+  filedPath?: string | null;
+  filedName?: string | null;
+  keptOriginal?: boolean;
+  parked?: boolean;
 }
 
 interface HistoryEntryDto {
@@ -135,7 +141,15 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   resumeQueue(): Promise<void> { return this.transport.invoke('queue_resume'); }
   cancel(id: string): Promise<void> { return this.transport.invoke('queue_cancel', { id }); }
   retry(id: string): Promise<void> { return this.transport.invoke('queue_retry', { id }); }
-  remove(id: string): Promise<void> { return this.transport.invoke('queue_remove', { id }); }
+  reanalyze(id: string): Promise<void> { return this.transport.invoke('queue_reanalyze', { id }); }
+  // Always sent, false unless the person said so: a backend from before the
+  // confirmation existed ignores the extra argument, and one after it reads
+  // a missing value as "not confirmed" anyway.
+  remove(id: string, options?: { confirmed?: boolean }): Promise<void> {
+    return this.transport.invoke('queue_remove', { id, confirmed: options?.confirmed === true });
+  }
+  openItem(id: string): Promise<void> { return this.transport.invoke('document_open', { id }); }
+  revealItem(id: string): Promise<void> { return this.transport.invoke('document_reveal', { id }); }
 
   approve(id: string, filename: string, description: string): Promise<void> {
     return this.transport.invoke('proposal_approve', { id, filename, description });
@@ -463,6 +477,13 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.reason === undefined && item.errorCode === undefined
       ? {}
       : { reason: humanizeReason(item.reason ?? item.errorCode ?? '') }),
+    // The sentence above is for people; the code is what decides which
+    // actions the backend will accept, so it is kept as sent.
+    ...(item.errorCode ? { errorCode: item.errorCode } : {}),
+    ...(typeof item.filedName === 'string' && item.filedName ? { filedName: item.filedName } : {}),
+    ...(typeof item.filedPath === 'string' && item.filedPath ? { filedPath: item.filedPath } : {}),
+    ...(item.keptOriginal === undefined ? {} : { keptOriginal: item.keptOriginal }),
+    ...(item.parked === undefined ? {} : { parked: item.parked }),
     ...(item.progress === undefined ? {} : { progress: item.progress }),
     ...(status === 'processing' ? { cancelable: item.status !== 'applying' } : {}),
     ...(item.undoable === undefined ? {} : { undoable: item.undoable }),

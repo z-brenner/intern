@@ -72,8 +72,26 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   approve(id: string, filename: string, description: string): Promise<void>;
   keepOriginal(id: string): Promise<void>;
   retry(id: string): Promise<void>;
-  remove(id: string): Promise<void>;
+  /**
+   * Forget a ready or review item's proposal and read the document again -
+   * for a proposal that is wrong, or a file that changed after it was read.
+   */
+  reanalyze(id: string): Promise<void>;
+  /**
+   * Take an item out of the queue. A parked item (see `QueueItem.parked`) is
+   * removed only with `confirmed`, the person's word that they have resolved
+   * its files themselves.
+   */
+  remove(id: string, options?: { confirmed?: boolean }): Promise<void>;
   undo(id: string): Promise<void>;
+  /**
+   * Open an item's document in the program the system uses for it: the filed
+   * copy once renamed, the file as it arrived before that. Takes an id, never
+   * a path, so the webview cannot ask the shell to open anything else.
+   */
+  openItem(id: string): Promise<void>;
+  /** Show an item's document selected in its folder. Same id-only contract as `openItem`. */
+  revealItem(id: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   saveSettings(settings: AppSettings): Promise<void>;
   getSetup(): Promise<SetupState>;

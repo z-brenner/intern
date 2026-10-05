@@ -388,7 +388,7 @@ describe('queue interactions', () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
-    await bridge.keepOriginal('lease');
+    await bridge.approve('lease', '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf', '');
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeVisible();

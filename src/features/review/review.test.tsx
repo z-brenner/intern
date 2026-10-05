@@ -372,15 +372,24 @@ describe('review actions', () => {
       .toHaveTextContent('https://z-brenner.github.io/intern/guide.html');
   });
 
-  it('moves Keep original to Completed and lets the user undo it', async () => {
+  // Keeping the original name renames nothing, so the backend has no rename
+  // to undo and refuses one. The in-memory bridge used to offer it anyway.
+  it('moves Keep original to Completed without offering an undo the backend would refuse', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Keep original/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
 
-    expect((await bridge.listItems()).find((item) => item.id === 'lease')?.status).toBe('review');
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+    expect((await bridge.listItems()).find((item) => item.id === 'lease')).toMatchObject({
+      status: 'completed',
+      keptOriginal: true,
+      undoable: false,
+      // The proposal stays, unapplied, as the backend leaves it.
+      proposedFilename: '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf',
+    });
+    await expect(bridge.undo('lease')).rejects.toMatchObject({ code: 'STATE_CONFLICT' });
   });
 });

@@ -13,6 +13,24 @@ export interface QueueItem {
   description?: string;
   evidence?: { date?: string; type?: string; parties?: string };
   reason?: string;
+  /**
+   * The backend's code for why the item is in review or failed, kept beside
+   * the humanized `reason`: which actions the backend accepts depends on it
+   * (only some review codes can be retried), and the sentence cannot say.
+   */
+  errorCode?: string;
+  /** The name the document was filed under, which can differ from the proposal (a " (2)" suffix, a layout folder). */
+  filedName?: string;
+  /** Where the filed document is, for showing it in its folder. */
+  filedPath?: string;
+  /** Completed without a rename: the document kept the name it arrived with. */
+  keptOriginal?: boolean;
+  /**
+   * A rename stopped part-way and its files need checking before anything
+   * else can happen: approve and keep are refused until "Check again", and
+   * removing it needs the person to say they sorted the files out themselves.
+   */
+  parked?: boolean;
   progress?: number;
   cancelable?: boolean;
   undoable?: boolean;

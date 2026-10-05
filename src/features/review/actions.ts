@@ -1,0 +1,108 @@
+import type { QueueItem } from '../../types';
+
+/**
+ * Review codes the backend's retry accepts (Pipeline::retry): a duplicate is
+ * processed anyway, an unverified upload is checked again, and a renamed copy
+ * whose original could not be deleted has the deletion tried again. Every
+ * other review reason is refused with INVALID_TRANSITION, which is why Retry
+ * is not on the menu for them.
+ */
+const RETRYABLE_REVIEW_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED', 'SOURCE_DELETE_FAILED']);
+
+/** The two codes that always meant a rename's files need checking, before the backend said so itself. */
+const PARKED_CODES = new Set(['SOURCE_DELETE_FAILED', 'RECONCILIATION_REQUIRED']);
+
+/**
+ * Whether a review item's files need checking before it can be decided. The
+ * backend reports it (`parked`); a backend from before that field is read
+ * from the codes that meant it.
+ */
+export function isParked(item: QueueItem): boolean {
+  if (item.status !== 'review') return false;
+  return item.parked ?? PARKED_CODES.has(item.errorCode ?? '');
+}
+
+/** Whether the backend would accept Retry for this item. */
+export function retryAccepted(item: QueueItem): boolean {
+  if (item.status === 'failed') return true;
+  return item.status === 'review' && (isParked(item) || RETRYABLE_REVIEW_CODES.has(item.errorCode ?? ''));
+}
+
+/** Ready and review items can be decided, unless their files need checking first. */
+export function undecided(item: QueueItem): boolean {
+  return (item.status === 'review' || item.status === 'ready') && !isParked(item);
+}
+
+/** What the inspector offers for an item: exactly what the backend accepts for it, and nothing it refuses. */
+export interface ItemActions {
+  /** Approve & rename (review) or Apply rename (ready). Needs a proposal: the backend has nothing to approve without one. */
+  approve: boolean;
+  keep: boolean;
+  /** Retry under the name that says what it does here, and whether it is the item's main action. */
+  retry?: { label: string; primary: boolean };
+  reanalyze: boolean;
+  /** Remove, and whether the person must first say they resolved the files themselves. */
+  remove?: { label: string; resolvedFiles: boolean };
+  cancel: boolean;
+  undo: boolean;
+  /** Open and Show in folder: the source until it is filed, the filed copy after. */
+  open: boolean;
+}
+
+export function itemActions(item: QueueItem): ItemActions {
+  const none: ItemActions = { approve: false, keep: false, reanalyze: false, cancel: false, undo: false, open: false };
+  switch (item.status) {
+    case 'review': {
+      // Parked: approve and keep are refused until the files are checked, so
+      // the check is the main action rather than an entry in a menu.
+      if (isParked(item)) return { ...none, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true };
+      const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : undefined;
+      return {
+        ...none,
+        approve: item.proposedFilename !== undefined,
+        keep: true,
+        ...(retry ? { retry: { label: retry, primary: false } } : {}),
+        reanalyze: retry === undefined,
+        remove: { label: 'Remove from queue', resolvedFiles: false },
+        open: true,
+      };
+    }
+    case 'ready':
+      return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: true, remove: { label: 'Remove from queue', resolvedFiles: false }, open: true };
+    case 'waiting':
+      return { ...none, remove: { label: 'Remove from queue', resolvedFiles: false } };
+    case 'failed':
+      return { ...none, retry: { label: 'Retry item', primary: false }, remove: { label: 'Remove item', resolvedFiles: false } };
+    case 'processing':
+      return { ...none, cancel: item.cancelable !== false };
+    case 'completed':
+      return { ...none, undo: item.undoable === true, open: true };
+  }
+  return none;
+}
+
+/**
+ * Items still waiting on a person, in the order review works through them:
+ * those needing review first, then those ready to apply, each in the order
+ * the table shows them.
+ */
+export function undecidedOrder(rows: QueueItem[]): QueueItem[] {
+  return [...rows.filter((item) => item.status === 'review'), ...rows.filter((item) => item.status === 'ready')].filter(undecided);
+}
+
+/**
+ * The undecided item to go to after `currentId`: the next one after it in
+ * `undecidedOrder`, wrapping round to those skipped earlier. `before` is the
+ * order when the decision was made, so an item decided out of order still
+ * hands on to the one that followed it; `rows` is the queue now.
+ */
+export function nextUndecided(before: QueueItem[], currentId: string, rows: QueueItem[]): QueueItem | undefined {
+  const now = undecidedOrder(rows).filter((item) => item.id !== currentId);
+  const index = before.findIndex((item) => item.id === currentId);
+  const rotation = index < 0 ? before : [...before.slice(index + 1), ...before.slice(0, index)];
+  for (const candidate of rotation) {
+    const current = now.find((item) => item.id === candidate.id);
+    if (current) return current;
+  }
+  return now[0];
+}

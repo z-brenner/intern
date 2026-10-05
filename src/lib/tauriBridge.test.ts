@@ -153,7 +153,7 @@ describe('TauriBridge', () => {
       { command: 'queue_resume', args: undefined },
       { command: 'queue_cancel', args: { id: '7' } },
       { command: 'queue_retry', args: { id: '7' } },
-      { command: 'queue_remove', args: { id: '7' } },
+      { command: 'queue_remove', args: { id: '7', confirmed: false } },
       { command: 'proposal_approve', args: { id: '7', filename: '2024-04-12 - Agreement.pdf', description: 'Agreement description.' } },
       { command: 'proposal_keep_original', args: { id: '7' } },
       { command: 'operation_undo', args: { id: '7' } },
@@ -175,6 +175,55 @@ describe('TauriBridge', () => {
       { command: 'descriptions_status', args: undefined },
       { command: 'descriptions_backfill', args: undefined },
     ]);
+  });
+
+  // The review menu, Open and Show in folder name an item by id and nothing
+  // else; which file that is stays the backend's decision.
+  it('reanalyze_open_reveal_invoke_expected_commands', async () => {
+    const fake = fakeTransport();
+    const bridge = new TauriBridge(fake.transport);
+
+    await bridge.reanalyze('7');
+    await bridge.openItem('7');
+    await bridge.revealItem('7');
+    await bridge.remove('8', { confirmed: true });
+    await bridge.remove('9', {});
+
+    expect(fake.calls).toEqual([
+      { command: 'queue_reanalyze', args: { id: '7' } },
+      { command: 'document_open', args: { id: '7' } },
+      { command: 'document_reveal', args: { id: '7' } },
+      { command: 'queue_remove', args: { id: '8', confirmed: true } },
+      { command: 'queue_remove', args: { id: '9', confirmed: false } },
+    ]);
+  });
+
+  // The humanized reason cannot say which review items the backend will
+  // retry; the code can, so it is kept beside the sentence.
+  it('normalize_keeps_error_code_and_filed_fields', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'low.pdf', status: 'needs_review', proposedFilename: '2024-01-02 Letter.pdf', reason: 'LOW_CONFIDENCE', errorCode: null },
+        { id: 2, originalFilename: 'copy.pdf', status: 'needs_review', reason: 'Duplicate of 2024 Filed.pdf', errorCode: 'DUPLICATE' },
+        { id: 3, originalFilename: 'scan.pdf', status: 'completed', proposedFilename: '2024-03-01 Lease.pdf', filedName: '2024-03-01 Lease (2).pdf', filedPath: 'C:\\Filed\\2024-03-01 Lease (2).pdf', keptOriginal: false, parked: false, undoable: true },
+        { id: 4, originalFilename: 'kept.pdf', status: 'completed', proposedFilename: '2024-03-02 Notice.pdf', filedName: null, filedPath: null, keptOriginal: true, parked: false },
+        { id: 5, originalFilename: 'stuck.pdf', status: 'needs_review', errorCode: 'RECONCILIATION_REQUIRED', parked: true },
+        // An older backend sends none of the filing fields.
+        { id: 6, originalFilename: 'old.pdf', status: 'completed', proposedFilename: '2024-03-03 Memo.pdf', undoable: true },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0]).not.toHaveProperty('errorCode');
+    expect(items[0].reason).toBe('The model reported low confidence in its own proposal.');
+    expect(items[1]).toMatchObject({ errorCode: 'DUPLICATE', reason: 'Duplicate of 2024 Filed.pdf' });
+    expect(items[2]).toMatchObject({ filedName: '2024-03-01 Lease (2).pdf', filedPath: 'C:\\Filed\\2024-03-01 Lease (2).pdf', keptOriginal: false, parked: false });
+    expect(items[3]).toMatchObject({ keptOriginal: true });
+    expect(items[3]).not.toHaveProperty('filedName');
+    expect(items[3]).not.toHaveProperty('filedPath');
+    expect(items[4]).toMatchObject({ status: 'review', errorCode: 'RECONCILIATION_REQUIRED', parked: true });
+    for (const field of ['filedName', 'filedPath', 'keptOriginal', 'parked']) expect(items[5]).not.toHaveProperty(field);
   });
 
   it('keeps a history description only when the backend sent a sentence', async () => {
