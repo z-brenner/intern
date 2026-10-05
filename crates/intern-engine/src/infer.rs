@@ -26,6 +26,7 @@ use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
     date_match_positions, extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely,
 };
+use crate::validate::rfind_word;
 
 /// Roles in the order one wins when a line carries several cues: the more
 /// specific reading first, so "notice of termination dated" reads as a notice
@@ -305,12 +306,16 @@ fn continues_sentence(line: &str) -> bool {
 
 /// Whether the wording before a date merely labels it as the date: "Date:",
 /// "Dated", "Date of this ...", or a bare "DATE" the way a stamped form
-/// writes it.
+/// writes it. The cues are read as whole words: "Last updated:" and "Status
+/// update:" contain the letters of "dated" and "date:" without labelling
+/// anything as the date.
 fn is_generic_label(window: &str) -> bool {
     if labels_another_date(window) {
         return false;
     }
-    GENERIC_DATE_CUES.iter().any(|cue| window.contains(cue))
+    GENERIC_DATE_CUES
+        .iter()
+        .any(|cue| rfind_word(window, cue).is_some())
         || window
             .trim_end()
             .rsplit(|character: char| !character.is_alphanumeric())
@@ -345,9 +350,14 @@ pub(crate) fn labels_a_deadline(window: &str) -> bool {
 
 /// Whether the wording before a date names it as the day the document was
 /// issued: "Invoice Date:", "Date of issue", "Dated", or a bare "Date:".
+/// Whole words only, because the date found here can replace the model's: a
+/// footer's "Rates updated January 1, 2024" is no issue date.
 pub(crate) fn labels_the_issue_date(window: &str) -> bool {
     !labels_another_date(window)
-        && (ISSUE_LABELS.iter().any(|label| window.contains(label)) || is_generic_label(window))
+        && (ISSUE_LABELS
+            .iter()
+            .any(|label| rfind_word(window, label).is_some())
+            || is_generic_label(window))
 }
 
 /// The wording a date's role is read from: what stands before it on its
@@ -1236,6 +1246,29 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
         assert_eq!(readings("2025-04-30"), vec!["2025-04-30"]);
         assert_eq!(readings("04/05/2025"), vec!["2025-04-05", "2025-05-04"]);
         assert!(readings("04/30/25").is_empty());
+    }
+
+    /// "updated" and "update:" hold the letters of "dated" and "date:", and
+    /// read as a bare date label they lent the type's default role to a date
+    /// that only says when something last changed.
+    #[test]
+    fn an_update_is_not_a_date_label() {
+        for line in [
+            "Prices last updated April 1, 2026",
+            "Status update: April 1, 2026",
+        ] {
+            let digest = digest_of(&format!("INVOICE INV-2048\n{line}"));
+            assert_eq!(
+                infer_date_role(&digest, "2026-04-01", Some("Invoice")),
+                None,
+                "{line}"
+            );
+        }
+        let digest = digest_of("INVOICE INV-2048\nDate: April 1, 2026");
+        assert_eq!(
+            infer_date_role(&digest, "2026-04-01", Some("Invoice")),
+            Some(DateRole::Invoice)
+        );
     }
 
     /// A notice dated a day was given that day, whatever it terminates; the

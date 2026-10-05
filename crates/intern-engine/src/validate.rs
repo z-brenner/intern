@@ -619,7 +619,7 @@ fn noun_ending(text: &str) -> Option<usize> {
 
 /// The last place `word` stands in `haystack` as a whole word, with no
 /// letter or digit running into it on either side.
-fn rfind_word(haystack: &str, word: &str) -> Option<usize> {
+pub(crate) fn rfind_word(haystack: &str, word: &str) -> Option<usize> {
     haystack.rmatch_indices(word).map(|(at, _)| at).find(|&at| {
         let before = haystack[..at].chars().next_back();
         let after = haystack[at + word.len()..].chars().next();
@@ -2143,6 +2143,27 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             Some("2026-03-01")
         );
         assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+    }
+
+    /// "updated" holds the letters of "dated", and a footer's "Rates updated
+    /// January 1, 2024" stood as the invoice's issue date, ready to replace
+    /// the due date with a date that is not the invoice's either.
+    #[test]
+    fn an_update_is_not_the_issue_date() {
+        for footer in [
+            "Rates updated January 1, 2024",
+            "Status update: January 1, 2024",
+        ] {
+            let outcome = validate_at(
+                invoice("2025-05-30"),
+                &digest_of(&invoice_document(&format!(
+                    "Due Date: 05/30/2025\n{footer}"
+                ))),
+                2026,
+            );
+            assert_eq!(outcome.proposal.document_date, None, "{footer}");
+            assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        }
     }
 
     /// A description that writes a date in words for a document that prints
