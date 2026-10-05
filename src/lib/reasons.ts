@@ -19,6 +19,9 @@ const SENTENCES: Record<string, string> = {
   LOW_CONFIDENCE: 'The model reported low confidence in its own proposal.',
   MODEL_REQUESTED_REVIEW: 'The model asked for a person to look at this one.',
   PARSER_WARNING: 'Extraction reported a problem that could corrupt what was read.',
+  DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
+  DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
+  DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
   FILE_CHANGED: 'The file changed after it was analyzed, so the result no longer describes it.',
   SOURCE_LOCKED: 'Another program is still holding this file open — often a sync client mid-upload. Retry once it settles.',
   DESTINATION_UNAVAILABLE: 'The destination folder is unavailable, or already has a file with this name.',
@@ -27,6 +30,20 @@ const SENTENCES: Record<string, string> = {
   RECONCILIATION_REQUIRED: 'Recovery could not tell which file is the document, and both are still on disk. Compare the two names before deciding.',
   PROPOSAL_MISSING: 'Analysis finished without a usable proposal.',
   IO_ERROR: 'A file operation failed.',
+  PASSWORD_PROTECTED: 'This file is password-protected. Remove the password and add it again.',
+  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so Intern could not read it.',
+  DOCUMENT_TOO_LARGE: 'This document is too large for Intern to read. Split it, or name it yourself.',
+  OCR_UNAVAILABLE: 'Intern\'s text-recognition files are missing. Reinstall Intern to restore them.',
+  EXTRACTION_FAILED: 'Intern could not read this file. It may be damaged; open it to check, then retry or remove it.',
+  ANALYSIS_FAILED: 'Intern hit an internal error while reading this document. Retry, or name it yourself.',
+  MODEL_FAILED: 'The model could not finish reading this document. Retry it.',
+  MODEL_OUTPUT_INVALID: 'The model\'s answer for this document could not be used. Retry it, or name it yourself.',
+  MODEL_INPUT_TOO_LARGE: 'This document is too long for the model to read at once. Name it yourself, or split it.',
+  MODEL_REPLY_TRUNCATED: 'The model\'s answer was cut off before it finished. Retry it, or name it yourself.',
+  HOSTED_MODEL_UNAVAILABLE: 'The hosted model could not be used for this document. Check the Model section in Settings.',
+  HOSTED_MODEL_BILLING: 'The hosted service refused the request for billing or quota reasons. Check your account\'s credit, then resume the queue.',
+  STATE_CONFLICT: 'Another file operation was in progress. Try again in a moment.',
+  INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
   DATE_REQUIRED: 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.',
   MODEL_DECLINED: 'The hosted model declined to answer about this document. Name it yourself, or keep the original.',
   HOSTED_MODEL_MISCONFIGURED: 'The hosted model\'s address, model name, or key is not usable. Check the Model section in Settings.',
@@ -48,6 +65,8 @@ const SENTENCES: Record<string, string> = {
   // name and the proposal is still here, so the document waits for a decision
   // rather than being renamed again by the next automatic pass.
   UNDONE: 'You undid this rename. The document is back under its original name and waits for your decision.',
+  // Set when the document already had exactly the name Intern would give it.
+  ALREADY_NAMED: 'This document already had this name, so nothing was renamed.',
 };
 
 /**

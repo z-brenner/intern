@@ -527,6 +527,10 @@ pub const NEAR_DUPLICATE: &str = "NEAR_DUPLICATE";
 /// it started and waits for a decision; nothing files it again on its own.
 pub const UNDONE: &str = "UNDONE";
 
+/// Recorded when the document already carried exactly the name Intern would
+/// give it, so filing it completed without touching the file.
+pub const ALREADY_NAMED: &str = "ALREADY_NAMED";
+
 impl ProposalRecord {
     /// The validated facts as the name carries them: the document's words,
     /// respelled the way the reviewer has taught Intern to.

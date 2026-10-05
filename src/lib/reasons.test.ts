@@ -44,4 +44,20 @@ describe('humanizeReason', () => {
     expect(humanizeReason(name)).toBe(name);
     expect(humanizeReason('TYPE_UNSUPPORTED, SOMETHING_NEW')).toBe('TYPE_UNSUPPORTED, SOMETHING_NEW');
   });
+
+  it('has a plain sentence for every failure and review code the backend can store', () => {
+    const codes = [
+      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS',
+      'PASSWORD_PROTECTED', 'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'OCR_UNAVAILABLE',
+      'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
+      'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',
+      'HOSTED_MODEL_BILLING', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'ALREADY_NAMED',
+    ];
+    for (const code of codes) {
+      const sentence = humanizeReason(code);
+      expect(sentence, code).not.toBe(code);
+      expect(sentence, code).toMatch(/[.]$/);
+    }
+  });
 });
+
