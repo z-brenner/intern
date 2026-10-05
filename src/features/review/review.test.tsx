@@ -147,6 +147,28 @@ describe('review actions', () => {
     expect(within(inspector).queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
   });
 
+  // The backend on this branch sends neither filedName nor keptOriginal, and
+  // keeps the unapplied proposal on a kept original. The fallback to that
+  // proposal said "Renamed to" a name the file never had.
+  it('tells a kept original from a rename before the backend reports filings', async () => {
+    render(<App bridge={createInMemoryBridge({ items: [
+      { id: 'filed', originalFilename: 'Scan 0401.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', undoable: true },
+      { id: 'kept', originalFilename: 'Scan 0402.pdf', status: 'completed', proposedFilename: '2024-05-07 Board Meeting Minutes.pdf', undoable: false },
+    ] })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
+
+    expect(await screen.findByRole('row', { name: /Scan 0401\.pdf/ })).toHaveTextContent('2024-01-22 Lease Agreement.pdf');
+    expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).toHaveTextContent('Kept original');
+    expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.pdf');
+
+    selectRow(screen.getByRole('row', { name: /Scan 0401\.pdf/ }));
+    const inspector = screen.getByRole('complementary', { name: 'Review item' });
+    await waitFor(() => expect(inspector).toHaveTextContent('Renamed to 2024-01-22 Lease Agreement.pdf'));
+    selectRow(screen.getByRole('row', { name: /Scan 0402\.pdf/ }));
+    await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
+    expect(inspector).not.toHaveTextContent('Renamed to');
+  });
+
   it('says plainly when the document is no longer where Intern saw it', async () => {
     const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
     render(<App bridge={{ ...createInMemoryBridge(), openItem }} />);

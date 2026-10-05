@@ -5,7 +5,7 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
-import { itemActions } from '../features/review/actions';
+import { itemActions, keptOriginal } from '../features/review/actions';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { QueueItem } from '../types';
@@ -217,7 +217,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
       <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
       <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
       {item.status === 'ready' && item.approved && <p className="filed-outcome">Approved. It will be renamed when the queue is free.</p>}
-      {completed && (item.keptOriginal
+      {completed && (keptOriginal(item)
         ? <p className="filed-outcome">Kept its original name</p>
         : filedAs && <p className="filed-outcome">Renamed to <strong>{filedAs}</strong></p>)}
       <StatusCell item={item} />

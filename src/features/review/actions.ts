@@ -22,6 +22,20 @@ export function isParked(item: QueueItem): boolean {
   return item.parked ?? PARKED_CODES.has(item.errorCode ?? '');
 }
 
+/**
+ * Whether a completed item kept the name it arrived with. The backend says so
+ * itself once it reports filings (`keptOriginal`). Until then, a completed
+ * item has a finished rename behind it exactly when it can be undone - the
+ * same test the backend's own intake report makes - so one that cannot be
+ * undone, and names no filing, was not renamed. Falling back to the proposal
+ * instead said "Renamed to" a name the file never had: the backend keeps an
+ * unapplied proposal on a kept original.
+ */
+export function keptOriginal(item: QueueItem): boolean {
+  if (item.status !== 'completed') return false;
+  return item.keptOriginal ?? (item.undoable !== true && item.filedName === undefined);
+}
+
 /** Whether the backend would accept Retry for this item. */
 export function retryAccepted(item: QueueItem): boolean {
   if (item.status === 'failed') return true;

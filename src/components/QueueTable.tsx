@@ -1,3 +1,4 @@
+import { keptOriginal } from '../features/review/actions';
 import type { QueueItem } from '../types';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
@@ -33,6 +34,6 @@ export function QueueTable({ items, selectedId, onSelect }: { items: QueueItem[]
  */
 function nameCell(item: QueueItem) {
   if (item.status !== 'completed') return item.proposedFilename ?? '—';
-  if (item.keptOriginal) return <span className="kept-original">Kept original</span>;
+  if (keptOriginal(item)) return <span className="kept-original">Kept original</span>;
   return item.filedName ?? item.proposedFilename ?? '—';
 }
