@@ -22,10 +22,35 @@ use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const SNAPSHOT_NAME_ATTEMPTS: usize = 8;
 const CONTENT_NAME: &str = "content";
-const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "pdf", "docx", "pptx", "pptm", "ppsx", "xlsx", "eml", "msg", "txt", "md", "markdown", "png",
-    "jpg", "jpeg", "tif", "tiff",
+
+/// Every extension Intern admits, lowercase and without the dot.
+///
+/// This is the one list: the queue admits a dropped file by it, the intake
+/// watcher claims a file by it, a snapshot is taken only for it, and the
+/// worker's router has a test that every entry here reaches a reader and
+/// every reader is reachable from here. Two copies of this list drifted apart
+/// once - `.docm` was routed by the worker and refused by both admission
+/// lists - which is why there is now only one.
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "pdf", "docx", "docm", "doc", "rtf", "odt", "pptx", "pptm", "ppsx", "ppt", "odp", "xlsx",
+    "xlsm", "xls", "ods", "csv", "eml", "msg", "txt", "md", "markdown", "png", "jpg", "jpeg",
+    "tif", "tiff",
 ];
+
+/// Whether a file name is one Intern's own rename-history export goes by:
+/// `intern-history.csv`, the name its save dialog suggests, and the
+/// `intern-history (2).csv` or `intern-history-march.csv` a person or the
+/// dialog makes of it.
+///
+/// The export is Intern's own record of what it renamed - every filed
+/// document's old and new path and its description - and since `.csv` is
+/// admitted, one saved into a watched folder looked like any new upload:
+/// it was claimed, read by the model as a client's ledger, and renamed and
+/// filed like one. Nothing Intern admits by this name is a document to file.
+pub fn is_history_export(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.starts_with("intern-history") && name.ends_with(".csv")
+}
 
 /// A directory controlled by Intern and kept outside watched or synced roots.
 ///

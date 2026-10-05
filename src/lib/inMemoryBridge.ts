@@ -101,7 +101,7 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
       evidence: { date: 'Invoice date: April 30, 2025', type: 'INVOICE INV-2048', parties: 'Nimbus Orchard Supply Co.; Atlas Threadworks LLC' },
       reason: 'Identical content from a different path is retained as a separate review result.',
     };
-    if (file.displayName === 'unsupported.csv') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .csv.' };
+    if (file.displayName === 'unsupported.zip') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .zip.' };
     if (file.displayName.startsWith('~$')) return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Office lock file skipped.' };
   }
   return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'waiting' };
@@ -110,7 +110,10 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  // skipUpdateChecks is spelled out because the desktop backend always
+  // returns it - false for a file that predates it - so a bridge that left it
+  // out would differ from the real one in exactly the case worth testing.
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -400,6 +403,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         syncConflicts: 0,
         awaitingHydration: 0,
         unreadableFolders: 0,
+        arriving: 0,
+        unreadableDocuments: 0,
         claimedByOthers: enabled ? 1 : 0,
         processedHere: enabled ? 3 : 0,
         lastScanAt: enabled ? now - 5 : null,

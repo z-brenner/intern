@@ -67,6 +67,10 @@ const SENTENCES: Record<string, string> = {
   UNDONE: 'You undid this rename. The document is back under its original name and waits for your decision.',
   // Set when the document already had exactly the name Intern would give it.
   ALREADY_NAMED: 'This document already had this name, so nothing was renamed.',
+  // Set on a row the folder watcher canceled itself, as opposed to a person's
+  // Cancel: another computer took the document over, or who uploaded it could
+  // no longer be confirmed.
+  INTAKE_WITHDRAWN: 'Another computer took this document over, or who added it could no longer be confirmed, so it was set aside here. It runs again if it comes back to this computer.',
 };
 
 /**

@@ -9,16 +9,89 @@ use std::process::{Command, Stdio};
 #[cfg(feature = "native-tesseract")]
 use std::time::Duration;
 
+use image::DynamicImage;
 #[cfg(feature = "native-tesseract")]
-use image::{DynamicImage, ImageFormat};
+use image::ImageFormat;
 
 use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, RenderedPage};
 #[cfg(feature = "native-tesseract")]
-use crate::extract::{apply_detected_rotation, better_reading, orientation_search_is_worthwhile};
+use crate::extract::{OrientationPasses, apply_detected_rotation, read_upright};
 #[cfg(feature = "native-tesseract")]
 use crate::limits::ResourceLimits;
 #[cfg(feature = "native-tesseract")]
 use crate::temp::TempWorkspace;
+
+/// Rebuilds a page's text from Tesseract's TSV output, keeping the layout
+/// Tesseract found.
+///
+/// Each word row carries the block, paragraph and line it belongs to. Words
+/// on one line are joined with a space, lines with a newline, and blocks and
+/// paragraphs with a blank line - which is what Tesseract's own plain-text
+/// renderer does. Joining every word of the page with a space instead made
+/// each scan one undifferentiated line, so distillation found no headings
+/// in it and no date line, and the model's evidence for a date was the
+/// whole page.
+///
+/// The mean confidence is over every word Tesseract scored; rows with no
+/// word, and the -1 Tesseract gives a word it did not score, do not count.
+pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
+    let tsv = std::str::from_utf8(bytes)
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let mut text = String::new();
+    let mut confidences = Vec::new();
+    // (page, block, paragraph, line) of the word last written.
+    let mut previous: Option<[&str; 4]> = None;
+    for row in tsv.lines().skip(1) {
+        let columns: Vec<&str> = row.splitn(12, '\t').collect();
+        if columns.len() != 12 || columns[0] != "5" {
+            continue;
+        }
+        let word = columns[11].trim();
+        if word.is_empty() {
+            continue;
+        }
+        let position = [columns[1], columns[2], columns[3], columns[4]];
+        match previous {
+            None => {}
+            Some(previous) if previous[..3] != position[..3] => text.push_str("\n\n"),
+            Some(previous) if previous[3] != position[3] => text.push('\n'),
+            Some(_) => text.push(' '),
+        }
+        text.push_str(word);
+        previous = Some(position);
+        let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
+        if confidence >= 0.0 {
+            confidences.push(confidence);
+        }
+    }
+    let mean_confidence = if confidences.is_empty() {
+        0.0
+    } else {
+        confidences.iter().sum::<f32>() / confidences.len() as f32
+    };
+    Ok(OcrResult::new(text, mean_confidence))
+}
+
+/// The page as Tesseract is given it to read: grey.
+///
+/// Tesseract binarises whatever it is given, so colour tells it nothing,
+/// and grey is a third of the bytes to encode, write and decode on every
+/// pass.
+pub fn recognition_image(page: &DynamicImage) -> DynamicImage {
+    DynamicImage::ImageLuma8(page.to_luma8())
+}
+
+/// The copy of a page orientation detection reads: half its size each way.
+///
+/// A 300-DPI page halved is 150 DPI, which is still far more than
+/// orientation detection looks at, and it is a quarter of the pixels to
+/// encode and scan. Each pixel is the average of the four it replaces,
+/// summed in integers straight into the copy. The general resampler would
+/// first build a full-width, half-height copy in 32-bit floats per channel
+/// - 200 MB on a 25-megapixel page - for a picture nobody keeps.
+pub fn orientation_image(page: &DynamicImage) -> DynamicImage {
+    page.thumbnail_exact((page.width() / 2).max(1), (page.height() / 2).max(1))
+}
 
 /// How to ask Tesseract for TSV output without depending on a file we do not ship.
 ///
@@ -75,33 +148,6 @@ impl TesseractOcr {
             tessdata_directory,
             language: "eng".to_owned(),
         })
-    }
-
-    fn parse_tsv(&self, bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
-        let text = String::from_utf8(bytes.to_vec())
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
-        let mut words = Vec::new();
-        let mut confidences = Vec::new();
-        for line in text.lines().skip(1) {
-            let columns: Vec<&str> = line.splitn(12, '\t').collect();
-            if columns.len() != 12 {
-                continue;
-            }
-            let word = columns[11].trim();
-            let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
-            if !word.is_empty() {
-                words.push(word);
-                if confidence >= 0.0 {
-                    confidences.push(confidence);
-                }
-            }
-        }
-        let mean_confidence = if confidences.is_empty() {
-            0.0
-        } else {
-            confidences.iter().sum::<f32>() / confidences.len() as f32
-        };
-        Ok(OcrResult::new(words.join(" "), mean_confidence))
     }
 
     fn parse_osd(&self, bytes: &[u8]) -> Result<u16, ExtractionError> {
@@ -193,19 +239,31 @@ impl TesseractOcr {
         }
     }
 
+    /// Reads the page turned clockwise by `rotation` degrees.
     fn recognize_at(
         &self,
         workspace: &TempWorkspace,
-        page: &RenderedPage,
+        page: &DynamicImage,
         rotation: u16,
-        label: &str,
         cancel: &CancellationToken,
     ) -> Result<OcrResult, ExtractionError> {
-        let rotated = apply_detected_rotation(page.image.clone(), rotation)?;
-        let input = self.write_png(workspace, &format!("{label}.png"), &rotated)?;
+        let label = if rotation == 0 {
+            "upright".to_owned()
+        } else {
+            format!("rotated-{rotation}")
+        };
+        // The page as it came is encoded as it is: turning it by nothing
+        // used to cost a copy of the whole page, and then a second encode of
+        // the image orientation detection had already been given.
+        let input = if rotation == 0 {
+            self.write_png(workspace, &format!("{label}.png"), page)?
+        } else {
+            let rotated = apply_detected_rotation(page.clone(), rotation)?;
+            self.write_png(workspace, &format!("{label}.png"), &rotated)?
+        };
         let output_base = workspace.path().join(format!("ocr-{label}"));
         let child = Command::new(&self.executable)
-            .arg(&input)
+            .arg(input)
             .arg(&output_base)
             .arg("-l")
             .arg(&self.language)
@@ -232,29 +290,23 @@ impl TesseractOcr {
                 output_path.display()
             ))
         })?;
-        Ok(self.parse_tsv(&output)?.with_rotation(rotation))
+        Ok(parse_tsv(&output)?.with_rotation(rotation))
     }
-}
 
-#[cfg(feature = "native-tesseract")]
-impl OcrBackend for TesseractOcr {
-    fn recognize(
+    /// The clockwise rotation Tesseract's orientation detection says the page
+    /// needs, read from [`orientation_image`]'s half-scale copy.
+    ///
+    /// On a page too small to halve - a low-resolution photo - detection
+    /// reports too few characters, which is a rotation of zero: the
+    /// orientation search that follows is what decides, and it still finds
+    /// such a page's orientation by reading it.
+    fn detect_orientation(
         &self,
-        page: &RenderedPage,
+        workspace: &TempWorkspace,
+        page: &DynamicImage,
         cancel: &CancellationToken,
-    ) -> Result<OcrResult, ExtractionError> {
-        cancel.check()?;
-        if !self.executable.is_file()
-            || !self.tessdata_directory.join("eng.traineddata").is_file()
-            || !self.tessdata_directory.join("osd.traineddata").is_file()
-        {
-            return Err(ExtractionError::native_assets_missing(
-                "Tesseract executable, eng.traineddata, or osd.traineddata is absent",
-            ));
-        }
-        let workspace =
-            TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
-        let input = self.write_png(&workspace, "input.png", &page.image)?;
+    ) -> Result<u16, ExtractionError> {
+        let input = self.write_png(workspace, "orientation.png", &orientation_image(page))?;
         let osd_base = workspace.path().join("orientation");
         let osd_stderr_path = workspace.write("osd.stderr", b"")?;
         let osd_stderr = std::fs::OpenOptions::new()
@@ -284,47 +336,237 @@ impl OcrBackend for TesseractOcr {
             .read_to_end(&mut osd_diagnostic)
             .map_err(ExtractionError::io)?;
         let osd_diagnostic = String::from_utf8_lossy(&osd_diagnostic);
-        let rotation = if osd_status.success() {
+        if osd_status.success() {
             let osd_path = Self::osd_output_path(&osd_base);
             workspace.register_existing(&osd_path)?;
-            self.parse_osd(&std::fs::read(osd_path).map_err(ExtractionError::io)?)?
+            self.parse_osd(&std::fs::read(osd_path).map_err(ExtractionError::io)?)
         } else if osd_status.code() == Some(1) && Self::is_sparse_osd_diagnostic(&osd_diagnostic) {
             // Tesseract uses exit code 1 when OSD cannot determine an
             // orientation for sparse or blank input. OCR remains useful.
-            0
+            Ok(0)
         } else if Self::is_osd_initialization_diagnostic(&osd_diagnostic) {
-            return Err(ExtractionError::native_assets_missing(format!(
+            Err(ExtractionError::native_assets_missing(format!(
                 "Tesseract OSD initialization failed: {}",
                 Self::diagnostic_summary(&osd_diagnostic)
-            )));
+            )))
         } else {
-            return Err(ExtractionError::parse_failed(format!(
+            Err(ExtractionError::parse_failed(format!(
                 "Tesseract OSD exited with {osd_status}: {}",
                 Self::diagnostic_summary(&osd_diagnostic)
-            )));
-        };
-
-        let mut best = self.recognize_at(&workspace, page, rotation, "oriented", cancel)?;
-        // A page that reads confidently in the orientation OSD asked for is done,
-        // and so is one that read as blank: the overwhelmingly common upright
-        // document, and every blank back of a duplex scan, cost exactly one pass.
-        for candidate in [270, 90, 180, 0] {
-            if !orientation_search_is_worthwhile(&best) {
-                break;
-            }
-            if candidate == rotation {
-                continue;
-            }
-            let attempt = self.recognize_at(
-                &workspace,
-                page,
-                candidate,
-                &format!("try-{candidate}"),
-                cancel,
-            )?;
-            best = better_reading(best, attempt);
+            )))
         }
-        Ok(best)
+    }
+}
+
+#[cfg(feature = "native-tesseract")]
+impl OcrBackend for TesseractOcr {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        cancel.check()?;
+        if !self.executable.is_file()
+            || !self.tessdata_directory.join("eng.traineddata").is_file()
+            || !self.tessdata_directory.join("osd.traineddata").is_file()
+        {
+            return Err(ExtractionError::native_assets_missing(
+                "Tesseract executable, eng.traineddata, or osd.traineddata is absent",
+            ));
+        }
+        let workspace =
+            TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
+        let page = recognition_image(&page.image);
+        read_upright(&mut PagePasses {
+            ocr: self,
+            workspace: &workspace,
+            page: &page,
+            cancel,
+        })
+    }
+}
+
+/// One page's passes through the Tesseract executable, in one workspace.
+#[cfg(feature = "native-tesseract")]
+struct PagePasses<'a> {
+    ocr: &'a TesseractOcr,
+    workspace: &'a TempWorkspace,
+    page: &'a DynamicImage,
+    cancel: &'a CancellationToken,
+}
+
+#[cfg(feature = "native-tesseract")]
+impl OrientationPasses for PagePasses<'_> {
+    fn recognize(&mut self, rotation_degrees: u16) -> Result<OcrResult, ExtractionError> {
+        self.ocr
+            .recognize_at(self.workspace, self.page, rotation_degrees, self.cancel)
+    }
+
+    fn detect_orientation(&mut self) -> Result<u16, ExtractionError> {
+        self.ocr
+            .detect_orientation(self.workspace, self.page, self.cancel)
+    }
+}
+
+/// What Tesseract is handed. These run in every build: the native tests that
+/// watch the real adapter hand these to a stand-in Tesseract only run where
+/// the `native-tesseract` feature is built.
+#[cfg(test)]
+mod page_image_tests {
+    use std::io::Cursor;
+
+    use image::{DynamicImage, GenericImageView, GrayImage, ImageFormat, Luma, Rgb, RgbImage};
+
+    use super::{orientation_image, recognition_image};
+
+    #[test]
+    fn recognition_reads_a_grey_page() {
+        let page = DynamicImage::ImageRgb8(RgbImage::from_pixel(30, 20, Rgb([200, 40, 40])));
+
+        let grey = recognition_image(&page);
+
+        assert_eq!(grey.color(), image::ColorType::L8);
+        assert_eq!(grey.dimensions(), (30, 20));
+        // Encoded the way the adapter writes it: a greyscale PNG, colour
+        // type 0 in the header.
+        let mut png = Vec::new();
+        grey.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        assert_eq!(png[25], 0);
+    }
+
+    #[test]
+    fn orientation_detection_reads_a_half_scale_average() {
+        // Columns alternate black and white in pairs of two: every 2 x 2
+        // block holds two of each, so each half-scale pixel is their mean.
+        let page = DynamicImage::ImageLuma8(GrayImage::from_fn(40, 20, |x, _| {
+            Luma([if x % 2 == 0 { 0 } else { 255 }])
+        }));
+
+        let half = orientation_image(&page);
+
+        assert_eq!(half.dimensions(), (20, 10));
+        assert_eq!(half.color(), image::ColorType::L8);
+        let grey = half.to_luma8();
+        assert!(grey.pixels().all(|pixel| pixel.0[0] == 128), "{grey:?}");
+        // An odd edge loses its last row or column, and nothing is ever
+        // halved to nothing.
+        let odd = DynamicImage::ImageLuma8(GrayImage::new(41, 21));
+        assert_eq!(orientation_image(&odd).dimensions(), (20, 10));
+        let tiny = DynamicImage::ImageLuma8(GrayImage::new(1, 1));
+        assert_eq!(orientation_image(&tiny).dimensions(), (1, 1));
+    }
+}
+
+/// The text a scan comes back as. These run in every build: reading
+/// Tesseract's output needs no Tesseract.
+#[cfg(test)]
+mod tsv_tests {
+    use super::parse_tsv;
+
+    /// `tesseract document-image.jpg out -l eng --psm 3 -c
+    /// tessedit_create_tsv=1` over the pinned `tessdata_fast` English model:
+    /// one block, one paragraph, three lines.
+    const PACKING_SLIP: &str = include_str!("../tests/fixtures/tsv/document-image.jpg.tsv");
+    /// The same over `document-image.png`, which Tesseract reads less well:
+    /// one word scored 0 and several in the 60s.
+    const PURCHASE_ORDER: &str = include_str!("../tests/fixtures/tsv/document-image.png.tsv");
+
+    #[test]
+    fn parse_tsv_keeps_lines_and_paragraphs() {
+        let reading = parse_tsv(PACKING_SLIP.as_bytes()).unwrap();
+
+        assert_eq!(
+            reading.text,
+            "PACKING SLIP PS-311\nDATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC"
+        );
+        let lines: Vec<&str> = reading.text.lines().collect();
+        assert_eq!(lines[0], "PACKING SLIP PS-311");
+        assert_eq!(lines[1], "DATE JULY 15 2025");
+        assert_eq!(lines[2], "QUARTZ MEADOW RETAIL LLC");
+
+        let reading = parse_tsv(PURCHASE_ORDER.as_bytes()).unwrap();
+        assert_eq!(
+            reading.text,
+            "PURCHASE ORDER FPO-Sie\nDATE JULY 14 2625\nEMBER POST MANUFACTURING LLC"
+        );
+    }
+
+    /// A new block or paragraph is a blank line, the way Tesseract's own
+    /// text output separates them and the way distillation finds
+    /// paragraphs; a new line within one is a newline; and the rows above
+    /// word level, which carry no text, contribute nothing.
+    #[test]
+    fn parse_tsv_separates_blocks_and_paragraphs_with_a_blank_line() {
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let rows = [
+            "1\t1\t0\t0\t0\t0\t0\t0\t900\t900\t-1\t",
+            "2\t1\t1\t0\t0\t0\t10\t10\t500\t100\t-1\t",
+            "5\t1\t1\t1\t1\t1\t10\t10\t80\t20\t96\tLEASE",
+            "5\t1\t1\t1\t1\t2\t100\t10\t80\t20\t95\tAGREEMENT",
+            "5\t1\t1\t1\t2\t1\t10\t40\t80\t20\t91\tEffective",
+            "5\t1\t1\t1\t2\t2\t100\t40\t80\t20\t90\tSeptember",
+            "5\t1\t1\t2\t1\t1\t10\t90\t80\t20\t89\tLandlord:",
+            "5\t1\t1\t2\t1\t2\t100\t90\t80\t20\t-1\t ",
+            "5\t1\t2\t1\t1\t1\t10\t300\t80\t20\t88\tTenant:",
+        ];
+        let tsv = std::iter::once(header)
+            .chain(rows)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(
+            reading.text,
+            "LEASE AGREEMENT\nEffective September\n\nLandlord:\n\nTenant:"
+        );
+    }
+
+    /// Only the layout changed. The confidence is still the mean over the
+    /// words Tesseract scored, a 0 among them counting as a 0.
+    #[test]
+    fn parse_tsv_confidence_unchanged() {
+        // The eleven word scores in the capture, as Tesseract wrote them.
+        let scores = [
+            "95.227531",
+            "89.323761",
+            "0.000000",
+            "94.372665",
+            "91.018906",
+            "60.589909",
+            "59.604561",
+            "92.558258",
+            "76.375427",
+            "73.802658",
+            "86.925316",
+        ]
+        .map(|score| score.parse::<f32>().unwrap());
+        let expected = scores.iter().sum::<f32>() / scores.len() as f32;
+
+        let reading = parse_tsv(PURCHASE_ORDER.as_bytes()).unwrap();
+
+        assert_eq!(reading.mean_confidence, expected);
+        assert_eq!(reading.text.split_whitespace().count(), scores.len());
+        assert_eq!(reading.rotation_degrees, 0);
+    }
+
+    #[test]
+    fn parse_tsv_of_a_blank_page_is_empty_and_unconfident() {
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let tsv = format!("{header}\n1\t1\t0\t0\t0\t0\t0\t0\t900\t900\t-1\t\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(reading.text, "");
+        assert_eq!(reading.mean_confidence, 0.0);
+    }
+
+    #[test]
+    fn parse_tsv_refuses_output_that_is_not_utf8() {
+        let error = parse_tsv(&[0xff, 0xfe, b'\n']).unwrap_err();
+
+        assert_eq!(error.code(), "PARSE_FAILED");
     }
 }
 

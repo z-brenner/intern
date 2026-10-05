@@ -9,7 +9,7 @@
 use std::{
     fmt,
     net::TcpListener,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
@@ -24,6 +24,8 @@ use crate::error::{EngineError, EngineErrorCode, EngineResult};
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HEALTH_CONFIRMATION_DELAY: Duration = Duration::from_millis(500);
 const MAX_SPAWN_ATTEMPTS: usize = 3;
+/// The server's standard error, under the log directory when one is set.
+const SERVER_LOG: &str = "llama-server.log";
 
 /// Context window. Large enough for the distillation budget plus the prompt,
 /// small enough that the KV cache stays a few hundred megabytes on CPU.
@@ -111,7 +113,7 @@ impl LlamaServer {
             projector,
             options,
             HEALTH_CONFIRMATION_DELAY,
-            &StdProcessLauncher,
+            &StdProcessLauncher::new(),
             &EphemeralPortAllocator,
             Arc::new(ReqwestHealthProbe::new()?),
         )
@@ -341,7 +343,18 @@ impl ProcessControl for StdChildProcess {
     }
 }
 
-struct StdProcessLauncher;
+struct StdProcessLauncher {
+    /// Where the server's standard error is kept; nowhere when `None`.
+    log_directory: Option<PathBuf>,
+}
+
+impl StdProcessLauncher {
+    fn new() -> Self {
+        Self {
+            log_directory: crate::logs::log_directory().map(Path::to_path_buf),
+        }
+    }
+}
 
 impl ProcessLauncher for StdProcessLauncher {
     fn launch(
@@ -350,16 +363,22 @@ impl ProcessLauncher for StdProcessLauncher {
         arguments: &[String],
     ) -> EngineResult<Box<dyn ProcessControl>> {
         let mut command = Command::new(executable);
+        // Standard error is where llama-server says why it could not start:
+        // missing CPU features, a quarantined runtime library, a model that
+        // will not load. At its default verbosity it logs no prompt text and
+        // not its `--api-key`; it must never be started with `-v`.
         command
             .args(arguments)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(crate::logs::stderr_for(
+                self.log_directory.as_deref(),
+                SERVER_LOG,
+            ));
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            command.creation_flags(CREATE_NO_WINDOW);
+            command.creation_flags(crate::process::sidecar_creation_flags());
         }
         let child = command.spawn().map_err(|_| start_failed())?;
         crate::process::tie_to_this_process(&child);
@@ -385,11 +404,14 @@ struct ReqwestHealthProbe {
 
 impl ReqwestHealthProbe {
     fn new() -> EngineResult<Self> {
+        // Loopback HTTP only; see `ModelClient::new` for why the operating
+        // system's certificate store is left unread.
         let client = Client::builder()
             .connect_timeout(Duration::from_millis(500))
             .timeout(Duration::from_secs(1))
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
+            .tls_built_in_native_certs(false)
             .build()
             .map_err(|_| start_failed())?;
         Ok(Self { client })
@@ -471,6 +493,69 @@ mod tests {
         assert!(!arguments.contains(&"--no-mmproj".to_owned()));
     }
 
+    /// The server's standard error is the only account of why it would not
+    /// start, so with a log directory it is kept - in a file that cannot grow
+    /// without bound - and without one it goes nowhere, as before.
+    #[cfg(unix)]
+    #[test]
+    fn stderr_goes_to_capped_log_when_directory_set() {
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join(SERVER_LOG), vec![b'x'; 300 * 1024]).unwrap();
+
+        let launcher = StdProcessLauncher {
+            log_directory: Some(logs.clone()),
+        };
+        let mut process = launcher
+            .launch(
+                Path::new("/bin/sh"),
+                &[
+                    "-c".to_owned(),
+                    "echo 'error: unknown model architecture' >&2".to_owned(),
+                ],
+            )
+            .expect("a shell");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !process.has_exited().unwrap() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(logs.join(SERVER_LOG)).unwrap(),
+            "error: unknown model architecture\n",
+            "the oversized log was emptied before this start wrote to it"
+        );
+
+        // No directory: the launch is unchanged, and nothing is written.
+        let launcher = StdProcessLauncher {
+            log_directory: None,
+        };
+        let mut process = launcher
+            .launch(
+                Path::new("/bin/sh"),
+                &["-c".to_owned(), "echo lost >&2".to_owned()],
+            )
+            .expect("a shell");
+        while !process.has_exited().unwrap() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 1);
+    }
+
+    /// Windows sidecars open no console window and run below normal
+    /// priority, so filing documents never makes the foreground stutter.
+    #[test]
+    fn sidecar_creation_flags_include_below_normal() {
+        let flags = crate::process::sidecar_creation_flags();
+        assert_eq!(
+            flags & 0x0000_4000,
+            0x0000_4000,
+            "BELOW_NORMAL_PRIORITY_CLASS"
+        );
+        assert_eq!(flags & 0x0800_0000, 0x0800_0000, "CREATE_NO_WINDOW");
+        assert_eq!(flags, 0x0800_4000, "nothing else");
+    }
+
     #[test]
     fn the_thread_default_leaves_the_machine_usable() {
         let threads = default_threads();
@@ -534,7 +619,7 @@ mod tests {
         let script = format!(
             "Set-Content -LiteralPath '{announcement}' -Value $PID; Start-Sleep -Seconds 120"
         );
-        let _child = StdProcessLauncher
+        let _child = StdProcessLauncher::new()
             .launch(
                 Path::new("powershell.exe"),
                 &[

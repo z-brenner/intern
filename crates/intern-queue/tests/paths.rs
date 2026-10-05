@@ -33,6 +33,75 @@ fn canonical_file_accepts_only_existing_supported_regular_files() {
     assert!(canonical_file(&temp.path().join("missing.pdf")).is_err());
 }
 
+/// The legacy and open formats professionals actually file are admitted by
+/// the same list the worker routes by, and the lock file an editor keeps
+/// beside an open one is still never a document.
+#[test]
+fn legacy_and_open_formats_are_admitted_but_their_lock_files_are_not() {
+    assert_eq!(
+        intern_queue::paths::SUPPORTED_EXTENSIONS,
+        intern_core::SUPPORTED_EXTENSIONS
+    );
+    let temp = tempdir().unwrap();
+    for name in [
+        "letter.doc",
+        "letter.docm",
+        "letter.rtf",
+        "letter.odt",
+        "deck.ppt",
+        "deck.odp",
+        "ledger.xls",
+        "ledger.xlsm",
+        "ledger.ods",
+        "statement.CSV",
+    ] {
+        let path = temp.path().join(name);
+        fs::write(&path, b"content").unwrap();
+        assert_eq!(
+            canonical_file(&path).unwrap(),
+            path.canonicalize().unwrap(),
+            "{name}"
+        );
+    }
+    for lock in ["~$letter.doc", "~$ledger.xls", "~$deck.ppt"] {
+        let path = temp.path().join(lock);
+        fs::write(&path, b"lock").unwrap();
+        assert!(canonical_file(&path).is_err(), "{lock}");
+    }
+
+    let root = canonical_folder(temp.path()).unwrap();
+    let files = collect_supported_files(&root).unwrap();
+    assert_eq!(files.len(), 10, "{files:?}");
+    assert!(
+        files
+            .iter()
+            .all(|file| !file.to_string_lossy().contains("~$")),
+        "{files:?}"
+    );
+}
+
+/// Intern's own rename-history export is a CSV, and CSV is admitted. It is
+/// Intern's record of what it filed, not a document to file, whether it
+/// arrives on its own or inside a dropped folder.
+#[test]
+fn interns_own_history_export_is_not_a_document() {
+    let temp = tempdir().unwrap();
+    let export = temp.path().join("intern-history.csv");
+    let renamed = temp.path().join("Intern-History (2).csv");
+    let statement = temp.path().join("statement.csv");
+    for path in [&export, &renamed, &statement] {
+        fs::write(path, b"at,direction,kind\r\n").unwrap();
+    }
+
+    assert_eq!(
+        canonical_file(&export).unwrap_err().code,
+        "UNSUPPORTED_FORMAT"
+    );
+    assert!(canonical_file(&renamed).is_err());
+    let files = collect_supported_files(temp.path()).unwrap();
+    assert_eq!(files, vec![statement.canonicalize().unwrap()]);
+}
+
 #[test]
 fn canonical_model_file_accepts_only_nonempty_regular_gguf_without_following_links() {
     let temp = tempdir().unwrap();

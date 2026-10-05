@@ -123,13 +123,21 @@ impl ReqwestHttpTransport {
                 "download timeouts must be bounded and nonzero",
             ));
         }
-        let mut builder = reqwest::Client::builder()
-            .connect_timeout(connect_timeout)
-            .read_timeout(read_timeout);
-        if let Some(overall_timeout) = overall_timeout {
-            builder = builder.timeout(overall_timeout);
-        }
-        let client = builder.build().map_err(|_| {
+        let build = |native_roots: bool| {
+            let mut builder = reqwest::Client::builder()
+                .connect_timeout(connect_timeout)
+                .read_timeout(read_timeout)
+                .tls_built_in_native_certs(native_roots);
+            if let Some(overall_timeout) = overall_timeout {
+                builder = builder.timeout(overall_timeout);
+            }
+            builder.build()
+        };
+        // The operating system's roots are what let the download through a
+        // firm's TLS-inspecting proxy. A store holding nothing usable makes
+        // the build fail outright, though, and that must not stop a download
+        // the bundled roots alone can still make.
+        let client = build(true).or_else(|_| build(false)).map_err(|_| {
             ModelError::new(
                 ModelErrorCode::DownloadFailed,
                 "download client could not be created",
@@ -489,19 +497,13 @@ impl<H: HttpTransport, D: DiskSpace> Downloader<H, D> {
                 Err(_) => {}
             }
         }
+        // A resume trusts the partial file's length and nothing else. There
+        // is no digest of a prefix to compare against, so hashing the bytes
+        // already on disk proved nothing and cost seconds per gigabyte on
+        // every retry; the full-file check below is what catches a bad prefix.
         let requested_start = (existing > 0 && existing < expected.size).then_some(existing);
         let initial_remaining = expected.size.saturating_sub(requested_start.unwrap_or(0));
         require_disk(&self.disk, destination_directory, initial_remaining)?;
-
-        if let Some(resume_length) = requested_start {
-            hash_prefix_cancelable(&partial_path, resume_length, cancellation, |checked| {
-                progress(SetupProgress {
-                    stage: SetupStage::Checking,
-                    completed_bytes: checked,
-                    total_bytes: expected.size,
-                });
-            })?;
-        }
 
         let mut response = match self.http.get(&expected.url, requested_start, cancellation) {
             Ok(response) => response,
@@ -836,27 +838,6 @@ fn open_partial(path: &Path, append: bool) -> ModelResult<File> {
         .truncate(!append)
         .open(path)
         .map_err(|_| download_failed())
-}
-
-fn hash_prefix_cancelable<F>(
-    path: &Path,
-    expected_length: u64,
-    cancellation: &CancellationToken,
-    progress: F,
-) -> ModelResult<()>
-where
-    F: FnMut(u64),
-{
-    let mut file = File::open(path).map_err(|_| download_failed())?;
-    let (copied, _) = hash_reader_cancelable(
-        &mut Read::by_ref(&mut file).take(expected_length),
-        cancellation,
-        progress,
-    )?;
-    if copied != expected_length {
-        return Err(invalid_file());
-    }
-    Ok(())
 }
 
 fn hash_reader(reader: &mut impl Read, hasher: &mut Sha256) -> io::Result<u64> {

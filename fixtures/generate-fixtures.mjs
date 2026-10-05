@@ -27,7 +27,7 @@ const GOLD = {
     { file: 'multi-date-invoice.pdf', kind: 'text_pdf', document_type: 'Invoice', acceptable_types: [], document_date: '2025-04-30', acceptable_dates: [], forbidden_dates: ['2025-05-30'], date_role: 'invoice', parties: ['Nimbus Orchard Supply Co.'], forbidden_parties: [], party_relation: 'from', expected_readiness: 'ready', ambiguity: ['invoice_and_due_dates'], acceptable_description_facts: ['invoice'], expected_routing: 'native_text' },
     { file: 'meeting-minutes.md', kind: 'markdown', document_type: 'Meeting Minutes', acceptable_types: ['Quarterly Operations Review'], document_date: '2025-05-07', acceptable_dates: [], forbidden_dates: [], date_role: 'issuance', parties: [], forbidden_parties: [], party_relation: 'none', expected_readiness: 'ready', ambiguity: [], acceptable_description_facts: ['minutes'], expected_routing: 'text' },
     { file: 'rotated-low-resolution-scan.png', kind: 'rotated_scan', document_type: 'Delivery Receipt', acceptable_types: [], document_date: '2025-06-12', acceptable_dates: [], forbidden_dates: [], date_role: 'issuance', parties: ['Pine Echo Couriers LLC'], forbidden_parties: [], party_relation: 'from', expected_readiness: 'needs_review', ambiguity: ['rotated', 'low_resolution'], acceptable_description_facts: ['receipt'], expected_routing: 'ocr' },
-    { file: 'encrypted.pdf', kind: 'encrypted_pdf', expected_error: 'PARSE_FAILED', expected_readiness: 'failed', ambiguity: ['password_required'], acceptable_description_facts: [], expected_routing: 'error' },
+    { file: 'encrypted.pdf', kind: 'encrypted_pdf', expected_error: 'PASSWORD_PROTECTED', expected_readiness: 'failed', ambiguity: ['password_required'], acceptable_description_facts: [], expected_routing: 'error' },
     { file: 'malformed.pdf', kind: 'malformed_pdf', expected_error: 'PARSE_FAILED', expected_readiness: 'failed', ambiguity: ['malformed_container'], acceptable_description_facts: [], expected_routing: 'error' },
     { file: 'long-document-100-pages.pdf', kind: 'long_pdf', document_type: 'Project Journal', acceptable_types: [], document_date: '2025-07-01', acceptable_dates: [], forbidden_dates: [], date_role: 'issuance', parties: [], forbidden_parties: [], party_relation: 'none', expected_readiness: 'ready', ambiguity: [], acceptable_description_facts: ['journal'], expected_routing: 'native_text' },
     { file: 'document-image.png', kind: 'png', document_type: 'Purchase Order', acceptable_types: [], document_date: '2025-07-14', acceptable_dates: [], forbidden_dates: [], date_role: 'issuance', parties: ['Ember Post Manufacturing LLC'], forbidden_parties: [], party_relation: 'from', expected_readiness: 'needs_review', ambiguity: ['ocr_required'], acceptable_description_facts: ['order'], expected_routing: 'ocr' },
@@ -624,7 +624,7 @@ export async function generateFixtures(outputDirectory) {
     ['board-deck.pptx', boardDeckPptx()],
     ['mixed-batch/duplicate-invoice-a.pdf', invoice],
     ['mixed-batch/duplicate-invoice-b.pdf', invoice],
-    ['mixed-batch/unsupported.csv', Buffer.from('fictional_id,status\nX-001,unsupported\n')],
+    ['mixed-batch/unsupported.zip', Buffer.from('fictional_id,status\nX-001,unsupported\n')],
     ['mixed-batch/~$nda.docx', Buffer.from('temporary lock file; intentionally ignored')],
   ]);
   for (const [relative, bytes] of files) await writeFile(join(root, relative), bytes);

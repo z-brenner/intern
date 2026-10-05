@@ -371,9 +371,6 @@ impl MicrosoftClient {
     pub fn metadata(&self, url: Url) -> Result<(Account, Value), String> {
         self.graph_request(url)
     }
-    pub fn start_audit_query(&self, _body: &Value) -> Result<(Account, Value), String> {
-        Err("Microsoft audit endpoints are not permitted.".into())
-    }
     fn graph_request(&self, url: Url) -> Result<(Account, Value), String> {
         if !deployment_allows_endpoint(&self.deployment, &url, false, true) {
             return Err("Only Microsoft intake metadata may be requested.".into());
@@ -575,14 +572,12 @@ mod tests {
     struct Fake {
         replies: Mutex<VecDeque<Reply>>,
         calls: Mutex<Vec<Call>>,
-        audit_calls: Mutex<usize>,
     }
     impl Fake {
         fn new(replies: Vec<Reply>) -> Self {
             Self {
                 replies: Mutex::new(replies.into()),
                 calls: Mutex::new(Vec::new()),
-                audit_calls: Mutex::new(0),
             }
         }
     }
@@ -819,18 +814,6 @@ mod tests {
             connected_calls,
             "rejected metadata URLs must never reach even an injected transport"
         );
-    }
-    #[test]
-    fn audit_queries_are_not_a_connected_client_capability() {
-        let (client, http, _, time) = rig(vec![device(), token(), me()]);
-        client.begin().unwrap();
-        time.0.store(1005, Ordering::SeqCst);
-        client.poll().unwrap();
-
-        let error = client.start_audit_query(&json!({})).unwrap_err();
-
-        assert_eq!(error, "Microsoft audit endpoints are not permitted.");
-        assert_eq!(*http.audit_calls.lock().unwrap(), 0);
     }
     /// A file the sync client has not finished uploading yet answers 404, and
     /// that is a verdict about one file. Pausing the whole client for it holds

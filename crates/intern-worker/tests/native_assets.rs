@@ -168,35 +168,30 @@ fn tesseract_osd_exit_one_with_initialization_diagnostic_is_not_fallback() {
     assert!(!error.retryable());
 }
 
+/// PDFium keeps process-global state and is not safe to drive from several
+/// threads at once, so the tests that drive it take turns.
 #[cfg(feature = "native-pdfium")]
-fn nested_image_pdf() -> Vec<u8> {
-    fn stream(dictionary: &str, contents: &[u8]) -> Vec<u8> {
-        let mut object =
-            format!("<< {dictionary} /Length {} >>\nstream\n", contents.len()).into_bytes();
-        object.extend_from_slice(contents);
-        object.extend_from_slice(b"\nendstream");
-        object
-    }
+static PDFIUM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    let objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        concat!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] ",
-            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
-        )
-        .as_bytes()
-        .to_vec(),
-        stream(
-            "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /Im0 6 0 R >> >>",
-            b"q 100 0 0 100 0 0 cm /Im0 Do Q",
-        ),
-        stream("", b"q /Fm0 Do Q"),
-        stream(
-            "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
-            &[255, 0, 0],
-        ),
-    ];
+#[cfg(feature = "native-pdfium")]
+fn pdfium_turn() -> std::sync::MutexGuard<'static, ()> {
+    PDFIUM_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+#[cfg(feature = "native-pdfium")]
+fn stream(dictionary: &str, contents: &[u8]) -> Vec<u8> {
+    let mut object =
+        format!("<< {dictionary} /Length {} >>\nstream\n", contents.len()).into_bytes();
+    object.extend_from_slice(contents);
+    object.extend_from_slice(b"\nendstream");
+    object
+}
+
+/// A PDF of these objects, numbered from 1, with its cross-reference table.
+#[cfg(feature = "native-pdfium")]
+fn pdf(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut pdf = b"%PDF-1.7\n%\x80\x80\x80\x80\n".to_vec();
     let mut offsets = Vec::new();
     for (index, object) in objects.iter().enumerate() {
@@ -222,11 +217,60 @@ fn nested_image_pdf() -> Vec<u8> {
 }
 
 #[cfg(feature = "native-pdfium")]
+fn nested_image_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] ",
+            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 100 100] /Resources << /XObject << /Im0 6 0 R >> >>",
+            b"q 100 0 0 100 0 0 cm /Im0 Do Q",
+        ),
+        stream("", b"q /Fm0 Do Q"),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+            &[255, 0, 0],
+        ),
+    ];
+    pdf(&objects)
+}
+
+/// One page of `width` x `height` points that is nothing but an image - what
+/// a tool that wraps a photo in a PDF at 72 DPI produces.
+#[cfg(feature = "native-pdfium")]
+fn photo_pdf(width: u32, height: u32) -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .into_bytes(),
+        stream(
+            "",
+            format!("q {width} 0 0 {height} 0 0 cm /Im0 Do Q").as_bytes(),
+        ),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+            &[0, 255],
+        ),
+    ];
+    pdf(&objects)
+}
+
+#[cfg(feature = "native-pdfium")]
 #[test]
 fn form_xobject_nested_image_contributes_rendered_coverage() {
     let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
         return;
     };
+    let _turn = pdfium_turn();
     let directory = tempdir().unwrap();
     let path = directory.path().join("nested-image.pdf");
     std::fs::write(&path, nested_image_pdf()).unwrap();
@@ -239,5 +283,108 @@ fn form_xobject_nested_image_contributes_rendered_coverage() {
         pages[0].image_coverage >= 0.65,
         "{}",
         pages[0].image_coverage
+    );
+}
+
+/// A phone photo wrapped in a PDF at 72 DPI is a 4032 x 3024 point page,
+/// about 212 megapixels at 300 DPI. PDFium renders it within the 25-megapixel
+/// budget instead - at about 103 DPI - and the page is OCR'd rather than the
+/// document failing.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_photo_sized_page_renders_within_the_pixel_budget() {
+    use image::GenericImageView as _;
+    use intern_worker::extract::{OcrResult, PageSource, extract_pdf};
+    use intern_worker::limits::{MAX_PAGE_PIXELS, ResourceLimits};
+
+    struct MeasuringOcr(std::sync::Mutex<Vec<(u32, u32)>>);
+    impl OcrBackend for MeasuringOcr {
+        fn recognize(
+            &self,
+            page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            self.0.lock().unwrap().push(page.image.dimensions());
+            Ok(OcrResult::new("RECEIPT 0417 TOTAL 42.10", 91.0))
+        }
+    }
+
+    let Some(runtime) = std::env::var_os("INTERN_RUNTIME_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("receipt.pdf");
+    std::fs::write(&path, photo_pdf(4_032, 3_024)).unwrap();
+    let backend = PdfiumBackend::new(runtime).unwrap();
+    let ocr = MeasuringOcr(std::sync::Mutex::new(Vec::new()));
+
+    let document = extract_pdf(
+        &path,
+        &backend,
+        &ocr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    let sizes = ocr.0.lock().unwrap();
+    assert_eq!(sizes.len(), 1);
+    let (width, height) = sizes[0];
+    assert!(
+        u64::from(width) * u64::from(height) <= MAX_PAGE_PIXELS,
+        "{width} x {height}"
+    );
+    assert!(width >= 5_772 && height >= 4_329, "{width} x {height}");
+    assert_eq!(document.pages[0].source, PageSource::Ocr);
+}
+
+/// The scanned lease through the real PDFium and the real Tesseract: its
+/// OCR text keeps the lines Tesseract found, where it used to come back as
+/// one line holding the whole page.
+#[cfg(all(feature = "native-pdfium", feature = "native-tesseract"))]
+#[test]
+fn scanned_lease_ocr_text_has_multiple_lines() {
+    use intern_worker::extract::{PageSource, extract_pdf};
+    use intern_worker::limits::ResourceLimits;
+
+    let Some(runtime) = std::env::var_os("INTERN_RUNTIME_DIR").map(std::path::PathBuf::from) else {
+        return;
+    };
+    let lease = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/generated/scanned-lease.pdf");
+    if !lease.is_file() {
+        assert!(
+            std::env::var_os("INTERN_REQUIRE_GENERATED_FIXTURES").is_none(),
+            "required generated fixture is missing: {}",
+            lease.display()
+        );
+        return;
+    }
+    let _turn = pdfium_turn();
+    let ocr = TesseractOcr::new(runtime.join("tesseract.exe"), runtime.join("tessdata")).unwrap();
+
+    let document = extract_pdf(
+        &lease,
+        &PdfiumBackend::new(&runtime).unwrap(),
+        &ocr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+
+    let page = &document.pages[0];
+    assert_eq!(page.source, PageSource::Ocr);
+    let lines: Vec<&str> = page
+        .text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert!(lines.len() >= 3, "{:?}", page.text);
+    assert!(lines[0].starts_with("LEASE AGREEMENT"), "{:?}", page.text);
+    assert!(
+        !lines[0].contains("PROPERTIES"),
+        "the parties ran into the title: {:?}",
+        page.text
     );
 }

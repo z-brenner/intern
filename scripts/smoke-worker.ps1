@@ -158,7 +158,7 @@ try {
     Assert-ParsedFixture "mixed-signature.pdf" @("Aurora Catalog Project", "January 8, 2025") @("native", "ocr")
     Assert-ParsedFixture "nda.docx" @("Project Marigold", "March 3, 2025") @("any_doc")
     Assert-ParsedFixture "document-image.jpg" @("Packing Slip", "PS-311") @("ocr")
-    Assert-RejectedFixture "encrypted.pdf"
+    Assert-RejectedFixture "encrypted.pdf" -Code "PASSWORD_PROTECTED"
     Assert-RejectedFixture "malformed.pdf"
 
     $Shutdown = [ordered]@{ protocol_version = 1; request_id = "shutdown"; command = @{ type = "shutdown" } }

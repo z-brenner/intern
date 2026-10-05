@@ -200,12 +200,27 @@ describe('setup and queue controls', () => {
   it.each([
     ['MODEL_FILE_INVALID', /did not match the model Intern pins/i],
     ['MODEL_SELF_TEST_FAILED', /local self-test failed/i],
+    ['MODEL_SERVER_START_FAILED', /runtime would not start on this computer/i],
+    ['MODEL_SERVER_UNHEALTHY', /did not become ready in time/i],
   ])('announces the %s setup failure with recovery guidance', async (error, message) => {
     render(<App bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: 300, error } })} selection={setupSelection(async () => modelFiles)} />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
     expect(screen.getByRole('button', { name: 'Try download again' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Choose existing model files' })).toBeEnabled();
+  });
+
+  // A runtime that will not start, will not become ready, or answers its
+  // self-test wrongly is running a model file that already passed its
+  // checksum. These used to show a raw code, or advise downloading 1.2 GB
+  // again; they name the log that says what happened instead.
+  it.each(['MODEL_SELF_TEST_FAILED', 'MODEL_SERVER_START_FAILED', 'MODEL_SERVER_UNHEALTHY'])('points a %s runtime failure at its log, not at a download', async (error) => {
+    render(<App bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: 300, error } })} selection={setupSelection(async () => modelFiles)} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('llama-server.log in %LOCALAPPDATA%\\com.intern.app\\logs');
+    expect(alert).not.toHaveTextContent(/try the download again|choose a verified model file/i);
+    expect(alert).toHaveTextContent(`(${error})`);
   });
 
   // These messages previously told a user to supply "Q4 or Q8 model and mmproj

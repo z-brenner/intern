@@ -14,22 +14,38 @@ use std::{
 
 use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
 use intern_intake::{
-    CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState, ClaimStore, DoneOutcome,
-    Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, IntakeWatcher, ItemState,
-    MachineIdentity, scan::is_conflict_copy,
+    BACKLOG_FORGET_SECONDS, CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState,
+    ClaimStore, DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome,
+    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig,
+    IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity, SETTLING_SCAN_INTERVAL,
+    StabilityTracker, scan::is_conflict_copy,
 };
 use tempfile::TempDir;
 
 /// In-memory host: records what the watcher hands over and answers
 /// `item_state` from a scriptable map, defaulting to `Unknown` like a queue
 /// that has never seen the path.
+///
+/// It keeps the real queue's rules where the watcher depends on them: one row
+/// per path and content, so handing over a document it already has returns
+/// that row as it is - failed, canceled, finished - instead of starting it
+/// again; and a row the watcher itself withdrew starts again when the same
+/// document is handed over later.
 #[derive(Default)]
 struct FakeHost {
     enqueued: Mutex<Vec<PathBuf>>,
     abandoned: Mutex<Vec<PathBuf>>,
+    retried: Mutex<Vec<PathBuf>>,
     states: Mutex<HashMap<PathBuf, ItemState>>,
+    /// The content each path's row was made from.
+    contents: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    /// Rows the watcher's own `abandon` withdrew.
+    withdrawn: Mutex<HashSet<PathBuf>>,
     statuses: Mutex<Vec<IntakeStatus>>,
     fail_enqueue: AtomicBool,
+    /// Every hand-over the watcher attempted, refused or not. Each one
+    /// follows a claim acquired in the shared folder.
+    enqueue_calls: AtomicUsize,
     admission: Mutex<Option<IntakeAdmission>>,
     admission_calls: AtomicUsize,
 }
@@ -41,6 +57,29 @@ impl FakeHost {
 
     fn abandoned(&self) -> Vec<PathBuf> {
         self.abandoned.lock().unwrap().clone()
+    }
+
+    fn retried(&self) -> Vec<PathBuf> {
+        self.retried.lock().unwrap().clone()
+    }
+
+    /// A person takes the item out of the queue: Remove on a review item, or
+    /// Discard waiting. The row is gone.
+    fn remove(&self, path: &Path) {
+        self.states.lock().unwrap().remove(path);
+        self.contents.lock().unwrap().remove(path);
+    }
+
+    /// A person cancels the item. The host reports a row they canceled as
+    /// kept where it is.
+    fn cancel(&self, path: &Path) {
+        self.set_state(
+            path,
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            },
+        );
     }
 
     fn admission_calls(&self) -> usize {
@@ -65,12 +104,23 @@ impl IntakeHost for FakeHost {
             .unwrap_or(IntakeAdmission::LocalOnly)
     }
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String> {
+        self.enqueue_calls.fetch_add(1, Ordering::SeqCst);
         if self.fail_enqueue.load(Ordering::SeqCst) {
             return Err("the queue is unavailable".to_string());
         }
         let mut states = self.states.lock().unwrap();
+        let mut contents = self.contents.lock().unwrap();
+        let mut withdrawn = self.withdrawn.lock().unwrap();
         for path in paths {
+            let content = fs::read(path).map_err(|_| "FILE_UNREADABLE".to_string())?;
+            let same_row =
+                states.contains_key(path) && contents.get(path).is_some_and(|row| *row == content);
+            if same_row && !withdrawn.contains(path) {
+                continue;
+            }
+            withdrawn.remove(path);
             states.insert(path.clone(), ItemState::Active);
+            contents.insert(path.clone(), content);
         }
         self.enqueued.lock().unwrap().extend(paths.iter().cloned());
         Ok(())
@@ -85,8 +135,26 @@ impl IntakeHost for FakeHost {
             .unwrap_or(ItemState::Unknown)
     }
 
+    /// Like the real host: only a pending item can be withdrawn.
     fn abandon(&self, path: &Path) {
         self.abandoned.lock().unwrap().push(path.to_path_buf());
+        let mut states = self.states.lock().unwrap();
+        if let Some(state @ (ItemState::Active | ItemState::NeedsReview)) = states.get_mut(path) {
+            *state = ItemState::Unknown;
+            self.withdrawn.lock().unwrap().insert(path.to_path_buf());
+        }
+    }
+
+    fn retry(&self, path: &Path) -> bool {
+        let mut states = self.states.lock().unwrap();
+        match states.get_mut(path) {
+            Some(state @ ItemState::Failed) => {
+                *state = ItemState::Active;
+                self.retried.lock().unwrap().push(path.to_path_buf());
+                true
+            }
+            _ => false,
+        }
     }
 
     fn status_changed(&self, status: &IntakeStatus) {
@@ -94,14 +162,20 @@ impl IntakeHost for FakeHost {
     }
 }
 
-/// Deterministic harness: an hour-long scan interval means the loop only
-/// moves when `step` wakes it, and the mock clock stamps every tick uniquely
-/// so `step` can wait for exactly the scan it triggered.
+/// Deterministic harness: hour-long scan intervals, settling or not, mean the
+/// loop only moves when `step` wakes it, and the mock clock stamps every tick
+/// uniquely so `step` can wait for exactly the scan it triggered.
+///
+/// Like the app, it keeps the backlog in a data directory of its own, apart
+/// from the watched folder.
 struct Rig {
     temp: TempDir,
+    data: TempDir,
     clock: Arc<MockClock>,
     host: Arc<FakeHost>,
     hydration: Arc<FakeHydration>,
+    config: IntakeConfig,
+    identity: MachineIdentity,
     watcher: IntakeWatcher,
 }
 
@@ -164,19 +238,55 @@ impl Rig {
         process_others_uploads: bool,
         backlog_files: &[&str],
     ) -> Rig {
+        Self::start_with(identity, process_others_uploads, backlog_files, |_| {})
+    }
+
+    /// Starts on a fresh folder with the rig's defaults, adjusted by
+    /// `configure` before the watcher sees them.
+    fn start_with(
+        identity: MachineIdentity,
+        process_others_uploads: bool,
+        backlog_files: &[&str],
+        configure: impl FnOnce(&mut IntakeConfig),
+    ) -> Rig {
         let temp = TempDir::new().unwrap();
+        let data = TempDir::new().unwrap();
         for name in backlog_files {
             fs::write(temp.path().join(name), b"backlog content").unwrap();
         }
-        let clock = MockClock::at_real_now();
-        let host = Arc::new(FakeHost::default());
         let mut config = IntakeConfig::new(temp.path(), vec!["pdf".to_string(), "txt".to_string()]);
         config.process_others_uploads = process_others_uploads;
+        config.backlog_file = Some(data.path().join("intake-backlog.json"));
         config.scan_interval = Duration::from_secs(3600);
-        let hydration = Arc::new(FakeHydration::default());
-        let watcher = IntakeWatcher::start_with_seams(
+        config.settling_interval = Duration::from_secs(3600);
+        // One second of quiet, so the default `step` keeps the two-scan
+        // pickup the scenarios below are written in; tests about the quiet
+        // time itself set their own.
+        config.min_quiet_seconds = 1;
+        configure(&mut config);
+        Self::launch(
+            temp,
+            data,
+            MockClock::at_real_now(),
+            Arc::new(FakeHost::default()),
+            Arc::new(FakeHydration::default()),
             config,
             identity,
+        )
+    }
+
+    fn launch(
+        temp: TempDir,
+        data: TempDir,
+        clock: Arc<MockClock>,
+        host: Arc<FakeHost>,
+        hydration: Arc<FakeHydration>,
+        config: IntakeConfig,
+        identity: MachineIdentity,
+    ) -> Rig {
+        let watcher = IntakeWatcher::start_with_seams(
+            config.clone(),
+            identity.clone(),
             host.clone(),
             clock.clone(),
             hydration.clone(),
@@ -186,16 +296,72 @@ impl Rig {
         });
         Rig {
             temp,
+            data,
             clock,
             host,
             hydration,
+            config,
+            identity,
             watcher,
         }
     }
 
+    /// Stops the watcher and starts a new one, as the app does on every
+    /// start, update restart, and intake settings save. The folder, the
+    /// app's data, the queue, and the clock carry over; nothing the old
+    /// watcher held in memory does.
+    fn restart(self) -> Rig {
+        self.restart_with(|_, _| {})
+    }
+
+    /// Like `restart`, with `while_off` doing what a person or a sync client
+    /// can do while no watcher is running: change the folder (handed its
+    /// path) or the machine's settings.
+    fn restart_with(self, while_off: impl FnOnce(&Path, &mut MachineIdentity)) -> Rig {
+        self.restart_changing(|folder, identity, _| while_off(folder, identity))
+    }
+
+    /// Like `restart_with`, and the host may start the new watcher on a
+    /// changed configuration, as it does after an intake settings save.
+    fn restart_changing(
+        self,
+        while_off: impl FnOnce(&Path, &mut MachineIdentity, &mut IntakeConfig),
+    ) -> Rig {
+        let Rig {
+            temp,
+            data,
+            clock,
+            host,
+            hydration,
+            mut config,
+            mut identity,
+            watcher,
+        } = self;
+        drop(watcher);
+        while_off(temp.path(), &mut identity, &mut config);
+        clock.advance(1);
+        Self::launch(temp, data, clock, host, hydration, config, identity)
+    }
+
+    fn backlog_file(&self) -> PathBuf {
+        self.config.backlog_file.clone().unwrap()
+    }
+
+    /// The document keys the persisted backlog lists.
+    fn backlog_keys(&self) -> Vec<String> {
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(self.backlog_file()).unwrap()).unwrap();
+        serde_json::from_value(record["keys"].clone()).unwrap()
+    }
+
     /// Triggers exactly one scan and waits for it to complete.
     fn step(&self) {
-        let target = self.clock.advance(1);
+        self.step_by(1);
+    }
+
+    /// Lets `seconds` pass on the clock, then triggers exactly one scan.
+    fn step_by(&self, seconds: i64) {
+        let target = self.clock.advance(seconds);
         self.watcher.scan_now();
         wait_until("a scan tick", || {
             self.watcher.status().last_scan_at == Some(target)
@@ -284,6 +450,315 @@ fn files_that_predate_the_watcher_are_held_for_others_in_mine_scope() {
     rig.step();
     rig.step();
     assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+}
+
+/// Intern starts at sign-in, restarts for every update, and starts a new
+/// watcher on every intake settings save. The record of what was already in
+/// the folder used to be retaken each time, so a document that arrived while
+/// Intern was off - scanned from a phone over the weekend - counted as already
+/// there and was held for others for ever.
+#[test]
+fn restart_with_persisted_backlog_processes_files_added_while_off() {
+    let rig = Rig::start(false, &["pre.pdf"]);
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "pre.pdf").key()]
+    );
+
+    let rig = rig.restart_with(|folder, _| {
+        fs::write(
+            folder.join("while-off.pdf"),
+            b"scanned while Intern was off",
+        )
+        .unwrap();
+    });
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![rig.temp.path().join("while-off.pdf")]
+    );
+    let status = rig.watcher.status();
+    assert_eq!(
+        status.held_for_others, 1,
+        "pre.pdf is still held: {status:?}"
+    );
+    let store = ClaimStore::new(rig.temp.path(), identity("other", "elsewhere")).unwrap();
+    assert_eq!(
+        store
+            .read_origin(&facts_for(rig.temp.path(), "while-off.pdf").key())
+            .unwrap()
+            .machine_id,
+        "here-machine",
+        "a document that arrived while this machine was off was put here locally"
+    );
+}
+
+/// The backlog is keyed by document, not by name. A scanner that writes every
+/// scan as "Scan.pdf", or a person replacing a document with a new version,
+/// puts a new document under an old name, and that used to be held as though
+/// it had been there all along.
+#[test]
+fn replaced_backlog_file_is_new() {
+    let rig = Rig::start(false, &["pre.pdf", "other.pdf"]);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+    let old_key = facts_for(rig.temp.path(), "pre.pdf").key();
+
+    let rig = rig.restart_with(|folder, _| {
+        fs::write(folder.join("pre.pdf"), b"a new document under the old name").unwrap();
+    });
+    rig.step();
+    let replaced = rig.temp.path().join("pre.pdf");
+    assert_eq!(rig.host.enqueued(), vec![replaced.clone()]);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    // The old key names nothing now, and goes once whole scans have missed
+    // it for long enough to be sure.
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "other.pdf").key()],
+        "the replaced document's old key is forgotten"
+    );
+    assert!(!rig.backlog_keys().contains(&old_key));
+
+    // The same while the watcher runs.
+    fs::write(rig.temp.path().join("other.pdf"), b"replaced while watched").unwrap();
+    rig.step();
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![replaced, rig.temp.path().join("other.pdf")]
+    );
+    assert_eq!(rig.watcher.status().held_for_others, 0);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    assert!(rig.backlog_keys().is_empty());
+}
+
+/// Saving a new machine label restarts the watcher on the same folder. That
+/// is not a new folder, and what was already there is not taken again.
+#[test]
+fn label_restart_keeps_backlog() {
+    let rig = Rig::start_as(
+        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        false,
+        &["pre.pdf"],
+    );
+    rig.step();
+    rig.step();
+    let recorded = fs::read(rig.backlog_file()).unwrap();
+
+    let rig = rig.restart_with(|folder, identity| {
+        identity.name = "Front desk".to_string();
+        fs::write(
+            folder.join("after-relabel.pdf"),
+            b"arrived during the restart",
+        )
+        .unwrap();
+    });
+    rig.step();
+    rig.step();
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![rig.temp.path().join("after-relabel.pdf")]
+    );
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(
+        fs::read(rig.backlog_file()).unwrap(),
+        recorded,
+        "the snapshot was neither retaken nor rewritten"
+    );
+}
+
+/// Turning watching on, or changing how the folder's documents are admitted,
+/// is the person starting to watch it, and "Only new documents" means new from
+/// then. The snapshot kept from an earlier watch of the same folder said
+/// nothing about documents that arrived while it was off, and they were taken
+/// for this machine's own uploads and filed. The host asks for a fresh look.
+#[test]
+fn a_new_watch_of_the_same_folder_takes_the_first_look_again() {
+    let rig = Rig::start(false, &["pre.pdf"]);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        fs::write(
+            folder.join("while-off.pdf"),
+            b"added while watching was turned off",
+        )
+        .unwrap();
+        config.retake_backlog = true;
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty(), "both were already here");
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+    let mut taken = vec![
+        facts_for(rig.temp.path(), "pre.pdf").key(),
+        facts_for(rig.temp.path(), "while-off.pdf").key(),
+    ];
+    taken.sort();
+    assert_eq!(rig.backlog_keys(), taken);
+
+    // The next start carries that watch on.
+    let rig = rig.restart_changing(|folder, _, config| {
+        fs::write(folder.join("after.pdf"), b"arrived during the restart").unwrap();
+        config.retake_backlog = false;
+    });
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![rig.temp.path().join("after.pdf")]);
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+}
+
+/// A version that learns to read a new type of document finds files of that
+/// type that sat in the folder all along. The first look never covered them,
+/// so they are not this machine's new uploads; one that arrives later is.
+#[test]
+fn documents_of_a_newly_read_type_that_were_already_there_are_held() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["pre.pdf"],
+        |config| {
+            config.extensions = vec!["pdf".to_string()];
+            fs::write(config.intake_root.join("notes.txt"), b"there all along").unwrap();
+        },
+    );
+    rig.step();
+    rig.step();
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    let rig = rig.restart_changing(|_, _, config| {
+        config.extensions = vec!["pdf".to_string(), "txt".to_string()];
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+
+    let later = rig.write("later.txt", b"a note written after the update");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![later]);
+    assert_eq!(rig.watcher.status().held_for_others, 2);
+}
+
+/// A backlog that cannot be written is said so, and written as soon as it can
+/// be: until then a restart would take it again and hold what arrived since.
+#[test]
+fn a_backlog_that_cannot_be_written_is_reported_and_written_later() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["pre.pdf"],
+        |config| {
+            let data = config.backlog_file.as_ref().unwrap().parent().unwrap();
+            config.backlog_file = Some(data.join("not-yet").join("intake-backlog.json"));
+        },
+    );
+    let error = rig.watcher.status().error.unwrap_or_default();
+    assert!(error.starts_with("BACKLOG_WRITE_FAILED"), "{error}");
+
+    fs::create_dir(rig.backlog_file().parent().unwrap()).unwrap();
+    rig.step();
+    assert_eq!(rig.watcher.status().error, None);
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(rig.temp.path(), "pre.pdf").key()]
+    );
+}
+
+/// The folder spelled so long that a subfolder named `out_of_reach()` takes
+/// it past the system's path limit: that subfolder cannot be listed, by
+/// anyone, until the folder is watched under its ordinary path again. A place
+/// a scan cannot look into, made without permission bits, which a test run
+/// as root ignores. The extra `.` components change nothing else: document
+/// keys and the snapshot's canonical folder come out the same.
+#[cfg(target_os = "linux")]
+fn long_spelling(folder: &Path) -> PathBuf {
+    let mut spelled = folder.as_os_str().to_owned();
+    while spelled.len() < 3900 {
+        spelled.push("/.");
+    }
+    PathBuf::from(spelled)
+}
+
+#[cfg(target_os = "linux")]
+fn out_of_reach() -> String {
+    "d".repeat(250)
+}
+
+/// A subfolder that cannot be listed hid its documents; it did not remove
+/// them. Forgetting them - after any length of time - would admit them as new
+/// the moment the folder could be read again.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_subfolder_that_cannot_be_listed_keeps_its_backlog() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        let hidden = config.intake_root.join(out_of_reach());
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("old.pdf"), b"already here").unwrap();
+    });
+    let key = facts_for(rig.temp.path(), &format!("{}/old.pdf", out_of_reach())).key();
+    assert_eq!(rig.backlog_keys(), vec![key.clone()]);
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = long_spelling(folder);
+    });
+    assert_eq!(rig.watcher.status().unreadable_folders, 1);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    rig.step_by(BACKLOG_FORGET_SECONDS);
+    assert_eq!(rig.backlog_keys(), vec![key.clone()]);
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = folder.to_path_buf();
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    let status = rig.watcher.status();
+    assert_eq!(status.unreadable_folders, 0);
+    assert_eq!(status.held_for_others, 1);
+}
+
+/// A subfolder the first look could not list held documents that were there
+/// all along. Finishing the look without them had them taken for new uploads
+/// and filed the moment the folder could be read.
+#[cfg(target_os = "linux")]
+#[test]
+fn documents_the_first_look_could_not_list_are_held_once_they_can_be() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        let hidden = config.intake_root.join(out_of_reach());
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("old.pdf"), b"already here").unwrap();
+        config.intake_root = long_spelling(&config.intake_root);
+    });
+    assert_eq!(rig.watcher.status().unreadable_folders, 1);
+    rig.step();
+
+    let rig = rig.restart_changing(|folder, _, config| {
+        config.intake_root = folder.to_path_buf();
+    });
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    let old = facts_for(rig.temp.path(), &format!("{}/old.pdf", out_of_reach())).key();
+    assert_eq!(rig.backlog_keys(), vec![old]);
+
+    // Seen into once, the place is settled: a document that lands there now
+    // is new.
+    let later = rig.write(&format!("{}/later.pdf", out_of_reach()), b"arrived since");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![later]);
     assert_eq!(rig.watcher.status().held_for_others, 1);
 }
 
@@ -391,6 +866,188 @@ fn a_claimed_file_deleted_by_the_user_leaves_a_removed_tombstone() {
     assert_eq!(claim.outcome, Some(DoneOutcome::Removed));
 }
 
+/// Remove on a review item deletes the queue row. Releasing the claim because
+/// the row was gone put the document straight back into the queue on the next
+/// scan, to be analysed again seconds after the person said "Item removed."
+#[test]
+fn removed_review_item_is_tombstoned_not_reenqueued() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("bad-proposal.pdf", b"a document the person gave up on");
+    let key = facts_for(rig.temp.path(), "bad-proposal.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+    rig.host.set_state(&path, ItemState::NeedsReview);
+    rig.step();
+
+    rig.host.remove(&path);
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+
+    for _ in 0..3 {
+        rig.step();
+    }
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![path],
+        "a removed document is never handed over again"
+    );
+    assert_eq!(
+        rig.read_claim(&key),
+        tombstone,
+        "tombstoned exactly once, and left alone after"
+    );
+    assert_eq!(rig.watcher.status().processed_here, 1);
+}
+
+/// Discard waiting can take a document out of the queue before any scan has
+/// seen it working. The queue had already taken it, so its disappearance is
+/// still a person's decision, not the crash between claim and hand-over.
+#[test]
+fn a_document_discarded_before_any_scan_saw_it_is_not_reenqueued() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("queued.pdf", b"discarded while still waiting");
+    let key = facts_for(rig.temp.path(), "queued.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.remove(&path);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path], "never handed over again");
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+}
+
+/// The queue keeps a canceled row, and handing the same document over again
+/// returns it canceled, so the old mapping (canceled reads as no item) made the
+/// claim file appear and vanish every two scans for ever - an upload to the
+/// sync client each time - and re-hashed the document on every cycle.
+#[test]
+fn user_cancel_is_tombstoned() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("not-this-one.pdf", b"a document the person canceled");
+    let key = facts_for(rig.temp.path(), "not-this-one.pdf").key();
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.cancel(&path);
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+    for _ in 0..4 {
+        rig.step();
+        assert_eq!(rig.read_claim(&key), tombstone, "no claim churn");
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// A claim with no queue row is not always a person's decision: a crash
+/// between taking the claim and handing the document over leaves exactly that,
+/// and the next run must still hand the document over.
+#[test]
+fn restart_adopted_claim_without_row_is_released() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("interrupted.pdf", b"claimed, then the app died");
+    let facts = facts_for(rig.temp.path(), "interrupted.pdf");
+    let rig = {
+        // The previous run got as far as the origin marker and the claim.
+        let store = ClaimStore::new(rig.temp.path(), rig.identity.clone()).unwrap();
+        store.write_origin(&facts).unwrap();
+        assert!(matches!(
+            store.acquire(&facts),
+            intern_intake::AcquireOutcome::Acquired
+        ));
+        rig.restart()
+    };
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+    assert!(
+        !rig.claim_file(&facts.key()).exists(),
+        "an adopted claim with no item behind it is released"
+    );
+
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.read_claim(&facts.key()).state, ClaimState::Claimed);
+}
+
+/// The watcher's own withdrawal is not a person's decision. A document it
+/// let go of while its uploader could not be vouched for is handed over again
+/// once it can be, and starts again rather than being tombstoned.
+#[test]
+fn a_document_the_watcher_withdrew_is_handed_over_again_not_tombstoned() {
+    let rig = Rig::start(false, &[]);
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Verified);
+    let path = rig.write("contract.pdf", b"a document being processed");
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Revoked);
+    rig.step();
+    assert_eq!(rig.host.abandoned(), vec![path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Unknown);
+
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Verified);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone(), path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
+}
+
+/// A queue that could not be asked says nothing about the document, so the
+/// claim is only kept alive: not released to be handed over again, not
+/// closed, not withdrawn - even with the file gone, since what the queue did
+/// with it is unknown.
+#[test]
+fn an_unavailable_queue_only_keeps_the_claim() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"a document in progress");
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    rig.host.set_state(&path, ItemState::Unavailable);
+    for _ in 0..3 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+    fs::remove_file(&path).unwrap();
+    for _ in 0..3 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
+    assert!(
+        claim.lease_expires_at > rig.watcher.status().last_scan_at.unwrap(),
+        "the lease was renewed all along"
+    );
+    assert!(rig.host.abandoned().is_empty());
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    // Once the queue answers again the claim is driven as usual.
+    rig.host.set_state(&path, ItemState::Unknown);
+    rig.step();
+    assert_eq!(rig.read_claim(&key).outcome, Some(DoneOutcome::Removed));
+}
+
 #[test]
 fn a_file_changing_between_scans_is_not_claimed_until_it_settles() {
     let rig = Rig::start(false, &[]);
@@ -412,6 +1069,185 @@ fn a_file_changing_between_scans_is_not_claimed_until_it_settles() {
         rig.host.enqueued(),
         vec![path],
         "one quiet scan interval proves stability"
+    );
+}
+
+/// Two observations a moment apart prove nothing about a writer that has only
+/// paused; stability is a stretch of quiet on the clock.
+#[test]
+fn stability_requires_minimum_quiet_time() {
+    let path = Path::new("/intake/attachment.pdf");
+    let mut tracker = StabilityTracker::new(10);
+    assert!(!tracker.observe(path, 4_000, 1_700_000_000, 1_000));
+    assert!(
+        !tracker.observe(path, 4_000, 1_700_000_000, 1_001),
+        "equal facts one second apart are not stable"
+    );
+    assert!(
+        tracker.observe(path, 4_000, 1_700_000_000, 1_010),
+        "the same facts min_quiet_seconds apart are"
+    );
+
+    // A change starts the quiet time over.
+    assert!(!tracker.observe(path, 9_000, 1_700_000_005, 1_011));
+    assert!(!tracker.observe(path, 9_000, 1_700_000_005, 1_020));
+    assert!(tracker.observe(path, 9_000, 1_700_000_005, 1_021));
+
+    // Two scans within the same second never settle anything.
+    let mut quick = StabilityTracker::new(10);
+    assert!(!quick.observe(path, 1, 1, 50));
+    assert!(!quick.observe(path, 1, 1, 50));
+}
+
+/// "Scan now" wakes the loop at once, so two scans could land milliseconds
+/// apart and see a paused writer's half-written file twice. The document was
+/// claimed and fingerprinted from that torn snapshot, then processed again
+/// once it settled.
+#[test]
+fn scan_now_double_scan_does_not_claim_changing_file() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.min_quiet_seconds = 10;
+    });
+    rig.step();
+    let path = rig.write("attachment.pdf", b"the first pages");
+    rig.step();
+    rig.step();
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "unchanged across two scans, but not quiet for long"
+    );
+
+    let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "and the rest of the attachment").unwrap();
+    drop(file);
+    rig.step();
+    rig.step();
+    assert!(rig.host.enqueued().is_empty());
+
+    rig.step_by(10);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    let key = facts_for(rig.temp.path(), "attachment.pdf").key();
+    assert_eq!(
+        rig.read_claim(&key).size,
+        fs::metadata(rig.temp.path().join("attachment.pdf"))
+            .unwrap()
+            .len(),
+        "claimed as the finished file"
+    );
+}
+
+#[test]
+fn next_interval_is_fast_while_settling() {
+    let mut config = IntakeConfig::new("/intake", vec!["pdf".to_string()]);
+    assert_eq!(config.next_interval(0), DEFAULT_SCAN_INTERVAL);
+    assert_eq!(config.next_interval(2), SETTLING_SCAN_INTERVAL);
+    assert_eq!(SETTLING_SCAN_INTERVAL, Duration::from_secs(3));
+    // Never slower than the configured interval.
+    config.scan_interval = Duration::from_secs(1);
+    assert_eq!(config.next_interval(2), Duration::from_secs(1));
+}
+
+/// A dropped document used to wait out a whole scan interval after it went
+/// quiet, and pickup took 20 to 40 seconds. Driven the way the loop drives
+/// itself, with the production intervals, it is claimed within one fast
+/// rescan of its quiet time.
+#[test]
+fn a_dropped_file_is_claimed_within_the_quiet_time_and_one_fast_rescan() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.min_quiet_seconds = DEFAULT_MIN_QUIET_SECONDS;
+    });
+    let production = IntakeConfig::new(rig.temp.path(), Vec::new());
+    rig.step();
+    let path = rig.write("scan.pdf", b"a scanned page");
+    rig.step();
+    let last_change = rig.watcher.status().last_scan_at.unwrap();
+    while rig.host.enqueued().is_empty() {
+        let wait = production.next_interval(rig.watcher.status().arriving as usize);
+        rig.step_by(wait.as_secs() as i64);
+        assert!(
+            rig.watcher.status().last_scan_at.unwrap() - last_change
+                <= DEFAULT_MIN_QUIET_SECONDS + SETTLING_SCAN_INTERVAL.as_secs() as i64,
+            "still not claimed"
+        );
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// While anything is arriving the loop looks again within seconds without
+/// being asked. Those rescans take a held document's verdict from the last
+/// full scan: for a shared folder each uploader check is a request to
+/// Microsoft, and asking about every held document every three seconds
+/// multiplied those requests for as long as anything arrived.
+#[test]
+fn settling_rescans_run_unasked_and_reuse_held_verdicts() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["held.pdf"],
+        |config| {
+            config.settling_interval = Duration::from_millis(20);
+            config.min_quiet_seconds = 1000;
+        },
+    );
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Other);
+    rig.step_by(1000);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+    assert_eq!(rig.host.admission_calls(), 1);
+
+    rig.write("arriving.pdf", b"still being written");
+    rig.step();
+    assert_eq!(rig.watcher.status().arriving, 1);
+    let asked = rig.host.admission_calls();
+    assert_eq!(asked, 2, "a scan someone asked for checks again");
+
+    // Nothing asks for these scans: the clock moves and the loop, rescanning
+    // while the file settles, stamps each one.
+    for _ in 0..3 {
+        let target = rig.clock.advance(1);
+        wait_until("a settling rescan", || {
+            rig.watcher.status().last_scan_at == Some(target)
+        });
+    }
+    assert_eq!(rig.host.admission_calls(), asked);
+    assert_eq!(rig.watcher.status().held_for_others, 1);
+
+    rig.watcher.scan_now();
+    wait_until("a full scan to check again", || {
+        rig.host.admission_calls() > asked
+    });
+}
+
+/// Settings shows what is on its way, and the loop rescans quickly while
+/// anything is. Files that were already there when watching started are not
+/// arriving.
+#[test]
+fn arriving_count_reported() {
+    let rig = Rig::start_with(
+        identity("here-machine", "here"),
+        false,
+        &["already-here.pdf"],
+        |config| config.min_quiet_seconds = 10,
+    );
+    assert_eq!(rig.watcher.status().arriving, 0);
+    rig.write("first.pdf", b"one document on its way");
+    rig.write("second.pdf", b"another document on its way");
+    rig.step();
+    assert_eq!(rig.watcher.status().arriving, 2);
+    rig.step_by(5);
+    assert_eq!(rig.watcher.status().arriving, 2, "still settling");
+
+    rig.step_by(5);
+    let status = rig.watcher.status();
+    assert_eq!(status.arriving, 0, "{status:?}");
+    assert_eq!(rig.host.enqueued().len(), 2);
+    assert!(
+        rig.host
+            .statuses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|reported| reported.arriving == 2),
+        "an arriving count is worth telling the host about"
     );
 }
 
@@ -439,15 +1275,114 @@ fn an_enqueue_failure_releases_the_claim_so_a_later_scan_can_retry() {
         rig.watcher.status()
     );
 
+    assert_eq!(rig.watcher.status().unreadable_documents, 1);
+
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step();
+    assert!(
+        rig.host.enqueued().is_empty(),
+        "the next attempt waits out its pause"
+    );
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert!(rig.claim_file(&key).exists());
+    let status = rig.watcher.status();
+    assert_eq!(status.error, None, "a clean scan clears the error");
+    assert_eq!(status.unreadable_documents, 0);
+}
+
+/// A document the queue can never take - a file this account may not read -
+/// was claimed and released on every scan, a claim file created and deleted
+/// in the shared folder every 20 seconds for ever.
+#[test]
+fn enqueue_failures_back_off() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("locked.pdf", b"a file this account may not read");
+    let key = facts_for(rig.temp.path(), "locked.pdf").key();
+    rig.step();
+    // A minute of scans a second apart: attempts at 0, 20, and 60 seconds.
+    for _ in 0..61 {
+        rig.step();
+        let status = rig.watcher.status();
+        assert_eq!(status.unreadable_documents, 1, "{status:?}");
+        assert!(!rig.claim_file(&key).exists());
+    }
+    let attempts = rig.host.enqueue_calls.load(Ordering::SeqCst);
+    assert_eq!(attempts, 3, "61 scans, 3 attempts");
+
+    // The pause stops growing at its cap; the document is still tried.
+    for _ in 0..12 {
+        rig.step_by(ENQUEUE_RETRY_CAP_SECONDS);
+    }
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), attempts + 12);
+
+    // Settled at last: handed over, and nothing more is counted.
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step_by(ENQUEUE_RETRY_CAP_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().unreadable_documents, 0);
+}
+
+/// Offline, the queue cannot read a placeholder it was handed, and the health
+/// notice said "Up to date" while the document went nowhere.
+#[test]
+fn dehydrated_enqueue_failure_counts_as_awaiting_hydration() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("online-only.pdf", b"bytes that live in the cloud");
+    rig.hydration.set_dehydrated(&path, true);
+    rig.step();
+    rig.step();
+    for _ in 0..3 {
+        let status = rig.watcher.status();
+        assert_eq!(status.awaiting_hydration, 1, "{status:?}");
+        assert_eq!(status.unreadable_documents, 0);
+        assert_eq!(
+            status.error, None,
+            "waiting for OneDrive is not an error to show"
+        );
+        rig.step();
+    }
+
+    // Back online, the next attempt hands it over.
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert_eq!(rig.watcher.status().awaiting_hydration, 0);
+}
+
+/// A placeholder the queue could not read offline waits for the connection,
+/// not for the clock. It waited out its pause - up to fifteen minutes - after
+/// the connection came back, while Settings said the next scan would pick it
+/// up.
+#[test]
+fn a_refused_placeholder_is_handed_over_as_soon_as_its_content_can_come_down() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("online-only.pdf", b"bytes that live in the cloud");
+    rig.hydration.set_dehydrated(&path, true);
+    rig.step();
+    rig.step();
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
+    rig.step_by(2 * ENQUEUE_RETRY_SECONDS);
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 3);
+
+    // Still offline: the content cannot come down, and the pause holds.
+    rig.step();
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    // Back online, well inside the pause.
+    rig.hydration.reachable.store(true, Ordering::SeqCst);
     rig.host.fail_enqueue.store(false, Ordering::SeqCst);
     rig.step();
     assert_eq!(rig.host.enqueued(), vec![path]);
-    assert!(rig.claim_file(&key).exists());
-    assert_eq!(
-        rig.watcher.status().error,
-        None,
-        "a clean scan clears the error"
-    );
+    let status = rig.watcher.status();
+    assert_eq!(status.awaiting_hydration, 0, "{status:?}");
 }
 
 #[test]
@@ -572,8 +1507,9 @@ fn update_config_rearms_on_a_new_folder_and_rebuilds_the_backlog() {
 
     let second = TempDir::new().unwrap();
     fs::write(second.path().join("pre-existing.pdf"), b"was already here").unwrap();
-    let mut config = IntakeConfig::new(second.path(), vec!["pdf".to_string()]);
-    config.scan_interval = Duration::from_secs(3600);
+    let mut config = rig.config.clone();
+    config.intake_root = second.path().to_path_buf();
+    config.extensions = vec!["pdf".to_string()];
     rig.watcher.update_config(config);
     wait_until("the watcher to adopt the new folder", || {
         rig.watcher.status().folder == second.path()
@@ -587,6 +1523,17 @@ fn update_config_rearms_on_a_new_folder_and_rebuilds_the_backlog() {
         "the new folder's pre-existing file is backlog again: {status:?}"
     );
     assert_eq!(rig.host.enqueued().len(), 1, "nothing new was enqueued");
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(rig.backlog_file()).unwrap()).unwrap();
+    assert_eq!(
+        record["folder"],
+        fs::canonicalize(second.path()).unwrap().to_str().unwrap(),
+        "a new folder retakes the snapshot"
+    );
+    assert_eq!(
+        rig.backlog_keys(),
+        vec![facts_for(second.path(), "pre-existing.pdf").key()]
+    );
 }
 
 #[test]
@@ -624,6 +1571,42 @@ fn skip_rules_ignore_dotfiles_office_locks_unsupported_and_empty_files() {
     assert_eq!(status.claimed_by_others, 0);
 }
 
+/// The host watches by the one admission list, so the legacy and open
+/// formats the worker learned to read are claimed from a watched folder the
+/// moment they arrive, like a PDF. What the skip rules leave alone stays left
+/// alone in those formats too: the `~$` owner file Office keeps beside an open
+/// legacy document, LibreOffice's `.~lock` file, and Intern's own history
+/// export, which is a CSV.
+#[test]
+fn documents_in_newly_read_formats_are_claimed_and_their_lock_files_are_not() {
+    let rig = Rig::start_with(identity("here-machine", "here"), false, &[], |config| {
+        config.extensions = intern_core::SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect();
+    });
+    rig.step();
+    let mut documents = vec![
+        rig.write("letter.doc", b"legacy word"),
+        rig.write("ledger.xls", b"legacy excel"),
+        rig.write("statement.csv", b"date,amount\r\n"),
+        rig.write("minutes.odt", b"open document"),
+    ];
+    rig.write("~$letter.doc", b"office owner file");
+    rig.write("~$ledger.xls", b"office owner file");
+    rig.write(".~lock.minutes.odt#", b"libreoffice lock");
+    rig.write("intern-history.csv", b"at,direction\r\n");
+    rig.step();
+    rig.step();
+    let mut enqueued = rig.host.enqueued();
+    enqueued.sort();
+    documents.sort();
+    assert_eq!(enqueued, documents);
+    let status = rig.watcher.status();
+    assert_eq!(status.held_for_others, 0);
+    assert_eq!(status.unreadable_documents, 0);
+}
+
 #[test]
 fn dropping_the_watcher_joins_the_scan_thread() {
     let rig = Rig::start(false, &[]);
@@ -634,6 +1617,7 @@ fn dropping_the_watcher_joins_the_scan_thread() {
         host,
         hydration,
         watcher,
+        ..
     } = rig;
     // A hang here (a detached or stuck thread) fails the test by timeout.
     drop(watcher);
@@ -752,15 +1736,15 @@ fn a_document_that_failed_while_still_in_the_cloud_is_held_not_tombstoned() {
         "a document nothing could read must not be tombstoned"
     );
 
-    // Back online: the bytes arrive, so the claim is released and the next
-    // scan re-acquires it to give the document a real attempt.
+    // Back online: the bytes arrive, so the queue retries the document in
+    // place to give it a real attempt, and the claim stays this machine's.
     rig.hydration.set_dehydrated(&path, false);
     rig.step();
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    assert!(
-        !rig.claim_file(&key).exists(),
-        "the released claim leaves nothing behind to block a retry"
-    );
+    assert_eq!(rig.host.retried(), vec![path]);
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
 }
 
 #[test]
@@ -779,6 +1763,64 @@ fn a_failure_with_the_content_local_still_tombstones() {
     let claim = rig.read_claim(&key);
     assert_eq!(claim.state, ClaimState::Done);
     assert_eq!(claim.outcome, Some(DoneOutcome::Failed));
+}
+
+/// The queue keeps one row per path and content, so re-handing a failed
+/// document over returns the failed row unchanged. Forgiving a document that
+/// failed without its content therefore has to retry it through the host, or
+/// nothing is retried at all and the next scan tombstones it as failed.
+#[test]
+fn hydration_forgiveness_retries_through_host() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    rig.hydration.reachable.store(true, Ordering::SeqCst);
+    rig.step();
+    assert_eq!(rig.host.retried(), vec![path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    for _ in 0..2 {
+        rig.step();
+        let claim = rig.read_claim(&key);
+        assert_eq!(claim.state, ClaimState::Claimed, "the claim stays held");
+        assert_eq!(claim.machine_id, "here-machine");
+    }
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// Forgiveness is once per trip through the cloud: a document that fails
+/// again with its content on this disk failed for real.
+#[test]
+fn second_failure_tombstones() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document that is broken");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    rig.hydration.set_dehydrated(&path, false);
+    rig.step();
+    assert_eq!(rig.host.retried(), vec![path.clone()]);
+    rig.step();
+
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Done);
+    assert_eq!(claim.outcome, Some(DoneOutcome::Failed));
+    assert_eq!(rig.host.retried(), vec![path], "retried exactly once");
 }
 
 #[test]
@@ -801,6 +1843,38 @@ fn a_document_deleted_while_awaiting_hydration_stops_being_waited_on() {
 
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
     assert!(!rig.claim_file(&key).exists());
+}
+
+/// Clear history tidies failed items away. A document whose item failed
+/// before its content ever arrived was never judged, and its failed item
+/// going is no decision about it: it was closed as kept and never retried.
+/// It is handed over again instead.
+#[test]
+fn clearing_a_failure_that_awaits_its_content_hands_the_document_over_again() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("contract.pdf", b"an online-only document");
+    rig.step();
+    rig.step();
+    let key = facts_for(rig.temp.path(), "contract.pdf").key();
+
+    rig.hydration.set_dehydrated(&path, true);
+    rig.host.set_state(&path, ItemState::Failed);
+    rig.step();
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    rig.host.remove(&path);
+    rig.step();
+    assert!(
+        !rig.claim_file(&key).exists(),
+        "released for the next scan to hand over, not tombstoned"
+    );
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone(), path.clone()]);
+    assert_eq!(rig.host.item_state(&path), ItemState::Active);
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert_eq!(claim.machine_id, "here-machine");
 }
 
 /// A shared drive grants permissions per folder. One folder this machine may
@@ -939,10 +2013,9 @@ fn a_retryable_recheck_keeps_the_owned_claim_without_recording_a_verdict() {
     assert!(!rig.claim_file(&key).exists());
 }
 
-/// Verifying an uploader costs a Microsoft audit search, and only 32 can be
-/// pending at once. Spending them on documents this machine has already
-/// finished, or that another machine is processing, starves the documents that
-/// actually need a verdict.
+/// Verifying an uploader can cost a request to Microsoft. Spending those on
+/// documents this machine has already finished, or that another machine is
+/// processing, starves the documents that actually need a verdict.
 #[test]
 fn held_and_done_files_are_not_reverified_each_scan() {
     let rig = Rig::start(false, &[]);
@@ -1019,6 +2092,55 @@ fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
     assert_eq!(rig.watcher.status().sync_conflicts, 2);
 }
 
+/// A label someone typed into Settings is not a name any sync client writes.
+/// Treating it as a conflict suffix silently skipped ordinary documents that
+/// happen to end in it, with no per-file explanation.
+#[test]
+fn machine_label_is_not_a_conflict_suffix() {
+    let rig = Rig::start_as(
+        labelled_identity("here-machine", "Office", "DESKTOP-A1"),
+        false,
+        &[],
+    );
+    rig.step();
+    // A teammate's labelled machine, and one whose presence record predates
+    // hostnames, when its display name was the hostname.
+    ClaimStore::new(
+        rig.temp.path(),
+        labelled_identity("other-machine", "Reception", "LAPTOP-Z9"),
+    )
+    .unwrap()
+    .touch_presence()
+    .unwrap();
+    fs::write(
+        rig.temp
+            .path()
+            .join(".intern")
+            .join("machines")
+            .join("legacy-machine.json"),
+        format!(
+            r#"{{"version":1,"machineId":"legacy-machine","machineName":"OLD-PC","userName":"pat","lastSeenAt":{}}}"#,
+            common::real_now()
+        ),
+    )
+    .unwrap();
+    let invoice = rig.write("Invoice-Office.pdf", b"an ordinary document");
+    let memo = rig.write("Memo-Reception.pdf", b"another ordinary document");
+    rig.write("report-DESKTOP-A1.pdf", b"our own conflict copy");
+    rig.write("minutes-LAPTOP-Z9.pdf", b"a teammate's conflict copy");
+    rig.write("notes-OLD-PC.pdf", b"a legacy machine's conflict copy");
+    rig.step();
+    rig.step();
+
+    assert_eq!(rig.host.enqueued(), vec![invoice, memo]);
+    assert_eq!(
+        rig.watcher.status().sync_conflicts,
+        3,
+        "{:?}",
+        rig.watcher.status()
+    );
+}
+
 /// Nothing else ever opens a placeholder, so a claim held waiting for content
 /// waits for ever unless the scan asks the sync client for the bytes.
 #[test]
@@ -1044,10 +2166,12 @@ fn a_held_placeholder_is_hydrated_when_the_host_can_reach_the_cloud() {
         "the scan must ask for the content it is waiting on"
     );
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    assert!(
-        !rig.claim_file(&key).exists(),
-        "the released claim lets the next scan give the document a real attempt"
+    assert_eq!(
+        rig.host.retried(),
+        vec![path],
+        "the document gets a real attempt now the content is here"
     );
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
 }
 
 /// A sync client can settle a file's size before it has finished with it and
@@ -1153,17 +2277,19 @@ fn a_placeholder_that_hydrates_is_given_a_real_attempt_rather_than_a_failure() {
     assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
     assert_eq!(rig.read_claim(&key).machine_id, "here-machine");
 
-    // The bytes arrive, the claim is released, and the next scan hands the
-    // document back to the queue with something to read.
+    // The bytes arrive and the queue runs the document again, with
+    // something to read, while the claim stays held.
     rig.hydration.reachable.store(true, Ordering::SeqCst);
     rig.step();
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
-    rig.step();
     assert_eq!(
-        rig.host.enqueued(),
-        vec![path.clone(), path.clone()],
+        rig.host.retried(),
+        vec![path.clone()],
         "the document deserves a second attempt now the content is here"
     );
+    rig.step();
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
 
     rig.host.set_state(
         &path,

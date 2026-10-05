@@ -6,7 +6,7 @@
 
 use std::{
     collections::HashSet,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
@@ -29,6 +29,20 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STALE_WORKSPACE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// OCR below this mean confidence is reported as a fact-affecting warning.
 const LOW_OCR_CONFIDENCE: f32 = 75.0;
+/// The longest response line read from the worker.
+///
+/// The worker caps a document at eight million characters, so an honest
+/// reply - JSON escaping and a page image included - stays well inside this.
+/// A longer line is a worker gone wrong, and reading it whole would put an
+/// unbounded allocation in the app's own process rather than the worker's.
+const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
+/// The worker warning for rows and columns a spreadsheet's window
+/// deliberately leaves out, with a marker where it does. The rest of the
+/// sheet was read and chosen against, so nothing the window shows is in
+/// doubt.
+const CONTENT_ELIDED: &str = "CONTENT_ELIDED";
+/// The worker's standard error, under the log directory when one is set.
+const WORKER_LOG: &str = "worker.log";
 
 /// Progress from the extraction stage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -206,10 +220,16 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
         return Err(ExtractFailure::new("WORKER_PROTOCOL_INVALID", false, false));
     }
 
+    // Every warning can corrupt what was read except a deliberate, marked
+    // elision. A code this build does not know stays fact-affecting, so a
+    // newer worker's warning errs towards review.
     let mut parser_warnings = document
         .warnings
         .into_iter()
-        .map(|code| ParserWarning::new(code, true))
+        .map(|code| {
+            let field_affecting = code != CONTENT_ELIDED;
+            ParserWarning::new(code, field_affecting)
+        })
         .collect::<Vec<_>>();
     let low_confidence = document.pages.iter().any(|page| {
         page.source == WorkerPageSource::Ocr
@@ -569,6 +589,18 @@ impl Drop for SupervisedWorker {
 }
 
 fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, ExtractFailure> {
+    launch_logged(executable, temp_root, crate::logs::log_directory())
+}
+
+/// [`launch`], with the worker's standard error kept in `worker.log` under
+/// `log_directory` when there is one. The worker writes warning codes there,
+/// never document text: its panic hook reports where a panic happened, not
+/// the message, which can quote the document.
+fn launch_logged(
+    executable: &Path,
+    temp_root: Option<&Path>,
+    log_directory: Option<&Path>,
+) -> Result<WorkerProcess, ExtractFailure> {
     let mut command = Command::new(executable);
     if let Some(temp_root) = temp_root {
         command.env("INTERN_TEMP_ROOT", temp_root);
@@ -576,11 +608,11 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(crate::logs::stderr_for(log_directory, WORKER_LOG));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
+        command.creation_flags(crate::process::sidecar_creation_flags());
     }
     let mut child = command.spawn().map_err(|_| ExtractFailure::crashed())?;
     crate::process::tie_to_this_process(&child);
@@ -603,23 +635,7 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
     let (sender, receiver) = mpsc::channel();
     let reader = std::thread::Builder::new()
         .name("intern-worker-jsonl".into())
-        .spawn(move || {
-            let reader = BufReader::new(output);
-            for line in reader.lines() {
-                match line {
-                    Ok(line) => {
-                        if sender.send(Ok(line)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(_) => {
-                        let _ = sender.send(Err(()));
-                        return;
-                    }
-                }
-            }
-            let _ = sender.send(Err(()));
-        });
+        .spawn(move || forward_lines(output, &sender, MAX_RESPONSE_LINE_BYTES));
     if reader.is_err() {
         let _ = child.kill();
         let _ = child.wait();
@@ -630,6 +646,44 @@ fn launch(executable: &Path, temp_root: Option<&Path>) -> Result<WorkerProcess, 
         input: Mutex::new(input),
         output: Mutex::new(receiver),
     })
+}
+
+/// Sends each line the worker writes, then `Err(())` once the output ends
+/// or cannot be read - including a line longer than `limit`, which is
+/// refused as soon as it passes the limit rather than read to its end. The
+/// receiving side treats `Err(())` as a crashed worker and stops it.
+fn forward_lines(output: impl Read, sender: &mpsc::Sender<Result<String, ()>>, limit: usize) {
+    let mut reader = BufReader::new(output);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = match reader
+            .by_ref()
+            .take(limit as u64 + 1)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        if read == 0 {
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+        } else if line.len() > limit {
+            break;
+        }
+        let Ok(text) = String::from_utf8(std::mem::take(&mut line)) else {
+            break;
+        };
+        if sender.send(Ok(text)).is_err() {
+            return;
+        }
+    }
+    let _ = sender.send(Err(()));
 }
 
 pub fn prepare_worker_temp_root(root: &Path, max_entries: usize) -> std::io::Result<usize> {
@@ -829,6 +883,181 @@ mod tests {
 
         let canceled = request_failure("CANCELED".into(), "request canceled".into(), false);
         assert!(canceled.canceled, "a worker-side cancel is still a cancel");
+    }
+
+    /// A worker reply carrying one page and the given warnings.
+    fn one_page(text: &str, warnings: &[&str], truncated: bool) -> DocumentSource {
+        let reply = json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "r",
+            "event": {"type": "parsed", "document": {
+                "pages": [{"page_number": 1, "text": text, "source": "any_doc",
+                    "ocr_confidence": null, "vision_escalated": false}],
+                "warnings": warnings,
+                "truncated": truncated,
+                "optional_image": null,
+            }},
+        });
+        parsed(&reply.to_string()).unwrap()
+    }
+
+    /// A sheet whose facts are in its first rows and whose ledger runs on
+    /// past the window, as the worker renders it.
+    const LONG_SHEET: &str = "## Statement of Work\n\n\
+STATEMENT OF WORK\n\n\
+This Statement of Work is effective as of April 1, 2026, by and between Acme Corporation \
+and Contoso Worldwide, Inc.\n\n\
+The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n\
+| Item | Amount |\n| --- | --- |\n| CRM licences | 1200 |\n| Onboarding | 800 |\n\n\
+[... 150 more rows not shown]\n";
+
+    fn long_sheet_proposal() -> crate::domain::ModelProposal {
+        use crate::domain::{DateRole, Evidence, ModelProposal, PartyRelation};
+        ModelProposal {
+            document_type: Some("Statement of Work".into()),
+            document_date: Some("2026-04-01".into()),
+            date_role: Some(DateRole::Effective),
+            parties: vec!["Acme Corporation".into(), "Contoso Worldwide, Inc.".into()],
+            party_relation: PartyRelation::Between,
+            description:
+                "Statement of work between Acme Corporation and Contoso Worldwide, Inc. covering the 2026 CRM implementation and its fees."
+                    .into(),
+            confidence: 0.9,
+            needs_review: false,
+            evidence: Evidence {
+                date: Some("effective as of April 1, 2026".into()),
+                document_type: Some("STATEMENT OF WORK".into()),
+                parties: vec![
+                    "by and between Acme Corporation and Contoso Worldwide, Inc.".into(),
+                ],
+            },
+        }
+    }
+
+    fn validated(source: &DocumentSource) -> crate::domain::ValidationOutcome {
+        let digest = crate::distill::distill(source, crate::distill::DigestBudget::default());
+        crate::validate::validate(long_sheet_proposal(), &digest)
+    }
+
+    /// Rows past a spreadsheet's window are left out by design and marked
+    /// where they are. That says the sheet is long, not that anything read
+    /// from it is in doubt, so a proposal the sheet supports is still Ready.
+    /// Text that was cut is a different matter and still goes to review.
+    #[test]
+    fn content_elided_is_not_field_affecting() {
+        use crate::domain::{ProposalStatus, ReviewReason};
+
+        let elided = one_page(LONG_SHEET, &["CONTENT_ELIDED"], false);
+        assert_eq!(
+            elided.parser_warnings,
+            vec![ParserWarning::new("CONTENT_ELIDED", false)]
+        );
+        let outcome = validated(&elided);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::ParserWarning));
+
+        let truncated = one_page(LONG_SHEET, &["TEXT_TRUNCATED"], true);
+        assert_eq!(
+            truncated.parser_warnings,
+            vec![ParserWarning::new("TEXT_TRUNCATED", true)]
+        );
+        let outcome = validated(&truncated);
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert!(outcome.reasons.contains(&ReviewReason::ParserWarning));
+
+        // A code this build has never heard of errs towards review.
+        let unknown = one_page(LONG_SHEET, &["SOMETHING_NEW"], false);
+        assert_eq!(
+            unknown.parser_warnings,
+            vec![ParserWarning::new("SOMETHING_NEW", true)]
+        );
+    }
+
+    /// Reads everything `forward_lines` sends for the given output.
+    fn forwarded(output: impl Read, limit: usize) -> Vec<Result<String, ()>> {
+        let (sender, receiver) = mpsc::channel();
+        forward_lines(output, &sender, limit);
+        drop(sender);
+        receiver.into_iter().collect()
+    }
+
+    /// The worker's reply lines are read with a bound. A line past it is a
+    /// worker gone wrong: it is refused once the bound is passed, never
+    /// read to its end, and reported as the crash the caller already knows
+    /// how to recover from. Nothing after it is read.
+    #[test]
+    fn oversized_response_line_fails_cleanly() {
+        assert_eq!(
+            forwarded(&b"{\"a\":1}\r\n{\"b\":2}\nlast"[..], 16),
+            vec![
+                Ok("{\"a\":1}".to_owned()),
+                Ok("{\"b\":2}".to_owned()),
+                Ok("last".to_owned()),
+                Err(()),
+            ]
+        );
+        assert_eq!(
+            forwarded(&b"short\n0123456789abcdefXYZ\nnever read\n"[..], 16),
+            vec![Ok("short".to_owned()), Err(())]
+        );
+        // A line exactly at the bound is still a line.
+        assert_eq!(
+            forwarded(&b"0123456789abcdef\n"[..], 16),
+            vec![Ok("0123456789abcdef".to_owned()), Err(())]
+        );
+
+        // At the real bound, an endless line costs the bound and no more.
+        let endless = std::io::repeat(b'x');
+        assert_eq!(forwarded(endless, MAX_RESPONSE_LINE_BYTES), vec![Err(())]);
+    }
+
+    /// The worker's standard error is kept beside the server's when a log
+    /// directory is set, in a file emptied once it passes the cap.
+    #[cfg(unix)]
+    #[test]
+    fn worker_stderr_goes_to_its_log_when_directory_set() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join(WORKER_LOG), vec![b'x'; 300 * 1024]).unwrap();
+        // A worker that reports a warning code and then waits for commands.
+        let helper = directory.path().join("worker.sh");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\necho '{\"level\":\"warning\",\"code\":\"PARSE_FAILED\"}' >&2\nexec cat\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // A script written a moment ago can briefly be "text file busy" while
+        // another test's fork still holds the write handle; try again.
+        let process = (0..20)
+            .find_map(|_| {
+                launch_logged(&helper, None, Some(&logs)).ok().or_else(|| {
+                    std::thread::sleep(Duration::from_millis(50));
+                    None
+                })
+            })
+            .expect("the helper starts");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let log = logs.join(WORKER_LOG);
+        while std::fs::read_to_string(&log).unwrap_or_default().is_empty()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        process.terminate();
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "{\"level\":\"warning\",\"code\":\"PARSE_FAILED\"}\n"
+        );
     }
 
     #[test]

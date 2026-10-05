@@ -11,8 +11,9 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
-    path::{Path, PathBuf},
+    fs,
+    io::{self, Read},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -24,6 +25,7 @@ use crate::{
     filed::{FILED_RETENTION_SECONDS, FiledMarker},
     fsatomic,
     identity::MachineIdentity,
+    scan::modified_secs,
 };
 
 pub const CLAIM_LEASE_SECONDS: i64 = 900;
@@ -32,6 +34,10 @@ pub const COURTESY_DELAY_SECONDS: i64 = 120;
 pub const DONE_RETENTION_SECONDS: i64 = 30 * 24 * 3600;
 pub const PRESENCE_REFRESH_SECONDS: i64 = 300;
 pub const PRESENCE_ACTIVE_WINDOW_SECONDS: i64 = 600;
+/// How often `prune` actually sweeps the shared directory. Every retention it
+/// enforces is measured in days, so sweeping on every scan bought nothing and
+/// re-read a year of filed markers every 20 seconds.
+pub const PRUNE_INTERVAL_SECONDS: i64 = 3600;
 
 const FORMAT_VERSION: u32 = 1;
 const MALFORMED_RETENTION_SECONDS: i64 = 24 * 3600;
@@ -162,10 +168,17 @@ pub struct MachinePresence {
 }
 
 impl MachinePresence {
-    /// Every name this machine might be called in a sync client's conflict
-    /// copy: the display name, which may be a label, and the hostname.
-    pub fn names(&self) -> [&str; 2] {
-        [&self.machine_name, &self.host_name]
+    /// The name a sync client gives this machine's conflict copies: its
+    /// hostname. `machine_name` may be a label someone typed into Settings,
+    /// and an ordinary document can end in a word like "Office". It is used
+    /// only for a record written before hostnames were kept, whose
+    /// `machine_name` was the hostname unless a label was set.
+    pub fn conflict_name(&self) -> &str {
+        if self.host_name.trim().is_empty() {
+            &self.machine_name
+        } else {
+            &self.host_name
+        }
     }
 }
 
@@ -208,15 +221,41 @@ impl Versioned for MachinePresence {
     }
 }
 
+/// The largest coordination file `load` will read. Every record this crate
+/// writes is a few hundred bytes; the cap only has to leave room for long
+/// filenames.
+pub(crate) const MAX_COORDINATION_BYTES: u64 = 64 * 1024;
+
 /// A malformed or future-version file is indistinguishable from sync-conflict
 /// garbage, so it reads as `Unreadable` rather than an error or a panic;
 /// `prune` clears such files once they are a day old.
+///
+/// These files come from a shared folder anyone with write access - or a sync
+/// glitch - can fill, and the scan reads them all. An oversized one is
+/// `Unreadable` too, decided from its length before anything is read and
+/// enforced again on the read itself, so one huge file cannot be pulled into
+/// memory on every scan.
 pub(crate) fn load<T: DeserializeOwned + Versioned>(path: &Path) -> Stored<T> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Stored::Missing,
         Err(_) => return Stored::Unreadable,
     };
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > MAX_COORDINATION_BYTES)
+    {
+        return Stored::Unreadable;
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_COORDINATION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_COORDINATION_BYTES
+    {
+        return Stored::Unreadable;
+    }
     match serde_json::from_slice::<T>(&bytes) {
         Ok(value) if value.version() == FORMAT_VERSION => Stored::Parsed(value),
         _ => Stored::Unreadable,
@@ -234,6 +273,9 @@ pub struct ClaimStore {
     identity: MachineIdentity,
     clock: Arc<dyn Clock>,
     presence_touched_at: Mutex<Option<i64>>,
+    /// When `prune` last swept, on the injected clock. `None` until the first
+    /// sweep, so every process sweeps once at start.
+    pruned_at: Mutex<Option<i64>>,
     /// Per claim key, the last heartbeat value seen from another machine and
     /// the local time it was first seen with that value. See
     /// `observed_silence`.
@@ -264,6 +306,7 @@ impl ClaimStore {
             identity,
             clock,
             presence_touched_at: Mutex::new(None),
+            pruned_at: Mutex::new(None),
             heartbeats: Mutex::new(HashMap::new()),
         })
     }
@@ -557,15 +600,31 @@ impl ClaimStore {
 
     /// Best-effort janitor for the shared directory.
     ///
-    /// Removes done tombstones past `DONE_RETENTION_SECONDS`, claimed leases
+    /// Removes done tombstones past `DONE_RETENTION_SECONDS` - except a kept
+    /// document's while it stays put (see `prune_claims`) - claimed leases
     /// whose heartbeat has been silent that long (their machine is gone for
     /// good and nothing else ever deletes them), origin markers past the same
     /// retention, filed markers past `FILED_RETENTION_SECONDS`, and — after
     /// a one-day grace so in-flight sync writes are never eaten — malformed
     /// files, sync conflict copies (valid JSON under the wrong filename), and
     /// leaked dot-prefixed temp files.
+    ///
+    /// Self-gated to one sweep per `PRUNE_INTERVAL_SECONDS`: the sweep opens
+    /// every file in four directories, which grow with history, inside a
+    /// synced folder. A clock that moved backwards sweeps again rather than
+    /// waiting for it to catch up.
     pub fn prune(&self) {
         let now = self.clock.now();
+        {
+            let mut pruned_at = self
+                .pruned_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pruned_at.is_some_and(|at| (0..PRUNE_INTERVAL_SECONDS).contains(&(now - at))) {
+                return;
+            }
+            *pruned_at = Some(now);
+        }
         let live = self.prune_claims(now);
         self.heartbeats
             .lock()
@@ -593,6 +652,18 @@ impl ClaimStore {
 
     /// Returns the keys of the claims that survived, so the heartbeat
     /// observations cannot outlive the claims they describe.
+    ///
+    /// A `KeptOriginal` tombstone whose document is still in the folder
+    /// exactly as it was claimed is kept however old it is. That outcome is a
+    /// person's decision to leave the document where it is - kept under its
+    /// own name, canceled, removed from the queue, discarded while waiting -
+    /// and the tombstone is the only record of it: expired, the document was
+    /// picked up again as new and analysed once more a month after someone
+    /// decided against it. Once the document is moved, deleted or rewritten
+    /// its key is one nothing will see again, and the tombstone goes as
+    /// before. Other outcomes keep the plain retention: a failure is tried
+    /// again a month on, and a document that vanished before it was finished
+    /// and then came back is not refused for ever.
     fn prune_claims(&self, now: i64) -> HashSet<String> {
         let mut live = HashSet::new();
         let Ok(entries) = fs::read_dir(self.root.join("claims")) else {
@@ -610,7 +681,11 @@ impl ClaimStore {
                         ClaimState::Done => claim.done_at.unwrap_or(claim.claimed_at),
                         ClaimState::Claimed => claim.heartbeat_at,
                     };
-                    if now - reference >= DONE_RETENTION_SECONDS {
+                    let expired = now - reference >= DONE_RETENTION_SECONDS;
+                    let kept_in_place = claim.state == ClaimState::Done
+                        && claim.outcome == Some(DoneOutcome::KeptOriginal)
+                        && self.still_in_place(&claim);
+                    if expired && !kept_in_place {
                         let _ = fs::remove_file(&path);
                     } else {
                         live.insert(claim.key);
@@ -621,6 +696,28 @@ impl ClaimStore {
             }
         }
         live
+    }
+
+    /// Whether the document `claim` names is still in the intake folder as it
+    /// was claimed: same place, size and modification time. The claim comes
+    /// from a file anyone who can write the shared folder can write, so it
+    /// names nothing unless its facts make the key it is filed under, and a
+    /// path that would lead anywhere but down into the folder names nothing
+    /// either.
+    fn still_in_place(&self, claim: &ClaimInfo) -> bool {
+        let relative = Path::new(&claim.relative_path);
+        let Some(folder) = self.root.parent() else {
+            return false;
+        };
+        document_key(&claim.relative_path, claim.size, claim.modified_at) == claim.key
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            && fs::metadata(folder.join(relative)).is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata.len() == claim.size
+                    && modified_secs(&metadata) == claim.modified_at
+            })
     }
 
     fn prune_named_dir<T: DeserializeOwned + Versioned>(

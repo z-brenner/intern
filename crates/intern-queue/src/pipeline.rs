@@ -13,7 +13,7 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_filename,
+    RuleKind, ValidatedProposal, compose_styled_filename,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
@@ -638,6 +638,10 @@ pub struct Pipeline {
     /// How long no model may be loaded before the queue stops for it.
     model_missing_grace: std::time::Duration,
     active_item: AtomicI64,
+    /// Set when the active item's model request is canceled - by a person or
+    /// by its deadline - before the model itself is told. The request thread
+    /// reads it to tell a failure the cancel caused from one worth a retry.
+    active_cancel: Mutex<Option<Arc<AtomicBool>>>,
     shutting_down: AtomicBool,
     model_timeout: std::time::Duration,
     lease_renewal_interval: std::time::Duration,
@@ -754,6 +758,7 @@ impl Pipeline {
             model_missing_since: Mutex::new(None),
             model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
+            active_cancel: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
             lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
@@ -1056,6 +1061,8 @@ impl Pipeline {
         let cancel_worker = Arc::clone(&self.worker);
         let cancel_model = Arc::clone(&self.model);
         let cancel_request_id = request_id.clone();
+        let cancel_store = Arc::clone(&self.store);
+        let cancel_item = item.id;
         let lease = match LeaseKeeper::start_with_cancel(
             Arc::clone(&self.store),
             item.id,
@@ -1064,8 +1071,13 @@ impl Pipeline {
                 Ok(LeasePhase::Extracting) => {
                     let _ = cancel_worker.cancel(&cancel_request_id);
                 }
+                // A canceled item loses its lease by being canceled, and the
+                // cancel already stopped its request. Stopping the model
+                // again only restarted the server a second time.
                 Ok(LeasePhase::Analyzing) => {
-                    let _ = cancel_model.cancel();
+                    if !item_is_canceled(&cancel_store, cancel_item).unwrap_or(false) {
+                        let _ = cancel_model.cancel();
+                    }
                 }
                 Err(_) => {
                     let _ = cancel_worker.shutdown();
@@ -1212,16 +1224,17 @@ impl Pipeline {
                         "pipeline is shutting down",
                     ));
                 }
+                // Before the lease: canceling an item is what takes its lease
+                // away, so a canceled item always fails its lease check, and
+                // checking that first paused the queue for every cancel.
+                if item_is_canceled(&self.store, item.id)? {
+                    self.events.queue_changed();
+                    return Ok(true);
+                }
                 if let Err(lease_error) = lease.check() {
                     self.paused.store(true, Ordering::SeqCst);
                     self.events.queue_changed();
                     return Err(lease_error);
-                }
-                if self.store.list()?.iter().any(|candidate| {
-                    candidate.id == item.id && candidate.status == QueueStatus::Canceled
-                }) {
-                    self.events.queue_changed();
-                    return Ok(true);
                 }
                 let code = model_error_code(&error);
                 let action = model_failure_action(&error.code);
@@ -1236,9 +1249,10 @@ impl Pipeline {
                         // happens for a moment while switching between the
                         // hosted and the local one, or while the local server
                         // restarts after a cancel. The document goes back to
-                        // wait with nothing counted against it, and this drain
-                        // ends rather than claiming it again at once; the
-                        // scheduler's next pass finds the model in place.
+                        // wait with nothing counted against it - counted, it
+                        // failed outright at the second such moment - and this
+                        // drain ends rather than claiming it again at once;
+                        // the scheduler's next pass finds the model in place.
                         lease.stop_and_check()?;
                         self.store.transition(
                             item.id,
@@ -1300,12 +1314,25 @@ impl Pipeline {
                 return Ok(true);
             }
         };
+        // An answer for a document canceled while it was being read is not
+        // wanted, and its lost lease is not the queue's problem.
+        if item_is_canceled(&self.store, item.id)? {
+            self.active_item.store(0, Ordering::SeqCst);
+            self.events.queue_changed();
+            return Ok(true);
+        }
         self.ensure_lease(&lease)?;
         // The document's words, respelled the way review has taught Intern
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
         let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
-        let filename = self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+        let filename = self.compose_for_target(
+            &item.source_path,
+            &styled,
+            &house_rules,
+            &extension,
+            &existing,
+        );
         // The exact-bytes check ran before analysis. This one needs the text
         // and the date, so it runs after: a second scan, a re-export, or a
         // copy saved again with new metadata says what a filed document
@@ -1473,14 +1500,19 @@ impl Pipeline {
     /// the name that is actually applied must not collide in the folder the
     /// document is going to. Without readable settings the source folder's
     /// names (`fallback`) stand in.
+    ///
+    /// `proposal` is the styled proposal and `house_rules` the rules that
+    /// styled it: what a rule spelled is the reviewer's, and is written as
+    /// they typed it.
     fn compose_for_target(
         &self,
         source_path: &Path,
         proposal: &ValidatedProposal,
+        house_rules: &[HouseRule],
         extension: &str,
         fallback: &[String],
     ) -> String {
-        let named = compose_filename(proposal, extension, &[]).value;
+        let named = compose_styled_filename(proposal, house_rules, extension, &[]).value;
         let existing = match self.settings.load() {
             Ok(settings) => names_beside(
                 &target_folder(
@@ -1492,8 +1524,9 @@ impl Pipeline {
             ),
             Err(_) => fallback.to_vec(),
         };
-        compose_filename(
+        compose_styled_filename(
             proposal,
+            house_rules,
             extension,
             &existing.iter().map(String::as_str).collect::<Vec<_>>(),
         )
@@ -1570,8 +1603,13 @@ impl Pipeline {
                 item.source_path.parent().unwrap_or_else(|| Path::new(".")),
                 &item.source_path,
             );
-            record.filename =
-                self.compose_for_target(&item.source_path, &styled, &extension, &existing);
+            record.filename = self.compose_for_target(
+                &item.source_path,
+                &styled,
+                &house_rules,
+                &extension,
+                &existing,
+            );
             record.house_rules = house_rules;
             record.revision += 1;
             self.repository.replace_proposal(item.id, &record)?;
@@ -1629,6 +1667,9 @@ impl Pipeline {
         let source = source.clone();
         let extension = extension.to_owned();
         let existing_names = existing_names.to_vec();
+        let canceled = Arc::new(AtomicBool::new(false));
+        let request_canceled = Arc::clone(&canceled);
+        self.set_active_cancel(Some(Arc::clone(&canceled)));
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let join = std::thread::Builder::new()
             .name("intern-model-request".into())
@@ -1637,21 +1678,74 @@ impl Pipeline {
                     .iter()
                     .map(String::as_str)
                     .collect::<Vec<_>>();
+                let was_canceled = || {
+                    request_canceled
+                        .load(Ordering::SeqCst)
+                        .then(|| ModelFailure::fatal("MODEL_CANCELED"))
+                };
+                // A request the cancel interrupted fails like a server that
+                // died - the local model is restarted under it - and was
+                // recovered and sent again: the canceled document read a
+                // second time, on yet another restarted server.
                 let result = match request_model.analyze(&source, &extension, &existing) {
-                    Err(error) if error.retryable => request_model
-                        .recover(&error)
-                        .and_then(|()| request_model.analyze(&source, &extension, &existing)),
+                    Err(error) => match was_canceled() {
+                        Some(canceled) => Err(canceled),
+                        None if error.retryable => {
+                            request_model
+                                .recover(&error)
+                                .and_then(|()| match was_canceled() {
+                                    Some(canceled) => Err(canceled),
+                                    None => request_model.analyze(&source, &extension, &existing),
+                                })
+                        }
+                        None => Err(error),
+                    },
                     result => result,
                 };
                 let _ = sender.send(result);
             })
-            .map_err(|_| ModelFailure::fatal("MODEL_REQUEST_FAILED"))?;
+            .map_err(|_| {
+                self.set_active_cancel(None);
+                ModelFailure::fatal("MODEL_REQUEST_FAILED")
+            })?;
+        let result = self.await_model_request(&model, &canceled, &receiver, join);
+        self.set_active_cancel(None);
+        result
+    }
+
+    fn set_active_cancel(&self, flag: Option<Arc<AtomicBool>>) {
+        *self
+            .active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = flag;
+    }
+
+    /// Marks the active model request canceled, before the model is told.
+    fn cancel_active_request(&self) {
+        if let Some(flag) = self
+            .active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn await_model_request(
+        &self,
+        model: &Arc<dyn AnalyzerBoundary>,
+        request_canceled: &AtomicBool,
+        receiver: &std::sync::mpsc::Receiver<Result<DocumentAnalysis, ModelFailure>>,
+        join: std::thread::JoinHandle<()>,
+    ) -> Result<DocumentAnalysis, ModelFailure> {
         match receiver.recv_timeout(self.model_timeout) {
             Ok(result) => {
                 let _ = join.join();
                 result
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                request_canceled.store(true, Ordering::SeqCst);
                 let canceled = model.cancel();
                 // A request that has already missed its deadline is given a
                 // little longer to notice the cancel, and then left to finish
@@ -2079,6 +2173,21 @@ impl Pipeline {
     }
 
     pub fn cancel(&self, id: i64) -> PipelineResult<()> {
+        self.cancel_marked(id, None)
+    }
+
+    /// Cancels on the intake watcher's behalf: the claim on the document went
+    /// to another computer, or its uploader could no longer be confirmed. The
+    /// row is marked `INTAKE_WITHDRAWN`, on the row itself so the mark
+    /// outlives a restart, because a person's cancel leaves the same status
+    /// and means the opposite - leave the document alone - where this one
+    /// may be handed over and run again. A row already canceled stays the
+    /// person's.
+    pub fn withdraw(&self, id: i64) -> PipelineResult<()> {
+        self.cancel_marked(id, Some(ErrorCode::IntakeWithdrawn))
+    }
+
+    fn cancel_marked(&self, id: i64, mark: Option<ErrorCode>) -> PipelineResult<()> {
         let item = self.find_item(id)?;
         if item.status == QueueStatus::NeedsReview
             && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
@@ -2092,7 +2201,7 @@ impl Pipeline {
             | QueueStatus::Ready
             | QueueStatus::NeedsReview => {
                 self.store
-                    .transition(id, item.status, QueueStatus::Canceled, None)?;
+                    .transition(id, item.status, QueueStatus::Canceled, mark)?;
             }
             QueueStatus::Canceled => {}
             QueueStatus::Applying => {
@@ -2114,9 +2223,12 @@ impl Pipeline {
                     let request_id = format!("queue-{}-{}", id, item.processing_failures + 1);
                     self.worker.cancel(&request_id).map_err(worker_error)?;
                 }
-                QueueStatus::Analyzing => self.model.cancel().map_err(|error| {
-                    PipelineError::new(error.code, "local model request could not be canceled")
-                })?,
+                QueueStatus::Analyzing => {
+                    self.cancel_active_request();
+                    self.model.cancel().map_err(|error| {
+                        PipelineError::new(error.code, "local model request could not be canceled")
+                    })?
+                }
                 _ => {}
             }
         }
@@ -3304,6 +3416,14 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() as i64)
+}
+
+/// Whether the item has been canceled. One indexed read: this is asked
+/// whenever a model request ends, and from the lease's cancel callback.
+fn item_is_canceled(store: &QueueStore, id: i64) -> PipelineResult<bool> {
+    Ok(store
+        .get(id)?
+        .is_some_and(|item| item.status == QueueStatus::Canceled))
 }
 
 /// The queue code an extraction failure is stored under, from the worker's

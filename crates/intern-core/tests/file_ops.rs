@@ -1,16 +1,20 @@
+#[cfg(windows)]
+use std::sync::atomic::AtomicUsize;
 use std::{
     fs, io,
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime},
 };
 
+#[cfg(windows)]
+use intern_core::LockRetry;
 use intern_core::{
-    ErrorCode, FileApplier, FileIdentity, FileSystem, LockRetry, LockedFile, OperationKind,
-    OperationStage, QueueStatus, QueueStore, StdFileSystem,
+    ErrorCode, FileApplier, FileIdentity, FileSystem, LockedFile, OperationKind, OperationStage,
+    QueueStatus, QueueStore, StdFileSystem,
 };
 use tempfile::TempDir;
 
@@ -1260,13 +1264,20 @@ mod windows_safety {
     }
 }
 
+// The holds these doubles inject are raw ERROR_SHARING_VIOLATION (os error
+// 32), which only Windows reads as a lock worth waiting out; on Linux 32 is
+// EPIPE. So the doubles are compiled where the tests that use them are, and a
+// Linux build does not carry them as dead code.
+
 /// A source the sync client is holding: the first `holds` opens fail the way
 /// Windows reports ERROR_SHARING_VIOLATION, and everything after that succeeds.
+#[cfg(windows)]
 struct SyncLockedFileSystem {
     inner: StdFileSystem,
     remaining_holds: AtomicUsize,
 }
 
+#[cfg(windows)]
 impl SyncLockedFileSystem {
     fn take_hold(&self) -> Option<io::Error> {
         let held =
@@ -1278,6 +1289,7 @@ impl SyncLockedFileSystem {
     }
 }
 
+#[cfg(windows)]
 impl FileSystem for SyncLockedFileSystem {
     fn exists(&self, path: &Path) -> bool {
         self.inner.exists(path)
@@ -1311,6 +1323,7 @@ impl FileSystem for SyncLockedFileSystem {
     }
 }
 
+#[cfg(windows)]
 fn sync_locked(holds: usize) -> Arc<SyncLockedFileSystem> {
     Arc::new(SyncLockedFileSystem {
         inner: StdFileSystem,
@@ -1320,10 +1333,12 @@ fn sync_locked(holds: usize) -> Arc<SyncLockedFileSystem> {
 
 /// A source another process is still holding: every attempt to open it for
 /// deletion fails the way Windows reports ERROR_SHARING_VIOLATION.
+#[cfg(windows)]
 struct HeldSourceFileSystem {
     inner: StdFileSystem,
 }
 
+#[cfg(windows)]
 impl FileSystem for HeldSourceFileSystem {
     fn exists(&self, path: &Path) -> bool {
         self.inner.exists(path)
@@ -1417,12 +1432,14 @@ fn a_source_the_sync_client_releases_is_applied_rather_than_sent_to_review() {
 /// A destination an indexer grabs the instant it appears: the first
 /// `remaining_holds` attempts to open the renamed file, and to rename a
 /// temporary onto it, fail the way Windows reports ERROR_SHARING_VIOLATION.
+#[cfg(windows)]
 struct HeldDestinationFileSystem {
     inner: StdFileSystem,
     same_volume: bool,
     remaining_holds: AtomicUsize,
 }
 
+#[cfg(windows)]
 impl HeldDestinationFileSystem {
     fn take_hold(&self) -> Option<io::Error> {
         let held =
@@ -1434,10 +1451,12 @@ impl HeldDestinationFileSystem {
     }
 }
 
+#[cfg(windows)]
 fn is_named(path: &Path) -> bool {
     path.file_name().and_then(|value| value.to_str()) == Some("named.pdf")
 }
 
+#[cfg(windows)]
 impl FileSystem for HeldDestinationFileSystem {
     fn exists(&self, path: &Path) -> bool {
         self.inner.exists(path)
@@ -1477,6 +1496,7 @@ impl FileSystem for HeldDestinationFileSystem {
     }
 }
 
+#[cfg(windows)]
 fn held_destination(same_volume: bool, holds: usize) -> Arc<HeldDestinationFileSystem> {
     Arc::new(HeldDestinationFileSystem {
         inner: StdFileSystem,
