@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use intern_core::{
@@ -128,6 +128,18 @@ pub struct QueueItemDto {
     /// the name it was filed under, and the machine when it was not this one.
     #[serde(skip_serializing_if = "Option::is_none")]
     near_duplicate_of: Option<String>,
+    /// Where the document is filed, as the rename that filed it chose: the
+    /// folder the layout put it in and any ` (2)` the destination needed,
+    /// neither of which the proposal knows. `None` when it is not filed.
+    filed_path: Option<String>,
+    /// The leaf of `filed_path`.
+    filed_name: Option<String>,
+    /// A completed item that was never renamed: the person kept its name.
+    kept_original: bool,
+    /// Review is waiting on the files, not on a decision about the name: an
+    /// operation never finished, and Check again - or a confirmed remove -
+    /// is what moves the item on.
+    parked: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -831,8 +843,25 @@ pub(crate) enum SchedulerMessage {
     Shutdown,
 }
 
-fn scheduler_actions(timed_out: bool, model_ready: bool) -> (bool, bool) {
-    (timed_out, model_ready)
+/// How often the scheduler looks for operations to recover.
+const RECOVER_INTERVAL: Duration = Duration::from_secs(65);
+
+/// Whether this pass of the scheduler recovers, and whether it drains.
+///
+/// Recovery used to run only when 65 seconds passed with no wake at all, and
+/// every document the intake watcher enqueues is a wake: a scanner dropping a
+/// page every half minute put recovery off for as long as it kept scanning,
+/// and an operation left applying held the whole queue for all of that time.
+/// It now runs on the wall clock, whatever woke the scheduler.
+fn scheduler_actions(
+    timed_out: bool,
+    model_ready: bool,
+    elapsed_since_recover: Duration,
+) -> (bool, bool) {
+    (
+        timed_out || elapsed_since_recover >= RECOVER_INTERVAL,
+        model_ready,
+    )
 }
 
 struct PipelineScheduler {
@@ -852,15 +881,25 @@ impl PipelineScheduler {
         let join = std::thread::Builder::new()
             .name("intern-pipeline-scheduler".into())
             .spawn(move || {
+                let mut last_recover = Instant::now();
                 loop {
-                    let timed_out = match receiver.recv_timeout(Duration::from_secs(65)) {
+                    // Wait no longer than the next recovery is due, so it
+                    // runs on time even when nothing wakes the scheduler.
+                    let wait = RECOVER_INTERVAL.saturating_sub(last_recover.elapsed());
+                    let timed_out = match receiver.recv_timeout(wait) {
                         Ok(SchedulerMessage::Shutdown) => return,
                         Ok(SchedulerMessage::Wake) => false,
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                     };
-                    let (recover, drain) =
-                        scheduler_actions(timed_out, model_ready.load(Ordering::SeqCst));
+                    let (recover, drain) = scheduler_actions(
+                        timed_out,
+                        model_ready.load(Ordering::SeqCst),
+                        last_recover.elapsed(),
+                    );
+                    if recover {
+                        last_recover = Instant::now();
+                    }
                     if recover && let Err(error) = scheduled_pipeline.recover() {
                         let _ = app.emit(
                             "queue://changed",
@@ -2465,11 +2504,10 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                     .map(|name| format!("Duplicate of {name}"))
             }),
         error_code: item.error_code.map(|code| code.as_str().to_owned()),
-        undoable: item.status == QueueStatus::Completed
-            && item.receipt.as_ref().is_some_and(|receipt| {
-                receipt.direction == OperationDirection::Apply
-                    && receipt.stage == OperationStage::Complete
-            }),
+        // The apply that filed the document, not the newest receipt: an undo
+        // that was refused and rolled back used to take the Undo button away
+        // from a document that was still filed.
+        undoable: item.status == QueueStatus::Completed && item.filed_receipt.is_some(),
         proposal_revision: proposal.map(|record| record.revision.to_string()),
         reconciliation,
         suggested_date: proposal.and_then(|record| suggested_date(&record.analysis)),
@@ -2485,6 +2523,25 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .map(|record| record.house_rules.iter().map(HouseRuleDto::from).collect())
             .unwrap_or_default(),
         near_duplicate_of: proposal.and_then(|record| record.near_duplicate_of.clone()),
+        filed_path: item
+            .filed_receipt
+            .as_ref()
+            .map(|receipt| display_path(&receipt.destination)),
+        filed_name: item.filed_receipt.as_ref().and_then(|receipt| {
+            receipt
+                .destination
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }),
+        kept_original: item.status == QueueStatus::Completed && item.filed_receipt.is_none(),
+        parked: (item.status == QueueStatus::NeedsReview && item.unsettled_receipt.is_some())
+            || matches!(
+                item.error_code,
+                Some(
+                    intern_core::ErrorCode::SourceDeleteFailed
+                        | intern_core::ErrorCode::ReconciliationRequired
+                )
+            ),
     })
 }
 
@@ -3199,14 +3256,41 @@ mod background_task_tests {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{ExistingModelFilesDto, scheduler_actions};
+    use std::time::Duration;
+
+    use super::{ExistingModelFilesDto, RECOVER_INTERVAL, scheduler_actions};
 
     #[test]
     fn timer_recovers_but_does_not_drain_until_model_is_ready() {
-        assert_eq!(scheduler_actions(true, false), (true, false));
-        assert_eq!(scheduler_actions(false, false), (false, false));
-        assert_eq!(scheduler_actions(false, true), (false, true));
-        assert_eq!(scheduler_actions(true, true), (true, true));
+        let recently = Duration::from_secs(1);
+        assert_eq!(scheduler_actions(true, false, recently), (true, false));
+        assert_eq!(scheduler_actions(false, false, recently), (false, false));
+        assert_eq!(scheduler_actions(false, true, recently), (false, true));
+        assert_eq!(scheduler_actions(true, true, recently), (true, true));
+    }
+
+    #[test]
+    fn scheduler_runs_recover_on_wall_clock_even_with_frequent_wakes() {
+        // A scanner dropping a page into the watched folder every thirty
+        // seconds: every pass is a wake, and none of them ever times out.
+        let wake_every = Duration::from_secs(30);
+        let mut since_recover = Duration::ZERO;
+        let mut recovered_at = Vec::new();
+        for wake in 1..=10_u32 {
+            since_recover += wake_every;
+            let (recover, drain) = scheduler_actions(false, true, since_recover);
+            assert!(drain, "every wake drains a ready queue");
+            if recover {
+                recovered_at.push(wake);
+                since_recover = Duration::ZERO;
+            }
+        }
+        // Recovery is due every 65 seconds, so the third wake (90s) runs it,
+        // and so does every third wake after.
+        assert_eq!(recovered_at, vec![3, 6, 9]);
+
+        assert!(!scheduler_actions(false, false, RECOVER_INTERVAL - Duration::from_millis(1)).0);
+        assert!(scheduler_actions(false, false, RECOVER_INTERVAL).0);
     }
 
     #[test]
@@ -3447,6 +3531,139 @@ mod duplicate_reason_tests {
         let stale = queue_item_dto(duplicate_item(None)).unwrap();
         assert_eq!(stale.reason, None);
         assert_eq!(stale.error_code.as_deref(), Some("DUPLICATE"));
+    }
+}
+
+#[cfg(test)]
+mod filed_dto_tests {
+    use std::path::PathBuf;
+
+    use intern_core::{
+        ErrorCode, OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
+    };
+    use intern_queue::PipelineItem;
+
+    use super::queue_item_dto;
+
+    fn receipt(
+        id: i64,
+        direction: OperationDirection,
+        stage: OperationStage,
+        destination: &str,
+    ) -> OperationReceipt {
+        OperationReceipt {
+            id,
+            queue_item_id: 7,
+            direction,
+            source: PathBuf::from("C:/drop/scan.pdf"),
+            destination: PathBuf::from(destination),
+            temporary_path: None,
+            pre_operation_hash: "hash".into(),
+            post_operation_hash: None,
+            kind: OperationKind::Rename,
+            stage,
+            source_exists: true,
+            destination_exists: false,
+            temporary_exists: false,
+        }
+    }
+
+    fn item(status: QueueStatus) -> PipelineItem {
+        PipelineItem {
+            id: 7,
+            source_path: PathBuf::from("C:/drop/scan.pdf"),
+            source_hash: "hash".into(),
+            status,
+            processing_failures: 0,
+            error_code: None,
+            proposal: None,
+            receipt: None,
+            filed_receipt: None,
+            unsettled_receipt: None,
+            duplicate_of: None,
+        }
+    }
+
+    #[test]
+    fn queue_item_dto_exposes_filed_name_kept_original_parked() {
+        // Filed under the suffix the destination needed, and then an undo
+        // was refused and rolled back on top of it.
+        let applied = receipt(
+            1,
+            OperationDirection::Apply,
+            OperationStage::Complete,
+            "C:/filed/2024/2024-04-12 Invoice Acme (2).pdf",
+        );
+        let filed = PipelineItem {
+            receipt: Some(receipt(
+                2,
+                OperationDirection::Undo,
+                OperationStage::RolledBack,
+                "C:/drop/scan.pdf",
+            )),
+            filed_receipt: Some(applied),
+            ..item(QueueStatus::Completed)
+        };
+        let dto = queue_item_dto(filed).unwrap();
+        assert_eq!(
+            dto.filed_name.as_deref(),
+            Some("2024-04-12 Invoice Acme (2).pdf")
+        );
+        assert!(dto.filed_path.as_deref().is_some_and(|path| {
+            path.ends_with("2024-04-12 Invoice Acme (2).pdf") && path.contains("2024")
+        }));
+        assert!(
+            dto.undoable,
+            "a rolled-back undo leaves the filing undoable"
+        );
+        assert!(!dto.kept_original);
+        assert!(!dto.parked);
+
+        let kept = queue_item_dto(item(QueueStatus::Completed)).unwrap();
+        assert!(kept.kept_original);
+        assert!(!kept.undoable);
+        assert_eq!(kept.filed_name, None);
+
+        // Waiting on the files rather than on a decision: an unfinished
+        // receipt, or one of the codes that mean two files are on disk.
+        let unsettled = PipelineItem {
+            error_code: Some(ErrorCode::FileChanged),
+            unsettled_receipt: Some(receipt(
+                3,
+                OperationDirection::Apply,
+                OperationStage::Planned,
+                "C:/filed/named.pdf",
+            )),
+            ..item(QueueStatus::NeedsReview)
+        };
+        assert!(queue_item_dto(unsettled).unwrap().parked);
+        for code in [
+            ErrorCode::SourceDeleteFailed,
+            ErrorCode::ReconciliationRequired,
+        ] {
+            let parked = PipelineItem {
+                error_code: Some(code),
+                ..item(QueueStatus::NeedsReview)
+            };
+            assert!(queue_item_dto(parked).unwrap().parked, "{code:?}");
+        }
+        let deciding = PipelineItem {
+            error_code: Some(ErrorCode::FileChanged),
+            ..item(QueueStatus::NeedsReview)
+        };
+        let deciding = queue_item_dto(deciding).unwrap();
+        assert!(!deciding.parked);
+        assert!(
+            !deciding.kept_original,
+            "only a completed item kept its name"
+        );
+
+        // The wire names the window reads.
+        let json = serde_json::to_value(kept).unwrap();
+        for key in ["filedPath", "filedName", "keptOriginal", "parked"] {
+            assert!(json.get(key).is_some(), "{key} missing from {json}");
+        }
+        assert_eq!(json["keptOriginal"], true);
     }
 }
 

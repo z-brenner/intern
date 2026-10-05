@@ -337,6 +337,21 @@ pub(crate) fn item_fate(
     }
 }
 
+/// A queue item's fate, judged by the apply that filed it.
+///
+/// The newest receipt is the wrong witness: an undo that was refused and
+/// rolled back sits on top of the apply, having moved nothing, and a document
+/// that was still filed read as one that kept its original name.
+pub(crate) fn pipeline_item_fate(item: &PipelineItem) -> ItemState {
+    item_fate(
+        item.status,
+        item.filed_receipt.as_ref(),
+        item.proposal
+            .as_ref()
+            .map(|record| record.filename.as_str()),
+    )
+}
+
 /// The intake crate's view of the app: documents go into the existing
 /// pipeline, and status changes become `intake://changed` events.
 pub(crate) struct PipelineIntakeHost {
@@ -407,13 +422,7 @@ impl IntakeHost for PipelineIntakeHost {
 
     fn item_state(&self, path: &Path) -> ItemState {
         match self.find_item(path) {
-            Some(item) => item_fate(
-                item.status,
-                item.receipt.as_ref(),
-                item.proposal
-                    .as_ref()
-                    .map(|record| record.filename.as_str()),
-            ),
+            Some(item) => pipeline_item_fate(&item),
             None => ItemState::Unknown,
         }
     }
@@ -836,5 +845,97 @@ mod filed_index_tests {
         assert_eq!(elsewhere.filed_by, None);
         assert_eq!(elsewhere.filename, "2026-03-02 Agreement.pdf");
         assert!(known_filing(&marker("aaa"), "aaa", None).is_some());
+    }
+}
+
+#[cfg(test)]
+mod fate_tests {
+    use std::path::PathBuf;
+
+    use intern_core::{
+        OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
+    };
+    use intern_intake::{DoneOutcome, ItemState};
+    use intern_queue::PipelineItem;
+
+    use super::pipeline_item_fate;
+
+    fn receipt(
+        id: i64,
+        direction: OperationDirection,
+        stage: OperationStage,
+        source: &str,
+        destination: &str,
+    ) -> OperationReceipt {
+        OperationReceipt {
+            id,
+            queue_item_id: 7,
+            direction,
+            source: PathBuf::from(source),
+            destination: PathBuf::from(destination),
+            temporary_path: None,
+            pre_operation_hash: "hash".into(),
+            post_operation_hash: Some("hash".into()),
+            kind: OperationKind::Rename,
+            stage,
+            source_exists: false,
+            destination_exists: true,
+            temporary_exists: false,
+        }
+    }
+
+    #[test]
+    fn a_rolled_back_undo_does_not_turn_a_filed_document_into_a_kept_original() {
+        let filed = receipt(
+            1,
+            OperationDirection::Apply,
+            OperationStage::Complete,
+            "/intake/scan.pdf",
+            "/dest/2024-03-01 Contract.pdf",
+        );
+        // The undo was refused, journalled and rolled back: the newest
+        // receipt, having moved nothing.
+        let refused_undo = receipt(
+            2,
+            OperationDirection::Undo,
+            OperationStage::RolledBack,
+            "/dest/2024-03-01 Contract.pdf",
+            "/intake/scan.pdf",
+        );
+        let item = PipelineItem {
+            id: 7,
+            source_path: PathBuf::from("/intake/scan.pdf"),
+            source_hash: "hash".into(),
+            status: QueueStatus::Completed,
+            processing_failures: 0,
+            error_code: None,
+            proposal: None,
+            receipt: Some(refused_undo),
+            filed_receipt: Some(filed),
+            unsettled_receipt: None,
+            duplicate_of: None,
+        };
+
+        assert_eq!(
+            pipeline_item_fate(&item),
+            ItemState::Done {
+                outcome: DoneOutcome::Renamed,
+                result_filename: Some("2024-03-01 Contract.pdf".into()),
+            }
+        );
+
+        // With nothing filed - a keep-original, or a finished undo - the
+        // document kept its name.
+        let kept = PipelineItem {
+            filed_receipt: None,
+            ..item
+        };
+        assert_eq!(
+            pipeline_item_fate(&kept),
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            }
+        );
     }
 }
