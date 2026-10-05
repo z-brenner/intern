@@ -87,7 +87,10 @@ export function validateLeafFilename(name: string): string | undefined {
   if (name.endsWith('.')) return 'A filename cannot end with a dot; Windows would drop it.';
   if (/\s$/u.test(name)) return 'A filename cannot end with a space; Windows would drop it.';
   const bytes = new TextEncoder().encode(name).length;
-  if (bytes > MAX_FILENAME_BYTES) return `This filename is too long. Shorten it by about ${bytes - MAX_FILENAME_BYTES} characters.`;
+  // Counted in bytes, as the backend counts; "about" because a character
+  // outside ASCII takes more than one.
+  const over = bytes - MAX_FILENAME_BYTES;
+  if (over > 0) return `This filename is too long. Shorten it by about ${over} ${over === 1 ? 'character' : 'characters'}.`;
   return undefined;
 }
 

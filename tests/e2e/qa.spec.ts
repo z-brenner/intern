@@ -64,15 +64,20 @@ test.describe('whole-product browser QA', () => {
     await filename.focus();
     await expect(filename).toBeFocused();
 
-    // Focusing a text input puts the caret at the end, which scrolls a long
-    // proposed name out of view: the field rendered as "etween ABC Properties LLC
-    // and TenantCo Inc.pdf". The focus assertion above is the accessibility check
-    // and stays; this only returns the field to the start so the capture shows the
-    // filename a reviewer is being asked to approve, rather than its tail.
-    await filename.evaluate((element: HTMLInputElement) => {
-      element.setSelectionRange(0, 0);
-      element.scrollLeft = 0;
-    });
+    // The whole proposed name is on screen with the caret in it. A one-line
+    // input scrolled a long name to its tail on focus ("etween ABC Properties
+    // LLC and TenantCo Inc.pdf"), and this test had to scroll it back by hand
+    // before the capture; the field now wraps and grows instead.
+    await expect(filename).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
+    const field = await filename.evaluate((element: HTMLTextAreaElement) => ({
+      overflowY: element.scrollHeight - element.clientHeight,
+      overflowX: element.scrollWidth - element.clientWidth,
+      lines: Math.round((element.clientHeight - Number.parseFloat(getComputedStyle(element).paddingTop) - Number.parseFloat(getComputedStyle(element).paddingBottom)) / Number.parseFloat(getComputedStyle(element).lineHeight)),
+    }));
+    expect(field.overflowY).toBeLessThanOrEqual(0);
+    expect(field.overflowX).toBeLessThanOrEqual(0);
+    expect(field.lines).toBeGreaterThan(1);
+    await expect(page.locator('.filename-extension')).toHaveText('.pdf');
 
     if (process.env.INTERN_QA_CAPTURE === '1') {
       const capture = resolve('docs/qa/latest-implementation.png');
@@ -98,7 +103,7 @@ test.describe('whole-product browser QA', () => {
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.goto('/');
     const inspector = page.getByRole('complementary', { name: 'Review item' });
-    await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+    await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     await expect(inspector.getByRole('button', { name: 'Approve & rename' })).toBeInViewport({ ratio: 1 });
     await expect(inspector.getByRole('button', { name: 'Keep original' })).toBeInViewport({ ratio: 1 });

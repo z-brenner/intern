@@ -1,15 +1,33 @@
 import { Ban, CalendarPlus, ClipboardCopy, Ellipsis, FileCheck2, FileText, RotateCcw, Trash2, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
-import { leadingDate, withLeadingDate } from '../lib/filenames';
+import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { QueueItem } from '../types';
 
 /** What the inspector says when a name has no date; the backend says the same in DATE_REQUIRED. */
 export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.';
+
+/**
+ * What is wrong with an edited stem, checked as the person types: the
+ * backend's own rules for the whole name, and one it cannot see - a stem that
+ * already ends in the extension, as a name pasted whole from Explorer does,
+ * would be filed as "Lease.pdf.pdf". An empty stem is left alone until
+ * Approve, so clearing the field to retype it is not an error.
+ */
+function stemProblem(stem: string, extension: string | undefined, sourceExtension: string | undefined): string | undefined {
+  if (!stem.trim()) return undefined;
+  if (extension !== undefined && stem.trim().toLowerCase().endsWith(`.${extension.toLowerCase()}`)) {
+    return `Leave \u201c.${extension}\u201d off: Intern adds the extension itself.`;
+  }
+  return validateFilename(joinFilename(stem, extension), sourceExtension);
+}
+
+/** Line breaks have no place in a filename; one pasted in becomes a space, so the words either side stay apart. */
+const withoutLineBreaks = (value: string) => value.replace(/[\r\n]+/g, ' ');
 
 /**
  * The pipeline joins several parties into one string with semicolons. Shown as
@@ -22,35 +40,65 @@ function quotations(value?: string): string[] {
 
 interface Props { item: QueueItem; drawer: boolean; busy?: boolean; onClose(): void; onApprove(filename: string, description: string): void; onKeep(): void; onCancel(): void; onRetry(): void; onRemove(): void; onUndo(): void }
 export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep, onCancel, onRetry, onRemove, onUndo }: Props) {
-  const [filename, setFilename] = useState(item.proposedFilename ?? '');
+  // The extension is the source's and the backend refuses any other, so it
+  // is not part of what can be edited: the field holds the name before it,
+  // and the extension sits after the field, locked.
+  const sourceExtension = filenameExtension(item.originalFilename);
+  const { stem: proposedStem, extension } = splitFilename(item.proposedFilename ?? '', sourceExtension);
+  const [stem, setStem] = useState(proposedStem);
   const [description, setDescription] = useState(item.description ?? '');
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const inspectorRef = useRef<HTMLElement>(null);
-  const filenameRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { setFilename(item.proposedFilename ?? ''); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); }, [item.id, item.proposalRevision]);
+  const filenameRef = useRef<HTMLTextAreaElement>(null);
+  const fieldId = useId();
+  useEffect(() => { setStem(proposedStem); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); }, [item.id, item.proposalRevision]);
+  // The whole name, always: a single-line field showed about half of a
+  // typical proposal, and the caret only its tail. The field grows to fit
+  // instead. Chromium sizes it from its content (field-sizing, in app.css);
+  // this is for an engine that cannot.
+  useLayoutEffect(() => {
+    const field = filenameRef.current;
+    if (!field || typeof CSS === 'undefined' || CSS.supports?.('field-sizing', 'content')) return;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight}px`;
+  }, [stem]);
   useEffect(() => {
     if (!drawer) return;
     const filenameInput = filenameRef.current;
     if (filenameInput && !filenameInput.disabled) filenameInput.focus();
     else inspectorRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus();
   }, [drawer, item.id]);
-  const dated = leadingDate(filename) !== undefined;
-  const approve = () => {
-    if (!filename.trim()) { setError('Filename is required'); return; }
-    if (!dated) { setError(DATE_REQUIRED_MESSAGE); return; }
-    onApprove(filename.trim(), description);
+  const dated = leadingDate(stem) !== undefined;
+  // Every check the backend makes, before the round trip, so a refusal names
+  // the character at fault next to the field instead of arriving as jargon.
+  const submit = (nextStem: string) => {
+    if (!nextStem.trim()) { setError('Filename is required'); return; }
+    const problem = stemProblem(nextStem, extension, sourceExtension);
+    if (problem) { setError(problem); return; }
+    const name = joinFilename(nextStem, extension);
+    if (!leadingDate(name)) { setError(DATE_REQUIRED_MESSAGE); return; }
+    onApprove(name, description);
   };
+  const approve = () => submit(stem);
+  const editStem = (value: string) => { setStem(value); setError(stemProblem(value, extension, sourceExtension) ?? ''); };
   // The model's date, when Intern could not find it written in the document
   // and so left it out of the name. Offered until the name carries a date.
   const suggestedDate = item.suggestedDate && !dated ? item.suggestedDate : undefined;
-  const useSuggestedDate = () => { setFilename(withLeadingDate(filename, suggestedDate!)); setError(''); };
-  const acceptSuggestedDate = () => onApprove(withLeadingDate(filename, suggestedDate!), description);
+  const useSuggestedDate = () => editStem(withLeadingDate(stem, suggestedDate!));
+  const acceptSuggestedDate = () => submit(withLeadingDate(stem, suggestedDate!));
   // When the name has no date and the model offered none worth showing, the
   // document's own dates - and, last, the file's - are one click each.
   const dateChoices = !dated ? (item.datesInDocument ?? []) : [];
   const fileDate = !dated ? item.fileModifiedDate : undefined;
-  const chooseDate = (date: string) => { setFilename(withLeadingDate(filename, date)); setError(''); };
+  const chooseDate = (date: string) => editStem(withLeadingDate(stem, date));
+  // Enter files the name, as it does in any one-line field; the IME's Enter
+  // that ends a composition is left to the IME.
+  const onFilenameKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== 'Enter' || event.altKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (!busy) approve();
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (!drawer) return;
     if (event.key === 'Escape') { event.preventDefault(); onClose(); return; }
@@ -81,9 +129,17 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
     </div>
     {editable && <section className="proposal">
       <h3>Proposed rename</h3>
-      <label>Filename<input ref={filenameRef} aria-label="Filename" className="filename-input" value={filename} onChange={(event) => setFilename(event.target.value)} aria-invalid={Boolean(error)} /></label>
-      {error && <p className="form-error" role="alert">{error}</p>}
-      {!error && filename.trim() && !dated && !suggestedDate && <p className="check-hint date-hint">{DATE_REQUIRED_MESSAGE}</p>}
+      <label className="filename-label">Filename
+        <span className="filename-field">
+          <textarea ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
+            onChange={(event) => editStem(withoutLineBreaks(event.target.value))} onKeyDown={onFilenameKeyDown}
+            aria-invalid={Boolean(error)} aria-describedby={[extension !== undefined ? `${fieldId}-extension` : '', error ? `${fieldId}-error` : ''].filter(Boolean).join(' ') || undefined} />
+          {extension !== undefined && <span className="filename-extension" title="The extension stays as it is" aria-hidden="true">.{extension}</span>}
+        </span>
+      </label>
+      {extension !== undefined && <span className="sr-only" id={`${fieldId}-extension`}>The name ends in .{extension}, which cannot change.</span>}
+      {error && <p className="form-error" role="alert" id={`${fieldId}-error`}>{error}</p>}
+      {!error && stem.trim() && !dated && !suggestedDate && <p className="check-hint date-hint">{DATE_REQUIRED_MESSAGE}</p>}
       {/*
         A name that differs from the evidence under it looks like a mistake
         unless the reason is on screen: the reviewer's own spelling, learned

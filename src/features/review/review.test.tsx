@@ -22,6 +22,89 @@ describe('review actions', () => {
     expect((await bridge.listItems()).find((item) => item.id === 'lease')?.status).toBe('review');
   });
 
+  // FRONTEND_UX-6. A reserved character used to go to the backend and come
+  // back as "filename must be one nonblank path component" in a toast.
+  it('names a character Windows refuses as it is typed, and never sends the name', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement: ABC Properties LLC' } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('\u201c:\u201d cannot be used in a Windows filename.');
+    expect(filename).toHaveAttribute('aria-invalid', 'true');
+    expect(filename.getAttribute('aria-describedby')).toContain(screen.getByRole('alert').id);
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+    fireEvent.keyDown(filename, { key: 'Enter' });
+    expect(approve).not.toHaveBeenCalled();
+
+    // Fixing the name clears the error without a click.
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement - ABC Properties LLC' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(filename).toHaveAttribute('aria-invalid', 'false');
+  });
+
+  it('keeps the extension out of the field, so it cannot be changed, and adds it back on approve', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    expect(filename.tagName).toBe('TEXTAREA');
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
+    expect(filename).toHaveAccessibleDescription('The name ends in .pdf, which cannot change.');
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease.pdf', expect.any(String)));
+  });
+
+  it('files the name on Enter, and turns pasted line breaks into spaces', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    const filename = screen.getByLabelText('Filename');
+
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease\r\nAgreement\n' } });
+    expect(filename).toHaveValue('2023-09-15 Lease Agreement ');
+    fireEvent.keyDown(filename, { key: 'Enter' });
+
+    await waitFor(() => expect(approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease Agreement.pdf', expect.any(String)));
+  });
+
+  it('catches a name pasted whole, extension and all, before it is filed as ".pdf.pdf"', async () => {
+    const baseBridge = createInMemoryBridge();
+    const approve = vi.fn(baseBridge.approve);
+    render(<App bridge={{ ...baseBridge, approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+
+    fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2023-09-15 Lease.PDF' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Leave \u201c.pdf\u201d off: Intern adds the extension itself.');
+    expect(approve).not.toHaveBeenCalled();
+  });
+
+  // The backstop for a rule the window does not know: the backend's own
+  // refusal, in words, and a way to put it away.
+  it('explains a filename the backend refused in words, and can be dismissed', async () => {
+    const approve = vi.fn(async () => { throw { code: 'NAME_INVALID', message: 'filename must be one nonblank path component' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
+
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).toHaveTextContent('That filename cannot be used.');
+    expect(feedback).not.toHaveTextContent('nonblank path component');
+    fireEvent.click(within(feedback).getByRole('button', { name: 'Dismiss' }));
+
+    expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
+  });
+
   // The description is half of what Intern produces, and it used to be rendered
   // only while an item was still ready or in review. Applying a rename made the
   // item `completed`, which hid the sentence for good - so the fact describing
@@ -50,10 +133,10 @@ describe('review actions', () => {
     render(<App bridge={bridge} />);
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
-    fireEvent.change(filename, { target: { value: 'My local draft.pdf' } });
+    fireEvent.change(filename, { target: { value: 'My local draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
-    await waitFor(() => expect(filename).toHaveValue('My local draft.pdf'));
+    await waitFor(() => expect(filename).toHaveValue('My local draft'));
   });
 
   it('traps keyboard focus in settings and restores it to the invoking control', async () => {

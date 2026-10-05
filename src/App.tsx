@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
@@ -10,6 +11,7 @@ import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
+import { Icon } from './components/Icon';
 import { GUIDE_URL } from './lib/bridge';
 import { humanizeReason } from './lib/reasons';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
@@ -381,7 +383,11 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       sentence already in it, and a live region that arrives complete is not
       reliably spoken. Every other error banner in the app is an alert too.
     */}
-    {actionError && <p className="operation-feedback" role="alert" aria-label="Action error">{actionError}</p>}
+    {actionError && <div className="operation-feedback" role="alert" aria-label="Action error">
+      <p>{actionError}</p>
+      {/* It used to stay until the next action, over whatever was beneath it. */}
+      <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setActionError('')}><Icon icon={X} /></button>
+    </div>}
     {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{drag.count > 0 ? `Drop to add ${drag.count} ${drag.count === 1 ? 'file' : 'files'}` : 'Drop to add files'}</p></div>}
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
@@ -465,7 +471,23 @@ function matchesQuery(item: QueueItem, query: string) {
     .some((text) => text !== undefined && text.toLowerCase().includes(query));
 }
 
+/**
+ * Plain sentences for the codes a review action can be refused with. The
+ * backend's messages are written for its logs - "filename must be one
+ * nonblank path component" - and a code with no entry here still shows its
+ * message, as before.
+ */
+const ACTION_ERRORS: Record<string, string> = {
+  NAME_INVALID: 'That filename cannot be used. Keep the file\'s extension, and leave out / \\ < > : " | ? * and invisible characters.',
+  ITEM_NOT_FOUND: 'That document is no longer in the queue.',
+  PATH_UNAVAILABLE: 'The document is not where Intern last saw it. It may have been moved, renamed, or deleted outside Intern.',
+  UNSUPPORTED_FORMAT: 'Intern opens only the document formats it reads.',
+  INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
+};
+
 function describeActionError(error: unknown) {
+  const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
+  if (code && ACTION_ERRORS[code]) return ACTION_ERRORS[code];
   if (typeof error === 'string' && error.trim()) return error.trim();
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();

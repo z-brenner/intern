@@ -25,7 +25,7 @@ describe('the date gate', () => {
     render(<App bridge={{ ...baseBridge, approve }} />);
     selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
-    fireEvent.change(filename, { target: { value: 'Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf' } });
+    fireEvent.change(filename, { target: { value: 'Lease Agreement between ABC Properties LLC and TenantCo Inc' } });
     // The requirement is shown before anyone clicks.
     expect(screen.getByText(/Every rename needs a date/)).toBeVisible();
 
@@ -34,7 +34,7 @@ describe('the date gate', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Start the filename with the document\'s date as YYYY-MM-DD');
     expect(approve).not.toHaveBeenCalled();
 
-    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf' } });
+    fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc' } });
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
     await waitFor(() => expect(approve).toHaveBeenCalledWith('lease', '2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf', expect.any(String)));
   });
@@ -75,7 +75,7 @@ describe('the date gate', () => {
     expect(within(choices).getByRole('button', { name: '2024-06-20 · file date' })).toHaveAttribute('title', expect.stringMatching(/last-modified/));
     fireEvent.click(within(choices).getByRole('button', { name: '2024-07-01' }));
 
-    expect(screen.getByLabelText('Filename')).toHaveValue('2024-07-01 Board Meeting Minutes - Contoso Worldwide, Inc.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2024-07-01 Board Meeting Minutes - Contoso Worldwide, Inc');
     expect(screen.queryByRole('group', { name: 'Dates to choose from' })).not.toBeInTheDocument();
   });
 
@@ -85,7 +85,7 @@ describe('the date gate', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Use this date' }));
 
-    expect(screen.getByLabelText('Filename')).toHaveValue('2024-06-18 Board Resolution - Contoso Worldwide, Inc.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2024-06-18 Board Resolution - Contoso Worldwide, Inc');
     // Once the name carries a date the offer has nothing left to add.
     expect(screen.queryByRole('group', { name: 'Suggested date' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Every rename needs a date/)).not.toBeInTheDocument();

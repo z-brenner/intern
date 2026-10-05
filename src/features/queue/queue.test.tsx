@@ -190,7 +190,7 @@ describe('queue interactions', () => {
     await selectRow(screen.getByRole('row', { name: /NDA - Acme Corp/i }));
     finish?.();
 
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp.docx'));
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp'));
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
   });
 
@@ -208,7 +208,7 @@ describe('queue interactions', () => {
     await selectRow(screen.getByRole('row', { name: /Lease Agreement - 123 Main St/i }));
     finish?.();
 
-    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf'));
+    await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc'));
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
   });
 
@@ -336,7 +336,7 @@ describe('queue interactions', () => {
     await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
 
     expect(screen.getByRole('complementary', { name: 'Review item' })).toBeVisible();
-    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+    expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   });
 
   it('filters the table from Queue to Completed navigation', async () => {

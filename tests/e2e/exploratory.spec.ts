@@ -71,7 +71,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   const drawer = page.getByRole('complementary', { name: 'Review item' });
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('Lease Agreement - 123 Main St.pdf');
-  await expect(drawer.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await expect(drawer.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await expect(drawer).toContainText('ABC Properties LLC');
   await expect(drawer).toContainText('TenantCo Inc.');
   await shot(page, 'review-drawer');
@@ -105,7 +105,7 @@ test('a rename without a date is refused, and one with a date is applied and und
   const drawer = page.getByRole('complementary', { name: 'Review item' });
 
   // Every applied name must start with the document's date.
-  await drawer.getByLabel('Filename').fill('Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await drawer.getByLabel('Filename').fill('Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await drawer.getByRole('button', { name: /Approve & rename/i }).click();
   await shot(page, 'date-required-refusal');
   await expect(page.getByRole('alert').filter({ hasText: /date/i }).first()).toBeVisible();
@@ -113,7 +113,7 @@ test('a rename without a date is refused, and one with a date is applied and und
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toContainText('Needs review');
 
   // With a date it applies.
-  await drawer.getByLabel('Filename').fill('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+  await drawer.getByLabel('Filename').fill('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
   await drawer.getByRole('button', { name: /Approve & rename/i }).click();
   await page.getByRole('button', { name: /^Completed/ }).click();
   await expect(page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i })).toBeVisible();

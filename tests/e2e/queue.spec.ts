@@ -35,7 +35,8 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
 
   await page.getByRole('button', { name: 'Needs Review' }).click();
   await page.getByRole('button', { name: 'Select duplicate-invoice-a.pdf' }).click();
-  await page.getByLabel('Filename').fill('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co.pdf');
+  // The extension is locked beside the field; only the name before it is typed.
+  await page.getByLabel('Filename').fill('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co');
   await page.getByLabel('Description').fill('Invoice INV-2048 dated April 30, 2025 for Atlas Threadworks LLC.');
   await page.getByRole('button', { name: 'Approve & rename' }).click();
 
