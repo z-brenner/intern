@@ -16,7 +16,11 @@ it('packages the license directory as a tree so vcpkg subpaths match the signed 
   expect(smoke).toContain('$Relative = [string]$Entry.install_path');
   expect(smoke).toContain('Join-Path $InstallDirectory $Relative');
   expect(smoke).toContain('Start-Process -FilePath $App');
-  expect(smoke).toContain('CloseMainWindow()');
+  // The close goes to Intern's own window, not Process.MainWindowHandle: with
+  // the main window created hidden, that was the single-instance plugin's.
+  expect(smoke).toContain('"Tauri Window"');
+  expect(smoke).toContain('PostMessage($AppWindow, 0x0010');
+  expect(smoke).not.toContain('CloseMainWindow()');
   expect(smoke).toContain('WaitForExit(');
   expect(smoke).toContain('$EvidencePath');
 });
@@ -46,10 +50,13 @@ it('adds Send to > Intern at install and removes it at uninstall, but not during
   expect(smoke).toContain('[Environment+SpecialFolder]::SendTo');
   expect(smoke).toContain('Send to shortcut is missing after install');
   expect(smoke).toContain('Send to shortcut remains after uninstall');
-  // The window is created hidden and a failed start shows it too, so a window
-  // handle alone no longer proves the app started.
-  expect(smoke).toContain('MainWindowHandle');
+  // The window is shown before initialization and a failed start shows it
+  // too, so a window alone does not prove the app started: the startup error
+  // log is read before the close and again after the exit.
   expect(smoke).toContain('logs/startup-error.log');
+  const exited = smoke.indexOf('$AppProcess.ExitCode -ne 0');
+  expect(exited).toBeGreaterThan(0);
+  expect(smoke.indexOf('Test-Path -LiteralPath $StartupErrorLog', exited)).toBeGreaterThan(exited);
 });
 
 // Tauri refuses to build when a plugin's Rust crate and npm package differ in

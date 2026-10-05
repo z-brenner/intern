@@ -76,26 +76,59 @@ try {
 
     & (Join-Path $PSScriptRoot "smoke-worker.ps1") -WorkerPath (Join-Path $InstallDirectory "intern-worker.exe") -RuntimeDirectory $InstallDirectory -FixtureDirectory $FixtureDirectory
 
-    # The main window is created hidden and shown as setup's last step, so a
-    # window handle here also means setup finished. A failed start shows the
-    # window too (behind a dialog saying why), so the startup error log is
-    # what tells the two apart.
+    # Intern's own window, found by its class. Process.MainWindowHandle is the
+    # first visible top-level window the process owns, and the main window is
+    # created hidden, so until setup shows it that is the single-instance
+    # plugin's message window ("com.intern.app-siw"). CloseMainWindow closed
+    # that one: the app rightly kept running, and this step reported a hang.
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class InternSmokeWindow {
+    delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder name, int capacity);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+    public static IntPtr Visible(int processId) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((hwnd, lParam) => {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            if (owner != (uint)processId || !IsWindowVisible(hwnd)) { return true; }
+            StringBuilder name = new StringBuilder(64);
+            GetClassName(hwnd, name, name.Capacity);
+            if (name.ToString() != "Tauri Window") { return true; }
+            found = hwnd;
+            return false;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+"@
+    # The window is shown before initialization when the launch is going to
+    # show it at all, so its appearing does not mean setup finished. A failed
+    # start shows it too, behind a dialog saying why; the startup error log,
+    # checked again once the app has exited, is what tells the two apart.
     $AppProcess = Start-Process -FilePath $App -PassThru
-    $WindowReady = $false
+    $AppWindow = [IntPtr]::Zero
     for ($Attempt = 0; $Attempt -lt 60; $Attempt += 1) {
         Start-Sleep -Milliseconds 500
         $AppProcess.Refresh()
         if ($AppProcess.HasExited) { throw "Installed Intern.exe exited before its window became ready" }
-        if ($AppProcess.MainWindowHandle -ne 0) {
-            $WindowReady = $true
-            break
-        }
+        $AppWindow = [InternSmokeWindow]::Visible($AppProcess.Id)
+        if ($AppWindow -ne [IntPtr]::Zero) { break }
     }
-    if (-not $WindowReady) { throw "Installed Intern.exe did not create a main window" }
+    if ($AppWindow -eq [IntPtr]::Zero) { throw "Installed Intern.exe did not show its main window" }
     if (Test-Path -LiteralPath $StartupErrorLog) {
         throw "Installed Intern.exe could not start: $(Get-Content -LiteralPath $StartupErrorLog -Raw)"
     }
-    if (-not $AppProcess.CloseMainWindow()) { throw "Installed Intern.exe rejected a normal window close request" }
+    # WM_CLOSE, which is what CloseMainWindow posts, to the right window.
+    if (-not [InternSmokeWindow]::PostMessage($AppWindow, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)) {
+        throw "Installed Intern.exe rejected a normal window close request"
+    }
     # A WebView2 app on a shared CI runner can take well over fifteen seconds to
     # tear its browser process down, and a timeout here reads as "the app hangs on
     # close" when the truth is "the runner was busy". Sixty seconds still fails a
@@ -112,6 +145,9 @@ try {
             "Children: $($Children -join ', '). Live Intern processes: $($Surviving -join ', ')")
     }
     if ($AppProcess.ExitCode -ne 0) { throw "Installed Intern.exe exited with $($AppProcess.ExitCode)" }
+    if (Test-Path -LiteralPath $StartupErrorLog) {
+        throw "Installed Intern.exe could not start: $(Get-Content -LiteralPath $StartupErrorLog -Raw)"
+    }
 
     $Uninstaller = Get-ChildItem -LiteralPath $InstallDirectory -File -Filter "uninstall*.exe" | Select-Object -First 1
     if (-not $Uninstaller) { throw "NSIS uninstaller is missing" }
