@@ -1108,6 +1108,24 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Err(lease_error);
                 }
+                if error.code == "MODEL_NOT_READY" {
+                    // Nothing was asked: no model was loaded to ask, as
+                    // happens while the local server restarts or the local
+                    // model is chosen again. The document goes back to wait
+                    // with nothing counted against it - counted, it failed
+                    // outright at the second such moment - and this drain
+                    // ends rather than claim it again at once; the next
+                    // pass finds the model in place.
+                    lease.stop_and_check()?;
+                    self.store.transition(
+                        item.id,
+                        QueueStatus::Analyzing,
+                        QueueStatus::Queued,
+                        None,
+                    )?;
+                    self.events.queue_changed();
+                    return Ok(false);
+                }
                 self.store
                     .record_processing_failure(item.id, model_error_code(&error))?;
                 // Failures that would repeat for every document - a model
@@ -1123,6 +1141,7 @@ impl Pipeline {
                         | "HOSTED_MODEL_UNAUTHORIZED"
                         | "HOSTED_MODEL_UNREACHABLE"
                         | "HOSTED_MODEL_RATE_LIMITED"
+                        | "HOSTED_MODEL_BILLING"
                 ) {
                     self.paused.store(true, Ordering::SeqCst);
                 }

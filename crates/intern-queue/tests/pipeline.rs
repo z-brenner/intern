@@ -688,6 +688,49 @@ fn failed_model_recovery_pauses_before_retrying_or_draining_next_item() {
     assert_eq!(pipeline.list().unwrap()[1].status, QueueStatus::Queued);
 }
 
+/// An account out of credit fails every document the same way, so the queue
+/// pauses at the first one. It used to fail the whole backlog instead: each
+/// document sent twice, each attempt billed, each marked a file error.
+#[test]
+fn an_account_out_of_credit_pauses_the_queue_instead_of_failing_the_backlog() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let second = source(temp.path(), "second.pdf");
+    let text = "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
+    let worker = Arc::new(FakeWorker::new((0..4).map(|_| Ok(parsed(text))).collect()));
+    let model = Arc::new(FakeModel::new(
+        (0..4)
+            .map(|_| Err(ModelFailure::fatal("HOSTED_MODEL_BILLING")))
+            .collect(),
+    ));
+    let files = Arc::new(FakeFiles::default());
+    files.trust(&first, "first-hash");
+    files.trust(&second, "second-hash");
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    );
+    pipeline.enqueue_files(&[first, second]).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    assert!(pipeline.is_paused());
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        1,
+        "one request, not four"
+    );
+    let items = pipeline.list().unwrap();
+    // The first keeps its second attempt for after the account is topped up.
+    assert_eq!(items[0].status, QueueStatus::Queued);
+    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(items[1].processing_failures, 0);
+}
+
 #[test]
 fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
     let temp = tempdir().unwrap();
@@ -1881,6 +1924,10 @@ struct InterruptedModel {
     hold_recover: bool,
     /// A cancel releases whatever is waiting, as stopping a server does.
     cancel_releases: bool,
+    /// How many requests after a cancel find no server, as they do while
+    /// the real one restarts under the cancel.
+    not_ready_after_cancel: usize,
+    not_ready_left: AtomicUsize,
     released: (Mutex<bool>, Condvar),
 }
 
@@ -1923,6 +1970,15 @@ impl AnalyzerBoundary for InterruptedModel {
                 return Err(ModelFailure::retryable("MODEL_REQUEST_FAILED"));
             }
         }
+        if self
+            .not_ready_left
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ModelFailure::retryable("MODEL_NOT_READY"));
+        }
         Ok(analyze_locally(
             source,
             proposal(0.94, false),
@@ -1941,6 +1997,8 @@ impl AnalyzerBoundary for InterruptedModel {
 
     fn cancel(&self) -> Result<(), ModelFailure> {
         self.cancels.fetch_add(1, Ordering::SeqCst);
+        self.not_ready_left
+            .store(self.not_ready_after_cancel, Ordering::SeqCst);
         if self.cancel_releases {
             self.release();
         }
@@ -1963,7 +2021,12 @@ fn cancel_rig(
     let first = source(temp, "canceled.pdf");
     let second = source(temp, "next.pdf");
     let text = "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.";
-    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(text)), Ok(parsed(text))]));
+    // One reading to spare, for a next document read a second time.
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(text)),
+        Ok(parsed(text)),
+        Ok(parsed(text)),
+    ]));
     let files = Arc::new(FakeFiles::default());
     files.trust(&first, "first-hash");
     files.trust(&second, "second-hash");
@@ -1989,14 +2052,17 @@ fn cancel_rig(
     (pipeline, items[0].id, items[1].id, drain)
 }
 
-fn status_of(pipeline: &Pipeline, id: i64) -> QueueStatus {
+fn item_of(pipeline: &Pipeline, id: i64) -> intern_queue::PipelineItem {
     pipeline
         .list()
         .unwrap()
         .into_iter()
         .find(|item| item.id == id)
         .unwrap()
-        .status
+}
+
+fn status_of(pipeline: &Pipeline, id: i64) -> QueueStatus {
+    item_of(pipeline, id).status
 }
 
 #[test]
@@ -2107,6 +2173,47 @@ fn a_cancel_during_recovery_stops_the_second_attempt() {
         "the canceled document was not sent again"
     );
     assert_eq!(status_of(&pipeline, next), QueueStatus::Ready);
+}
+
+/// A cancel restarts the local server under the request, and no longer
+/// holds the queue while it does, so the next document can reach the model
+/// before the new server is up. It is handed back to wait, with nothing
+/// counted against it - counted, it failed as a file error the second time
+/// it met the restart - and read once the model is back.
+#[test]
+fn a_document_that_meets_the_restart_after_a_cancel_is_handed_back_not_failed() {
+    let temp = tempdir().unwrap();
+    let model = Arc::new(InterruptedModel {
+        hold_first: true,
+        cancel_releases: true,
+        // The next document's request and its one retry both find no server.
+        not_ready_after_cancel: 2,
+        ..InterruptedModel::default()
+    });
+    let (pipeline, canceled, next, drain) = cancel_rig(temp.path(), Arc::clone(&model), None);
+
+    model.wait_until(|model| model.calls.load(Ordering::SeqCst) == 1);
+    pipeline.cancel(canceled).unwrap();
+    drain.join().unwrap().unwrap();
+
+    assert!(!pipeline.is_paused());
+    assert_eq!(status_of(&pipeline, canceled), QueueStatus::Canceled);
+    let waiting = item_of(&pipeline, next);
+    assert_eq!(
+        waiting.status,
+        QueueStatus::Queued,
+        "handed back, and the drain ended"
+    );
+    assert_eq!(waiting.processing_failures, 0, "nothing counted against it");
+    assert_eq!(waiting.error_code, None);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+
+    // The server is up by the next pass.
+    pipeline.run_until_idle().unwrap();
+    let read = item_of(&pipeline, next);
+    assert_eq!(read.status, QueueStatus::Ready);
+    assert_eq!(read.processing_failures, 0);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 4);
 }
 
 #[test]

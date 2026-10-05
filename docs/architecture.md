@@ -473,8 +473,14 @@ servers could load at once. Now a request that fails after a cancel reports
 nothing, the queue skips recovery for a request it has itself canceled, and
 the canceled item no longer pauses the queue through the lease its cancel took
 away. A document the model failed on its own terms - too large, a reply cut
-off or unreadable - fails without a restart. A request that finds no server
-running is handed back as `MODEL_NOT_READY`, not counted against the document.
+off or unreadable - fails without a restart. A cancel no longer holds the
+queue while it restarts the server, so the next document can reach the model
+before the new server has loaded; a request that finds a restart under way - a
+cancel's, or the start that choosing the local model again begins - waits for
+it, and is never sent to a server a stop is about to take away. One that still
+finds no server running is handed back to the queue as `MODEL_NOT_READY`, which
+ends that pass with nothing counted against the document; counted, it used to
+fail as a file error the second time it met a restart.
 
 Choosing a hosted model stops the local server, and a launch with a hosted
 model chosen never starts it: it would hold 1.3 to 2.6 GB with nothing to ask
