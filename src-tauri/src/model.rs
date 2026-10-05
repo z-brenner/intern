@@ -28,8 +28,13 @@ use crate::{
 };
 
 /// How long to wait before retrying after a hosted service asked for a
-/// slower pace or briefly could not be reached.
+/// slower pace or briefly could not be reached, when it did not say how long.
+/// Spread by a fifth either way, so a backlog does not knock in step.
 const HOSTED_RETRY_DELAY: Duration = Duration::from_secs(8);
+const HOSTED_RETRY_JITTER: f64 = 0.2;
+/// The longest a document waits on a service's own `Retry-After` before the
+/// one retry. A longer ask is answered by pausing the queue.
+const MAX_HOSTED_RETRY_WAIT: Duration = Duration::from_secs(60);
 
 /// What Settings shows about the hosted model.
 #[derive(Clone, Debug, Serialize)]
@@ -73,6 +78,9 @@ pub struct HostedModel {
     /// Whether someone has typed an API key into this window since Intern
     /// started. Entering a key is a person saying where it may go.
     key_entered: AtomicBool,
+    /// The wait the service asked for in its last failure, kept for the
+    /// recovery that follows it. The queue's failure carries only a code.
+    retry_after: Mutex<Option<Duration>>,
 }
 
 impl HostedModel {
@@ -81,6 +89,7 @@ impl HostedModel {
             secrets,
             engine: Mutex::new(None),
             key_entered: AtomicBool::new(false),
+            retry_after: Mutex::new(None),
         }
     }
 
@@ -213,9 +222,21 @@ impl HostedModel {
             .config(settings)
             .map_err(|error| ModelFailure::fatal(error.code))?;
         let engine = self.engine(config).map_err(failure_for)?;
-        engine
-            .analyze(source, extension, existing_names)
-            .map_err(failure_for)
+        let result = engine.analyze(source, extension, existing_names);
+        *self
+            .retry_after
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            result.as_ref().err().and_then(EngineError::retry_after);
+        result.map_err(failure_for)
+    }
+
+    /// The wait the last failure asked for, once.
+    fn take_retry_after(&self) -> Option<Duration> {
+        self.retry_after
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     fn engine(&self, config: HostedModelConfig) -> Result<Arc<Engine>, EngineError> {
@@ -295,6 +316,8 @@ pub struct SwitchingModel<L: AnalyzerBoundary> {
     hosted: Arc<HostedModel>,
     settings: SettingsStore,
     active: AtomicU8,
+    /// How a retry waits: the thread sleeps, except under test.
+    sleep: Box<dyn Fn(Duration) + Send + Sync>,
 }
 
 impl<L: AnalyzerBoundary> SwitchingModel<L> {
@@ -304,7 +327,27 @@ impl<L: AnalyzerBoundary> SwitchingModel<L> {
             hosted,
             settings,
             active: AtomicU8::new(IDLE),
+            sleep: Box::new(std::thread::sleep),
         }
+    }
+
+    #[cfg(test)]
+    fn with_sleeper(mut self, sleep: impl Fn(Duration) + Send + Sync + 'static) -> Self {
+        self.sleep = Box::new(sleep);
+        self
+    }
+}
+
+/// How long to wait before the one retry of a busy or unreachable hosted
+/// service: what it asked for, up to [`MAX_HOSTED_RETRY_WAIT`], or the fixed
+/// delay moved by `jitter` (a fraction, within [`HOSTED_RETRY_JITTER`]) when it
+/// did not ask. A service that names its wait and is retried sooner only
+/// refuses again, and its quota window is what decides when the queue moves.
+fn retry_wait(asked: Option<Duration>, jitter: f64) -> Duration {
+    match asked {
+        Some(asked) => asked.min(MAX_HOSTED_RETRY_WAIT),
+        None => HOSTED_RETRY_DELAY
+            .mul_f64(1.0 + jitter.clamp(-HOSTED_RETRY_JITTER, HOSTED_RETRY_JITTER)),
     }
 }
 
@@ -342,7 +385,10 @@ impl<L: AnalyzerBoundary> AnalyzerBoundary for SwitchingModel<L> {
     fn recover(&self, failure: &ModelFailure) -> Result<(), ModelFailure> {
         match failure.code.as_str() {
             "HOSTED_MODEL_RATE_LIMITED" | "HOSTED_MODEL_UNREACHABLE" => {
-                std::thread::sleep(HOSTED_RETRY_DELAY);
+                use rand::Rng as _;
+                let jitter =
+                    rand::thread_rng().gen_range(-HOSTED_RETRY_JITTER..=HOSTED_RETRY_JITTER);
+                (self.sleep)(retry_wait(self.hosted.take_retry_after(), jitter));
                 Ok(())
             }
             code if code.starts_with("HOSTED_MODEL_") => Ok(()),
@@ -366,15 +412,20 @@ impl<L: AnalyzerBoundary> AnalyzerBoundary for SwitchingModel<L> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use intern_engine::{
         AnalysisTelemetry, DateRole, DocumentAnalysis, EngineError, EngineErrorCode, Evidence,
-        ModelProposal, PartyRelation, ProposalStatus, ValidatedProposal,
+        HostedProvider, ModelProposal, PartyRelation, ProposalStatus, ValidatedProposal,
     };
-    use intern_queue::{AppSettings, ModelSource};
+    use intern_queue::{AppSettings, ModelSource, SettingsStore};
 
-    use super::{HostedModel, failure_for, suggested_date};
+    use super::{HostedModel, SwitchingModel, failure_for, retry_wait, suggested_date};
     use crate::secrets::{HOSTED_MODEL_API_KEY, MemoryStore, SecretStore};
 
     fn analysis(accepted: Option<&str>, proposed: Option<&str>) -> DocumentAnalysis {
@@ -455,11 +506,152 @@ mod tests {
             EngineErrorCode::HostedModelMisconfigured,
             EngineErrorCode::HostedModelRejected,
             EngineErrorCode::HostedModelRefused,
+            // No retry changes an empty balance, a document too large for
+            // the window, or a reply cut off at the same token again.
+            EngineErrorCode::HostedModelBilling,
+            EngineErrorCode::ModelInputTooLarge,
+            EngineErrorCode::ModelReplyTruncated,
         ] {
             let failure = failure_for(EngineError::new(code, "x"));
             assert!(!failure.retryable, "{code:?}");
             assert_eq!(failure.code, code.as_str());
         }
+    }
+
+    struct NoLocalModel;
+
+    impl intern_queue::AnalyzerBoundary for NoLocalModel {
+        fn analyze(
+            &self,
+            _source: &intern_engine::DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<DocumentAnalysis, intern_queue::ModelFailure> {
+            panic!("the hosted model is the one chosen")
+        }
+    }
+
+    /// A hosted service on this machine that answers every request with
+    /// `reply`, the way the queue would meet it.
+    fn hosted_answering(
+        name: &str,
+        reply: &'static str,
+    ) -> (
+        SwitchingModel<NoLocalModel>,
+        Arc<Mutex<Vec<Duration>>>,
+        PathBuf,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut length = 0_usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let _ = reader.read_exact(&mut vec![0_u8; length]);
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+
+        let data = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
+        let settings = SettingsStore::new(data.join("settings.json"));
+        settings
+            .save(&AppSettings {
+                model_source: ModelSource::Hosted,
+                hosted_provider: HostedProvider::OpenAiCompatible,
+                hosted_base_url: format!("http://{address}/v1"),
+                hosted_model: "local-model".into(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let secrets: Arc<dyn SecretStore> = Arc::new(MemoryStore::default());
+        secrets.set(HOSTED_MODEL_API_KEY, "sk-test").unwrap();
+        let slept = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&slept);
+        let model = SwitchingModel::new(
+            Arc::new(NoLocalModel),
+            Arc::new(HostedModel::new(secrets)),
+            settings,
+        )
+        .with_sleeper(move |wait| recorded.lock().unwrap().push(wait));
+        (model, slept, data)
+    }
+
+    /// One recovery after one failure, and how long it slept.
+    fn recovered_after(name: &str, reply: &'static str) -> (String, Duration) {
+        use intern_queue::AnalyzerBoundary as _;
+
+        let (model, slept, data) = hosted_answering(name, reply);
+        let source = intern_engine::distill::source_from_text(
+            "MEMO\n\nThe office moves to the fourth floor on March 2, 2026.",
+        );
+        let failure = model.analyze(&source, "pdf", &[]).unwrap_err();
+        assert!(failure.retryable, "{}", failure.code);
+        model.recover(&failure).unwrap();
+        let _ = std::fs::remove_dir_all(data);
+        let slept = slept.lock().unwrap().clone();
+        assert_eq!(slept.len(), 1, "{slept:?}");
+        (failure.code, slept[0])
+    }
+
+    /// A service that says how long to wait is waited for - up to a minute,
+    /// beyond which the queue's pause is the better answer - and one that
+    /// does not is given the usual delay, moved a little so a backlog of
+    /// retries does not arrive in step.
+    #[test]
+    fn recover_sleeps_for_retry_after_capped() {
+        let (code, slept) = recovered_after(
+            "retry-after-7",
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(code, "HOSTED_MODEL_RATE_LIMITED");
+        assert_eq!(slept, Duration::from_secs(7));
+
+        let (code, slept) = recovered_after(
+            "retry-after-capped",
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 3600\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(code, "HOSTED_MODEL_UNREACHABLE");
+        assert_eq!(slept, Duration::from_secs(60));
+
+        let (code, slept) = recovered_after(
+            "retry-after-none",
+            "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        assert_eq!(code, "HOSTED_MODEL_RATE_LIMITED");
+        assert!(
+            (Duration::from_millis(6_400)..=Duration::from_millis(9_600)).contains(&slept),
+            "{slept:?}"
+        );
+    }
+
+    #[test]
+    fn the_retry_wait_honours_the_service_and_otherwise_jitters_the_default() {
+        assert_eq!(
+            retry_wait(Some(Duration::from_secs(7)), 0.2),
+            Duration::from_secs(7)
+        );
+        assert_eq!(
+            retry_wait(Some(Duration::from_secs(120)), 0.0),
+            Duration::from_secs(60)
+        );
+        assert_eq!(retry_wait(None, 0.0), Duration::from_secs(8));
+        assert_eq!(retry_wait(None, -0.2), Duration::from_millis(6_400));
+        assert_eq!(retry_wait(None, 0.2), Duration::from_millis(9_600));
+        assert_eq!(
+            retry_wait(None, 5.0),
+            Duration::from_millis(9_600),
+            "clamped"
+        );
     }
 
     #[test]

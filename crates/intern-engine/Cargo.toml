@@ -18,6 +18,9 @@ path = "src/bin/intern-evaluate.rs"
 
 [dependencies]
 base64 = "=0.22.1"
+# A hosted service's Retry-After may be an HTTP-date. Already built for
+# intern-intake with exactly these features, so it costs no compilation.
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 fs4 = "=0.13.1"
 rand = "=0.8.5"
 # Both root sets: the bundled Mozilla roots, and the operating system's store.

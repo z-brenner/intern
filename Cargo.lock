@@ -2318,6 +2318,7 @@ dependencies = [
  "intern-intake",
  "intern-queue",
  "keyring",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tauri",
@@ -2347,6 +2348,7 @@ name = "intern-engine"
 version = "0.1.0-alpha.10"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "fs4",
  "rand 0.8.5",
  "reqwest 0.12.15",

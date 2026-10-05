@@ -15,14 +15,15 @@
 //! Anthropic the required output cap - because a sampling knob one provider
 //! rejects is a document that never gets filed.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use reqwest::{StatusCode, Url, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::client::{
-    AttemptError, ChatCompletion, ModelRequest, Proposer, decode, proposal_from_text, read_capped,
+    AttemptError, ChatCompletion, ModelRequest, Proposer, decode, is_context_overflow,
+    proposal_from_text, read_capped, read_error_body,
 };
 use crate::domain::{DocumentAnalysis, ModelProposal};
 use crate::engine::Engine;
@@ -41,7 +42,17 @@ pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5";
 /// that precedes the answer, so it is generous; the answer itself is short.
 const MAX_REPLY_TOKENS: u32 = 16_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a service on the internet gets to answer one document.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(180);
+/// How long a server on this machine gets: the local llama-server's own
+/// allowance, still inside the pipeline's fifteen-minute deadline. LM Studio
+/// or Ollama running a 7-8B model on a laptop CPU spends minutes on prefill
+/// alone, and at 180 s every long document timed out, was retried into the
+/// same timeout, and paused the queue.
+const LOCAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// The longest wait a `Retry-After` is taken at its word for. A service that
+/// asks for longer is better answered by a paused queue and a person.
+const MAX_RETRY_AFTER_SECS: u64 = 120;
 
 /// Which wire format the endpoint speaks.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -191,6 +202,15 @@ fn is_this_machine(url: &Url) -> bool {
     })
 }
 
+/// How long one request to this endpoint may take.
+pub fn request_timeout_for(url: &Url) -> Duration {
+    if is_this_machine(url) {
+        LOCAL_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    }
+}
+
 /// Whether a request to this endpoint goes through the machine's proxy.
 ///
 /// The same judgement that lets plain HTTP through decides this, and it has
@@ -238,7 +258,7 @@ impl HostedClient {
         let build = |native_roots: bool| {
             let mut builder = Client::builder()
                 .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(request_timeout_for(&endpoint))
                 .redirect(reqwest::redirect::Policy::none())
                 .tls_built_in_native_certs(native_roots);
             if !uses_system_proxy(&endpoint) {
@@ -309,7 +329,7 @@ impl HostedClient {
         }
     }
 
-    fn propose_once(&self, request: &ModelRequest) -> Result<ModelProposal, AttemptError> {
+    fn propose_once(&self, request: &ModelRequest) -> Result<ModelProposal, HostedFailure> {
         let post = self.http.post(self.endpoint.clone());
         let post = match self.config.provider {
             HostedProvider::Anthropic => post
@@ -323,17 +343,50 @@ impl HostedClient {
             .map_err(|_| AttemptError(EngineErrorCode::HostedModelUnreachable))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(AttemptError(failure_for_status(status)));
+            let retry_after_secs = retry_after(
+                status,
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok()),
+                SystemTime::now(),
+            );
+            let body = read_error_body(response);
+            return Err(HostedFailure {
+                code: failure_for_status(status, &body),
+                retry_after_secs,
+            });
         }
         let bytes = read_capped(response, EngineErrorCode::HostedModelUnreachable)?;
-        match self.config.provider {
-            HostedProvider::Anthropic => decode_anthropic(&bytes),
+        Ok(match self.config.provider {
+            HostedProvider::Anthropic => decode_anthropic(&bytes)?,
             HostedProvider::OpenAiCompatible => {
                 let completion: ChatCompletion = serde_json::from_slice(&bytes)
                     .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-                decode(completion)
+                decode(completion)?
             }
+        })
+    }
+}
+
+/// One attempt's failure, and how long the service asked to be left alone.
+struct HostedFailure {
+    code: EngineErrorCode,
+    retry_after_secs: Option<u32>,
+}
+
+impl From<AttemptError> for HostedFailure {
+    fn from(AttemptError(code): AttemptError) -> Self {
+        Self {
+            code,
+            retry_after_secs: None,
         }
+    }
+}
+
+impl HostedFailure {
+    fn into_error(self) -> EngineError {
+        hosted_error(self.code).with_retry_after(self.retry_after_secs)
     }
 }
 
@@ -344,16 +397,35 @@ impl Proposer for HostedClient {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
         match self.propose_once(request) {
             Ok(proposal) => Ok(proposal),
-            Err(AttemptError(EngineErrorCode::ModelResponseInvalid)) => self
+            Err(failure) if failure.code == EngineErrorCode::ModelResponseInvalid => self
                 .propose_once(request)
-                .map_err(|AttemptError(code)| hosted_error(code)),
-            Err(AttemptError(code)) => Err(hosted_error(code)),
+                .map_err(HostedFailure::into_error),
+            Err(failure) => Err(failure.into_error()),
         }
     }
 }
 
-/// What an HTTP failure means to the person who has to fix it.
-pub(crate) fn failure_for_status(status: StatusCode) -> EngineErrorCode {
+/// What an HTTP failure means to the person who has to fix it, from the
+/// status and the start of the error body.
+///
+/// The body comes first where it is more specific than the status. A service
+/// that has run out of credit says so in several ways - 402, Anthropic's
+/// `billing_error` or its 400 about the credit balance, OpenAI's 429 with
+/// `insufficient_quota` - and every one of them used to read as something
+/// else: a "slower pace" that resuming never fixed, or a rejected request
+/// that failed the backlog one paid request at a time.
+pub(crate) fn failure_for_status(status: StatusCode, body: &[u8]) -> EngineErrorCode {
+    let error = ErrorObject::read(body);
+    if error.is_billing(status) {
+        return EngineErrorCode::HostedModelBilling;
+    }
+    if status == StatusCode::BAD_REQUEST
+        && (is_context_overflow(body) || error.code.as_deref() == Some("context_length_exceeded"))
+    {
+        // A local server behind the OpenAI shape with a smaller context than
+        // the document: the engine condenses it and asks once more.
+        return EngineErrorCode::ModelInputTooLarge;
+    }
     match status.as_u16() {
         // Redirects are refused, so a 3xx reaches this point as an answer:
         // the configured address has moved. Reporting it as an outage sends
@@ -366,8 +438,81 @@ pub(crate) fn failure_for_status(status: StatusCode) -> EngineErrorCode {
         404 => EngineErrorCode::HostedModelMisconfigured,
         429 => EngineErrorCode::HostedModelRateLimited,
         400..=499 => EngineErrorCode::HostedModelRejected,
+        // Including Anthropic's 529, "overloaded": busy, not broken.
         _ => EngineErrorCode::HostedModelUnreachable,
     }
+}
+
+/// The `error` object Anthropic and OpenAI both wrap a failure in: what each
+/// reads of it, and nothing when the body is not one.
+#[derive(Default)]
+struct ErrorObject {
+    kind: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+}
+
+impl ErrorObject {
+    fn read(body: &[u8]) -> Self {
+        let Some(error) = serde_json::from_slice::<Value>(body)
+            .ok()
+            .and_then(|reply| reply.get("error").cloned())
+        else {
+            return Self::default();
+        };
+        let field = |name: &str| error.get(name).and_then(Value::as_str).map(str::to_owned);
+        Self {
+            kind: field("type"),
+            code: field("code"),
+            message: field("message"),
+        }
+    }
+
+    fn is_billing(&self, status: StatusCode) -> bool {
+        status == StatusCode::PAYMENT_REQUIRED
+            || self.kind.as_deref() == Some("billing_error")
+            || self.code.as_deref() == Some("insufficient_quota")
+            || self.kind.as_deref() == Some("insufficient_quota")
+            || (status == StatusCode::BAD_REQUEST
+                && self
+                    .message
+                    .as_deref()
+                    .is_some_and(|message| message.to_ascii_lowercase().contains("credit balance")))
+    }
+}
+
+/// The wait a `Retry-After` header asks for, in seconds, on the statuses
+/// where a wait means something: 429, 503, and Anthropic's 529.
+pub(crate) fn retry_after(
+    status: StatusCode,
+    header: Option<&str>,
+    now: SystemTime,
+) -> Option<u32> {
+    if !matches!(status.as_u16(), 429 | 503 | 529) {
+        return None;
+    }
+    parse_retry_after(header?, now)
+}
+
+/// Reads `Retry-After` as either form RFC 9110 allows - delta-seconds or an
+/// HTTP-date - capped at [`MAX_RETRY_AFTER_SECS`]. A date already past means
+/// no wait at all; anything unreadable means the service did not say.
+pub(crate) fn parse_retry_after(value: &str, now: SystemTime) -> Option<u32> {
+    let value = value.trim();
+    let seconds = match value.parse::<u64>() {
+        Ok(seconds) => seconds,
+        Err(_) => {
+            let at = chrono::DateTime::parse_from_rfc2822(value)
+                .ok()?
+                .timestamp();
+            let now = now
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())?;
+            u64::try_from(at.saturating_sub(now)).unwrap_or(0)
+        }
+    };
+    u32::try_from(seconds.min(MAX_RETRY_AFTER_SECS)).ok()
 }
 
 #[derive(Deserialize)]
@@ -428,6 +573,14 @@ const fn hosted_error(code: EngineErrorCode) -> EngineError {
         EngineErrorCode::HostedModelRefused => EngineError::new(
             EngineErrorCode::HostedModelRefused,
             "the hosted model declined to answer about this document",
+        ),
+        EngineErrorCode::HostedModelBilling => EngineError::new(
+            EngineErrorCode::HostedModelBilling,
+            "the hosted service refused the request for billing or quota reasons",
+        ),
+        EngineErrorCode::ModelInputTooLarge => EngineError::new(
+            EngineErrorCode::ModelInputTooLarge,
+            "the document does not fit the hosted model's context window",
         ),
         EngineErrorCode::ModelReplyTruncated => EngineError::new(
             EngineErrorCode::ModelReplyTruncated,
@@ -650,45 +803,246 @@ mod tests {
     #[test]
     fn http_statuses_map_to_the_codes_a_person_can_act_on() {
         assert_eq!(
-            failure_for_status(StatusCode::UNAUTHORIZED),
+            failure_for_status(StatusCode::UNAUTHORIZED, b""),
             EngineErrorCode::HostedModelUnauthorized
         );
         assert_eq!(
-            failure_for_status(StatusCode::FORBIDDEN),
+            failure_for_status(StatusCode::FORBIDDEN, b""),
             EngineErrorCode::HostedModelUnauthorized
         );
         assert_eq!(
-            failure_for_status(StatusCode::TOO_MANY_REQUESTS),
+            failure_for_status(StatusCode::TOO_MANY_REQUESTS, b""),
             EngineErrorCode::HostedModelRateLimited
         );
         // An unknown or retired model name, or an API root that is not one.
         // Every document in the backlog would meet it, so it is a
         // configuration problem that pauses the queue once.
         assert_eq!(
-            failure_for_status(StatusCode::NOT_FOUND),
+            failure_for_status(StatusCode::NOT_FOUND, b""),
             EngineErrorCode::HostedModelMisconfigured
         );
         // Redirects are refused, so a base URL that has moved arrives here as
         // a 3xx. That is a wrong address, not a network outage.
         for moved in [301, 302, 303, 307, 308] {
             assert_eq!(
-                failure_for_status(StatusCode::from_u16(moved).unwrap()),
+                failure_for_status(StatusCode::from_u16(moved).unwrap(), b""),
                 EngineErrorCode::HostedModelMisconfigured,
                 "{moved}"
             );
         }
         assert_eq!(
-            failure_for_status(StatusCode::BAD_REQUEST),
+            failure_for_status(StatusCode::BAD_REQUEST, b""),
             EngineErrorCode::HostedModelRejected
         );
         assert_eq!(
-            failure_for_status(StatusCode::INTERNAL_SERVER_ERROR),
+            failure_for_status(StatusCode::INTERNAL_SERVER_ERROR, b""),
             EngineErrorCode::HostedModelUnreachable
         );
         assert_eq!(
-            failure_for_status(StatusCode::from_u16(529).unwrap()),
+            failure_for_status(StatusCode::from_u16(529).unwrap(), b""),
             EngineErrorCode::HostedModelUnreachable
         );
+    }
+
+    fn status(code: u16) -> StatusCode {
+        StatusCode::from_u16(code).unwrap()
+    }
+
+    /// Every way a service says the account is out of credit. Each one used
+    /// to read as something a person could not act on: OpenAI's quota as a
+    /// "slower pace" that resuming never fixed, Anthropic's balance as a
+    /// rejected request that failed the backlog one paid request at a time.
+    #[test]
+    fn billing_shapes_map_to_billing() {
+        let shapes: [(u16, &[u8]); 5] = [
+            (402, b""),
+            (
+                402,
+                br#"{"type":"error","error":{"type":"billing_error","message":"Your account has no credit."}}"#,
+            ),
+            (
+                400,
+                br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}"#,
+            ),
+            (
+                429,
+                br#"{"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}"#,
+            ),
+            (
+                403,
+                br#"{"type":"error","error":{"type":"billing_error","message":"Billing is not set up."}}"#,
+            ),
+        ];
+        for (code, body) in shapes {
+            assert_eq!(
+                failure_for_status(status(code), body),
+                EngineErrorCode::HostedModelBilling,
+                "{code} {}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        // A rate limit that is only a rate limit stays one, and "credit" in
+        // some other 4xx is not a balance.
+        assert_eq!(
+            failure_for_status(
+                status(429),
+                br#"{"error":{"message":"Rate limit reached for requests","type":"requests","code":"rate_limit_exceeded"}}"#
+            ),
+            EngineErrorCode::HostedModelRateLimited
+        );
+        assert_eq!(
+            failure_for_status(
+                status(401),
+                br#"{"error":{"message":"Your credit balance is fine but this key is revoked"}}"#
+            ),
+            EngineErrorCode::HostedModelUnauthorized
+        );
+    }
+
+    /// A server behind the OpenAI shape with a smaller context than the
+    /// document - llama.cpp's own words, or OpenAI's code - is told apart
+    /// from a rejected request, so the engine can condense and ask again.
+    #[test]
+    fn a_context_overflow_is_an_input_too_large() {
+        for body in [
+            &br#"{"error":{"code":400,"message":"the request exceeds the available context size, try increasing it","type":"exceed_context_size_error"}}"#[..],
+            br#"{"error":{"message":"This model's maximum context length is 8192 tokens.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}"#,
+        ] {
+            assert_eq!(
+                failure_for_status(StatusCode::BAD_REQUEST, body),
+                EngineErrorCode::ModelInputTooLarge
+            );
+        }
+    }
+
+    #[test]
+    fn retry_after_seconds_and_http_date_parsed_and_capped() {
+        // Thursday, 1 October 2026, 12:00:00 UTC.
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_790_856_000);
+        assert_eq!(parse_retry_after("7", now), Some(7));
+        assert_eq!(parse_retry_after(" 0 ", now), Some(0));
+        assert_eq!(parse_retry_after("3600", now), Some(120), "capped");
+        assert_eq!(
+            parse_retry_after("Thu, 01 Oct 2026 12:00:30 GMT", now),
+            Some(30)
+        );
+        assert_eq!(
+            parse_retry_after("Thu, 01 Oct 2026 13:00:00 GMT", now),
+            Some(120),
+            "capped"
+        );
+        assert_eq!(
+            parse_retry_after("Thu, 01 Oct 2026 11:59:00 GMT", now),
+            Some(0),
+            "already past"
+        );
+        for unreadable in ["", "soon", "-5", "1.5"] {
+            assert_eq!(parse_retry_after(unreadable, now), None, "{unreadable:?}");
+        }
+        // Only where a wait means something.
+        assert_eq!(retry_after(status(429), Some("7"), now), Some(7));
+        assert_eq!(retry_after(status(503), Some("7"), now), Some(7));
+        assert_eq!(retry_after(status(529), Some("7"), now), Some(7));
+        assert_eq!(retry_after(status(500), Some("7"), now), None);
+        assert_eq!(retry_after(status(429), None, now), None);
+    }
+
+    /// Anthropic's "overloaded" is a busy service, not a broken one.
+    #[test]
+    fn status_529_is_unreachable() {
+        assert_eq!(
+            failure_for_status(
+                status(529),
+                br#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#
+            ),
+            EngineErrorCode::HostedModelUnreachable
+        );
+    }
+
+    #[test]
+    fn request_timeout_for_loopback_is_ten_minutes() {
+        for local in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:1234/v1",
+            "http://[::1]:8080/v1",
+        ] {
+            assert_eq!(
+                request_timeout_for(&Url::parse(local).unwrap()),
+                Duration::from_secs(600),
+                "{local}"
+            );
+        }
+        for remote in [
+            "https://api.anthropic.com/v1",
+            "https://api.openai.com/v1",
+            "https://localhost.example.com/v1",
+        ] {
+            assert_eq!(
+                request_timeout_for(&Url::parse(remote).unwrap()),
+                Duration::from_secs(180),
+                "{remote}"
+            );
+        }
+    }
+
+    fn local_openai(address: std::net::SocketAddr) -> HostedClient {
+        HostedClient::new(config(
+            HostedProvider::OpenAiCompatible,
+            &format!("http://{address}/v1"),
+            "local-model",
+        ))
+        .unwrap()
+    }
+
+    /// The whole path, against a service that answers 429: the wait it named
+    /// rides out on the error for the queue to honour, and a quota that has
+    /// run out is a billing failure, sent once.
+    #[test]
+    fn a_rate_limit_carries_its_wait_and_an_exhausted_quota_is_billing() {
+        use crate::test_support::{http_reply, scripted_server};
+
+        let server = scripted_server(vec![http_reply(
+            "429 Too Many Requests",
+            &[("Retry-After", "7"), ("Content-Type", "application/json")],
+            r#"{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}"#,
+        )]);
+        let error = local_openai(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::HostedModelRateLimited);
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(server.attempts(), 1);
+
+        let server = scripted_server(vec![http_reply(
+            "429 Too Many Requests",
+            &[("Content-Type", "application/json")],
+            r#"{"error":{"message":"You exceeded your current quota.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}"#,
+        )]);
+        let error = local_openai(server.address)
+            .propose(&ModelRequest { prompt: "p".into() })
+            .unwrap_err();
+        assert_eq!(error.code(), EngineErrorCode::HostedModelBilling);
+        assert_eq!(error.retry_after(), None);
+        assert_eq!(server.attempts(), 1);
+    }
+
+    /// An Azure content filter, and a reply cut off at the token cap, are
+    /// each one billed request - not four, and not a paused queue.
+    #[test]
+    fn a_filtered_or_truncated_reply_is_sent_once() {
+        use crate::test_support::{completion_reply, scripted_server};
+
+        for (reason, code) in [
+            ("content_filter", EngineErrorCode::HostedModelRefused),
+            ("length", EngineErrorCode::ModelReplyTruncated),
+        ] {
+            let server = scripted_server(vec![completion_reply(reason, "{\"type_evidence\":")]);
+            let error = local_openai(server.address)
+                .propose(&ModelRequest { prompt: "p".into() })
+                .unwrap_err();
+            assert_eq!(error.code(), code, "{reason}");
+            assert_eq!(server.attempts(), 1, "{reason}");
+        }
     }
 
     #[test]
