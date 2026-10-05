@@ -1151,7 +1151,10 @@ impl Pipeline {
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_owned();
-        let existing = existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
+        let existing = names_beside(
+            item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+            &item.source_path,
+        );
         if let Err(error) = self.authorize_item(&item, AdmissionStage::Analyze) {
             lease.stop_and_check()?;
             let (next, code, keep_draining) = if error.is_retryable() {
@@ -1188,9 +1191,11 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Err(lease_error);
                 }
-                if self.store.list()?.iter().any(|candidate| {
-                    candidate.id == item.id && candidate.status == QueueStatus::Canceled
-                }) {
+                if self
+                    .store
+                    .get(item.id)?
+                    .is_some_and(|current| current.status == QueueStatus::Canceled)
+                {
                     self.events.queue_changed();
                     return Ok(true);
                 }
@@ -1299,17 +1304,12 @@ impl Pipeline {
         )?;
         self.admission
             .processed(&item.source_path, &item.source_hash);
-        let ready_item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|candidate| candidate.id == item.id)
-            .ok_or_else(|| {
-                PipelineError::new(
-                    "ITEM_NOT_FOUND",
-                    "queue item disappeared after proposal storage",
-                )
-            })?;
+        let ready_item = self.store.get(item.id)?.ok_or_else(|| {
+            PipelineError::new(
+                "ITEM_NOT_FOUND",
+                "queue item disappeared after proposal storage",
+            )
+        })?;
         self.active_item.store(0, Ordering::SeqCst);
         self.events.queue_changed();
         if next == QueueStatus::Ready {
@@ -1419,11 +1419,14 @@ impl Pipeline {
     ) -> String {
         let named = compose_filename(proposal, extension, &[]).value;
         let existing = match self.settings.load() {
-            Ok(settings) => existing_names(&target_folder(
-                &settings,
+            Ok(settings) => names_beside(
+                &target_folder(
+                    &settings,
+                    source_path,
+                    &proposal_as_applied(proposal, &named),
+                ),
                 source_path,
-                &proposal_as_applied(proposal, &named),
-            )),
+            ),
             Err(_) => fallback.to_vec(),
         };
         compose_filename(
@@ -1470,7 +1473,11 @@ impl Pipeline {
     /// `approved` names the document whose name a person has just typed, if
     /// any. That name is theirs and is never recomposed: composing it again
     /// from the validated facts would throw away everything the facts do not
-    /// carry, the date they typed in most of all.
+    /// carry, the date they typed in most of all. The same goes for every
+    /// name approved earlier and still waiting to be filed, because the queue
+    /// was busy when it was approved: a rule learned or changed in the
+    /// meantime rebuilt it, and the scheduler then filed the rebuilt name
+    /// under the approval - without the date the reviewer had typed.
     fn restyle_waiting(&self, approved: Option<i64>) -> PipelineResult<()> {
         let style = self.repository.active_style()?;
         let mut changed = false;
@@ -1483,6 +1490,9 @@ impl Pipeline {
             let Some(mut record) = self.repository.load_proposal(item.id)? else {
                 continue;
             };
+            if record.approved {
+                continue;
+            }
             let (styled, house_rules) = style.apply(&record.analysis.proposal);
             if house_rules == record.house_rules {
                 continue;
@@ -1493,8 +1503,10 @@ impl Pipeline {
                 .and_then(|value| value.to_str())
                 .unwrap_or_default()
                 .to_owned();
-            let existing =
-                existing_names(item.source_path.parent().unwrap_or_else(|| Path::new(".")));
+            let existing = names_beside(
+                item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+                &item.source_path,
+            );
             record.filename =
                 self.compose_for_target(&item.source_path, &styled, &extension, &existing);
             record.house_rules = house_rules;
@@ -1643,9 +1655,15 @@ impl Pipeline {
             }
         };
         if fingerprint != item.source_hash {
+            // Back to review, and said: approve reported "Rename applied" for a
+            // document that had just gone back to review instead, and approving
+            // again could only repeat it. Reading the file again is the way on.
             self.repository.mark_needs_review(item.id, "FILE_CHANGED")?;
             self.events.queue_changed();
-            return Ok(());
+            return Err(PipelineError::new(
+                "FILE_CHANGED",
+                "The file changed after it was analyzed. Re-analyze it.",
+            ));
         }
         let proposal = self.repository.load_proposal(item.id)?;
         // The name to apply is the one the record holds now, not the one the
@@ -1681,9 +1699,13 @@ impl Pipeline {
             self.events.queue_changed();
             return Err(failure);
         }
+        let destination = target.join(filename);
+        if names_the_source(&destination, &item.source_path) {
+            return self.complete_already_named(item);
+        }
         let applied = {
             let _files = self.hold_file_ops();
-            let applied = self.files.apply(item, &target.join(filename));
+            let applied = self.files.apply(item, &destination);
             if let Err(error) = &applied
                 && error.code != APPLY_DEFERRED
             {
@@ -1706,9 +1728,8 @@ impl Pipeline {
             }
             if self
                 .store
-                .list()?
-                .iter()
-                .any(|current| current.id == item.id && current.status == QueueStatus::Ready)
+                .get(item.id)?
+                .is_some_and(|current| current.status == QueueStatus::Ready)
             {
                 self.repository.mark_needs_review(item.id, &error.code)?;
             } else {
@@ -1718,6 +1739,42 @@ impl Pipeline {
             return Err(error);
         }
         self.report_filed(item);
+        self.events.queue_changed();
+        Ok(())
+    }
+
+    /// Completes a document whose name is already the one it would be filed
+    /// under, without touching the file.
+    ///
+    /// A rename onto the document's own name has nowhere to go: the name is
+    /// taken, by the document itself, so the applier refused it or - through
+    /// the collision suffix - filed it as "... (2)". A name that differs only
+    /// in case is the same file to Windows, and a case-only rename is not one
+    /// this release makes, so it completes the same way. The record says why
+    /// nothing moved.
+    fn complete_already_named(&self, item: &QueueItem) -> PipelineResult<()> {
+        if let Err(error) = self
+            .store
+            .complete_keep_original(item.id, QueueStatus::Ready)
+        {
+            // An approval and a scheduler pass can reach the same document;
+            // the one that finds it completed by the other has nothing to do.
+            if self
+                .store
+                .get(item.id)?
+                .is_some_and(|current| current.status == QueueStatus::Completed)
+            {
+                return Ok(());
+            }
+            return Err(error.into());
+        }
+        if let Some(mut record) = self.repository.load_proposal(item.id)?
+            && !record.reasons.iter().any(|reason| reason == ALREADY_NAMED)
+        {
+            record.reasons.push(ALREADY_NAMED.to_owned());
+            record.revision += 1;
+            self.repository.replace_proposal(item.id, &record)?;
+        }
         self.events.queue_changed();
         Ok(())
     }
@@ -1765,10 +1822,7 @@ impl Pipeline {
     /// remembered as filed. What is reported is read from the store, so it is
     /// the same work whichever call finished the operation.
     fn report_settled(&self, item_id: i64) {
-        let Ok(items) = self.store.list() else {
-            return;
-        };
-        let Some(item) = items.into_iter().find(|candidate| candidate.id == item_id) else {
+        let Ok(Some(item)) = self.store.get(item_id) else {
             return;
         };
         let Ok(Some(receipt)) = self.store.load_receipt(item_id) else {
@@ -1863,9 +1917,7 @@ impl Pipeline {
 
     fn find_item(&self, id: i64) -> PipelineResult<QueueItem> {
         self.store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
+            .get(id)?
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))
     }
 
@@ -1891,12 +1943,7 @@ impl Pipeline {
     }
 
     pub fn cancel(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if item.status == QueueStatus::NeedsReview
             && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
@@ -1942,12 +1989,7 @@ impl Pipeline {
     }
 
     pub fn retry(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         // For a document whose files were left unsettled, the only thing
         // Retry can mean is "look at them again": the deletion a sync client
         // was blocking, the rename a program holding the file refused, the two
@@ -1996,6 +2038,33 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Reads a document waiting on a person again, from the start:
+    /// Re-analyze.
+    ///
+    /// What a person needs once the document itself has changed - signed
+    /// after it was read, edited, scanned again over itself - and for any
+    /// reading they would rather have done again than correct by hand. The
+    /// file is fingerprinted now and the item takes the new fingerprint when
+    /// it changed, so the new reading is of the file as it is, and the rename
+    /// that follows checks against that. What the earlier reading left goes:
+    /// the proposal and any approval in it, and the text fingerprint a
+    /// filing of it left for near-duplicate checks.
+    pub fn reanalyze(&self, id: i64) -> PipelineResult<()> {
+        let item = self.find_item(id)?;
+        if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+            return Err(PipelineError::new(
+                "INVALID_TRANSITION",
+                "only a document waiting for review can be analyzed again",
+            ));
+        }
+        let fingerprint = self.files.fingerprint(&item.source_path)?;
+        let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
+        self.store.requeue_for_analysis(id, item.status, new_hash)?;
+        self.repository.forget_fingerprint(id)?;
+        self.events.queue_changed();
+        Ok(())
+    }
+
     /// Takes an item out of the queue, with its proposal and receipts.
     ///
     /// An item whose files were left unsettled is removed only once the
@@ -2021,12 +2090,7 @@ impl Pipeline {
                 "the filename must start with the document's date as YYYY-MM-DD",
             ));
         }
-        let mut item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let mut item = self.find_item(id)?;
         // A rename that never finished stops any new one being journalled,
         // and approving again - once the program holding the file has let go
         // - is exactly how a person asks for it to be settled. So it is
@@ -2084,14 +2148,9 @@ impl Pipeline {
         if let Some(record) = proposed.as_ref() {
             let _ = self.learn_from_edit(id, record, source_extension, &filename);
         }
-        let ready = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|candidate| candidate.id == id)
-            .ok_or_else(|| {
-                PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
-            })?;
+        let ready = self.store.get(id)?.ok_or_else(|| {
+            PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
+        })?;
         let settings = match self.settings.load() {
             Ok(settings) => settings,
             Err(error) => {
@@ -2104,12 +2163,7 @@ impl Pipeline {
     }
 
     pub fn keep_original(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
@@ -2119,12 +2173,7 @@ impl Pipeline {
     }
 
     pub fn undo(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if item.status != QueueStatus::Completed {
             return Err(PipelineError::new(
                 "INVALID_TRANSITION",
@@ -2230,12 +2279,7 @@ impl Pipeline {
     }
 
     fn reject_deferred_reconciliation_mutation(&self, id: i64) -> PipelineResult<()> {
-        let item = self
-            .store
-            .list()?
-            .into_iter()
-            .find(|item| item.id == id)
-            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        let item = self.find_item(id)?;
         if item.status == QueueStatus::NeedsReview
             && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
@@ -2261,9 +2305,8 @@ impl Pipeline {
         for id in interrupted {
             if self
                 .store
-                .list()?
-                .iter()
-                .any(|item| item.id == id && item.status == QueueStatus::Queued)
+                .get(id)?
+                .is_some_and(|item| item.status == QueueStatus::Queued)
             {
                 self.repository.record_recovered_failure(id)?;
             }
@@ -2285,9 +2328,8 @@ impl Pipeline {
                 let _files = self.hold_file_ops();
                 let Some(item) = self
                     .store
-                    .list()?
-                    .into_iter()
-                    .find(|item| item.id == id && item.status == QueueStatus::Applying)
+                    .get(id)?
+                    .filter(|item| item.status == QueueStatus::Applying)
                 else {
                     continue;
                 };
@@ -3136,6 +3178,57 @@ fn queue_status_text(status: QueueStatus) -> &'static str {
         QueueStatus::Applying => "applying",
         QueueStatus::Completed => "completed",
     }
+}
+
+/// The names already in `folder` that a document from `source_path` must not
+/// take. Its own name is not one of them: in its own folder the document is
+/// the file with that name, and counting it made a document already named the
+/// way Intern names documents collide with itself and be proposed - and with
+/// automatic renaming, renamed - as "... (2)".
+fn names_beside(folder: &Path, source_path: &Path) -> Vec<String> {
+    let mut names = existing_names(folder);
+    if let Some(own) = source_path
+        .file_name()
+        .filter(|_| is_own_folder(folder, source_path))
+    {
+        let own = name_key(&own.to_string_lossy());
+        names.retain(|name| name_key(name) != own);
+    }
+    names
+}
+
+/// Whether filing at `destination` would leave the document where it is,
+/// under a name Windows takes for its own.
+fn names_the_source(destination: &Path, source_path: &Path) -> bool {
+    let (Some(folder), Some(name), Some(own)) = (
+        destination.parent(),
+        destination.file_name(),
+        source_path.file_name(),
+    ) else {
+        return false;
+    };
+    is_own_folder(folder, source_path)
+        && name_key(&name.to_string_lossy()) == name_key(&own.to_string_lossy())
+}
+
+/// Whether `folder` is the folder `source_path` is in: the same path, or the
+/// same folder spelled another way.
+fn is_own_folder(folder: &Path, source_path: &Path) -> bool {
+    let Some(parent) = source_path.parent() else {
+        return false;
+    };
+    folder == parent
+        || matches!(
+            (fs::canonicalize(folder), fs::canonicalize(parent)),
+            (Ok(folder), Ok(parent)) if folder == parent
+        )
+}
+
+/// A name as Windows compares two in one folder - without regard to case, and
+/// without the trailing dots and spaces it drops - which is how the composer
+/// decides that two names collide.
+fn name_key(name: &str) -> String {
+    name.trim_end_matches([' ', '.']).to_lowercase()
 }
 
 fn existing_names(directory: &Path) -> Vec<String> {

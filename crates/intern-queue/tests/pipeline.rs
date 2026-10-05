@@ -31,9 +31,10 @@ use intern_intake::{
 use intern_queue::{
     paths::display_path,
     pipeline::{
-        AnalyzerBoundary, CoreFileActions, DuplicateOracle, FileActions, FiledDocument, FilingSink,
-        KnownFiling, ModelFailure, NEAR_DUPLICATE, Pipeline, PipelineError, PipelineEventSink,
-        PipelineProgress, SimilarFiling, UNDONE, UnfiledDocument, WorkerBoundary, WorkerFailure,
+        ALREADY_NAMED, AnalyzerBoundary, CoreFileActions, DuplicateOracle, FileActions,
+        FiledDocument, FilingSink, KnownFiling, ModelFailure, NEAR_DUPLICATE, Pipeline,
+        PipelineError, PipelineEventSink, PipelineProgress, SimilarFiling, UNDONE, UnfiledDocument,
+        WorkerBoundary, WorkerFailure,
     },
     settings::{AppSettings, DestinationLayout, SettingsStore},
 };
@@ -5068,4 +5069,307 @@ fn two_documents_proposing_one_name_are_filed_apart() {
             .and_then(|name| name.to_str()),
         Some("2024-04-12 Employment Agreement between John Smith and Acme Corporation (2).pdf")
     );
+}
+
+/// A queue over fake files - fingerprints the test sets - reading `documents`
+/// signed agreements, with automatic renaming off.
+fn edited_queue(root: &Path, documents: usize) -> (Pipeline, Arc<FakeWorker>, Arc<FakeFiles>) {
+    let worker = Arc::new(FakeWorker::new(
+        (0..documents)
+            .map(|_| Ok(parsed(SIGNED_AGREEMENT)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        (0..documents).map(|_| Ok(proposal(0.94, false))).collect(),
+    ));
+    let files = Arc::new(FakeFiles::default());
+    let pipeline = pipeline(
+        root,
+        Arc::clone(&worker),
+        model,
+        Arc::clone(&files),
+        AppSettings::default(),
+    );
+    (pipeline, worker, files)
+}
+
+/// The document was signed after it was read. Approving it used to report
+/// "Rename applied" while the item went back to review, and every approval
+/// after that did the same.
+#[test]
+fn approve_after_edit_reports_file_changed() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, _worker, files) = edited_queue(temp.path(), 1);
+    files.trust(&path, "unsigned");
+    let id = ready_document(&pipeline, &path);
+    files.trust(&path, "signed");
+
+    let refused = pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap_err();
+
+    assert_eq!(refused.code, "FILE_CHANGED");
+    assert!(
+        refused.message.contains("Re-analyze"),
+        "{}",
+        refused.message
+    );
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert!(
+        item.proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == "FILE_CHANGED")
+    );
+    assert!(files.applies.lock().unwrap().is_empty());
+}
+
+/// Re-analyze is the way on from FILE_CHANGED: the file is read again, as it
+/// is now, and the rename that follows checks against the new fingerprint.
+#[test]
+fn reanalyze_file_changed_item_gives_fresh_proposal() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, worker, files) = edited_queue(temp.path(), 2);
+    files.trust(&path, "unsigned");
+    let id = ready_document(&pipeline, &path);
+    files.trust(&path, "signed");
+    pipeline
+        .approve(id, AGREEMENT_NAME, "A reviewer's sentence.")
+        .unwrap_err();
+    assert_eq!(item_of(&pipeline, id).status, QueueStatus::NeedsReview);
+
+    pipeline.reanalyze(id).unwrap();
+
+    let queued = item_of(&pipeline, id);
+    assert_eq!(queued.status, QueueStatus::Queued);
+    assert_eq!(queued.source_hash, "signed");
+    assert!(queued.proposal.is_none(), "the earlier reading is gone");
+
+    pipeline.run_until_idle().unwrap();
+
+    let fresh = item_of(&pipeline, id);
+    assert_eq!(fresh.status, QueueStatus::Ready);
+    assert_eq!(fresh.source_hash, "signed");
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 2);
+    let record = fresh.proposal.unwrap();
+    assert_eq!(record.revision, 1);
+    assert!(!record.approved);
+    assert!(record.reasons.is_empty(), "{:?}", record.reasons);
+    assert_eq!(record.filename, AGREEMENT_NAME);
+    assert_ne!(record.description, "A reviewer's sentence.");
+
+    // And the rename now goes through against the new fingerprint.
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(files.applies.lock().unwrap().as_slice(), &[id]);
+}
+
+#[test]
+fn reanalyze_is_refused_for_work_not_waiting_on_a_person() {
+    let temp = tempdir().unwrap();
+    let path = source(temp.path(), "scan.pdf");
+    let (pipeline, _worker, files) = edited_queue(temp.path(), 1);
+    files.trust(&path, "unsigned");
+    let id = pipeline
+        .enqueue_files(std::slice::from_ref(&path))
+        .unwrap()
+        .remove(0)
+        .id;
+
+    assert_eq!(
+        pipeline.reanalyze(id).unwrap_err().code,
+        "INVALID_TRANSITION",
+        "still queued: there is nothing to read again yet"
+    );
+    assert_eq!(
+        pipeline.reanalyze(id + 100).unwrap_err().code,
+        "ITEM_NOT_FOUND"
+    );
+}
+
+/// An archive already named the way Intern names documents, with no
+/// destination: every file used to be proposed, and with automatic renaming
+/// renamed, as "... (2)".
+#[test]
+fn already_named_source_is_completed_without_rename() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let path = source(&inbox, AGREEMENT_NAME);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(SIGNED_AGREEMENT))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&automatic_settings()).unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    pipeline.enqueue_files(std::slice::from_ref(&path)).unwrap();
+
+    pipeline.run_until_idle().unwrap();
+
+    let item = pipeline.list().unwrap().pop().unwrap();
+    let record = item.proposal.as_ref().unwrap();
+    assert_eq!(record.filename, AGREEMENT_NAME, "no ' (2)'");
+    assert_eq!(item.status, QueueStatus::Completed);
+    assert!(
+        record.reasons.iter().any(|reason| reason == ALREADY_NAMED),
+        "{:?}",
+        record.reasons
+    );
+    assert!(item.receipt.is_none(), "no file operation was journalled");
+    assert!(path.exists());
+    let names = std::fs::read_dir(&inbox)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec![AGREEMENT_NAME.to_owned()]);
+}
+
+/// A name that differs from the proposal only in case is the document's own
+/// name to Windows: proposed without a suffix, and approved without a rename,
+/// since this release makes no case-only renames.
+#[test]
+fn lowercase_named_source_is_not_suffixed() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let lowercase = AGREEMENT_NAME.to_lowercase();
+    let path = source(&inbox, &lowercase);
+    let pipeline = reviewed_queue(temp.path(), Arc::new(StdFileSystem), 1);
+    let id = ready_document(&pipeline, &path);
+
+    assert_eq!(
+        item_of(&pipeline, id).proposal.unwrap().filename,
+        AGREEMENT_NAME
+    );
+
+    pipeline
+        .approve(id, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+
+    let item = item_of(&pipeline, id);
+    assert_eq!(item.status, QueueStatus::Completed);
+    assert!(
+        item.proposal
+            .unwrap()
+            .reasons
+            .iter()
+            .any(|reason| reason == ALREADY_NAMED)
+    );
+    assert!(path.exists(), "the file keeps the name it had");
+    assert_eq!(std::fs::read_dir(&inbox).unwrap().count(), 1);
+}
+
+/// A name approved while the queue was busy waits, approved, to be filed. A
+/// spelling rule learned in the meantime used to rebuild it from the facts,
+/// which do not carry the date the reviewer typed, and the rebuilt name was
+/// what the approval then filed - or, with no date left, sent back to review.
+#[test]
+fn approved_deferred_name_survives_rule_change() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&filed).unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    // A says no date at all, so the reviewer types one.
+    let undated = "Employment Agreement between John Smith and Acme Corporation         covering duties, salary, and term.";
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(parsed(undated)),
+        Ok(dated_text("May 3, 2024")),
+        Ok(dated_text("April 12, 2024")),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(proposal(0.94, false)),
+        Ok(dated_proposal("2024-05-03", "May 3, 2024")),
+        Ok(dated_proposal("2024-04-12", "April 12, 2024")),
+    ]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            destination: filed.to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        database.clone(),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+    let ids = pipeline
+        .enqueue_files(&[
+            source(&inbox, "a.pdf"),
+            source(&inbox, "b.pdf"),
+            source(&inbox, "c.pdf"),
+        ])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, a).filename,
+        "Employment Agreement between John Smith and Acme Corporation.pdf"
+    );
+    // The respelling once, while the queue is free: a decision, not a rule.
+    pipeline
+        .approve(
+            c,
+            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "An employment agreement.",
+        )
+        .unwrap();
+    assert!(!pipeline.learned_rules().unwrap()[0].active);
+
+    // Another document is being read: approvals wait to be filed.
+    pipeline.enqueue_files(&[source(&inbox, "d.pdf")]).unwrap();
+    let busy = QueueStore::open(&database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    let typed = "2024-03-01 Employment Agreement between John Smith and Acme Corporation.pdf";
+    pipeline
+        .approve(a, typed, "An employment agreement.")
+        .unwrap();
+    assert_eq!(item_of(&pipeline, a).status, QueueStatus::Ready);
+    // The same respelling a second time makes it a rule.
+    pipeline
+        .approve(
+            b,
+            "2024-05-03 Employment Agreement between John Smith and Acme.pdf",
+            "An employment agreement.",
+        )
+        .unwrap();
+    assert!(pipeline.learned_rules().unwrap()[0].active);
+    assert_eq!(record_of(&pipeline, a).filename, typed);
+
+    busy.transition(
+        claimed.id,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    drop(busy);
+    pipeline.run_until_idle().unwrap();
+
+    let filed_a = item_of(&pipeline, a);
+    assert_eq!(filed_a.status, QueueStatus::Completed);
+    assert_eq!(
+        filed_a.filed_receipt.unwrap().destination,
+        filed.join(typed)
+    );
+    assert_eq!(item_of(&pipeline, b).status, QueueStatus::Completed);
 }
