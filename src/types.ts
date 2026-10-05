@@ -26,9 +26,12 @@ export interface QueueItem {
   /** Completed without a rename: the document kept the name it arrived with. */
   keptOriginal?: boolean;
   /**
-   * A rename stopped part-way and its files need checking before anything
-   * else can happen: approve and keep are refused until "Check again", and
-   * removing it needs the person to say they sorted the files out themselves.
+   * A rename stopped part-way and its files need checking: "Check again" is
+   * what moves it on. Keep, cancel and Analyze again are refused until then,
+   * and removing it needs the person to say they sorted the files out
+   * themselves. Approving is accepted, because the backend checks the files
+   * first: it approves when the rename turns out never to have happened, and
+   * when it had finished, takes only the name that rename filed.
    */
   parked?: boolean;
   progress?: number;

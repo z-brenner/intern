@@ -45,12 +45,16 @@ describe('the actions each status offers', () => {
       .toEqual(['Remove from queue']);
     expect(actionSet(review))
       .toEqual([...open, 'Approve & rename', 'Keep original', 'More review actions', 'Analyze again', 'Remove from queue']);
-    // Its files need checking before anything else; approving or keeping is
-    // refused until then, so checking is the main action.
+    // Its files need checking, so checking is the main action; keeping and
+    // reading it again are refused until then. Approving is accepted - the
+    // backend checks the files first - so the name can still be approved.
     expect(actionSet({ ...review, parked: true, errorCode: 'FILE_CHANGED' }))
-      .toEqual([...open, 'Check again', 'Remove from queue']);
+      .toEqual([...open, 'Check again', 'Approve & rename', 'Remove from queue']);
     // A backend from before `parked` existed: the codes that always meant it.
     expect(actionSet({ ...review, errorCode: 'RECONCILIATION_REQUIRED' }))
+      .toEqual([...open, 'Check again', 'Approve & rename', 'Remove from queue']);
+    // No proposal, nothing to approve: only the check and the confirmed remove.
+    expect(actionSet({ id: 'parked', originalFilename: 'scan.pdf', status: 'review', parked: true, errorCode: 'RECONCILIATION_REQUIRED' }))
       .toEqual([...open, 'Check again', 'Remove from queue']);
     // Flagged before analysis, so there is no proposal to approve. Reading
     // it from the start is accepted too (Pipeline::reanalyze takes any ready
@@ -102,6 +106,21 @@ describe('the actions each status offers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show in folder' }));
     expect(calls.onOpen).toHaveBeenCalledOnce();
     expect(calls.onReveal).toHaveBeenCalledOnce();
+  });
+
+  // Pipeline::approve checks a parked item's files before it approves, so
+  // the name can be approved from the panel; checking stays the main action.
+  it('leads a parked item with Check again, and still lets its name be approved', () => {
+    const calls = handlers();
+    render(<ReviewInspector item={{ ...review, parked: true, errorCode: 'FILE_CHANGED' }} drawer={false} {...calls} />);
+
+    expect(screen.getByRole('button', { name: 'Check again' })).toHaveClass('primary');
+    const approve = screen.getByRole('button', { name: /Approve & rename/ });
+    expect(approve).not.toHaveClass('primary');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filename' }), { target: { value: '2024-03-01 Lease' } });
+    fireEvent.click(approve);
+    expect(calls.onApprove).toHaveBeenCalledWith('2024-03-01 Lease.pdf', 'A lease.');
+    expect(calls.onRetry).not.toHaveBeenCalled();
   });
 
   // QUEUE_CORE-8: a parked item refused every action. With WP-07 it can be

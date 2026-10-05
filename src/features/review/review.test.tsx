@@ -171,6 +171,31 @@ describe('review actions', () => {
     expect(retry.mock.calls.map(([id]) => id)).toEqual(['stuck', 'copied', 'ambiguous']);
   });
 
+  // Pipeline::approve checks a parked item's files first and approves when
+  // the rename never happened, so the panel offers it; a check that fails
+  // inside the approval is the same dead end as a failed Check again.
+  it('approves a parked item\'s name, checking its files first', async () => {
+    const parked = (id: string) => ({ id, originalFilename: `${id}.pdf`, status: 'review' as const, proposedFilename: `2024-05-01 ${id}.pdf`, errorCode: 'FILE_CHANGED', parked: true });
+    const base = createInMemoryBridge({ items: [parked('stuck'), parked('ambiguous')] });
+    const approve = vi.fn(async (id: string, filename: string, description: string) => {
+      if (id === 'ambiguous') throw { code: 'RECONCILIATION_REQUIRED', message: 'an incomplete operation left a file at both of its paths' };
+      await base.approve(id, filename, description);
+    });
+    render(<App bridge={{ ...base, approve }} />);
+
+    selectRow(await screen.findByRole('row', { name: /ambiguous\.pdf/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    const feedback = await screen.findByRole('alert', { name: 'Action error' });
+    expect(feedback).not.toHaveTextContent('Check again');
+    expect(feedback).toHaveTextContent('I have resolved the files myself');
+
+    selectRow(screen.getByRole('row', { name: /stuck\.pdf/ }));
+    fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2024-05-01 Stuck renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed stuck.pdf.'));
+    expect((await base.listItems()).find((item) => item.id === 'stuck')).toMatchObject({ status: 'completed', filedName: '2024-05-01 Stuck renamed.pdf' });
+  });
+
   it('completed_item_labels_and_open_reveal_buttons', async () => {
     const base = createInMemoryBridge({ items: [
       { id: 'filed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement (2).pdf', undoable: true },

@@ -173,9 +173,9 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-  // The name can be edited only where it can be approved: a parked item's
-  // files must be checked first, and an item flagged before analysis has no
-  // proposal for the backend to approve.
+  // The name can be edited only where it can be approved: an item flagged
+  // before analysis has no proposal for the backend to approve. A parked
+  // item's can be, since approving it checks its files first.
   const editable = actions.approve;
   const omitted = item.omittedParties ?? [];
   const completed = item.status === 'completed';
@@ -321,8 +321,9 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>
-        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
+        {/* A parked item leads with checking its files; approving, which checks them first too, comes after it. */}
         {actions.retry?.primary && <button type="button" className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+        {actions.approve && <button type="button" className={actions.retry?.primary ? undefined : 'primary'} disabled={busy} onClick={decides(approve)} aria-keyshortcuts="Control+Enter"><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}<Shortcut keys="Ctrl+Enter" /></button>}
         {actions.keep && <>
           <button type="button" className="secondary-action" disabled={busy} onClick={decides(onKeep)} aria-keyshortcuts="Alt+K"><Icon icon={FileText} />Keep original<Shortcut keys="Alt+K" /></button>
           <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>

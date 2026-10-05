@@ -84,16 +84,31 @@ export interface ItemActions {
   reveal: boolean;
 }
 
+/**
+ * What the inspector offers for `item`, mirroring the backend's rules for each
+ * status (Pipeline::approve, keep_original, retry, reanalyze, remove, cancel
+ * and undo in crates/intern-queue/src/pipeline.rs).
+ *
+ * Two transitions the backend accepts are left out on purpose, as the review
+ * workflow's action table (F2) leaves them out, and not by drift. Cancel on a
+ * waiting, ready or review item would turn a document nobody has refused into
+ * a failed row: Remove takes it out of the queue instead, and Keep original
+ * settles a proposal without renaming. Remove on a completed item would drop
+ * the receipt that Undo and the history rest on, one row at a time; Clear
+ * history does that for all of them, and says so.
+ */
 export function itemActions(item: QueueItem): ItemActions {
   const none: ItemActions = { approve: false, keep: false, reanalyze: false, cancel: false, undo: false, open: false, reveal: false };
   switch (item.status) {
     case 'review': {
-      // Parked: the files decide what happens next, not the name. Keeping,
+      // Parked: the files decide what happens next, not the name, so checking
+      // them is the main action rather than an entry in a menu. Keeping,
       // re-analyzing and an unconfirmed remove are refused until they are
-      // checked, and approving checks them first and may find the rename
-      // finished already - so the check is the main action rather than an
-      // entry in a menu.
-      if (isParked(item)) return { ...none, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true, reveal: true };
+      // checked. Approving is accepted: the backend checks the files first,
+      // approves if the rename turns out never to have happened, and when it
+      // had finished, takes an approval of the name it filed and refuses any
+      // other (ALREADY_FILED). It needs a proposal, as any approval does.
+      if (isParked(item)) return { ...none, approve: item.proposedFilename !== undefined, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true, reveal: true };
       const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : undefined;
       return {
         ...none,
