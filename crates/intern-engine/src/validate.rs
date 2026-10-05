@@ -13,8 +13,9 @@ use crate::domain::{
     ValidationOutcome,
 };
 use crate::evidence::{
-    date_match_positions, digest_contains, digest_contains_date, digest_contains_loosely,
-    extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely,
+    DateSpelling, NumericOrder, date_match_positions, date_statements, digest_contains,
+    digest_contains_date, digest_contains_loosely, extract_stated_dates, is_valid_iso_date,
+    normalize, normalize_loosely, numeric_date_order,
 };
 use crate::infer::{
     complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
@@ -134,6 +135,17 @@ pub fn validate_at(
         && !year_is_plausible(date, current_year)
     {
         push(&mut reasons, ReviewReason::DateImplausible);
+    }
+    // "Invoice Date: 04/01/2026" is 1 April in London and 4 January in New
+    // York, and both readings pass every check above: each is a real date
+    // the document prints. Unless the document settles it - the same date
+    // in words or year first somewhere, or another numeric date that can
+    // only be read one way round - the model's reading is a guess about a
+    // convention. It is kept, because it may be right, and a person looks.
+    if let Some(date) = document_date.as_deref()
+        && reading_is_unsettled(digest, date)
+    {
+        push(&mut reasons, ReviewReason::DateAmbiguous);
     }
     // The wording around the date says what kind of date it is more reliably
     // than the model's label; the model's answer stands only where the
@@ -414,6 +426,49 @@ fn deadline_redirect(digest: &DocumentDigest, date: &str) -> Option<Deadline> {
         },
         _ => Deadline::Withheld,
     })
+}
+
+/// True when the document writes `date` only in numbers that read as two
+/// different dates, and nothing in the document says which one it means.
+///
+/// The document settles the reading when it writes the same date with the
+/// month in words or year first, or when its numeric dates show an order -
+/// some numeric date can only be read one way round, and none only the
+/// other ([`numeric_date_order`]). A date the document states only against
+/// its own order - "03/04/2026" taken as 4 March in a document whose
+/// "30/01/2026" shows it writes the day first - is unsettled too: the
+/// model's reading contradicts the document's.
+///
+/// A day above 12 or a day equal to the month reads one way only, and is
+/// never ambiguous.
+fn reading_is_unsettled(digest: &DocumentDigest, date: &str) -> bool {
+    let (Some(month), Some(day)) = (
+        date.get(5..7).and_then(|value| value.parse::<u32>().ok()),
+        date.get(8..10).and_then(|value| value.parse::<u32>().ok()),
+    ) else {
+        return false;
+    };
+    if month > 12 || day > 12 || month == day {
+        return false;
+    }
+    let spellings = digest
+        .segments
+        .iter()
+        .flat_map(|segment| date_statements(date, &normalize(segment)))
+        .map(|(_, spelling)| spelling)
+        .collect::<Vec<_>>();
+    if spellings.is_empty()
+        || spellings
+            .iter()
+            .any(|spelling| matches!(spelling, DateSpelling::Written | DateSpelling::YearFirst))
+    {
+        return false;
+    }
+    match numeric_date_order(digest) {
+        None => true,
+        Some(NumericOrder::DayFirst) => !spellings.contains(&DateSpelling::DayFirst),
+        Some(NumericOrder::MonthFirst) => !spellings.contains(&DateSpelling::MonthFirst),
+    }
 }
 
 /// Whether an accepted ISO date's year is one a document could carry.
@@ -2165,6 +2220,92 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             );
             assert_eq!(outcome.proposal.document_date, None, "{footer}");
             assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        }
+    }
+
+    /// "04/01/2026" is 1 April in London and 4 January in New York, and
+    /// both readings are dates the document prints. Unless the document says
+    /// which, the model's reading is a guess, kept but reviewed.
+    #[test]
+    fn a_numeric_date_that_reads_either_way_round_is_reviewed() {
+        // A US invoice with nothing else to go on: either reading is a guess.
+        for date in ["2026-04-01", "2026-01-04"] {
+            let outcome = validate_at(
+                invoice(date),
+                &digest_of(&invoice_document("Invoice Date: 04/01/2026")),
+                2026,
+            );
+            assert_eq!(outcome.proposal.document_date.as_deref(), Some(date));
+            assert_eq!(outcome.reasons, vec![ReviewReason::DateAmbiguous], "{date}");
+            assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        }
+
+        // A UK invoice whose delivery date can only be read day first: the
+        // invoice date read the same way is the document's, and read the
+        // other way round it contradicts the document.
+        let uk = digest_of(&invoice_document(
+            "Invoice Date: 04/01/2026\nDelivered: 30/01/2026",
+        ));
+        let outcome = validate_at(invoice("2026-01-04"), &uk, 2026);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let outcome = validate_at(invoice("2026-04-01"), &uk, 2026);
+        assert_eq!(outcome.reasons, vec![ReviewReason::DateAmbiguous]);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-01")
+        );
+
+        // The two-digit-year shape of the same invoice, which used to accept
+        // only the US misreading.
+        let short = digest_of(&invoice_document(
+            "Invoice Date: 01/04/26\nDelivered: 30/04/26",
+        ));
+        let outcome = validate_at(invoice("2026-04-01"), &short, 2026);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let outcome = validate_at(invoice("2026-01-04"), &short, 2026);
+        assert_eq!(outcome.reasons, vec![ReviewReason::DateAmbiguous]);
+
+        // The same date in words, or year first, anywhere in the document
+        // settles it; so does a day above 12 or a day equal to its month.
+        for date_lines in [
+            "Invoice Date: 04/01/2026 (April 1, 2026)",
+            "Invoice Date: 04/01/2026\nIssued: 2026-04-01",
+            "Invoice Date: 2026-04-01",
+        ] {
+            let outcome = validate_at(
+                invoice("2026-04-01"),
+                &digest_of(&invoice_document(date_lines)),
+                2026,
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{date_lines}: {:?}",
+                outcome.reasons
+            );
+        }
+        for (printed, date) in [("04/30/2026", "2026-04-30"), ("04/04/2026", "2026-04-04")] {
+            let outcome = validate_at(
+                invoice(date),
+                &digest_of(&invoice_document(&format!("Invoice Date: {printed}"))),
+                2026,
+            );
+            assert_eq!(
+                outcome.status,
+                ProposalStatus::Ready,
+                "{printed}: {:?}",
+                outcome.reasons
+            );
         }
     }
 
