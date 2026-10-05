@@ -43,6 +43,20 @@ describe('folder names', () => {
     expect(folderLabel(roots, 'D:\\Scans')).toBe('D:\\Scans');
     expect(filedBeside(`${library}\\Inbox`)).toBe(`${library}\\Filed`);
   });
+
+  // A root has nothing beside it. "E:\" used to come out as "E/Filed", and
+  // a share root as a path on the server rather than on any share.
+  it('offers no Filed folder beside a drive, a share, or the file system root', () => {
+    for (const root of ['E:\\', 'E:', 'e:/', '\\\\?\\E:\\', '\\\\server\\share', '\\\\server\\share\\', '\\\\?\\UNC\\server\\share', '/']) {
+      expect(filedBeside(root), root).toBeUndefined();
+    }
+    expect(filedBeside('E:\\Scans')).toBe('E:\\Filed');
+    expect(filedBeside('E:\\Scans\\Inbox\\')).toBe('E:\\Scans\\Filed');
+    expect(filedBeside('\\\\server\\share\\Scans')).toBe('\\\\server\\share\\Filed');
+    expect(filedBeside('\\\\?\\UNC\\server\\share\\Scans')).toBe('\\\\?\\UNC\\server\\share\\Filed');
+    expect(filedBeside('/home/pat/Scans')).toBe('/home/pat/Filed');
+    expect(filedBeside('/Scans')).toBe('/Filed');
+  });
 });
 
 describe('folder health', () => {
@@ -138,6 +152,39 @@ describe('folder setup', () => {
     expect(await screen.findByRole('heading', { name: 'Watching Legal - Documents (Contoso SharePoint) › Inbox.' })).toBeVisible();
     expect(screen.getByText('Renamed documents go to Legal - Documents (Contoso SharePoint) › Filed.')).toBeVisible();
     expect(await bridge.getSettings()).toMatchObject({ intakeFolder: `${library}\\Inbox`, destination: `${library}\\Filed`, intakeMyFolder: true });
+  });
+
+  // The backend refuses to make a Filed folder beside a drive's top folder,
+  // so the button that asked it to could only fail, under a "Filed folder:"
+  // line naming a path that cannot exist.
+  it('drive root has no filed folder beside it', async () => {
+    const bridge = firstRun();
+    const createFiledFolder = vi.spyOn(bridge, 'createFiledFolder');
+    const picks = ['E:\\', 'D:\\Filed by Intern'];
+    const selection = { ...selectionPicking(''), pickFolder: async () => { const path = picks.shift()!; return { path, displayName: path }; } };
+    render(<App bridge={bridge} selection={selection} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse for another folder…' }));
+
+    await screen.findByRole('heading', { name: 'Where should renamed documents go?' });
+    expect(screen.getByText('A drive\'s top folder has nothing beside it. Choose where renamed documents should go.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Create a “Filed” folder here' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Filed folder:/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose another folder…' }));
+
+    expect(await screen.findByRole('heading', { name: 'Watching E:\\.' })).toBeVisible();
+    expect(createFiledFolder).not.toHaveBeenCalled();
+    expect(await bridge.getSettings()).toMatchObject({ intakeFolder: 'E:\\', destination: 'D:\\Filed by Intern' });
+  });
+
+  it('names the Filed folder it will make beside an ordinary folder', async () => {
+    render(<App bridge={firstRun()} selection={selectionPicking('D:\\Scans\\Inbox')} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a folder' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse for another folder…' }));
+
+    expect(await screen.findByText('Filed folder: D:\\Scans\\Filed')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create a “Filed” folder here' })).toBeVisible();
   });
 
   it('explains how to sync a folder when none is found, and checks again', async () => {

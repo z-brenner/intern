@@ -414,7 +414,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     cloudRoots: async () => roots.map((root) => ({ ...root })),
     intakeFolderDocuments: async () => options.existingDocuments ?? 0,
     createInboxFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Inbox`,
-    createFiledFolder: async (intakeFolder) => filedBeside(intakeFolder),
+    // Mirrors the backend: a drive or share root has no folder beside it.
+    createFiledFolder: async (intakeFolder) => {
+      const filed = filedBeside(intakeFolder);
+      if (filed === undefined) throw { code: 'FILED_FOLDER_UNAVAILABLE', message: 'a drive\'s top folder has nothing beside it to file into' };
+      return filed;
+    },
     openOneDrive: async () => { /* No OneDrive in the browser. */ },
     descriptionsStatus: async () => descriptionsStatus(),
     // Mirrors the backend: refused until the setting is saved on, otherwise
