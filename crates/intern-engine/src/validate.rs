@@ -519,7 +519,7 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
 /// this document's own.
 fn ends_the_clause(between: &str) -> bool {
     between.char_indices().any(|(index, character)| {
-        let rest = &between[index + 1..];
+        let rest = &between[index + character.len_utf8()..];
         match character {
             ',' => !rest.split_whitespace().next().is_some_and(|word| {
                 COMPANY_FORMS.contains(
@@ -1718,6 +1718,8 @@ The Consultant will provide services commencing April 15, 2026.
             "issued under Master Agreement No. 12 effective June 2, 2023",
             "issued under the Master Agreement with Acme Corp. effective June 2, 2023",
             "issued under the MSA between Acme Corporation and Contoso Worldwide, Inc. effective June 2, 2023",
+            // Read a character at a time, not a byte at a time.
+            "issued under the Master Agreement with Société Générale effective June 2, 2023",
         ] {
             assert!(reference_at(line, "2023-06-02"), "{line}");
         }
