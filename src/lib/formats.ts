@@ -39,6 +39,12 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
   tiff: 'image',
 };
 
+/**
+ * Every admitted extension, for the file picker's Documents filter and for
+ * what the in-memory bridge skips, as the backend does.
+ */
+export const SUPPORTED_EXTENSIONS: readonly string[] = Object.freeze(Object.keys(FILE_KINDS));
+
 /** The formats as a person names them, for the drop zone. */
 export const SUPPORTED_FORMATS_LABEL = 'PDF, Word (.docx, .doc, .rtf, .odt), Excel (.xlsx, .xls, .ods, .csv), PowerPoint (.pptx, .ppt, .odp), Outlook .msg and .eml email, text, Markdown, and scanned images (PNG, JPEG, TIFF)';
 

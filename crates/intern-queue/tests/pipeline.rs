@@ -3000,6 +3000,91 @@ fn content_a_teammate_already_filed_is_flagged_before_analysis_and_names_their_m
     assert_eq!(teammates.asked.lock().unwrap().len(), 3);
 }
 
+/// Fingerprints every document but one, which another program holds open -
+/// a scanner still writing it, Outlook still saving it.
+struct OneLockedFile {
+    locked: PathBuf,
+}
+
+impl FileActions for OneLockedFile {
+    fn fingerprint(&self, path: &Path) -> Result<String, PipelineError> {
+        if path == self.locked {
+            return Err(PipelineError::new(
+                "SOURCE_LOCKED",
+                "source file is locked by another program",
+            ));
+        }
+        Ok(format!("hash-of-{}", path.display()))
+    }
+
+    fn apply(&self, _item: &QueueItem, _destination: &Path) -> Result<(), PipelineError> {
+        unreachable!("adding documents applies nothing")
+    }
+
+    fn undo(&self, _item: &QueueItem, _receipt: &OperationReceipt) -> Result<(), PipelineError> {
+        unreachable!("adding documents undoes nothing")
+    }
+
+    fn reconcile(&self, _item: &QueueItem) -> Result<(), PipelineError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn enqueue_report_continues_past_failures_and_emits_once() {
+    let temp = tempdir().unwrap();
+    let first = source(temp.path(), "first.pdf");
+    let locked = source(temp.path(), "still-scanning.pdf");
+    let third = source(temp.path(), "third.pdf");
+    let events = Arc::new(RecordingEvents::default());
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    let pipeline = Pipeline::open(
+        temp.path().join("queue.sqlite3"),
+        Arc::new(FakeWorker::new(vec![])),
+        Arc::new(FakeModel::new(vec![])),
+        Arc::new(OneLockedFile {
+            locked: locked.clone(),
+        }),
+        events.clone(),
+        settings,
+    )
+    .unwrap();
+
+    let report = pipeline
+        .enqueue_files_report(&[first.clone(), locked.clone(), third.clone()])
+        .unwrap();
+
+    // The locked file no longer drops the one after it.
+    let added = report
+        .added
+        .iter()
+        .map(|item| item.source_path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(added, vec![first.clone(), third.clone()]);
+    assert_eq!(
+        report.skipped,
+        vec![(locked.clone(), "SOURCE_LOCKED".to_owned())]
+    );
+    assert_eq!(report.already_queued, 0);
+    assert_eq!(pipeline.list().unwrap().len(), 2);
+    // One announcement for the batch, though a document in it failed.
+    assert_eq!(events.changed.load(Ordering::SeqCst), 1);
+
+    // Added again, the two are already there, and nothing new is announced.
+    let again = pipeline
+        .enqueue_files_report(&[first.clone(), locked.clone(), third])
+        .unwrap();
+    assert!(again.added.is_empty());
+    assert_eq!(again.already_queued, 2);
+    assert_eq!(again.skipped.len(), 1);
+    assert_eq!(events.changed.load(Ordering::SeqCst), 1);
+
+    // The intake watcher's path is unchanged: it hands over one document at a
+    // time, and a failure is still that call's error.
+    let error = pipeline.enqueue_files(&[locked]).unwrap_err();
+    assert_eq!(error.code, "SOURCE_LOCKED");
+}
+
 #[test]
 fn same_content_still_pending_does_not_flag_a_duplicate() {
     let temp = tempdir().unwrap();
@@ -3551,6 +3636,591 @@ fn respelling_interns_own_spelling_in_review_changes_the_rule_not_the_document()
         )
         .unwrap();
     assert!(pipeline.learned_rules().unwrap().is_empty());
+}
+
+/// A statement of work the firm signed with a supplier, dated `written`.
+fn statement_of_work(written: &str) -> DocumentSource {
+    parsed(&format!(
+        "STATEMENT OF WORK effective as of {written} between Contoso Worldwide, Inc. and \
+         Ridgeline Cartography LLC for the member-map engagement."
+    ))
+}
+
+/// What the model reads in [`statement_of_work`]: the parties it names, in
+/// the order given, joined by `relation`.
+fn statement_of_work_proposal(
+    iso: &str,
+    written: &str,
+    parties: &[&str],
+    relation: PartyRelation,
+    confidence: f32,
+) -> ModelProposal {
+    ModelProposal {
+        document_type: Some("Statement of Work".into()),
+        document_date: Some(iso.into()),
+        date_role: Some(DateRole::Effective),
+        parties: parties.iter().map(|party| (*party).to_owned()).collect(),
+        party_relation: relation,
+        description: "Statement of work between Contoso Worldwide, Inc. and Ridgeline Cartography LLC for the member-map engagement.".into(),
+        confidence,
+        needs_review: false,
+        evidence: Evidence {
+            date: Some(format!("effective as of {written}")),
+            document_type: Some("STATEMENT OF WORK".into()),
+            parties: vec![
+                "between Contoso Worldwide, Inc. and Ridgeline Cartography LLC".into(),
+            ],
+        },
+    }
+}
+
+const BOTH_SIDES: [&str; 2] = ["Contoso Worldwide, Inc.", "Ridgeline Cartography LLC"];
+
+/// The firm's own name is on everything it files. Named once in Settings,
+/// it is left out of a name that has someone else to carry, so the name and
+/// the Party folder say who the document is with - while the analysis, the
+/// evidence, and a document that names only the firm keep the firm.
+#[test]
+fn own_names_file_by_counterparty_in_name_and_party_folder() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    let filed = temp.path().join("filed");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::create_dir_all(&filed).unwrap();
+    let with_supplier = source(&inbox, "sow.pdf");
+    let only_us = source(&inbox, "internal.pdf");
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(statement_of_work("April 1, 2026")),
+        Ok(statement_of_work("May 4, 2026")),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        // The firm first, as the model often has it: without the setting
+        // this is filed in the firm's own Party folder with everything else.
+        Ok(statement_of_work_proposal(
+            "2026-04-01",
+            "April 1, 2026",
+            &BOTH_SIDES,
+            PartyRelation::Between,
+            0.94,
+        )),
+        Ok(statement_of_work_proposal(
+            "2026-05-04",
+            "May 4, 2026",
+            &["Contoso Worldwide, Inc."],
+            PartyRelation::For,
+            0.94,
+        )),
+    ]));
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings
+        .save(&AppSettings {
+            automatic_rename: true,
+            destination: filed.to_string_lossy().into_owned(),
+            destination_layout: DestinationLayout::Party,
+            // As a textarea sends it: padded, with a blank line.
+            our_names: vec!["  Contoso Worldwide, Inc. ".into(), String::new()],
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let filing = Arc::new(RecordingFiling::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap()
+    .with_filing_sink(filing.clone());
+    let queued = pipeline
+        .enqueue_files(&[with_supplier, only_us])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+
+    pipeline.run_until_idle().unwrap();
+
+    let destination = |id: i64| {
+        let item = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap();
+        assert_eq!(item.status, QueueStatus::Completed);
+        item.receipt.unwrap().destination
+    };
+    assert_eq!(
+        destination(queued[0]),
+        filed
+            .join("Ridgeline Cartography LLC")
+            .join("2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"),
+        "named, and filed, by the other side"
+    );
+    assert_eq!(
+        destination(queued[1]),
+        filed
+            .join("Contoso Worldwide, Inc")
+            .join("2026-05-04 Statement of Work for Contoso Worldwide, Inc.pdf"),
+        "a document that names only the firm keeps the firm"
+    );
+
+    let record = record_of(&pipeline, queued[0]);
+    assert_eq!(record.own_names, vec!["Contoso Worldwide, Inc."]);
+    assert_eq!(
+        record.analysis.proposal.parties, BOTH_SIDES,
+        "the analysis keeps both sides"
+    );
+    assert_eq!(
+        record.analysis.proposal.evidence.parties,
+        vec!["between Contoso Worldwide, Inc. and Ridgeline Cartography LLC"]
+    );
+    assert_eq!(
+        record.name_view().1,
+        vec!["Contoso Worldwide, Inc."],
+        "and says which side it left out"
+    );
+    assert!(record_of(&pipeline, queued[1]).name_view().1.is_empty());
+    let heard = filing.filed.lock().unwrap();
+    assert_eq!(heard[0].proposal.parties, vec!["Ridgeline Cartography LLC"]);
+    assert_eq!(heard[1].proposal.parties, vec!["Contoso Worldwide, Inc."]);
+}
+
+/// A second document claimed the way a running queue claims one, so the
+/// store refuses applies and an approval waits for the scheduler.
+fn hold_the_queue(pipeline: &Pipeline, database: &Path, inbox: &Path) -> (QueueStore, i64) {
+    let other = source(inbox, "being-read.pdf");
+    pipeline
+        .enqueue_files(std::slice::from_ref(&other))
+        .unwrap();
+    let busy = QueueStore::open(database).unwrap();
+    let claimed = busy.claim_next().unwrap().unwrap();
+    (busy, claimed.id)
+}
+
+/// Naming the firm in Settings renames every document still waiting for a
+/// decision at once, in review or ready - and changing it back renames them
+/// back. A name a person already approved is theirs: it keeps what they
+/// typed, even while it waits for a busy queue to file it.
+#[test]
+fn refreshing_own_names_restyles_waiting_but_not_approved() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let dates = [
+        ("2026-04-01", "April 1, 2026", 0.5),
+        ("2026-05-04", "May 4, 2026", 0.94),
+        ("2026-06-01", "June 1, 2026", 0.94),
+    ];
+    let worker = Arc::new(FakeWorker::new(
+        dates
+            .iter()
+            .map(|(_, written, _)| Ok(statement_of_work(written)))
+            .collect(),
+    ));
+    let model = Arc::new(FakeModel::new(
+        dates
+            .iter()
+            .map(|(iso, written, confidence)| {
+                Ok(statement_of_work_proposal(
+                    iso,
+                    written,
+                    &BOTH_SIDES,
+                    PartyRelation::Between,
+                    *confidence,
+                ))
+            })
+            .collect(),
+    ));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        database.clone(),
+        worker,
+        model,
+        events.clone(),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let queued = ["review.pdf", "ready.pdf", "approved.pdf"]
+        .map(|name| source(&inbox, name))
+        .to_vec();
+    let queued = pipeline
+        .enqueue_files(&queued)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let both = "Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf";
+    assert_eq!(
+        record_of(&pipeline, queued[1]).filename,
+        format!("2026-05-04 {both}")
+    );
+
+    let (busy, claimed) = hold_the_queue(&pipeline, &database, &inbox);
+    let typed = format!("2026-06-07 {both}");
+    pipeline
+        .approve(queued[2], &typed, "A sentence about the engagement.")
+        .unwrap();
+    let approved = record_of(&pipeline, queued[2]);
+    assert!(approved.approved, "waiting for the queue to be free");
+
+    // Settings names the firm.
+    let names = vec!["Contoso Worldwide, Inc.".to_owned(), "  ".to_owned()];
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings {
+            our_names: names.clone(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let heard = events.changed.load(Ordering::SeqCst);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert!(events.changed.load(Ordering::SeqCst) > heard);
+
+    let statuses = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .map(|item| (item.id, item.status))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(statuses[&queued[0]], QueueStatus::NeedsReview);
+    assert_eq!(statuses[&queued[1]], QueueStatus::Ready);
+    for (id, date) in [(queued[0], "2026-04-01"), (queued[1], "2026-05-04")] {
+        let renamed = record_of(&pipeline, id);
+        assert_eq!(
+            renamed.filename,
+            format!("{date} Statement of Work with Ridgeline Cartography LLC.pdf")
+        );
+        assert_eq!(renamed.own_names, vec!["Contoso Worldwide, Inc."]);
+        assert_eq!(renamed.revision, 2);
+    }
+    assert_eq!(
+        record_of(&pipeline, queued[2]),
+        approved,
+        "the approved name keeps what the person typed"
+    );
+
+    // Unnamed again, the waiting documents carry both sides again.
+    pipeline.refresh_own_names(&[]).unwrap();
+    let restored = record_of(&pipeline, queued[1]);
+    assert_eq!(restored.filename, format!("2026-05-04 {both}"));
+    assert!(restored.own_names.is_empty());
+    assert_eq!(restored.revision, 3);
+    // And a list that changes nothing touches nothing.
+    pipeline.refresh_own_names(&[" ".into()]).unwrap();
+    assert_eq!(record_of(&pipeline, queued[1]).revision, 3);
+
+    busy.transition(
+        claimed,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
+    drop(busy);
+    pipeline.run_until_idle().unwrap();
+    let filed = pipeline
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == queued[2])
+        .unwrap();
+    assert_eq!(filed.status, QueueStatus::Completed);
+    assert!(inbox.join(&typed).exists(), "filed under the typed name");
+}
+
+/// The proposal's revision is the window's cue that the name it shows is no
+/// longer the proposal, and the reviewer's unapproved draft of the name and
+/// the description is replaced when it moves. Naming the firm in Settings
+/// must not move it for a document whose name does not change - one that
+/// never mentions the firm - or saving Settings throws away what a reviewer
+/// had typed into it.
+#[test]
+fn naming_the_firm_keeps_the_revision_of_a_name_it_does_not_change() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let worker = Arc::new(FakeWorker::new(vec![
+        Ok(statement_of_work("April 1, 2026")),
+        Ok(parsed(AGREEMENT)),
+    ]));
+    let model = Arc::new(FakeModel::new(vec![
+        Ok(statement_of_work_proposal(
+            "2026-04-01",
+            "April 1, 2026",
+            &BOTH_SIDES,
+            PartyRelation::Between,
+            0.94,
+        )),
+        Ok(proposal(0.94, false)),
+    ]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        events.clone(),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let queued = pipeline
+        .enqueue_files(&[source(&inbox, "sow.pdf"), source(&inbox, "employment.pdf")])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    let untouched = record_of(&pipeline, queued[1]);
+    assert_eq!(untouched.revision, 1);
+
+    let names = vec!["Contoso Worldwide, Inc.".to_owned()];
+    pipeline.refresh_own_names(&names).unwrap();
+
+    let renamed = record_of(&pipeline, queued[0]);
+    assert_eq!(
+        renamed.filename,
+        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+    );
+    assert_eq!(renamed.revision, 2, "a new name is a new proposal");
+    let kept = record_of(&pipeline, queued[1]);
+    assert_eq!(kept.filename, untouched.filename);
+    assert_eq!(
+        kept.revision, 1,
+        "the same name: the reviewer's draft of it stands"
+    );
+    // The list is still stored with it, so the record says which names it
+    // was composed under, and the next save has nothing to do.
+    assert_eq!(kept.own_names, names);
+
+    // Asked again with the same names, as every save asks, nothing is
+    // written and nothing is announced.
+    let heard = events.changed.load(Ordering::SeqCst);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert_eq!(events.changed.load(Ordering::SeqCst), heard);
+    assert_eq!(record_of(&pipeline, queued[0]), renamed);
+    assert_eq!(record_of(&pipeline, queued[1]), kept);
+}
+
+/// Says nothing about duplicates. Asked after a document's name has been
+/// composed and before its proposal is stored, which is when it saves
+/// Settings naming the firm: the moment a Settings save lands while the
+/// document is still being read, and its rename of everything waiting
+/// cannot see the document yet.
+struct SettingsSavedMidway {
+    settings: PathBuf,
+    names: Vec<String>,
+}
+
+impl DuplicateOracle for SettingsSavedMidway {
+    fn filed_elsewhere(&self, _source_hash: &str, _source_path: &Path) -> Option<KnownFiling> {
+        None
+    }
+
+    fn similar_elsewhere(&self, _fingerprint: u64) -> Option<SimilarFiling> {
+        let store = SettingsStore::new(&self.settings);
+        let mut settings = store.load().unwrap();
+        settings.our_names = self.names.clone();
+        store.save(&settings).unwrap();
+        None
+    }
+}
+
+/// A document already named by the other side, waiting in the folder it was
+/// found in: naming the firm in Settings composes exactly its own name, and
+/// that name is the document itself, not a file it collides with. Renaming
+/// the waiting documents counted the document's own name as taken, as
+/// composing the first proposal once did, and offered it as "... (2)".
+#[test]
+fn naming_the_firm_never_suffixes_a_document_already_named_by_the_other_side() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let named = "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf";
+    let path = source(&inbox, named);
+    let worker = Arc::new(FakeWorker::new(vec![Ok(statement_of_work(
+        "April 1, 2026",
+    ))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
+        "2026-04-01",
+        "April 1, 2026",
+        &BOTH_SIDES,
+        PartyRelation::Between,
+        0.94,
+    ))]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap();
+    let id = pipeline.enqueue_files(&[path]).unwrap()[0].id;
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(
+        record_of(&pipeline, id).filename,
+        "2026-04-01 Statement of Work between Contoso Worldwide, Inc and Ridgeline Cartography LLC.pdf"
+    );
+
+    let names = vec!["Contoso Worldwide, Inc.".to_owned()];
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings {
+            our_names: names.clone(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    pipeline.refresh_own_names(&names).unwrap();
+
+    let renamed = record_of(&pipeline, id);
+    assert_eq!(renamed.filename, named, "no ' (2)'");
+    assert_eq!(renamed.own_names, names);
+    assert_eq!(renamed.revision, 2);
+
+    // With no settings to say where it is going, the folder it is in stands
+    // in for the destination, and the same holds there.
+    std::fs::write(&settings_path, b"not json").unwrap();
+    pipeline.refresh_own_names(&[]).unwrap();
+    assert_ne!(record_of(&pipeline, id).filename, named);
+    pipeline.refresh_own_names(&names).unwrap();
+    assert_eq!(record_of(&pipeline, id).filename, named, "no ' (2)'");
+}
+
+/// The firm named in Settings while a document is being read: the save's
+/// rename of everything waiting runs before the document waits, so the
+/// document reads the names once more when it does, and is named by the
+/// other side like everything else.
+#[test]
+fn own_names_saved_while_a_document_is_read_name_it_too() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    // Long enough to have a text fingerprint, which is what asks the shared
+    // index about near-duplicates.
+    let text = format!(
+        "{} The supplier surveys, draws and delivers a member map for every region the \
+         network covers, reviews each draft with the member team, and corrects every map \
+         the team marks before the final delivery date.",
+        "STATEMENT OF WORK effective as of April 1, 2026 between Contoso Worldwide, Inc. and \
+         Ridgeline Cartography LLC for the member-map engagement."
+    );
+    let worker = Arc::new(FakeWorker::new(vec![Ok(parsed(&text))]));
+    let model = Arc::new(FakeModel::new(vec![Ok(statement_of_work_proposal(
+        "2026-04-01",
+        "April 1, 2026",
+        &BOTH_SIDES,
+        PartyRelation::Between,
+        0.94,
+    ))]));
+    let settings_path = temp.path().join("settings.json");
+    SettingsStore::new(&settings_path)
+        .save(&AppSettings::default())
+        .unwrap();
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        model,
+        Arc::new(RecordingEvents::default()),
+        SettingsStore::new(&settings_path),
+    )
+    .unwrap()
+    .with_duplicate_oracle(Arc::new(SettingsSavedMidway {
+        settings: settings_path.clone(),
+        names: vec!["Contoso Worldwide, Inc.".into()],
+    }));
+    let id = pipeline
+        .enqueue_files(&[source(&inbox, "sow.pdf")])
+        .unwrap()[0]
+        .id;
+
+    pipeline.run_until_idle().unwrap();
+
+    let record = record_of(&pipeline, id);
+    assert_eq!(
+        SettingsStore::new(&settings_path).load().unwrap().our_names,
+        vec!["Contoso Worldwide, Inc."],
+        "the save landed while the document was being read"
+    );
+    assert_eq!(
+        record.filename,
+        "2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf"
+    );
+    assert_eq!(record.own_names, vec!["Contoso Worldwide, Inc."]);
+    assert_eq!(record.name_view().1, vec!["Contoso Worldwide, Inc."]);
+}
+
+/// A spelling put to use renames what is waiting for a decision, not a name
+/// a person approved that is waiting only for a busy queue to file it.
+#[test]
+fn a_spelling_put_to_use_leaves_an_approved_name_alone() {
+    let temp = tempdir().unwrap();
+    let inbox = temp.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let (pipeline, _) = learning_pipeline(
+        temp.path(),
+        &[
+            ("2024-04-12", "April 12, 2024"),
+            ("2024-05-03", "May 3, 2024"),
+            ("2024-06-07", "June 7, 2024"),
+        ],
+    );
+    let queued = ["a.pdf", "b.pdf", "c.pdf"]
+        .map(|name| source(&inbox, name))
+        .to_vec();
+    let queued = pipeline
+        .enqueue_files(&queued)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+
+    let (busy, claimed) = hold_the_queue(&pipeline, &temp.path().join("queue.sqlite3"), &inbox);
+    // Approved in the document's own words, and a date of the person's own.
+    let typed = "2024-05-04 Employment Agreement between John Smith and Acme Corporation.pdf";
+    pipeline
+        .approve(queued[1], typed, "A sentence about the agreement.")
+        .unwrap();
+    let approved = record_of(&pipeline, queued[1]);
+    assert!(approved.approved);
+
+    pipeline
+        .approve(
+            queued[0],
+            "2024-04-12 Employment Agreement between John Smith and Acme.pdf",
+            "A sentence about the agreement.",
+        )
+        .unwrap();
+    let rule = pipeline.learned_rules().unwrap().remove(0);
+    pipeline.use_rule(rule.id).unwrap();
+
+    assert_eq!(
+        record_of(&pipeline, queued[2]).filename,
+        "2024-06-07 Employment Agreement between John Smith and Acme.pdf",
+        "the document waiting for a decision takes the spelling"
+    );
+    assert_eq!(record_of(&pipeline, queued[1]), approved);
+
+    busy.transition(
+        claimed,
+        QueueStatus::Extracting,
+        QueueStatus::Canceled,
+        None,
+    )
+    .unwrap();
 }
 
 /// An agreement long enough to fingerprint, with the date and the names

@@ -134,17 +134,18 @@ const alpha9Settings: AppSettings = {
   runInBackground: false, startAtLogin: false, recordDescriptions: true,
   modelSource: 'local', hostedProvider: 'openai_compatible', hostedBaseUrl: 'https://models.example.test/v1', hostedModel: 'example-model',
 };
+/*
+  The same file as this build reads it back: every saved value as it was, and
+  each field added since alpha.9 at the default the backend's serde gives it -
+  the organisation's names as the empty list, which names nobody, and the
+  update switch as checks on.
+*/
+const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false };
 const alpha9Items: QueueItem[] = [
   { id: 'alpha9-filed', originalFilename: 'scan-0001.pdf', status: 'completed', proposedFilename: '2025-03-04 Invoice from Northwind.pdf', confidence: 0.94, undoable: true },
   { id: 'alpha9-review', originalFilename: 'scan-0002.pdf', status: 'review', proposedFilename: '2025-03-05 Lease Amendment.pdf', confidence: 0.61 },
   { id: 'alpha9-waiting', originalFilename: 'scan-0003.pdf', status: 'waiting' },
 ];
-
-/*
-  The same file as this build reads it back: a field added since alpha.9 takes
-  its default, and the update switch's default is checks on.
-*/
-const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, skipUpdateChecks: false };
 
 function alpha9Bridge(options: InMemoryBridgeOptions = {}) {
   return createInMemoryBridge({ settings: alpha9Settings, items: alpha9Items, completedOnboardingVersion: 0, ...options });

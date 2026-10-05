@@ -3,8 +3,9 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 // Types only: the plugin itself is still imported lazily, below.
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
   DescriptionsEventSource,
   DesktopBridge,
@@ -12,6 +13,7 @@ import type {
   FileSelection,
   FolderSelection,
   IntakeEventSource,
+  LaunchReportSource,
   SelectionBoundary,
   SelectionResult,
   SupportLinkTarget,
@@ -81,6 +83,13 @@ interface QueueItemDto {
   houseRules?: HouseRule[];
   nearDuplicateOf?: string;
   fileModifiedDate?: string;
+  omittedParties?: string[];
+}
+
+interface AddReportDto {
+  added?: number;
+  alreadyQueued?: number;
+  skipped?: Array<{ name: string; code: string }>;
 }
 
 interface HistoryEntryDto {
@@ -117,7 +126,7 @@ export interface TauriSelectionBoundary extends SelectionBoundary {
   subscribeDrops(listener: (selection: SelectionResult) => void): Promise<() => void>;
 }
 
-export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource {
+export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventSource, IntakeEventSource, DescriptionsEventSource, LaunchReportSource {
   constructor(private readonly transport: TauriTransport = defaultTransport) {}
 
   microsoftIntakeStatus(): Promise<MicrosoftIntakeStatus> { return this.transport.invoke('microsoft_intake_status'); }
@@ -132,12 +141,12 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return items.map(normalizeItem);
   }
 
-  addFiles(files: FileSelection[]): Promise<void> {
-    return this.transport.invoke('queue_add_files', { files });
+  async addFiles(files: FileSelection[]): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_files', { files }));
   }
 
-  addFolder(folder: FolderSelection): Promise<void> {
-    return this.transport.invoke('queue_add_folder', { folder });
+  async addFolder(folder: FolderSelection): Promise<AddReport> {
+    return normalizeAddReport(await this.transport.invoke<AddReportDto | undefined>('queue_add_folder', { folder }));
   }
 
   pauseQueue(): Promise<void> { return this.transport.invoke('queue_pause'); }
@@ -321,10 +330,49 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     // which closes Intern to replace it, so there is no relaunch call here to
     // fail after the process has already gone.
     await beforeInstall?.();
-    await update.install();
+    // The installer starts Intern again with this process's arguments, and
+    // documents "Send to > Intern" named among them would be added again -
+    // whatever is at those paths by now. Told just before it takes over, the
+    // backend knows that relaunch for what it is; a download that failed or
+    // was never finished leaves nothing behind. Not being able to tell it is
+    // no reason to withhold an update.
+    await this.transport.invoke('update_relaunch_expected', { expected: true }).catch(() => undefined);
+    try {
+      await update.install();
+    } catch (error) {
+      // Nothing will relaunch, so the next launch is a person's own.
+      await this.transport.invoke('update_relaunch_expected', { expected: false }).catch(() => undefined);
+      throw error;
+    }
     // A successful install hands the bytes back to the plugin, which frees
     // them; installing this update again starts from a fresh download.
     downloadedUpdate = undefined;
+  }
+
+  // Same shape as subscribeIntake. The event only says a report is waiting:
+  // the backend holds it until it is taken, because the add for a launch
+  // that started Intern can finish before this window is listening - so it
+  // is also asked for once, as soon as the listener is in place.
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void {
+    let active = true;
+    let stop: (() => void) | undefined;
+    const take = async () => {
+      try {
+        const report = await this.transport.invoke<AddReportDto | null | undefined>('queue_take_launch_report');
+        if (active && report) handler(normalizeAddReport(report));
+      } catch { /* Nothing to show; the queue still shows what was added. */ }
+    };
+    void this.transport.listen<unknown>('queue://launch-report', () => {
+      if (active) void take();
+    }).then((unlisten) => {
+      if (active) { stop = unlisten; void take(); }
+      else unlisten();
+    }).catch(() => { if (active) void take(); });
+    return () => {
+      if (!active) return;
+      active = false;
+      stop?.();
+    };
   }
 
   async subscribeQueue(listener: (event: QueueBridgeEvent) => void): Promise<() => void> {
@@ -443,6 +491,16 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
+// Fresh arrays and plain numbers, whatever arrived: the report is shown, and
+// nothing about it is worth failing an add that already happened.
+function normalizeAddReport(report: AddReportDto | undefined): AddReport {
+  return {
+    added: report?.added ?? 0,
+    alreadyQueued: report?.alreadyQueued ?? 0,
+    skipped: (report?.skipped ?? []).map(({ name, code }) => ({ name, code })),
+  };
+}
+
 function normalizeItem(item: QueueItemDto): QueueItem {
   const status = normalizeStatus(item.status);
   const waiting = status === 'waiting';
@@ -468,6 +526,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.houseRules?.length ? { houseRules: item.houseRules.map((rule) => ({ ...rule })) } : {}),
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
+    ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
   };
 }
 
@@ -492,7 +551,12 @@ function normalizeStatus(status: BackendStatus): QueueItem['status'] {
 
 async function openDialog(transport: TauriTransport, directory: boolean): Promise<string[]> {
   const result = await transport.invoke<unknown>('plugin:dialog|open', {
-    options: { multiple: !directory, directory },
+    options: directory
+      ? { multiple: false, directory }
+      // Documents first, so the picker opens showing only what Intern can
+      // read; All files stays one click away, and whatever it lets through is
+      // reported by the add rather than refused with the rest.
+      : { multiple: true, directory, filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }] },
   });
   return stringPaths(result);
 }

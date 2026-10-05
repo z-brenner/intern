@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -64,8 +64,14 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
 
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
-  addFiles(files: FileSelection[]): Promise<void>;
-  addFolder(folder: FolderSelection): Promise<void>;
+  /**
+   * Add files - or, from a drop, folders too. One file that cannot be added
+   * never refuses the rest; the report says what was queued and names
+   * whatever was left out.
+   */
+  addFiles(files: FileSelection[]): Promise<AddReport>;
+  /** Add the supported documents in a folder, reported the same way. */
+  addFolder(folder: FolderSelection): Promise<AddReport>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
   cancel(id: string): Promise<void>;
@@ -215,6 +221,16 @@ export interface IntakeEventSource {
  */
 export interface DescriptionsEventSource {
   subscribeDescriptions(handler: (status: DescriptionsStatus) => void): () => void;
+}
+
+/**
+ * Optional capability, duck-typed like IntakeEventSource: documents sent to
+ * Intern from outside the window ("Send to > Intern", or named on its command
+ * line) that could not all be added. The handler is given each report once,
+ * including one from a launch that finished before it subscribed.
+ */
+export interface LaunchReportSource {
+  subscribeLaunchReports(handler: (report: AddReport) => void): () => void;
 }
 
 /**

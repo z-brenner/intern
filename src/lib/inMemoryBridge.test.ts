@@ -121,6 +121,57 @@ describe('createInMemoryBridge support links', () => {
   });
 });
 
+describe('createInMemoryBridge organisation names', () => {
+  const lease = async (bridge: ReturnType<typeof createInMemoryBridge>) => (await bridge.listItems()).find((item) => item.id === 'lease')!;
+
+  it('starts with no names and stores them the way the backend does', async () => {
+    const bridge = createInMemoryBridge();
+    expect((await bridge.getSettings()).ourNames).toEqual([]);
+
+    await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: [' TenantCo Inc. ', '', '  '] });
+    expect((await bridge.getSettings()).ourNames).toEqual(['TenantCo Inc.']);
+  });
+
+  it('names a waiting seeded proposal by the other side, and by both again when the names go', async () => {
+    const bridge = createInMemoryBridge();
+    expect(await lease(bridge)).not.toHaveProperty('omittedParties');
+
+    // Matched as the backend matches: case and punctuation disregarded.
+    await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: ['TENANTCO INC'] });
+    // A new proposal revision, as the backend records one, so an open
+    // inspector shows the new name rather than keeping the old as a draft.
+    expect(await lease(bridge)).toMatchObject({ proposedFilename: '2023-09-15 Lease Agreement with ABC Properties LLC.pdf', omittedParties: ['TenantCo Inc.'], proposalRevision: '2' });
+    // A save that changes nothing about the name is not a new revision.
+    await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: ['TenantCo Inc.'] });
+    expect((await lease(bridge)).proposalRevision).toBe('2');
+
+    await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: [] });
+    const restored = await lease(bridge);
+    expect(restored.proposedFilename).toBe('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
+    expect(restored).not.toHaveProperty('omittedParties');
+    expect(restored.proposalRevision).toBe('3');
+  });
+
+  it('applies names already saved, and never to a name a person approved or to rows a test supplied', async () => {
+    const named = createInMemoryBridge({ settings: { ourNames: ['ABC Properties'] } });
+    expect(await lease(named)).toMatchObject({ proposedFilename: '2023-09-15 Lease Agreement with TenantCo Inc.pdf', omittedParties: ['ABC Properties LLC'] });
+
+    const bridge = createInMemoryBridge();
+    await bridge.approve('lease', '2023-09-15 Lease for 123 Main St.pdf', 'Lease.');
+    await bridge.undo('lease');
+    await bridge.saveSettings({ ...await bridge.getSettings(), ourNames: ['TenantCo Inc.'] });
+    expect((await lease(bridge)).proposedFilename).toBe('2023-09-15 Lease for 123 Main St.pdf');
+
+    const supplied = createInMemoryBridge({ items: [{ id: 'lease', originalFilename: 'lease.pdf', status: 'review', proposedFilename: '2023-09-15 Lease.pdf' }], settings: { ourNames: ['TenantCo Inc.'] } });
+    expect(await lease(supplied)).toEqual({ id: 'lease', originalFilename: 'lease.pdf', status: 'review', proposedFilename: '2023-09-15 Lease.pdf' });
+  });
+
+  it('never matches on an own name too short to mean one organisation', async () => {
+    const bridge = createInMemoryBridge({ settings: { ourNames: ['ABC'] } });
+    expect(await lease(bridge)).not.toHaveProperty('omittedParties');
+  });
+});
+
 describe('createInMemoryBridge update switch', () => {
   // The desktop backend reads a file that never mentions the switch as checks
   // on, and the browser bridge has to agree with it.

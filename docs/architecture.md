@@ -588,14 +588,42 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but one whose name a person approved - just now, or earlier
-and still waiting to be filed - which is the reviewer's own text and would
-lose whatever the validated facts do not carry, the date they typed with it
-most of all.
+every document but one whose name a person approved, the one just approved
+and one approved earlier that is waiting only for a busy queue alike. That
+name is the reviewer's own text and would lose whatever the validated facts
+do not carry, the date they typed with it most of all.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
+
+### Your organisation
+
+A firm's own name is on almost everything it files, so a name that carries
+every party says the firm over and over, and the Party layout files one
+client's documents under whichever side the model happened to name first.
+Settings takes the organisation's names, one per line, and the queue applies
+them after house style (`own_names::counterparty_view`): when a document
+names the organisation and someone else, the organisation's parties are left
+out of the name and the others keep their order, "between" becoming "with"
+when one is left. A document that names only the organisation keeps it - a
+name with no party says less than one that names the firm. Matching is house
+style's key, plus a whole-word prefix either way round ("Contoso" is
+"Contoso Worldwide, Inc."), and an own name under four characters is ignored
+because it would match far too much.
+
+Like house style it is deterministic and after validation: the evidence and
+the description stay the document's words, and the review panel says which
+party was left out and why. The names in force are recorded with each
+proposal, so the name, the layout folder, a lesson from an edit, and the
+filing report all read the same view. Changing them in Settings recomposes
+every document still waiting, as a learned spelling does; an approved name
+keeps what the person typed. Every save asks, not only one that changed the
+list, so a rename an earlier save never reached is finished by the next, and
+a document being read while the list changed reads it again as it starts to
+wait. A proposal's revision moves only when its name does: the review panel
+replaces an unapproved draft when it moves, and a document the change leaves
+named as it was keeps whatever the reviewer had typed.
 
 ## Model and runtime
 
@@ -678,7 +706,12 @@ that still matches, the next launch starts the server with neither check; when
 any of it changes, the model is hashed and self-tested once and stamped again,
 and a failed self-test removes the stamp. Within a session the digest is read
 at most once: restarts - a cancel, a recovery - start a file that still looks
-exactly as it did when it was checked, and refuse one that does not.
+exactly as it did when it was checked, and refuse one that does not. The
+setup thread is started only once the rest of launch has succeeded: a launch
+that fails later waits behind a dialog that says why, and a server started
+earlier went on loading the model for an app that could not run. Until then
+the model is held, so the queue cannot hand a document to a server that has
+not started.
 
 Starts and stops are serialized, and every deliberate stop - a cancel, a hosted
 model chosen, shutdown - moves a generation counter before it stops anything.

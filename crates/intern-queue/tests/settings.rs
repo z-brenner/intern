@@ -21,6 +21,7 @@ fn settings_saved_before_the_intake_fields_existed_load_with_defaults() {
         AppSettings {
             destination: "/somewhere/out".into(),
             destination_layout: DestinationLayout::Flat,
+            our_names: Vec::new(),
             start_minimized: true,
             automatic_rename: true,
             intake_folder: String::new(),
@@ -51,6 +52,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
     let settings = AppSettings {
         destination: "/somewhere/out".into(),
         destination_layout: DestinationLayout::YearType,
+        our_names: vec!["Contoso Worldwide, Inc.".into(), "Contoso".into()],
         start_minimized: false,
         automatic_rename: true,
         intake_folder: "/somewhere/intake".into(),
@@ -84,6 +86,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         "\"skipUpdateChecks\": true",
         "recordDescriptions",
         "\"destinationLayout\": \"year_type\"",
+        "\"ourNames\": [",
         "\"modelSource\": \"hosted\"",
         "\"hostedProvider\": \"openai_compatible\"",
         "\"hostedBaseUrl\": \"https://gateway.example.com/v1\"",

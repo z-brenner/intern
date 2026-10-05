@@ -10,9 +10,12 @@ pub mod onboarding;
 pub mod secrets;
 pub mod sharepoint_root_verifier;
 pub mod sharepoint_setup;
+pub mod startup;
 pub mod tray;
 
 pub fn run() {
+    // First, so that even a panic inside Tauri's own setup leaves a record.
+    startup::install_panic_hook();
     tauri::Builder::default()
         // One Intern per machine, and registered first as the plugin
         // requires. Autostart at sign-in followed by a click on the shortcut
@@ -46,30 +49,64 @@ pub fn run() {
         // explicit permissions/privacy notices.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let state = commands::AppState::initialize(app.handle()).map_err(|error| {
-                std::io::Error::other(format!("{}: {}", error.code, error.message))
-            })?;
+            let data = app.path().app_local_data_dir().ok();
+            if let Some(data) = &data {
+                startup::set_log_directory(data);
+            }
+            let arguments = commands::process_arguments();
+            // Decided before initialization, which can take seconds on this
+            // thread (see `shows_window_before_initialize`), from the settings
+            // as it will read them: a file that cannot be read is the
+            // defaults, which show the window.
+            let starts_hidden = data
+                .as_deref()
+                .is_some_and(|data| commands::launch_starts_hidden(data, &arguments));
+            if startup::shows_window_before_initialize(starts_hidden) {
+                tray::show_main_window(app.handle());
+            }
+            // Returning the error made Tauri panic with "Failed to setup app"
+            // and the process vanish with nothing said anywhere. A failed start
+            // is reported instead, and setup succeeds without AppState: the
+            // invoke guard below answers every command, and the dialog exits.
+            let state = match commands::AppState::initialize(app.handle()) {
+                Ok(state) => state,
+                Err(error) => {
+                    startup::report_failure(app.handle(), &error.code, &error.message);
+                    return Ok(());
+                }
+            };
             let settings = state.settings_snapshot();
+            let data = state.data_dir().to_path_buf();
             app.manage(state);
-            let data = app.path().app_local_data_dir().map_err(|_| {
-                std::io::Error::other("local application data directory is unavailable")
-            })?;
             app.manage(onboarding::OnboardingStore::new(
                 data.join("ui-state.json"),
                 sharepoint_setup::PACKAGED_DEPLOYMENT,
             ));
             tray::sync_tray(app.handle(), settings.run_in_background);
-            let minimized_launch = std::env::args().any(|argument| argument == "--minimized");
-            if tray::window_starts_hidden(
-                settings.start_minimized,
-                settings.run_in_background,
-                minimized_launch,
-            ) && let Some(window) = app.get_webview_window("main")
-            {
-                let _ = window.hide();
-            }
+            // An update's installer starts Intern again with the arguments
+            // the old process had. Documents among them were added when they
+            // were sent; adding them again would file whatever is at those
+            // paths now, without anyone asking.
+            let relaunched = commands::is_update_relaunch(&data, &arguments, commands::unix_now());
+            let documents = !relaunched && commands::launch_names_documents(&arguments);
+            let shows_window = startup::shows_window_after_setup(startup::Startup::Ready {
+                starts_hidden,
+                documents,
+            });
             app.resources_table()
                 .add(ShutdownGuard(app.handle().clone()));
+            // "Send to > Intern" with Intern not yet running starts it with the
+            // documents as arguments.
+            if documents {
+                commands::queue_launch_documents(
+                    app.handle(),
+                    arguments,
+                    std::env::current_dir().unwrap_or_default(),
+                );
+            }
+            if shows_window {
+                tray::show_main_window(app.handle());
+            }
             Ok(())
         })
         // Close-to-tray. When background mode is on the close request is
@@ -78,16 +115,22 @@ pub fn run() {
         // case is left completely alone: when background mode is off (or the
         // settings cannot be read) nothing here touches the event and the
         // window closes exactly as it always has.
+        //
+        // There is no AppState after a failed start, and then the close is
+        // the ordinary one: hiding a window whose app cannot run would strand
+        // it.
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == "main"
-                && window.state::<commands::AppState>().hide_window_on_close()
+                && window
+                    .try_state::<commands::AppState>()
+                    .is_some_and(|state| state.hide_window_on_close())
             {
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(refused_without_app_state(tauri::generate_handler![
             onboarding::onboarding_status,
             onboarding::onboarding_complete,
             sharepoint_setup::onboarding_sharepoint_status,
@@ -102,6 +145,8 @@ pub fn run() {
             commands::queue_list,
             commands::queue_add_files,
             commands::queue_add_folder,
+            commands::queue_take_launch_report,
+            commands::update_relaunch_expected,
             commands::queue_pause,
             commands::queue_resume,
             commands::queue_cancel,
@@ -139,7 +184,7 @@ pub fn run() {
             commands::house_rules_list,
             commands::house_rule_forget,
             commands::house_rule_use,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while running Intern")
         // Every ordinary way out of the app arrives here, and the pipeline is
@@ -155,6 +200,29 @@ pub fn run() {
                 commands::shutdown_runtime(app);
             }
         });
+}
+
+/// Every command of Intern's own needs the state a failed start never
+/// managed - some through `State`, which would refuse with Tauri's own
+/// wording, and some by looking it up, which panics. After a failed start
+/// they are all answered APP_NOT_READY instead, while the dialog saying why
+/// is on screen. Plugin commands (the dialog, the updater) are not routed
+/// through here and keep working.
+fn refused_without_app_state<R: tauri::Runtime>(
+    commands: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if invoke
+            .message
+            .webview_ref()
+            .try_state::<commands::AppState>()
+            .is_none()
+        {
+            invoke.resolver.reject(commands::app_not_ready());
+            return true;
+        }
+        commands(invoke)
+    }
 }
 
 /// Parked in the app's resource table for the sake of its `Drop`.

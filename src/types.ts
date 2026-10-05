@@ -35,6 +35,12 @@ export interface QueueItem {
    * document waits for a person instead of being filed twice.
    */
   nearDuplicateOf?: string;
+  /**
+   * Parties left out of the proposed name because they are the person's own
+   * organisation (Settings, "Your organisation's names"), as the document
+   * spells them. The evidence still shows them.
+   */
+  omittedParties?: string[];
 }
 
 /**
@@ -58,6 +64,12 @@ export type HostedProvider = 'anthropic' | 'openai_compatible';
 export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
+  /**
+   * The person's own organisation, one name per entry. A document that names
+   * it and someone else is named, and filed in the Party layout, by the
+   * someone else. Absent from an older backend.
+   */
+  ourNames?: string[];
   startMinimized: boolean;
   automaticRename: boolean;
   /** Watched intake folder path; "" = none configured. */
@@ -277,4 +289,23 @@ export interface LearnedRule extends HouseRule {
   active: boolean;
   /** Unix seconds of the latest edit that taught it. */
   learnedAt: number;
+}
+
+/**
+ * What adding files or a folder did. A batch is never refused whole for one
+ * bad file: what could be queued was, and every file left out is named with
+ * the code of the reason.
+ */
+export interface AddReport {
+  /** Documents newly in the queue. */
+  added: number;
+  /** Documents whose path already held these exact bytes in the queue. */
+  alreadyQueued: number;
+  skipped: SkippedDocument[];
+}
+
+/** A file an add left out: its name, and why (UNSUPPORTED_FORMAT, EMPTY_FILE, SOURCE_LOCKED, ...). */
+export interface SkippedDocument {
+  name: string;
+  code: string;
 }

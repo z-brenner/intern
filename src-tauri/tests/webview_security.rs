@@ -7,13 +7,15 @@
 
 use std::path::Path;
 
-fn security() -> serde_json::Value {
+fn config() -> serde_json::Value {
     let config =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"))
             .expect("the Tauri configuration is readable");
     serde_json::from_str::<serde_json::Value>(&config).expect("the Tauri configuration is JSON")
-        ["app"]["security"]
-        .clone()
+}
+
+fn security() -> serde_json::Value {
+    config()["app"]["security"].clone()
 }
 
 #[test]
@@ -39,4 +41,18 @@ fn csp_is_configured() {
             "the policy must carry {directive}: {csp}"
         );
     }
+}
+
+/// Created visible, the window appeared before setup ran and sat blank and
+/// unresponsive through initialization - a white window flashing at sign-in
+/// for a launch meant for the tray. Setup shows it as its last step instead
+/// (lib.rs, startup::shows_window_after_setup).
+#[test]
+fn main_window_starts_invisible() {
+    let window = &config()["app"]["windows"][0];
+    assert_eq!(
+        window["title"], "Intern",
+        "the first window is the main one"
+    );
+    assert_eq!(window["visible"], serde_json::Value::Bool(false));
 }

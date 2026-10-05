@@ -1,7 +1,9 @@
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { leadingDate } from './filenames';
+import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 
@@ -22,6 +24,47 @@ const seedItems: QueueItem[] = [
   { id: 'notes', originalFilename: 'Notes from Call - 2024-05-02.txt', status: 'waiting' },
   { id: 'completed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', confidence: 0.93, undoable: true, description: 'Residential lease agreement for a twelve-month term beginning January 22, 2024.' },
 ];
+
+/**
+ * What a seeded proposal naming two parties was composed from, so that naming
+ * the organisation in Settings renames it the way the desktop backend's
+ * counterparty view does. A row naming one party needs no entry: the only
+ * party is never left out.
+ */
+interface SeedName { stem: string; parties: [string, string]; extension: string }
+
+const seedNames: Record<string, SeedName> = {
+  lease: { stem: '2023-09-15 Lease Agreement', parties: ['ABC Properties LLC', 'TenantCo Inc.'], extension: 'pdf' },
+};
+
+/**
+ * The backend's is_own_name: the same key, or that key followed by more whole
+ * words, either way round. An own name under four characters names nobody.
+ */
+function isOwnName(party: string, own: string): boolean {
+  const ownKey = nameKey(own);
+  const partyKey = nameKey(party);
+  if ([...ownKey].length < OWN_NAME_MIN_CHARS || !partyKey) return false;
+  return partyKey === ownKey || partyKey.startsWith(`${ownKey} `) || ownKey.startsWith(`${partyKey} `);
+}
+
+/** A party as a filename carries it, without the trailing period a name segment cannot end in. */
+const nameSegment = (party: string) => party.replace(/[. ]+$/, '');
+
+/** The counterparty view of a seeded two-party proposal, composed as its name. */
+function seededName(name: SeedName, own: string[]): Pick<QueueItem, 'proposedFilename' | 'omittedParties'> {
+  const mine = (party: string) => own.some((entry) => isOwnName(party, entry));
+  const others = name.parties.filter((party) => !mine(party));
+  const omitted = name.parties.filter(mine);
+  if (!omitted.length || !others.length) {
+    return { proposedFilename: `${name.stem} between ${nameSegment(name.parties[0])} and ${nameSegment(name.parties[1])}.${name.extension}` };
+  }
+  // "between" needs two sides; the one left is "with" it.
+  return { proposedFilename: `${name.stem} with ${nameSegment(others[0])}.${name.extension}`, omittedParties: omitted };
+}
+
+/** Own names as the backend stores them: trimmed, blank lines left out. */
+const ownNames = (names: string[]) => names.map((name) => name.trim()).filter((name) => name.length > 0);
 
 /**
  * Plausible finished operations for browser dev and tests, newest first —
@@ -101,10 +144,21 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
       evidence: { date: 'Invoice date: April 30, 2025', type: 'INVOICE INV-2048', parties: 'Nimbus Orchard Supply Co.; Atlas Threadworks LLC' },
       reason: 'Identical content from a different path is retained as a separate review result.',
     };
-    if (file.displayName === 'unsupported.zip') return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Unsupported format skipped: .zip.' };
-    if (file.displayName.startsWith('~$')) return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'failed', reason: 'Office lock file skipped.' };
   }
   return { id: `file-${crypto.randomUUID()}`, originalFilename: file.displayName, status: 'waiting' };
+}
+
+/**
+ * Why the desktop backend would leave a file out of an add, by its name alone
+ * (the in-memory bridge has no bytes to weigh): a lock or hidden file, or an
+ * extension it does not read. `undefined` means it would be queued.
+ */
+function skipCode(file: FileSelection): string | undefined {
+  const name = file.displayName.split('/').at(-1) ?? file.displayName;
+  if (name.startsWith('~$') || name.startsWith('.')) return 'TEMPORARY_FILE';
+  const dot = name.lastIndexOf('.');
+  const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+  return SUPPORTED_EXTENSIONS.includes(extension) ? undefined : 'UNSUPPORTED_FORMAT';
 }
 
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
@@ -113,7 +167,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // skipUpdateChecks is spelled out because the desktop backend always
   // returns it - false for a file that predates it - so a bridge that left it
   // out would differ from the real one in exactly the case worth testing.
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -265,34 +319,57 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const idByPath = new Map<string, string>();
   const pathById = new Map<string, string>();
   const update = (id: string, change: Partial<QueueItem>) => { items = items.map((item) => item.id === id ? { ...item, ...change } : item); };
+  // The seeded proposals still named from their facts. A name a person
+  // approved is theirs: it leaves this map and keeps what they typed.
+  const composedNames = new Map(options.items ? [] : Object.entries(seedNames));
+  // Mirrors the backend's refresh_own_names: a document still waiting for a
+  // decision is named by the other side when Settings names the organisation,
+  // and by both sides again when it no longer does.
+  const renameWaiting = () => {
+    const own = settings.ourNames ?? [];
+    items = items.map((item) => {
+      const name = composedNames.get(item.id);
+      if (!name || (item.status !== 'ready' && item.status !== 'review')) return item;
+      const { proposedFilename, omittedParties } = seededName(name, own);
+      if (proposedFilename === item.proposedFilename && omittedParties?.join('\n') === item.omittedParties?.join('\n')) return item;
+      // A new revision, as the backend's recompose records one, so an open
+      // inspector takes the new name instead of keeping the old one as a draft.
+      const renamed: QueueItem = { ...item, proposedFilename, proposalRevision: String(Number(item.proposalRevision ?? 1) + 1) };
+      delete renamed.omittedParties;
+      return omittedParties ? { ...renamed, omittedParties } : renamed;
+    });
+  };
+  renameWaiting();
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
-  const addFolder = (folder: FolderSelection) => {
-    const sourceFiles = folder.files ?? [];
-    const folderItems = sourceFiles.flatMap((file) => {
-      if (idByPath.has(file.path)) return [];
+  // Mirrors the backend's partial add: what it would leave out is reported by
+  // name, everything else is queued, and a path already queued says so.
+  const addSelections = (files: FileSelection[], report: AddReport) => {
+    for (const file of files) {
+      const code = skipCode(file);
+      if (code) { report.skipped.push({ name: file.displayName.split('/').at(-1) ?? file.displayName, code }); continue; }
+      if (idByPath.has(file.path)) { report.alreadyQueued += 1; continue; }
       const item = itemFromFile(file, fixtureBatch);
       idByPath.set(file.path, item.id);
       pathById.set(item.id, file.path);
-      return [item];
-    });
-    if (sourceFiles.length) { items = [...items, ...folderItems]; return; }
-    if (idByPath.has(folder.path)) return;
+      items = [...items, item];
+      report.added += 1;
+    }
+    return report;
+  };
+  const addFolder = (folder: FolderSelection): AddReport => {
+    const sourceFiles = folder.files ?? [];
+    // A folder skips what it cannot read silently, as Add folder always has.
+    if (sourceFiles.length) return addSelections(sourceFiles.filter((file) => skipCode(file) === undefined), { added: 0, alreadyQueued: 0, skipped: [] });
+    if (idByPath.has(folder.path)) return { added: 0, alreadyQueued: 1, skipped: [] };
     const item = { id: `folder-${crypto.randomUUID()}`, originalFilename: `${folder.displayName}/`, status: 'waiting' as const };
     idByPath.set(folder.path, item.id);
     pathById.set(item.id, folder.path);
     items = [...items, item];
+    return { added: 1, alreadyQueued: 0, skipped: [] };
   };
   return {
     listItems: async () => items.map((item) => ({ ...item })),
-    addFiles: async (files) => {
-      for (const file of files) {
-        if (idByPath.has(file.path)) continue;
-        const item = itemFromFile(file, fixtureBatch);
-        idByPath.set(file.path, item.id);
-        pathById.set(item.id, file.path);
-        items = [...items, item];
-      }
-    },
+    addFiles: async (files) => addSelections(files, { added: 0, alreadyQueued: 0, skipped: [] }),
     addFolder: async (folder) => addFolder(folder),
     pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const } : item); },
     resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', progress: 0 }); },
@@ -300,6 +377,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     // Mirrors the backend's gate: a rename carries a date or it does not happen.
     approve: async (id, filename, description) => {
       if (!leadingDate(filename)) throw { code: 'DATE_REQUIRED', message: 'the filename must start with the document\'s date as YYYY-MM-DD' };
+      composedNames.delete(id);
       update(id, { status: 'completed', proposedFilename: filename, description, undoable: true });
       noteRecorded();
     },
@@ -320,7 +398,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         if (hostedKey === undefined) throw { code: 'HOSTED_MODEL_KEY_MISSING', message: 'no API key is stored for the hosted model' };
         if (hostedEndpoint(next) === null) throw { code: 'HOSTED_MODEL_MISCONFIGURED', message: 'the hosted model\'s address or model name is not usable' };
       }
-      settings = { ...next };
+      settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
+      renameWaiting();
     },
     getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
     getOnboarding: async (): Promise<OnboardingStatus> => ({

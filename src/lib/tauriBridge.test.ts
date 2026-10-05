@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { check } from '@tauri-apps/plugin-updater';
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
+import { SUPPORTED_EXTENSIONS } from './formats';
 import {
   TauriBridge,
   createTauriSelectionBoundary,
@@ -249,6 +250,20 @@ describe('TauriBridge', () => {
     expect(items[5].cancelable).toBe(false);
   });
 
+  it('carries the parties a name left out as the organisation\'s own, and nothing when there are none', async () => {
+    const fake = fakeTransport({
+      queue_list: [
+        { id: 1, originalFilename: 'sow.pdf', status: 'ready', proposedFilename: '2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf', omittedParties: ['Contoso Worldwide, Inc.'] },
+        { id: 2, originalFilename: 'nda.pdf', status: 'ready', proposedFilename: '2026-04-01 NDA with Acme.pdf', omittedParties: [] },
+      ],
+    });
+
+    const items = await new TauriBridge(fake.transport).listItems();
+
+    expect(items[0].omittedParties).toEqual(['Contoso Worldwide, Inc.']);
+    expect(items[1]).not.toHaveProperty('omittedParties');
+  });
+
   // The backend's status vocabulary can grow ahead of this build. An unmapped
   // one used to fall out of the switch as undefined, and the row then failed
   // every view's status filter and disappeared from the queue entirely.
@@ -365,6 +380,40 @@ describe('TauriBridge', () => {
     expect(seen).toHaveBeenCalledTimes(1);
   });
 
+  it('hands over what a launch left out: one held from before it listened, then one per launch-report event', async () => {
+    const fake = fakeTransport();
+    const held: unknown[] = [
+      // Intern started by "Send to": the add finished before the window listened.
+      { added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] },
+      { added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] },
+      null,
+    ];
+    const taken: string[] = [];
+    const transport: TauriTransport = {
+      ...fake.transport,
+      invoke: async <T>(command: string) => {
+        taken.push(command);
+        return held.shift() as T;
+      },
+    };
+    const seen = vi.fn();
+    const unsubscribe = new TauriBridge(transport).subscribeLaunchReports(seen);
+
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(1));
+    expect(seen).toHaveBeenLastCalledWith({ added: 1, alreadyQueued: 0, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] });
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 1, payload: null });
+    await vi.waitFor(() => expect(seen).toHaveBeenCalledTimes(2));
+    expect(seen).toHaveBeenLastCalledWith({ added: 0, alreadyQueued: 0, skipped: [{ name: 'blank.pdf', code: 'EMPTY_FILE' }] });
+    // Nothing held: nothing said.
+    fake.listeners.get('queue://launch-report')?.({ event: 'queue://launch-report', id: 2, payload: null });
+    await vi.waitFor(() => expect(taken).toHaveLength(3));
+    expect(seen).toHaveBeenCalledTimes(2);
+    expect(new Set(taken)).toEqual(new Set(['queue_take_launch_report']));
+
+    unsubscribe();
+    expect(fake.unlisten.get('queue://launch-report')).toHaveBeenCalledOnce();
+  });
+
   it('normalizes history entry ids to strings from the wire DTO', async () => {
     const fake = fakeTransport({
       history_list: [{
@@ -437,6 +486,37 @@ describe('TauriBridge', () => {
 
     await expect(new TauriBridge(fake.transport).classifyFolder('C:\\Local\\Scans')).resolves.toBeNull();
     expect(fake.calls).toEqual([{ command: 'folder_classify', args: { path: 'C:\\Local\\Scans' } }]);
+  });
+
+  it('returns the add report the backend sends for files and for a folder', async () => {
+    const report = { added: 24, alreadyQueued: 1, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] };
+    const fake = fakeTransport({ queue_add_files: report, queue_add_folder: { added: 3, alreadyQueued: 0, skipped: [] } });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect(await bridge.addFiles([{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }])).toEqual(report);
+    expect(await bridge.addFolder({ path: 'C:\\Inbox', displayName: 'Inbox' })).toEqual({ added: 3, alreadyQueued: 0, skipped: [] });
+    expect(fake.calls).toEqual([
+      { command: 'queue_add_files', args: { files: [{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }] } },
+      { command: 'queue_add_folder', args: { folder: { path: 'C:\\Inbox', displayName: 'Inbox' } } },
+    ]);
+  });
+
+  it('offers a Documents filter in the file picker, with All files beside it', async () => {
+    const fake = fakeTransport({ 'plugin:dialog|open': ['C:\\Docs\\One.pdf'] });
+    const selection = createTauriSelectionBoundary(fake.transport);
+
+    await selection.pickFiles();
+    await selection.pickFolder();
+
+    const [files, folder] = fake.calls.map((call) => (call.args as { options: Record<string, unknown> }).options);
+    expect(files).toEqual({
+      multiple: true,
+      directory: false,
+      filters: [{ name: 'Documents', extensions: [...SUPPORTED_EXTENSIONS] }, { name: 'All files', extensions: ['*'] }],
+    });
+    expect(SUPPORTED_EXTENSIONS).toEqual(expect.arrayContaining(['pdf', 'docx', 'xlsx', 'pptx', 'eml', 'msg', 'txt', 'png', 'jpg', 'tiff']));
+    // A folder picker has nothing to filter.
+    expect(folder).toEqual({ multiple: false, directory: true });
   });
 
   it('keeps native path selection at the injected boundary', async () => {

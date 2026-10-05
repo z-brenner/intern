@@ -140,6 +140,11 @@ pub struct QueueItemDto {
     /// operation never finished, and Check again - or a confirmed remove -
     /// is what moves the item on.
     parked: bool,
+    /// The parties left out of the proposed name because they are the
+    /// person's own organisation, as the document spells them, so the
+    /// inspector can say why a party in the evidence is not in the name.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    omitted_parties: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1404,22 +1409,33 @@ impl SetupManager {
 /// self-tested at every launch, and resident for the rest of the day: 1.3 to
 /// 2.6 GB on an 8 GB laptop for a model nothing would ask anything. Nothing
 /// here reads the model file; the setup thread does that.
+///
+/// An installed local model is held, not started, and the flag returned says
+/// it waits to be verified: the caller starts that with
+/// [`SetupManager::verify_installed`] once nothing else in the launch can
+/// fail. Verification starts llama-server and loads the model into it, and a
+/// launch that failed after starting it - and now waits behind the dialog
+/// that says why, instead of ending at once - left it doing that for an app
+/// that could not run. Held until then, so the queue cannot hand a document
+/// to a server that has not started.
 fn launch_local_model(
     publish: SetupPublisher,
     runtime: Arc<RuntimeModel>,
     source: ModelSource,
-) -> Arc<SetupManager> {
+) -> (Arc<SetupManager>, bool) {
     let installed = runtime.installed_quick(runtime.manifest());
     let setup = Arc::new(SetupManager::new(publish, Arc::clone(&runtime), installed));
-    match source {
+    let verify = match source {
         ModelSource::Hosted => {
             let _ = runtime.hold();
-            setup.hold_local_model();
+            false
         }
-        ModelSource::Local if installed => setup.verify_installed(),
-        ModelSource::Local => {}
+        ModelSource::Local => installed,
+    };
+    if installed {
+        setup.hold_local_model();
     }
-    setup
+    (setup, verify)
 }
 
 /// The queue runs when either model can answer.
@@ -1702,6 +1718,9 @@ pub struct AppState {
     hosted: Arc<HostedModel>,
     settings_gate: Mutex<()>,
     sharepoint_activation: AtomicBool,
+    /// What the documents a launch named came to, when some could not be
+    /// added, until the window takes it.
+    launch_reports: LaunchReports,
 }
 
 /// The watcher's configuration for the canonical intake `folder`.
@@ -1789,7 +1808,9 @@ impl AppState {
         // the file is left exactly as it is until somebody deliberately saves,
         // and `intake_status_dto` reports the trouble to the interface.
         let startup_settings = settings.load().unwrap_or_default();
-        let setup = launch_local_model(
+        // An installed local model is held here and verified only once
+        // nothing below can fail (see `launch_local_model`).
+        let (setup, verify_model) = launch_local_model(
             setup_publisher(app.clone()),
             Arc::clone(&runtime),
             startup_settings.model_source,
@@ -1877,6 +1898,7 @@ impl AppState {
             hosted,
             settings_gate: Mutex::new(()),
             sharepoint_activation: AtomicBool::new(false),
+            launch_reports: LaunchReports::default(),
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -1887,6 +1909,9 @@ impl AppState {
             && let Ok(mut slot) = state.intake_error.lock()
         {
             *slot = Some(format!("{}: {}", error.code, error.message));
+        }
+        if verify_model {
+            state.setup.verify_installed();
         }
         Ok(state)
     }
@@ -2000,6 +2025,11 @@ impl AppState {
         Ok(())
     }
 
+    /// The local application data folder everything Intern keeps lives in.
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     /// The settings as currently stored, for startup decisions (tray,
     /// start-hidden). A missing file is the defaults, same as `load`.
     pub(crate) fn settings_snapshot(&self) -> AppSettings {
@@ -2025,11 +2055,323 @@ impl AppState {
 /// model, a second intake watcher, and a second tray against the same queue
 /// database, and a sign-in autostart launch followed by a click on the
 /// shortcut is an ordinary way to end up with both. The single-instance
-/// plugin ends the second process and hands its command line here instead.
-pub fn second_instance_launched(app: &AppHandle, arguments: Vec<String>, _directory: String) {
-    if second_launch_shows_window(&arguments) {
-        crate::tray::show_main_window(app);
+/// plugin ends the second process and hands its command line here instead -
+/// including any documents it was given, which is how "Send to > Intern"
+/// reaches a copy that is already running.
+pub fn second_instance_launched(app: &AppHandle, arguments: Vec<String>, directory: String) {
+    second_launch(&AppLaunch(app), arguments, directory);
+}
+
+/// What a launch does to the running app: its documents are added, and its
+/// window shown. `AppLaunch` is the app; tests stand in a queue of their own.
+trait LaunchTarget {
+    /// Adds the documents `arguments` names, resolving a relative path
+    /// against `cwd`.
+    fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf);
+    fn show_window(&self);
+}
+
+struct AppLaunch<'a>(&'a AppHandle);
+
+impl LaunchTarget for AppLaunch<'_> {
+    fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf) {
+        queue_launch_documents(self.0, arguments, cwd);
     }
+
+    fn show_window(&self) {
+        crate::tray::show_main_window(self.0);
+    }
+}
+
+/// [`second_instance_launched`], apart from the app. The documents are
+/// resolved against `directory`, the second process's working folder - a
+/// relative path in its command line means nothing against this one's.
+fn second_launch(target: &impl LaunchTarget, arguments: Vec<String>, directory: String) {
+    let shows_window = second_launch_shows_window(&arguments);
+    target.add_documents(arguments, PathBuf::from(directory));
+    if shows_window {
+        target.show_window();
+    }
+}
+
+/// The arguments Intern passes itself, which are never documents: the
+/// autostart entry's `--minimized` (lib.rs). The updater relaunches with the
+/// arguments the previous process had, so this list is the whole of it.
+const LAUNCH_FLAGS: &[&str] = &["--minimized"];
+
+/// The documents a launch asks Intern to add. "Send to > Intern" in Explorer,
+/// "Open with", and a file dropped on the shortcut all start `Intern.exe` with
+/// one path per document.
+///
+/// Only flags Intern itself passes are skipped, not "anything that starts with
+/// a dash", so a document named `-draft.pdf` still arrives; and a leading `/`
+/// marks a switch only on Windows and only in its short form (`/x`), because
+/// everywhere else `/` begins an absolute path. A relative path is resolved
+/// against the launching process's directory, which for a second launch is not
+/// this process's. A path that does not exist is dropped here; one that exists
+/// but is not a document is reported by the add, like any other. The updater
+/// relaunches Intern with the arguments it had, documents included, and that
+/// relaunch adds none of them (`is_update_relaunch`).
+pub fn launch_documents(args: &[String], cwd: &Path) -> Vec<PathBuf> {
+    launch_arguments(args)
+        .map(|argument| cwd.join(argument))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+/// Whether this launch keeps the window in the tray: settings read from the
+/// data folder as initialization reads them, where a file that cannot be read
+/// is the defaults, and the autostart entry's `--minimized`.
+pub fn launch_starts_hidden(data: &Path, arguments: &[String]) -> bool {
+    let settings = SettingsStore::new(data.join("settings.json"))
+        .load()
+        .unwrap_or_default();
+    crate::tray::window_starts_hidden(
+        settings.start_minimized,
+        settings.run_in_background,
+        arguments.iter().any(|argument| argument == "--minimized"),
+    )
+}
+
+/// Whether a launch names anything besides Intern's own flags. Touches no
+/// file, so the main thread can ask it of a path on a share that is offline.
+pub fn launch_names_documents(args: &[String]) -> bool {
+    launch_arguments(args).next().is_some()
+}
+
+/// Everything after argv[0] that is not one of Intern's own flags. A blank
+/// argument (`Intern.exe ""`, a script with an unset variable) is not a
+/// document either: joined to the launching directory it would be that
+/// directory, and a sign-in launch starts in System32.
+fn launch_arguments(args: &[String]) -> impl Iterator<Item = &String> {
+    args.iter()
+        .skip(1)
+        .filter(|argument| !argument.trim().is_empty() && !is_launch_flag(argument))
+}
+
+fn is_launch_flag(argument: &str) -> bool {
+    LAUNCH_FLAGS.contains(&argument) || (cfg!(windows) && is_short_windows_switch(argument))
+}
+
+/// `/x`, `/S`, `/?`: a slash and one or two characters, the shape of a
+/// Windows command-line switch. Anything longer (`/Scans`) is a folder at the
+/// root of the current drive, and nothing with a separator in it (`//server`)
+/// is a switch at all. Explorer hands over full paths, with a drive letter or
+/// a `\\server`, so this is only a guard for a switch nobody here passes.
+fn is_short_windows_switch(argument: &str) -> bool {
+    argument.strip_prefix('/').is_some_and(|switch| {
+        (1..=2).contains(&switch.len())
+            && switch
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '?')
+    })
+}
+
+/// What a launch's documents do to the queue, without the app around it:
+/// added like any other add, the scheduler woken (`wake`) when anything was,
+/// and what came of it returned for the window. An add that failed outright,
+/// because the queue database could not be reached, names every document
+/// with the reason, as it would a file it refused: a launch has no window of
+/// its own to say so in, and nothing else will.
+fn add_launch_documents(
+    pipeline: &Pipeline,
+    arguments: &[String],
+    cwd: &Path,
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> AddReportDto {
+    let documents = launch_documents(arguments, cwd);
+    let report = add_inputs(pipeline, &documents).unwrap_or_else(|error| {
+        // The code only: the message can name a document.
+        crate::startup::log_line(&format!(
+            "documents a launch named could not be queued: {}",
+            error.code
+        ));
+        refused_launch(&documents, &error.code)
+    });
+    // Queued, so not skipped; they wait for the scheduler's own timer.
+    if let Err(error) = wake_if_added(&report, wake) {
+        crate::startup::log_line(&format!(
+            "the queue could not be woken for documents a launch named: {}",
+            error.code
+        ));
+    }
+    report
+}
+
+/// A launch's documents, every one left out for `code`.
+fn refused_launch(documents: &[PathBuf], code: &str) -> AddReportDto {
+    AddReportDto {
+        skipped: documents
+            .iter()
+            .map(|path| SkippedDocumentDto {
+                name: document_name(path),
+                code: code.to_owned(),
+            })
+            .collect(),
+        ..AddReportDto::default()
+    }
+}
+
+/// Adds the documents a launch named, off the main thread: even asking
+/// whether a path on an offline share exists can take many seconds, hashing a
+/// folder of scans takes more, and the main thread is the window's. The
+/// queue's own change event refreshes the window; a document that could not
+/// be added is left where it is, exactly as it was, and named in the window
+/// (`queue://launch-report`, then `queue_take_launch_report`).
+pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cwd: PathBuf) {
+    if !launch_names_documents(&arguments) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // A launch that arrives while startup is failing has nowhere to go.
+        let Some(state) = app.try_state::<AppState>() else {
+            return;
+        };
+        let report = add_launch_documents(&state.pipeline, &arguments, &cwd, || state.schedule());
+        if state.launch_reports.hold(report) {
+            let _ = app.emit(LAUNCH_REPORT_EVENT, ());
+        }
+    });
+}
+
+/// Says the window has a launch report to take.
+const LAUNCH_REPORT_EVENT: &str = "queue://launch-report";
+
+/// What launches' documents came to, held for the window when some could
+/// not be added: "Send to > Intern" with a `.zip` among the attachments said
+/// nothing at all, because only an add made from the window had anywhere to
+/// say "Skipped 1: notes.zip". Held rather than only sent, because the first
+/// launch's add can finish before the window is listening; and gathered,
+/// because Explorer can start one launch per document.
+#[derive(Debug, Default)]
+pub(crate) struct LaunchReports(Mutex<Option<AddReportDto>>);
+
+impl LaunchReports {
+    /// Keeps `report` when it left something out, adding it to whatever the
+    /// window has not taken yet, and says whether it did. A launch whose
+    /// documents were all added has nothing to tell: they are in the queue.
+    fn hold(&self, report: AddReportDto) -> bool {
+        if report.skipped.is_empty() {
+            return false;
+        }
+        let Ok(mut held) = self.0.lock() else {
+            return false;
+        };
+        match held.as_mut() {
+            Some(earlier) => {
+                earlier.added = earlier.added.saturating_add(report.added);
+                earlier.already_queued =
+                    earlier.already_queued.saturating_add(report.already_queued);
+                earlier.skipped.extend(report.skipped);
+            }
+            None => *held = Some(report),
+        }
+        true
+    }
+
+    /// Everything held since the window last asked, once.
+    fn take(&self) -> Option<AddReportDto> {
+        self.0.lock().ok().and_then(|mut held| held.take())
+    }
+}
+
+/// The documents launches named that could not all be added, since the
+/// window last asked: nothing when there is nothing to say.
+#[tauri::command]
+pub fn queue_take_launch_report(
+    state: State<'_, AppState>,
+) -> Result<Option<AddReportDto>, CommandError> {
+    Ok(state.launch_reports.take())
+}
+
+/// Where a launch about to be ended by an update leaves its arguments.
+const UPDATE_RELAUNCH: &str = "update-relaunch.json";
+/// How long the record of an update's relaunch is believed. An install
+/// that never relaunched leaves it behind; a launch long after is a
+/// person's, not the installer's.
+const UPDATE_RELAUNCH_SECONDS: i64 = 60 * 60;
+
+/// The arguments of the launch an update is about to end, and when.
+#[derive(Debug, Deserialize, Serialize)]
+struct UpdateRelaunch {
+    arguments: Vec<String>,
+    at: i64,
+}
+
+/// Records, before an update installs, that the next launch is the
+/// installer's relaunch of this one - or, with `expected` false, that the
+/// install did not go ahead after all.
+///
+/// The updater hands the installer this process's arguments and the
+/// installer starts Intern again with them, documents included. A launch
+/// from "Send to > Intern" days earlier would add the same paths again:
+/// whatever a scanner has since written to that path, or every new file in
+/// a folder that was sent, filed without anyone asking.
+#[tauri::command]
+pub fn update_relaunch_expected(
+    expected: bool,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    if expected {
+        expect_update_relaunch(&state.data_dir, &process_arguments(), unix_now())
+    } else {
+        forget_update_relaunch(&state.data_dir);
+        Ok(())
+    }
+}
+
+fn forget_update_relaunch(data: &Path) {
+    let _ = std::fs::remove_file(data.join(UPDATE_RELAUNCH));
+}
+
+fn expect_update_relaunch(data: &Path, arguments: &[String], now: i64) -> Result<(), CommandError> {
+    let record = UpdateRelaunch {
+        arguments: arguments.iter().skip(1).cloned().collect(),
+        at: now,
+    };
+    let unavailable = |_| CommandError {
+        code: "APP_DATA_UNAVAILABLE".into(),
+        message: "the update could not be prepared".into(),
+    };
+    let json = serde_json::to_vec(&record).map_err(|_| CommandError {
+        code: "INVALID_DATA".into(),
+        message: "the update could not be prepared".into(),
+    })?;
+    std::fs::write(data.join(UPDATE_RELAUNCH), json).map_err(unavailable)
+}
+
+/// Whether this launch is an update's relaunch of one whose documents were
+/// already added: the same arguments the record holds, within the hour. The
+/// record is used up either way, so it can never stand in for a later
+/// launch of a person's own.
+pub fn is_update_relaunch(data: &Path, arguments: &[String], now: i64) -> bool {
+    let path = data.join(UPDATE_RELAUNCH);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return false;
+    };
+    let _ = std::fs::remove_file(&path);
+    serde_json::from_slice::<UpdateRelaunch>(&bytes).is_ok_and(|record| {
+        (0..=UPDATE_RELAUNCH_SECONDS).contains(&(now - record.at))
+            && record.arguments.iter().eq(arguments.iter().skip(1))
+    })
+}
+
+/// This process's command line. Lossy rather than `args()`, which panics on
+/// an argument that is not Unicode; such a path cannot be found anyway.
+pub fn process_arguments() -> Vec<String> {
+    std::env::args_os()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Seconds since the Unix epoch, for the record of an update's relaunch.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 /// Whether a second launch means "show me the window". Someone who clicked
@@ -2043,8 +2385,14 @@ fn second_launch_shows_window(arguments: &[String]) -> bool {
 /// pipeline (and with it the local model process) down deliberately, then
 /// leave without starting window teardown - the same shape as the close-time
 /// exit, which deliberately avoids wedging in WebView destruction.
+///
+/// `process::exit` runs no destructors, and the notification-area icon is
+/// removed only when the tray icon is dropped: without the explicit removal
+/// Windows kept a ghost Intern icon in the tray until the pointer passed over
+/// it, and people clicked it believing Intern was still running.
 pub(crate) fn shutdown_and_exit(app: &AppHandle) -> ! {
     shutdown_runtime(app);
+    let _ = app.remove_tray_by_id(crate::tray::TRAY_ID);
     std::process::exit(0);
 }
 
@@ -2070,6 +2418,16 @@ fn background_task_failed(task: &str) -> CommandError {
     CommandError {
         code: "INTERNAL_ERROR".into(),
         message: format!("{task} could not finish because of an internal error"),
+    }
+}
+
+/// The answer to every command when Intern could not start. The window is
+/// open behind the dialog that says why, and anything it asks for needs the
+/// state that failed to load.
+pub(crate) fn app_not_ready() -> CommandError {
+    CommandError {
+        code: "APP_NOT_READY".into(),
+        message: "Intern could not start. Restart it; if this happens again, startup-error.log in its data folder says why".into(),
     }
 }
 
@@ -2136,47 +2494,178 @@ fn attention_counts(items: &[PipelineItem]) -> (usize, usize) {
     (count(QueueStatus::NeedsReview), count(QueueStatus::Ready))
 }
 
+/// What adding documents did, for the window to say in one line: "Added 24
+/// documents. Skipped 1: notes.zip (not a supported format)."
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddReportDto {
+    added: u32,
+    already_queued: u32,
+    skipped: Vec<SkippedDocumentDto>,
+}
+
+/// A document left out of an add: its name as a person would recognize it,
+/// and the code of the reason.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedDocumentDto {
+    name: String,
+    code: String,
+}
+
+/// An Office lock file (`~$Contract.docx`) or a hidden file (`.DS_Store`):
+/// never a document, and the reason for that differs from "not a supported
+/// format" in what a person should do about it - nothing.
+const TEMPORARY_FILE: &str = "TEMPORARY_FILE";
+/// A document with no bytes in it, often a download or a scan that has not
+/// finished.
+const EMPTY_FILE: &str = "EMPTY_FILE";
+
+/// Splits what a person handed over - files, folders, anything Explorer will
+/// drag - into the documents to queue and the rest, each with the code of the
+/// reason it was left out.
+///
+/// One `.zip` among twenty-five dragged attachments used to refuse all
+/// twenty-five, because the first path `canonical_file` refused ended the
+/// command. A folder expands to the supported documents inside it, exactly as
+/// Add folder does; anything else is named in the report and the others go on.
+fn partition_inputs(inputs: &[PathBuf]) -> (Vec<PathBuf>, Vec<(String, String)>) {
+    let mut files = Vec::new();
+    let mut rejected = Vec::new();
+    for input in inputs {
+        match canonical_file(input) {
+            Ok(path) => files.push(path),
+            Err(file_error) => match canonical_folder(input) {
+                Ok(folder) => match collect_supported_files(&folder) {
+                    Ok(found) => files.extend(found),
+                    Err(error) => rejected.push((document_name(input), error.code)),
+                },
+                Err(_) => rejected.push((document_name(input), skip_code(input, file_error))),
+            },
+        }
+    }
+    (files, rejected)
+}
+
+/// The code a refused path is reported under. `canonical_file` refuses an
+/// unsupported extension, an empty file, and a lock or hidden file alike as
+/// UNSUPPORTED_FORMAT; the person reading the report needs to know which.
+fn skip_code(input: &Path, error: PipelineError) -> String {
+    if error.code != "UNSUPPORTED_FORMAT" {
+        return error.code;
+    }
+    let name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name.starts_with("~$") || name.starts_with('.') {
+        return TEMPORARY_FILE.into();
+    }
+    let supported = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            SUPPORTED_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        });
+    let empty =
+        std::fs::metadata(input).is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0);
+    if supported && empty {
+        EMPTY_FILE.into()
+    } else {
+        error.code
+    }
+}
+
+/// The last component of a path, which is what a person picked; the whole
+/// path only when there is no last component to show.
+fn document_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| display_path(path))
+}
+
+/// Queues what a person handed over and reports on all of it: Add files, a
+/// drop, Send to Intern, and a document opened with Intern all come here.
+/// Blocking - every path is canonicalized and every document hashed.
+fn add_inputs(pipeline: &Pipeline, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
+    let (files, mut skipped) = partition_inputs(inputs);
+    let report = pipeline.enqueue_files_report(&files)?;
+    skipped.extend(
+        report
+            .skipped
+            .into_iter()
+            .map(|(path, code)| (document_name(&path), code)),
+    );
+    Ok(AddReportDto {
+        added: u32::try_from(report.added.len()).unwrap_or(u32::MAX),
+        already_queued: u32::try_from(report.already_queued).unwrap_or(u32::MAX),
+        skipped: skipped
+            .into_iter()
+            .map(|(name, code)| SkippedDocumentDto { name, code })
+            .collect(),
+    })
+}
+
+/// Wakes the scheduler when an add queued anything. Without it the documents
+/// sat until the scheduler's own 65-second look, and an add that failed part
+/// way returned before waking it at all.
+fn wake_if_added(
+    report: &AddReportDto,
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<(), CommandError> {
+    if report.added > 0 { wake() } else { Ok(()) }
+}
+
+/// An add made from the window, whole: queued, reported, and the scheduler
+/// woken (`wake`) for whatever was queued. Both add commands are this and
+/// nothing else, so what is tested here is what they do.
+fn add_and_wake(
+    pipeline: &Pipeline,
+    inputs: &[PathBuf],
+    wake: impl FnOnce() -> Result<(), CommandError>,
+) -> Result<AddReportDto, CommandError> {
+    let report = add_inputs(pipeline, inputs)?;
+    wake_if_added(&report, wake)?;
+    Ok(report)
+}
+
+/// Adds files, folders, or a mixture of both - a drop carries whatever was
+/// dragged. Partial by design: what cannot be added is reported, and the
+/// scheduler is woken for whatever was, so nothing waits for its timer.
 #[tauri::command]
 pub async fn queue_add_files(
     files: Vec<FileSelectionDto>,
     state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let pipeline = state.pipeline.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
-        let mut paths = Vec::new();
-        for file in files {
-            let input = Path::new(&file.path);
-            match canonical_file(input) {
-                Ok(path) => paths.push(path),
-                Err(file_error) => match canonical_folder(input) {
-                    Ok(folder) => paths.extend(collect_supported_files(&folder)?),
-                    Err(_) => return Err(file_error.into()),
-                },
-            }
-        }
-        pipeline.enqueue_files(&paths)?;
-        Ok(())
+) -> Result<AddReportDto, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let inputs = files
+            .into_iter()
+            .map(|file| PathBuf::from(file.path))
+            .collect::<Vec<_>>();
+        add_and_wake(&state.pipeline, &inputs, || state.schedule())
     })
     .await
-    .map_err(|_| background_task_failed("file intake"))??;
-    state.schedule()
+    .map_err(|_| background_task_failed("file intake"))?
 }
 
+/// Adds the supported documents in a folder. The folder itself must exist -
+/// that is the whole selection - but a document in it that cannot be read is
+/// reported, not allowed to drop the rest.
 #[tauri::command]
 pub async fn queue_add_folder(
     folder: FolderSelectionDto,
     state: State<'_, AppState>,
-) -> Result<(), CommandError> {
-    let pipeline = state.pipeline.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
+) -> Result<AddReportDto, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
         let folder = canonical_folder(Path::new(&folder.path))?;
-        let paths = collect_supported_files(&folder)?;
-        pipeline.enqueue_files(&paths)?;
-        Ok(())
+        add_and_wake(&state.pipeline, &[folder], || state.schedule())
     })
     .await
-    .map_err(|_| background_task_failed("folder intake"))??;
-    state.schedule()
+    .map_err(|_| background_task_failed("folder intake"))?
 }
 
 #[tauri::command]
@@ -2409,6 +2898,12 @@ pub(crate) trait SettingsRuntime {
     /// already in the folder again; see `starts_a_new_watch`.
     fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
+    /// The organisation's names as just saved: documents still waiting that
+    /// were named under another list are named by the other side, or by
+    /// every side again, at once. Asked after every save, so a rename an
+    /// earlier save never reached is finished by the next; one already
+    /// named by `names` is left as it is.
+    fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
         &self,
@@ -2481,6 +2976,12 @@ impl SettingsRuntime for AppState {
 
     fn emit_intake_changed(&self) -> Result<(), CommandError> {
         AppState::emit_intake_changed(self)
+    }
+
+    fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
+        self.pipeline
+            .refresh_own_names(names)
+            .map_err(CommandError::from)
     }
 
     fn managed_sharepoint(
@@ -2580,6 +3081,9 @@ fn save_settings_with_microsoft_protection(
             .into_owned();
     }
     validate_description_settings(&settings)?;
+    // Stored the way they are matched, so a blank line or a stray space
+    // typed in the list is not a change that renames anything.
+    settings.our_names = settings.own_names();
     // A hosted model that could not be sent to is refused at save time, like
     // every other configuration that could never do anything: the key must
     // be in the credential store and the address must be one a key may be
@@ -2620,7 +3124,18 @@ fn save_settings_with_microsoft_protection(
         state.restart_intake(&settings, starts_a_new_watch(&previous, &settings))?;
         state.emit_intake_changed()?;
     }
-    source_changed
+    // Last, because it renames only what is still waiting: a queue that
+    // could not be renamed must not leave the watcher on the old folder.
+    // Asked on every save, not only when the list differs from the one
+    // stored before: the list is stored first, so when a step above (or the
+    // rename itself) failed, the next save found nothing different, and the
+    // documents waiting kept the old organisation's names until the list
+    // was edited again. Documents already named by this list are not
+    // touched, so a save that changes nothing renames nothing.
+    let renamed = state.own_names_changed(&settings.our_names);
+    // Like the model's answer, the rename's is reported only once every
+    // other part of the save has been applied.
+    source_changed.and(renamed)
 }
 
 fn sharepoint_activation_in_progress() -> CommandError {
@@ -2746,6 +3261,12 @@ fn restore_settings_unlocked(
         failures.push(error);
     }
     if let Err(error) = runtime.emit_intake_changed() {
+        failures.push(error);
+    }
+    // Always, like the tray and the watcher: the queue need not be named by
+    // what was stored when the failure struck, and documents already named
+    // by the restored list are left as they are.
+    if let Err(error) = runtime.own_names_changed(&previous.own_names()) {
         failures.push(error);
     }
     let Some(first) = failures.first() else {
@@ -3484,6 +4005,9 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                         | intern_core::ErrorCode::ReconciliationRequired
                 )
             ),
+        omitted_parties: proposal
+            .map(|record| record.name_view().1)
+            .unwrap_or_default(),
     })
 }
 
@@ -4116,9 +4640,562 @@ mod intake_tests {
     }
 }
 
+/// A real queue in a scratch folder, for the tests that add documents to one.
+#[cfg(test)]
+mod scratch_queue {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use intern_engine::{DocumentAnalysis, DocumentSource, ExtractProgress};
+    use intern_queue::{
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineEventSink, PipelineProgress,
+        SettingsStore, WorkerBoundary, WorkerFailure,
+    };
+
+    /// Adding a document reads and hashes it, and nothing more.
+    struct NothingRuns;
+
+    impl WorkerBoundary for NothingRuns {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(ExtractProgress),
+        ) -> Result<DocumentSource, WorkerFailure> {
+            panic!("adding a document must not extract it")
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    impl AnalyzerBoundary for NothingRuns {
+        fn analyze(
+            &self,
+            _source: &DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<DocumentAnalysis, ModelFailure> {
+            panic!("adding a document must not analyze it")
+        }
+    }
+
+    /// Counts queue-change announcements, the window's cue to refresh.
+    #[derive(Default)]
+    pub(super) struct Changes(AtomicUsize);
+
+    impl Changes {
+        pub(super) fn count(&self) -> usize {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    impl PipelineEventSink for Changes {
+        fn queue_changed(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn progress(&self, _progress: PipelineProgress) {}
+    }
+
+    pub(super) fn folder(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!(
+            "intern-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        folder.canonicalize().unwrap()
+    }
+
+    pub(super) fn write(folder: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = folder.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A queue whose database lives in `data`, apart from the documents.
+    pub(super) fn queue(data: &Path) -> (Pipeline, Arc<Changes>) {
+        std::fs::create_dir_all(data).unwrap();
+        let changes = Arc::new(Changes::default());
+        let pipeline = Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::new(NothingRuns),
+            Arc::new(NothingRuns),
+            changes.clone(),
+            SettingsStore::new(data.join("settings.json")),
+        )
+        .unwrap();
+        (pipeline, changes)
+    }
+}
+
+#[cfg(test)]
+mod add_report_tests {
+    use super::{
+        AddReportDto, CommandError, LaunchReports, SkippedDocumentDto, add_and_wake,
+        partition_inputs,
+        scratch_queue::{folder, queue, write},
+    };
+
+    #[test]
+    fn partition_inputs_accepts_supported_expands_folders_and_reports_rest() {
+        let root = folder("partition");
+        let valid = write(&root, "valid.pdf", b"%PDF-1.7 a document");
+        let archive = write(&root, "notes.zip", b"PK an archive");
+        let empty = write(&root, "empty.pdf", b"");
+        let lock = write(&root, "~$nda.docx", b"Pat Lee");
+        let hidden = write(&root, ".DS_Store", b"Finder state");
+        let scans = root.join("Scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        let scan = write(&scans, "scan.pdf", b"%PDF-1.7 a scan");
+        // Inside a folder, what is not a document is passed over silently,
+        // exactly as Add folder always has.
+        write(&scans, "invite.ics", b"BEGIN:VCALENDAR");
+        let missing = root.join("gone.pdf");
+
+        let (files, rejected) =
+            partition_inputs(&[valid.clone(), archive, empty, lock, hidden, scans, missing]);
+
+        assert_eq!(files, vec![valid, scan.canonicalize().unwrap()]);
+        assert_eq!(
+            rejected,
+            vec![
+                ("notes.zip".to_owned(), "UNSUPPORTED_FORMAT".to_owned()),
+                ("empty.pdf".to_owned(), "EMPTY_FILE".to_owned()),
+                ("~$nda.docx".to_owned(), "TEMPORARY_FILE".to_owned()),
+                (".DS_Store".to_owned(), "TEMPORARY_FILE".to_owned()),
+                ("gone.pdf".to_owned(), "FILE_MISSING".to_owned()),
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_bad_file_in_a_drop_no_longer_refuses_the_rest() {
+        // TAURI_SHELL-5: [a.pdf, b.zip, c.docx, an empty file, a folder].
+        let root = folder("drop");
+        let documents = root.join("Attachments");
+        std::fs::create_dir_all(&documents).unwrap();
+        let first = write(&documents, "a.pdf", b"%PDF-1.7 first");
+        let archive = write(&documents, "b.zip", b"PK archive");
+        let third = write(&documents, "c.docx", b"PK word document");
+        let empty = write(&documents, "d.pdf", b"");
+        let inner = documents.join("More");
+        std::fs::create_dir_all(&inner).unwrap();
+        let fourth = write(&inner, "e.txt", b"a plain text letter");
+        let (pipeline, changes) = queue(&root.join("data"));
+        let mut woken = 0;
+
+        let report = add_and_wake(
+            &pipeline,
+            &[first.clone(), archive, third.clone(), empty, inner],
+            || {
+                woken += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            AddReportDto {
+                added: 3,
+                already_queued: 0,
+                skipped: vec![
+                    SkippedDocumentDto {
+                        name: "b.zip".into(),
+                        code: "UNSUPPORTED_FORMAT".into(),
+                    },
+                    SkippedDocumentDto {
+                        name: "d.pdf".into(),
+                        code: "EMPTY_FILE".into(),
+                    },
+                ],
+            }
+        );
+        let queued = pipeline
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|item| item.source_path)
+            .collect::<Vec<_>>();
+        assert_eq!(queued, vec![first.clone(), third, fourth]);
+        // One announcement for the batch, which is what refreshes the window.
+        assert_eq!(changes.count(), 1);
+        // And the scheduler is woken for what was added, though two of the
+        // five were not: nothing waits for its timer.
+        assert_eq!(woken, 1);
+
+        // The same files again are already there, and say so.
+        let again = add_and_wake(&pipeline, std::slice::from_ref(&first), || {
+            panic!("nothing new was queued, so nothing is woken")
+        })
+        .unwrap();
+        assert_eq!(again.added, 0);
+        assert_eq!(again.already_queued, 1);
+        assert_eq!(changes.count(), 1);
+
+        // A scheduler that cannot be woken is the add's error: what was
+        // queued stays queued, and the window hears why nothing will run.
+        let late = write(&documents, "f.pdf", b"%PDF-1.7 late");
+        let refused = add_and_wake(&pipeline, &[late], || {
+            Err(CommandError {
+                code: "STATE_CONFLICT".into(),
+                message: "pipeline scheduler is unavailable".into(),
+            })
+        })
+        .unwrap_err();
+        assert_eq!(refused.code, "STATE_CONFLICT");
+        assert_eq!(pipeline.list().unwrap().len(), 4);
+
+        // The wire shape the window reads.
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::json!({
+                "added": 3,
+                "alreadyQueued": 0,
+                "skipped": [
+                    { "name": "b.zip", "code": "UNSUPPORTED_FORMAT" },
+                    { "name": "d.pdf", "code": "EMPTY_FILE" },
+                ],
+            })
+        );
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn skipped(added: u32, name: &str, code: &str) -> AddReportDto {
+        AddReportDto {
+            added,
+            already_queued: 0,
+            skipped: vec![SkippedDocumentDto {
+                name: name.into(),
+                code: code.into(),
+            }],
+        }
+    }
+
+    /// A launch has no window of its own to say what it left out, and the
+    /// first one's add can finish before the window is listening: what it
+    /// left out is held until the window asks, gathered across launches,
+    /// and handed over once.
+    #[test]
+    fn launch_reports_are_held_for_the_window_and_taken_once() {
+        let held = LaunchReports::default();
+        assert!(
+            !held.hold(AddReportDto {
+                added: 2,
+                ..AddReportDto::default()
+            }),
+            "everything was added: the queue shows it"
+        );
+        assert_eq!(held.take(), None);
+
+        assert!(held.hold(skipped(1, "notes.zip", "UNSUPPORTED_FORMAT")));
+        // Explorer can start one launch per document sent.
+        assert!(held.hold(skipped(0, "blank.pdf", "EMPTY_FILE")));
+
+        assert_eq!(
+            held.take(),
+            Some(AddReportDto {
+                added: 1,
+                already_queued: 0,
+                skipped: vec![
+                    SkippedDocumentDto {
+                        name: "notes.zip".into(),
+                        code: "UNSUPPORTED_FORMAT".into(),
+                    },
+                    SkippedDocumentDto {
+                        name: "blank.pdf".into(),
+                        code: "EMPTY_FILE".into(),
+                    },
+                ],
+            })
+        );
+        assert_eq!(held.take(), None, "said once");
+    }
+}
+
 #[cfg(test)]
 mod second_instance_tests {
-    use super::second_launch_shows_window;
+    use std::{
+        cell::Cell,
+        path::{MAIN_SEPARATOR, PathBuf},
+    };
+
+    use intern_queue::{AppSettings, Pipeline, SettingsStore};
+
+    use super::{
+        LaunchReports, LaunchTarget, SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents,
+        expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
+        is_update_relaunch, launch_documents, launch_names_documents, launch_starts_hidden,
+        refused_launch,
+        scratch_queue::{folder, queue, write},
+        second_launch, second_launch_shows_window,
+    };
+
+    /// The running app as a launch reaches it, over a scratch queue: the
+    /// documents added and what was left out held exactly as
+    /// `queue_launch_documents` does, and the window's showing counted.
+    struct ScratchApp<'a> {
+        pipeline: &'a Pipeline,
+        reports: LaunchReports,
+        woken: Cell<usize>,
+        told: Cell<usize>,
+        shown: Cell<usize>,
+    }
+
+    impl<'a> ScratchApp<'a> {
+        fn new(pipeline: &'a Pipeline) -> Self {
+            Self {
+                pipeline,
+                reports: LaunchReports::default(),
+                woken: Cell::new(0),
+                told: Cell::new(0),
+                shown: Cell::new(0),
+            }
+        }
+    }
+
+    impl LaunchTarget for ScratchApp<'_> {
+        fn add_documents(&self, arguments: Vec<String>, cwd: PathBuf) {
+            let report = add_launch_documents(self.pipeline, &arguments, &cwd, || {
+                self.woken.set(self.woken.get() + 1);
+                Ok(())
+            });
+            if self.reports.hold(report) {
+                self.told.set(self.told.get() + 1);
+            }
+        }
+
+        fn show_window(&self) {
+            self.shown.set(self.shown.get() + 1);
+        }
+    }
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn launch_documents_skips_flags_and_resolves_relative_paths() {
+        let cwd = folder("launch");
+        std::fs::create_dir_all(cwd.join("docs")).unwrap();
+        let relative = write(&cwd.join("docs"), "a.pdf", b"%PDF-1.7");
+        let elsewhere = folder("launch-elsewhere");
+        let absolute = write(&elsewhere, "b.pdf", b"%PDF-1.7");
+        // A document whose name starts with a dash is still a document.
+        let dashed = write(&cwd, "-draft.pdf", b"%PDF-1.7");
+        let absolute_text = absolute.to_string_lossy().into_owned();
+
+        let documents = launch_documents(
+            &args(&[
+                // argv[0], which can itself be a real path.
+                cwd.join("docs").join("a.pdf").to_str().unwrap(),
+                "--minimized",
+                &format!("docs{MAIN_SEPARATOR}a.pdf"),
+                &absolute_text,
+                "-draft.pdf",
+                "missing.pdf",
+                // Blank: joined to the launch folder it would be the folder.
+                "",
+                "  ",
+            ]),
+            &cwd,
+        );
+
+        assert_eq!(documents, vec![relative, absolute, dashed]);
+        // Intern's own flag is not a document; nothing else is skipped by
+        // shape alone.
+        assert!(!launch_names_documents(&args(&[
+            "intern.exe",
+            "--minimized"
+        ])));
+        assert!(!launch_names_documents(&args(&["intern.exe"])));
+        assert!(!launch_names_documents(&args(&["intern.exe", ""])));
+        assert!(launch_names_documents(&args(&[
+            "intern.exe",
+            "C:/drop/scan.pdf"
+        ])));
+        std::fs::remove_dir_all(cwd).unwrap();
+        std::fs::remove_dir_all(elsewhere).unwrap();
+    }
+
+    #[test]
+    fn only_a_short_slash_switch_is_a_switch_and_only_on_windows() {
+        assert!(is_short_windows_switch("/x"));
+        assert!(is_short_windows_switch("/S"));
+        assert!(is_short_windows_switch("/?"));
+        // Paths: absolute ones, and on Windows a folder at the drive's root.
+        assert!(!is_short_windows_switch("/home/pat/scan.pdf"));
+        assert!(!is_short_windows_switch("/tmp"));
+        assert!(!is_short_windows_switch("/Scans"));
+        assert!(!is_short_windows_switch("//server/share/scan.pdf"));
+        assert!(!is_short_windows_switch("/scan.pdf"));
+        assert!(!is_short_windows_switch("/"));
+        if !cfg!(windows) {
+            // On Linux and macOS `/x` is a path like any other.
+            assert!(launch_names_documents(&args(&["intern", "/x"])));
+        }
+    }
+
+    #[test]
+    fn second_instance_with_file_queues_it() {
+        let root = folder("second-launch");
+        let inbox = root.join("Saved attachments");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let scan = write(&inbox, "scan.pdf", b"%PDF-1.7 a scan");
+        write(&inbox, "notes.zip", b"PK an archive");
+        let (pipeline, changes) = queue(&root.join("data"));
+        let app = ScratchApp::new(&pipeline);
+        // What Explorer's "Send to > Intern" hands the second process, and
+        // the single-instance plugin hands on: its arguments, and its working
+        // folder as a string. The documents are relative to that folder, not
+        // to this process's.
+        let arguments = args(&[
+            "C:\\Program Files\\Intern\\Intern.exe",
+            "scan.pdf",
+            "notes.zip",
+        ]);
+
+        second_launch(&app, arguments, inbox.to_string_lossy().into_owned());
+
+        let queued = pipeline.list().unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].source_path, scan);
+        assert_eq!(changes.count(), 1);
+        assert_eq!(app.woken.get(), 1, "the scheduler is woken for it");
+        // And the window comes up to show it, told about the archive.
+        assert_eq!(app.shown.get(), 1);
+        assert_eq!(app.told.get(), 1);
+        let report = app.reports.take().unwrap();
+        assert_eq!(report.added, 1);
+        assert_eq!(
+            report.skipped,
+            vec![SkippedDocumentDto {
+                name: "notes.zip".into(),
+                code: "UNSUPPORTED_FORMAT".into(),
+            }]
+        );
+
+        // A sign-in launch handed on here asked for the tray: nothing is
+        // added, nothing is said, and the window stays where it is.
+        second_launch(
+            &app,
+            args(&["intern.exe", "--minimized"]),
+            inbox.to_string_lossy().into_owned(),
+        );
+        assert_eq!(app.shown.get(), 1);
+        assert_eq!(app.told.get(), 1);
+        assert_eq!(pipeline.list().unwrap().len(), 1);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The queue could not take a launch's documents at all. Nothing else
+    /// will say so, so every document is named with the reason.
+    #[test]
+    fn a_launch_the_queue_refused_names_every_document() {
+        let report = refused_launch(
+            &[
+                PathBuf::from("/drop/scan.pdf"),
+                PathBuf::from("/drop/Scans"),
+            ],
+            "DATABASE_UNAVAILABLE",
+        );
+        assert_eq!(report.added, 0);
+        assert_eq!(
+            report.skipped,
+            ["scan.pdf", "Scans"]
+                .map(|name| SkippedDocumentDto {
+                    name: name.into(),
+                    code: "DATABASE_UNAVAILABLE".into(),
+                })
+                .to_vec()
+        );
+    }
+
+    /// The updater hands the installer the old process's arguments, and the
+    /// installer starts Intern again with them. A launch from "Send to"
+    /// would add the same paths again - whatever is there now - without
+    /// anyone asking, so a launch about to be updated says so first, and the
+    /// relaunch that matches it adds nothing.
+    #[test]
+    fn an_update_relaunch_does_not_add_the_documents_again() {
+        let data = folder("relaunch");
+        let sent = args(&["C:\\Intern\\Intern.exe", "C:\\Scans\\scan.pdf"]);
+        assert!(!is_update_relaunch(&data, &sent, 1_000), "nothing recorded");
+
+        expect_update_relaunch(&data, &sent, 1_000).unwrap();
+        // The installer may spell Intern's own path differently.
+        let relaunch = args(&[
+            "C:\\Users\\pat\\AppData\\Local\\Intern\\intern.exe",
+            "C:\\Scans\\scan.pdf",
+        ]);
+        assert!(is_update_relaunch(&data, &relaunch, 1_030));
+        assert!(
+            !is_update_relaunch(&data, &relaunch, 1_060),
+            "used up: the same document sent later is a person's"
+        );
+
+        // A different launch is a person's, and uses the record up too.
+        expect_update_relaunch(&data, &sent, 2_000).unwrap();
+        assert!(!is_update_relaunch(
+            &data,
+            &args(&["intern.exe", "C:\\Scans\\other.pdf"]),
+            2_010
+        ));
+        assert!(!data.join(UPDATE_RELAUNCH).exists());
+
+        // An install that never relaunched is not believed an hour on.
+        expect_update_relaunch(&data, &sent, 3_000).unwrap();
+        assert!(!is_update_relaunch(&data, &sent, 3_000 + 60 * 60 + 1));
+        // Nor one that was abandoned, nor a record that cannot be read.
+        expect_update_relaunch(&data, &sent, 4_000).unwrap();
+        forget_update_relaunch(&data);
+        assert!(!is_update_relaunch(&data, &sent, 4_010));
+        std::fs::write(data.join(UPDATE_RELAUNCH), b"{").unwrap();
+        assert!(!is_update_relaunch(&data, &sent, 4_020));
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    /// The window is shown before initialization unless the launch keeps it
+    /// in the tray, so this reads the settings file before anything else
+    /// has: as initialization does, and as the defaults when it cannot.
+    #[test]
+    fn whether_a_launch_starts_in_the_tray_is_read_before_initialization() {
+        let data = folder("starts-hidden");
+        let minimized = args(&["intern.exe", "--minimized"]);
+        let clicked = args(&["intern.exe"]);
+        assert!(!launch_starts_hidden(&data, &minimized), "no settings yet");
+
+        SettingsStore::new(data.join("settings.json"))
+            .save(&AppSettings {
+                run_in_background: true,
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert!(launch_starts_hidden(&data, &minimized));
+        assert!(!launch_starts_hidden(&data, &clicked));
+
+        std::fs::write(data.join("settings.json"), b"not json").unwrap();
+        assert!(!launch_starts_hidden(&data, &minimized));
+        std::fs::remove_dir_all(data).unwrap();
+    }
 
     #[test]
     fn a_second_launch_opens_the_window_unless_it_asked_for_the_tray() {
@@ -4133,6 +5210,31 @@ mod second_instance_tests {
             "intern.exe".to_owned(),
             "--minimized".to_owned()
         ]));
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    /// TAURI_SHELL-8. `process::exit` runs no destructors, and Windows takes
+    /// the icon out of the notification area only when the tray icon is
+    /// dropped, so Quit Intern left a ghost icon behind. Nothing short of a
+    /// live tray can watch that happen; what can be pinned is that the quit
+    /// path removes the icon, and does so before it leaves.
+    #[test]
+    fn quitting_from_the_tray_removes_the_icon_before_the_process_ends() {
+        let source = include_str!("commands.rs");
+        let body = source
+            .split("pub(crate) fn shutdown_and_exit(app: &AppHandle) -> ! {")
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .expect("the quit path is in commands.rs");
+        let removal = body
+            .find("app.remove_tray_by_id(crate::tray::TRAY_ID)")
+            .expect("the quit path removes the tray icon");
+        let exit = body
+            .find("std::process::exit(0)")
+            .expect("the quit path exits");
+        assert!(removal < exit, "the icon must go before the process does");
     }
 }
 
@@ -4851,19 +5953,24 @@ mod runtime_tests {
         }
     }
 
-    /// A setup manager whose published states arrive on the receiver.
+    /// A setup manager whose published states arrive on the receiver, as a
+    /// launch leaves it once nothing else can fail: an installed local model
+    /// being verified.
     fn manager(
         runtime: &Arc<RuntimeModel>,
         source: ModelSource,
     ) -> (Arc<SetupManager>, Receiver<SetupStateDto>) {
         let (sender, receiver) = channel();
-        let setup = launch_local_model(
+        let (setup, verify) = launch_local_model(
             Box::new(move |state: &SetupStateDto| {
                 let _ = sender.send(state.clone());
             }),
             Arc::clone(runtime),
             source,
         );
+        if verify {
+            setup.verify_installed();
+        }
         (setup, receiver)
     }
 
@@ -5379,6 +6486,39 @@ mod runtime_tests {
         assert!(!runtime.running());
     }
 
+    /// Launch holds an installed model rather than starting it, and the
+    /// caller starts it when nothing else in the launch can fail: a launch
+    /// that fails later, and waits behind the dialog that says why, has no
+    /// llama-server loading a model for an app that cannot run.
+    #[test]
+    fn an_installed_model_waits_for_the_launch_to_finish_before_it_starts() {
+        let install = Install::new("launch-held");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+
+        let (setup, verify) = launch_local_model(
+            Box::new(|_: &SetupStateDto| {}),
+            Arc::clone(&runtime),
+            ModelSource::Local,
+        );
+        assert!(verify, "the installed local model waits to be verified");
+        settle(&setup);
+        assert_eq!(
+            rig.launches(),
+            0,
+            "nothing started before the launch finished"
+        );
+        assert!(!runtime.running());
+        assert!(!setup.model_ready.load(Ordering::SeqCst), "the queue waits");
+        // The window still says the model is installed.
+        assert_eq!(setup.get().unwrap().state, SetupStatus::Ready);
+
+        setup.verify_installed();
+        settle(&setup);
+        assert_eq!(rig.launches(), 1);
+        assert!(setup.model_ready.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn hosted_source_at_launch_starts_nothing() {
         let install = Install::new("hosted-launch");
@@ -5478,7 +6618,7 @@ mod runtime_tests {
         let switched = Arc::new(AtomicBool::new(false));
         let releasing = Arc::clone(&runtime);
         let seen = Arc::clone(&switched);
-        let setup = launch_local_model(
+        let (setup, verify) = launch_local_model(
             Box::new(move |state: &SetupStateDto| {
                 if state.state == SetupStatus::Ready && !seen.swap(true, Ordering::SeqCst) {
                     releasing.release();
@@ -5487,6 +6627,7 @@ mod runtime_tests {
             Arc::clone(&runtime),
             ModelSource::Hosted,
         );
+        assert!(!verify, "a hosted launch verifies no local model");
         setup
             .choose_existing(ExistingModelSelection {
                 model_path: chosen.clone(),
@@ -5911,6 +7052,50 @@ mod model_source_settings_tests {
             ModelSource::Local
         );
         assert!(runtime.live().tray);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The model's answer waits for the end of the save, and the end of the
+    /// save is also where the waiting documents are renamed by the
+    /// organisation: a busy local model must not keep that rename from
+    /// happening, nor a rename that failed hide the model's answer.
+    #[test]
+    fn a_busy_local_model_still_renames_by_the_organisation() {
+        let dir = scratch("source-busy-own-names");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&hosted()).unwrap();
+        runtime.setup_busy.store(true, Ordering::SeqCst);
+        let named = vec!["Contoso".to_owned()];
+
+        let error = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: named.clone(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "SETUP_BUSY");
+        assert_eq!(*runtime.own_names.lock().unwrap(), vec![named.clone()]);
+
+        // Both fail: the model's answer is the one reported, and the rename
+        // was still asked for.
+        runtime.store.save(&hosted()).unwrap();
+        runtime.fail_own_names.store(true, Ordering::SeqCst);
+        let error = save_settings(
+            &runtime,
+            AppSettings {
+                our_names: named.clone(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "SETUP_BUSY");
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![named.clone(), named]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -6360,6 +7545,168 @@ mod settings_report_tests {
     }
 }
 
+#[cfg(test)]
+mod own_names_tests {
+    use std::sync::atomic::Ordering;
+
+    use intern_queue::AppSettings;
+
+    use super::test_runtime::RecordingRuntime;
+    use super::{restore_sharepoint_settings, save_settings};
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("intern-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Naming the organisation renames what is waiting, so the queue hears
+    /// the list after every save - stored the way it is matched, so stray
+    /// spaces and blank lines are not a different list. The queue leaves a
+    /// document already named by the list as it is, so hearing the same
+    /// list again renames nothing (pipeline tests pin that half).
+    #[test]
+    fn settings_save_reports_own_names_change_to_runtime() {
+        let dir = scratch("own-names");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let heard = || runtime.own_names.lock().unwrap().clone();
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec![
+                    " Contoso Worldwide, Inc. ".into(),
+                    String::new(),
+                    "Contoso".into(),
+                ],
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        let named = vec!["Contoso Worldwide, Inc.".to_owned(), "Contoso".to_owned()];
+        assert_eq!(heard(), vec![named.clone()]);
+        assert_eq!(
+            runtime.store.load().unwrap().our_names,
+            named,
+            "stored the way they are matched"
+        );
+
+        save_settings(
+            &runtime,
+            AppSettings {
+                our_names: vec![
+                    "Contoso Worldwide, Inc.".into(),
+                    "  Contoso".into(),
+                    " ".into(),
+                ],
+                machine_label: "Front desk".into(),
+                ..AppSettings::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            heard(),
+            vec![named.clone(), named.clone()],
+            "the same names, trimmed the same way"
+        );
+
+        save_settings(&runtime, AppSettings::default()).unwrap();
+        assert_eq!(
+            heard(),
+            vec![named.clone(), named, Vec::new()],
+            "nobody named any more"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list is stored before anything is renamed. A save that failed
+    /// after storing it - the watcher would not restart, or the rename
+    /// itself could not reach the queue - used to leave the waiting
+    /// documents on the old names for good: the retry found the stored list
+    /// already equal to the new one and renamed nothing. The retry finishes
+    /// the rename now.
+    #[test]
+    fn a_rename_a_failed_save_never_reached_happens_on_the_next_save() {
+        let dir = scratch("own-names-retry");
+        let inbox = dir.join("Inbox");
+        let filed = dir.join("Filed");
+        std::fs::create_dir_all(&inbox).unwrap();
+        std::fs::create_dir_all(&filed).unwrap();
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime.store.save(&AppSettings::default()).unwrap();
+        let named = vec!["Contoso".to_owned()];
+        let watching = AppSettings {
+            intake_enabled: true,
+            intake_local_only: true,
+            intake_folder: inbox.to_string_lossy().into_owned(),
+            destination: filed.to_string_lossy().into_owned(),
+            our_names: named.clone(),
+            ..AppSettings::default()
+        };
+
+        // The watcher cannot restart: the save stops before the rename.
+        *runtime.fail_intake_restart.lock().unwrap() = Some(Box::new(|_| true));
+        assert_eq!(
+            save_settings(&runtime, watching.clone()).unwrap_err().code,
+            "APP_DATA_UNAVAILABLE"
+        );
+        assert_eq!(runtime.store.load().unwrap().our_names, named, "stored");
+        assert!(runtime.own_names.lock().unwrap().is_empty());
+
+        // The rename itself fails.
+        *runtime.fail_intake_restart.lock().unwrap() = None;
+        runtime.fail_own_names.store(true, Ordering::SeqCst);
+        assert_eq!(
+            save_settings(&runtime, watching.clone()).unwrap_err().code,
+            "DATABASE_UNAVAILABLE"
+        );
+
+        // Nothing differs from what is stored, and the rename still runs.
+        runtime.fail_own_names.store(false, Ordering::SeqCst);
+        save_settings(&runtime, watching).unwrap();
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![named.clone(), named]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Putting back the settings stored before a failed SharePoint
+    /// activation puts back the organisation the waiting documents are named
+    /// by - every time, like the tray and the watcher, because the queue
+    /// need not be named by what was stored when the activation failed.
+    #[test]
+    fn restoring_settings_renames_by_the_restored_organisation() {
+        let dir = scratch("own-names-restore");
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime
+            .store
+            .save(&AppSettings {
+                our_names: vec!["Northwind Traders".into()],
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let previous = AppSettings {
+            our_names: vec!["Contoso".into(), " ".into()],
+            ..AppSettings::default()
+        };
+
+        restore_sharepoint_settings(&runtime, &previous).unwrap();
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()]]
+        );
+        restore_sharepoint_settings(&runtime, &previous).unwrap();
+        assert_eq!(
+            *runtime.own_names.lock().unwrap(),
+            vec![vec!["Contoso".to_owned()], vec!["Contoso".to_owned()]]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A `SettingsRuntime` over a real settings file whose live effects are
 /// recorded instead of reaching Tauri. Shared by the settings and SharePoint
 /// activation tests so both drive the production application code.
@@ -6401,6 +7748,11 @@ pub(crate) mod test_runtime {
         pub fail_hosted_model: bool,
         pub fail_intake_events: AtomicBool,
         pub after_persist: Mutex<Option<Hook>>,
+        /// Every list of own names the queue was told about, in order.
+        pub own_names: Mutex<Vec<Vec<String>>>,
+        /// Renaming the waiting documents fails, as a queue database that
+        /// is briefly unavailable does. The names are still recorded.
+        pub fail_own_names: AtomicBool,
         /// Every watcher restart, by whether it asked for a first look.
         pub intake_restarts: Mutex<Vec<bool>>,
         /// Every change of model the runtime was told about, in order.
@@ -6423,6 +7775,8 @@ pub(crate) mod test_runtime {
                 fail_hosted_model: false,
                 fail_intake_events: AtomicBool::new(false),
                 after_persist: Mutex::new(None),
+                own_names: Mutex::new(Vec::new()),
+                fail_own_names: AtomicBool::new(false),
                 intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
@@ -6558,6 +7912,17 @@ pub(crate) mod test_runtime {
                 ));
             }
             self.live.lock().unwrap().intake_events += 1;
+            Ok(())
+        }
+
+        fn own_names_changed(&self, names: &[String]) -> Result<(), CommandError> {
+            self.own_names.lock().unwrap().push(names.to_vec());
+            if self.fail_own_names.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "DATABASE_UNAVAILABLE",
+                    "injected queue rename failure",
+                ));
+            }
             Ok(())
         }
 

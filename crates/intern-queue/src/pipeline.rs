@@ -13,7 +13,7 @@ use intern_core::{
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
-    RuleKind, ValidatedProposal, compose_styled_filename,
+    RuleKind, ValidatedProposal, compose_styled_filename, counterparty_view,
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
 use crate::paths::display_path;
-use crate::settings::{AppSettings, DestinationLayout, SettingsStore};
+use crate::settings::{AppSettings, DestinationLayout, SettingsStore, normalize_own_names};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
 const LEASE_RENEWAL_ATTEMPTS: usize = 3;
@@ -525,6 +525,13 @@ pub struct ProposalRecord {
     /// differs from them, and why.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub house_rules: Vec<HouseRule>,
+    /// The person's own organisation as Settings named it when `filename`
+    /// was composed. A party it names is left out of the name, so the name
+    /// and the Party folder carry the other side. Kept with the record so the
+    /// name can be read back exactly as it was composed, whatever Settings
+    /// says by then.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub own_names: Vec<String>,
     /// The name a document with nearly this text was already filed under -
     /// a second scan, a re-export, a copy saved again - when there is one.
     /// Such a document waits for a person rather than being filed twice.
@@ -551,11 +558,21 @@ pub const ALREADY_NAMED: &str = "ALREADY_NAMED";
 
 impl ProposalRecord {
     /// The validated facts as the name carries them: the document's words,
-    /// respelled the way the reviewer has taught Intern to.
+    /// respelled the way the reviewer has taught Intern to, with the
+    /// person's own organisation left out where the document names someone
+    /// else too. The one view the filename, the layout folder, a lesson
+    /// from an edit, and a filing report are all read from.
     pub fn styled_proposal(&self) -> ValidatedProposal {
-        HouseStyle::new(self.house_rules.clone())
+        self.name_view().0
+    }
+
+    /// [`Self::styled_proposal`], and the parties it left out because they
+    /// are the person's own organisation.
+    pub fn name_view(&self) -> (ValidatedProposal, Vec<String>) {
+        let styled = HouseStyle::new(self.house_rules.clone())
             .apply(&self.analysis.proposal)
-            .0
+            .0;
+        counterparty_view(&styled, &self.own_names)
     }
 }
 
@@ -612,6 +629,19 @@ pub struct PipelineItem {
     /// original filename for keep-original completions). `None` once the
     /// completed row is gone, e.g. after the history was cleared.
     pub duplicate_of: Option<String>,
+}
+
+/// What adding a batch of documents did, document by document.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EnqueueReport {
+    /// Rows this batch created, in the order given.
+    pub added: Vec<QueueItem>,
+    /// Documents whose path already held these exact bytes in the queue.
+    pub already_queued: usize,
+    /// Documents that could not be admitted, each with the code of the
+    /// failure: `SOURCE_LOCKED` for a file another program holds open,
+    /// `IO_ERROR` for one that cannot be read, and so on.
+    pub skipped: Vec<(PathBuf, String)>,
 }
 
 pub struct Pipeline {
@@ -809,30 +839,95 @@ impl Pipeline {
     pub fn enqueue_files(&self, paths: &[PathBuf]) -> PipelineResult<Vec<QueueItem>> {
         let mut queued = Vec::with_capacity(paths.len());
         for path in paths {
-            let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
-            let fingerprint = self.files.fingerprint(path)?;
-            if verified
-                .verified_hash()
-                .is_some_and(|hash| hash != fingerprint)
-            {
-                return Err(PipelineError::new(
-                    "FILE_CHANGED",
-                    "The file changed after Microsoft verified its uploader.",
-                ));
-            }
-            let mut item = self.store.enqueue(path, &fingerprint)?;
-            if item.status == QueueStatus::Queued {
-                item = self.flag_if_completed_duplicate(item)?;
-            }
-            if item.status == QueueStatus::Queued {
-                item = self.flag_if_filed_elsewhere(item)?;
-            }
-            queued.push(item);
+            let fingerprint = self.admit_for_enqueue(path)?;
+            queued.push(self.enqueue_admitted(path, &fingerprint)?.0);
         }
         if !queued.is_empty() {
             self.events.queue_changed();
         }
         Ok(queued)
+    }
+
+    /// Adds documents a person chose, one at a time, and says what became of
+    /// each.
+    ///
+    /// `enqueue_files` stops at the first document it cannot admit, after the
+    /// ones before it are already in the queue - right for the intake
+    /// watcher, which hands over one path at a time, and wrong for a person
+    /// adding a folder of two hundred: one file a scanner is still writing, or
+    /// one online-only placeholder that cannot be read offline, silently
+    /// dropped the rest and announced nothing. Here a document that cannot be
+    /// admitted or fingerprinted is set aside with its code and the rest go
+    /// on.
+    ///
+    /// A failure of the queue database is not about one document, so it still
+    /// ends the batch; what was added before it is announced first, so the
+    /// window shows it either way.
+    pub fn enqueue_files_report(&self, paths: &[PathBuf]) -> PipelineResult<EnqueueReport> {
+        let mut report = EnqueueReport::default();
+        let result = self.enqueue_reporting_into(paths, &mut report);
+        if !report.added.is_empty() {
+            self.events.queue_changed();
+        }
+        result.map(|()| report)
+    }
+
+    fn enqueue_reporting_into(
+        &self,
+        paths: &[PathBuf],
+        report: &mut EnqueueReport,
+    ) -> PipelineResult<()> {
+        for path in paths {
+            let fingerprint = match self.admit_for_enqueue(path) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    report.skipped.push((path.clone(), error.code));
+                    continue;
+                }
+            };
+            let (item, inserted) = self.enqueue_admitted(path, &fingerprint)?;
+            if inserted {
+                report.added.push(item);
+            } else {
+                report.already_queued += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Everything about one document that can refuse it before the queue is
+    /// touched: who may add it, and whether its bytes can be read. Returns the
+    /// fingerprint the row is keyed on.
+    fn admit_for_enqueue(&self, path: &Path) -> PipelineResult<String> {
+        let verified = self.admission.authorize(path, AdmissionStage::Enqueue)?;
+        let fingerprint = self.files.fingerprint(path)?;
+        if verified
+            .verified_hash()
+            .is_some_and(|hash| hash != fingerprint)
+        {
+            return Err(PipelineError::new(
+                "FILE_CHANGED",
+                "The file changed after Microsoft verified its uploader.",
+            ));
+        }
+        Ok(fingerprint)
+    }
+
+    /// Writes an admitted document's row and flags it when its content is
+    /// already filed. The flag is `true` when the row is new.
+    fn enqueue_admitted(
+        &self,
+        path: &Path,
+        fingerprint: &str,
+    ) -> PipelineResult<(QueueItem, bool)> {
+        let (mut item, inserted) = self.store.enqueue_with_outcome(path, fingerprint)?;
+        if item.status == QueueStatus::Queued {
+            item = self.flag_if_completed_duplicate(item)?;
+        }
+        if item.status == QueueStatus::Queued {
+            item = self.flag_if_filed_elsewhere(item)?;
+        }
+        Ok((item, inserted))
     }
 
     /// Flags a just-queued item whose content is already filed as completed.
@@ -1329,9 +1424,19 @@ impl Pipeline {
         // to. Applied here, after validation, so the evidence stayed the
         // document's and only the name is the reviewer's.
         let (styled, house_rules) = self.repository.active_style()?.apply(&analysis.proposal);
+        // And named by the other side when it names the person's own
+        // organisation too. Settings that cannot be read name nobody, so the
+        // name carries every party, as it did before the setting existed; an
+        // automatic rename below reports the unreadable file.
+        let own_names = self
+            .settings
+            .load()
+            .map(|settings| settings.own_names())
+            .unwrap_or_default();
+        let (named, _) = counterparty_view(&styled, &own_names);
         let filename = self.compose_for_target(
             &item.source_path,
-            &styled,
+            &named,
             &house_rules,
             &extension,
             &existing,
@@ -1359,6 +1464,7 @@ impl Pipeline {
             analysis,
             revision: 1,
             house_rules,
+            own_names,
             near_duplicate_of,
             approved: false,
         };
@@ -1375,6 +1481,19 @@ impl Pipeline {
         )?;
         self.admission
             .processed(&item.source_path, &item.source_hash);
+        // The organisation's names were read before the name was composed,
+        // and a Settings save since then renamed everything that was waiting
+        // - which this document was not, yet. Read once more now that it
+        // waits: a list that changed in between names it the way it names
+        // every other waiting document, and a save after this point finds it
+        // waiting.
+        let settings = self.settings.load();
+        if let Ok(current) = &settings {
+            let names = current.own_names();
+            if names != record.own_names {
+                self.recompose(&self.repository.active_style()?, &item, Some(&names))?;
+            }
+        }
         let ready_item = self.store.get(item.id)?.ok_or_else(|| {
             PipelineError::new(
                 "ITEM_NOT_FOUND",
@@ -1384,7 +1503,7 @@ impl Pipeline {
         self.active_item.store(0, Ordering::SeqCst);
         self.events.queue_changed();
         if next == QueueStatus::Ready {
-            let settings = match self.settings.load() {
+            let settings = match settings {
                 Ok(settings) => settings,
                 Err(error) => {
                     self.repository.mark_needs_review(item.id, &error.code)?;
@@ -1550,7 +1669,7 @@ impl Pipeline {
                 "learned spelling does not exist",
             ));
         }
-        self.restyle_waiting(None)
+        self.restyle_waiting()
     }
 
     /// Apply a learned spelling from now on without waiting for a second
@@ -1562,66 +1681,107 @@ impl Pipeline {
                 "learned spelling does not exist",
             ));
         }
-        self.restyle_waiting(None)
+        self.restyle_waiting()
     }
 
     /// Recomposes the proposed name of every document still waiting under
     /// the spellings now in force, so a rule that just changed shows in the
     /// queue at once rather than only on the next document.
+    fn restyle_waiting(&self) -> PipelineResult<()> {
+        self.recompose_waiting(None)
+    }
+
+    /// Names every document still waiting by the counterparty when it names
+    /// the person's own organisation, now that Settings names it `names`.
+    /// Waiting, unapproved documents are renamed in the queue at once, the
+    /// way a learned spelling renames them; a name a person approved is
+    /// theirs and keeps everything it says. A document already named by
+    /// `names` is not touched, so asking again with the same list - after
+    /// every save, to finish a rename an earlier one never reached - writes
+    /// nothing and announces nothing.
+    pub fn refresh_own_names(&self, names: &[String]) -> PipelineResult<()> {
+        self.recompose_waiting(Some(&normalize_own_names(names)))
+    }
+
+    /// Recomposes the proposed name of every waiting document whose name
+    /// the spellings in force, or `own_names` when it is given, would change.
     ///
-    /// `approved` names the document whose name a person has just typed, if
-    /// any. That name is theirs and is never recomposed: composing it again
+    /// A name a person approved is never recomposed: the one being approved
+    /// right now, and one approved earlier that is still waiting for a busy
+    /// queue to file it. It is the name they chose, and composing it again
     /// from the validated facts would throw away everything the facts do not
-    /// carry, the date they typed in most of all. The same goes for every
-    /// name approved earlier and still waiting to be filed, because the queue
-    /// was busy when it was approved: a rule learned or changed in the
-    /// meantime rebuilt it, and the scheduler then filed the rebuilt name
-    /// under the approval - without the date the reviewer had typed.
-    fn restyle_waiting(&self, approved: Option<i64>) -> PipelineResult<()> {
+    /// carry, the date they typed in most of all. An earlier approval waiting
+    /// for the queue counts too: a rule learned while it waited once rebuilt
+    /// its name, and the scheduler then filed the rebuilt name under the
+    /// approval - without the date the reviewer had typed.
+    fn recompose_waiting(&self, own_names: Option<&[String]>) -> PipelineResult<()> {
         let style = self.repository.active_style()?;
         let mut changed = false;
         for item in self.store.list()? {
-            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
-                || approved == Some(item.id)
-            {
+            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
                 continue;
             }
-            let Some(mut record) = self.repository.load_proposal(item.id)? else {
-                continue;
-            };
-            if record.approved {
-                continue;
-            }
-            let (styled, house_rules) = style.apply(&record.analysis.proposal);
-            if house_rules == record.house_rules {
-                continue;
-            }
-            let extension = item
-                .source_path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default()
-                .to_owned();
-            let existing = names_beside(
-                item.source_path.parent().unwrap_or_else(|| Path::new(".")),
-                &item.source_path,
-            );
-            record.filename = self.compose_for_target(
-                &item.source_path,
-                &styled,
-                &house_rules,
-                &extension,
-                &existing,
-            );
-            record.house_rules = house_rules;
-            record.revision += 1;
-            self.repository.replace_proposal(item.id, &record)?;
-            changed = true;
+            changed |= self.recompose(&style, &item, own_names)?;
         }
         if changed {
             self.events.queue_changed();
         }
         Ok(())
+    }
+
+    /// Recomposes one waiting document's proposed name the way
+    /// [`Self::recompose_waiting`] does, and says whether its record changed.
+    ///
+    /// The revision moves only when the name does. It is how the window
+    /// knows the name it holds is no longer the proposal, and the reviewer's
+    /// draft of the name and the description is replaced when it moves. A
+    /// change that leaves the name as it was - an organisation this document
+    /// never mentions, a respelling of a party the name leaves out - is
+    /// stored without moving it, so whatever the reviewer has typed and not
+    /// yet approved survives a Settings save.
+    fn recompose(
+        &self,
+        style: &HouseStyle,
+        item: &QueueItem,
+        own_names: Option<&[String]>,
+    ) -> PipelineResult<bool> {
+        let Some(mut record) = self.repository.load_proposal(item.id)? else {
+            return Ok(false);
+        };
+        if record.approved {
+            return Ok(false);
+        }
+        let (styled, house_rules) = style.apply(&record.analysis.proposal);
+        let own_names = own_names.map_or_else(|| record.own_names.clone(), <[String]>::to_vec);
+        if house_rules == record.house_rules && own_names == record.own_names {
+            return Ok(false);
+        }
+        let (named, _) = counterparty_view(&styled, &own_names);
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let existing = names_beside(
+            item.source_path.parent().unwrap_or_else(|| Path::new(".")),
+            &item.source_path,
+        );
+        let filename = self.compose_for_target(
+            &item.source_path,
+            &named,
+            &house_rules,
+            &extension,
+            &existing,
+        );
+        if filename != record.filename {
+            record.revision += 1;
+        }
+        record.filename = filename;
+        record.house_rules = house_rules;
+        record.own_names = own_names;
+        self.repository.replace_proposal(item.id, &record)?;
+        Ok(true)
     }
 
     /// What an approved edit teaches, if anything: a respelled party or
@@ -1632,7 +1792,6 @@ impl Pipeline {
     /// rule.
     fn learn_from_edit(
         &self,
-        id: i64,
         record: &ProposalRecord,
         extension: &str,
         approved: &str,
@@ -1656,7 +1815,7 @@ impl Pipeline {
         } else if lesson.is_meaningful() {
             self.repository.learn(&lesson)?;
         }
-        self.restyle_waiting(Some(id))
+        self.restyle_waiting()
     }
 
     fn analyze_with_deadline(
@@ -2398,7 +2557,7 @@ impl Pipeline {
         // A preference store, not a filing step: a lesson that cannot be
         // written must not stop the rename that was just approved.
         if let Some(record) = proposed.as_ref() {
-            let _ = self.learn_from_edit(id, record, source_extension, &filename);
+            let _ = self.learn_from_edit(record, source_extension, &filename);
         }
         let ready = self.store.get(id)?.ok_or_else(|| {
             PipelineError::new("ITEM_NOT_FOUND", "queue item disappeared during approval")
