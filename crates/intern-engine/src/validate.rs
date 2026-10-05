@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::distill::DocumentDigest;
 use crate::domain::{
-    ModelProposal, PartyRelation, ProposalStatus, ReviewReason, ValidatedProposal,
+    DateRole, ModelProposal, PartyRelation, ProposalStatus, ReviewReason, ValidatedProposal,
     ValidationOutcome,
 };
 use crate::evidence::{
@@ -17,7 +17,8 @@ use crate::evidence::{
     extract_stated_dates, is_valid_iso_date, normalize,
 };
 use crate::infer::{
-    complete_type_from_title, infer_date_role, infer_document_type, repair_issued_relation,
+    complete_type_from_title, dates_stated_on, infer_date_role, infer_document_type,
+    labels_a_deadline, labels_the_issue_date, repair_issued_relation, window_before, wrapped_lines,
 };
 
 /// Below this self-reported confidence a proposal goes to review even when
@@ -85,12 +86,45 @@ pub fn validate_at(
         }
     }
 
-    let (document_date, date_role, date_supported, date_evidence_override) =
+    let (mut document_date, mut date_role, date_supported, mut date_evidence_override) =
         validate_date(&candidate, digest, document_type.as_deref());
     if !date_supported {
         push(&mut reasons, ReviewReason::DateUnsupported);
     }
-    if document_date.is_none() && date_supported {
+    // A due date is written in the document as plainly as an invoice date,
+    // so the evidence check passes it, and the grammar's lack of a "due"
+    // role does not stop the model reaching for it. The document's own
+    // labels say which date it is: when every statement of the chosen date
+    // is labelled a deadline, the one date labelled as the issue date takes
+    // its place, and with no single such date the choice is a person's. A
+    // date the referencing guard already replaced came from an effective
+    // line, so it is left alone.
+    let mut withheld_as_deadline = false;
+    if date_evidence_override.is_none()
+        && let Some(deadline) = document_date
+            .as_deref()
+            .and_then(|date| deadline_redirect(digest, date))
+    {
+        push(&mut reasons, ReviewReason::DateIsDeadline);
+        match deadline {
+            Deadline::Replaced { date, line } => {
+                let invoice = document_type
+                    .as_deref()
+                    .is_some_and(|value| value.to_lowercase().contains("invoice"));
+                document_date = Some(date);
+                date_role = invoice.then_some(DateRole::Invoice);
+                date_evidence_override = Some(line);
+            }
+            Deadline::Withheld => {
+                // The model's date is still offered to the reviewer: it is
+                // the candidate's, and the candidate is kept whole.
+                document_date = None;
+                date_role = None;
+                withheld_as_deadline = true;
+            }
+        }
+    }
+    if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
     }
     // A year the document really prints can still be wrong: OCR reads 2025
@@ -316,6 +350,70 @@ fn validate_date(
         return (None, None, false, None);
     }
     (Some(date.to_owned()), candidate.date_role, true, None)
+}
+
+/// What became of a date the document states only as a deadline.
+enum Deadline {
+    /// The one date the document labels as its issue date, and the line it
+    /// stands on.
+    Replaced { date: String, line: String },
+    /// No single issue date: the date is withheld for a person to choose.
+    Withheld,
+}
+
+/// `Some` when every statement of `date` the document makes - references to
+/// other documents aside - is labelled a due, expiry, renewal, or deadline
+/// date ("Due Date: 05/30/2025", "Payment due", "Expires on"). The
+/// replacement is the one other date labelled as the date of issue ("Invoice
+/// Date:", "Date of issue", "Dated", a bare "Date:"); two or none, and the
+/// date is withheld rather than guessed at. A numeric date both readings fit
+/// counts as two.
+///
+/// A single unlabelled statement of the date anywhere clears it: the
+/// document then says something besides "this is when it is due".
+fn deadline_redirect(digest: &DocumentDigest, date: &str) -> Option<Deadline> {
+    let lines: Vec<String> = digest
+        .segments
+        .iter()
+        .flat_map(|segment| wrapped_lines(segment))
+        .collect();
+    let mut stated = false;
+    for line in &lines {
+        let normalized = normalize(line);
+        for position in date_match_positions(date, &normalized) {
+            if reference_introduced(&normalized, position) {
+                continue;
+            }
+            if !labels_a_deadline(&window_before(&normalized, position)) {
+                return None;
+            }
+            stated = true;
+        }
+    }
+    if !stated {
+        return None;
+    }
+    let mut alternates: Vec<(String, String)> = Vec::new();
+    for line in &lines {
+        let normalized = normalize(line);
+        for (found, position) in dates_stated_on(&normalized) {
+            if found == date
+                || alternates.iter().any(|(existing, _)| *existing == found)
+                || reference_introduced(&normalized, position)
+                || !labels_the_issue_date(&window_before(&normalized, position))
+            {
+                continue;
+            }
+            alternates.push((found, line.trim().to_owned()));
+        }
+    }
+    Some(match alternates.as_slice() {
+        [(alternate, line)] => Deadline::Replaced {
+            date: alternate.clone(),
+            line: line.clone(),
+        },
+        _ => Deadline::Withheld,
+    })
 }
 
 /// Whether an accepted ISO date's year is one a document could carry.
@@ -1525,5 +1623,165 @@ The Consultant will provide services commencing April 15, 2026.
         assert_eq!(civil_year_from_days(19_722), 2023);
         assert_eq!(civil_year_from_days(19_723), 2024);
         assert!((2026..2200).contains(&current_year()));
+    }
+
+    /// The model picked the due date of an invoice that prints both dates
+    /// on one line, and every check passed: the date is in the document,
+    /// and the role inference read the invoice date's label onto it. The
+    /// document's one issue date takes its place; with no single issue date
+    /// the choice is withheld for a person, the model's date still offered.
+    #[test]
+    fn a_due_date_labelled_as_the_invoice_date_is_caught() {
+        let both = invoice_document("Invoice Date: 04/30/2025    Due Date: 05/30/2025");
+        let outcome = validate_at(invoice("2025-05-30"), &digest_of(&both), 2026);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-04-30")
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Invoice));
+        assert_eq!(outcome.reasons, vec![ReviewReason::DateIsDeadline]);
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert_eq!(
+            outcome.proposal.evidence.date.as_deref(),
+            Some("Invoice Date: 04/30/2025    Due Date: 05/30/2025")
+        );
+        assert_eq!(
+            outcome.candidate.document_date.as_deref(),
+            Some("2025-05-30")
+        );
+
+        // The same with written dates on lines of their own, and with a
+        // lease's renewal date standing in for the due date.
+        let outcome = validate_at(
+            invoice("2025-05-30"),
+            &digest_of(&invoice_document(
+                "Invoice Date: April 30, 2025\nPayment due: May 30, 2025",
+            )),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-04-30")
+        );
+        let mut lease = proposal();
+        lease.document_type = Some("Lease Agreement".into());
+        lease.document_date = Some("2027-03-01".into());
+        let outcome = validate_at(
+            lease,
+            &digest_of(
+                "LEASE AGREEMENT\nThis Lease is dated March 1, 2026 between Acme Corporation and Contoso Worldwide, Inc.\nRenewal Date: March 1, 2027\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-01")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+
+        // No issue date, two of them, or one a numeric token that reads
+        // either way round: withheld, and only the deadline is the reason.
+        for date_lines in [
+            "Due Date: 05/30/2025",
+            "Invoice Date: 04/30/2025\nStatement Date: May 1, 2025\nDue Date: 05/30/2025",
+            "Invoice Date: 04/05/2025\nDue Date: 05/30/2025",
+        ] {
+            let outcome = validate_at(
+                invoice("2025-05-30"),
+                &digest_of(&invoice_document(date_lines)),
+                2026,
+            );
+            assert_eq!(outcome.proposal.document_date, None, "{date_lines}");
+            assert_eq!(outcome.proposal.date_role, None);
+            assert_eq!(
+                outcome.reasons,
+                vec![ReviewReason::DateIsDeadline],
+                "{date_lines}"
+            );
+            assert_eq!(
+                outcome.candidate.document_date.as_deref(),
+                Some("2025-05-30")
+            );
+        }
+
+        // The invoice date itself, chosen correctly, is left alone, and so
+        // is a due date the document also states without the label.
+        let outcome = validate_at(invoice("2025-04-30"), &digest_of(&both), 2026);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-04-30")
+        );
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let outcome = validate_at(
+            invoice("2025-05-30"),
+            &digest_of(&invoice_document(
+                "Due Date: 05/30/2025\nServices delivered 05/30/2025",
+            )),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-05-30")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+    }
+
+    /// The deadline check can take a date away from a filename, so only an
+    /// explicit deadline label sets it off: "payable" and "return" label
+    /// dates that are no deadline, and a renewal mentioned in passing does
+    /// not make the date beside it a renewal date.
+    #[test]
+    fn payable_return_and_renewal_wording_is_not_a_deadline() {
+        let outcome = validate_at(
+            invoice("2025-03-03"),
+            &digest_of(&invoice_document(
+                "Payment payable upon receipt. Date: March 3, 2025",
+            )),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-03-03")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+
+        let mut tax_return = proposal();
+        tax_return.document_type = Some("Tax Return".into());
+        tax_return.document_date = Some("2025-04-15".into());
+        tax_return.parties = vec!["Jane Smith".into()];
+        tax_return.party_relation = PartyRelation::For;
+        let outcome = validate_at(
+            tax_return,
+            &digest_of(
+                "INDIVIDUAL INCOME TAX RETURN\nTaxpayer: Jane Smith\nTax Return Date: April 15, 2025\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2025-04-15")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+
+        let mut lease = proposal();
+        lease.document_type = Some("Lease Agreement".into());
+        lease.document_date = Some("2026-03-01".into());
+        let outcome = validate_at(
+            lease,
+            &digest_of(
+                "LEASE AGREEMENT\nThis Lease, including any renewal, commences on March 1, 2026 between Acme Corporation and Contoso Worldwide, Inc.\nRenewal: the Tenant may renew by notice before March 1, 2027.\n",
+            ),
+            2026,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-03-01")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsDeadline));
     }
 }

@@ -23,7 +23,9 @@
 
 use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRelation};
-use crate::evidence::{date_match_positions, extract_stated_dates, normalize, normalize_loosely};
+use crate::evidence::{
+    date_match_positions, extract_stated_dates, is_valid_iso_date, normalize, normalize_loosely,
+};
 
 /// Roles in the order one wins when a line carries several cues: the more
 /// specific reading first, so "notice of termination dated" reads as a notice
@@ -152,6 +154,31 @@ const OTHER_DATE_LABELS: &[&str] = &[
     "return",
     "deadline",
     "payable",
+];
+/// The labels that make a date a deadline - when money is owed, when
+/// something lapses or renews - and so never the date a document was issued.
+/// Narrower than [`OTHER_DATE_LABELS`] on purpose: that list only keeps a
+/// type's default role off a date, while this one can take a date away from
+/// the filename, so "payable" ("Payment payable upon receipt") and "return"
+/// (a tax return's own date) are left out.
+const DEADLINE_LABELS: &[&str] = &[
+    "due",
+    "expires",
+    "expiration",
+    "expiry",
+    "renewal",
+    "deadline",
+];
+/// Words that sit between a label and its date without changing what the
+/// label says: "Due Date:", "due on or before", "Expires on".
+const LABEL_FILLERS: &[&str] = &["date", "on", "or", "before", "by", "of"];
+/// Labels that name a date as the day the document itself was issued.
+const ISSUE_LABELS: &[&str] = &[
+    "invoice date",
+    "date of issue",
+    "issue date",
+    "statement date",
+    "dated",
 ];
 
 /// How far before a date the wording that names its role can sit. Long
@@ -302,7 +329,31 @@ fn labels_another_date(window: &str) -> bool {
     OTHER_DATE_LABELS.iter().any(|word| before.ends_with(word))
 }
 
-fn window_before(normalized: &str, position: usize) -> String {
+/// Whether the label nearest the date makes it a deadline: "Due Date:",
+/// "Payment due", "Expires on", "Renewal Date". Only the label itself is
+/// read - the last word before the date once fillers like "date" and "on"
+/// are stepped over - so "This Lease, including any renewal, commences on"
+/// is a commencement, not a renewal date.
+pub(crate) fn labels_a_deadline(window: &str) -> bool {
+    window
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .rev()
+        .find(|word| !LABEL_FILLERS.contains(word))
+        .is_some_and(|word| DEADLINE_LABELS.contains(&word))
+}
+
+/// Whether the wording before a date names it as the day the document was
+/// issued: "Invoice Date:", "Date of issue", "Dated", or a bare "Date:".
+pub(crate) fn labels_the_issue_date(window: &str) -> bool {
+    !labels_another_date(window)
+        && (ISSUE_LABELS.iter().any(|label| window.contains(label)) || is_generic_label(window))
+}
+
+/// The wording a date's role is read from: what stands before it on its
+/// line, back to the previous date or the end of the previous sentence, and
+/// never more than [`CUE_WINDOW`] bytes.
+pub(crate) fn window_before(normalized: &str, position: usize) -> String {
     // A fixed distance back can land inside a multi-byte character - é, §,
     // •, °, the fraction slash NFKC makes of ½ - and slicing there panicked
     // inside the model thread, which paused the whole queue. Walking forward
@@ -324,10 +375,128 @@ fn window_before(normalized: &str, position: usize) -> String {
             }
         }
     }
+    // Written dates are found above; a numeric one is not, because
+    // extraction leaves numeric dates alone, and "Invoice Date: 04/30/2025
+    // Due Date: 05/30/2025" lent the invoice date's label to the due date.
+    // Any date-shaped token bounds the window - nothing is read from it as a
+    // date, so its shape is all that matters.
+    if let Some(end) = last_numeric_date_end(&normalized[..position]) {
+        start = start.max(end);
+    }
     if let Some(stop) = normalized[start..position].rfind(". ") {
         start += stop + ". ".len();
     }
     normalized[start..position].to_owned()
+}
+
+/// A token shaped like a numeric date - "04/30/2025", "30.04.2025",
+/// "2025-04-30", "4/30/25" - as byte offsets into the text it was found in,
+/// with its three runs of digits.
+struct NumericDate<'a> {
+    start: usize,
+    end: usize,
+    parts: [&'a str; 3],
+}
+
+/// Every numeric-date-shaped token in `text`: one to four digits, a
+/// separator out of `/ . -`, one or two digits, the same separator, two to
+/// four digits, with no digit running into either end. Whether the token is
+/// a real calendar date is not asked here.
+fn numeric_dates(text: &str) -> Vec<NumericDate<'_>> {
+    let bytes = text.as_bytes();
+    let digits_from = |from: usize| -> usize {
+        bytes[from..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count()
+    };
+    let mut found = Vec::new();
+    for start in 0..bytes.len() {
+        if !bytes[start].is_ascii_digit() || (start > 0 && bytes[start - 1].is_ascii_digit()) {
+            continue;
+        }
+        // Each run is taken whole, so a run longer than its shape allows
+        // is a longer number and not a date.
+        let first = digits_from(start);
+        let Some(&separator) = bytes.get(start + first) else {
+            continue;
+        };
+        if !(1..=4).contains(&first) || !matches!(separator, b'/' | b'.' | b'-') {
+            continue;
+        }
+        let second_start = start + first + 1;
+        let second = digits_from(second_start);
+        if !(1..=2).contains(&second) || bytes.get(second_start + second) != Some(&separator) {
+            continue;
+        }
+        let third_start = second_start + second + 1;
+        let third = digits_from(third_start);
+        if !(2..=4).contains(&third) {
+            continue;
+        }
+        let end = third_start + third;
+        found.push(NumericDate {
+            start,
+            end,
+            parts: [
+                &text[start..start + first],
+                &text[second_start..second_start + second],
+                &text[third_start..end],
+            ],
+        });
+    }
+    found
+}
+
+/// Where the last numeric-date-shaped token in `window` ends.
+fn last_numeric_date_end(window: &str) -> Option<usize> {
+    numeric_dates(window).iter().map(|date| date.end).max()
+}
+
+/// The calendar dates a numeric token can mean. A year-first token is read
+/// one way. A year-last token is read month-first and day-first, and both
+/// readings are kept when both are real dates: the document's locale is not
+/// known, and choosing between them would be a guess. A two-digit year is
+/// not read at all, for the same reason - its century is a guess.
+fn numeric_readings(date: &NumericDate<'_>) -> Vec<String> {
+    let [first, second, third] = date.parts;
+    let candidates = if first.len() == 4 {
+        vec![(first, second, third)]
+    } else if third.len() == 4 {
+        vec![(third, first, second), (third, second, first)]
+    } else {
+        Vec::new()
+    };
+    let mut readings: Vec<String> = Vec::new();
+    for (year, month, day) in candidates {
+        let iso = format!("{year}-{month:0>2}-{day:0>2}");
+        if is_valid_iso_date(&iso) && !readings.contains(&iso) {
+            readings.push(iso);
+        }
+    }
+    readings
+}
+
+/// Every date a normalized line states, each with the byte offset it stands
+/// at: written months and ISO forms the way [`extract_stated_dates`] reads
+/// them, and numeric tokens in every reading they allow. A reading counts
+/// only where the evidence check finds that date at that token too, so a
+/// date taken from here always passes it.
+pub(crate) fn dates_stated_on(normalized: &str) -> Vec<(String, usize)> {
+    let mut found = Vec::new();
+    for date in extract_stated_dates(normalized) {
+        for position in date_match_positions(&date, normalized) {
+            found.push((date.clone(), position));
+        }
+    }
+    for token in numeric_dates(normalized) {
+        for reading in numeric_readings(&token) {
+            if date_match_positions(&reading, normalized).contains(&token.start) {
+                found.push((reading, token.start));
+            }
+        }
+    }
+    found
 }
 
 fn role_from_wording(window: &str) -> Option<DateRole> {
@@ -1005,6 +1174,70 @@ Invoice Date: April 30, 2025    Due Date: May 30, 2025",
         );
     }
 
+    /// The numeric twin of the test above. Extraction leaves numeric dates
+    /// alone, so they never bounded the window, and the due date read the
+    /// invoice date's label.
+    #[test]
+    fn a_numeric_label_governs_only_the_date_that_follows_it() {
+        let digest = digest_of(
+            "INVOICE INV-2048
+Invoice Date: 04/30/2025    Due Date: 05/30/2025",
+        );
+        assert_eq!(
+            infer_date_role(&digest, "2025-05-30", Some("Invoice")),
+            None,
+            "the invoice date's label stops at the invoice date"
+        );
+        assert_eq!(
+            infer_date_role(&digest, "2025-04-30", Some("Invoice")),
+            Some(DateRole::Invoice)
+        );
+        // Day-first and ISO spellings bound it the same way.
+        for line in [
+            "Invoice Date: 30.04.2025    Due Date: 30.05.2025",
+            "Invoice Date: 2025-04-30    Due Date: 2025-05-30",
+        ] {
+            let digest = digest_of(&format!("INVOICE INV-2048\n{line}"));
+            assert_eq!(
+                infer_date_role(&digest, "2025-05-30", Some("Invoice")),
+                None,
+                "{line}"
+            );
+        }
+    }
+
+    /// The shape is all that bounds a window, so it is pinned exactly: a
+    /// longer number is not a date, and neither is a two-part one.
+    #[test]
+    fn only_a_whole_date_shaped_token_bounds_the_window() {
+        assert_eq!(last_numeric_date_end("date: 04/30/2025 due"), Some(16));
+        assert_eq!(last_numeric_date_end("4/30/25 then 2025-04-30 x"), Some(23));
+        assert_eq!(last_numeric_date_end("30.04.2025"), Some(10));
+        for not_a_date in [
+            "account 12345/1/2026",
+            "ref 04/30/20255",
+            "04/30-2025",
+            "page 4/30",
+            "section 9.2.1",
+            "104/300/2025",
+        ] {
+            assert_eq!(last_numeric_date_end(not_a_date), None, "{not_a_date}");
+        }
+        // Only an unambiguous reading of a numeric token is a single date;
+        // a token both readings fit stays two, and a two-digit year none.
+        let readings = |text: &str| -> Vec<String> {
+            numeric_dates(text)
+                .iter()
+                .flat_map(numeric_readings)
+                .collect()
+        };
+        assert_eq!(readings("04/30/2025"), vec!["2025-04-30"]);
+        assert_eq!(readings("30.04.2025"), vec!["2025-04-30"]);
+        assert_eq!(readings("2025-04-30"), vec!["2025-04-30"]);
+        assert_eq!(readings("04/05/2025"), vec!["2025-04-05", "2025-05-04"]);
+        assert!(readings("04/30/25").is_empty());
+    }
+
     /// A notice dated a day was given that day, whatever it terminates; the
     /// role list says so, and the termination cue used to claim it first.
     #[test]
@@ -1029,6 +1262,39 @@ Invoice Date: April 30, 2025    Due Date: May 30, 2025",
             infer_date_role(&digest, "2027-01-31", Some("Notice of Termination")),
             Some(DateRole::Termination)
         );
+    }
+
+    /// Only the label nearest the date makes it a deadline, and only an
+    /// explicit one: "payable" and "return" label other dates without
+    /// making them deadlines, and a renewal mentioned in passing is not a
+    /// renewal date.
+    #[test]
+    fn only_an_explicit_label_on_the_date_makes_it_a_deadline() {
+        for deadline in [
+            "due date: ",
+            "payment due date: ",
+            "payment due: ",
+            "due on or before ",
+            "expires on ",
+            "expiration date ",
+            "expiry: ",
+            "renewal date: ",
+            "deadline: ",
+        ] {
+            assert!(labels_a_deadline(deadline), "{deadline}");
+        }
+        for not_a_deadline in [
+            "invoice date: ",
+            "date: ",
+            "payment payable upon receipt date: ",
+            "amount payable date: ",
+            "tax return date: ",
+            "this lease, including any renewal, commences on ",
+            "the due diligence report is dated ",
+            "",
+        ] {
+            assert!(!labels_a_deadline(not_a_deadline), "{not_a_deadline}");
+        }
     }
 
     /// The cue window starts a fixed number of bytes before the date, and
