@@ -10,8 +10,8 @@ use std::{
 use common::{MockClock, facts_for, identity, real_now};
 use intern_intake::{
     AcquireOutcome, CLAIM_LEASE_SECONDS, CLAIM_RENEW_THRESHOLD_SECONDS, ClaimInfo, ClaimState,
-    ClaimStore, DONE_RETENTION_SECONDS, DocumentFacts, DoneOutcome, MachinePresence,
-    PRESENCE_REFRESH_SECONDS, document_key,
+    ClaimStore, DONE_RETENTION_SECONDS, DocumentFacts, DoneOutcome, FiledIndex, FiledMarker,
+    MachinePresence, PRESENCE_REFRESH_SECONDS, document_key,
 };
 use tempfile::TempDir;
 
@@ -653,4 +653,54 @@ fn a_live_owner_with_a_slow_clock_is_not_taken_over() {
         );
     }
     assert_eq!(read_claim(temp.path(), &key).machine_id, "aaa");
+}
+
+/// Coordination files come from a shared folder that anyone with write access,
+/// or a sync glitch, can fill, and every scan reads them. A marker far larger
+/// than anything Intern writes is unreadable rather than read into memory, and
+/// the one-day grace for unreadable files clears it like any other garbage.
+#[test]
+fn oversized_marker_is_unreadable() {
+    let temp = TempDir::new().unwrap();
+    let clock = MockClock::at_real_now();
+    let store =
+        ClaimStore::with_clock(temp.path(), identity("aaa", "here"), clock.clone()).unwrap();
+    let index = FiledIndex::new(temp.path(), identity("aaa", "here"));
+    let filed = temp.path().join(".intern").join("filed");
+    let marker = |hash: &str| FiledMarker {
+        version: 1,
+        content_hash: hash.to_string(),
+        filename: "2026-03-02 Agreement.pdf".to_string(),
+        relative_path: "scan.pdf".to_string(),
+        machine_id: "bbb".to_string(),
+        machine_name: "Front desk".to_string(),
+        user_name: "pat".to_string(),
+        filed_at: real_now(),
+        text_fingerprint: None,
+    };
+    let ordinary = "a".repeat(64);
+    let oversized = "b".repeat(64);
+    fs::write(
+        filed.join(format!("{ordinary}.json")),
+        serde_json::to_vec(&marker(&ordinary)).unwrap(),
+    )
+    .unwrap();
+    // Valid JSON throughout - only its size is wrong.
+    let mut bytes = serde_json::to_vec(&marker(&oversized)).unwrap();
+    bytes.extend(std::iter::repeat_n(b' ', 70 * 1024));
+    let oversized_path = filed.join(format!("{oversized}.json"));
+    fs::write(&oversized_path, &bytes).unwrap();
+
+    assert!(index.lookup(&ordinary).is_some());
+    assert_eq!(index.lookup(&oversized), None);
+
+    store.prune();
+    assert!(
+        oversized_path.exists(),
+        "a fresh unreadable file may still be a sync transfer in progress"
+    );
+    clock.advance(2 * 24 * 3600);
+    store.prune();
+    assert!(!oversized_path.exists());
+    assert!(filed.join(format!("{ordinary}.json")).exists());
 }

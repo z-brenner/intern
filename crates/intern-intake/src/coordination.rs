@@ -11,7 +11,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -208,15 +209,41 @@ impl Versioned for MachinePresence {
     }
 }
 
+/// The largest coordination file `load` will read. Every record this crate
+/// writes is a few hundred bytes; the cap only has to leave room for long
+/// filenames.
+pub(crate) const MAX_COORDINATION_BYTES: u64 = 64 * 1024;
+
 /// A malformed or future-version file is indistinguishable from sync-conflict
 /// garbage, so it reads as `Unreadable` rather than an error or a panic;
 /// `prune` clears such files once they are a day old.
+///
+/// These files come from a shared folder anyone with write access - or a sync
+/// glitch - can fill, and the scan reads them all. An oversized one is
+/// `Unreadable` too, decided from its length before anything is read and
+/// enforced again on the read itself, so one huge file cannot be pulled into
+/// memory on every scan.
 pub(crate) fn load<T: DeserializeOwned + Versioned>(path: &Path) -> Stored<T> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Stored::Missing,
         Err(_) => return Stored::Unreadable,
     };
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() > MAX_COORDINATION_BYTES)
+    {
+        return Stored::Unreadable;
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_COORDINATION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_COORDINATION_BYTES
+    {
+        return Stored::Unreadable;
+    }
     match serde_json::from_slice::<T>(&bytes) {
         Ok(value) if value.version() == FORMAT_VERSION => Stored::Parsed(value),
         _ => Stored::Unreadable,

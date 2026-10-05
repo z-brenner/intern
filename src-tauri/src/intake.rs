@@ -578,6 +578,10 @@ impl DuplicateOracle for SharedFiledIndex {
 /// retraction has not reached the folder, which is the document itself, not
 /// a copy of it. A filing this machine made from another path is still a
 /// duplicate, but there is no other machine to name.
+///
+/// The names come from a file anyone who can write the shared folder can
+/// write, and they end up in a review reason, so they are clamped to the
+/// length of a real filename.
 pub(crate) fn known_filing(
     marker: &FiledMarker,
     own_machine_id: &str,
@@ -591,9 +595,16 @@ pub(crate) fn known_filing(
         return None;
     }
     Some(KnownFiling {
-        filename: marker.filename.clone(),
-        filed_by: (!own).then(|| marker.machine_name.clone()),
+        filename: clamp_marker_text(&marker.filename),
+        filed_by: (!own).then(|| clamp_marker_text(&marker.machine_name)),
     })
+}
+
+/// The longest marker string shown to a person: a filename's limit.
+const MARKER_TEXT_LIMIT: usize = 255;
+
+fn clamp_marker_text(text: &str) -> String {
+    text.chars().take(MARKER_TEXT_LIMIT).collect()
 }
 
 /// What the description records are doing, for Settings.
@@ -821,6 +832,21 @@ mod filed_index_tests {
         assert_eq!(known.filed_by.as_deref(), Some("Front desk"));
         // From outside the intake folder, the same answer.
         assert_eq!(known_filing(&marker("aaa"), "bbb", None), Some(known));
+    }
+
+    /// A marker is a file anyone who can write the shared folder can write,
+    /// and its names go straight into a review reason.
+    #[test]
+    fn a_teammates_marker_names_are_clamped_to_a_filenames_length() {
+        let mut planted = marker("aaa");
+        planted.filename = "x".repeat(10_000);
+        planted.machine_name = "é".repeat(10_000);
+        let known = known_filing(&planted, "bbb", None).unwrap();
+        assert_eq!(known.filename.chars().count(), 255);
+        assert_eq!(known.filed_by.unwrap().chars().count(), 255);
+        // An ordinary marker is untouched.
+        let ordinary = known_filing(&marker("aaa"), "bbb", None).unwrap();
+        assert_eq!(ordinary.filename, "2026-03-02 Agreement.pdf");
     }
 
     #[test]
