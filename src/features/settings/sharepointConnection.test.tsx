@@ -483,11 +483,37 @@ describe('SharePoint connection in Settings', () => {
     expect(screen.queryByText(/deployment configuration/i)).not.toBeInTheDocument();
   });
 
+  // Focus moves when `managed` lands. It used to move in a passive effect,
+  // which React flushes in a later scheduler task, while findByRole resolves
+  // on the DOM mutation of the commit itself: under a loaded run the
+  // assertions could look before the effect had run. The product now moves
+  // focus in a layout effect, inside that commit; the test also waits rather
+  // than looking once.
   it('moves focus into the dialog when the manual fields it started on are replaced', async () => {
     renderDialog(managedBridge());
-    await screen.findByRole('region', { name: 'SharePoint connection' });
-    expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(document.activeElement as HTMLElement);
-    expect(document.activeElement).toBe(screen.getByLabelText('Arrange filed documents'));
+    await screen.findByRole('region', { name: 'SharePoint connection' }, { timeout: 5_000 });
+    await waitFor(() => {
+      const active = document.activeElement as HTMLElement;
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(active);
+      expect(screen.getByLabelText('Arrange filed documents')).toHaveFocus();
+    });
+  });
+
+  // The layout effect is the product half of the fix: by the time the commit
+  // that inserts the region has finished, focus has already moved.
+  it('has moved focus by the time the managed region is in the document', async () => {
+    renderDialog(managedBridge());
+    const seen: Array<Element | null> = [];
+    const observer = new MutationObserver(() => {
+      if (!seen.length && document.querySelector('section.sharepoint-connection')) seen.push(document.activeElement);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    try {
+      await screen.findByRole('region', { name: 'SharePoint connection' }, { timeout: 5_000 });
+    } finally {
+      observer.disconnect();
+    }
+    expect(seen[0]).toBe(screen.getByLabelText('Arrange filed documents'));
   });
 
   it('lets the keyboard reach the support details disclosure', async () => {

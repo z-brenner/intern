@@ -3,7 +3,7 @@ import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSetti
 import { SharePointConnection } from '../features/settings/SharePointConnection';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateStatus } from '../lib/bridge';
@@ -276,7 +276,10 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   }, [bridge]);
   // The destination field focused on open is not rendered once the connection
   // is managed; keep focus inside the dialog rather than dropping it on the page.
-  useEffect(() => {
+  // A layout effect, so focus moves in the same commit that removes the field:
+  // as a passive effect it ran a scheduler task later, and anything that
+  // looked in between - a person's keystroke, a test - found focus on <body>.
+  useLayoutEffect(() => {
     if (managed && !dialog.current?.contains(document.activeElement)) layout.current?.focus();
   }, [managed]);
   useEffect(() => {
