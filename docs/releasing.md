@@ -38,9 +38,11 @@ but `docs/qa/`.
   and QA need no secrets at all, which is what keeps pull requests from forks
   working.
 - **Pages**: Settings → Pages → Source: **GitHub Actions**. The Pages workflow
-  also runs when a release is published; for that run to deploy, the
-  `github-pages` environment (Settings → Environments) must allow release tags
-  as well as `main`. If it does not, run the Pages workflow from `main`.
+  deploys `site/` from `main`: on every push to `main` that changes `site/`,
+  and once more when the release workflow has published, which starts it from
+  `main` (a release published with the workflow's own token cannot start it
+  any other way). The `github-pages` environment's default rule, `main` only,
+  is all it needs.
 - **Private vulnerability reporting**: Settings → Code security → Private
   vulnerability reporting, so the link in [`SECURITY.md`](../SECURITY.md) works.
 
@@ -102,7 +104,8 @@ but `docs/qa/`.
    verified offline, SBOMs and checksums, the evidence manifest validated, the
    provenance attestation, the annotated tag, and the release published as
    **latest** (a prerelease would be invisible to `/releases/latest`, which is
-   where installed copies look for updates).
+   where installed copies look for updates). A last, short job starts the
+   Pages workflow from `main`, so the download page is deployed again.
 7. **Check what shipped.** Download the installer from the release page and
    verify it:
 
@@ -112,8 +115,9 @@ but `docs/qa/`.
    ```
 
    Confirm `https://github.com/z-brenner/intern/releases/latest/download/latest.json`
-   names the new version, and that the Pages run the release started deployed
-   the download page.
+   names the new version, and that the Pages run the release's last job
+   (**Redeploy the download page**) started from `main` deployed the download
+   page.
 
 ## The reviewer rule
 
@@ -160,7 +164,10 @@ and accepts it. It is only worth anything if that is true.
 - **QA's corpus scoring hit its 60-minute limit.** Usually a wedged
   llama-server. `docs/qa/logs/model-evaluation.log` in the artifact shows where
   it stopped; run QA again.
-- **Pages did not deploy.** The run summary says why. Usually Pages is not
-  enabled (Settings → Pages → Source: GitHub Actions), or a run started by a
-  release was refused by the `github-pages` environment's branch rules; run the
-  Pages workflow from `main`.
+- **Pages did not deploy.** Usually Pages is not enabled; the run summary
+  then says so, with the fix (Settings → Pages → Source: GitHub Actions). A
+  run the `github-pages` environment refused stops before any step, so it
+  writes no summary; its error names the ref, and running the Pages workflow
+  from `main` deploys. If the release's **Redeploy the download page** job
+  warns that it could not start the Pages workflow, the release itself is
+  published: run the Pages workflow from `main` by hand.

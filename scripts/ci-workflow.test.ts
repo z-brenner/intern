@@ -126,12 +126,35 @@ describe('the Rust lock and format check', () => {
 });
 
 describe('the Pages deployment', () => {
-  it('redeploys on a published release and says how to enable Pages when it cannot deploy', async () => {
+  it('says how to enable Pages when it cannot deploy', async () => {
     const workflow = await readFile('.github/workflows/pages.yml', 'utf8');
-    expect(workflow).toMatch(/^ {2}release:\n {4}types: \[published\]$/m);
     const remedy = stepsOf(jobOf(workflow, 'deploy')).find((step) => step.includes('if: failure()'));
     expect(remedy).toBeDefined();
     expect(remedy).toContain('Enable Pages: Settings → Pages → Source: GitHub Actions');
     expect(remedy).toContain('>> "$GITHUB_STEP_SUMMARY"');
+    // A run the environment's rules refuse never reaches a step, so advice
+    // for that case here could never be shown.
+    expect(remedy).not.toMatch(/tag/i);
+  });
+
+  // The release publishes with the workflow's own token, and GitHub starts no
+  // run for an event that token causes. A `release: published` trigger on
+  // pages.yml therefore never fired for a release made by release.yml; only
+  // a dispatch does.
+  it('is started by the release once it has published, from main', async () => {
+    const pages = await readFile('.github/workflows/pages.yml', 'utf8');
+    expect(pages).toMatch(/^on:\n[\s\S]*^ {2}workflow_dispatch:$/m);
+    expect(pages).not.toMatch(/^ {2}release:$/m);
+
+    const release = await readFile('.github/workflows/release.yml', 'utf8');
+    const job = jobOf(release, 'pages');
+    expect(job).toContain('needs: release');
+    expect(job).toMatch(/^ {4}permissions:\n {6}actions: write$/m);
+    expect(job).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(job).toContain('gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main');
+    // The release is already out; a refused dispatch must not read as a
+    // failed release that someone dispatches again.
+    expect(job).toMatch(/if ! gh workflow run pages\.yml[^\n]*; then\n\s+echo '::warning::/);
+    expect(release.indexOf('  pages:\n')).toBeGreaterThan(release.indexOf('gh release create $Tag'));
   });
 });

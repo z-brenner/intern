@@ -473,3 +473,28 @@ jobs:
           # notes say so in their first line.
           gh release create $Tag $Assets --verify-tag --latest --notes-file docs/releases/v0.1.0-alpha.10.md --title 'Intern v0.1.0-alpha.10'
           if ($LASTEXITCODE -ne 0) { throw 'Could not publish GitHub release' }
+
+  # The download page the release links to, deployed again once the release
+  # exists. pages.yml cannot notice the release by itself: the job above
+  # publishes with this workflow's own token, and GitHub starts no workflow run
+  # for an event that token causes, except workflow_dispatch. So it is
+  # dispatched, from main, which is also the ref the github-pages environment
+  # lets deploy. Nothing outside docs/qa/ may change between QA and release
+  # (docs/releasing.md), so main's site/ is the released commit's. By now the
+  # release is published; a dispatch that is refused is a warning with the
+  # remedy, not a failed release that someone might dispatch again.
+  pages:
+    name: Redeploy the download page
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start the Pages workflow from main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main; then
+            echo '::warning::The release is published, but the Pages workflow could not be started. Run it from main: Actions → Pages → Run workflow.'
+            echo 'The release is published, but the Pages workflow could not be started. Run it from main: Actions → Pages → Run workflow.' >> "$GITHUB_STEP_SUMMARY"
+          fi

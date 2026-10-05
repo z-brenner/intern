@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths: ['site/**', '.github/workflows/pages.yml']
-  # Publishing a release redeploys the page from the released commit, so the
-  # download page a release links to exists and says what that release does,
-  # even when no commit since the last deployment touched site/.
-  release:
-    types: [published]
+  # Also how a release redeploys the page: release.yml dispatches this from
+  # main once it has published. A `release: published` trigger would never
+  # fire for it, because that release is published with the release
+  # workflow's own token, and GitHub starts no run for an event that token
+  # causes, workflow_dispatch excepted.
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,9 @@ jobs:
       # The usual failure is a repository where Pages was never switched on,
       # and the actions' own errors ("Get Pages site failed", "Not Found") do
       # not say that. Say it, with the fix, where the run's summary shows it.
+      # A run the github-pages environment refuses (a ref its deployment rules
+      # do not allow) never reaches this step: the job is stopped before any
+      # step runs, and the refusal is the run's own error.
       - name: Explain how to enable Pages
         if: failure()
         run: |
@@ -49,6 +52,4 @@ jobs:
             echo 'If the log above says Pages is not enabled, or the Pages site was not found:'
             echo
             echo '**Enable Pages: Settings → Pages → Source: GitHub Actions**, then run this workflow again.'
-            echo
-            echo 'If it says a tag is not allowed to deploy to github-pages (a run started by publishing a release), allow release tags under Settings → Environments → github-pages → Deployment branches and tags, or run this workflow from main.'
           } >> "$GITHUB_STEP_SUMMARY"
