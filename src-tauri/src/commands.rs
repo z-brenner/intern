@@ -1419,9 +1419,18 @@ pub fn queue_retry(id: String, state: State<'_, AppState>) -> Result<(), Command
     state.schedule()
 }
 
+/// Removes an item. `confirmed` is the person saying they have resolved the
+/// files of an operation that never finished; without it such an item is
+/// refused, as before. Absent from older windows, which never confirm.
 #[tauri::command]
-pub fn queue_remove(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.remove(parse_item_id(&id)?)?;
+pub fn queue_remove(
+    id: String,
+    confirmed: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    state
+        .pipeline
+        .remove(parse_item_id(&id)?, confirmed.unwrap_or(false))?;
     Ok(())
 }
 
@@ -3418,6 +3427,8 @@ mod duplicate_reason_tests {
             error_code: Some(ErrorCode::Duplicate),
             proposal: None,
             receipt: None,
+            filed_receipt: None,
+            unsettled_receipt: None,
             duplicate_of: duplicate_of.map(str::to_owned),
         }
     }

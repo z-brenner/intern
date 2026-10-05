@@ -8,8 +8,8 @@ use std::{
 };
 
 use intern_core::{
-    ErrorCode, FileApplier, InternError, OperationDirection, OperationReceipt, OperationStage,
-    QueueItem, QueueStatus, QueueStore, StdFileSystem, source_path_key,
+    ErrorCode, FileApplier, FileSystem, InternError, OperationDirection, OperationReceipt,
+    OperationStage, QueueItem, QueueStatus, QueueStore, StdFileSystem, source_path_key,
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
@@ -22,6 +22,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::admission::{AdmissionEvidence, AdmissionGuard, AdmissionStage, LocalAdmission};
+use crate::paths::display_path;
 use crate::settings::{AppSettings, DestinationLayout, SettingsStore};
 
 const LEASE_RENEWAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(20);
@@ -289,8 +290,15 @@ pub struct CoreFileActions {
 
 impl CoreFileActions {
     pub fn local(store: Arc<QueueStore>) -> Self {
+        Self::with_file_system(store, Arc::new(StdFileSystem))
+    }
+
+    /// The journalled file operations over `filesystem` rather than the
+    /// machine's own: what lets a held file, a refused rename or a slow copy
+    /// be reproduced on any platform, against the queue's own store.
+    pub fn with_file_system(store: Arc<QueueStore>, filesystem: Arc<dyn FileSystem>) -> Self {
         Self {
-            applier: FileApplier::new(Arc::new(StdFileSystem), Arc::clone(&store)),
+            applier: FileApplier::new(filesystem, Arc::clone(&store)),
             store,
         }
     }
@@ -334,7 +342,7 @@ impl FileActions for CoreFileActions {
     }
 
     fn undo(&self, item: &QueueItem, receipt: &OperationReceipt) -> PipelineResult<()> {
-        self.store.begin_applying(item.id, QueueStatus::Completed)?;
+        self.store.begin_undo(item.id)?;
         let lease = LeaseKeeper::start(Arc::clone(&self.store), item.id, LEASE_RENEWAL_INTERVAL)?;
         let result = self.applier.undo(item.id, receipt);
         lease.stop_and_check()?;
@@ -577,7 +585,18 @@ pub struct PipelineItem {
     pub processing_failures: u32,
     pub error_code: Option<ErrorCode>,
     pub proposal: Option<ProposalRecord>,
+    /// The newest receipt of any stage: the operation reconciliation is
+    /// about, whether or not it finished.
     pub receipt: Option<OperationReceipt>,
+    /// The completed apply the document is filed by, when its newest finished
+    /// operation is one. An undo that was refused and rolled back leaves this
+    /// in place; an undo that finished takes it away. This, not `receipt`, is
+    /// what says where the document is and whether it can be undone.
+    pub filed_receipt: Option<OperationReceipt>,
+    /// An operation that never finished, on an item that is not applying: one
+    /// a reconciliation could not settle. Until it is checked again, no new
+    /// rename of the document can be journalled.
+    pub unsettled_receipt: Option<OperationReceipt>,
     /// For an item flagged DUPLICATE: the name its content is already filed
     /// under (the completed apply's destination leaf, or the completed item's
     /// original filename for keep-original completions). `None` once the
@@ -608,6 +627,14 @@ pub struct Pipeline {
     model_timeout: std::time::Duration,
     lease_renewal_interval: std::time::Duration,
     run_lock: Mutex<()>,
+    /// Held around every file operation and the reconciliation that follows
+    /// it. Approve, undo, retry and the recovery pass run on different
+    /// threads with the same store session, so every ownership check of one
+    /// passed against another still in flight: recovery could record a
+    /// rename as rolled back just before it landed, or delete a temporary
+    /// copy still being verified. Taken after `run_lock`, never before it,
+    /// and never held twice.
+    file_ops: Mutex<()>,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -639,26 +666,9 @@ impl Pipeline {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        Ok(Self {
-            store,
-            repository,
-            worker,
-            model,
-            files,
-            events,
-            filing: Arc::new(NoFilingSink),
-            duplicates: Arc::new(NoDuplicateOracle),
-            admission: Arc::new(LocalAdmission),
-            settings,
-            paused: AtomicBool::new(false),
-            pause_reason: Mutex::new(None),
-            consecutive_unreadable_replies: AtomicU32::new(0),
-            active_item: AtomicI64::new(0),
-            shutting_down: AtomicBool::new(false),
-            model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
-            lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
-            run_lock: Mutex::new(()),
-        })
+        Ok(Self::assemble(
+            store, repository, worker, model, files, events, settings,
+        ))
     }
 
     pub fn with_local_files(
@@ -668,11 +678,51 @@ impl Pipeline {
         events: Arc<dyn PipelineEventSink>,
         settings: SettingsStore,
     ) -> PipelineResult<Self> {
+        Self::with_file_system(
+            database,
+            worker,
+            model,
+            events,
+            settings,
+            Arc::new(StdFileSystem),
+        )
+    }
+
+    /// The queue with its real journalled file operations, over `filesystem`.
+    ///
+    /// The file operations share the queue's own store, as they do in the
+    /// app: their ownership checks run against the same session as approve,
+    /// undo and recovery, which is exactly where those calls used to race.
+    pub fn with_file_system(
+        database: impl AsRef<Path>,
+        worker: Arc<dyn WorkerBoundary>,
+        model: Arc<dyn AnalyzerBoundary>,
+        events: Arc<dyn PipelineEventSink>,
+        settings: SettingsStore,
+        filesystem: Arc<dyn FileSystem>,
+    ) -> PipelineResult<Self> {
         let database = database.as_ref();
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
-        let files = Arc::new(CoreFileActions::local(Arc::clone(&store)));
-        Ok(Self {
+        let files = Arc::new(CoreFileActions::with_file_system(
+            Arc::clone(&store),
+            filesystem,
+        ));
+        Ok(Self::assemble(
+            store, repository, worker, model, files, events, settings,
+        ))
+    }
+
+    fn assemble(
+        store: Arc<QueueStore>,
+        repository: PipelineRepository,
+        worker: Arc<dyn WorkerBoundary>,
+        model: Arc<dyn AnalyzerBoundary>,
+        files: Arc<dyn FileActions>,
+        events: Arc<dyn PipelineEventSink>,
+        settings: SettingsStore,
+    ) -> Self {
+        Self {
             store,
             repository,
             worker,
@@ -691,7 +741,8 @@ impl Pipeline {
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
             lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
             run_lock: Mutex::new(()),
-        })
+            file_ops: Mutex::new(()),
+        }
     }
 
     /// Reports every completed rename (and every undo of one) to `sink`.
@@ -830,6 +881,17 @@ impl Pipeline {
     fn pipeline_item(&self, item: QueueItem) -> PipelineResult<PipelineItem> {
         let proposal = self.repository.load_proposal(item.id)?;
         let receipt = self.store.load_receipt(item.id)?;
+        let filed_receipt = self
+            .store
+            .load_latest_complete_receipt(item.id)?
+            .filter(|receipt| receipt.direction == OperationDirection::Apply);
+        // An applying item's unfinished receipt is the operation in flight,
+        // not one left behind.
+        let unsettled_receipt = if item.status == QueueStatus::Applying {
+            None
+        } else {
+            self.store.load_unsettled_receipt(item.id)?
+        };
         let duplicate_of = if item.status == QueueStatus::NeedsReview
             && item.error_code == Some(ErrorCode::Duplicate)
         {
@@ -862,29 +924,35 @@ impl Pipeline {
             error_code: item.error_code,
             proposal,
             receipt,
+            filed_receipt,
+            unsettled_receipt,
             duplicate_of,
         })
     }
 
     /// Every document the queue has filed and not undone: completed items
-    /// whose latest receipt is a finished apply, with the sentence and facts
-    /// that were applied. What a records keeper replays when it is switched
-    /// on after documents were already filed.
+    /// whose latest finished operation is an apply, with the sentence and
+    /// facts that were applied. What a records keeper replays when it is
+    /// switched on after documents were already filed.
+    ///
+    /// The filing time is when the receipt finished. It used to be read from
+    /// the filed document's modification time, but a rename does not change
+    /// that, so a contract last saved years ago was recorded as filed then.
     pub fn filed_documents(&self) -> PipelineResult<Vec<FiledDocument>> {
         Ok(self
             .list()?
             .into_iter()
             .filter(|item| item.status == QueueStatus::Completed)
             .filter_map(|item| {
-                let receipt = item.receipt?;
+                let receipt = item.filed_receipt?;
                 let proposal = item.proposal?;
-                filed_document(
-                    item.id,
-                    &item.source_hash,
-                    &receipt,
-                    &proposal,
-                    receipt_time(&receipt),
-                )
+                let filed_at = self
+                    .store
+                    .receipt_updated_at(receipt.id)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(unix_now);
+                filed_document(item.id, &item.source_hash, &receipt, &proposal, filed_at)
             })
             .collect())
     }
@@ -1613,7 +1681,21 @@ impl Pipeline {
             self.events.queue_changed();
             return Err(failure);
         }
-        if let Err(error) = self.files.apply(item, &target.join(filename)) {
+        let applied = {
+            let _files = self.hold_file_ops();
+            let applied = self.files.apply(item, &target.join(filename));
+            if let Err(error) = &applied
+                && error.code != APPLY_DEFERRED
+            {
+                // Core file operations journal ambiguous failures in Applying.
+                // Settle them now, under the same hold, so no recovery pass
+                // can take the operation over between its failure and this;
+                // the scheduler also retries reconciliation periodically.
+                let _ = self.files.reconcile(item);
+            }
+            applied
+        };
+        if let Err(error) = applied {
             if error.code == APPLY_DEFERRED {
                 // Nothing is wrong with this document: the queue was busy with
                 // another one. The name a person approved is durable in the
@@ -1622,9 +1704,6 @@ impl Pipeline {
                 self.events.queue_changed();
                 return Ok(());
             }
-            // Core file operations journal ambiguous failures in Applying. Try to settle
-            // them now; the scheduler also retries reconciliation periodically.
-            let _ = self.files.reconcile(item);
             if self
                 .store
                 .list()?
@@ -1648,7 +1727,7 @@ impl Pipeline {
     /// the applier actually chose, suffix and all, and the proposal carries
     /// the sentence a reviewer may have edited.
     fn report_filed(&self, item: &QueueItem) {
-        let Ok(Some(receipt)) = self.store.load_receipt(item.id) else {
+        let Ok(Some(receipt)) = self.store.load_latest_complete_receipt(item.id) else {
             return;
         };
         let Ok(Some(proposal)) = self.repository.load_proposal(item.id) else {
@@ -1773,6 +1852,33 @@ impl Pipeline {
         self.paused.store(true, Ordering::SeqCst);
     }
 
+    /// The hold every file operation and its reconciliation runs under. The
+    /// guarded value is nothing, so a holder that panicked leaves nothing to
+    /// distrust behind it.
+    fn hold_file_ops(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.file_ops
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn find_item(&self, id: i64) -> PipelineResult<QueueItem> {
+        self.store
+            .list()?
+            .into_iter()
+            .find(|item| item.id == id)
+            .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))
+    }
+
+    /// The operation an item was left with when a reconciliation could not
+    /// settle it. An applying item's unfinished receipt is the operation in
+    /// flight, so it never counts.
+    fn unsettled_receipt(&self, item: &QueueItem) -> PipelineResult<Option<OperationReceipt>> {
+        if item.status == QueueStatus::Applying {
+            return Ok(None);
+        }
+        Ok(self.store.load_unsettled_receipt(item.id)?)
+    }
+
     pub fn shutdown(&self) -> PipelineResult<()> {
         self.shutting_down.store(true, Ordering::SeqCst);
         self.paused.store(true, Ordering::SeqCst);
@@ -1792,7 +1898,7 @@ impl Pipeline {
             .find(|item| item.id == id)
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
         if item.status == QueueStatus::NeedsReview
-            && let Some(error) = unsettled_files(&item)
+            && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
             return Err(error);
         }
@@ -1842,14 +1948,16 @@ impl Pipeline {
             .into_iter()
             .find(|item| item.id == id)
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
+        // For a document whose files were left unsettled, the only thing
+        // Retry can mean is "look at them again": the deletion a sync client
+        // was blocking, the rename a program holding the file refused, the two
+        // names a person has since sorted out by hand. Whatever stage the
+        // operation reached.
         if item.status == QueueStatus::NeedsReview
-            && item.error_code == Some(ErrorCode::SourceDeleteFailed)
+            && (item.error_code == Some(ErrorCode::SourceDeleteFailed)
+                || self.unsettled_receipt(&item)?.is_some())
         {
-            let claimed = self.store.claim_deferred_reconciliation(id)?;
-            let result = self.files.reconcile(&claimed);
-            self.report_settled(id);
-            self.events.queue_changed();
-            return result;
+            return self.check_again(id);
         }
         if item.status == QueueStatus::NeedsReview
             && item.error_code == Some(ErrorCode::UploaderUnverified)
@@ -1888,8 +1996,18 @@ impl Pipeline {
         Ok(())
     }
 
-    pub fn remove(&self, id: i64) -> PipelineResult<()> {
-        self.reject_deferred_reconciliation_mutation(id)?;
+    /// Takes an item out of the queue, with its proposal and receipts.
+    ///
+    /// An item whose files were left unsettled is removed only once the
+    /// person has `confirmed` they resolved the files themselves: removing it
+    /// otherwise decides what the files are on their behalf, and with the
+    /// receipts goes the only record of what is where. Without that there was
+    /// no way out at all for an operation reconciliation could never prove -
+    /// every action refused it, even after the files were sorted by hand.
+    pub fn remove(&self, id: i64, confirmed: bool) -> PipelineResult<()> {
+        if !confirmed {
+            self.reject_deferred_reconciliation_mutation(id)?;
+        }
         self.repository.remove_item(id)?;
         self.events.queue_changed();
         Ok(())
@@ -1903,13 +2021,28 @@ impl Pipeline {
                 "the filename must start with the document's date as YYYY-MM-DD",
             ));
         }
-        let item = self
+        let mut item = self
             .store
             .list()?
             .into_iter()
             .find(|item| item.id == id)
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
-        if let Some(error) = unsettled_files(&item) {
+        // A rename that never finished stops any new one being journalled,
+        // and approving again - once the program holding the file has let go
+        // - is exactly how a person asks for it to be settled. So it is
+        // checked first, rather than left to fail the apply every time.
+        if matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready)
+            && self.unsettled_receipt(&item)?.is_some()
+        {
+            self.check_again(id)?;
+            item = self.find_item(id)?;
+            if item.status == QueueStatus::Completed {
+                // The earlier rename had in fact landed: the document is
+                // filed, under the name that rename gave it.
+                return Ok(());
+            }
+        }
+        if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
         let source_extension = item
@@ -1977,7 +2110,7 @@ impl Pipeline {
             .into_iter()
             .find(|item| item.id == id)
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
-        if let Some(error) = unsettled_files(&item) {
+        if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
         self.store.complete_keep_original(id, item.status)?;
@@ -1998,19 +2131,87 @@ impl Pipeline {
                 "only completed operations can be undone",
             ));
         }
-        let receipt = self.store.load_receipt(id)?.ok_or_else(|| {
-            PipelineError::new(
-                "STATE_CONFLICT",
-                "completed item has no durable operation receipt",
-            )
-        })?;
+        // The apply that filed the document, not the newest receipt: an undo
+        // refused and rolled back earlier sits on top of it having moved
+        // nothing.
+        let receipt = self
+            .store
+            .load_latest_complete_receipt(id)?
+            .filter(|receipt| receipt.direction == OperationDirection::Apply)
+            .ok_or_else(|| {
+                PipelineError::new(
+                    "STATE_CONFLICT",
+                    "completed item has no durable operation receipt",
+                )
+            })?;
+        let outcome = {
+            let _files = self.hold_file_ops();
+            let outcome = self.files.undo(&item, &receipt);
+            if outcome.is_err() {
+                // A journalled undo that failed leaves the item applying, and
+                // one applying row stops every other document - until a
+                // recovery pass that steady intake could put off for good.
+                // Settle it now, as a failed apply is.
+                let _ = self.files.reconcile(&item);
+            }
+            outcome
+        };
         // An undo the applier journalled can be finished by a reconciliation
         // even when the call itself reports a failure, so what settles this is
         // the store rather than the return value.
-        let outcome = self.files.undo(&item, &receipt);
         self.report_settled(id);
         self.events.queue_changed();
-        outcome
+        match outcome {
+            Ok(()) => Ok(()),
+            Err(_) if self.is_undone(id) => Ok(()),
+            Err(error) => Err(undo_failure(error, &receipt)),
+        }
+    }
+
+    /// Whether the item's newest finished operation is an undo: the document
+    /// is back where it started, whichever call got it there.
+    fn is_undone(&self, id: i64) -> bool {
+        self.store
+            .load_latest_complete_receipt(id)
+            .ok()
+            .flatten()
+            .is_some_and(|receipt| receipt.direction == OperationDirection::Undo)
+    }
+
+    /// Looks again at a file operation that never finished - "Check again",
+    /// which retry and approve run too.
+    ///
+    /// The operation is put back in `applying` bound to its receipt, and the
+    /// same reconciliation recovery runs settles it: a rename that never
+    /// happened is rolled back, one that did is finished, and one that still
+    /// cannot be proven is parked again with the reason. Before this, nothing
+    /// ever looked at a parked receipt again, and its unfinished stage made
+    /// every later apply of the document fail to journal.
+    pub fn check_again(&self, id: i64) -> PipelineResult<()> {
+        let result = {
+            let _files = self.hold_file_ops();
+            let reattached =
+                self.store
+                    .reattach_unsettled_receipt(id)
+                    .map_err(|error| match error.code() {
+                        ErrorCode::StateConflict => PipelineError::new(
+                            "STATE_CONFLICT",
+                            "another file operation is in progress; check again in a moment",
+                        ),
+                        _ => error.into(),
+                    })?;
+            if reattached.is_none() {
+                return Err(PipelineError::new(
+                    "INVALID_TRANSITION",
+                    "no file operation of this document is waiting to be checked",
+                ));
+            }
+            let item = self.find_item(id)?;
+            self.files.reconcile(&item)
+        };
+        self.report_settled(id);
+        self.events.queue_changed();
+        result
     }
 
     pub fn clear_history(&self) -> PipelineResult<usize> {
@@ -2036,7 +2237,7 @@ impl Pipeline {
             .find(|item| item.id == id)
             .ok_or_else(|| PipelineError::new("ITEM_NOT_FOUND", "queue item does not exist"))?;
         if item.status == QueueStatus::NeedsReview
-            && let Some(error) = unsettled_files(&item)
+            && let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref())
         {
             return Err(error);
         }
@@ -2067,24 +2268,66 @@ impl Pipeline {
                 self.repository.record_recovered_failure(id)?;
             }
         }
-        for item in self
+        let applying = self
             .store
             .list()?
             .into_iter()
             .filter(|item| item.status == QueueStatus::Applying)
-        {
-            // A still-running app may own the ambiguous operation. Its file boundary can
-            // reconcile under that lease without waiting for its own session to go stale.
-            if self.files.reconcile(&item).is_err()
-                && let Ok(claimed) = self.store.claim_applying_reconciliation(item.id)
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        for id in applying {
             {
-                let _ = self.files.reconcile(&claimed);
+                // An approve, undo or check on another thread may be in the
+                // middle of this very operation, with the same session, so
+                // nothing in the store tells the two apart. Wait for it, then
+                // look at what it left: if it settled the item, there is
+                // nothing to recover, and whoever settled it reported it.
+                let _files = self.hold_file_ops();
+                let Some(item) = self
+                    .store
+                    .list()?
+                    .into_iter()
+                    .find(|item| item.id == id && item.status == QueueStatus::Applying)
+                else {
+                    continue;
+                };
+                // A still-running app may own the ambiguous operation. Its file boundary can
+                // reconcile under that lease without waiting for its own session to go stale.
+                if self.files.reconcile(&item).is_err()
+                    && let Ok(claimed) = self.store.claim_applying_reconciliation(item.id)
+                {
+                    let _ = self.files.reconcile(&claimed);
+                }
             }
-            self.report_settled(item.id);
+            self.report_settled(id);
         }
         self.events.queue_changed();
         Ok(())
     }
+}
+
+/// What a failed undo tells the person who asked for it.
+///
+/// The window shows the message as it is, and the applier's own words were
+/// written for a log: a filed document someone moved read as an unavailable
+/// destination volume, and a moment of contention as a compare-and-swap.
+fn undo_failure(error: PipelineError, filed: &OperationReceipt) -> PipelineError {
+    if !filed.destination.exists() {
+        return PipelineError::new(
+            "FILE_CHANGED",
+            format!(
+                "The filed document is no longer at {}; it was moved or deleted.",
+                display_path(&filed.destination)
+            ),
+        );
+    }
+    if error.code == "STATE_CONFLICT" {
+        return PipelineError::new(
+            "STATE_CONFLICT",
+            "Another rename is in progress. Try Undo again in a moment.",
+        );
+    }
+    error
 }
 
 /// Why an item's files must be settled before anything else moves them, or
@@ -2092,10 +2335,16 @@ impl Pipeline {
 ///
 /// Both codes mean two files are on disk where one document should be: a
 /// verified copy whose original could not be deleted, and a reconciliation
-/// that could not tell which of the two the document is. Renaming, cancelling
-/// or removing such an item would decide that on the person's behalf, so each
-/// of those refuses and says which question is open.
-fn unsettled_files(item: &QueueItem) -> Option<PipelineError> {
+/// that could not tell which of the two the document is. Any other
+/// unfinished receipt is an operation nobody has looked at since it failed,
+/// and it stops the next rename from being journalled. Renaming, cancelling
+/// or removing such an item would decide what the files are on the person's
+/// behalf, so each of those refuses and says which question is open - by
+/// name, rather than letting an apply fail on it later as a conflict.
+fn unsettled_files(
+    item: &QueueItem,
+    unsettled: Option<&OperationReceipt>,
+) -> Option<PipelineError> {
     match item.error_code {
         Some(ErrorCode::SourceDeleteFailed) => Some(PipelineError::new(
             "RECONCILIATION_REQUIRED",
@@ -2105,7 +2354,12 @@ fn unsettled_files(item: &QueueItem) -> Option<PipelineError> {
             "RECONCILIATION_REQUIRED",
             "reconciliation could not tell which file is the document; compare both names",
         )),
-        _ => None,
+        _ => unsettled.map(|_| {
+            PipelineError::new(
+                "RECONCILIATION_REQUIRED",
+                "an earlier rename of this document did not finish, so its files need checking: use Check again",
+            )
+        }),
     }
 }
 
@@ -2736,17 +2990,6 @@ pub fn proposal_as_applied(proposal: &ValidatedProposal, filename: &str) -> Vali
         applied.document_date = Some(date.to_owned());
     }
     applied
-}
-
-/// When a completed rename happened, as best the receipt can say: the
-/// destination's modification time is the rename itself on most filesystems,
-/// and a missing file (deleted since) falls back to now.
-fn receipt_time(receipt: &OperationReceipt) -> i64 {
-    fs::metadata(&receipt.destination)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or_else(unix_now, |duration| duration.as_secs() as i64)
 }
 
 fn unix_now() -> i64 {
