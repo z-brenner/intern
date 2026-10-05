@@ -79,6 +79,24 @@ window: the delimiter is the one of comma, semicolon, tab, and pipe that
 splits the leading records most consistently, fields that are not UTF-8 read
 as Windows-1252, and a UTF-16 export is transcoded as it streams.
 
+A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
+the 25-megapixel render cap, at the highest resolution that fits it. A phone
+photo that some tool wrapped in a PDF at 72 DPI is a 4032 × 3024 point page,
+about 212 megapixels at 300 DPI; it is rendered at about 103 DPI, which
+Tesseract reads perfectly well, instead of failing the document. Only a page
+that would have to go below 50 DPI to fit is a resource limit, and the size of
+what was actually rendered is still checked against the cap. A standalone
+image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
+are ordinary — and scaled down to the page cap before OCR.
+
+OCR text keeps the layout Tesseract found. The worker rebuilds it from
+Tesseract's TSV output: words on a line joined with a space, lines with a
+newline, and a new block or paragraph with a blank line, the way Tesseract's
+own text output separates them. It used to be one line per page, which left
+distillation no headings, no labelled lines, and no date lines on exactly the
+documents where dates go missing; the scanned lease's evidence for its date
+was its whole page.
+
 A standalone image is OCR'd as one page; a TIFF holding a frame per page — a
 fax, a batch scan — yields its first frame and reports the rest as truncated
 rather than dropping them silently. `.eml` emails and Outlook `.msg` messages
@@ -103,7 +121,7 @@ document eight million, and the host reads the worker's reply lines with a
 64 MiB bound, failing a longer one as a crashed worker rather than allocating
 it in the app's own process.
 
-Two consequences of "OCR only when necessary" are enforced in code rather than
+What "OCR only when necessary" means is enforced in code rather than
 documented as intent:
 
 * The OCR engine is constructed the first time a page actually needs it. A text
@@ -112,19 +130,34 @@ documented as intent:
 * PDFium is bound once per process and shared. Binding it per document made
   every PDF after the first one in a queue fail as "native assets missing";
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
-* A page that does not read confidently is re-read in the other orientations.
-  Tesseract's orientation detection is trained on prose with ascenders and
-  descenders; on a dense all-caps form it can be confidently 180 degrees wrong,
-  and OCR then returns a full page of gibberish with the same word count and
-  shape as a real reading. Volume cannot tell those apart, so mean word
-  confidence arbitrates: one corpus page scored 23, 14, 14, and 76 across the
-  four orientations. Confidence is a mean, though, so a reading only displaces
+* A page is read as it came first, in grey: Tesseract binarises whatever it is
+  given, and grey is a third of the bytes to encode for every pass. A reading
+  of at least three words at a mean confidence of 75 or more is done — one
+  recognition pass and no orientation detection — and so is a reading that
+  found nothing, since a blank page, every other sheet of a duplex scan, is
+  blank in every orientation. Orientation detection used to run first on every
+  page, and on the corpus's upright lease it was confidently 180 degrees wrong
+  and bought three more recognition passes to find the orientation the page
+  already had. Reading upright first took that page from four passes to one
+  and from 3.8 s to 0.6 s, and the median upright scan in the corpus from
+  1.2 s to 0.6 s (whole document, Linux, Tesseract 5.3.4 on one thread).
+* A page that does not read confidently asks orientation detection, on a
+  half-scale copy, and is then re-read in the other orientations. Tesseract's
+  orientation detection is trained on prose with ascenders and descenders; on
+  a dense all-caps form it can be confidently 180 degrees wrong, and OCR then
+  returns a full page of gibberish with the same word count and shape as a
+  real reading. Volume cannot tell those apart, so mean word confidence
+  arbitrates: one corpus page scored 23, 14, 14, and 76 across the four
+  orientations. Confidence is a mean, though, so a reading only displaces
   another when it read a comparable amount; three confident tokens are not a
-  better reading of a page than three hundred words just under the bar. A page
-  that reads well the first time — every upright document — still costs exactly
-  one pass, and so does a page that reads as blank, which is every other sheet
-  of a duplex scan; only a page already headed for a low-confidence warning
-  pays for the search.
+  better reading of a page than three hundred words just under the bar. The
+  upright reading is one of the candidates, compared as it already came back
+  rather than read again.
+
+A PDF reports its progress as it goes: a `reading` event as each page is
+reached and an `ocr` event as each goes to OCR, carrying the page and the page
+count, at most four of each a second. A 200-page scan used to sit at 0% until
+it was done.
 
 ## Distillation
 
