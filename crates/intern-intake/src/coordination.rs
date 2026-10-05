@@ -13,7 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{self, Read},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -25,6 +25,7 @@ use crate::{
     filed::{FILED_RETENTION_SECONDS, FiledMarker},
     fsatomic,
     identity::MachineIdentity,
+    scan::modified_secs,
 };
 
 pub const CLAIM_LEASE_SECONDS: i64 = 900;
@@ -599,7 +600,8 @@ impl ClaimStore {
 
     /// Best-effort janitor for the shared directory.
     ///
-    /// Removes done tombstones past `DONE_RETENTION_SECONDS`, claimed leases
+    /// Removes done tombstones past `DONE_RETENTION_SECONDS` - except a kept
+    /// document's while it stays put (see `prune_claims`) - claimed leases
     /// whose heartbeat has been silent that long (their machine is gone for
     /// good and nothing else ever deletes them), origin markers past the same
     /// retention, filed markers past `FILED_RETENTION_SECONDS`, and — after
@@ -650,6 +652,18 @@ impl ClaimStore {
 
     /// Returns the keys of the claims that survived, so the heartbeat
     /// observations cannot outlive the claims they describe.
+    ///
+    /// A `KeptOriginal` tombstone whose document is still in the folder
+    /// exactly as it was claimed is kept however old it is. That outcome is a
+    /// person's decision to leave the document where it is - kept under its
+    /// own name, canceled, removed from the queue, discarded while waiting -
+    /// and the tombstone is the only record of it: expired, the document was
+    /// picked up again as new and analysed once more a month after someone
+    /// decided against it. Once the document is moved, deleted or rewritten
+    /// its key is one nothing will see again, and the tombstone goes as
+    /// before. Other outcomes keep the plain retention: a failure is tried
+    /// again a month on, and a document that vanished before it was finished
+    /// and then came back is not refused for ever.
     fn prune_claims(&self, now: i64) -> HashSet<String> {
         let mut live = HashSet::new();
         let Ok(entries) = fs::read_dir(self.root.join("claims")) else {
@@ -667,7 +681,11 @@ impl ClaimStore {
                         ClaimState::Done => claim.done_at.unwrap_or(claim.claimed_at),
                         ClaimState::Claimed => claim.heartbeat_at,
                     };
-                    if now - reference >= DONE_RETENTION_SECONDS {
+                    let expired = now - reference >= DONE_RETENTION_SECONDS;
+                    let kept_in_place = claim.state == ClaimState::Done
+                        && claim.outcome == Some(DoneOutcome::KeptOriginal)
+                        && self.still_in_place(&claim);
+                    if expired && !kept_in_place {
                         let _ = fs::remove_file(&path);
                     } else {
                         live.insert(claim.key);
@@ -678,6 +696,28 @@ impl ClaimStore {
             }
         }
         live
+    }
+
+    /// Whether the document `claim` names is still in the intake folder as it
+    /// was claimed: same place, size and modification time. The claim comes
+    /// from a file anyone who can write the shared folder can write, so it
+    /// names nothing unless its facts make the key it is filed under, and a
+    /// path that would lead anywhere but down into the folder names nothing
+    /// either.
+    fn still_in_place(&self, claim: &ClaimInfo) -> bool {
+        let relative = Path::new(&claim.relative_path);
+        let Some(folder) = self.root.parent() else {
+            return false;
+        };
+        document_key(&claim.relative_path, claim.size, claim.modified_at) == claim.key
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+            && fs::metadata(folder.join(relative)).is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata.len() == claim.size
+                    && modified_secs(&metadata) == claim.modified_at
+            })
     }
 
     fn prune_named_dir<T: DeserializeOwned + Versioned>(

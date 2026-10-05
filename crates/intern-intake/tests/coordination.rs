@@ -422,6 +422,89 @@ fn prune_removes_expired_done_claims_dead_leases_and_conflict_copies() {
     assert!(temp.path().join(".intern").join("README.txt").exists());
 }
 
+/// A kept document's tombstone is the only record that a person decided to
+/// leave it where it is - kept under its own name, canceled, removed from the
+/// queue. Expired while the document still sat in the folder unchanged, it
+/// had the document picked up again as new and analysed once more, a month
+/// after someone decided against it.
+#[test]
+fn a_kept_documents_tombstone_lasts_while_the_document_stays_in_place() {
+    let temp = TempDir::new().unwrap();
+    let start = real_now();
+    let clock = MockClock::at(start);
+    let store =
+        ClaimStore::with_clock(temp.path(), identity("aaa", "here"), clock.clone()).unwrap();
+    fs::create_dir(temp.path().join("2024")).unwrap();
+    let mut tombstones = Vec::new();
+    for (name, outcome) in [
+        ("kept.pdf", DoneOutcome::KeptOriginal),
+        ("2024/removed.pdf", DoneOutcome::KeptOriginal),
+        ("rewritten.pdf", DoneOutcome::KeptOriginal),
+        ("deleted.pdf", DoneOutcome::KeptOriginal),
+        ("failed.pdf", DoneOutcome::Failed),
+    ] {
+        fs::write(temp.path().join(name), format!("the document {name}")).unwrap();
+        let facts = facts_for(temp.path(), name);
+        assert!(matches!(store.acquire(&facts), AcquireOutcome::Acquired));
+        store.mark_done(&facts.key(), outcome, None).unwrap();
+        tombstones.push(facts.key());
+    }
+    fs::write(
+        temp.path().join("rewritten.pdf"),
+        b"new content, so a new document",
+    )
+    .unwrap();
+    fs::remove_file(temp.path().join("deleted.pdf")).unwrap();
+
+    // A tombstone is whatever someone wrote into the shared folder. One whose
+    // path climbs out of the folder names no document here, whatever is
+    // there, and neither does one whose facts are not the key it is filed
+    // under.
+    let outside = TempDir::new_in(temp.path().parent().unwrap()).unwrap();
+    fs::write(outside.path().join("elsewhere.pdf"), b"not in the folder").unwrap();
+    let mut climbing = facts_for(outside.path(), "elsewhere.pdf");
+    climbing.relative_path = format!(
+        "../{}/elsewhere.pdf",
+        outside.path().file_name().unwrap().to_str().unwrap()
+    );
+    let mut planted = Vec::new();
+    for (key, facts) in [
+        (climbing.key(), climbing.clone()),
+        ("f".repeat(64), facts_for(temp.path(), "kept.pdf")),
+    ] {
+        let mut claim = foreign_claim(&key, &facts, "bbb", start);
+        claim.state = ClaimState::Done;
+        claim.done_at = Some(start);
+        claim.outcome = Some(DoneOutcome::KeptOriginal);
+        fs::write(
+            claim_file(temp.path(), &key),
+            serde_json::to_vec(&claim).unwrap(),
+        )
+        .unwrap();
+        planted.push(key);
+    }
+
+    clock.set(start + DONE_RETENTION_SECONDS + 1);
+    store.prune();
+    assert!(claim_file(temp.path(), &tombstones[0]).exists());
+    assert!(
+        claim_file(temp.path(), &tombstones[1]).exists(),
+        "in a subfolder too"
+    );
+    assert!(
+        !claim_file(temp.path(), &tombstones[2]).exists(),
+        "a rewritten document has a new key, and the old tombstone guards nothing"
+    );
+    assert!(!claim_file(temp.path(), &tombstones[3]).exists());
+    assert!(
+        !claim_file(temp.path(), &tombstones[4]).exists(),
+        "a failure is no decision to leave the document alone"
+    );
+    for key in &planted {
+        assert!(!claim_file(temp.path(), key).exists(), "{key}");
+    }
+}
+
 #[test]
 fn prune_gives_fresh_malformed_files_a_day_of_grace() {
     let temp = TempDir::new().unwrap();

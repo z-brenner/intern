@@ -579,7 +579,7 @@ fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
     }
 }
 
-fn modified_secs(metadata: &fs::Metadata) -> i64 {
+pub(crate) fn modified_secs(metadata: &fs::Metadata) -> i64 {
     let Ok(modified) = metadata.modified() else {
         return 0;
     };
