@@ -43,18 +43,34 @@ pub const MAX_CELL_CHARS: usize = 1_000;
 /// the rendered window keeps the cost amortised and the memory bounded.
 const CELLS_BEFORE_PRUNE: usize = 4 * MAX_SHEET_ROWS * MAX_SHEET_COLS;
 
-/// The most cells a binary workbook may make calamine materialise.
+/// The most memory opening a binary workbook may have calamine hold at once.
 ///
-/// calamine reads an `.xls` eagerly: opening it builds every sheet as a
-/// dense range spanning that sheet's corners, and reserves space for as many
-/// cells as each sheet's `Dimensions` record claims. Those corners and that
-/// claim come from the file. Two cells at `A1` and `IV65536` on each of a
-/// few sheets, or one forged `Dimensions` record, would have the allocator
-/// asked for gigabytes, and an allocation failure aborts the process rather
-/// than failing one document. Four million cells is several full-height
-/// ledgers - far beyond anything the window shows - at a cost of a few
-/// hundred megabytes at most.
-const MAX_LEGACY_WORKBOOK_CELLS: u64 = 4_000_000;
+/// calamine reads an `.xls` eagerly. Opening it builds every sheet as two
+/// dense ranges spanning that sheet's corners - a value per cell, and a
+/// formula per cell - and keeps every sheet's ranges until the workbook is
+/// dropped; while it builds each one, it also holds a list of that sheet's
+/// cells, reserved up front at the size the sheet's `Dimensions` record
+/// claims. Those corners and that claim come from the file. Two cells at
+/// `A1` and `IV65536`, or one forged `Dimensions` record, would have the
+/// allocator asked for gigabytes, and an allocation failure aborts the
+/// process rather than failing one document.
+///
+/// The bound is on those allocations themselves, in bytes: what the sheets
+/// already built keep, plus what the one being built holds while it is
+/// built. A cap on cells summed across sheets counted each sheet's list as
+/// if it were kept, and refused a year of monthly ledgers that opens in
+/// under a hundred megabytes. Half a gigabyte opens a full-height sheet a
+/// hundred columns wide; one sheet filled out to both of the format's
+/// corners, which no real workbook is, does not fit.
+const MAX_LEGACY_WORKBOOK_BYTES: u64 = 512 * 1024 * 1024;
+
+/// What calamine holds per cell: a value in a sheet's dense value range, a
+/// formula in its dense formula range, and an entry in each of the lists
+/// those ranges are built from.
+const RANGE_VALUE_BYTES: u64 = size_of::<Data>() as u64;
+const RANGE_FORMULA_BYTES: u64 = size_of::<String>() as u64;
+const LISTED_VALUE_BYTES: u64 = size_of::<calamine::Cell<Data>>() as u64;
+const LISTED_FORMULA_BYTES: u64 = size_of::<calamine::Cell<String>>() as u64;
 
 /// Runs one calamine operation behind a panic barrier: calamine can panic on
 /// crafted or corrupt containers, and a dependency panic must degrade to a
@@ -497,26 +513,34 @@ fn survey_legacy_workbook(stream: &[u8], limits: &ResourceLimits) -> Result<(), 
 
     let too_large = || {
         ExtractionError::resource_limit(format!(
-            "workbook would expand to more than {MAX_LEGACY_WORKBOOK_CELLS} cells"
+            "workbook would take more than {} MiB to open",
+            MAX_LEGACY_WORKBOOK_BYTES / (1024 * 1024)
         ))
     };
-    let mut total = 0_u64;
+    // The ranges of the sheets built so far, which calamine keeps.
+    let mut kept = 0_u64;
+    // The largest sheet's value range: reading a sheet back copies it.
+    let mut largest_values = 0_u64;
     let mut text = 0_u64;
     for offset in globals.sheet_offsets {
         // Values and formulas become two dense ranges, each over its own
-        // corners; the cell list both are built from is reserved up front at
-        // the largest size a Dimensions record claims.
+        // corners.
         let mut values = Corners::default();
         let mut formulas = Corners::default();
+        // The room a Dimensions record has the cell list reserve: its claim
+        // on top of the cells already listed.
         let mut reserved = 0_u64;
         let mut cells = 0_u64;
+        let mut formula_cells = 0_u64;
         // A formula's string result follows it in a record of its own, and
         // calamine places it wherever the last formula was - the top-left
         // cell, if none has been.
         let mut formula_at = (0, 0);
         for (kind, _, data) in biff_records(stream, offset) {
             match kind {
-                BIFF_DIMENSIONS => reserved = reserved.max(claimed_cells(data)),
+                BIFF_DIMENSIONS => {
+                    reserved = reserved.max(cells.saturating_add(claimed_cells(data)));
+                }
                 BIFF_MULRK => {
                     if let (Some(row), Some(first)) = (word(data, 0), word(data, 2))
                         && let Some(last) = data.len().checked_sub(2).and_then(|at| word(data, at))
@@ -536,6 +560,7 @@ fn survey_legacy_workbook(stream: &[u8], limits: &ResourceLimits) -> Result<(), 
                         if kind == BIFF_FORMULA {
                             formulas.extend(row, column);
                             formula_at = (row, column);
+                            formula_cells += 1;
                         }
                         cells += 1;
                     }
@@ -550,11 +575,29 @@ fn survey_legacy_workbook(stream: &[u8], limits: &ResourceLimits) -> Result<(), 
                 _ => {}
             }
         }
-        total = total
-            .saturating_add(values.area())
-            .saturating_add(formulas.area())
-            .saturating_add(reserved.max(cells));
-        if total > MAX_LEGACY_WORKBOOK_CELLS {
+        // The lists start at whatever room was reserved and double whenever
+        // the cells outgrow it; the formula list is never reserved at all.
+        let listed_values = if cells > reserved {
+            cells.saturating_mul(2)
+        } else {
+            reserved
+        };
+        let listed = listed_values
+            .saturating_mul(LISTED_VALUE_BYTES)
+            .saturating_add(
+                formula_cells
+                    .saturating_mul(2)
+                    .saturating_mul(LISTED_FORMULA_BYTES),
+            );
+        let value_range = values.area().saturating_mul(RANGE_VALUE_BYTES);
+        let ranges =
+            value_range.saturating_add(formulas.area().saturating_mul(RANGE_FORMULA_BYTES));
+        let building = kept.saturating_add(listed).saturating_add(ranges);
+        kept = kept.saturating_add(ranges);
+        largest_values = largest_values.max(value_range);
+        if building > MAX_LEGACY_WORKBOOK_BYTES
+            || kept.saturating_add(largest_values) > MAX_LEGACY_WORKBOOK_BYTES
+        {
             return Err(too_large());
         }
         if text > MAX_LEGACY_WORKBOOK_TEXT {
@@ -929,6 +972,57 @@ mod tests {
         stream
     }
 
+    /// A global substream listing every sheet, followed by each sheet's
+    /// records in turn.
+    fn workbook_of(sheets: &[Vec<Vec<u8>>]) -> Vec<u8> {
+        let bof = record(0x0809, &[0; 16]);
+        let eof = record(BIFF_EOF, &[]);
+        let bound_sheet_length = 4 + 8 + 2;
+        let mut offset = bof.len() + sheets.len() * bound_sheet_length + eof.len();
+        let mut stream = bof.clone();
+        let mut bodies = Vec::new();
+        for sheet in sheets {
+            let mut bound_sheet = (offset as u32).to_le_bytes().to_vec();
+            bound_sheet.extend_from_slice(&[0, 0, 1, 0, b'S', 0]);
+            stream.extend(record(BIFF_BOUNDSHEET, &bound_sheet));
+            let mut body = bof.clone();
+            for record in sheet {
+                body.extend(record);
+            }
+            body.extend(&eof);
+            offset += body.len();
+            bodies.push(body);
+        }
+        stream.extend(&eof);
+        for body in bodies {
+            stream.extend(body);
+        }
+        stream
+    }
+
+    /// A `MulRk` record: a number in each of the first `columns` cells of
+    /// `row`, which is how Excel writes a row of numbers.
+    fn number_run(row: u16, columns: u16) -> Vec<u8> {
+        let mut data = row.to_le_bytes().to_vec();
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        for _ in 0..columns {
+            data.extend_from_slice(&0_u16.to_le_bytes());
+            data.extend_from_slice(&2_u32.to_le_bytes());
+        }
+        data.extend_from_slice(&(columns - 1).to_le_bytes());
+        record(BIFF_MULRK, &data)
+    }
+
+    /// An honest BIFF8 `Dimensions` record for `rows` by `columns` cells.
+    fn dimensions(rows: u32, columns: u16) -> Vec<u8> {
+        let mut data = 0_u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&rows.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&columns.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        record(BIFF_DIMENSIONS, &data)
+    }
+
     /// A formula cell at `row`, `column` with a cached number and the given
     /// token stream.
     fn formula(row: u16, column: u16, expression: &[u8]) -> Vec<u8> {
@@ -1096,6 +1190,45 @@ mod tests {
 
         let ordinary = workbook(&[number_cell(0, 0), number_cell(5_000, 20)]);
         survey_legacy_workbook(&ordinary, &ResourceLimits::default()).unwrap();
+    }
+
+    /// Ordinary workbooks far larger than the window open: a year of monthly
+    /// ledgers, a few wide sheets with a total column of formulas, and one
+    /// full-height ledger. The budget is what calamine holds at once, and
+    /// summing every sheet's cell list as if it were kept refused all three
+    /// - each opens in well under 512 MiB.
+    #[test]
+    fn large_ordinary_workbooks_open() {
+        for (sheets, rows, columns) in [(12, 5_000, 40), (6, 10_000, 35), (1, 65_536, 30)] {
+            let mut sheet = vec![dimensions(rows, columns + 1)];
+            for row in 0..rows {
+                let row = row as u16;
+                sheet.push(number_run(row, columns));
+                sheet.push(formula(row, columns, &[]));
+            }
+            let stream = workbook_of(&vec![sheet; sheets]);
+            survey_legacy_workbook(&stream, &ResourceLimits::default())
+                .unwrap_or_else(|error| panic!("{sheets} sheets of {rows} x {columns}: {error}"));
+        }
+    }
+
+    /// calamine keeps every sheet it has built until the workbook is
+    /// dropped, so sheets that each fit can still not fit together.
+    #[test]
+    fn the_sheets_calamine_keeps_add_up() {
+        // Two numbers at opposite corners of 65,536 x 100 cells: a dense
+        // range of a little over 200 MB.
+        let sparse = vec![number_cell(0, 0), number_cell(65_535, 99)];
+        survey_legacy_workbook(
+            &workbook_of(std::slice::from_ref(&sparse)),
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+
+        let error =
+            survey_legacy_workbook(&workbook_of(&vec![sparse; 3]), &ResourceLimits::default())
+                .unwrap_err();
+        assert_eq!(error.code(), "RESOURCE_LIMIT_EXCEEDED");
     }
 
     /// A `Dimensions` record is a claim, and calamine reserves room for it

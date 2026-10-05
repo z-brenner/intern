@@ -71,10 +71,12 @@ cut at the size cap, unread TIFF frames — is still `TEXT_TRUNCATED` and still
 forces review. A `.xlsx` is streamed cell by cell; calamine reads a binary
 `.xls` whole as it opens it, so its record stream is first surveyed for what
 that would allocate (dense ranges spanning a sheet's corners, forged
-`Dimensions` claims, shared strings copied into every cell that names them),
-its formulas' token streams are emptied (only cached values are rendered, and
-spelling out a formula can be far longer than its record), and it is handed
-to calamine in a fresh compound file. CSV exports are read through the same
+`Dimensions` claims, shared strings copied into every cell that names them)
+and refused if calamine would hold more than 512 MiB at once, counting the
+sheets already built and the one being built; a year of monthly ledgers
+stays far inside that. Its formulas' token streams are then emptied (only
+cached values are rendered, and spelling out a formula can be far longer than
+its record), and it is handed to calamine in a fresh compound file. CSV exports are read through the same
 window: the delimiter is the one of comma, semicolon, tab, and pipe that
 splits the leading records most consistently, fields that are not UTF-8 read
 as Windows-1252, and a UTF-16 export is transcoded as it streams.
