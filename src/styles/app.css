@@ -172,7 +172,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .row-description { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
 
-.status { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-weight: 500; }
+/* Wraps rather than painting over the next column. Beside the inspector at
+   1200px the Status column used to be 84px of content, narrower than "Needs
+   review" and its icon; a label that will not fit now takes a second line. */
+.status { display: inline-flex; align-items: flex-start; gap: 8px; white-space: normal; font-weight: 500; }
+.status svg { flex: none; margin-top: 2px; }
 .status.ready, .status.completed, .confidence.ready, .confidence.completed { color: var(--ready); }
 .status.review, .confidence.review { color: var(--review); }
 .status.waiting { color: var(--waiting); }
@@ -353,6 +357,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* With the side inspector open below 1440px the table is about 600px wide, and
+   a fifth of it left the status label 56px: "Reading document…" broke inside
+   its words. The status column takes a larger share until the window is wide
+   enough not to need it; at 1100px and below the inspector is a drawer and
+   the table has the width back. */
+@media (min-width: 1101px) and (max-width: 1439px) {
+  .table-wrap th:nth-child(2) { width: 25%; }
+  .table-wrap th:nth-child(3) { width: 32%; }
+}
 
 /* ---------- narrow ---------- */
 @media (max-width: 1100px) {

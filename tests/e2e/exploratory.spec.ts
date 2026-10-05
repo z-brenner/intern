@@ -258,6 +258,24 @@ test('the window stays usable at 1024 pixels and the drawer does not overflow', 
   expect(overflow, 'the page must not scroll horizontally at 1024 pixels').toBeLessThanOrEqual(0);
 });
 
+// At 1200px the side inspector is still open, so the Status column is about
+// 84px of content. Unwrapped, "Needs review" and a processing label painted
+// over the proposed filename beside them.
+test('status cells do not overflow at 1200', async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.goto('/');
+  await expect(page.getByRole('complementary', { name: 'Review item' })).toBeVisible();
+
+  const statuses = await page.locator('.table-wrap .status').evaluateAll((elements) => elements.map((status) => {
+    const cell = status.closest('td')!;
+    const style = getComputedStyle(cell);
+    const content = cell.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+    return { text: status.textContent, scrollWidth: status.scrollWidth, content };
+  }));
+  expect(statuses.length).toBeGreaterThanOrEqual(8);
+  for (const status of statuses) expect(status.scrollWidth, `"${status.text}" overflows its cell`).toBeLessThanOrEqual(status.content);
+});
+
 test('no console errors or failed requests during an ordinary session', async ({ page }) => {
   const problems: string[] = [];
   page.on('console', (message) => { if (message.type() === 'error') problems.push(`console: ${message.text()}`); });
