@@ -55,8 +55,10 @@ describe('the actions each status offers', () => {
     // Flagged before analysis, so there is no proposal to approve.
     expect(actionSet({ id: 'duplicate', originalFilename: 'copy.pdf', status: 'review', reason: 'Duplicate of 2024-03-01 Lease Agreement.pdf', errorCode: 'DUPLICATE' }))
       .toEqual([...open, 'Keep original', 'More review actions', 'Process anyway', 'Remove from queue']);
-    expect(actionSet({ id: 'unverified', originalFilename: 'upload.pdf', status: 'review', errorCode: 'UPLOADER_UNVERIFIED' }))
-      .toEqual([...open, 'Keep original', 'More review actions', 'Check again', 'Remove from queue']);
+    // Held because nobody could vouch for its uploader: found in its folder,
+    // but not opened in its program from Intern's window.
+    expect(actionSet({ id: 'unverified', originalFilename: 'upload.pptm', status: 'review', errorCode: 'UPLOADER_UNVERIFIED' }))
+      .toEqual(['Show in folder', 'Keep original', 'More review actions', 'Check again', 'Remove from queue']);
     expect(actionSet({ id: 'failed', originalFilename: 'broken.pdf', status: 'failed', reason: 'Extraction failed.' }))
       .toEqual(['Retry item', 'Remove item']);
     expect(actionSet({ id: 'active', originalFilename: 'scan.pdf', status: 'processing', stage: 'reading' }))

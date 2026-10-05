@@ -226,9 +226,9 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         here, and once it was filed they could not find it. Before filing
         these reach the file as it arrived; after, the filed copy.
       */}
-      {actions.open && <div className="document-actions" role="group" aria-label="Document">
-        <button type="button" onClick={onOpen}><Icon icon={ExternalLink} />Open</button>
-        <button type="button" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>
+      {(actions.open || actions.reveal) && <div className="document-actions" role="group" aria-label="Document">
+        {actions.open && <button type="button" onClick={onOpen}><Icon icon={ExternalLink} />Open</button>}
+        {actions.reveal && <button type="button" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>}
       </div>}
     </div>
     {editable && <section className="proposal">

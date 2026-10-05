@@ -66,17 +66,19 @@ export interface ItemActions {
   remove?: { label: string; resolvedFiles: boolean };
   cancel: boolean;
   undo: boolean;
-  /** Open and Show in folder: the source until it is filed, the filed copy after. */
+  /** Open, in the program the system uses for it: the source until it is filed, the filed copy after. */
   open: boolean;
+  /** Show in folder, the same document selected where it is. */
+  reveal: boolean;
 }
 
 export function itemActions(item: QueueItem): ItemActions {
-  const none: ItemActions = { approve: false, keep: false, reanalyze: false, cancel: false, undo: false, open: false };
+  const none: ItemActions = { approve: false, keep: false, reanalyze: false, cancel: false, undo: false, open: false, reveal: false };
   switch (item.status) {
     case 'review': {
       // Parked: approve and keep are refused until the files are checked, so
       // the check is the main action rather than an entry in a menu.
-      if (isParked(item)) return { ...none, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true };
+      if (isParked(item)) return { ...none, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true, reveal: true };
       const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : undefined;
       return {
         ...none,
@@ -85,11 +87,15 @@ export function itemActions(item: QueueItem): ItemActions {
         ...(retry ? { retry: { label: retry, primary: false } } : {}),
         reanalyze: retry === undefined,
         remove: { label: 'Remove from queue', resolvedFiles: false },
-        open: true,
+        // Held because nobody could vouch for who uploaded it: opening it
+        // would start its program from Intern's window, so it can only be
+        // found in its folder until the uploader checks out.
+        open: item.errorCode !== 'UPLOADER_UNVERIFIED',
+        reveal: true,
       };
     }
     case 'ready':
-      return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: true, remove: { label: 'Remove from queue', resolvedFiles: false }, open: true };
+      return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: true, remove: { label: 'Remove from queue', resolvedFiles: false }, open: true, reveal: true };
     case 'waiting':
       return { ...none, remove: { label: 'Remove from queue', resolvedFiles: false } };
     case 'failed':
@@ -97,7 +103,7 @@ export function itemActions(item: QueueItem): ItemActions {
     case 'processing':
       return { ...none, cancel: item.cancelable !== false };
     case 'completed':
-      return { ...none, undo: item.undoable === true, open: true };
+      return { ...none, undo: item.undoable === true, open: true, reveal: true };
   }
   return none;
 }

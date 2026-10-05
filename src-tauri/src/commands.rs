@@ -1485,7 +1485,7 @@ pub async fn document_open(id: String, state: State<'_, AppState>) -> Result<(),
     let id = parse_item_id(&id)?;
     tauri::async_runtime::spawn_blocking(move || -> Result<(), CommandError> {
         let items = pipeline.list()?;
-        let path = openable_document(locate_document(items.iter().find(|item| item.id == id))?)?;
+        let path = document_to_open(items.iter().find(|item| item.id == id))?;
         tauri_plugin_opener::open_path(shell_path(&path), None::<&str>).map_err(|_| CommandError {
             code: "OPEN_FAILED".into(),
             message: "the system could not open the document".into(),
@@ -1570,10 +1570,33 @@ fn shell_path(path: &Path) -> PathBuf {
     PathBuf::from(display_path(path))
 }
 
+/// The document Open hands to its program for an item. One held because
+/// Intern could not verify who uploaded it is not opened from here: the hold
+/// means nobody vouched for the file, and Open would start whatever program
+/// handles it from Intern's own window. Show in folder still finds it.
+fn document_to_open(item: Option<&PipelineItem>) -> Result<PathBuf, CommandError> {
+    if item.is_some_and(|item| {
+        item.status == QueueStatus::NeedsReview
+            && item.error_code == Some(intern_core::ErrorCode::UploaderUnverified)
+    }) {
+        return Err(CommandError {
+            code: "UPLOADER_UNVERIFIED".into(),
+            message:
+                "a document from an uploader Intern could not verify is not opened from Intern"
+                    .into(),
+        });
+    }
+    openable_document(locate_document(item)?)
+}
+
 /// Opening hands the file to whatever program the system associates with it,
-/// so only the document formats Intern itself reads are handed over. The
-/// queue only ever takes those, so this refuses nothing in practice; it is
-/// here so that no future path into the queue can make Open run a program.
+/// so only the document formats Intern itself reads are handed over - never
+/// an executable, a shortcut or a script. The queue only ever takes those, so
+/// this refuses nothing in practice; it is here so that no future path into
+/// the queue can make Open launch a program file. A format Intern reads can
+/// still carry macros (a .pptm presentation): Office's own macro settings
+/// govern those, as when the file is opened from Explorer, and a document
+/// from an unverified uploader is not opened at all (`document_to_open`).
 fn openable_document(path: PathBuf) -> Result<PathBuf, CommandError> {
     let supported = path
         .extension()
@@ -3107,7 +3130,7 @@ mod document_path_tests {
     };
     use intern_queue::PipelineItem;
 
-    use super::{document_path, locate_document, openable_document, shell_path};
+    use super::{document_path, document_to_open, locate_document, openable_document, shell_path};
 
     fn item(status: QueueStatus, receipt: Option<OperationReceipt>) -> PipelineItem {
         PipelineItem {
@@ -3208,6 +3231,30 @@ mod document_path_tests {
         }
         // Mid-operation the file is between its two names.
         assert_eq!(document_path(&item(QueueStatus::Applying, None)), None);
+    }
+
+    // Held because nobody could vouch for who uploaded it: Open would start
+    // its program from Intern's window. Show in folder still finds it.
+    #[test]
+    fn a_document_from_an_unverified_uploader_is_not_opened() {
+        let temp = std::env::temp_dir().join(format!("intern-unverified-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        let present = temp.join("Invoice.pptm");
+        std::fs::write(&present, b"pptm").unwrap();
+        let mut held = item(QueueStatus::NeedsReview, None);
+        held.source_path = present.clone();
+        held.error_code = Some(ErrorCode::UploaderUnverified);
+        assert_eq!(
+            document_to_open(Some(&held)).unwrap_err().code,
+            "UPLOADER_UNVERIFIED"
+        );
+        assert_eq!(locate_document(Some(&held)).unwrap(), present);
+
+        // Any other review item, once verified, opens as before.
+        held.error_code = Some(ErrorCode::Duplicate);
+        assert_eq!(document_to_open(Some(&held)).unwrap(), present);
+        assert_eq!(document_to_open(None).unwrap_err().code, "ITEM_NOT_FOUND");
+        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
