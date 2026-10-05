@@ -21,10 +21,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -39,10 +41,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -57,10 +61,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -74,10 +80,12 @@
         "date_present": false,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": false,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -91,10 +99,12 @@
         "date_present": false,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -109,10 +119,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -133,6 +145,7 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": false,
@@ -157,6 +170,7 @@
         "date_role_correct": true,
         "description_covers_facts": false,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
@@ -175,10 +189,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -193,10 +209,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -211,10 +229,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -229,10 +249,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -246,10 +268,12 @@
         "date_present": false,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": false,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -263,10 +287,12 @@
         "date_present": false,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": false,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -281,10 +307,12 @@
         "date_role_correct": true,
         "description_covers_facts": false,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -299,10 +327,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -317,10 +347,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": false,
         "type_correct": true,
         "type_present": true
       }
@@ -335,10 +367,12 @@
         "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
+        "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
