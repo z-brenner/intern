@@ -321,7 +321,23 @@ Only one document is worked on at a time, so an approval made while the queue
 is busy cannot be applied on the spot. It is remembered on the proposal and
 applied by the scheduler between documents, under the name the reviewer typed
 - a busy queue is not something wrong with the document, and never sends it to
-review.
+review. An undo does not wait for a document being read: it moves nothing but
+its own filed document, so the only thing it waits for is another rename.
+
+A rename or undo that fails partway is settled rather than left: its receipt
+records how far it got, and a reconciliation - straight after the failure, on
+the recovery pass, or when a person asks to check again - finishes it or rolls
+it back. A rename refused because the document is open in another program
+moved nothing, so it is rolled back after a plain read of the original, and
+approving again once the program lets go files it. A file that appeared at
+the destination name in the meantime is somebody else's, so the rename is
+rolled back and the document waits in review; only the same file or the same
+bytes at both names is ambiguous enough to hold, and an item whose files a
+person has sorted out by hand can then be removed once they confirm it. Every
+file operation and the reconciliation after it run one at a time, so the
+recovery pass - every 65 seconds by the clock, however often new documents
+wake the scheduler - never reconciles an operation still in flight, and an
+operation that has been taken over stops before its rename rather than after.
 
 ### House style
 
