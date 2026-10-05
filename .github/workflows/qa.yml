@@ -21,6 +21,23 @@ jobs:
       INTERN_PDFIUM_DIR: ${{ github.workspace }}\src-tauri\resources\native\pdfium
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The committed sign-off is the previous release's until a reviewer
+      # accepts this run's capture, and it is bound to the release inputs it
+      # was reviewed against. Any change outside docs/qa/ moves those, so an
+      # accepted record left over from the last release made this run fail at
+      # its final binding step - after two hours of green gates. A record that
+      # no longer matches is set aside on this runner as pending, which is
+      # what it is until a new review. The committed file is untouched, and
+      # release.yml still refuses anything but an accepted, matching record.
+      # Only git and the runner's own Node are needed, so this runs first.
+      - name: Set aside a sign-off reviewed against other release inputs
+        shell: pwsh
+        run: |
+          # The digest a sign-off for this commit has to carry, for the log.
+          node scripts/hash-release-inputs.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Could not digest the release inputs" }
+          node scripts/release-preflight.mjs --set-aside-stale-signoff --root=.
+          if ($LASTEXITCODE -ne 0) { throw "Could not check the rendered-fidelity sign-off" }
       - name: Record immutable runner context
         shell: pwsh
         run: |
@@ -156,12 +173,17 @@ jobs:
           if (-not (Test-Path -LiteralPath 'docs\qa\logs\installer-smoke.log')) { throw "Installer smoke produced no log" }
       - name: Score the whole corpus through the shipping pipeline with real inference
         shell: pwsh
+        # Bounded like the release run's scoring step. Without a limit a wedged
+        # llama-server held the runner until the job's own 360 minutes ran out,
+        # and the tee'd log is what says which document it was stuck on.
+        timeout-minutes: 60
         run: |
-          ./scripts/run-model-evaluation.ps1 `
+          New-Item -ItemType Directory docs\qa\logs -Force | Out-Null
+          & ./scripts/run-model-evaluation.ps1 `
             -RuntimeDirectory $env:INTERN_QA_RUNTIME_STAGE `
             -WorkerPath (Join-Path $env:INTERN_QA_RUNTIME_STAGE "intern-worker.exe") `
             -EvaluatePath target\release\intern-evaluate.exe `
-            -OutputPath docs\qa\model-evaluation.json
+            -OutputPath docs\qa\model-evaluation.json 2>&1 | Tee-Object -FilePath docs\qa\logs\model-evaluation.log
           node scripts/validate-model-evaluation.mjs docs/qa/model-evaluation.json
       - name: Write run-specific command, count, and exit-code checklist
         if: success()

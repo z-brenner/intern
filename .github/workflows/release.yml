@@ -31,6 +31,12 @@ jobs:
           ref: ${{ github.sha }}
       - id: target
         shell: bash
+        # A tag that already names another commit used to end this job with
+        # "this push is a no-op" and exit 0, a leftover from when releases ran
+        # on push. Dispatched, it skipped the release job and showed green: a
+        # run that tagged its commit and then failed to publish, followed by a
+        # dispatch on the fix, reported success with nothing published. It is
+        # an error now, and says how to get out of it.
         run: |
           set -euo pipefail
           tag='v0.1.0-alpha.10'
@@ -39,12 +45,22 @@ jobs:
           if git show-ref --verify --quiet "refs/tags/$tag"; then
             test "$(git cat-file -t "refs/tags/$tag")" = tag
             if test "$(git rev-parse "refs/tags/$tag^{commit}")" != "$GITHUB_SHA"; then
-              echo 'eligible=false' >> "$GITHUB_OUTPUT"
-              echo "$tag is already bound to an earlier main commit; this push is a no-op."
-              exit 0
+              echo "::error::$tag already points at $(git rev-parse "refs/tags/$tag^{commit}"), not $GITHUB_SHA. Delete the tag or bump the version."
+              exit 1
             fi
           fi
           echo 'eligible=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.15.0
+      # Everything the last step of the release checks about this commit that
+      # can be known before building anything: the rendered-fidelity sign-off
+      # is accepted for exactly these release inputs and this screenshot, the
+      # release notes exist and say what they must, and every version agrees.
+      # Each of these used to surface only after about ninety minutes of
+      # Windows build and real inference.
+      - name: Preflight the sign-off, release notes, and versions
+        run: node scripts/release-preflight.mjs --root=. --workflow="$GITHUB_WORKFLOW"
 
   release:
     needs: release_target
@@ -163,7 +179,7 @@ jobs:
           "INTERN_RUNTIME_STAGE=$Stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Score the corpus through the shipping pipeline for this exact commit
         shell: pwsh
-        # Downloads 1.19 GiB and scores 20 documents with real inference, about
+        # Downloads 1.19 GiB and scores the corpus with real inference, about
         # 11 minutes when healthy. Bounded so a wedged llama-server cannot hold
         # the job open for hours.
         timeout-minutes: 60
