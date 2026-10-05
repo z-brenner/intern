@@ -69,6 +69,43 @@ describe('keyboard review', () => {
     expect(screen.getByRole('button', { name: /Approve & rename/ })).toHaveAttribute('aria-keyshortcuts', 'Control+Enter');
   });
 
+  // The panel stays mounted as review moves on, and the name being edited
+  // used to be put back to the new item's in a passive effect - a task after
+  // the commit that showed the new item. A key pressed in between, as a held
+  // or quick second Ctrl+Enter or Enter is, approved the item now on screen
+  // under the name and description of the one just decided. The observer
+  // presses it at exactly that moment: the commit that brings the next item.
+  it('a key pressed as the next item appears approves it under its own name', async () => {
+    const bridge = await start();
+    const pressAsItAppears = (name: string, key: KeyboardEventInit) => {
+      const observer = new MutationObserver(() => {
+        if (!inspector().textContent?.includes(name)) return;
+        observer.disconnect();
+        (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...key }));
+      });
+      observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+      return observer;
+    };
+
+    // From the keyboard shortcut, with focus where the seeded selection left it.
+    const first = pressAsItAppears('Scan 0102.pdf', { key: 'Enter', ctrlKey: true });
+    press('Enter', { ctrlKey: true });
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(2));
+    first.disconnect();
+    expect(bridge.approve).toHaveBeenNthCalledWith(1, 'scan-0101', '2024-02-01 Engagement Letter with Northwind Traders.pdf', 'Engagement letter between Northwind Traders and the firm for 2024 advisory work.');
+    expect(bridge.approve).toHaveBeenNthCalledWith(2, 'scan-0102', '2024-02-09 Invoice INV-3301 from Fabrikam Inc.pdf', 'Invoice INV-3301 from Fabrikam Inc. for February consulting hours.');
+
+    // From Enter in the name itself, which still has focus as the next item arrives.
+    await waitFor(() => expect(within(inspector()).getByLabelText('Filename')).toHaveValue('2024-03-30 Statement of Work with Litware Inc'));
+    await waitFor(() => expect(within(inspector()).getByLabelText('Filename')).toHaveFocus());
+    const second = pressAsItAppears('Scan 0106.pdf', { key: 'Enter' });
+    press('Enter');
+    await waitFor(() => expect(bridge.approve).toHaveBeenCalledTimes(4));
+    second.disconnect();
+    expect(bridge.approve).toHaveBeenNthCalledWith(3, 'scan-0104', '2024-03-30 Statement of Work with Litware Inc.pdf', 'Statement of work with Litware Inc. for the spring data migration.');
+    expect(bridge.approve).toHaveBeenNthCalledWith(4, 'scan-0106', '2024-04-18 Lease Amendment for 500 Pine St.pdf', 'First amendment to the lease of 500 Pine St.');
+  });
+
   it('approve_advances_to_next_undecided_and_announces', async () => {
     const bridge = await start();
     fireEvent.click(rowButton('Scan 0102.pdf'));

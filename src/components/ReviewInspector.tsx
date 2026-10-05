@@ -75,17 +75,31 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
   // and the extension sits after the field, locked.
   const sourceExtension = filenameExtension(item.originalFilename);
   const { stem: proposedStem, extension } = splitFilename(item.proposedFilename ?? '', sourceExtension);
-  const [stem, setStem] = useState(proposedStem);
-  const [description, setDescription] = useState(item.description ?? '');
+  // The name and description being edited belong to one item, and to one
+  // revision of its proposal. The panel stays mounted as review moves on, and
+  // they used to be put back to the new item's in a passive effect: a task
+  // after the commit that showed the new item. A key pressed in between - a
+  // held or quick second Ctrl+Enter, or Enter in the name - approved the item
+  // on screen under the name and description of the one just decided. They
+  // are put back while rendering instead, so no commit, and no handler or
+  // shortcut taken from one, ever pairs an item with another's draft.
+  const draftFor = `${item.id}\n${item.proposalRevision ?? ''}`;
+  const [draft, setDraft] = useState({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
+  if (draft.for !== draftFor) {
+    setDraft({ for: draftFor, stem: proposedStem, description: item.description ?? '' });
+    setError(''); setMoreOpen(false); setConfirmingRemove(false);
+  }
+  const { stem, description } = draft;
+  const setStem = (value: string) => setDraft((current) => ({ ...current, stem: value }));
+  const setDescription = (value: string) => setDraft((current) => ({ ...current, description: value }));
   const inspectorRef = useRef<HTMLElement>(null);
   const filenameRef = useRef<HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const fieldId = useId();
-  useEffect(() => { setStem(proposedStem); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); setConfirmingRemove(false); }, [item.id, item.proposalRevision]);
   useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
   // The whole name, always: a single-line field showed about half of a
   // typical proposal, and the caret only its tail. The field grows to fit
