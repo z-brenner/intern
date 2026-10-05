@@ -20,6 +20,57 @@ use crate::limits::ResourceLimits;
 #[cfg(feature = "native-tesseract")]
 use crate::temp::TempWorkspace;
 
+/// Rebuilds a page's text from Tesseract's TSV output, keeping the layout
+/// Tesseract found.
+///
+/// Each word row carries the block, paragraph and line it belongs to. Words
+/// on one line are joined with a space, lines with a newline, and blocks and
+/// paragraphs with a blank line - which is what Tesseract's own plain-text
+/// renderer does. Joining every word of the page with a space instead made
+/// each scan one undifferentiated line, so distillation found no headings
+/// in it and no date line, and the model's evidence for a date was the
+/// whole page.
+///
+/// The mean confidence is over every word Tesseract scored; rows with no
+/// word, and the -1 Tesseract gives a word it did not score, do not count.
+pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
+    let tsv = std::str::from_utf8(bytes)
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    let mut text = String::new();
+    let mut confidences = Vec::new();
+    // (page, block, paragraph, line) of the word last written.
+    let mut previous: Option<[&str; 4]> = None;
+    for row in tsv.lines().skip(1) {
+        let columns: Vec<&str> = row.splitn(12, '\t').collect();
+        if columns.len() != 12 || columns[0] != "5" {
+            continue;
+        }
+        let word = columns[11].trim();
+        if word.is_empty() {
+            continue;
+        }
+        let position = [columns[1], columns[2], columns[3], columns[4]];
+        match previous {
+            None => {}
+            Some(previous) if previous[..3] != position[..3] => text.push_str("\n\n"),
+            Some(previous) if previous[3] != position[3] => text.push('\n'),
+            Some(_) => text.push(' '),
+        }
+        text.push_str(word);
+        previous = Some(position);
+        let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
+        if confidence >= 0.0 {
+            confidences.push(confidence);
+        }
+    }
+    let mean_confidence = if confidences.is_empty() {
+        0.0
+    } else {
+        confidences.iter().sum::<f32>() / confidences.len() as f32
+    };
+    Ok(OcrResult::new(text, mean_confidence))
+}
+
 /// How to ask Tesseract for TSV output without depending on a file we do not ship.
 ///
 /// `tesseract in out tsv` does not pass a flag: `tsv` names a config file that
@@ -75,33 +126,6 @@ impl TesseractOcr {
             tessdata_directory,
             language: "eng".to_owned(),
         })
-    }
-
-    fn parse_tsv(&self, bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
-        let text = String::from_utf8(bytes.to_vec())
-            .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
-        let mut words = Vec::new();
-        let mut confidences = Vec::new();
-        for line in text.lines().skip(1) {
-            let columns: Vec<&str> = line.splitn(12, '\t').collect();
-            if columns.len() != 12 {
-                continue;
-            }
-            let word = columns[11].trim();
-            let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
-            if !word.is_empty() {
-                words.push(word);
-                if confidence >= 0.0 {
-                    confidences.push(confidence);
-                }
-            }
-        }
-        let mean_confidence = if confidences.is_empty() {
-            0.0
-        } else {
-            confidences.iter().sum::<f32>() / confidences.len() as f32
-        };
-        Ok(OcrResult::new(words.join(" "), mean_confidence))
     }
 
     fn parse_osd(&self, bytes: &[u8]) -> Result<u16, ExtractionError> {
@@ -232,7 +256,7 @@ impl TesseractOcr {
                 output_path.display()
             ))
         })?;
-        Ok(self.parse_tsv(&output)?.with_rotation(rotation))
+        Ok(parse_tsv(&output)?.with_rotation(rotation))
     }
 }
 
@@ -325,6 +349,118 @@ impl OcrBackend for TesseractOcr {
             best = better_reading(best, attempt);
         }
         Ok(best)
+    }
+}
+
+/// The text a scan comes back as. These run in every build: reading
+/// Tesseract's output needs no Tesseract.
+#[cfg(test)]
+mod tsv_tests {
+    use super::parse_tsv;
+
+    /// `tesseract document-image.jpg out -l eng --psm 3 -c
+    /// tessedit_create_tsv=1` over the pinned `tessdata_fast` English model:
+    /// one block, one paragraph, three lines.
+    const PACKING_SLIP: &str = include_str!("../tests/fixtures/tsv/document-image.jpg.tsv");
+    /// The same over `document-image.png`, which Tesseract reads less well:
+    /// one word scored 0 and several in the 60s.
+    const PURCHASE_ORDER: &str = include_str!("../tests/fixtures/tsv/document-image.png.tsv");
+
+    #[test]
+    fn parse_tsv_keeps_lines_and_paragraphs() {
+        let reading = parse_tsv(PACKING_SLIP.as_bytes()).unwrap();
+
+        assert_eq!(
+            reading.text,
+            "PACKING SLIP PS-311\nDATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC"
+        );
+        let lines: Vec<&str> = reading.text.lines().collect();
+        assert_eq!(lines[0], "PACKING SLIP PS-311");
+        assert_eq!(lines[1], "DATE JULY 15 2025");
+        assert_eq!(lines[2], "QUARTZ MEADOW RETAIL LLC");
+
+        let reading = parse_tsv(PURCHASE_ORDER.as_bytes()).unwrap();
+        assert_eq!(
+            reading.text,
+            "PURCHASE ORDER FPO-Sie\nDATE JULY 14 2625\nEMBER POST MANUFACTURING LLC"
+        );
+    }
+
+    /// A new block or paragraph is a blank line, the way Tesseract's own
+    /// text output separates them and the way distillation finds
+    /// paragraphs; a new line within one is a newline; and the rows above
+    /// word level, which carry no text, contribute nothing.
+    #[test]
+    fn parse_tsv_separates_blocks_and_paragraphs_with_a_blank_line() {
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let rows = [
+            "1\t1\t0\t0\t0\t0\t0\t0\t900\t900\t-1\t",
+            "2\t1\t1\t0\t0\t0\t10\t10\t500\t100\t-1\t",
+            "5\t1\t1\t1\t1\t1\t10\t10\t80\t20\t96\tLEASE",
+            "5\t1\t1\t1\t1\t2\t100\t10\t80\t20\t95\tAGREEMENT",
+            "5\t1\t1\t1\t2\t1\t10\t40\t80\t20\t91\tEffective",
+            "5\t1\t1\t1\t2\t2\t100\t40\t80\t20\t90\tSeptember",
+            "5\t1\t1\t2\t1\t1\t10\t90\t80\t20\t89\tLandlord:",
+            "5\t1\t1\t2\t1\t2\t100\t90\t80\t20\t-1\t ",
+            "5\t1\t2\t1\t1\t1\t10\t300\t80\t20\t88\tTenant:",
+        ];
+        let tsv = std::iter::once(header)
+            .chain(rows)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(
+            reading.text,
+            "LEASE AGREEMENT\nEffective September\n\nLandlord:\n\nTenant:"
+        );
+    }
+
+    /// Only the layout changed. The confidence is still the mean over the
+    /// words Tesseract scored, a 0 among them counting as a 0.
+    #[test]
+    fn parse_tsv_confidence_unchanged() {
+        // The eleven word scores in the capture, as Tesseract wrote them.
+        let scores = [
+            "95.227531",
+            "89.323761",
+            "0.000000",
+            "94.372665",
+            "91.018906",
+            "60.589909",
+            "59.604561",
+            "92.558258",
+            "76.375427",
+            "73.802658",
+            "86.925316",
+        ]
+        .map(|score| score.parse::<f32>().unwrap());
+        let expected = scores.iter().sum::<f32>() / scores.len() as f32;
+
+        let reading = parse_tsv(PURCHASE_ORDER.as_bytes()).unwrap();
+
+        assert_eq!(reading.mean_confidence, expected);
+        assert_eq!(reading.text.split_whitespace().count(), scores.len());
+        assert_eq!(reading.rotation_degrees, 0);
+    }
+
+    #[test]
+    fn parse_tsv_of_a_blank_page_is_empty_and_unconfident() {
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let tsv = format!("{header}\n1\t1\t0\t0\t0\t0\t0\t0\t900\t900\t-1\t\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(reading.text, "");
+        assert_eq!(reading.mean_confidence, 0.0);
+    }
+
+    #[test]
+    fn parse_tsv_refuses_output_that_is_not_utf8() {
+        let error = parse_tsv(&[0xff, 0xfe, b'\n']).unwrap_err();
+
+        assert_eq!(error.code(), "PARSE_FAILED");
     }
 }
 
