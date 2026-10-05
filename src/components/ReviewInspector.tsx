@@ -1,10 +1,11 @@
-import { Ban, CalendarPlus, ClipboardCopy, Ellipsis, FileCheck2, FileText, RotateCcw, Trash2, X } from 'lucide-react';
+import { Ban, CalendarPlus, ClipboardCopy, Ellipsis, ExternalLink, FileCheck2, FileText, FolderOpen, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
+import { itemActions } from '../features/review/actions';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { QueueItem } from '../types';
 
@@ -38,8 +39,27 @@ function quotations(value?: string): string[] {
   return (value ?? '').split(';').map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-interface Props { item: QueueItem; drawer: boolean; busy?: boolean; onClose(): void; onApprove(filename: string, description: string): void; onKeep(): void; onCancel(): void; onRetry(): void; onRemove(): void; onUndo(): void }
-export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep, onCancel, onRetry, onRemove, onUndo }: Props) {
+interface Props {
+  item: QueueItem;
+  drawer: boolean;
+  busy?: boolean;
+  onClose(): void;
+  onApprove(filename: string, description: string): void;
+  onKeep(): void;
+  onCancel(): void;
+  onRetry(): void;
+  onReanalyze(): void;
+  /** `confirmed`: the person said they resolved a parked item's files themselves. */
+  onRemove(confirmed: boolean): void;
+  onUndo(): void;
+  onOpen(): void;
+  onReveal(): void;
+}
+export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
+  // Exactly what the backend accepts for this item. Retry on an ordinary
+  // review item, and nothing at all for a ready or waiting one, were the
+  // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
+  const actions = itemActions(item);
   // The extension is the source's and the backend refuses any other, so it
   // is not part of what can be edited: the field holds the name before it,
   // and the extension sits after the field, locked.
@@ -49,10 +69,13 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
   const [description, setDescription] = useState(item.description ?? '');
   const [error, setError] = useState('');
   const [moreOpen, setMoreOpen] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const inspectorRef = useRef<HTMLElement>(null);
   const filenameRef = useRef<HTMLTextAreaElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const fieldId = useId();
-  useEffect(() => { setStem(proposedStem); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); }, [item.id, item.proposalRevision]);
+  useEffect(() => { setStem(proposedStem); setDescription(item.description ?? ''); setError(''); setMoreOpen(false); setConfirmingRemove(false); }, [item.id, item.proposalRevision]);
+  useEffect(() => { if (confirmingRemove) confirmRef.current?.focus(); }, [confirmingRemove]);
   // The whole name, always: a single-line field showed about half of a
   // typical proposal, and the caret only its tail. The field grows to fit
   // instead. Chromium sizes it from its content (field-sizing, in app.css);
@@ -110,7 +133,18 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-  const editable = item.status === 'ready' || item.status === 'review';
+  // The name can be edited only where it can be approved: a parked item's
+  // files must be checked first, and an item flagged before analysis has no
+  // proposal for the backend to approve.
+  const editable = actions.approve;
+  const completed = item.status === 'completed';
+  const filedAs = item.filedName ?? item.proposedFilename;
+  const remove = actions.remove;
+  // A parked item's files were left part-way through a rename, so removing it
+  // waits for the person to say they put them right; anything else goes at
+  // once from the menu, and asks first only from the Delete key.
+  const chooseRemove = () => { setMoreOpen(false); if (remove?.resolvedFiles) setConfirmingRemove(true); else onRemove(false); };
+  const cancelRemove = () => { setConfirmingRemove(false); queueMicrotask(() => inspectorRef.current?.querySelector<HTMLElement>('.inspector-actions button:not(:disabled)')?.focus()); };
   // Each row is a claim the proposed filename makes, paired with the text in
   // the document that supports it. A bare definition list read as metadata
   // about the file; attributing a quotation to the part of the name it
@@ -121,11 +155,24 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
     { label: 'Parties', quotes: quotations(item.evidence?.parties) },
   ].filter((entry) => entry.quotes.length > 0);
   return <aside ref={inspectorRef} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
-    <div className="inspector-title"><h2>Review item</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
+    {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
+    <div className="inspector-title"><h2>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
     <div className="source-file">
-      <p className="field-label">Current name</p>
+      <p className="field-label">{completed ? 'Original name' : 'Current name'}</p>
       <p className="selected-file"><FileKindIcon filename={item.originalFilename} />{item.originalFilename}</p>
+      {completed && (item.keptOriginal
+        ? <p className="filed-outcome">Kept its original name</p>
+        : filedAs && <p className="filed-outcome">Renamed to <strong>{filedAs}</strong></p>)}
       <StatusCell item={item} />
+      {/*
+        The reviewer is asked to name a document they could not open from
+        here, and once it was filed they could not find it. Before filing
+        these reach the file as it arrived; after, the filed copy.
+      */}
+      {actions.open && <div className="document-actions" role="group" aria-label="Document">
+        <button type="button" onClick={onOpen}><Icon icon={ExternalLink} />Open</button>
+        <button type="button" onClick={onReveal}><Icon icon={FolderOpen} />Show in folder</button>
+      </div>}
     </div>
     {editable && <section className="proposal">
       <h3>Proposed rename</h3>
@@ -188,7 +235,8 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
         <dt className="field-label">{label}</dt>
         <dd>{quotes.map((quote) => <q key={quote}>{quote}</q>)}</dd>
       </div>)}</dl></section>}
-    {item.reason && <section className={`note note--${item.status === 'failed' ? 'failed' : 'review'}`}><h3>{item.status === 'failed' ? 'Failure details' : 'Reason for review'}</h3><p>{item.reason}</p>
+    {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
+    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : 'Reason for review'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -197,11 +245,33 @@ export function ReviewInspector({ item, drawer, busy, onClose, onApprove, onKeep
       {item.nearDuplicateOf && <p className="near-duplicate" aria-label="Filed already as">Filed already as <q>{item.nearDuplicateOf}</q>.</p>}
     </section>}
     <div className="inspector-actions">
-      {item.status === 'review' && <><button type="button" className="primary" disabled={busy} onClick={approve}><Icon icon={FileCheck2} />Approve & rename</button><button type="button" className="secondary-action" disabled={busy} onClick={onKeep}><Icon icon={FileText} />Keep original</button><button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>{moreOpen && <div className="review-menu" role="group" aria-label="More review actions"><button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />Retry</button><button type="button" disabled={busy} onClick={onRemove}><Icon icon={Trash2} />Remove</button></div>}</>}
-      {item.status === 'ready' && <button type="button" className="primary" disabled={busy} onClick={approve}><Icon icon={FileCheck2} />Apply rename</button>}
-      {item.status === 'processing' && item.cancelable !== false && <button type="button" disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
-      {item.status === 'failed' && <><button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />Retry item</button><button type="button" disabled={busy} onClick={onRemove}><Icon icon={Trash2} />Remove item</button></>}
-      {item.status === 'completed' && item.undoable && <button type="button" disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
+      {confirmingRemove && remove ? <div className="remove-confirm" role="group" aria-label="Confirm removal" onKeyDown={(event) => {
+        // Escape takes back the question, not the whole drawer.
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelRemove(); }
+      }}>
+        <p>{remove.resolvedFiles
+          ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
+          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is.</>}</p>
+        <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); }}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
+        <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
+      </div> : <>
+        {actions.approve && <button type="button" className="primary" disabled={busy} onClick={approve}><Icon icon={FileCheck2} />{item.status === 'ready' ? 'Apply rename' : 'Approve & rename'}</button>}
+        {actions.retry?.primary && <button type="button" className="primary" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+        {actions.keep && <>
+          <button type="button" className="secondary-action" disabled={busy} onClick={onKeep}><Icon icon={FileText} />Keep original</button>
+          <button type="button" className="icon-button more-actions" disabled={busy} aria-label="More review actions" aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}><Icon icon={Ellipsis} /></button>
+          {moreOpen && <div className="review-menu" role="group" aria-label="More review actions">
+            {actions.retry && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onRetry(); }}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+            {actions.reanalyze && <button type="button" disabled={busy} onClick={() => { setMoreOpen(false); onReanalyze(); }}><Icon icon={RefreshCw} />Analyze again</button>}
+            {remove && <button type="button" disabled={busy} onClick={chooseRemove}><Icon icon={Trash2} />{remove.label}</button>}
+          </div>}
+        </>}
+        {/* Parked, failed or waiting: no keep and no menu, so the rest stand on their own. */}
+        {!actions.keep && actions.retry && !actions.retry.primary && <button type="button" disabled={busy} onClick={onRetry}><Icon icon={RotateCcw} />{actions.retry.label}</button>}
+        {!actions.keep && remove && <button type="button" className={actions.retry?.primary ? 'secondary-action' : undefined} disabled={busy} onClick={chooseRemove}><Icon icon={Trash2} />{remove.label}</button>}
+        {actions.cancel && <button type="button" disabled={busy} onClick={onCancel}><Icon icon={Ban} />Cancel processing</button>}
+        {actions.undo && <button type="button" disabled={busy} onClick={onUndo}><Icon icon={RotateCcw} />Undo</button>}
+      </>}
     </div>
   </aside>;
 }

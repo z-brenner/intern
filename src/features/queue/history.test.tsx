@@ -85,6 +85,25 @@ describe('rename history', () => {
     expect(await bridge.historyList()).toHaveLength(0);
   });
 
+  // Open and Show in folder reach a document where it is now, which the
+  // queue knows only for an item still in it, and only its newest row
+  // describes that place.
+  it('opens a filed document still in the queue from its newest history row', async () => {
+    const bridge = createInMemoryBridge();
+    const openItem = vi.fn(async () => undefined);
+    const revealItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    render(<App bridge={{ ...bridge, openItem, revealItem }} />);
+    const dialog = await openHistory();
+
+    expect(within(dialog).getAllByRole('button', { name: /^Open / })).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Open 2024-01-22 Lease Agreement.pdf' }));
+    await waitFor(() => expect(openItem).toHaveBeenCalledWith('completed'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show 2024-01-22 Lease Agreement.pdf in its folder' }));
+
+    expect(await within(dialog).findByRole('alert', { name: 'Open error' })).toHaveTextContent('The document is not where Intern last saw it.');
+    expect(revealItem).toHaveBeenCalledWith('completed');
+  });
+
   it('closes on Escape and returns focus to the History trigger', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openHistory();

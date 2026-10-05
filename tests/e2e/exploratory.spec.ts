@@ -128,6 +128,24 @@ test('a rename without a date is refused, and one with a date is applied and und
   await shot(page, 'undone-waits-in-review');
 });
 
+// Retry used to be on every review item's menu, and the backend refused it
+// for an ordinary review reason. The menu offers re-analysis instead, which
+// forgets the proposal and reads the document again.
+test('analyze_again_on_review_item', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
+  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  await inspector.getByRole('button', { name: 'More review actions' }).click();
+  await expect(inspector.getByRole('button', { name: /Retry/i })).toHaveCount(0);
+  await inspector.getByRole('button', { name: 'Analyze again' }).click();
+
+  const row = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/ });
+  await expect(row).toContainText('Waiting');
+  await shot(page, 'analyze-again-waiting');
+  await expect(row).toContainText('Needs review');
+  await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
+});
+
 test('pause, resume, apply all ready, and discard waiting all report what they did', async ({ page }) => {
   await page.goto('/');
   const pause = page.getByRole('button', { name: /Pause queue/i });

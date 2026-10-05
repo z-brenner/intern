@@ -13,6 +13,7 @@ import { Sidebar } from './components/Sidebar';
 import { ViewEmpty } from './components/ViewEmpty';
 import { Icon } from './components/Icon';
 import { GUIDE_URL } from './lib/bridge';
+import { describeActionError } from './lib/actionErrors';
 import { humanizeReason } from './lib/reasons';
 import type { DesktopBridge, SelectionBoundary, SelectionResult, UpdateStatus } from './lib/bridge';
 import { createInMemoryBridge } from './lib/inMemoryBridge';
@@ -30,7 +31,9 @@ type Gate =
   | { kind: 'onboarding' | 'folder-setup' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
-  const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge());
+  // The demo pushes its own changes, as the desktop backend does, so an item
+  // sent back to be analyzed again is seen coming back.
+  const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge({ liveEvents: true }));
   const bridge = suppliedBridge ?? bridgeRef.current;
   // The built-in demo bridge carries no SharePoint deployment, so it opens
   // straight into the app exactly as it always has.
@@ -266,6 +269,13 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       setActionPending(false);
     }
   };
+  // Opening a document changes nothing in the queue, so it takes no part in
+  // the one-action-at-a-time guard; it only reports a refusal.
+  const openDocument = async (id: string, reveal: boolean) => {
+    setActionError('');
+    try { await (reveal ? bridge.revealItem(id) : bridge.openItem(id)); }
+    catch (error) { setActionError(describeActionError(error)); }
+  };
   // Help leaves the app on purpose. Inside Tauri the webview has nowhere to
   // put a new tab, so the bridge hands the address to the system browser; if
   // that hand-off is refused the address itself is shown, because a person can
@@ -450,9 +460,9 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
           ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
       <p className="item-count">{query ? `${visible.length} of ${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}` : `${filtered.length} ${filtered.length === 1 ? 'item' : 'items'}`}</p></section>
-      {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onRemove={() => void refreshAndClear(() => bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} />}
+      {selected && <ReviewInspector busy={actionPending} drawer={drawerOpen} item={selected} onClose={closeReview} onApprove={(filename, description) => void refreshAndClear(() => bridge.approve(selected.id, filename, description), 'Rename applied.')} onKeep={() => void refreshAndClear(() => bridge.keepOriginal(selected.id), 'Original filename kept.')} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void refreshAndClear(() => bridge.retry(selected.id), 'Item queued for retry.')} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void refreshAndClear(() => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id), 'Item removed.')} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
-    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} onClose={closeHistory} />}
+    {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={() => bridge.installUpdate()} />}
   </main>;
 }
@@ -469,29 +479,6 @@ export const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 function matchesQuery(item: QueueItem, query: string) {
   return [item.originalFilename, item.proposedFilename, item.description]
     .some((text) => text !== undefined && text.toLowerCase().includes(query));
-}
-
-/**
- * Plain sentences for the codes a review action can be refused with. The
- * backend's messages are written for its logs - "filename must be one
- * nonblank path component" - and a code with no entry here still shows its
- * message, as before.
- */
-const ACTION_ERRORS: Record<string, string> = {
-  NAME_INVALID: 'That filename cannot be used. Keep the file\'s extension, and leave out / \\ < > : " | ? * and invisible characters.',
-  ITEM_NOT_FOUND: 'That document is no longer in the queue.',
-  PATH_UNAVAILABLE: 'The document is not where Intern last saw it. It may have been moved, renamed, or deleted outside Intern.',
-  UNSUPPORTED_FORMAT: 'Intern opens only the document formats it reads.',
-  INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
-};
-
-function describeActionError(error: unknown) {
-  const code = typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
-  if (code && ACTION_ERRORS[code]) return ACTION_ERRORS[code];
-  if (typeof error === 'string' && error.trim()) return error.trim();
-  if (error instanceof Error && error.message.trim()) return error.message.trim();
-  if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
-  return 'The operation could not be completed.';
 }
 
 function queueStatusAnnouncement(items: QueueItem[], paused: boolean) {

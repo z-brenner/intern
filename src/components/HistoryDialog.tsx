@@ -1,5 +1,6 @@
-import { X } from 'lucide-react';
+import { ExternalLink, FolderOpen, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { describeActionError } from '../lib/actionErrors';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import type { HistoryEntry } from '../types';
 import { Icon } from './Icon';
@@ -7,6 +8,12 @@ import { Icon } from './Icon';
 interface Props {
   bridge: DesktopBridge;
   selection?: SelectionBoundary;
+  /**
+   * Queue items that are filed and still in the queue. Their documents can be
+   * opened or shown from the history; one cleared from the queue has no
+   * record left to say where it is now.
+   */
+  filedItems?: ReadonlySet<string>;
   onClose(): void;
 }
 
@@ -36,9 +43,10 @@ function formatWhen(at: number): string {
  * backdrop/focus-trap conventions as SettingsDialog: Escape closes, Tab
  * cycles within the dialog.
  */
-export function HistoryDialog({ bridge, selection, onClose }: Props) {
+export function HistoryDialog({ bridge, selection, filedItems, onClose }: Props) {
   const [entries, setEntries] = useState<HistoryEntry[]>();
   const [loadError, setLoadError] = useState('');
+  const [openError, setOpenError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState('');
   const [exportError, setExportError] = useState('');
@@ -97,6 +105,22 @@ export function HistoryDialog({ bridge, selection, onClose }: Props) {
     }
   };
 
+  // Open and Show in folder reach the item's document where it is now, so
+  // they belong on its newest row only: an older row describes a rename the
+  // document has since moved on from.
+  const newest = new Set<string>();
+  const openable = new Set<string>();
+  for (const entry of entries ?? []) {
+    if (newest.has(entry.queueItemId)) continue;
+    newest.add(entry.queueItemId);
+    if (filedItems?.has(entry.queueItemId)) openable.add(entry.receiptId);
+  }
+  const openDocument = async (id: string, reveal: boolean) => {
+    setOpenError('');
+    try { await (reveal ? bridge.revealItem(id) : bridge.openItem(id)); }
+    catch (error) { setOpenError(describeActionError(error)); }
+  };
+
   return <div className="dialog-backdrop" role="presentation"><section ref={dialog} className="settings-dialog history-dialog" role="dialog" aria-modal="true" aria-label="Rename history">
     <div className="dialog-head"><h2>Rename history</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close history"><Icon icon={X} /></button></div>
     <p className="update-note">Every rename and undo Intern has applied, newest first. The CSV export carries each document's description in its last column.</p>
@@ -108,9 +132,15 @@ export function HistoryDialog({ bridge, selection, onClose }: Props) {
         <td>{formatWhen(entry.at)}</td>
         <td>{actionLabel(entry)}</td>
         <td title={entry.originalPath}>{pathLeaf(entry.originalPath)}</td>
-        <td title={entry.newPath}>{pathLeaf(entry.newPath)}{entry.description && <span className="row-description">{entry.description}</span>}</td>
+        <td title={entry.newPath}>{pathLeaf(entry.newPath)}{entry.description && <span className="row-description">{entry.description}</span>}
+          {openable.has(entry.receiptId) && <span className="history-document-actions">
+            <button type="button" className="link-button" aria-label={`Open ${pathLeaf(entry.newPath)}`} onClick={() => void openDocument(entry.queueItemId, false)}><Icon icon={ExternalLink} />Open</button>
+            <button type="button" className="link-button" aria-label={`Show ${pathLeaf(entry.newPath)} in its folder`} onClick={() => void openDocument(entry.queueItemId, true)}><Icon icon={FolderOpen} />Show in folder</button>
+          </span>}
+        </td>
       </tr>)}</tbody>
     </table></div>}
+    {openError && <p className="form-error" role="alert" aria-label="Open error">{openError}</p>}
     {exportMessage && <p role="status" aria-label="Export status" aria-live="polite">{exportMessage}</p>}
     {exportError && <p className="form-error" role="alert">{exportError}</p>}
     <div className="history-actions">

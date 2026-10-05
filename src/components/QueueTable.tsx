@@ -15,6 +15,17 @@ export function QueueTable({ items, selectedId, onSelect }: { items: QueueItem[]
         width, which matters because the table already scrolls horizontally on
         a 1200px window.
       */}
-      <td>{item.status === 'waiting' ? '—' : <>{item.proposedFilename ?? '—'}{item.description && <span className="row-description">{item.description}</span>}</>}</td><td className={`confidence ${item.status}`}>{item.status === 'waiting' ? '—' : <ConfidenceMeter value={item.confidence} status={item.status} />}</td>
+      <td>{item.status === 'waiting' ? '—' : <>{nameCell(item)}{item.description && <span className="row-description">{item.description}</span>}</>}</td><td className={`confidence ${item.status}`}>{item.status === 'waiting' ? '—' : <ConfidenceMeter value={item.confidence} status={item.status} />}</td>
     </tr>)}</tbody></table></div>;
+}
+
+/**
+ * A filed row shows the name the file was given, which can differ from the
+ * proposal (a " (2)" the destination needed). A kept original shows that it
+ * kept its name, not a proposal that was never applied.
+ */
+function nameCell(item: QueueItem) {
+  if (item.status !== 'completed') return item.proposedFilename ?? '—';
+  if (item.keptOriginal) return <span className="kept-original">Kept original</span>;
+  return item.filedName ?? item.proposedFilename ?? '—';
 }

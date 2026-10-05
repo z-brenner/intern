@@ -105,6 +105,75 @@ describe('review actions', () => {
     expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
   });
 
+  // FRONTEND_UX-8: a filed document's inspector called its old name its
+  // current one and never said what it became. And the reviewer could not
+  // open the document, or find it once filed.
+  it('completed_item_labels_and_open_reveal_buttons', async () => {
+    const base = createInMemoryBridge({ items: [
+      { id: 'filed', originalFilename: 'Completed lease.pdf', status: 'completed', proposedFilename: '2024-01-22 Lease Agreement.pdf', filedName: '2024-01-22 Lease Agreement (2).pdf', undoable: true },
+      { id: 'kept', originalFilename: 'Board minutes.docx', status: 'completed', proposedFilename: '2024-05-07 Board Meeting Minutes.docx', keptOriginal: true, undoable: false },
+      { id: 'named', originalFilename: '2024-02-01 Invoice.pdf', status: 'completed', proposedFilename: '2024-02-01 Invoice.pdf', filedName: '2024-02-01 Invoice.pdf', reason: 'This document already had this name, so nothing was renamed.' },
+    ] });
+    const openItem = vi.fn(async () => undefined);
+    const revealItem = vi.fn(async () => undefined);
+    render(<App bridge={{ ...base, openItem, revealItem }} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
+
+    // The table names what each file is called now.
+    expect(await screen.findByRole('row', { name: /Completed lease\.pdf/ })).toHaveTextContent('2024-01-22 Lease Agreement (2).pdf');
+    expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).toHaveTextContent('Kept original');
+    expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.docx');
+
+    selectRow(screen.getByRole('row', { name: /Completed lease\.pdf/ }));
+    const inspector = screen.getByRole('complementary', { name: 'Review item' });
+    expect(within(inspector).getByRole('heading', { level: 2 })).toHaveTextContent('Filed document');
+    expect(within(inspector).getByText('Original name')).toBeVisible();
+    expect(within(inspector).queryByText('Current name')).not.toBeInTheDocument();
+    expect(within(inspector).getByText(/^Renamed to/)).toHaveTextContent('Renamed to 2024-01-22 Lease Agreement (2).pdf');
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Show in folder' }));
+    await waitFor(() => expect(openItem).toHaveBeenCalledWith('filed'));
+    expect(revealItem).toHaveBeenCalledWith('filed');
+    expect(within(inspector).getByRole('button', { name: 'Undo' })).toBeEnabled();
+
+    selectRow(screen.getByRole('row', { name: /Board minutes\.docx/ }));
+    await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
+    expect(inspector).not.toHaveTextContent('Renamed to');
+    expect(within(inspector).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+
+    // A settled item's reason is a note about what happened, not a reason it waits.
+    selectRow(screen.getByRole('row', { name: /2024-02-01 Invoice\.pdf/ }));
+    await waitFor(() => expect(within(inspector).getByRole('heading', { name: 'Note' })).toBeVisible());
+    expect(within(inspector).queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
+  });
+
+  it('says plainly when the document is no longer where Intern saw it', async () => {
+    const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
+    render(<App bridge={{ ...createInMemoryBridge(), openItem }} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+
+    expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('It may have been moved, renamed, or deleted outside Intern.');
+    // Opening is not a decision: the item is still there to decide.
+    expect(screen.getByRole('button', { name: /Approve & rename/i })).toBeEnabled();
+  });
+
+  it('sends an ordinary review item back to be analyzed again, and it returns for review', async () => {
+    const bridge = createInMemoryBridge({ liveEvents: true, analysisDelayMs: 20 });
+    const reanalyze = vi.spyOn(bridge, 'reanalyze');
+    const retry = vi.spyOn(bridge, 'retry');
+    render(<App bridge={bridge} />);
+    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'More review actions' }));
+    expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze again' }));
+
+    await waitFor(() => expect(reanalyze).toHaveBeenCalledWith('lease'));
+    expect(retry).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('Waiting'));
+    await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('Needs review'));
+  });
+
   // The description is half of what Intern produces, and it used to be rendered
   // only while an item was still ready or in review. Applying a rename made the
   // item `completed`, which hid the sentence for good - so the fact describing

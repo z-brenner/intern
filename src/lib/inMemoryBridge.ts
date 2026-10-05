@@ -303,7 +303,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const parkedRefusal = () => ({ code: 'RECONCILIATION_REQUIRED', message: 'files need checking: use Check again' });
   const queueListeners = new Set<(event: QueueBridgeEvent) => void>();
   const queueChanged = () => queueListeners.forEach((listener) => listener({ type: 'changed' }));
-  const analysisDelayMs = options.analysisDelayMs ?? 300;
+  // Long enough to see the item wait before it is back in review.
+  const analysisDelayMs = options.analysisDelayMs ?? 800;
   /** What review leaves behind, by queue status: no proposal while waiting, no failure once settled. */
   const settledFields = ({ stage: _stage, progress: _progress, reason: _reason, errorCode: _errorCode, parked: _parked, ...rest }: QueueItem): QueueItem => rest;
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
