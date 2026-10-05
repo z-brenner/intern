@@ -5597,7 +5597,12 @@ fn a_foreign_file_at_the_destination_waits_in_review_and_files_once_it_is_gone()
 
     let filed = item_of(&pipeline, id);
     assert_eq!(filed.status, QueueStatus::Completed);
-    assert_eq!(filed.filed_receipt.unwrap().destination, occupied);
+    // The receipt stores the canonical path: on Windows a verbatim \\?\ path
+    // with long names, where the temp dir may come back in 8.3 form.
+    assert_eq!(
+        filed.filed_receipt.unwrap().destination,
+        occupied.canonicalize().unwrap()
+    );
     assert_eq!(fs::read(&occupied).unwrap(), b"scan.pdf");
 }
 
@@ -6114,7 +6119,7 @@ fn approving_a_parked_document_the_check_finishes_says_what_it_is_filed_as() {
     assert_eq!(filed.status, QueueStatus::Completed);
     assert_eq!(
         filed.filed_receipt.unwrap().destination,
-        folders[0].join(AGREEMENT_NAME)
+        folders[0].join(AGREEMENT_NAME).canonicalize().unwrap()
     );
     assert!(!folders[0].join(renamed).exists());
     assert!(!paths[0].exists());
