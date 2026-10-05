@@ -12,7 +12,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use intern_core::{OperationDirection, OperationReceipt, OperationStage, QueueStatus};
+use intern_core::{ErrorCode, OperationDirection, OperationReceipt, OperationStage, QueueStatus};
 use intern_engine::fingerprint::NEAR_DUPLICATE_DISTANCE;
 use intern_intake::{
     CloudLocation, CloudProviderKind, CloudRoot, DescriptionLedger, DoneOutcome, FiledIndex,
@@ -20,8 +20,8 @@ use intern_intake::{
     PRESENCE_ACTIVE_WINDOW_SECONDS, classify, detect_cloud_roots,
 };
 use intern_queue::{
-    DuplicateOracle, FiledDocument, FilingSink, KnownFiling, Pipeline, PipelineItem, SettingsStore,
-    SimilarFiling, UnfiledDocument,
+    DuplicateOracle, FiledDocument, FilingSink, KnownFiling, Pipeline, PipelineItem,
+    PipelineResult, SettingsStore, SimilarFiling, UnfiledDocument,
     paths::{canonical_file, display_path},
 };
 use serde::Serialize;
@@ -134,7 +134,12 @@ pub struct IntakeStatusDto {
     pub uploader_unknown: u32,
     pub sync_conflicts: u32,
     pub awaiting_hydration: u32,
+    /// Settled documents the queue could not take, retried with growing
+    /// pauses.
+    pub unreadable_documents: u32,
     pub unreadable_folders: u32,
+    /// Files still being written or synced in, claimed once they settle.
+    pub arriving: u32,
     pub claimed_by_others: u32,
     pub processed_here: u32,
     pub last_scan_at: Option<i64>,
@@ -257,7 +262,9 @@ pub(crate) fn status_dto(
         uploader_unknown: 0,
         sync_conflicts: 0,
         awaiting_hydration: 0,
+        unreadable_documents: 0,
         unreadable_folders: 0,
+        arriving: 0,
         claimed_by_others: 0,
         processed_here: 0,
         last_scan_at: None,
@@ -286,7 +293,9 @@ pub(crate) fn status_dto(
         uploader_unknown: status.uploader_unknown,
         sync_conflicts: status.sync_conflicts,
         awaiting_hydration: status.awaiting_hydration,
+        unreadable_documents: status.unreadable_documents,
         unreadable_folders: status.unreadable_folders,
+        arriving: status.arriving,
         claimed_by_others: status.claimed_by_others,
         processed_here: status.processed_here,
         last_scan_at: status.last_scan_at,
@@ -303,6 +312,10 @@ pub(crate) fn status_dto(
 /// receipt's destination leaf (falling back to the proposal filename). Any
 /// other completed item (keep-original, or an apply that was later undone)
 /// left the source in place and reports `KeptOriginal`.
+///
+/// A canceled item is a person's decision to leave the document alone, so it
+/// reports `KeptOriginal` too. One the watcher withdrew itself never reaches
+/// here; see `screen_lookup`.
 pub(crate) fn item_fate(
     status: QueueStatus,
     receipt: Option<&OperationReceipt>,
@@ -316,7 +329,10 @@ pub(crate) fn item_fate(
         | QueueStatus::Applying => ItemState::Active,
         QueueStatus::NeedsReview => ItemState::NeedsReview,
         QueueStatus::Failed => ItemState::Failed,
-        QueueStatus::Canceled => ItemState::Unknown,
+        QueueStatus::Canceled => ItemState::Done {
+            outcome: DoneOutcome::KeptOriginal,
+            result_filename: None,
+        },
         QueueStatus::Completed => {
             let applied = receipt.filter(|receipt| {
                 receipt.direction == OperationDirection::Apply
@@ -338,6 +354,106 @@ pub(crate) fn item_fate(
                 },
             }
         }
+    }
+}
+
+/// What a lookup in the queue tells the watcher before the row itself is
+/// read. A lookup that failed is `Unavailable`: it says nothing about the
+/// document, and reading it as "no item" let the watcher release a claim on
+/// a document the queue may still be working on. A row the watcher withdrew
+/// itself is `Unknown`, so the claim is released and the document can be
+/// handed over again later. Any other row goes on to `item_fate`.
+pub(crate) fn screen_lookup(
+    lookup: PipelineResult<Option<PipelineItem>>,
+) -> Result<Option<PipelineItem>, ItemState> {
+    match lookup {
+        Ok(Some(item)) if withdrawn(item.status, item.error_code) => Err(ItemState::Unknown),
+        Ok(found) => Ok(found),
+        Err(_) => Err(ItemState::Unavailable),
+    }
+}
+
+/// Whether a row is one the watcher withdrew rather than one a person
+/// canceled.
+///
+/// The two leave the same canceled status and mean opposite things: a
+/// person's cancel is a decision to leave the document alone, while the
+/// watcher only gave up a claim it lost, and the document may be handed over
+/// again. The watcher's is marked `INTAKE_WITHDRAWN` on the row, in the same
+/// step that cancels it. Kept in memory instead, the mark was gone after a
+/// restart or an intake settings save, and a cancel that failed after the
+/// row had changed never recorded it - and the row then read as a person's
+/// cancel and closed the document for good without it ever being processed.
+fn withdrawn(status: QueueStatus, error_code: Option<ErrorCode>) -> bool {
+    status == QueueStatus::Canceled && error_code == Some(ErrorCode::IntakeWithdrawn)
+}
+
+/// Hands documents to the queue for the watcher.
+///
+/// The queue keeps one row per path and content, so handing over again a
+/// document the watcher withdrew returns its canceled row, which is queued
+/// again: otherwise re-admission would never run it. A row a person canceled,
+/// and every other row, is left as it is.
+fn enqueue_for_intake(pipeline: &Pipeline, paths: &[PathBuf]) -> Result<(), String> {
+    let mut canonical = Vec::with_capacity(paths.len());
+    for path in paths {
+        canonical.push(canonical_file(path).map_err(|error| error.code)?);
+    }
+    let items = pipeline
+        .enqueue_files(&canonical)
+        .map_err(|error| error.code)?;
+    for item in items
+        .iter()
+        .filter(|item| withdrawn(item.status, item.error_code))
+    {
+        pipeline.retry(item.id).map_err(|error| error.code)?;
+    }
+    Ok(())
+}
+
+/// What the queue knows about the document at `path`, for the watcher.
+///
+/// The queue stores the canonical path handed to `enqueue`, and the
+/// watcher's paths derive from the canonical intake root, so a live file
+/// matches either literally or after canonicalization. A path that no
+/// longer canonicalizes (the apply already renamed it away) still matches
+/// literally — that is what lets a finished item report `Done` instead of
+/// `Unknown`. The newest matching item is the source's current fate;
+/// older completed rows for the same path are history. One indexed
+/// lookup per file: this is asked once per document on every scan.
+fn intake_item_state(pipeline: &Pipeline, path: &Path) -> ItemState {
+    match screen_lookup(pipeline.find_by_source_path(path)) {
+        Ok(Some(item)) => item_fate(
+            item.status,
+            item.receipt.as_ref(),
+            item.proposal
+                .as_ref()
+                .map(|record| record.filename.as_str()),
+        ),
+        Ok(None) => ItemState::Unknown,
+        Err(state) => state,
+    }
+}
+
+/// Withdraws the pending item at `path` for the watcher, marked as the
+/// watcher's (see `withdrawn`). Best effort: a terminal or mid-apply item is
+/// not cancelable and the pipeline says so, and the claim protocol only needs
+/// pending work withdrawn. A row already canceled was canceled by a person,
+/// and stays theirs.
+fn withdraw_for_intake(pipeline: &Pipeline, path: &Path) {
+    if let Ok(Some(item)) = pipeline.find_by_source_path(path)
+        && item.status != QueueStatus::Canceled
+    {
+        let _ = pipeline.withdraw(item.id);
+    }
+}
+
+/// Runs the failed item at `path` again in place. False when there is no
+/// failed item there, or the queue refused.
+fn retry_failed(pipeline: &Pipeline, path: &Path) -> bool {
+    match pipeline.find_by_source_path(path) {
+        Ok(Some(item)) if item.status == QueueStatus::Failed => pipeline.retry(item.id).is_ok(),
+        _ => false,
     }
 }
 
@@ -371,16 +487,13 @@ impl PipelineIntakeHost {
         }
     }
 
-    /// The queue stores the canonical path handed to `enqueue`, and the
-    /// watcher's paths derive from the canonical intake root, so a live file
-    /// matches either literally or after canonicalization. A path that no
-    /// longer canonicalizes (the apply already renamed it away) still matches
-    /// literally — that is what lets a finished item report `Done` instead of
-    /// `Unknown`. The newest matching item is the source's current fate;
-    /// older completed rows for the same path are history. One indexed
-    /// lookup per file: this is asked once per document on every scan.
-    fn find_item(&self, path: &Path) -> Option<PipelineItem> {
-        self.pipeline.find_by_source_path(path).ok().flatten()
+    /// The scheduler ignores wakes until the model is ready, and setup
+    /// sends its own wake on becoming ready, so gating here only avoids a
+    /// pointless message — mirroring AppState::schedule.
+    fn wake_scheduler(&self) {
+        if self.model_ready.load(Ordering::SeqCst) {
+            let _ = self.scheduler.send(SchedulerMessage::Wake);
+        }
     }
 }
 
@@ -393,42 +506,25 @@ impl IntakeHost for PipelineIntakeHost {
         intake_admission(manager.authorize(path, AdmissionStage::Enqueue))
     }
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String> {
-        let mut canonical = Vec::with_capacity(paths.len());
-        for path in paths {
-            canonical.push(canonical_file(path).map_err(|error| error.code)?);
-        }
-        self.pipeline
-            .enqueue_files(&canonical)
-            .map_err(|error| error.code)?;
-        // The scheduler ignores wakes until the model is ready, and setup
-        // sends its own wake on becoming ready, so gating here only avoids a
-        // pointless message — mirroring AppState::schedule.
-        if self.model_ready.load(Ordering::SeqCst) {
-            let _ = self.scheduler.send(SchedulerMessage::Wake);
-        }
+        enqueue_for_intake(&self.pipeline, paths)?;
+        self.wake_scheduler();
         Ok(())
     }
 
     fn item_state(&self, path: &Path) -> ItemState {
-        match self.find_item(path) {
-            Some(item) => item_fate(
-                item.status,
-                item.receipt.as_ref(),
-                item.proposal
-                    .as_ref()
-                    .map(|record| record.filename.as_str()),
-            ),
-            None => ItemState::Unknown,
-        }
+        intake_item_state(&self.pipeline, path)
     }
 
     fn abandon(&self, path: &Path) {
-        if let Some(item) = self.find_item(path) {
-            // Best effort: a terminal or mid-apply item is not cancelable and
-            // the pipeline will say so; the claim protocol only needs pending
-            // work withdrawn.
-            let _ = self.pipeline.cancel(item.id);
+        withdraw_for_intake(&self.pipeline, path);
+    }
+
+    fn retry(&self, path: &Path) -> bool {
+        let retried = retry_failed(&self.pipeline, path);
+        if retried {
+            self.wake_scheduler();
         }
+        retried
     }
 
     fn status_changed(&self, status: &IntakeStatus) {
@@ -582,6 +678,10 @@ impl DuplicateOracle for SharedFiledIndex {
 /// retraction has not reached the folder, which is the document itself, not
 /// a copy of it. A filing this machine made from another path is still a
 /// duplicate, but there is no other machine to name.
+///
+/// The names come from a file anyone who can write the shared folder can
+/// write, and they end up in a review reason, so they are clamped to the
+/// length of a real filename.
 pub(crate) fn known_filing(
     marker: &FiledMarker,
     own_machine_id: &str,
@@ -595,9 +695,16 @@ pub(crate) fn known_filing(
         return None;
     }
     Some(KnownFiling {
-        filename: marker.filename.clone(),
-        filed_by: (!own).then(|| marker.machine_name.clone()),
+        filename: clamp_marker_text(&marker.filename),
+        filed_by: (!own).then(|| clamp_marker_text(&marker.machine_name)),
     })
+}
+
+/// The longest marker string shown to a person: a filename's limit.
+const MARKER_TEXT_LIMIT: usize = 255;
+
+fn clamp_marker_text(text: &str) -> String {
+    text.chars().take(MARKER_TEXT_LIMIT).collect()
 }
 
 /// What the description records are doing, for Settings.
@@ -827,6 +934,21 @@ mod filed_index_tests {
         assert_eq!(known_filing(&marker("aaa"), "bbb", None), Some(known));
     }
 
+    /// A marker is a file anyone who can write the shared folder can write,
+    /// and its names go straight into a review reason.
+    #[test]
+    fn a_teammates_marker_names_are_clamped_to_a_filenames_length() {
+        let mut planted = marker("aaa");
+        planted.filename = "x".repeat(10_000);
+        planted.machine_name = "é".repeat(10_000);
+        let known = known_filing(&planted, "bbb", None).unwrap();
+        assert_eq!(known.filename.chars().count(), 255);
+        assert_eq!(known.filed_by.unwrap().chars().count(), 255);
+        // An ordinary marker is untouched.
+        let ordinary = known_filing(&marker("aaa"), "bbb", None).unwrap();
+        assert_eq!(ordinary.filename, "2026-03-02 Agreement.pdf");
+    }
+
     #[test]
     fn this_machines_own_marker_for_the_same_document_is_the_document_itself() {
         assert_eq!(
@@ -840,5 +962,185 @@ mod filed_index_tests {
         assert_eq!(elsewhere.filed_by, None);
         assert_eq!(elsewhere.filename, "2026-03-02 Agreement.pdf");
         assert!(known_filing(&marker("aaa"), "aaa", None).is_some());
+    }
+}
+
+#[cfg(test)]
+mod watcher_host_tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
+
+    use intern_core::QueueStatus;
+    use intern_intake::{DoneOutcome, ItemState};
+    use intern_queue::{
+        AnalyzerBoundary, ModelFailure, Pipeline, PipelineError, PipelineEventSink,
+        PipelineProgress, SettingsStore, WorkerBoundary, WorkerFailure,
+    };
+
+    use super::{
+        enqueue_for_intake, intake_item_state, retry_failed, screen_lookup, withdraw_for_intake,
+    };
+
+    /// An extractor that can read nothing, so every document fails.
+    struct Unreadable;
+
+    impl WorkerBoundary for Unreadable {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<intern_engine::DocumentSource, WorkerFailure> {
+            Err(WorkerFailure::new("TEST_UNREADABLE", false, false))
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    struct NeverAnalyze;
+
+    impl AnalyzerBoundary for NeverAnalyze {
+        fn analyze(
+            &self,
+            _source: &intern_engine::DocumentSource,
+            _extension: &str,
+            _existing_names: &[&str],
+        ) -> Result<intern_engine::DocumentAnalysis, ModelFailure> {
+            panic!("no document gets past extraction here")
+        }
+    }
+
+    struct NoEvents;
+
+    impl PipelineEventSink for NoEvents {
+        fn queue_changed(&self) {}
+
+        fn progress(&self, _progress: PipelineProgress) {}
+    }
+
+    /// A real queue in a directory of its own, with the documents beside it.
+    fn queue(name: &str) -> (PathBuf, Pipeline) {
+        let dir =
+            std::env::temp_dir().join(format!("intern-watcher-host-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dir = fs::canonicalize(dir).unwrap();
+        let pipeline = reopen(&dir);
+        (dir, pipeline)
+    }
+
+    /// The queue in `dir`, opened as the app opens it at start.
+    fn reopen(dir: &Path) -> Pipeline {
+        Pipeline::with_local_files(
+            dir.join("queue.sqlite3"),
+            Arc::new(Unreadable),
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            SettingsStore::new(dir.join("settings.json")),
+        )
+        .unwrap()
+    }
+
+    /// A person's Cancel and the watcher's own withdrawal leave the same
+    /// canceled row. Read as "no item", a person's cancel had the watcher
+    /// release and re-claim the document every two scans for ever; read as a
+    /// decision, the watcher's withdrawal would strand a document it only
+    /// let go of. The difference is kept on the row, so it holds after a
+    /// restart, when the host and everything it held in memory are new.
+    #[test]
+    fn user_canceled_maps_to_kept_original_abandoned_maps_to_unknown() {
+        let (dir, pipeline) = queue("cancel");
+        let canceled = dir.join("canceled.pdf");
+        let withdrawn = dir.join("withdrawn.pdf");
+        fs::write(&canceled, b"a document the person canceled").unwrap();
+        fs::write(&withdrawn, b"a document the watcher let go of").unwrap();
+        enqueue_for_intake(&pipeline, &[canceled.clone(), withdrawn.clone()]).unwrap();
+        let kept = ItemState::Done {
+            outcome: DoneOutcome::KeptOriginal,
+            result_filename: None,
+        };
+        let id = |path: &Path| pipeline.find_by_source_path(path).unwrap().unwrap().id;
+
+        pipeline.cancel(id(&canceled)).unwrap();
+        assert_eq!(intake_item_state(&pipeline, &canceled), kept);
+
+        withdraw_for_intake(&pipeline, &withdrawn);
+        let row = pipeline.find_by_source_path(&withdrawn).unwrap().unwrap();
+        assert_eq!(row.status, QueueStatus::Canceled);
+        assert_eq!(intake_item_state(&pipeline, &withdrawn), ItemState::Unknown);
+        // A row a person already canceled is never taken for the watcher's.
+        withdraw_for_intake(&pipeline, &canceled);
+        assert_eq!(intake_item_state(&pipeline, &canceled), kept);
+
+        // After a restart both read as they did.
+        drop(pipeline);
+        let pipeline = reopen(&dir);
+        assert_eq!(intake_item_state(&pipeline, &withdrawn), ItemState::Unknown);
+        assert_eq!(intake_item_state(&pipeline, &canceled), kept);
+
+        // Handed over again, only the one the watcher let go of starts again.
+        enqueue_for_intake(&pipeline, &[canceled.clone(), withdrawn.clone()]).unwrap();
+        assert_eq!(intake_item_state(&pipeline, &withdrawn), ItemState::Active);
+        assert_eq!(intake_item_state(&pipeline, &canceled), kept);
+
+        drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A lookup the database refused says nothing about the document. Read as
+    /// "no item", it had the watcher release a claim on work in progress.
+    #[test]
+    fn db_error_maps_to_unavailable() {
+        let refused = Err(PipelineError::new(
+            "DATABASE_UNAVAILABLE",
+            "database is locked",
+        ));
+        assert_eq!(screen_lookup(refused), Err(ItemState::Unavailable));
+        assert_eq!(screen_lookup(Ok(None)), Ok(None));
+    }
+
+    /// The forgive-once retry for a document that failed without its content
+    /// has to run the failed row again: handing the same document over again
+    /// only returns that row, still failed.
+    #[test]
+    fn a_failed_item_is_retried_in_place() {
+        let (dir, pipeline) = queue("retry");
+        let document = dir.join("contract.pdf");
+        fs::write(&document, b"a document that could not be read").unwrap();
+        pipeline
+            .enqueue_files(std::slice::from_ref(&document))
+            .unwrap();
+        pipeline.run_next().unwrap();
+        pipeline.run_next().unwrap();
+        let status = |path: &Path| pipeline.find_by_source_path(path).unwrap().unwrap().status;
+        assert_eq!(status(&document), QueueStatus::Failed);
+        let again = pipeline
+            .enqueue_files(std::slice::from_ref(&document))
+            .unwrap();
+        assert_eq!(
+            again[0].status,
+            QueueStatus::Failed,
+            "the row comes back as it was"
+        );
+
+        assert!(retry_failed(&pipeline, &document));
+        assert_eq!(status(&document), QueueStatus::Queued);
+        assert!(
+            !retry_failed(&pipeline, &document),
+            "nothing failed to retry"
+        );
+        assert!(!retry_failed(&pipeline, &dir.join("never-enqueued.pdf")));
+
+        drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
     }
 }

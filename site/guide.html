@@ -1119,11 +1119,11 @@
         <dl class="kv">
           <div>
             <dt>Scan interval</dt>
-            <dd>About every 20 seconds. <strong>Scan now</strong> forces an immediate pass.</dd>
+            <dd>About every 20 seconds, and every few seconds while a file is still arriving. <strong>Scan now</strong> forces an immediate pass.</dd>
           </div>
           <div>
             <dt>Half-copied files</dt>
-            <dd>A file is only picked up once its size and modified time have held still for a full interval, so a file still being copied is never read.</dd>
+            <dd>A file is only picked up once its size and modified time have held still for about ten seconds, so a file still being copied is never read. <strong>Scan now</strong> does not shorten that wait.</dd>
           </div>
           <div>
             <dt>Folders you cannot open</dt>
@@ -1416,7 +1416,7 @@
               <p>Work through the usual causes:</p>
               <ul class="bullets">
                 <li>Is it a supported format? Is it zero bytes?</li>
-                <li>Is it still copying or syncing in? A file is only picked up once its size and modified time have held still for a full scan interval.</li>
+                <li>Is it still copying or syncing in? A file is only picked up once its size and modified time have held still for about ten seconds.</li>
                 <li>Is it a dot-file, an Office lock file starting with <code>~$</code>, or Intern's own history export (<code>intern-history….csv</code>)? Those are ignored on purpose.</li>
                 <li>Did another machine claim it? Settings shows the counts.</li>
               </ul>

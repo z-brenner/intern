@@ -1623,6 +1623,49 @@ pub struct AppState {
     sharepoint_activation: AtomicBool,
 }
 
+/// The watcher's configuration for the canonical intake `folder`.
+///
+/// What was already in the folder when this machine began watching it is kept
+/// in the app's own data, so a restart, an update, or a changed label does not
+/// retake it and hold everything that arrived in between. Never in the shared
+/// `.intern` folder, which every machine reads. `first_look` takes it again,
+/// for a watch that starts now (see `starts_a_new_watch`).
+fn intake_config(
+    folder: PathBuf,
+    settings: &AppSettings,
+    data_dir: &Path,
+    first_look: bool,
+) -> IntakeConfig {
+    let mut config = IntakeConfig::new(
+        folder,
+        SUPPORTED_EXTENSIONS
+            .iter()
+            .map(|extension| (*extension).to_owned())
+            .collect(),
+    );
+    config.process_others_uploads = settings.process_others_uploads;
+    config.backlog_file = Some(data_dir.join("intake-backlog.json"));
+    config.retake_backlog = first_look;
+    config
+}
+
+/// Whether a save starts a new watch of the intake folder: watching was just
+/// turned on, or pointed at another folder, or told differently whose
+/// documents it admits. "Only new documents" means new from that moment, so a
+/// new watch takes the first look at what is already there again. The look
+/// kept from an earlier watch of the same folder knew nothing of what arrived
+/// while watching was off, and those documents were taken for this machine's
+/// own new uploads - renamed and filed although the person had just said to
+/// leave them alone. A changed label, or whether teammates' documents are
+/// processed too, carries the same watch on.
+fn starts_a_new_watch(previous: &AppSettings, settings: &AppSettings) -> bool {
+    settings.intake_enabled
+        && (!previous.intake_enabled
+            || previous.intake_folder != settings.intake_folder
+            || previous.intake_local_only != settings.intake_local_only
+            || previous.intake_my_folder != settings.intake_my_folder)
+}
+
 impl AppState {
     pub fn initialize(app: &AppHandle) -> Result<Self, CommandError> {
         let data = app.path().app_local_data_dir().map_err(|_| CommandError {
@@ -1759,7 +1802,7 @@ impl AppState {
             state.schedule()?;
         }
         if startup_settings.intake_enabled
-            && let Err(error) = state.restart_intake(&startup_settings)
+            && let Err(error) = state.restart_intake(&startup_settings, false)
             && let Ok(mut slot) = state.intake_error.lock()
         {
             *slot = Some(format!("{}: {}", error.code, error.message));
@@ -1785,8 +1828,9 @@ impl AppState {
     /// Stops any running watcher and starts a fresh one when the settings
     /// call for it. The identity is reloaded so a changed machine label takes
     /// effect. An intake folder that no longer canonicalizes is recorded for
-    /// `intake_status` instead of returned as an error.
-    fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError> {
+    /// `intake_status` instead of returned as an error. `first_look` is set
+    /// only by a save that starts a new watch.
+    fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError> {
         let identity = MachineIdentity::load_or_create(&self.data_dir, &settings.machine_label)
             .map_err(|_| CommandError {
                 code: "APP_DATA_UNAVAILABLE".into(),
@@ -1806,14 +1850,7 @@ impl AppState {
         if settings.intake_enabled {
             match canonical_folder(Path::new(&settings.intake_folder)) {
                 Ok(folder) => {
-                    let mut config = IntakeConfig::new(
-                        folder,
-                        SUPPORTED_EXTENSIONS
-                            .iter()
-                            .map(|extension| (*extension).to_owned())
-                            .collect(),
-                    );
-                    config.process_others_uploads = settings.process_others_uploads;
+                    let config = intake_config(folder, settings, &self.data_dir, first_look);
                     let host = Arc::new(PipelineIntakeHost::new(
                         Arc::clone(&self.pipeline),
                         self.scheduler.sender.clone(),
@@ -2215,7 +2252,9 @@ pub(crate) trait SettingsRuntime {
     fn model_source_changed(&self, from: ModelSource, to: ModelSource) -> Result<(), CommandError>;
     fn schedule(&self) -> Result<(), CommandError>;
     fn sync_tray(&self, run_in_background: bool);
-    fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError>;
+    /// `first_look` asks the new watcher to take the first look at what is
+    /// already in the folder again; see `starts_a_new_watch`.
+    fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
     /// The paths a completed SharePoint activation owns, if one is active.
     fn managed_sharepoint(
@@ -2283,8 +2322,8 @@ impl SettingsRuntime for AppState {
         }
     }
 
-    fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError> {
-        AppState::restart_intake(self, settings)
+    fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError> {
+        AppState::restart_intake(self, settings, first_look)
     }
 
     fn emit_intake_changed(&self) -> Result<(), CommandError> {
@@ -2425,7 +2464,7 @@ fn save_settings_with_microsoft_protection(
         || previous.process_others_uploads != settings.process_others_uploads
         || previous.machine_label != settings.machine_label
     {
-        state.restart_intake(&settings)?;
+        state.restart_intake(&settings, starts_a_new_watch(&previous, &settings))?;
         state.emit_intake_changed()?;
     }
     source_changed
@@ -2549,7 +2588,8 @@ fn restore_settings_unlocked(
         failures.push(error);
     }
     runtime.sync_tray(previous.run_in_background);
-    if let Err(error) = runtime.restart_intake(previous) {
+    // Back to the watch that was running before, not a new one.
+    if let Err(error) = runtime.restart_intake(previous, false) {
         failures.push(error);
     }
     if let Err(error) = runtime.emit_intake_changed() {
@@ -3201,11 +3241,12 @@ mod intake_tests {
     use intern_core::{
         OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
     };
-    use intern_intake::{CloudProviderKind, DoneOutcome, ItemState, MachineIdentity};
+    use intern_intake::{CloudProviderKind, DoneOutcome, IntakeStatus, ItemState, MachineIdentity};
     use intern_queue::AppSettings;
 
     use super::{
-        save_settings_and_autostart, validate_description_settings, validate_intake_settings,
+        intake_config, save_settings, save_settings_and_autostart, test_runtime::RecordingRuntime,
+        validate_description_settings, validate_intake_settings,
     };
     use crate::intake::{
         CloudProviderDto, filed_folder_for, item_fate, lists_one_drive, presence_active, status_dto,
@@ -3497,7 +3538,10 @@ mod intake_tests {
         );
         assert_eq!(
             item_fate(QueueStatus::Canceled, None, None),
-            ItemState::Unknown
+            ItemState::Done {
+                outcome: DoneOutcome::KeptOriginal,
+                result_filename: None,
+            }
         );
     }
 
@@ -3602,10 +3646,191 @@ mod intake_tests {
         assert_eq!(json["machines"], serde_json::json!([]));
         assert_eq!(json["heldForOthers"], 0);
         assert_eq!(json["unreadableFolders"], 0);
+        assert_eq!(json["unreadableDocuments"], 0);
         assert_eq!(json["claimedByOthers"], 0);
         assert_eq!(json["processedHere"], 0);
         assert_eq!(json["lastScanAt"], serde_json::Value::Null);
         assert_eq!(json["error"], serde_json::Value::Null);
+        assert_eq!(json["arriving"], 0);
+    }
+
+    /// The backlog has to outlive the watcher, and it is this machine's own
+    /// record: kept with the app's data, not in the folder teammates share.
+    #[test]
+    fn the_intake_backlog_is_kept_in_app_data_not_the_shared_folder() {
+        let settings = AppSettings {
+            process_others_uploads: true,
+            ..AppSettings::default()
+        };
+        let config = intake_config(
+            PathBuf::from("/srv/scans"),
+            &settings,
+            Path::new("/home/pat/.local/share/intern"),
+            false,
+        );
+        assert_eq!(config.intake_root, PathBuf::from("/srv/scans"));
+        assert!(config.process_others_uploads);
+        assert_eq!(
+            config.backlog_file,
+            Some(PathBuf::from(
+                "/home/pat/.local/share/intern/intake-backlog.json"
+            ))
+        );
+        assert!(!config.retake_backlog);
+        let first_look = intake_config(
+            PathBuf::from("/srv/scans"),
+            &settings,
+            Path::new("/home/pat/.local/share/intern"),
+            true,
+        );
+        assert!(first_look.retake_backlog);
+    }
+
+    /// The watcher claims by the same single list the queue admits by, so a
+    /// format the worker learns to read - a legacy Word or Excel file, a bank
+    /// statement's CSV - is picked up from a watched folder too, rather than
+    /// left there unseen while a dropped copy of it would be read.
+    #[test]
+    fn the_watcher_claims_every_format_the_queue_admits() {
+        let config = intake_config(
+            PathBuf::from("/srv/scans"),
+            &AppSettings::default(),
+            Path::new("/home/pat/.local/share/intern"),
+            false,
+        );
+        assert_eq!(config.extensions, intern_queue::paths::SUPPORTED_EXTENSIONS);
+        for extension in ["doc", "xls", "csv", "odt", "docm"] {
+            assert!(
+                config.extensions.iter().any(|watched| watched == extension),
+                "{extension} is admitted, so it is watched"
+            );
+        }
+    }
+
+    /// "Only new documents" means new from when watching starts. Turning
+    /// watching on, choosing another folder, or changing whose documents it
+    /// admits starts a new watch, which takes the first look again; the look
+    /// kept from an earlier watch of the same folder knew nothing of what
+    /// arrived while watching was off, and those documents were renamed and
+    /// filed as this machine's own. A restart, a changed label, or the
+    /// everyone/mine choice carries the same watch on.
+    #[test]
+    fn only_a_new_watch_takes_the_first_look_again() {
+        let dir = std::env::temp_dir().join(format!("intern-first-look-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Scans")).unwrap();
+        std::fs::create_dir_all(dir.join("Other scans")).unwrap();
+        std::fs::create_dir_all(dir.join("Filed")).unwrap();
+        let dir = std::fs::canonicalize(dir).unwrap();
+        let text = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        let watching = AppSettings {
+            intake_enabled: true,
+            intake_folder: text("Scans"),
+            destination: text("Filed"),
+            intake_my_folder: true,
+            ..AppSettings::default()
+        };
+        let runtime = RecordingRuntime::new(dir.join("settings.json"));
+        runtime
+            .store
+            .save(&AppSettings {
+                intake_enabled: false,
+                ..watching.clone()
+            })
+            .unwrap();
+
+        let saves = [
+            ("watching turned on", watching.clone(), true),
+            (
+                "a new label",
+                AppSettings {
+                    machine_label: "Front desk".into(),
+                    ..watching.clone()
+                },
+                false,
+            ),
+            (
+                "teammates' documents too",
+                AppSettings {
+                    machine_label: "Front desk".into(),
+                    process_others_uploads: true,
+                    ..watching.clone()
+                },
+                false,
+            ),
+            ("admitted differently", watching_local(&watching), true),
+            (
+                "another folder",
+                AppSettings {
+                    intake_folder: text("Other scans"),
+                    ..watching_local(&watching)
+                },
+                true,
+            ),
+            (
+                "watching turned off",
+                AppSettings {
+                    intake_enabled: false,
+                    intake_folder: text("Other scans"),
+                    ..watching_local(&watching)
+                },
+                false,
+            ),
+            (
+                "and on again",
+                AppSettings {
+                    intake_folder: text("Other scans"),
+                    ..watching_local(&watching)
+                },
+                true,
+            ),
+        ];
+        for (what, settings, first_look) in saves {
+            let before = runtime.intake_restarts.lock().unwrap().len();
+            save_settings(&runtime, settings).unwrap();
+            let restarts = runtime.intake_restarts.lock().unwrap().clone();
+            assert_eq!(restarts.len(), before + 1, "{what} restarts the watcher");
+            assert_eq!(restarts[before], first_look, "{what}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn watching_local(watching: &AppSettings) -> AppSettings {
+        AppSettings {
+            intake_my_folder: false,
+            intake_local_only: true,
+            ..watching.clone()
+        }
+    }
+
+    /// Settings says what is on its way and what the queue could not take,
+    /// so both counts have to reach the wire from a live watcher.
+    #[test]
+    fn status_dto_carries_the_arriving_and_unreadable_counts() {
+        let identity = MachineIdentity {
+            id: "0123456789abcdef0123456789abcdef".into(),
+            name: "Front desk".into(),
+            host_name: "DESKTOP-A1B2C3".into(),
+            user: "pat".into(),
+        };
+        let live = IntakeStatus {
+            arriving: 2,
+            unreadable_documents: 3,
+            last_scan_at: Some(1_755_850_000),
+            ..IntakeStatus::idle(PathBuf::from("/srv/scans"))
+        };
+        let dto = status_dto(
+            true,
+            &identity,
+            "/srv/scans",
+            Some(&live),
+            None,
+            1_755_850_000,
+        );
+        let json = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["watching"], true);
+        assert_eq!(json["arriving"], 2);
+        assert_eq!(json["unreadableDocuments"], 3);
     }
 
     #[test]
@@ -5607,6 +5832,8 @@ pub(crate) mod test_runtime {
         pub fail_hosted_model: bool,
         pub fail_intake_events: AtomicBool,
         pub after_persist: Mutex<Option<Hook>>,
+        /// Every watcher restart, by whether it asked for a first look.
+        pub intake_restarts: Mutex<Vec<bool>>,
         /// Every change of model the runtime was told about, in order.
         pub source_changes: Mutex<Vec<(ModelSource, ModelSource)>>,
         /// The local model answers a change of model the way it does while
@@ -5627,6 +5854,7 @@ pub(crate) mod test_runtime {
                 fail_hosted_model: false,
                 fail_intake_events: AtomicBool::new(false),
                 after_persist: Mutex::new(None),
+                intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
                 gate: Mutex::new(()),
@@ -5729,7 +5957,11 @@ pub(crate) mod test_runtime {
             self.live.lock().unwrap().tray = run_in_background;
         }
 
-        fn restart_intake(&self, settings: &AppSettings) -> Result<(), CommandError> {
+        fn restart_intake(
+            &self,
+            settings: &AppSettings,
+            first_look: bool,
+        ) -> Result<(), CommandError> {
             if self
                 .fail_intake_restart
                 .lock()
@@ -5745,6 +5977,7 @@ pub(crate) mod test_runtime {
             self.live.lock().unwrap().watcher = settings
                 .intake_enabled
                 .then(|| settings.intake_folder.clone());
+            self.intake_restarts.lock().unwrap().push(first_look);
             Ok(())
         }
 

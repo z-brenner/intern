@@ -11,6 +11,12 @@ use std::{
 use crate::coordination::{DoneOutcome, MachinePresence};
 
 pub const DEFAULT_SCAN_INTERVAL: Duration = Duration::from_secs(20);
+/// How soon the loop looks again while a file is still arriving.
+pub const SETTLING_SCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// How long a file's size and modification time must hold still before it is
+/// claimed: half the default interval, so ordinary pickup still takes two
+/// scans, but no longer two scans that happen to land a moment apart.
+pub const DEFAULT_MIN_QUIET_SECONDS: i64 = 10;
 
 #[derive(Clone, Debug)]
 pub struct IntakeConfig {
@@ -21,6 +27,22 @@ pub struct IntakeConfig {
     pub process_others_uploads: bool,
     /// Injectable so tests can drive the loop without real waits.
     pub scan_interval: Duration,
+    /// The interval while any file is still arriving. Injectable for the same
+    /// reason as `scan_interval`.
+    pub settling_interval: Duration,
+    /// Seconds, on the injected clock, that a file must go unchanged before it
+    /// is stable. See `StabilityTracker`.
+    pub min_quiet_seconds: i64,
+    /// Where the record of what was already in the folder when this machine
+    /// first watched it is kept, so a restart does not retake it. The host
+    /// puts it in its own data directory, never in the shared `.intern`
+    /// folder. `None` keeps it in memory, retaken by every new watcher.
+    pub backlog_file: Option<PathBuf>,
+    /// Takes that record again, whatever was kept: the person has just
+    /// started watching the folder - turned watching on, or chose how its
+    /// documents are admitted - so what is in it now is what they chose to
+    /// leave alone. A restart or a changed label leaves this false.
+    pub retake_backlog: bool,
 }
 
 impl IntakeConfig {
@@ -30,6 +52,27 @@ impl IntakeConfig {
             extensions,
             process_others_uploads: false,
             scan_interval: DEFAULT_SCAN_INTERVAL,
+            settling_interval: SETTLING_SCAN_INTERVAL,
+            min_quiet_seconds: DEFAULT_MIN_QUIET_SECONDS,
+            backlog_file: None,
+            retake_backlog: false,
+        }
+    }
+
+    /// How long the loop waits before its next scan, given how many files the
+    /// last one found still arriving.
+    ///
+    /// A file is only claimed once it has been quiet for `min_quiet_seconds`,
+    /// and only a scan can notice that, so waiting out a whole `scan_interval`
+    /// after a file goes quiet added up to 20 seconds to every pickup. While
+    /// something is arriving the loop looks again every `settling_interval`
+    /// instead - never less often than `scan_interval` - and a dropped document
+    /// is claimed within a few seconds of settling.
+    pub fn next_interval(&self, settling: usize) -> Duration {
+        if settling == 0 {
+            self.scan_interval
+        } else {
+            self.settling_interval.min(self.scan_interval)
         }
     }
 }
@@ -37,6 +80,8 @@ impl IntakeConfig {
 /// What the host queue knows about a document it was handed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ItemState {
+    /// The queue has no live item for the path: none was ever made, the
+    /// person removed it, or the watcher's own `abandon` withdrew it.
     Unknown,
     Active,
     NeedsReview,
@@ -45,6 +90,9 @@ pub enum ItemState {
         result_filename: Option<String>,
     },
     Failed,
+    /// The queue could not be asked - its database refused the lookup. Not a
+    /// verdict about the document, so the claim is only kept alive.
+    Unavailable,
 }
 
 /// The boundary to whatever processes documents (the pipeline in the real
@@ -72,11 +120,22 @@ pub trait IntakeHost: Send + Sync {
     fn admission(&self, _path: &Path) -> IntakeAdmission {
         IntakeAdmission::Unknown
     }
+    /// Hands documents to the queue. Handing over a path and content the
+    /// queue already has must leave that item as it is, whatever state it is
+    /// in, rather than starting it again: the real queue keeps one row per
+    /// path and content.
     fn enqueue(&self, paths: &[PathBuf]) -> Result<(), String>;
     fn item_state(&self, path: &Path) -> ItemState;
     /// The claim was lost to a takeover or sync conflict: cancel/remove the
-    /// local item if it is still pending.
+    /// local item if it is still pending. A withdrawn item reports `Unknown`,
+    /// and handing the same document over again later starts it again.
     fn abandon(&self, path: &Path);
+    /// Runs a `Failed` item again in place. True when it was failed and is
+    /// queued again; false when there was nothing to retry, or the host
+    /// cannot, in which case the watcher releases the claim instead.
+    fn retry(&self, _path: &Path) -> bool {
+        false
+    }
     fn status_changed(&self, status: &IntakeStatus);
 }
 
@@ -90,12 +149,21 @@ pub struct IntakeStatus {
     pub uploader_unknown: u32,
     /// Files skipped because their name is a sync client's conflict copy.
     pub sync_conflicts: u32,
-    /// Claims held open because the document's content is not on this disk yet.
+    /// Documents waiting on their content to come down from the cloud: claims
+    /// held open after a failure, and placeholders the queue could not read
+    /// while offline.
     pub awaiting_hydration: u32,
+    /// Settled documents the queue could not take - a file this account may
+    /// not read, or one the queue refuses to open - tried again with growing
+    /// pauses rather than on every scan.
+    pub unreadable_documents: u32,
     /// Subfolders the last scan could not read - a permission the share does
     /// not grant, or a folder that vanished mid-scan. The rest of the folder
     /// is still scanned; these are counted so a person can see them.
     pub unreadable_folders: u32,
+    /// Files that turned up or changed while being watched and have not yet
+    /// held still long enough to be claimed.
+    pub arriving: u32,
     pub claimed_by_others: u32,
     /// Done-by-us claims seen.
     pub processed_here: u32,
@@ -105,7 +173,8 @@ pub struct IntakeStatus {
 }
 
 impl IntakeStatus {
-    pub(crate) fn idle(folder: PathBuf) -> Self {
+    /// A watcher's status before its first scan has counted anything.
+    pub fn idle(folder: PathBuf) -> Self {
         Self {
             watching: true,
             folder,
@@ -114,7 +183,9 @@ impl IntakeStatus {
             uploader_unknown: 0,
             sync_conflicts: 0,
             awaiting_hydration: 0,
+            unreadable_documents: 0,
             unreadable_folders: 0,
+            arriving: 0,
             claimed_by_others: 0,
             processed_here: 0,
             machines: Vec::new(),
@@ -131,7 +202,9 @@ impl IntakeStatus {
             || self.uploader_unknown != other.uploader_unknown
             || self.sync_conflicts != other.sync_conflicts
             || self.awaiting_hydration != other.awaiting_hydration
+            || self.unreadable_documents != other.unreadable_documents
             || self.unreadable_folders != other.unreadable_folders
+            || self.arriving != other.arriving
             || self.claimed_by_others != other.claimed_by_others
             || self.processed_here != other.processed_here
             || self.machines != other.machines
@@ -156,6 +229,12 @@ pub(crate) struct Walk {
     pub files: Vec<FileFacts>,
     /// Subfolders that could not be listed and were skipped.
     pub unreadable_folders: u32,
+    /// Where the walk could not look, relative to the root and
+    /// `/`-separated: subfolders that could not be listed, a folder whose
+    /// listing broke off (`""` for the root), and files whose type or
+    /// attributes could not be read. A walk with any of these did not see
+    /// every document in the folder.
+    pub hidden: Vec<String>,
 }
 
 /// Recursive walk with the same skip rules as intern-queue's path handling:
@@ -172,16 +251,20 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
     let mut pending = vec![root.to_path_buf()];
     let mut walk = Walk::default();
     while let Some(directory) = pending.pop() {
+        let place = || relative_slash_path(root, &directory).unwrap_or_default();
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(error) if directory == root => return Err(error),
             Err(_) => {
                 walk.unreadable_folders += 1;
+                walk.hidden.push(place());
                 continue;
             }
         };
         for entry in entries {
             let Ok(entry) = entry else {
+                // The listing broke off, and whatever came after is unknown.
+                walk.hidden.push(place());
                 continue;
             };
             let path = entry.path();
@@ -189,6 +272,7 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
                 continue;
             }
             let Ok(file_type) = entry.file_type() else {
+                walk.hidden.extend(relative_slash_path(root, &path));
                 continue;
             };
             if file_type.is_symlink() {
@@ -207,8 +291,10 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
             // settled. Opening the file for its attributes costs a handle but
             // hydrates nothing, and a file held so exclusively that even this
             // is refused is one that is still being written, so skipping it is
-            // the right answer too.
+            // the right answer too - though not proof the file is new, so it
+            // is reported as unseen.
             let Ok(metadata) = fs::metadata(&path) else {
+                walk.hidden.extend(relative_slash_path(root, &path));
                 continue;
             };
             if metadata.len() == 0 {
@@ -230,17 +316,23 @@ pub(crate) fn walk_intake(root: &Path, extensions: &[String]) -> io::Result<Walk
     Ok(walk)
 }
 
-/// A file only becomes claimable after it is observed with an identical
-/// `(size, mtime)` on two consecutive scans.
+/// A file only becomes claimable once it has been observed with an
+/// identical `(size, mtime)` for at least `min_quiet_seconds` on the clock.
 ///
 /// The sync client (or a user copy) writes intake files incrementally, and a
 /// key computed from a half-written file would never match the settled file —
 /// the claim would orphan and the document would be processed from a torn
-/// snapshot. One full scan interval of quiet is the cheapest proof of
-/// stability available from stat alone.
-#[derive(Debug, Default)]
+/// snapshot. A stretch of quiet is the cheapest proof of stability available
+/// from stat alone. It is measured in time, not in scans: "Scan now" wakes the
+/// loop at once, and two scans a moment apart proved nothing about a writer
+/// that had merely paused.
+#[derive(Debug)]
 pub struct StabilityTracker {
     observed: HashMap<PathBuf, Observation>,
+    min_quiet_seconds: i64,
+    /// Set once a whole pass over the folder has been observed. A file first
+    /// seen before then was already there when watching started.
+    primed: bool,
 }
 
 #[derive(Debug)]
@@ -248,21 +340,45 @@ struct Observation {
     facts: (u64, i64),
     /// When this machine first saw the file at all, on its own clock.
     first_seen_at: i64,
+    /// When the facts were last seen to change, or first seen.
+    last_change_at: i64,
+    /// Whether the file turned up or changed while being watched, rather than
+    /// sitting unchanged since watching started.
+    arriving: bool,
+}
+
+impl Default for StabilityTracker {
+    fn default() -> Self {
+        Self::new(DEFAULT_MIN_QUIET_SECONDS)
+    }
 }
 
 impl StabilityTracker {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(min_quiet_seconds: i64) -> Self {
+        Self {
+            observed: HashMap::new(),
+            min_quiet_seconds,
+            primed: false,
+        }
     }
 
-    /// Records the observation; true when it is unchanged since the previous
-    /// scan. A first sighting is always unstable.
+    /// Records the observation; true when the facts are unchanged since the
+    /// previous one and have been for at least the minimum quiet time. A first
+    /// sighting is always unstable. A clock that moved backwards restarts the
+    /// quiet time rather than holding the file until it catches up.
     pub fn observe(&mut self, path: &Path, size: u64, modified_secs: i64, now: i64) -> bool {
         match self.observed.get_mut(path) {
             Some(observation) => {
-                let unchanged = observation.facts == (size, modified_secs);
-                observation.facts = (size, modified_secs);
-                unchanged
+                if observation.facts != (size, modified_secs) {
+                    observation.facts = (size, modified_secs);
+                    observation.last_change_at = now;
+                    observation.arriving = true;
+                    return false;
+                }
+                if now < observation.last_change_at {
+                    observation.last_change_at = now;
+                }
+                now - observation.last_change_at >= self.min_quiet_seconds
             }
             None => {
                 self.observed.insert(
@@ -270,11 +386,22 @@ impl StabilityTracker {
                     Observation {
                         facts: (size, modified_secs),
                         first_seen_at: now,
+                        last_change_at: now,
+                        arriving: self.primed,
                     },
                 );
                 false
             }
         }
+    }
+
+    /// Whether a file turned up or changed while being watched. A file that
+    /// has sat unchanged since watching started is not arriving, even before
+    /// its quiet time has passed.
+    pub fn is_arriving(&self, path: &Path) -> bool {
+        self.observed
+            .get(path)
+            .is_some_and(|observation| observation.arriving)
     }
 
     /// When this machine first saw the file, which is not the same as the
@@ -285,10 +412,12 @@ impl StabilityTracker {
             .map(|observation| observation.first_seen_at)
     }
 
-    /// Drops observations for files that vanished so the map cannot grow
-    /// without bound.
+    /// Ends a pass over the folder: drops observations for files that
+    /// vanished so the map cannot grow without bound, and from now on counts
+    /// any new file as arriving.
     pub fn retain_live(&mut self, live: &HashSet<PathBuf>) {
         self.observed.retain(|path, _| live.contains(path));
+        self.primed = true;
     }
 }
 
@@ -352,9 +481,9 @@ impl Hydration for SystemHydration {
     /// Opening a placeholder is what makes Files On-Demand fetch it; one byte
     /// is enough to start it and the sync client brings down the whole file.
     /// That download happens on the scan thread, which is why it is asked for
-    /// only for a document this machine already holds and has already failed
-    /// to read. Offline the open fails quickly and the attributes still say
-    /// the content is in the cloud, which is the answer the caller wants.
+    /// only for a document this machine has already tried and failed to read.
+    /// Offline the open fails quickly and the attributes still say the
+    /// content is in the cloud, which is the answer the caller wants.
     #[cfg(windows)]
     fn hydrate(&self, path: &Path) -> bool {
         use std::io::Read;
@@ -453,7 +582,7 @@ fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
     }
 }
 
-fn modified_secs(metadata: &fs::Metadata) -> i64 {
+pub(crate) fn modified_secs(metadata: &fs::Metadata) -> i64 {
     let Ok(modified) = metadata.modified() else {
         return 0;
     };
@@ -498,6 +627,7 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["keep.pdf".to_string()]);
         assert_eq!(walk.unreadable_folders, 0);
+        assert!(walk.hidden.is_empty(), "skipped on purpose is not unseen");
     }
 
     /// The host hands intake the one admission list, so a legacy Word or
@@ -600,15 +730,53 @@ mod tests {
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
         let walk = outcome.unwrap();
         if listable {
-            // Root ignores permission bits; nothing to prove here.
+            eprintln!("skipped: permission bits do not stop this user listing a folder");
             return;
         }
         assert_eq!(walk.unreadable_folders, 1);
+        assert_eq!(walk.hidden, vec!["locked".to_string()]);
         let names: Vec<String> = walk
             .files
             .iter()
             .map(|facts| facts.relative_path.clone())
             .collect();
         assert_eq!(names, vec!["open.pdf".to_string()]);
+    }
+
+    /// Everything the walk could not reach is reported where it is, so the
+    /// backlog can tell a hidden document from a gone one: a subfolder it
+    /// could not list, and a file it could not read the attributes of. Made
+    /// by spelling the root so long that both names take it past the path
+    /// limit, which stops every user alike - permission bits do not stop
+    /// root.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn what_the_walk_could_not_reach_is_reported_as_hidden() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let long = "d".repeat(250);
+        fs::create_dir(temp.path().join(&long)).unwrap();
+        fs::write(temp.path().join(&long).join("inside.pdf"), b"x").unwrap();
+        fs::write(temp.path().join(format!("{long}.pdf")), b"x").unwrap();
+        fs::write(temp.path().join("open.pdf"), b"x").unwrap();
+        let mut root = temp.path().as_os_str().to_owned();
+        while root.len() < 3900 {
+            root.push("/.");
+        }
+
+        let walk = walk_intake(std::path::Path::new(&root), &extensions()).unwrap();
+        let names: Vec<&str> = walk
+            .files
+            .iter()
+            .map(|facts| facts.relative_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["open.pdf"]);
+        assert_eq!(walk.unreadable_folders, 1);
+        let mut hidden = walk.hidden.clone();
+        hidden.sort();
+        assert_eq!(hidden, vec![long.clone(), format!("{long}.pdf")]);
+
+        let plain = walk_intake(temp.path(), &extensions()).unwrap();
+        assert_eq!(plain.files.len(), 3);
+        assert!(plain.hidden.is_empty());
     }
 }

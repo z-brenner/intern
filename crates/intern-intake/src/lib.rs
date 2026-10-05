@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 
+mod backlog;
 pub mod cloud;
 pub mod coordination;
 pub mod deployment;
@@ -24,6 +25,7 @@ pub mod onedrive_identity;
 pub mod scan;
 pub mod watcher;
 
+pub use backlog::BACKLOG_FORGET_SECONDS;
 pub use cloud::{
     CloudLocation, CloudProviderKind, CloudRoot, EnvProbe, RegistryHive, SystemEnv, classify,
     detect_cloud_roots, detect_cloud_roots_with, matching_root, network_share, paths_overlap,
@@ -33,14 +35,15 @@ pub use coordination::{
     AcquireOutcome, CLAIM_LEASE_SECONDS, CLAIM_RENEW_THRESHOLD_SECONDS, COURTESY_DELAY_SECONDS,
     ClaimInfo, ClaimState, ClaimStore, Clock, DONE_RETENTION_SECONDS, DocumentFacts, DoneOutcome,
     MachinePresence, OriginInfo, PRESENCE_ACTIVE_WINDOW_SECONDS, PRESENCE_REFRESH_SECONDS,
-    SystemClock, document_key,
+    PRUNE_INTERVAL_SECONDS, SystemClock, document_key,
 };
 pub use deployment::{DeploymentError, SharePointDeployment};
 pub use descriptions::{DescriptionLedger, DescriptionRecord, FiledDocument, record_key};
 pub use filed::{FILED_RETENTION_SECONDS, FiledIndex, FiledMarker};
 pub use identity::MachineIdentity;
 pub use scan::{
-    DEFAULT_SCAN_INTERVAL, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus,
-    ItemState, StabilityTracker, SystemHydration, is_conflict_copy,
+    DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, Hydration, IntakeAdmission, IntakeConfig,
+    IntakeHost, IntakeStatus, ItemState, SETTLING_SCAN_INTERVAL, StabilityTracker, SystemHydration,
+    is_conflict_copy,
 };
-pub use watcher::IntakeWatcher;
+pub use watcher::{ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, IntakeWatcher};

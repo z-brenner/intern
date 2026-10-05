@@ -403,6 +403,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         syncConflicts: 0,
         awaitingHydration: 0,
         unreadableFolders: 0,
+        arriving: 0,
+        unreadableDocuments: 0,
         claimedByOthers: enabled ? 1 : 0,
         processedHere: enabled ? 3 : 0,
         lastScanAt: enabled ? now - 5 : null,

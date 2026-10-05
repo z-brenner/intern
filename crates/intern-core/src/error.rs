@@ -41,6 +41,10 @@ pub enum ErrorCode {
     ModelFailed,
     /// The hosted model could not be used for this document.
     HostedModelUnavailable,
+    /// On a canceled row: the intake watcher withdrew the document, not a
+    /// person - another computer took it over, or its uploader could no
+    /// longer be confirmed - so it may be handed over and run again.
+    IntakeWithdrawn,
 }
 
 impl ErrorCode {
@@ -69,6 +73,7 @@ impl ErrorCode {
             Self::AnalysisFailed => "ANALYSIS_FAILED",
             Self::ModelFailed => "MODEL_FAILED",
             Self::HostedModelUnavailable => "HOSTED_MODEL_UNAVAILABLE",
+            Self::IntakeWithdrawn => "INTAKE_WITHDRAWN",
         }
     }
 
@@ -97,6 +102,7 @@ impl ErrorCode {
             "ANALYSIS_FAILED" => Self::AnalysisFailed,
             "MODEL_FAILED" => Self::ModelFailed,
             "HOSTED_MODEL_UNAVAILABLE" => Self::HostedModelUnavailable,
+            "INTAKE_WITHDRAWN" => Self::IntakeWithdrawn,
             _ => return None,
         })
     }
@@ -180,6 +186,7 @@ mod tests {
             ErrorCode::AnalysisFailed,
             ErrorCode::ModelFailed,
             ErrorCode::HostedModelUnavailable,
+            ErrorCode::IntakeWithdrawn,
         ];
         for code in all {
             assert_eq!(ErrorCode::from_str(code.as_str()), Some(code));
