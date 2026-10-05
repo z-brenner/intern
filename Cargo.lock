@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "intern-app"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "chrono",
  "intern-core",
@@ -2333,7 +2333,7 @@ dependencies = [
 
 [[package]]
 name = "intern-core"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "rand 0.8.5",
  "rusqlite",
@@ -2345,7 +2345,7 @@ dependencies = [
 
 [[package]]
 name = "intern-engine"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2367,7 +2367,7 @@ dependencies = [
 
 [[package]]
 name = "intern-intake"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2383,7 +2383,7 @@ dependencies = [
 
 [[package]]
 name = "intern-queue"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "base64 0.22.1",
  "intern-core",
@@ -2399,7 +2399,7 @@ dependencies = [
 
 [[package]]
 name = "intern-release-verifier"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "base64 0.22.1",
  "minisign-verify",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "intern-worker"
-version = "0.1.0-alpha.10"
+version = "0.1.0-alpha.11"
 dependencies = [
  "anydoc",
  "base64 0.22.1",

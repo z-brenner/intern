@@ -1,7 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { expect, it } from 'vitest';
 
-const version = '0.1.0-alpha.10';
+const version = '0.1.0-alpha.11';
 const tag = `v${version}`;
 
 it('keeps every current alpha.3 release surface synchronized without rewriting historical alpha.2 records', async () => {
