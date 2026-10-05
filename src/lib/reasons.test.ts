@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import { describeActionError } from './actionErrors';
 import { describeQueueStop, humanizeReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
-    expect(humanizeReason('SOURCE_LOCKED')).toContain('sync client mid-upload');
+    expect(humanizeReason('SOURCE_LOCKED')).toBe('The document is open in another program, or a sync client is still writing it. Close it, then try again.');
+  });
+
+  // A rename refused by a held file is rolled back and the document waits in
+  // review under SOURCE_LOCKED: the refusal shown at the moment of approving
+  // and the reason shown on the item afterwards are the same sentence.
+  it('says one thing about a held file, as a reason and as a refusal', () => {
+    expect(describeActionError({ code: 'SOURCE_LOCKED', message: 'atomic no-replace rename failed (os error 32)' })).toBe(humanizeReason('SOURCE_LOCKED'));
   });
 
   it('translates the pipeline comma-joined list into sentences', () => {

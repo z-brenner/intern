@@ -23,7 +23,11 @@ const SENTENCES: Record<string, string> = {
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
   FILE_CHANGED: 'The file changed after it was analyzed, so the result no longer describes it.',
-  SOURCE_LOCKED: 'Another program is still holding this file open — often a sync client mid-upload. Retry once it settles.',
+  // A rename refused because the file is held - a viewer the person opened
+  // it in, a sync client still writing it - is rolled back and the document
+  // waits in review; approving again once it is let go is the retry, and the
+  // refusal of the approval itself says the same (actionErrors.ts).
+  SOURCE_LOCKED: 'The document is open in another program, or a sync client is still writing it. Close it, then try again.',
   DESTINATION_UNAVAILABLE: 'The destination folder is unavailable, or already has a file with this name.',
   MOVE_VERIFICATION_FAILED: 'The rename could not be verified as intact, so it was not finalized.',
   SOURCE_DELETE_FAILED: 'The renamed copy is safe, but the original file could not be removed.',

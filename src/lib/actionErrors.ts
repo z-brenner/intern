@@ -1,3 +1,5 @@
+import { humanizeReason } from './reasons';
+
 /**
  * Plain sentences for the codes a review action can be refused with. The
  * backend's messages are written for its logs - "filename must be one
@@ -12,8 +14,10 @@ const ACTION_ERRORS: Record<string, string> = {
   INVALID_TRANSITION: 'That action does not apply to this document in its current state.',
   // Open, read, approve is the review the panel invites, and on Windows the
   // viewer still holds the file it opened: the rename, or an undo, then
-  // fails with the system's own "used by another process".
-  SOURCE_LOCKED: 'The document is open in another program, or a sync client is still writing it. Close it, then try again.',
+  // fails with the system's own "used by another process". The backend rolls
+  // a refused rename back and leaves the document in review under this same
+  // code, so the refusal and the item's reason are one sentence.
+  SOURCE_LOCKED: humanizeReason('SOURCE_LOCKED'),
   RECONCILIATION_REQUIRED: 'A rename of this document stopped part-way, so its files need checking first. Use Check again.',
 };
 

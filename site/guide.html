@@ -1339,12 +1339,14 @@
             </div>
           </details>
           <details>
-            <summary>It says “Another program is still holding this file open”</summary>
+            <summary>It says the document is open in another program</summary>
             <div class="answer">
               <p>
-                Usually the sync client, mid-upload. Intern already waited a few
-                seconds for the lock to clear before reporting this. Retry once
-                the sync settles.
+                Something still has the file open: the program you opened it in
+                to check it, or the sync client, mid-upload. Intern already
+                waited a few seconds for it to let go, then put the rename back
+                as it was. Close the document, or let the sync finish, and
+                approve it again.
               </p>
             </div>
           </details>
