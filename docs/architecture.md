@@ -221,9 +221,14 @@ checks read the document around it:
   withheld, or replaced by the one date the document states on an effective
   or commencement line. The determiner on the nearest document noun decides:
   `This Consulting Agreement dated`, and a defined term like `(the
-  "Agreement")` standing for it, are the document dating itself. A citation
-  (`issued under`, `pursuant to`) taints only a date it runs straight into,
-  with no clause punctuation in between.
+  "Agreement")` standing for it, are the document dating itself. Document
+  nouns are whole words, plural and `sub-` forms included (`the Loan
+  Agreements`, `the Subcontract`), so a contractor or a border is none. A
+  citation (`issued under`, `pursuant to`) taints only a date it runs
+  straight into, with no clause punctuation in between; a comma that only
+  sets off the cited date (`the Master Services Agreement, as amended,
+  effective June 2, 2023`) does not end it, while one followed by a clause
+  of its own (`..., your employment will terminate effective`) does.
 * **A deadline.** When every statement of the chosen date is labelled a
   deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
   date the document labels as its issue date (`Invoice Date:`, `Dated`, a

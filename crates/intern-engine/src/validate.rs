@@ -563,26 +563,82 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
 }
 
 /// Whether the wording between a citation and a date ends the clause the
-/// citation opened: a comma, a semicolon, a colon, or a full stop that ends
-/// a sentence. The point in "Section 9.2", "No. 12" or "Acme Inc." and the
-/// comma in "Contoso Worldwide, Inc." are part of what is cited, and reading
-/// them as the clause ending would let the cited agreement's date through as
-/// this document's own.
+/// citation opened: a semicolon, a colon, a full stop that ends a sentence,
+/// or a comma that a clause of its own follows. The point in "Section 9.2",
+/// "No. 12" or "Acme Inc." and the comma in "Contoso Worldwide, Inc." are
+/// part of what is cited, and reading them as the clause ending would let
+/// the cited agreement's date through as this document's own.
+///
+/// So are the commas that set off what a citation says about the document
+/// it cites: "issued under the Master Services Agreement, effective June 2,
+/// 2023," and "the Master Services Agreement, as amended, effective June 2,
+/// 2023" both date the agreement. What follows such a comma only introduces
+/// the date or qualifies the citation ([`CITATION_WORDS`]). A comma ends the
+/// clause when anything more stands after it - "..., your employment will
+/// terminate effective January 31, 2027", "..., is effective as of" - since
+/// a subject or a verb of its own is a new clause, and the date is its.
 fn ends_the_clause(between: &str) -> bool {
-    between.char_indices().any(|(index, character)| {
+    // Everything up to the first comma is what is cited. Each part after a
+    // comma must carry the citation on, or the clause has ended.
+    let mut part_start = None;
+    for (index, character) in between.char_indices() {
         let rest = &between[index + character.len_utf8()..];
         match character {
-            ',' => !rest.split_whitespace().next().is_some_and(|word| {
+            ',' if !rest.split_whitespace().next().is_some_and(|word| {
                 COMPANY_FORMS.contains(
                     &word.trim_end_matches(|character: char| !character.is_alphanumeric()),
                 )
-            }),
-            ';' | ':' => true,
-            '.' => rest.starts_with(char::is_whitespace) && !is_abbreviation_period(between, index),
-            _ => false,
+            }) =>
+            {
+                if part_start.is_some_and(|start| !continues_the_citation(&between[start..index])) {
+                    return true;
+                }
+                part_start = Some(index + character.len_utf8());
+            }
+            ';' | ':' => return true,
+            '.' if rest.starts_with(char::is_whitespace)
+                && !is_abbreviation_period(between, index) =>
+            {
+                return true;
+            }
+            _ => {}
         }
-    })
+    }
+    part_start.is_some_and(|start| !continues_the_citation(&between[start..]))
 }
+
+/// Whether the words between two of a citation's commas, or between its
+/// last comma and the date, still speak of the cited document: nothing but
+/// [`CITATION_WORDS`].
+fn continues_the_citation(part: &str) -> bool {
+    part.split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .all(|word| CITATION_WORDS.contains(&word))
+}
+
+/// The words a citation's commas can set off without starting a clause:
+/// the ones that introduce its date (", effective", ", dated as of", ",
+/// made and entered into as of") and the ones that say which version is
+/// cited (", as amended and restated from time to time,").
+const CITATION_WORDS: &[&str] = &[
+    "effective",
+    "dated",
+    "as",
+    "of",
+    "on",
+    "commencing",
+    "made",
+    "entered",
+    "into",
+    "and",
+    "amended",
+    "restated",
+    "supplemented",
+    "modified",
+    "from",
+    "time",
+    "to",
+];
 
 /// What follows the comma in a company's name: "Contoso Worldwide, Inc.",
 /// "Contoso Bank, N.A.".
@@ -1826,6 +1882,69 @@ The Consultant will provide services commencing April 15, 2026.
             outcome.reasons
         );
         assert_eq!(outcome.proposal.date_role, Some(DateRole::Termination));
+    }
+
+    /// Drafting sets a cited agreement's date off with commas - "issued
+    /// under the Master Services Agreement, effective June 2, 2023, between
+    /// ..." - and any comma after the citation used to end it, so the
+    /// agreement's date was filed Ready as the document's own. A comma ends
+    /// the citation only when a clause of its own follows it.
+    #[test]
+    fn a_comma_that_only_introduces_the_cited_date_keeps_the_citation() {
+        for line in [
+            "This Statement of Work is issued under the Master Services Agreement, effective June 2, 2023, between Acme Corporation and Contoso Worldwide, Inc.",
+            "made pursuant to the Supply Agreement, effective as of June 2, 2023, between Acme Corporation and Contoso Worldwide, Inc.",
+            "It is issued under the Master Services Agreement, as amended, effective June 2, 2023.",
+            "issued under the MSA, effective June 2, 2023",
+            "issued under the Master Services Agreement, entered into as of June 2, 2023",
+            "issued under the Master Services Agreement, as amended and restated from time to time, effective June 2, 2023",
+            "issued under the MSA between Acme Corporation and Contoso Worldwide, Inc., effective June 2, 2023",
+        ] {
+            assert!(reference_at(line, "2023-06-02"), "{line}");
+        }
+        // A comma a new clause follows still ends the citation, however
+        // many commas the sentence has.
+        for (line, date) in [
+            (
+                "Pursuant to Section 9.2 of the Employment Agreement, your employment will terminate, effective January 31, 2027",
+                "2027-01-31",
+            ),
+            (
+                "This Statement of Work is issued under the Master Services Agreement, and is effective as of April 1, 2026",
+                "2026-04-01",
+            ),
+        ] {
+            assert!(!reference_at(line, date), "{line}");
+        }
+
+        let document = "STATEMENT OF WORK
+This Statement of Work is issued under the Master Services Agreement, effective June 2, 2023, between Acme Corporation and Contoso Worldwide, Inc.
+This Statement of Work is effective as of April 1, 2026.
+";
+        let mut candidate = proposal();
+        candidate.document_date = Some("2023-06-02".into());
+        let outcome = validate_at(candidate, &digest_of(document), 2026);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-04-01"),
+            "{:?}",
+            outcome.reasons
+        );
+        // With no date of its own to fall back on, the cited date is
+        // withheld rather than filed.
+        let mut candidate = proposal();
+        candidate.document_date = Some("2023-06-02".into());
+        let outcome = validate_at(
+            candidate,
+            &digest_of(
+                "STATEMENT OF WORK
+This Statement of Work is issued under the Master Services Agreement, effective June 2, 2023, between Acme Corporation and Contoso Worldwide, Inc.
+",
+            ),
+            2026,
+        );
+        assert_eq!(outcome.proposal.document_date, None);
+        assert!(outcome.reasons.contains(&ReviewReason::DateUnsupported));
     }
 
     /// Only punctuation that ends the clause ends a citation. The point in a
