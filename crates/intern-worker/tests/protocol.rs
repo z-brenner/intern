@@ -645,10 +645,11 @@ impl OcrBackend for SteadyOcr {
 }
 
 /// A 200-page scan used to show 0% for minutes: the worker said it had
-/// started and then nothing until it had finished. It now says which page it
-/// has reached and how many there are - a `reading` event as each page is
-/// reached and an `ocr` event as each goes to OCR - and never more than one
-/// of either per interval, however fast the pages go by.
+/// started and then nothing until it had finished. It now says how many
+/// pages it has finished and how many there are - a `reading` event as each
+/// page is reached and an `ocr` event as each goes to OCR - and never more
+/// than one of either per interval, however fast the pages go by. The count
+/// is of pages finished, so the first says nothing is done yet.
 #[test]
 fn parse_emits_throttled_page_progress() {
     let output = SignalingWriter::default();
@@ -706,8 +707,8 @@ fn parse_emits_throttled_page_progress() {
     // At most one of each stage per interval, plus the first.
     let allowed = 1 + (elapsed.as_millis() / PROGRESS_INTERVAL.as_millis()) as usize;
 
-    assert_eq!(reading.first(), Some(&1), "{reading:?}");
-    assert_eq!(ocr.first(), Some(&1), "{ocr:?}");
+    assert_eq!(reading.first(), Some(&0), "{reading:?}");
+    assert_eq!(ocr.first(), Some(&0), "{ocr:?}");
     // A second of OCR is long enough to say more than that it started.
     assert!(reading.len() >= 2, "{reading:?} in {elapsed:?}");
     assert!(reading.len() <= allowed, "{reading:?} in {elapsed:?}");
@@ -716,6 +717,7 @@ fn parse_emits_throttled_page_progress() {
     assert!(
         reading
             .iter()
-            .all(|page| (1..=SCANNED_PAGES).contains(page))
+            .chain(&ocr)
+            .all(|finished| (0..SCANNED_PAGES).contains(finished))
     );
 }

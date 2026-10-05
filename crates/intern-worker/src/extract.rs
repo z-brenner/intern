@@ -109,7 +109,11 @@ impl ExtractionError {
 }
 
 /// Where a reader reports how far through a document it is: a stage name,
-/// the page it has reached, and how many pages there are, if it knows.
+/// how many pages it has finished, and how many there are, if it knows.
+///
+/// Finished, not reached: the window shows `current / total` as a
+/// percentage, and a one-page scan that announced page 1 of 1 as it went to
+/// OCR read as done for the whole of the OCR it was about to spend.
 pub type ProgressSink = Arc<dyn Fn(&'static str, usize, Option<usize>) + Send + Sync>;
 
 struct CancellationState {
@@ -539,7 +543,7 @@ pub fn extract_pdf(
     for inspection in inspections {
         timed_check(cancel, started, limits)?;
         let page_number = inspection.page_index + 1;
-        cancel.report_progress("reading", page_number, Some(page_count));
+        cancel.report_progress("reading", inspection.page_index, Some(page_count));
         // The render cap belongs to rendering. A large-format sheet - an A1
         // drawing, a plan set - is over it at 300 DPI while carrying a
         // perfectly good text layer, and failing the whole document over a
@@ -594,7 +598,7 @@ pub fn extract_pdf(
         let (render_width, render_height) = rendered.image.dimensions();
         limits.validate_page_pixels(render_width, render_height)?;
         timed_check(cancel, started, limits)?;
-        cancel.report_progress("ocr", page_number, Some(page_count));
+        cancel.report_progress("ocr", inspection.page_index, Some(page_count));
         let result = ocr.recognize(&rendered, cancel)?;
         let vision_escalated =
             vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
@@ -988,7 +992,7 @@ pub fn extract_image(
     cancel.check()?;
     let image = load_oriented_image(path, limits)?;
     let rendered = RenderedPage::new(0, image);
-    cancel.report_progress("ocr", 1, Some(1));
+    cancel.report_progress("ocr", 0, Some(1));
     let result = ocr.recognize(&rendered, cancel)?;
     let mut warnings = Vec::new();
     if result.mean_confidence < CONFIDENT_READING {

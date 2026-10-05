@@ -158,9 +158,11 @@ documented as intent:
   rather than read again.
 
 A PDF reports its progress as it goes: a `reading` event as each page is
-reached and an `ocr` event as each goes to OCR, carrying the page and the page
-count, at most four of each a second. A 200-page scan used to sit at 0% until
-it was done.
+reached and an `ocr` event as each goes to OCR, carrying how many pages are
+finished and the page count, at most four of each a second; a standalone
+image reports none of its one page finished as it goes to OCR. The window
+shows that as a whole percentage. A 200-page scan used to sit at 0% until it
+was done.
 
 ## Distillation
 

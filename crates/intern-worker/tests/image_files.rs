@@ -130,6 +130,26 @@ fn a_png_is_never_reported_as_truncated() {
     assert!(Path::new(&path).exists());
 }
 
+/// An image goes to OCR as soon as it is decoded, and OCR is nearly all of
+/// the time it takes. Announced as page 1 of 1 on the way in, it read as
+/// 100% done for the whole of that time; the worker reports pages finished,
+/// and while the only page is being read none is.
+#[test]
+fn an_image_reports_no_page_finished_while_it_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("receipt.png");
+    image::RgbImage::new(4, 4).save(&path).unwrap();
+    let reported = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&reported);
+    let cancel = CancellationToken::reporting_to(Arc::new(move |stage, finished, total| {
+        sink.lock().unwrap().push((stage, finished, total));
+    }));
+
+    extract_image(&path, &FakeOcr, &ResourceLimits::default(), &cancel).unwrap();
+
+    assert_eq!(*reported.lock().unwrap(), vec![("ocr", 0, Some(1))]);
+}
+
 /// An OCR engine that keeps a copy of every page it was given.
 #[derive(Clone, Default)]
 struct KeepingOcr {

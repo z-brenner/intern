@@ -281,8 +281,11 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     let progress: () => void;
     try {
       progress = await this.transport.listen<ProgressPayload>('queue://progress', ({ payload }) => {
+        // A whole percent, rounded down: `current` counts pages finished, and
+        // one of three is 33%, not 33.33333333333333% - nor 34%, which would
+        // claim a little of a page nobody has read yet.
         const progress = payload.total && payload.total > 0
-          ? Math.max(0, Math.min(100, (payload.current / payload.total) * 100))
+          ? Math.floor(Math.max(0, Math.min(100, (payload.current / payload.total) * 100)))
           : undefined;
         listener({
           type: 'progress',
