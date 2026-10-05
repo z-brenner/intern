@@ -481,7 +481,14 @@ always preserved; collisions get a ` (2)` suffix, judged the way Windows
 compares names. The engine checks collisions
 against the only folder it knows, the document's own; the queue recomposes the
 name against the folder the document is actually going to, so a suffix means
-a real collision at the destination and never a phantom one at the source.
+a real collision at the destination and never a phantom one at the source -
+nor one with the document itself. Filed into the folder it is already in (no
+destination, and a flat layout), a document's own name is left out of the
+comparison, so a document already named the way Intern names documents is
+proposed under that name rather than as ` (2)`. Filing it under its own name,
+or that name in other letter case, which Windows takes for the same file,
+completes it without touching the file and records `ALREADY_NAMED`; this
+release makes no case-only renames.
 
 Where a document lands is the destination folder plus, optionally, a
 subfolder the queue derives from the validated facts: the year, the year and
@@ -503,7 +510,46 @@ Only one document is worked on at a time, so an approval made while the queue
 is busy cannot be applied on the spot. It is remembered on the proposal and
 applied by the scheduler between documents, under the name the reviewer typed
 - a busy queue is not something wrong with the document, and never sends it to
-review.
+review, and a spelling rule learned while it waits does not rebuild it. An undo does not wait for a document being read: it moves nothing but
+its own filed document, so the only thing it waits for is another rename.
+
+A rename or undo that fails partway is settled rather than left: its receipt
+records how far it got, and a reconciliation - straight after the failure, on
+the recovery pass, or when a person asks to check again - finishes it or rolls
+it back. A rename refused because the document is open in another program
+moved nothing, so it is rolled back after a plain read of the original, and
+approving again once the program lets go files it. A file that appeared at
+the destination name in the meantime is somebody else's, so the rename is
+rolled back and the document waits in review; only the same file or the same
+bytes at both names is ambiguous enough to hold, and an item whose files a
+person has sorted out by hand can then be removed once they confirm it.
+Approving a document with an unfinished operation checks its files first. If
+that finishes the earlier rename, the document is filed under the name that
+rename gave it, and an approval that asked for another name or sentence is
+refused with that name rather than reported as applied. A rename rolled back
+into review takes the approval off its proposal, and a document read again
+since its old rename was journalled stays in review when that rename is
+rolled back. Every file operation and the reconciliation after it run one at
+a time, so the recovery pass - every 65 seconds by the clock, however often
+new documents wake the scheduler - never reconciles an operation still in
+flight, and an operation that has been taken over stops before its rename
+rather than after. A drain that finds nothing it may claim because a rename
+or an undo is running waits for it and carries on, instead of leaving the
+backlog until the next wake. An undo that cannot reach the filed document -
+an offline share - says so; only a document the file system reports missing
+is called moved or deleted.
+
+A document that changed after it was read - signed, edited, saved over - is
+never filed under a name that described the earlier version: approving it
+sends it back to review as `FILE_CHANGED` and says so. **Re-analyze** reads it
+again from the start under its new fingerprint, dropping the earlier proposal
+and any approval in it; it is refused while an operation of the document
+never finished, because what is on disk is an open question until that is
+checked again. A filing to another volume is a verified copy rather than a
+rename, and the copy keeps what a rename would: the document's modified and
+accessed times (and its creation time on Windows) and its Mark-of-the-Web,
+the `Zone.Identifier` stream that keeps Office's Protected View on for a
+downloaded or e-mailed file.
 
 ### House style
 
@@ -542,9 +588,10 @@ into the connector, and a diff would credit it all to one party.
 A rule takes effect on the second identical edit (`EDITS_TO_LEARN`), or at
 once when a person says "Use now" in Settings, and every document still
 waiting is recomposed under it so the queue shows the change immediately -
-every document but the one whose name was just approved, which is the
-reviewer's own text and would lose whatever the validated facts do not
-carry, the date they typed with it most of all.
+every document but one whose name a person approved - just now, or earlier
+and still waiting to be filed - which is the reviewer's own text and would
+lose whatever the validated facts do not carry, the date they typed with it
+most of all.
 Respelling a spelling Intern applied maps back to the document's word - the
 person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
@@ -677,18 +724,58 @@ that never gets filed. What goes out is the distilled digest of the document,
 condensed but verbatim; what comes back is read through the same JSON
 recovery and the same evidence checks as a local reply. A refusal from the
 model - Anthropic's `refusal`, OpenAI's `refusal` field, a `content_filter`
-finish - is reported as one and sends the document to review, never re-routed
-elsewhere; a rejected key, an unreachable service, a model name the service
-does not know, an address that has moved, and an account out of credit
-(`HOSTED_MODEL_BILLING`: a 402, Anthropic's `billing_error` or its 400 about the
-credit balance, OpenAI's `insufficient_quota`) all pause the queue rather than
-failing the backlog one item at a time; a busy service earns one retry. That
-retry waits as long as the service's `Retry-After` asked, up to a minute, and
-otherwise about eight seconds, spread by a fifth either way. A request to a
-service on the internet may take three minutes; one to a server on this
-machine - LM Studio or Ollama on a laptop CPU - may take 400 seconds, so that a
-request that timed out, the wait, and its one retry all end inside the queue's
-fifteen-minute deadline rather than running on past it.
+finish - is reported as one and fails that document on its own, never re-routed
+elsewhere and never sent again; a missing or rejected key, an unreachable
+service, a model name the service does not know, an address that has moved or
+cannot be used, and an account out of credit (`HOSTED_MODEL_BILLING`: a 402,
+Anthropic's `billing_error` or its 400 about the credit balance, OpenAI's
+`insufficient_quota`) all pause the queue rather than failing the backlog one
+item at a time, and the queue says which; a busy service earns one retry before
+it pauses. That retry waits as long as the service's `Retry-After` asked, up to
+a minute, and otherwise about eight seconds, spread by a fifth either way. A
+request to a service on the internet may take three minutes; one to a server on
+this machine - LM Studio or Ollama on a laptop CPU - may take 400 seconds, so
+that a request that timed out, the wait, and its one retry all end inside the
+queue's fifteen-minute deadline rather than running on past it.
+
+### When a document fails
+
+Each failure is stored under a code that says what went wrong, and the code
+decides what happens next. A failure that would come out the same on a second
+attempt fails the document at once: a password-protected file, a file that is
+not what its extension says, a document past the extraction limits or too long
+for the model, a damaged file the parser rejects, an internal failure on that
+one document, and a model refusal. Asking again would only re-read the file —
+thirty minutes of it, for a scan that hit the time limit — or re-send and
+re-bill the request. A worker crash, a failure the worker says may pass, and a
+model request that timed out or was called off get one more attempt. A failure
+that every following document would share pauses the queue and names the
+reason in the window: the hosted-model failures above, a local model server
+that cannot be started or recovered, and missing text-recognition files. A
+model reply that cannot be used fails that document; three documents in a row
+with such a reply pause the queue, since by then the model is the problem, and
+any document read successfully starts the count again. A document that meets
+no model at all — the moment while Settings switches between the hosted and
+the local one, before the local server's start has begun — goes back to wait
+with nothing counted against it. A request that finds a start or a restart
+under way waits for it instead (see above), so a model that is missing after
+that did not come up. Still missing four minutes later, far longer than a
+switch takes to begin its start, it is a start or restart that failed: the
+queue pauses and says the local model stopped responding, rather than reading
+the same document again on every pass with nothing on screen.
+The banner for a pause says to resume the queue; a document's own sentence
+for the same code, which says to retry that document, would name the wrong
+action.
+
+These codes are new in alpha.11, and alpha.10 fails its whole queue listing
+on a code it does not know. A database in which alpha.11 has recorded a
+failure - a failed document, or one waiting for its second attempt - or a
+document the folder watcher set aside (`INTAKE_WITHDRAWN`, on a canceled row)
+therefore shows an empty queue if alpha.10 is reinstalled over it: remove the
+failed and set-aside documents, and let the waiting ones finish, before going
+back. From alpha.11 on, an unknown code reads as none, and a row or an
+operation record with a status, direction or stage a newer build wrote is left
+out of the listing rather than failing it.
 
 The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address

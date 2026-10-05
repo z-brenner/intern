@@ -152,7 +152,11 @@ folder's `README.txt`:
 The rename history's CSV export (Completed → History → Export CSV) has a
 `description` column beside the original and new paths. Opened in Excel, the
 sentences can be copied into the library in **Edit in grid view**, one column
-at a time. It is manual, but it needs no flow and no admin.
+at a time. It is manual, but it needs no flow and no admin. The export holds
+every rename and undo, not only the ones the dialog lists; it starts with a
+byte-order mark so Excel keeps accented names intact; and a description that
+begins like a formula (`=`, `+`, `-`, `@`) is written with a leading
+apostrophe, so it opens as text rather than running.
 
 ## Network shares and other destinations
 

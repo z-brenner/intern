@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { humanizeReason } from './reasons';
+import { describeQueueStop, humanizeReason } from './reasons';
 
 describe('humanizeReason', () => {
   it('translates a single code into its sentence', () => {
@@ -62,3 +62,23 @@ describe('humanizeReason', () => {
   });
 });
 
+describe('describeQueueStop', () => {
+  // A stopped queue waits for Resume. The sentence a single document gets for
+  // the same code says to retry that document, or that Intern will retry it,
+  // and neither is what a person reading the banner has to do.
+  it('says to resume the queue, not to retry a document, for the pauses a document sentence would get wrong', () => {
+    for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE']) {
+      const sentence = describeQueueStop(code);
+      expect(sentence, code).toMatch(/resume the queue/i);
+      expect(sentence, code).not.toMatch(/Retry it|Intern will retry/);
+      expect(sentence, code).not.toBe(humanizeReason(code));
+    }
+    expect(describeQueueStop('HOSTED_MODEL_RATE_LIMITED')).toBe('The hosted service asked for a slower pace. Wait a minute, then resume the queue.');
+  });
+
+  it('falls back to the document sentence where that one already fits, and keeps unknown codes', () => {
+    expect(describeQueueStop('HOSTED_MODEL_BILLING')).toBe(humanizeReason('HOSTED_MODEL_BILLING'));
+    expect(describeQueueStop('OCR_UNAVAILABLE')).toBe(humanizeReason('OCR_UNAVAILABLE'));
+    expect(describeQueueStop('LEASE_LOST')).toBe('LEASE_LOST');
+  });
+});

