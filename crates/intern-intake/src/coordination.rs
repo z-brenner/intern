@@ -33,6 +33,10 @@ pub const COURTESY_DELAY_SECONDS: i64 = 120;
 pub const DONE_RETENTION_SECONDS: i64 = 30 * 24 * 3600;
 pub const PRESENCE_REFRESH_SECONDS: i64 = 300;
 pub const PRESENCE_ACTIVE_WINDOW_SECONDS: i64 = 600;
+/// How often `prune` actually sweeps the shared directory. Every retention it
+/// enforces is measured in days, so sweeping on every scan bought nothing and
+/// re-read a year of filed markers every 20 seconds.
+pub const PRUNE_INTERVAL_SECONDS: i64 = 3600;
 
 const FORMAT_VERSION: u32 = 1;
 const MALFORMED_RETENTION_SECONDS: i64 = 24 * 3600;
@@ -268,6 +272,9 @@ pub struct ClaimStore {
     identity: MachineIdentity,
     clock: Arc<dyn Clock>,
     presence_touched_at: Mutex<Option<i64>>,
+    /// When `prune` last swept, on the injected clock. `None` until the first
+    /// sweep, so every process sweeps once at start.
+    pruned_at: Mutex<Option<i64>>,
     /// Per claim key, the last heartbeat value seen from another machine and
     /// the local time it was first seen with that value. See
     /// `observed_silence`.
@@ -298,6 +305,7 @@ impl ClaimStore {
             identity,
             clock,
             presence_touched_at: Mutex::new(None),
+            pruned_at: Mutex::new(None),
             heartbeats: Mutex::new(HashMap::new()),
         })
     }
@@ -598,8 +606,23 @@ impl ClaimStore {
     /// a one-day grace so in-flight sync writes are never eaten — malformed
     /// files, sync conflict copies (valid JSON under the wrong filename), and
     /// leaked dot-prefixed temp files.
+    ///
+    /// Self-gated to one sweep per `PRUNE_INTERVAL_SECONDS`: the sweep opens
+    /// every file in four directories, which grow with history, inside a
+    /// synced folder. A clock that moved backwards sweeps again rather than
+    /// waiting for it to catch up.
     pub fn prune(&self) {
         let now = self.clock.now();
+        {
+            let mut pruned_at = self
+                .pruned_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pruned_at.is_some_and(|at| (0..PRUNE_INTERVAL_SECONDS).contains(&(now - at))) {
+                return;
+            }
+            *pruned_at = Some(now);
+        }
         let live = self.prune_claims(now);
         self.heartbeats
             .lock()

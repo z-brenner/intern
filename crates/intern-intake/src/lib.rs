@@ -33,7 +33,7 @@ pub use coordination::{
     AcquireOutcome, CLAIM_LEASE_SECONDS, CLAIM_RENEW_THRESHOLD_SECONDS, COURTESY_DELAY_SECONDS,
     ClaimInfo, ClaimState, ClaimStore, Clock, DONE_RETENTION_SECONDS, DocumentFacts, DoneOutcome,
     MachinePresence, OriginInfo, PRESENCE_ACTIVE_WINDOW_SECONDS, PRESENCE_REFRESH_SECONDS,
-    SystemClock, document_key,
+    PRUNE_INTERVAL_SECONDS, SystemClock, document_key,
 };
 pub use deployment::{DeploymentError, SharePointDeployment};
 pub use descriptions::{DescriptionLedger, DescriptionRecord, FiledDocument, record_key};

@@ -11,7 +11,7 @@ use common::{MockClock, facts_for, identity, real_now};
 use intern_intake::{
     AcquireOutcome, CLAIM_LEASE_SECONDS, CLAIM_RENEW_THRESHOLD_SECONDS, ClaimInfo, ClaimState,
     ClaimStore, DONE_RETENTION_SECONDS, DocumentFacts, DoneOutcome, FiledIndex, FiledMarker,
-    MachinePresence, PRESENCE_REFRESH_SECONDS, document_key,
+    MachinePresence, PRESENCE_REFRESH_SECONDS, PRUNE_INTERVAL_SECONDS, document_key,
 };
 use tempfile::TempDir;
 
@@ -444,6 +444,40 @@ fn prune_gives_fresh_malformed_files_a_day_of_grace() {
     clock.advance(2 * 24 * 3600);
     store.prune();
     assert!(!malformed.exists());
+}
+
+/// Retention is measured in days, so a sweep on every 20-second scan bought
+/// nothing and re-read a year of markers each time. The first sweep in a
+/// process still runs at once.
+#[test]
+fn prune_is_rate_limited() {
+    let temp = TempDir::new().unwrap();
+    let start = real_now();
+    let clock = MockClock::at(start);
+    let store =
+        ClaimStore::with_clock(temp.path(), identity("aaa", "here"), clock.clone()).unwrap();
+    let document = doc("old.pdf");
+    assert!(matches!(store.acquire(&document), AcquireOutcome::Acquired));
+    store
+        .mark_done(&document.key(), DoneOutcome::Renamed, None)
+        .unwrap();
+
+    // The first sweep of the process runs; the tombstone is not due yet.
+    clock.set(start + DONE_RETENTION_SECONDS - 60);
+    store.prune();
+    assert!(claim_file(temp.path(), &document.key()).exists());
+
+    // Now it is due, but the last sweep was a minute ago.
+    clock.advance(120);
+    store.prune();
+    assert!(
+        claim_file(temp.path(), &document.key()).exists(),
+        "a second sweep within the interval does nothing"
+    );
+
+    clock.advance(PRUNE_INTERVAL_SECONDS);
+    store.prune();
+    assert!(!claim_file(temp.path(), &document.key()).exists());
 }
 
 #[test]
