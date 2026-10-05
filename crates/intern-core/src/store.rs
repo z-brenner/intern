@@ -2,7 +2,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,10 +16,19 @@ use crate::{
 
 const LEASE_SECONDS: i64 = 60;
 static SESSION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+/// Whether an error code this build does not know has been reported yet. One
+/// line says what happened; one per row per listing would bury everything
+/// else on stderr.
+static UNKNOWN_ERROR_CODE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 pub struct QueueStore {
     connection: Mutex<Connection>,
     session_id: String,
+    /// Queue rows the latest listing left out because this build cannot read
+    /// them, and receipts the latest history listing left out for the same
+    /// reason. See [`QueueStore::hidden_rows`].
+    hidden_items: AtomicUsize,
+    hidden_receipts: AtomicUsize,
 }
 
 /// A completed item whose content matches a newly added file.
@@ -153,6 +162,8 @@ impl QueueStore {
         Ok(Self {
             connection: Mutex::new(connection),
             session_id,
+            hidden_items: AtomicUsize::new(0),
+            hidden_receipts: AtomicUsize::new(0),
         })
     }
 
@@ -429,6 +440,96 @@ impl QueueStore {
             ));
         }
         query_one(&connection, "WHERE id = ?1", params![id])
+    }
+
+    /// Sends a document waiting on a person back to the queue to be read
+    /// again from the start: Re-analyze.
+    ///
+    /// A document signed, edited or saved over after it was read had no way
+    /// back. Approving it checked the old fingerprint and failed every time,
+    /// and Retry was refused because nothing had failed. Everything the
+    /// earlier reading decided goes in one transaction - the proposal, and
+    /// with it any approval; the failure count; the error code; the receipt
+    /// pointers - so no half of it can outlive the other. `new_hash` is the
+    /// file's fingerprint now, when it is not the one stored: the item is
+    /// whatever is at its path today, and the rename after the new reading
+    /// is checked against that. A row already holding that path and that
+    /// content is DUPLICATE: the same version of the file is in the queue
+    /// once already.
+    ///
+    /// Refused while any operation of the item never finished. What is on
+    /// disk is an open question until it is checked again, and a new
+    /// reading would be of a file that may not be the document.
+    pub fn requeue_for_analysis(
+        &self,
+        id: i64,
+        expected: QueueStatus,
+        new_hash: Option<&str>,
+    ) -> InternResult<QueueItem> {
+        if !matches!(expected, QueueStatus::Ready | QueueStatus::NeedsReview) {
+            return Err(InternError::new(
+                ErrorCode::InvalidTransition,
+                "only a document waiting for review can be analyzed again",
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let unsettled = transaction
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM operation_receipts
+                   WHERE queue_item_id = ?1 AND stage NOT IN ('complete', 'rolled_back')
+                 )",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(InternError::from)?;
+        if unsettled {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::InvalidTransition,
+                "an earlier rename of this document did not finish; check it again first",
+            ));
+        }
+        let changed = match transaction.execute(
+            "UPDATE queue_items
+             SET status = 'queued', source_hash = COALESCE(?1, source_hash),
+                 processing_failures = 0, error_code = NULL, owner_session = NULL,
+                 lease_expires_at = NULL, previous_status = NULL, active_receipt_id = NULL,
+                 reconciliation_receipt_id = NULL, updated_at = ?2
+             WHERE id = ?3 AND status = ?4",
+            params![new_hash, now(), id, expected.as_db()],
+        ) {
+            Ok(changed) => changed,
+            Err(rusqlite::Error::SqliteFailure(failure, _))
+                if failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                transaction.rollback().map_err(InternError::from)?;
+                return Err(InternError::new(
+                    ErrorCode::Duplicate,
+                    "this version of the file is already in the queue",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the item changed before it could be analyzed again",
+            ));
+        }
+        transaction
+            .execute(
+                "DELETE FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+            )
+            .map_err(InternError::from)?;
+        let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(item)
     }
 
     pub fn complete_keep_original(
@@ -1137,16 +1238,53 @@ impl QueueStore {
             .map_err(InternError::from)
     }
 
+    /// Every item in the queue that this build can read, oldest first.
+    ///
+    /// A row with a status this build does not know is left out and counted
+    /// in [`QueueStore::hidden_rows`]: a row a newer Intern wrote, in a
+    /// database this one opened after the older release was reinstalled. It
+    /// used to fail the whole query, and a window that cannot list the queue
+    /// shows nothing at all.
     pub fn list(&self) -> InternResult<Vec<QueueItem>> {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(&queue_select("ORDER BY id"))
             .map_err(InternError::from)?;
         let rows = statement
-            .query_map([], row_to_item)
+            .query_map([], read_item)
             .map_err(InternError::from)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(InternError::from)
+        let mut items = Vec::new();
+        let mut hidden = 0;
+        for row in rows {
+            match row.map_err(InternError::from)? {
+                Some(item) => items.push(item),
+                None => hidden += 1,
+            }
+        }
+        self.hidden_items.store(hidden, Ordering::Relaxed);
+        Ok(items)
+    }
+
+    /// One item by id, or `None` when there is no such item - or none this
+    /// build can read, which the queue listing leaves out as well.
+    ///
+    /// The one-item actions used to list the whole queue and search it for
+    /// the id; this is the primary-key lookup that question needs.
+    pub fn get(&self, id: i64) -> InternResult<Option<QueueItem>> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(&queue_select("WHERE id = ?1"), params![id], read_item)
+            .optional()
+            .map_err(InternError::from)?
+            .flatten())
+    }
+
+    /// How many rows the latest queue listing and the latest history listing
+    /// left out because this build cannot read them: rows a newer Intern
+    /// wrote, with a status, direction, kind or stage this one does not know.
+    /// For diagnostics, and for saying so instead of leaving them unexplained.
+    pub fn hidden_rows(&self) -> usize {
+        self.hidden_items.load(Ordering::Relaxed) + self.hidden_receipts.load(Ordering::Relaxed)
     }
 
     /// Lists finished operations, newest first, for the history view.
@@ -1155,9 +1293,41 @@ impl QueueStore {
     /// reported: an in-flight receipt is bookkeeping for the applier and may
     /// still end either way. Receipts are joined to their queue items, so a
     /// cleared history (which cascades receipt deletion) lists nothing stale.
-    /// `limit` is capped at [`HISTORY_LIMIT`].
+    /// `limit` is capped at [`HISTORY_LIMIT`]: this is what a window shows.
     pub fn list_operation_history(&self, limit: usize) -> InternResult<Vec<HistoryEntry>> {
-        let limit = i64::try_from(limit.min(HISTORY_LIMIT)).unwrap_or(0);
+        self.operation_history(i64::try_from(limit.min(HISTORY_LIMIT)).unwrap_or(0))
+    }
+
+    /// Every finished operation, newest first, with no cap: what an export
+    /// writes. The history export used the window's listing and stopped at
+    /// five hundred rows without a word, while the dialog promised every
+    /// rename Intern had applied.
+    pub fn list_all_operation_history(&self) -> InternResult<Vec<HistoryEntry>> {
+        // SQLite reads a negative LIMIT as no limit at all.
+        self.operation_history(-1)
+    }
+
+    /// How many finished operations there are in all, so a listing capped at
+    /// [`HISTORY_LIMIT`] can say that it is.
+    pub fn count_operation_history(&self) -> InternResult<usize> {
+        let connection = self.lock()?;
+        let count = connection
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM operation_receipts receipts
+                 JOIN queue_items items ON items.id = receipts.queue_item_id
+                 WHERE receipts.stage IN ('complete', 'rolled_back')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(InternError::from)?;
+        Ok(usize::try_from(count).unwrap_or(0))
+    }
+
+    /// Finished operations, newest first, up to `limit` (none when negative).
+    /// A receipt this build cannot read is left out and counted, as a queue
+    /// row is.
+    fn operation_history(&self, limit: i64) -> InternResult<Vec<HistoryEntry>> {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
@@ -1172,10 +1342,18 @@ impl QueueStore {
             )
             .map_err(InternError::from)?;
         let rows = statement
-            .query_map(params![limit], row_to_history_entry)
+            .query_map(params![limit], read_history_entry)
             .map_err(InternError::from)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(InternError::from)
+        let mut entries = Vec::new();
+        let mut hidden = 0;
+        for row in rows {
+            match row.map_err(InternError::from)? {
+                Some(entry) => entries.push(entry),
+                None => hidden += 1,
+            }
+        }
+        self.hidden_receipts.store(hidden, Ordering::Relaxed);
+        Ok(entries)
     }
 
     pub fn clear_terminal(&self) -> InternResult<usize> {
@@ -1847,19 +2025,43 @@ fn queue_select(suffix: &str) -> String {
     )
 }
 
+/// A queue row that was just written, or that must be read whole: one this
+/// build cannot read is an error.
 fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueItem> {
-    let status = parse_status(row.get::<_, String>(3)?, 3)?;
-    let error = row
-        .get::<_, Option<String>>(5)?
-        .map(|value| {
-            ErrorCode::from_str(&value).ok_or_else(|| invalid_column(5, "unknown error code"))
-        })
-        .transpose()?;
-    let previous_status = row
-        .get::<_, Option<String>>(8)?
-        .map(|value| parse_status(value, 8))
-        .transpose()?;
-    Ok(QueueItem {
+    read_item(row)?.ok_or_else(|| invalid_column(3, "unknown queue status"))
+}
+
+/// A queue row as this build reads it, or `None` for a row it cannot: one
+/// whose status, or status before applying, a newer build wrote. Nothing can
+/// be decided about an item in a state this build has never heard of, so it
+/// is left out rather than guessed at.
+///
+/// An error code this build does not know reads as no code. It is what the
+/// window explains, not what the queue decides on - the decisions are made by
+/// compare-and-swaps in SQL, against the stored text - and every release adds
+/// codes, so it is the unknown value a database written by a newer release
+/// is most likely to hold.
+fn read_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<QueueItem>> {
+    let Some(status) = QueueStatus::from_db(&row.get::<_, String>(3)?) else {
+        return Ok(None);
+    };
+    let previous_status = match row.get::<_, Option<String>>(8)? {
+        Some(value) => match QueueStatus::from_db(&value) {
+            Some(previous) => Some(previous),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+    let error = row.get::<_, Option<String>>(5)?.and_then(|value| {
+        let code = ErrorCode::from_str(&value);
+        if code.is_none() && !UNKNOWN_ERROR_CODE_REPORTED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "intern: a queue item carries an error code this version does not know; it is shown without one"
+            );
+        }
+        code
+    });
+    Ok(Some(QueueItem {
         id: row.get(0)?,
         source_path: PathBuf::from(row.get::<_, String>(1)?),
         source_hash: row.get(2)?,
@@ -1879,7 +2081,7 @@ fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueueItem> {
         reconciliation_receipt_id: row.get(10)?,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
-    })
+    }))
 }
 
 fn receipt_select(suffix: &str) -> String {
@@ -1915,27 +2117,26 @@ fn row_to_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationReceipt>
     })
 }
 
-fn row_to_history_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
-    let direction_text: String = row.get(3)?;
-    let kind_text: String = row.get(4)?;
-    let stage_text: String = row.get(5)?;
-    Ok(HistoryEntry {
+/// A finished operation as this build reads it, or `None` for one whose
+/// direction, kind or stage a newer build wrote. The history listing leaves
+/// such a receipt out and counts it, as the queue listing does a row.
+fn read_history_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<HistoryEntry>> {
+    let direction = OperationDirection::from_db(&row.get::<_, String>(3)?);
+    let kind = OperationKind::from_db(&row.get::<_, String>(4)?);
+    let stage = OperationStage::from_db(&row.get::<_, String>(5)?);
+    let (Some(direction), Some(kind), Some(stage)) = (direction, kind, stage) else {
+        return Ok(None);
+    };
+    Ok(Some(HistoryEntry {
         receipt_id: row.get(0)?,
         queue_item_id: row.get(1)?,
         at: row.get(2)?,
-        direction: OperationDirection::from_db(&direction_text)
-            .ok_or_else(|| invalid_column(3, "unknown receipt direction"))?,
-        kind: OperationKind::from_db(&kind_text)
-            .ok_or_else(|| invalid_column(4, "unknown operation kind"))?,
-        stage: OperationStage::from_db(&stage_text)
-            .ok_or_else(|| invalid_column(5, "unknown operation stage"))?,
+        direction,
+        kind,
+        stage,
         original_path: PathBuf::from(row.get::<_, String>(6)?),
         new_path: PathBuf::from(row.get::<_, String>(7)?),
-    })
-}
-
-fn parse_status(value: String, index: usize) -> rusqlite::Result<QueueStatus> {
-    QueueStatus::from_db(&value).ok_or_else(|| invalid_column(index, "unknown queue status"))
+    }))
 }
 
 fn invalid_column(index: usize, message: &str) -> rusqlite::Error {
