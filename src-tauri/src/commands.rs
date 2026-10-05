@@ -864,6 +864,41 @@ fn scheduler_actions(
     )
 }
 
+/// When the scheduler last recovered: how long it may wait for a message
+/// before recovery is due, and what each pass does.
+///
+/// The loop's own timing is where recovery used to go missing - a wait that
+/// started its 65 seconds over at every wake - so it is kept here, where a
+/// test can drive it with the clock it chooses.
+struct RecoverClock {
+    last_recover: Instant,
+}
+
+impl RecoverClock {
+    fn new(now: Instant) -> Self {
+        Self { last_recover: now }
+    }
+
+    /// How long to wait for a message: no longer than until recovery is due.
+    fn wait(&self, now: Instant) -> Duration {
+        RECOVER_INTERVAL.saturating_sub(now.saturating_duration_since(self.last_recover))
+    }
+
+    /// What this pass does - whether it recovers, and whether it drains -
+    /// counting from the last pass that recovered.
+    fn pass(&mut self, timed_out: bool, model_ready: bool, now: Instant) -> (bool, bool) {
+        let actions = scheduler_actions(
+            timed_out,
+            model_ready,
+            now.saturating_duration_since(self.last_recover),
+        );
+        if actions.0 {
+            self.last_recover = now;
+        }
+        actions
+    }
+}
+
 struct PipelineScheduler {
     sender: std::sync::mpsc::Sender<SchedulerMessage>,
     join: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -881,25 +916,21 @@ impl PipelineScheduler {
         let join = std::thread::Builder::new()
             .name("intern-pipeline-scheduler".into())
             .spawn(move || {
-                let mut last_recover = Instant::now();
+                let mut clock = RecoverClock::new(Instant::now());
                 loop {
                     // Wait no longer than the next recovery is due, so it
                     // runs on time even when nothing wakes the scheduler.
-                    let wait = RECOVER_INTERVAL.saturating_sub(last_recover.elapsed());
-                    let timed_out = match receiver.recv_timeout(wait) {
+                    let timed_out = match receiver.recv_timeout(clock.wait(Instant::now())) {
                         Ok(SchedulerMessage::Shutdown) => return,
                         Ok(SchedulerMessage::Wake) => false,
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                     };
-                    let (recover, drain) = scheduler_actions(
+                    let (recover, drain) = clock.pass(
                         timed_out,
                         model_ready.load(Ordering::SeqCst),
-                        last_recover.elapsed(),
+                        Instant::now(),
                     );
-                    if recover {
-                        last_recover = Instant::now();
-                    }
                     if recover && let Err(error) = scheduled_pipeline.recover() {
                         let _ = app.emit(
                             "queue://changed",
@@ -3456,9 +3487,9 @@ mod background_task_tests {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
-    use super::{ExistingModelFilesDto, RECOVER_INTERVAL, scheduler_actions};
+    use super::{ExistingModelFilesDto, RECOVER_INTERVAL, RecoverClock, scheduler_actions};
 
     #[test]
     fn timer_recovers_but_does_not_drain_until_model_is_ready() {
@@ -3491,6 +3522,40 @@ mod scheduler_tests {
 
         assert!(!scheduler_actions(false, false, RECOVER_INTERVAL - Duration::from_millis(1)).0);
         assert!(scheduler_actions(false, false, RECOVER_INTERVAL).0);
+    }
+
+    /// The loop's own clock, not only the decision: the wait it asks for and
+    /// the recovery it records. A loop that restarted its wait at every wake,
+    /// or never recorded a recovery, passed the test above and still never
+    /// recovered - or recovered at every pass.
+    #[test]
+    fn the_scheduler_clock_recovers_every_65_seconds_through_wakes_30_seconds_apart() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut clock = RecoverClock::new(start);
+        assert_eq!(clock.wait(start), RECOVER_INTERVAL);
+
+        let mut recovered_at = Vec::new();
+        let mut waits = Vec::new();
+        for seconds in (30..=300).step_by(30) {
+            let (recover, drain) = clock.pass(false, true, at(seconds));
+            assert!(drain);
+            if recover {
+                recovered_at.push(seconds);
+            }
+            waits.push(clock.wait(at(seconds)).as_secs());
+        }
+
+        assert_eq!(recovered_at, vec![90, 180, 270]);
+        // After each recovery the next is a full interval away; between them
+        // the wait shrinks to what is left, never starting over.
+        assert_eq!(waits, vec![35, 5, 65, 35, 5, 65, 35, 5, 65, 35]);
+
+        // A timeout recovers whenever it comes, and restarts the interval.
+        let (recover, _) = clock.pass(true, false, at(310));
+        assert!(recover);
+        assert_eq!(clock.wait(at(310)), RECOVER_INTERVAL);
+        assert_eq!(clock.wait(at(400)), Duration::ZERO);
     }
 
     #[test]
