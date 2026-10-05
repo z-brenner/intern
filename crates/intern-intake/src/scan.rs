@@ -480,9 +480,9 @@ impl Hydration for SystemHydration {
     /// Opening a placeholder is what makes Files On-Demand fetch it; one byte
     /// is enough to start it and the sync client brings down the whole file.
     /// That download happens on the scan thread, which is why it is asked for
-    /// only for a document this machine already holds and has already failed
-    /// to read. Offline the open fails quickly and the attributes still say
-    /// the content is in the cloud, which is the answer the caller wants.
+    /// only for a document this machine has already tried and failed to read.
+    /// Offline the open fails quickly and the attributes still say the
+    /// content is in the cloud, which is the answer the caller wants.
     #[cfg(windows)]
     fn hydrate(&self, path: &Path) -> bool {
         use std::io::Read;

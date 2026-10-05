@@ -1316,6 +1316,37 @@ fn dehydrated_enqueue_failure_counts_as_awaiting_hydration() {
     assert_eq!(rig.watcher.status().awaiting_hydration, 0);
 }
 
+/// A placeholder the queue could not read offline waits for the connection,
+/// not for the clock. It waited out its pause - up to fifteen minutes - after
+/// the connection came back, while Settings said the next scan would pick it
+/// up.
+#[test]
+fn a_refused_placeholder_is_handed_over_as_soon_as_its_content_can_come_down() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("online-only.pdf", b"bytes that live in the cloud");
+    rig.hydration.set_dehydrated(&path, true);
+    rig.step();
+    rig.step();
+    rig.step_by(ENQUEUE_RETRY_SECONDS);
+    rig.step_by(2 * ENQUEUE_RETRY_SECONDS);
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 3);
+
+    // Still offline: the content cannot come down, and the pause holds.
+    rig.step();
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(rig.watcher.status().awaiting_hydration, 1);
+
+    // Back online, well inside the pause.
+    rig.hydration.reachable.store(true, Ordering::SeqCst);
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    let status = rig.watcher.status();
+    assert_eq!(status.awaiting_hydration, 0, "{status:?}");
+}
+
 #[test]
 fn a_file_claimed_by_another_machine_is_counted_and_left_alone() {
     let rig = Rig::start(true, &[]);

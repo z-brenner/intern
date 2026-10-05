@@ -600,8 +600,16 @@ impl Scanner<'_> {
             .get(key)
             .is_some_and(|&(_, next_try_at)| self.clock.now() < next_try_at)
         {
-            self.count_refused(path);
-            return;
+            // A placeholder the queue could not read offline is waiting for
+            // the connection, not for the clock. Asking the sync client for
+            // its content fails at once while offline, and once back online
+            // hands the document over on this scan rather than after a pause
+            // of up to fifteen minutes - while Settings says the next scan
+            // picks it up.
+            if !(self.hydration.is_dehydrated(path) && self.hydration.hydrate(path)) {
+                self.count_refused(path);
+                return;
+            }
         }
         match self.store.acquire(doc) {
             AcquireOutcome::Acquired => {
