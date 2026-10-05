@@ -29,6 +29,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STALE_WORKSPACE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// OCR below this mean confidence is reported as a fact-affecting warning.
 const LOW_OCR_CONFIDENCE: f32 = 75.0;
+/// The worker warning for rows and columns a spreadsheet's window
+/// deliberately leaves out, with a marker where it does. The rest of the
+/// sheet was read and chosen against, so nothing the window shows is in
+/// doubt.
+const CONTENT_ELIDED: &str = "CONTENT_ELIDED";
 
 /// Progress from the extraction stage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -191,10 +196,16 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
         return Err(ExtractFailure::new("WORKER_PROTOCOL_INVALID", false, false));
     }
 
+    // Every warning can corrupt what was read except a deliberate, marked
+    // elision. A code this build does not know stays fact-affecting, so a
+    // newer worker's warning errs towards review.
     let mut parser_warnings = document
         .warnings
         .into_iter()
-        .map(|code| ParserWarning::new(code, true))
+        .map(|code| {
+            let field_affecting = code != CONTENT_ELIDED;
+            ParserWarning::new(code, field_affecting)
+        })
         .collect::<Vec<_>>();
     let low_confidence = document.pages.iter().any(|page| {
         page.source == WorkerPageSource::Ocr
@@ -775,6 +786,99 @@ mod tests {
         assert_eq!(failure.code, "CANCELED");
         assert!(failure.canceled);
         assert!(!failure.retryable);
+    }
+
+    /// A worker reply carrying one page and the given warnings.
+    fn one_page(text: &str, warnings: &[&str], truncated: bool) -> DocumentSource {
+        let reply = json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": "r",
+            "event": {"type": "parsed", "document": {
+                "pages": [{"page_number": 1, "text": text, "source": "any_doc",
+                    "ocr_confidence": null, "vision_escalated": false}],
+                "warnings": warnings,
+                "truncated": truncated,
+                "optional_image": null,
+            }},
+        });
+        parsed(&reply.to_string()).unwrap()
+    }
+
+    /// A sheet whose facts are in its first rows and whose ledger runs on
+    /// past the window, as the worker renders it.
+    const LONG_SHEET: &str = "## Statement of Work\n\n\
+STATEMENT OF WORK\n\n\
+This Statement of Work is effective as of April 1, 2026, by and between Acme Corporation \
+and Contoso Worldwide, Inc.\n\n\
+The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n\
+| Item | Amount |\n| --- | --- |\n| CRM licences | 1200 |\n| Onboarding | 800 |\n\n\
+[... 150 more rows not shown]\n";
+
+    fn long_sheet_proposal() -> crate::domain::ModelProposal {
+        use crate::domain::{DateRole, Evidence, ModelProposal, PartyRelation};
+        ModelProposal {
+            document_type: Some("Statement of Work".into()),
+            document_date: Some("2026-04-01".into()),
+            date_role: Some(DateRole::Effective),
+            parties: vec!["Acme Corporation".into(), "Contoso Worldwide, Inc.".into()],
+            party_relation: PartyRelation::Between,
+            description:
+                "Statement of work between Acme Corporation and Contoso Worldwide, Inc. covering the 2026 CRM implementation and its fees."
+                    .into(),
+            confidence: 0.9,
+            needs_review: false,
+            evidence: Evidence {
+                date: Some("effective as of April 1, 2026".into()),
+                document_type: Some("STATEMENT OF WORK".into()),
+                parties: vec![
+                    "by and between Acme Corporation and Contoso Worldwide, Inc.".into(),
+                ],
+            },
+        }
+    }
+
+    fn validated(source: &DocumentSource) -> crate::domain::ValidationOutcome {
+        let digest = crate::distill::distill(source, crate::distill::DigestBudget::default());
+        crate::validate::validate(long_sheet_proposal(), &digest)
+    }
+
+    /// Rows past a spreadsheet's window are left out by design and marked
+    /// where they are. That says the sheet is long, not that anything read
+    /// from it is in doubt, so a proposal the sheet supports is still Ready.
+    /// Text that was cut is a different matter and still goes to review.
+    #[test]
+    fn content_elided_is_not_field_affecting() {
+        use crate::domain::{ProposalStatus, ReviewReason};
+
+        let elided = one_page(LONG_SHEET, &["CONTENT_ELIDED"], false);
+        assert_eq!(
+            elided.parser_warnings,
+            vec![ParserWarning::new("CONTENT_ELIDED", false)]
+        );
+        let outcome = validated(&elided);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::ParserWarning));
+
+        let truncated = one_page(LONG_SHEET, &["TEXT_TRUNCATED"], true);
+        assert_eq!(
+            truncated.parser_warnings,
+            vec![ParserWarning::new("TEXT_TRUNCATED", true)]
+        );
+        let outcome = validated(&truncated);
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+        assert!(outcome.reasons.contains(&ReviewReason::ParserWarning));
+
+        // A code this build has never heard of errs towards review.
+        let unknown = one_page(LONG_SHEET, &["SOMETHING_NEW"], false);
+        assert_eq!(
+            unknown.parser_warnings,
+            vec![ParserWarning::new("SOMETHING_NEW", true)]
+        );
     }
 
     #[test]
