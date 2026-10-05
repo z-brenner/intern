@@ -93,6 +93,14 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       INTERN_REQUIRE_GENERATED_FIXTURES: "1"
+      # Every test binary links tauri, wry and webkit. Incremental state and
+      # full debug info would multiply the target directory, which is both the
+      # runner's disk and the cache entry saved below, and that entry competes
+      # under the repository's cache limit with the Windows runtime-asset cache.
+      # These are also the settings this job was proven green with.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -114,7 +122,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-ubuntu-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          # Named for the settings above: an entry saved with incremental state and
+          # debug info would otherwise be restored as an exact hit, and never
+          # replaced, for as long as Cargo.lock stays the same.
+          key: cargo-ubuntu-nodebug-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - run: cargo fmt --all -- --check
       # The generator uses nothing but Node itself, so no npm install.
       - name: Generate the clean-room fixtures the worker tests read

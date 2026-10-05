@@ -74,6 +74,11 @@ describe('the Rust (Ubuntu) job', () => {
     expect(job).toMatch(/key: .*hashFiles\('Cargo\.lock'\)/);
     expect(job).toMatch(/^ {12}~\/\.cargo\/registry$/m);
     expect(job).toMatch(/^ {12}target$/m);
+    // The build settings it was proven green with, which also keep the cached
+    // target directory free of incremental state and debug info.
+    for (const setting of ['CARGO_INCREMENTAL', 'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG']) {
+      expect(job).toMatch(new RegExp(`^ {6}${setting}: "0"$`, 'm'));
+    }
 
     const runs = stepsOf(job).flatMap((step) => /run: (.+)$/m.exec(step)?.[1] ?? []);
     const fmt = runs.indexOf('cargo fmt --all -- --check');
