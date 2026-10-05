@@ -632,6 +632,11 @@ pub struct Pipeline {
     /// Documents in a row whose model reply could not be used. One such
     /// reply is that document's problem; several in a row is the model's.
     consecutive_unreadable_replies: AtomicU32,
+    /// When a document first found no model loaded to ask, in the current
+    /// run of such documents; `None` once a model has answered since.
+    model_missing_since: Mutex<Option<std::time::Instant>>,
+    /// How long no model may be loaded before the queue stops for it.
+    model_missing_grace: std::time::Duration,
     active_item: AtomicI64,
     shutting_down: AtomicBool,
     model_timeout: std::time::Duration,
@@ -746,6 +751,8 @@ impl Pipeline {
             paused: AtomicBool::new(false),
             pause_reason: Mutex::new(None),
             consecutive_unreadable_replies: AtomicU32::new(0),
+            model_missing_since: Mutex::new(None),
+            model_missing_grace: MODEL_MISSING_GRACE,
             active_item: AtomicI64::new(0),
             shutting_down: AtomicBool::new(false),
             model_timeout: std::time::Duration::from_secs(MODEL_TIMEOUT_SECONDS),
@@ -785,6 +792,12 @@ impl Pipeline {
     #[doc(hidden)]
     pub fn with_lease_renewal_interval(mut self, interval: std::time::Duration) -> Self {
         self.lease_renewal_interval = interval;
+        self
+    }
+
+    #[doc(hidden)]
+    pub fn with_model_missing_grace(mut self, grace: std::time::Duration) -> Self {
+        self.model_missing_grace = grace;
         self
     }
 
@@ -1188,6 +1201,7 @@ impl Pipeline {
             Ok(analysis) => {
                 self.consecutive_unreadable_replies
                     .store(0, Ordering::SeqCst);
+                self.forget_missing_model();
                 analysis
             }
             Err(error) => {
@@ -1203,20 +1217,25 @@ impl Pipeline {
                     self.events.queue_changed();
                     return Err(lease_error);
                 }
-                if self
-                    .store
-                    .get(item.id)?
-                    .is_some_and(|current| current.status == QueueStatus::Canceled)
-                {
+                if self.store.list()?.iter().any(|candidate| {
+                    candidate.id == item.id && candidate.status == QueueStatus::Canceled
+                }) {
                     self.events.queue_changed();
                     return Ok(true);
                 }
                 let code = model_error_code(&error);
-                match model_failure_action(&error.code) {
+                let action = model_failure_action(&error.code);
+                if action != ModelFailureAction::Requeue {
+                    // Anything but an empty slot means there was a model to
+                    // ask this time, whatever it answered.
+                    self.forget_missing_model();
+                }
+                match action {
                     ModelFailureAction::Requeue => {
                         // Nothing was asked: no model was loaded to ask, as
                         // happens for a moment while switching between the
-                        // hosted and the local one. The document goes back to
+                        // hosted and the local one, or while the local server
+                        // restarts after a cancel. The document goes back to
                         // wait with nothing counted against it, and this drain
                         // ends rather than claiming it again at once; the
                         // scheduler's next pass finds the model in place.
@@ -1227,6 +1246,16 @@ impl Pipeline {
                             QueueStatus::Queued,
                             None,
                         )?;
+                        // Unless it never comes back. A restart that failed
+                        // leaves the slot empty for as long as the app runs,
+                        // and every pass then read the head document again in
+                        // full only to put it back, with nothing on screen to
+                        // say the queue had stopped moving. A model still
+                        // missing once the moment has passed stops the queue
+                        // and says so.
+                        if self.model_missing_too_long() {
+                            self.pause_for(ErrorCode::ModelFailed.as_str());
+                        }
                         self.events.queue_changed();
                         return Ok(false);
                     }
@@ -1916,6 +1945,37 @@ impl Pipeline {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.to_owned());
         self.paused.store(true, Ordering::SeqCst);
+    }
+
+    /// Records that a document found no model loaded, and says whether one
+    /// has now been missing for longer than a switch or a restart takes.
+    ///
+    /// The first such document never stops the queue: the slot is empty for
+    /// a moment whenever Settings switches models or the local server is
+    /// restarted after a cancel. A later one stops it once the first is more
+    /// than the grace in the past. Resuming does not start the clock again -
+    /// only a model answering does - so a model still missing after a resume
+    /// stops the queue at the next document rather than minutes later.
+    fn model_missing_too_long(&self) -> bool {
+        let mut since = self
+            .model_missing_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *since {
+            Some(first) => first.elapsed() >= self.model_missing_grace,
+            None => {
+                *since = Some(std::time::Instant::now());
+                false
+            }
+        }
+    }
+
+    /// A model answered, so the slot is filled again.
+    fn forget_missing_model(&self) {
+        *self
+            .model_missing_since
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// The hold every file operation and its reconciliation runs under. The
@@ -3104,6 +3164,13 @@ fn model_error_code(error: &ModelFailure) -> ErrorCode {
 /// How many documents in a row may come back with a reply that cannot be
 /// used before the queue stops to say the model itself is the problem.
 const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
+
+/// How long documents may keep finding no model loaded before the queue
+/// stops for it. Longer than the local server is given to start - three
+/// minutes - so a restart in progress always finishes or fails inside it,
+/// and short enough that a restart that failed is reported within minutes
+/// rather than never.
+const MODEL_MISSING_GRACE: std::time::Duration = std::time::Duration::from_secs(4 * 60);
 
 /// What the queue does with a document whose analysis failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

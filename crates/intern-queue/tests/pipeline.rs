@@ -1076,8 +1076,9 @@ fn canceled_never_pauses() {
 
 /// Switching from the hosted model to the local one leaves a moment with no
 /// model loaded. A document that meets that moment was never analysed: it
-/// goes back to wait with nothing counted against it, however often it
-/// happens, and the drain ends instead of claiming it again at once.
+/// goes back to wait with nothing counted against it, as often as it happens
+/// within that moment, and the drain ends instead of claiming it again at
+/// once.
 #[test]
 fn model_not_ready_requeues_without_counting_a_failure() {
     let temp = tempdir().unwrap();
@@ -1122,6 +1123,82 @@ fn model_not_ready_requeues_without_counting_a_failure() {
             .iter()
             .all(|item| item.status == QueueStatus::Ready && item.processing_failures == 0)
     );
+}
+
+/// A local server whose restart failed leaves no model loaded for as long as
+/// the app runs. Every pass used to read the head document again in full and
+/// put it back, with nothing failed, nothing paused and nothing on screen. A
+/// model still missing once the moment a switch or restart takes has passed
+/// stops the queue and says so; a model that answers starts the clock over.
+#[test]
+fn model_missing_past_the_grace_pauses_the_queue_and_an_answer_starts_it_over() {
+    let temp = tempdir().unwrap();
+    let files = Arc::new(FakeFiles::default());
+    let paths = documents(temp.path(), &files, &["first.pdf", "second.pdf"]);
+    let worker = Arc::new(FakeWorker::new(
+        (0..6).map(|_| Ok(parsed(READABLE))).collect(),
+    ));
+    let not_ready = || Err(ModelFailure::fatal("MODEL_NOT_READY"));
+    let model = Arc::new(FakeModel::new(vec![
+        not_ready(),
+        not_ready(),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+        not_ready(),
+        Ok(proposal(0.94, false)),
+    ]));
+    // No grace at all: the first document to find no model is tolerated, and
+    // any later one finds it missing for too long.
+    let pipeline = pipeline(
+        temp.path(),
+        worker,
+        Arc::clone(&model),
+        files,
+        AppSettings::default(),
+    )
+    .with_model_missing_grace(Duration::ZERO);
+    pipeline.enqueue_files(&paths).unwrap();
+    let untouched = |pipeline: &Pipeline| {
+        pipeline.list().unwrap().iter().all(|item| {
+            item.status == QueueStatus::Queued
+                && item.processing_failures == 0
+                && item.error_code.is_none()
+        })
+    };
+
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused(), "the first is the moment of a switch");
+    assert!(untouched(&pipeline));
+
+    pipeline.run_until_idle().unwrap();
+    assert!(pipeline.is_paused());
+    assert_eq!(pipeline.pause_reason().as_deref(), Some("MODEL_FAILED"));
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert!(
+        untouched(&pipeline),
+        "nothing is failed or counted: no model was ever asked"
+    );
+
+    // Resuming without fixing anything stops at the next document, not
+    // minutes later: only an answer starts the clock over.
+    pipeline.resume();
+    pipeline.run_until_idle().unwrap();
+    assert!(pipeline.is_paused());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 3);
+
+    // The model is back. A document read successfully, and the next moment
+    // with no model is the first of a new run again.
+    pipeline.resume();
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused());
+    let items = pipeline.list().unwrap();
+    assert_eq!(items[0].status, QueueStatus::Ready);
+    assert_eq!(items[1].status, QueueStatus::Queued);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 5);
+
+    pipeline.run_until_idle().unwrap();
+    assert!(!pipeline.is_paused());
+    assert_eq!(pipeline.list().unwrap()[1].status, QueueStatus::Ready);
 }
 
 /// A crash the worker cannot be restarted from used to reclaim whatever the
