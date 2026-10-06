@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    Arc,
+    Arc, Mutex, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
@@ -20,6 +20,7 @@ use crate::limits::{
     ResourceLimits, VISION_GRID,
 };
 use crate::temp::TempWorkspace;
+use crate::timing::{ExtractionTimings, micros_since};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExtractionErrorKind {
@@ -120,6 +121,7 @@ struct CancellationState {
     canceled: AtomicBool,
     deadline: Instant,
     progress: Option<ProgressSink>,
+    timings: Mutex<ExtractionTimings>,
 }
 
 impl std::fmt::Debug for CancellationState {
@@ -133,13 +135,13 @@ impl std::fmt::Debug for CancellationState {
     }
 }
 
-/// What a reader carries for one request: whether to stop, and where to say
-/// how far it has got.
+/// What a reader carries for one request: whether to stop, where to say how
+/// far it has got, and where to say how long each stage took.
 ///
-/// Progress rides on the token because the token already reaches every
-/// reader and every page loop, and because neither belongs in the readers'
-/// signatures: a reader that has nothing to report never sees a sink, and
-/// one that does report cannot tell a sink from none.
+/// Progress and timings ride on the token because the token already reaches
+/// every reader and every page loop, and because neither belongs in the
+/// readers' signatures: a reader that has nothing to report never sees a
+/// sink, and one that does report cannot tell a sink from none.
 #[derive(Clone, Debug)]
 pub struct CancellationToken(Arc<CancellationState>);
 
@@ -164,6 +166,7 @@ impl CancellationToken {
             canceled: AtomicBool::new(false),
             deadline: Instant::now() + MAX_EXTRACTION_DURATION,
             progress,
+            timings: Mutex::new(ExtractionTimings::default()),
         }))
     }
 
@@ -173,6 +176,46 @@ impl CancellationToken {
         if let Some(sink) = &self.0.progress {
             sink(stage, current, total);
         }
+    }
+
+    /// Adds to this request's [`ExtractionTimings`].
+    ///
+    /// Timings are a measurement, never a reason to fail a document, so a
+    /// lock poisoned by a panic elsewhere is recorded into all the same.
+    pub fn record(&self, update: impl FnOnce(&mut ExtractionTimings)) {
+        update(
+            &mut self
+                .0
+                .timings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+    }
+
+    /// Runs `work` and adds the time it took to the stage `stage` names,
+    /// whether or not it succeeded.
+    pub fn timed<T>(
+        &self,
+        stage: impl FnOnce(&mut ExtractionTimings) -> &mut u64,
+        work: impl FnOnce() -> T,
+    ) -> T {
+        let started = Instant::now();
+        let result = work();
+        let elapsed = micros_since(started);
+        self.record(|timings| {
+            let total = stage(timings);
+            *total = total.saturating_add(elapsed);
+        });
+        result
+    }
+
+    /// What has been recorded so far.
+    pub fn timings(&self) -> ExtractionTimings {
+        *self
+            .0
+            .timings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn cancel(&self) {
@@ -454,6 +497,11 @@ pub struct ExtractedDocument {
     pub warnings: Vec<ExtractionWarning>,
     pub truncated: bool,
     pub optional_image: Option<VisionImage>,
+    /// Where the extraction's time went. Readers leave this empty: the
+    /// protocol fills it from the request's token once the reader returns,
+    /// and a document without it is sent exactly as it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<ExtractionTimings>,
 }
 
 fn timed_check(
@@ -553,16 +601,24 @@ pub fn extract_pdf(
         let renderable = limits
             .validate_page_pixels(inspection.width_pixels, inspection.height_pixels)
             .is_ok();
-        if !page_needs_ocr(&inspection) {
+        let needs_ocr = cancel.timed(
+            |timings| &mut timings.analysis_micros,
+            || page_needs_ocr(&inspection),
+        );
+        if !needs_ocr {
             let vision_escalated =
                 renderable && page_needs_vision(&inspection) && vision_candidate.is_none();
             if vision_escalated {
-                let rendered = pdf.render(path, inspection.page_index, cancel)?;
+                let rendered = cancel.timed(
+                    |timings| &mut timings.render_micros,
+                    || pdf.render(path, inspection.page_index, cancel),
+                )?;
                 let (render_width, render_height) = rendered.image.dimensions();
+                record_rendered(cancel, render_width, render_height);
                 limits.validate_page_pixels(render_width, render_height)?;
-                vision_candidate = Some(normalize_vision_image(
-                    inspection.page_index,
-                    rendered.image,
+                vision_candidate = Some(cancel.timed(
+                    |timings| &mut timings.vision_micros,
+                    || normalize_vision_image(inspection.page_index, rendered.image),
                 )?);
             }
             pages.push(ExtractedPage {
@@ -592,14 +648,17 @@ pub fn extract_pdf(
                 "page is too large to read within 25 megapixels at 50 DPI",
             ));
         }
-        let rendered =
-            pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel)?;
+        let rendered = cancel.timed(
+            |timings| &mut timings.render_micros,
+            || pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel),
+        )?;
         // The backend sized the render; this is what holds it to that.
         let (render_width, render_height) = rendered.image.dimensions();
+        record_rendered(cancel, render_width, render_height);
         limits.validate_page_pixels(render_width, render_height)?;
         timed_check(cancel, started, limits)?;
         cancel.report_progress("ocr", inspection.page_index, Some(page_count));
-        let result = ocr.recognize(&rendered, cancel)?;
+        let result = recognize_timed(ocr, &rendered, cancel)?;
         let vision_escalated =
             vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
         if result.mean_confidence < CONFIDENT_READING
@@ -608,9 +667,14 @@ pub fn extract_pdf(
             warnings.push(ExtractionWarning::LowOcrConfidence);
         }
         if vision_escalated {
-            vision_candidate = Some(normalize_vision_image(
-                inspection.page_index,
-                apply_detected_rotation(rendered.image, result.rotation_degrees)?,
+            vision_candidate = Some(cancel.timed(
+                |timings| &mut timings.vision_micros,
+                || {
+                    normalize_vision_image(
+                        inspection.page_index,
+                        apply_detected_rotation(rendered.image, result.rotation_degrees)?,
+                    )
+                },
             )?);
         }
         pages.push(ExtractedPage {
@@ -627,7 +691,31 @@ pub fn extract_pdf(
         warnings,
         truncated: false,
         optional_image: vision_candidate,
+        timings: None,
     })
+}
+
+/// Counts a page PDFium rendered towards the request's timings.
+fn record_rendered(cancel: &CancellationToken, width: u32, height: u32) {
+    cancel.record(|timings| {
+        timings.rendered_pixels = timings
+            .rendered_pixels
+            .saturating_add(u64::from(width) * u64::from(height));
+    });
+}
+
+/// Reads one page with OCR, counting the page and the time it took. The
+/// passes inside it are the OCR backend's to count.
+fn recognize_timed(
+    ocr: &dyn OcrBackend,
+    page: &RenderedPage,
+    cancel: &CancellationToken,
+) -> Result<OcrResult, ExtractionError> {
+    cancel.record(|timings| timings.ocr_pages += 1);
+    cancel.timed(
+        |timings| &mut timings.ocr_micros,
+        || ocr.recognize(page, cancel),
+    )
 }
 
 /// The resolution a page that has to be OCR'd is rendered at: 300 DPI, or as
@@ -692,6 +780,7 @@ pub fn extract_anydoc(
         warnings: vec![],
         truncated: false,
         optional_image: None,
+        timings: None,
     })
 }
 
@@ -923,6 +1012,7 @@ pub fn extract_text(
         warnings,
         truncated,
         optional_image: None,
+        timings: None,
     })
 }
 
@@ -1018,10 +1108,13 @@ pub fn extract_image(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     cancel.check()?;
-    let image = load_oriented_image(path, limits)?;
+    let image = cancel.timed(
+        |timings| &mut timings.image_decode_micros,
+        || load_oriented_image(path, limits),
+    )?;
     let rendered = RenderedPage::new(0, image);
     cancel.report_progress("ocr", 0, Some(1));
-    let result = ocr.recognize(&rendered, cancel)?;
+    let result = recognize_timed(ocr, &rendered, cancel)?;
     let mut warnings = Vec::new();
     if result.mean_confidence < CONFIDENT_READING {
         warnings.push(ExtractionWarning::LowOcrConfidence);
@@ -1030,9 +1123,14 @@ pub fn extract_image(
     if truncated {
         warnings.push(ExtractionWarning::TextTruncated);
     }
-    let optional_image = Some(normalize_vision_image(
-        0,
-        apply_detected_rotation(rendered.image, result.rotation_degrees)?,
+    let optional_image = Some(cancel.timed(
+        |timings| &mut timings.vision_micros,
+        || {
+            normalize_vision_image(
+                0,
+                apply_detected_rotation(rendered.image, result.rotation_degrees)?,
+            )
+        },
     )?);
     Ok(ExtractedDocument {
         pages: vec![ExtractedPage {
@@ -1045,6 +1143,7 @@ pub fn extract_image(
         warnings,
         truncated,
         optional_image,
+        timings: None,
     })
 }
 

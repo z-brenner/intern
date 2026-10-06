@@ -12,6 +12,7 @@ use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, ProgressSink,
 };
 use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+use crate::timing::{ExtractionTimings, micros_since};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const WORKER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -393,6 +394,16 @@ fn progress_events<W: Write + Send + 'static>(
     })
 }
 
+/// What a request's readers recorded, with the whole extraction's wall time,
+/// taken the moment the extractor returned.
+fn finished_timings(cancel: &CancellationToken, started: Instant) -> ExtractionTimings {
+    let total_micros = micros_since(started);
+    ExtractionTimings {
+        total_micros,
+        ..cancel.timings()
+    }
+}
+
 struct ActiveRequestGuard {
     active: Arc<Mutex<HashMap<String, CancellationToken>>>,
     request_id: String,
@@ -578,9 +589,12 @@ where
                         request_id: request_id.clone(),
                         cleared: false,
                     };
+                    let measured = token.clone();
+                    let started = Instant::now();
                     let response =
                         match catch_unwind(AssertUnwindSafe(|| thread_extractor(path, token))) {
                             Ok(Ok(mut document)) => {
+                                document.timings = Some(finished_timings(&measured, started));
                                 bound_page_text(&mut document);
                                 Response::new(request_id.clone(), Event::Parsed { document })
                             }

@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use intern_worker::extract::{
     CancellationToken, ExtractedDocument, ExtractionError, OcrBackend, RenderedPage,
@@ -8,6 +9,7 @@ use intern_worker::extract::{
 use intern_worker::limits::ResourceLimits;
 use intern_worker::ocr::TesseractOcr;
 use intern_worker::pdf::PdfiumBackend;
+use intern_worker::timing::micros_since;
 
 fn runtime_directory() -> Result<PathBuf, ExtractionError> {
     if let Some(path) = std::env::var_os("INTERN_RUNTIME_DIR") {
@@ -122,7 +124,10 @@ fn extract_path(
     cancel: CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let limits = ResourceLimits::default();
-    let snapshot = snapshot_source(&path, &limits, &cancel)?;
+    let snapshot = cancel.timed(
+        |timings| &mut timings.snapshot_micros,
+        || snapshot_source(&path, &limits, &cancel),
+    )?;
     let path = snapshot.path();
     let extension = path
         .extension()
@@ -134,17 +139,36 @@ fn extract_path(
             "no reader handles a .{extension} file"
         )));
     };
+    let reading = Instant::now();
+    let document = read_with(reader, path, &limits, &cancel);
+    // PDFium's reader times loading the format apart from analysing pages;
+    // every other reader reads in one call, so its time less the stages it
+    // reported is its parse.
+    if reader != Reader::Pdf {
+        let reader_micros = micros_since(reading);
+        cancel.record(|timings| timings.attribute_remainder_to_parse(reader_micros));
+    }
+    document
+}
+
+/// Hands the snapshot to the reader its extension routes to.
+fn read_with(
+    reader: Reader,
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<ExtractedDocument, ExtractionError> {
     match reader {
-        Reader::Office => extract_anydoc(path, &limits, &cancel),
-        Reader::Workbook => intern_worker::sheet::extract_xlsx(path, &limits, &cancel),
-        Reader::LegacyWorkbook => intern_worker::sheet::extract_xls(path, &limits, &cancel),
-        Reader::OpenWorkbook => intern_worker::sheet::extract_ods(path, &limits, &cancel),
-        Reader::Delimited => intern_worker::delimited::extract_delimited(path, &limits, &cancel),
-        Reader::Eml => intern_worker::email::extract_eml(path, &limits, &cancel),
-        Reader::Msg => intern_worker::email::extract_msg(path, &limits, &cancel),
-        Reader::Text => extract_text(path, &limits, &cancel),
-        Reader::Pdf => extract_pdf(path, &pdf_backend()?, &LAZY_OCR, &limits, &cancel),
-        Reader::Image => extract_image(path, &LAZY_OCR, &limits, &cancel),
+        Reader::Office => extract_anydoc(path, limits, cancel),
+        Reader::Workbook => intern_worker::sheet::extract_xlsx(path, limits, cancel),
+        Reader::LegacyWorkbook => intern_worker::sheet::extract_xls(path, limits, cancel),
+        Reader::OpenWorkbook => intern_worker::sheet::extract_ods(path, limits, cancel),
+        Reader::Delimited => intern_worker::delimited::extract_delimited(path, limits, cancel),
+        Reader::Eml => intern_worker::email::extract_eml(path, limits, cancel),
+        Reader::Msg => intern_worker::email::extract_msg(path, limits, cancel),
+        Reader::Text => extract_text(path, limits, cancel),
+        Reader::Pdf => extract_pdf(path, &pdf_backend()?, &LAZY_OCR, limits, cancel),
+        Reader::Image => extract_image(path, &LAZY_OCR, limits, cancel),
     }
 }
 
@@ -198,6 +222,30 @@ mod tests {
             extract_path(snapshot.path().to_path_buf(), CancellationToken::new()).unwrap();
 
         assert_eq!(document.pages[0].text, "Verified snapshot routing\n");
+    }
+
+    /// A reader with no parse figure of its own is charged its whole time
+    /// less the stages it reported, and the snapshot before it is counted on
+    /// its own.
+    #[test]
+    fn a_text_file_is_charged_its_snapshot_and_its_parse() {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("notes.txt");
+        std::fs::write(
+            &source,
+            "Meeting notes for the Harbourline lease.\n".repeat(2_000),
+        )
+        .unwrap();
+        let cancel = CancellationToken::new();
+
+        extract_path(source, cancel.clone()).unwrap();
+
+        let timings = cancel.timings();
+        assert!(timings.snapshot_micros > 0, "{timings:?}");
+        assert!(timings.parse_micros > 0, "{timings:?}");
+        assert_eq!(timings.ocr_micros, 0, "{timings:?}");
+        // The protocol, not the dispatch, takes the whole extraction's time.
+        assert_eq!(timings.total_micros, 0, "{timings:?}");
     }
 
     /// The admission list and the router are two lists that must name the

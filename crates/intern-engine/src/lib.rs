@@ -61,7 +61,8 @@ pub use own_names::{counterparty_view, is_own_name};
 pub use server::{LlamaServer, ServerOptions};
 pub use validate::validate;
 pub use worker::{
-    DocumentExtractor, ExtractFailure, ExtractProgress, SupervisedWorker, prepare_worker_temp_root,
+    DocumentExtractor, ExtractFailure, ExtractProgress, ExtractionTimings, SupervisedWorker,
+    prepare_worker_temp_root,
 };
 
 /// Semantic version of the engine's input/output contract.

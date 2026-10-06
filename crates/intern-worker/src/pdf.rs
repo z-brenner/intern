@@ -1,10 +1,14 @@
 use std::path::Path;
+#[cfg(feature = "native-pdfium")]
+use std::time::Instant;
 
 use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
 use crate::limits::{MAX_PAGE_COUNT, render_size_within};
+#[cfg(feature = "native-pdfium")]
+use crate::timing::micros_since;
 
 #[cfg(feature = "native-pdfium")]
 use pdfium_render::prelude::*;
@@ -114,6 +118,12 @@ impl PdfBackend for PdfiumBackend {
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
         cancel.check()?;
+        // Loading the document, each page, and its text is reading the
+        // format; walking a page's objects for images is deciding whether it
+        // is a scan. The second is timed on its own and the first is what
+        // is left, so the page loads PDFium does lazily are counted too.
+        let started = Instant::now();
+        let mut analysis_micros = 0_u64;
         let pdfium = self.pdfium()?;
         let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
         if document.pages().len() as usize > MAX_PAGE_COUNT {
@@ -129,6 +139,7 @@ impl PdfBackend for PdfiumBackend {
             // the render cap is the caller's question to ask of it.
             let size = render_size_within(page.width().value, page.height().value, u64::MAX);
             let (width_pixels, height_pixels) = (size.width, size.height);
+            let analysis_started = Instant::now();
             let page_area = page.width().value.abs() * page.height().value.abs();
             let image_area = page
                 .objects()
@@ -140,6 +151,7 @@ impl PdfBackend for PdfiumBackend {
             } else {
                 (image_area / page_area).clamp(0.0, 1.0)
             };
+            analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
             inspections.push(PdfPageInspection {
                 page_index,
                 native_text,
@@ -148,6 +160,11 @@ impl PdfBackend for PdfiumBackend {
                 height_pixels,
             });
         }
+        let parse_micros = micros_since(started).saturating_sub(analysis_micros);
+        cancel.record(|timings| {
+            timings.parse_micros = timings.parse_micros.saturating_add(parse_micros);
+            timings.analysis_micros = timings.analysis_micros.saturating_add(analysis_micros);
+        });
         Ok(inspections)
     }
 
