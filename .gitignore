@@ -11,6 +11,7 @@ coverage/
 playwright-report/
 test-results/
 fixtures/generated/
+bench/generated/
 *.log
 .DS_Store
 src-tauri/resources/licenses/
