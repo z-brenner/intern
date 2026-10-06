@@ -16,7 +16,7 @@
 
 use std::time::Instant;
 
-use crate::client::{MAX_REPLY_TOKENS, ModelClient, ModelRequest, Proposer};
+use crate::client::{MAX_REPLY_TOKENS, ModelClient, ModelRequest, Proposer, ProposerReply};
 use crate::distill::{DigestBudget, DocumentDigest, distill};
 use crate::domain::{
     AnalysisTelemetry, DocumentAnalysis, DocumentSource, ProposalStatus, ReviewReason,
@@ -116,6 +116,7 @@ impl Engine {
         let distill_started = Instant::now();
         let mut budget = self.budget;
         let mut digest = distill(source, budget);
+        let mut redistillations = 0_u32;
         if let Some(context) = self.client.context_tokens() {
             let ceiling = context.saturating_sub(TEMPLATE_TOKENS);
             let target = ceiling.saturating_sub(CONDENSING_MARGIN_TOKENS).max(1);
@@ -127,21 +128,29 @@ impl Engine {
                 let scaled = sent_characters(&digest, budget) * target / estimate.max(1);
                 budget = condensed(scaled.max(MIN_REDISTILLED_CHARACTERS));
                 digest = distill(source, budget);
+                redistillations += 1;
             }
         }
         let distill_micros = micros_since(distill_started);
-        match self.analyze_digest(source, &digest, distill_micros, extension, existing_names) {
-            // The estimate is an estimate. The server counts exactly, and when
-            // it says the prompt did not fit, half as much document is sent
-            // once more rather than the same prompt again.
-            Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
-                let redistill_started = Instant::now();
-                let digest = distill(source, condensed(sent_characters(&digest, budget) / 2));
-                let distill_micros = distill_micros.saturating_add(micros_since(redistill_started));
-                self.analyze_digest(source, &digest, distill_micros, extension, existing_names)
-            }
-            result => result,
-        }
+        let result =
+            match self.analyze_digest(source, &digest, distill_micros, extension, existing_names) {
+                // The estimate is an estimate. The server counts exactly, and
+                // when it says the prompt did not fit, half as much document
+                // is sent once more rather than the same prompt again.
+                Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+                    let redistill_started = Instant::now();
+                    let digest = distill(source, condensed(sent_characters(&digest, budget) / 2));
+                    let distill_micros =
+                        distill_micros.saturating_add(micros_since(redistill_started));
+                    redistillations += 1;
+                    self.analyze_digest(source, &digest, distill_micros, extension, existing_names)
+                }
+                result => result,
+            };
+        result.map(|mut analysis| {
+            analysis.telemetry.redistillations = redistillations;
+            analysis
+        })
     }
 
     /// Runs inference, validation, and naming over an already-built digest.
@@ -153,13 +162,22 @@ impl Engine {
         extension: &str,
         existing_names: &[&str],
     ) -> EngineResult<DocumentAnalysis> {
+        let prompt_started = Instant::now();
         let request = ModelRequest::from_digest(digest);
+        let prompt_micros = micros_since(prompt_started);
+        let prompt_characters = request.prompt.chars().count();
+        let estimated_prompt_tokens = estimated_tokens(&request.prompt);
         let inference_started = Instant::now();
-        let (proposal, token_confidence) = self.client.propose_scored(&request)?;
+        let ProposerReply {
+            proposal,
+            token_confidence,
+            timings: model,
+        } = self.client.propose_measured(&request)?;
         let inference_millis =
             u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         guard_analysis(|| {
+            let validation_started = Instant::now();
             let mut outcome = validate(proposal, digest);
             if barely_readable(source) {
                 // A page that yielded almost no text cannot support a
@@ -178,6 +196,8 @@ impl Engine {
                 }
                 outcome.status = ProposalStatus::NeedsReview;
             }
+            let validation_micros = micros_since(validation_started);
+            let naming_started = Instant::now();
             let mut analysis = finish(
                 outcome,
                 digest,
@@ -189,10 +209,18 @@ impl Engine {
                     compression_ratio: digest.compression_ratio(),
                     distill_micros,
                     inference_millis,
+                    prompt_micros,
+                    validation_micros,
+                    naming_micros: 0,
+                    redistillations: 0,
+                    prompt_characters,
+                    estimated_prompt_tokens,
+                    model,
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
             analysis.token_confidence = token_confidence;
+            analysis.telemetry.naming_micros = micros_since(naming_started);
             analysis
         })
     }
@@ -243,6 +271,12 @@ pub(crate) fn estimated_tokens(text: &str) -> usize {
         }
     }
     single + (other * 2).div_ceil(7)
+}
+
+/// Roughly how many tokens a prompt costs the local model, by the estimate
+/// the engine fits prompts to its context with.
+pub fn estimated_prompt_tokens(prompt: &str) -> usize {
+    estimated_tokens(prompt)
 }
 
 /// CJK ideographs, Hangul, and Kana - the scripts a BPE vocabulary built
@@ -723,6 +757,98 @@ mod tests {
             guard_analysis(|| analyze_with(Engine::with_proposer(Box::new(Scored(None)))))
                 .expect("no panic, no error");
         assert_eq!(analysis.status, ProposalStatus::Ready);
+    }
+
+    const SERVER_TIMINGS: crate::domain::ModelTimings = crate::domain::ModelTimings {
+        prompt_tokens: 312,
+        cached_tokens: 1_180,
+        prefill_micros: 4_210_000,
+        generated_tokens: 96,
+        generation_micros: 13_400_000,
+    };
+
+    /// A proposer that reports server timings, as the local client does.
+    struct Measured;
+
+    impl Proposer for Measured {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<crate::domain::ModelProposal> {
+            Scored(None).propose(request)
+        }
+
+        fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
+            Ok(ProposerReply {
+                proposal: self.propose(request)?,
+                token_confidence: None,
+                timings: Some(SERVER_TIMINGS),
+            })
+        }
+    }
+
+    /// The analysis says what each stage after distillation cost, what was
+    /// sent, and what the server reported - and none of it changes the
+    /// answer.
+    #[test]
+    fn the_analysis_reports_what_each_stage_cost() {
+        let measured = analyze_with(Engine::with_proposer(Box::new(Measured)));
+        let unmeasured = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
+
+        let source = source_from_text(
+            "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
+             It is made between Acme Corporation and the consultant for advisory services.",
+        );
+        let prompt = ModelRequest::from_digest(&distill(&source, DigestBudget::default())).prompt;
+        let telemetry = measured.telemetry;
+        assert_eq!(telemetry.model, Some(SERVER_TIMINGS));
+        assert_eq!(telemetry.prompt_characters, prompt.chars().count());
+        assert_eq!(telemetry.estimated_prompt_tokens, estimated_tokens(&prompt));
+        assert_eq!(
+            telemetry.estimated_prompt_tokens,
+            estimated_prompt_tokens(&prompt)
+        );
+        assert_eq!(telemetry.redistillations, 0);
+        assert!(
+            telemetry.prompt_micros + telemetry.validation_micros + telemetry.naming_micros > 0,
+            "{telemetry:?}"
+        );
+
+        assert_eq!(unmeasured.telemetry.model, None);
+        assert_eq!(measured.filename, unmeasured.filename);
+        assert_eq!(measured.status, unmeasured.status);
+        assert_eq!(measured.review_reasons, unmeasured.review_reasons);
+        assert_eq!(measured.proposal, unmeasured.proposal);
+    }
+
+    /// Every distillation after the first is counted: the ones that fit the
+    /// prompt to the local context before it is sent, and the one after the
+    /// model says it did not fit.
+    #[test]
+    fn redistillations_are_counted() {
+        use crate::error::EngineErrorCode::ModelInputTooLarge;
+
+        let fitted = std::sync::Arc::new(Recording::new(vec![Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&fitted)));
+        let analysis = engine
+            .analyze(&digit_dense_statement(), "pdf", &[])
+            .unwrap();
+        assert!(
+            (1..=MAX_REDISTILLATIONS as u32).contains(&analysis.telemetry.redistillations),
+            "{:?}",
+            analysis.telemetry
+        );
+
+        // A hosted model is never fitted beforehand, so its one condensing
+        // is the retry after it said the prompt was too large.
+        let refitted =
+            std::sync::Arc::new(Recording::hosted(vec![Err(ModelInputTooLarge), Ok(())]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refitted)));
+        let analysis = engine
+            .analyze(&digit_dense_statement(), "pdf", &[])
+            .unwrap();
+        assert_eq!(refitted.prompts().len(), 2);
+        assert_eq!(analysis.telemetry.redistillations, 1);
+
+        let plain = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
+        assert_eq!(plain.telemetry.redistillations, 0);
     }
 
     #[test]
