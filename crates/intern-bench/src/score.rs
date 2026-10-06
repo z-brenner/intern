@@ -464,7 +464,8 @@ fn party_role_correct(
         "to" => &["recipient"],
         "with" => &["counterparty"],
         "between" => {
-            let holders = roles
+            // A party is listed once per role it holds; it is one holder.
+            let mut holders = roles
                 .iter()
                 .filter(|role| role.role != "other")
                 .filter(|role| {
@@ -472,15 +473,18 @@ fn party_role_correct(
                         .iter()
                         .any(|party| party_matches(party, &role.name))
                 })
+                .map(|role| role.name.as_str())
                 .collect::<Vec<_>>();
+            holders.sort_unstable();
+            holders.dedup();
             if holders.len() < 2 {
                 return None;
             }
-            return Some(holders.iter().all(|holder| {
-                produced
+            return Some(
+                holders
                     .iter()
-                    .any(|party| party_matches(&holder.name, party))
-            }));
+                    .all(|holder| produced.iter().any(|party| party_matches(holder, party))),
+            );
         }
         _ => return None,
     };
@@ -826,6 +830,32 @@ mod tests {
         assert_eq!(role(&both, "between"), Some(json!(true)));
         // Nobody named: nothing to judge.
         assert_eq!(role(&[], "none"), None);
+        // Between needs two distinct holders: one party listed under two
+        // roles is one holder, and the other must still be named.
+        let mut doubled = invoice();
+        doubled.gold.party_roles.push(PartyRole {
+            name: "Halvorsen Fixture Works LLC".into(),
+            role: "seller".into(),
+        });
+        let scored = score(
+            &doubled,
+            &outcome(&both, "between", "x.pdf"),
+            &Texts::default(),
+        );
+        assert_eq!(scored.scores["party_role_correct"], json!(true));
+        doubled
+            .gold
+            .party_roles
+            .retain(|role| role.name.starts_with("Halvorsen"));
+        let scored = score(
+            &doubled,
+            &outcome(&both, "between", "x.pdf"),
+            &Texts::default(),
+        );
+        assert!(
+            !scored.scores.contains_key("party_role_correct"),
+            "one holder"
+        );
 
         let mut notice = invoice();
         notice.gold.party_relation = Some("for".into());
