@@ -444,17 +444,22 @@ pub fn render(comparison: &Comparison) -> String {
     let _ = writeln!(out);
 
     let flips = |out: &mut String, title: &str, flips: &[Flip]| {
-        let _ = writeln!(out, "## {title} ({})\n", flips.len());
-        if flips.is_empty() {
-            let _ = writeln!(out, "None.\n");
-            return;
-        }
         let mut by_document: Vec<(&str, Vec<&str>)> = Vec::new();
         for flip in flips {
             match by_document.iter_mut().find(|(id, _)| *id == flip.id) {
                 Some((_, scores)) => scores.push(&flip.score),
                 None => by_document.push((&flip.id, vec![&flip.score])),
             }
+        }
+        let _ = writeln!(
+            out,
+            "## {title}: {} score(s) in {} document(s)\n",
+            flips.len(),
+            by_document.len()
+        );
+        if flips.is_empty() {
+            let _ = writeln!(out, "None.\n");
+            return;
         }
         for (id, scores) in by_document {
             let _ = writeln!(out, "- **{id}**: {}", scores.join(", "));
@@ -641,7 +646,8 @@ mod tests {
 
         let rendered = render(&comparison);
         assert!(
-            rendered.contains("## Broken (1)\n\n- **a**: filename_correct"),
+            rendered
+                .contains("## Broken: 1 score(s) in 1 document(s)\n\n- **a**: filename_correct"),
             "{rendered}"
         );
         assert!(
