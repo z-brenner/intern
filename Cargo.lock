@@ -2332,6 +2332,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "intern-bench"
+version = "0.1.0-alpha.11"
+dependencies = [
+ "intern-engine",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "intern-core"
 version = "0.1.0-alpha.11"
 dependencies = [
