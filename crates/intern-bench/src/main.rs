@@ -1,0 +1,215 @@
+//! `intern-bench`: run InternBench, compare two runs, or re-render a report.
+//!
+//! ```text
+//! intern-bench run --corpus bench/generated --gold bench/gold.json
+//!                  (--worker PATH --endpoint URL --api-key KEY [--model-id intern-local]
+//!                   [--model-path GGUF] [--record OUT.json] [--note TEXT] [--server-pid PID]
+//!                   [--no-warmup]
+//!                  | --replay bench/recording.json [--allow-stale])
+//!                  [--only id,id] [--manifest bench/manifest.json]
+//!                  [--output report.json] [--markdown report.md]
+//!                  [--baseline bench/baseline.json] [--write-baseline bench/baseline.json]
+//!                  [--latency-gate 1.5]
+//! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
+//! intern-bench report  --input report.json --markdown out.md
+//! ```
+//!
+//! Exit status: 0 when the run scored; 2 when it regressed against the
+//! baseline or replay could not score a document; 1 for a usage or I/O
+//! error.
+
+use std::{collections::HashMap, env, path::PathBuf, process};
+
+use intern_bench::{
+    live::LiveOptions,
+    run::{Mode, RunOptions, compare_reports, render_report, run},
+};
+
+const USAGE: &str = "usage:
+  intern-bench run --corpus DIR --gold GOLD.json
+                   (--worker PATH --endpoint URL --api-key KEY [--model-id ID] [--model-path GGUF]
+                    [--record OUT.json] [--note TEXT] [--server-pid PID] [--no-warmup]
+                   | --replay RECORDING.json [--allow-stale])
+                   [--only id,id] [--manifest MANIFEST.json] [--output REPORT.json] [--markdown REPORT.md]
+                   [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
+  intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
+  intern-bench report --input REPORT.json --markdown OUT.md";
+
+/// Arguments that take no value.
+const FLAGS: &[&str] = &["allow-stale", "no-warmup"];
+
+const RUN_KEYS: &[&str] = &[
+    "corpus",
+    "gold",
+    "worker",
+    "endpoint",
+    "api-key",
+    "model-id",
+    "model-path",
+    "record",
+    "note",
+    "server-pid",
+    "no-warmup",
+    "replay",
+    "allow-stale",
+    "only",
+    "manifest",
+    "output",
+    "markdown",
+    "baseline",
+    "write-baseline",
+    "latency-gate",
+];
+
+fn main() {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    match dispatch(&arguments) {
+        Ok(exit) => process::exit(exit),
+        Err(message) => {
+            eprintln!("{message}");
+            process::exit(1);
+        }
+    }
+}
+
+fn dispatch(arguments: &[String]) -> Result<i32, String> {
+    let Some((command, rest)) = arguments.split_first() else {
+        return Err(USAGE.to_owned());
+    };
+    match command.as_str() {
+        "run" => run(run_options(&parse(rest, RUN_KEYS)?)?),
+        "compare" => {
+            let values = parse(rest, &["before", "after", "markdown", "output"])?;
+            compare_reports(
+                &PathBuf::from(required(&values, "before")?),
+                &PathBuf::from(required(&values, "after")?),
+                values.get("markdown").map(PathBuf::from).as_deref(),
+                values.get("output").map(PathBuf::from).as_deref(),
+            )
+        }
+        "report" => {
+            let values = parse(rest, &["input", "markdown"])?;
+            render_report(
+                &PathBuf::from(required(&values, "input")?),
+                &PathBuf::from(required(&values, "markdown")?),
+            )
+        }
+        "--help" | "-h" | "help" => {
+            println!("{USAGE}");
+            Ok(0)
+        }
+        other => Err(format!("unknown command {other}\n{USAGE}")),
+    }
+}
+
+fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
+    let path = |key: &str| values.get(key).map(PathBuf::from);
+    let mode = match values.get("replay") {
+        Some(recording) => {
+            for live_only in [
+                "worker",
+                "endpoint",
+                "api-key",
+                "record",
+                "model-path",
+                "no-warmup",
+                "server-pid",
+            ] {
+                if values.contains_key(live_only) {
+                    return Err(format!("--{live_only} is for live runs, not --replay"));
+                }
+            }
+            Mode::Replay {
+                recording: PathBuf::from(recording),
+                allow_stale: values.contains_key("allow-stale"),
+            }
+        }
+        None => {
+            if values.contains_key("allow-stale") {
+                return Err("--allow-stale is for --replay".to_owned());
+            }
+            Mode::Live {
+                options: LiveOptions {
+                    worker: PathBuf::from(required(values, "worker")?),
+                    endpoint: required(values, "endpoint")?.to_owned(),
+                    api_key: required(values, "api-key")?.to_owned(),
+                    model_id: values
+                        .get("model-id")
+                        .cloned()
+                        .unwrap_or_else(|| "intern-local".to_owned()),
+                    model_path: path("model-path"),
+                    warm_up: !values.contains_key("no-warmup"),
+                    server_pid: values
+                        .get("server-pid")
+                        .map(|value| {
+                            value
+                                .parse()
+                                .map_err(|_| "--server-pid must be a process id".to_owned())
+                        })
+                        .transpose()?,
+                },
+                record: path("record"),
+                note: values.get("note").cloned().unwrap_or_default(),
+            }
+        }
+    };
+    Ok(RunOptions {
+        corpus: PathBuf::from(required(values, "corpus")?),
+        gold: PathBuf::from(required(values, "gold")?),
+        manifest: path("manifest"),
+        only: values
+            .get("only")
+            .map(|list| {
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        output: path("output"),
+        markdown: path("markdown"),
+        baseline: path("baseline"),
+        write_baseline: path("write-baseline"),
+        latency_gate: values
+            .get("latency-gate")
+            .map(|value| {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|ratio| *ratio >= 1.0)
+                    .ok_or_else(|| "--latency-gate must be a ratio of at least 1".to_owned())
+            })
+            .transpose()?,
+        mode,
+    })
+}
+
+fn parse(arguments: &[String], allowed: &[&str]) -> Result<HashMap<String, String>, String> {
+    let mut values = HashMap::new();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let key = argument
+            .strip_prefix("--")
+            .ok_or_else(|| format!("unexpected argument: {argument}\n{USAGE}"))?;
+        if !allowed.contains(&key) {
+            return Err(format!("unknown option --{key}\n{USAGE}"));
+        }
+        if FLAGS.contains(&key) {
+            values.insert(key.to_owned(), "true".to_owned());
+            continue;
+        }
+        let value = arguments
+            .next()
+            .ok_or_else(|| format!("missing value for --{key}"))?;
+        values.insert(key.to_owned(), value.clone());
+    }
+    Ok(values)
+}
+
+fn required<'a>(values: &'a HashMap<String, String>, key: &str) -> Result<&'a str, String> {
+    values
+        .get(key)
+        .map(String::as_str)
+        .ok_or_else(|| format!("missing --{key}\n{USAGE}"))
+}
