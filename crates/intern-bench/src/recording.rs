@@ -44,10 +44,9 @@ use std::{
 
 use intern_engine::{
     DocumentSource, EngineError, EngineErrorCode, EngineResult, ModelProposal, ModelRequest,
-    PageImage, Proposer, TokenConfidence,
+    ModelTimings, PageImage, Proposer, ProposerReply, TokenConfidence,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::{
     machine::{MachineInfo, ModelInfo},
@@ -139,10 +138,9 @@ pub struct Exchange {
     pub prompt_sha256: String,
     pub prompt_characters: usize,
     pub reply: RecordedReply,
-    /// The server's account of the request (`ModelTimings`, serialized),
-    /// when it gave one.
+    /// The server's account of the request, when it gave one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_timings: Option<Value>,
+    pub model_timings: Option<ModelTimings>,
     pub wall_micros: u64,
 }
 
@@ -160,22 +158,28 @@ pub enum RecordedReply {
 }
 
 impl RecordedReply {
-    pub fn from_result(result: &EngineResult<(ModelProposal, Option<TokenConfidence>)>) -> Self {
+    pub fn from_result(result: &EngineResult<ProposerReply>) -> Self {
         match result {
-            Ok((proposal, token_confidence)) => Self::Proposed {
-                proposal: proposal.clone(),
-                token_confidence: *token_confidence,
+            Ok(reply) => Self::Proposed {
+                proposal: reply.proposal.clone(),
+                token_confidence: reply.token_confidence,
             },
             Err(error) => Self::Failed { code: error.code() },
         }
     }
 
-    fn answer(&self) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+    /// The reply as the model gave it, minus the server's timings, which
+    /// are the recording's to report and not the engine's to measure.
+    fn answer(&self) -> EngineResult<ProposerReply> {
         match self {
             Self::Proposed {
                 proposal,
                 token_confidence,
-            } => Ok((proposal.clone(), *token_confidence)),
+            } => Ok(ProposerReply {
+                proposal: proposal.clone(),
+                token_confidence: *token_confidence,
+                timings: None,
+            }),
             Self::Failed { code } => Err(EngineError::new(*code, "recorded failure")),
         }
     }
@@ -276,13 +280,18 @@ impl LookupProposer {
 
 impl Proposer for LookupProposer {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
-        self.propose_scored(request).map(|(proposal, _)| proposal)
+        self.propose_measured(request).map(|reply| reply.proposal)
     }
 
     fn propose_scored(
         &self,
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        self.propose_measured(request)
+            .map(|reply| (reply.proposal, reply.token_confidence))
+    }
+
+    fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
         let started = Instant::now();
         let sha = request.sha256();
         let reply = match self.replies.get(&sha) {
@@ -378,14 +387,14 @@ mod tests {
         let lookup = LookupProposer::new(&[recorded.clone()], Some(8_192), false, log.clone());
         let misses = lookup.misses();
         assert_eq!(
-            lookup.propose_scored(&request).unwrap_err().code(),
+            lookup.propose_measured(&request).unwrap_err().code(),
             EngineErrorCode::ModelReplyTruncated
         );
         assert!(misses.lock().unwrap().is_empty());
         let other = ModelRequest {
             prompt: "another prompt".into(),
         };
-        assert!(lookup.propose_scored(&other).is_err());
+        assert!(lookup.propose_measured(&other).is_err());
         assert_eq!(*misses.lock().unwrap(), vec![other.sha256()]);
         assert_eq!(lookup.context_tokens(), Some(8_192));
         let (exchanges, last) = log.take();
@@ -395,7 +404,7 @@ mod tests {
         // Allowed to be stale, a miss gets the reply the run ended on.
         let tolerant = LookupProposer::new(&[recorded], None, true, ExchangeLog::default());
         assert_eq!(
-            tolerant.propose_scored(&other).unwrap_err().code(),
+            tolerant.propose_measured(&other).unwrap_err().code(),
             EngineErrorCode::ModelReplyTruncated
         );
     }

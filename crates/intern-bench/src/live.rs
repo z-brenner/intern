@@ -17,10 +17,10 @@ use std::{
 };
 
 use intern_engine::{
-    DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, ExtractFailure,
-    ModelClient, ModelProposal, ModelRequest, Proposer, SupervisedWorker, TokenConfidence,
+    DigestBudget, DocumentSource, Engine, EngineResult, ExtractFailure, ExtractionTimings,
+    ModelClient, ModelProposal, ModelRequest, Proposer, ProposerReply, SupervisedWorker,
+    TokenConfidence,
 };
-use serde_json::Value;
 
 use crate::{
     gold::GoldDocument,
@@ -147,14 +147,10 @@ pub fn run(
                 let result = engine.analyze(&source, document.extension(), &[]);
                 let analyze_wall_micros = micros_since(analyze_started);
                 let (exchanges, last_prompt) = log.take();
-                let telemetry = result
-                    .as_ref()
-                    .ok()
-                    .and_then(|analysis| serde_json::to_value(analysis.telemetry).ok());
                 let timings = flatten(&Measured {
                     extraction_wall_micros: Some(extraction_wall_micros),
                     worker: worker_timings.as_ref(),
-                    telemetry: telemetry.as_ref(),
+                    telemetry: result.as_ref().ok().map(|analysis| &analysis.telemetry),
                     analyze_wall_micros: Some(analyze_wall_micros),
                     exchanges: &exchanges,
                 });
@@ -245,20 +241,30 @@ fn warm_up(worker: &SupervisedWorker, engine: &Engine) -> Result<(), String> {
 }
 
 /// Extracts a document, with the worker's account of its stages when the
-/// worker gives one.
+/// worker gives one. A failed extraction reports none.
 fn extract(
     worker: &SupervisedWorker,
     request_id: &str,
     path: &Path,
-) -> (Result<DocumentSource, ExtractFailure>, Option<Value>) {
-    (worker.extract(request_id, path, &mut |_| {}), None)
+) -> (
+    Result<DocumentSource, ExtractFailure>,
+    Option<ExtractionTimings>,
+) {
+    match worker.extract_timed(request_id, path, &mut |_| {}) {
+        Ok((source, timings)) => (Ok(source), timings),
+        Err(failure) => (Err(failure), None),
+    }
 }
 
 fn micros_since(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
-/// The model client, with every request and its reply written to a log.
+/// The model client, with every request, its reply, and the server's
+/// account of it written to a log. Every way the engine can ask goes
+/// through [`Proposer::propose_measured`], so the client's own retry of a
+/// malformed reply is kept, and the timings are those of the attempt that
+/// answered.
 struct RecordingProposer {
     inner: ModelClient,
     log: ExchangeLog,
@@ -266,22 +272,27 @@ struct RecordingProposer {
 
 impl Proposer for RecordingProposer {
     fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
-        self.propose_scored(request).map(|(proposal, _)| proposal)
+        self.propose_measured(request).map(|reply| reply.proposal)
     }
 
     fn propose_scored(
         &self,
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        self.propose_measured(request)
+            .map(|reply| (reply.proposal, reply.token_confidence))
+    }
+
+    fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
         let started = Instant::now();
-        let result = Proposer::propose_scored(&self.inner, request);
+        let result = self.inner.propose_measured(request);
         self.log.push(
             &request.prompt,
             Exchange {
                 prompt_sha256: request.sha256(),
                 prompt_characters: request.prompt.chars().count(),
                 reply: RecordedReply::from_result(&result),
-                model_timings: None,
+                model_timings: result.as_ref().ok().and_then(|reply| reply.timings),
                 wall_micros: micros_since(started),
             },
         );

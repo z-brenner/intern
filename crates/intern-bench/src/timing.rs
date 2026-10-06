@@ -5,13 +5,15 @@
 //! keys and a diff shows only the numbers that moved. Times are
 //! milliseconds with microsecond precision; counts are integers.
 //!
-//! The worker's stage timings and the engine's telemetry are read from
-//! their serialized form, by key, rather than field by field. That keeps
-//! this crate indifferent to which of those fields a given engine build
-//! has: a field it lacks is simply `null` here.
+//! The model's figures are summed over every request a document cost - a
+//! prompt the server refused as too large was still read - from what each
+//! request reported; the engine's telemetry, which keeps only the request
+//! that answered, stands in when no request reported (a recording made
+//! against a server that does not say).
 
 use std::collections::BTreeMap;
 
+use intern_engine::{AnalysisTelemetry, ExtractionTimings, ModelTimings};
 use serde_json::{Value, json};
 
 use crate::{recording::Exchange, stats::round};
@@ -91,10 +93,10 @@ pub fn get(timings: &Timings, metric: &str) -> Option<f64> {
 #[derive(Clone, Copy, Default)]
 pub struct Measured<'a> {
     pub extraction_wall_micros: Option<u64>,
-    /// The worker's `ExtractionTimings`, serialized (snake_case keys).
-    pub worker: Option<&'a Value>,
-    /// The engine's `AnalysisTelemetry`, serialized (camelCase keys).
-    pub telemetry: Option<&'a Value>,
+    /// What the worker said about its stages, when it said.
+    pub worker: Option<&'a ExtractionTimings>,
+    /// The engine's account, for a document it analysed.
+    pub telemetry: Option<&'a AnalysisTelemetry>,
     pub analyze_wall_micros: Option<u64>,
     /// Every model request the engine made for the document.
     pub exchanges: &'a [Exchange],
@@ -115,65 +117,67 @@ pub fn flatten(measured: &Measured<'_>) -> Timings {
     ) {
         millis("total_ms", Some(extraction + analysis));
     }
-    let worker = |key: &str| measured.worker.and_then(|value| value.get(key)?.as_u64());
-    for stage in [
-        "total",
-        "snapshot",
-        "parse",
-        "analysis",
-        "render",
-        "image_decode",
-        "ocr",
-        "ocr_encode",
-        "ocr_engine",
-        "vision",
-    ] {
-        millis(
-            &format!("worker_{stage}_ms"),
-            worker(&format!("{stage}_micros")),
-        );
-    }
-    let telemetry = |key: &str| {
-        measured
-            .telemetry
-            .and_then(|value| value.get(key)?.as_u64())
-    };
-    millis("distill_ms", telemetry("distillMicros"));
-    millis("prompt_ms", telemetry("promptMicros"));
-    millis("validation_ms", telemetry("validationMicros"));
-    millis("naming_ms", telemetry("namingMicros"));
+    let worker = |read: fn(&ExtractionTimings) -> u64| measured.worker.map(read);
+    millis("worker_total_ms", worker(|worker| worker.total_micros));
+    millis(
+        "worker_snapshot_ms",
+        worker(|worker| worker.snapshot_micros),
+    );
+    millis("worker_parse_ms", worker(|worker| worker.parse_micros));
+    millis(
+        "worker_analysis_ms",
+        worker(|worker| worker.analysis_micros),
+    );
+    millis("worker_render_ms", worker(|worker| worker.render_micros));
+    millis(
+        "worker_image_decode_ms",
+        worker(|worker| worker.image_decode_micros),
+    );
+    millis("worker_ocr_ms", worker(|worker| worker.ocr_micros));
+    millis(
+        "worker_ocr_encode_ms",
+        worker(|worker| worker.ocr_encode_micros),
+    );
+    millis(
+        "worker_ocr_engine_ms",
+        worker(|worker| worker.ocr_engine_micros),
+    );
+    millis("worker_vision_ms", worker(|worker| worker.vision_micros));
+    let telemetry = |read: fn(&AnalysisTelemetry) -> u64| measured.telemetry.map(read);
+    millis(
+        "distill_ms",
+        telemetry(|telemetry| telemetry.distill_micros),
+    );
+    millis("prompt_ms", telemetry(|telemetry| telemetry.prompt_micros));
+    millis(
+        "validation_ms",
+        telemetry(|telemetry| telemetry.validation_micros),
+    );
+    millis("naming_ms", telemetry(|telemetry| telemetry.naming_micros));
     millis(
         "inference_ms",
-        telemetry("inferenceMillis").map(|value| value.saturating_mul(1000)),
+        telemetry(|telemetry| telemetry.inference_millis.saturating_mul(1000)),
     );
 
-    // The model's own account, summed over every request the document
-    // cost: a prompt the server refused as too large was still read.
-    // Without per-request timings (an older recording) the telemetry's
-    // figures for the request that answered stand in.
     let per_request = measured
         .exchanges
         .iter()
         .filter_map(|exchange| exchange.model_timings.as_ref())
         .collect::<Vec<_>>();
-    let answered = measured
-        .telemetry
-        .and_then(|value| value.get("model"))
-        .filter(|value| value.is_object());
-    let sources = if per_request.is_empty() {
-        answered.into_iter().collect::<Vec<_>>()
+    let reported = if per_request.is_empty() {
+        measured
+            .telemetry
+            .and_then(|telemetry| telemetry.model.as_ref())
+            .into_iter()
+            .collect()
     } else {
         per_request
     };
-    let sum = |key: &str| -> Option<u64> {
-        let values = sources
-            .iter()
-            .filter_map(|value| value.get(key)?.as_u64())
-            .collect::<Vec<_>>();
-        (!values.is_empty()).then(|| values.iter().sum())
+    let sum = |read: fn(&ModelTimings) -> u64| {
+        (!reported.is_empty()).then(|| reported.iter().map(|timings| read(timings)).sum::<u64>())
     };
-    let prefill = sum("prefillMicros");
-    let generation = sum("generationMicros");
+    let prefill = sum(|timings| timings.prefill_micros);
+    let generation = sum(|timings| timings.generation_micros);
     millis("prefill_ms", prefill);
     millis("generation_ms", generation);
 
@@ -182,30 +186,46 @@ pub fn flatten(measured: &Measured<'_>) -> Timings {
             timings.insert(key.to_owned(), json!(value));
         }
     };
-    let prompt_tokens = sum("promptTokens");
-    let generated_tokens = sum("generatedTokens");
+    let prompt_tokens = sum(|timings| timings.prompt_tokens);
+    let generated_tokens = sum(|timings| timings.generated_tokens);
     count("prompt_tokens", prompt_tokens);
-    count("cached_tokens", sum("cachedTokens"));
+    count("cached_tokens", sum(|timings| timings.cached_tokens));
     count("generated_tokens", generated_tokens);
-    count("worker_ocr_pages", worker("ocr_pages"));
-    count("worker_ocr_passes", worker("ocr_passes"));
-    count("worker_orientation_passes", worker("orientation_passes"));
-    count("worker_rendered_pixels", worker("rendered_pixels"));
-    count("redistillations", telemetry("redistillations"));
-    count("source_characters", telemetry("sourceCharacters"));
-    count("digest_characters", telemetry("digestCharacters"));
+    count(
+        "worker_ocr_pages",
+        worker(|worker| u64::from(worker.ocr_pages)),
+    );
+    count(
+        "worker_ocr_passes",
+        worker(|worker| u64::from(worker.ocr_passes)),
+    );
+    count(
+        "worker_orientation_passes",
+        worker(|worker| u64::from(worker.orientation_passes)),
+    );
+    count(
+        "worker_rendered_pixels",
+        worker(|worker| worker.rendered_pixels),
+    );
+    count(
+        "redistillations",
+        telemetry(|telemetry| u64::from(telemetry.redistillations)),
+    );
+    count(
+        "source_characters",
+        telemetry(|telemetry| telemetry.source_characters as u64),
+    );
+    count(
+        "digest_characters",
+        telemetry(|telemetry| telemetry.digest_characters as u64),
+    );
     count(
         "prompt_characters",
-        telemetry("promptCharacters").or_else(|| {
-            measured
-                .exchanges
-                .last()
-                .map(|exchange| exchange.prompt_characters as u64)
-        }),
+        telemetry(|telemetry| telemetry.prompt_characters as u64),
     );
     count(
         "estimated_prompt_tokens",
-        telemetry("estimatedPromptTokens"),
+        telemetry(|telemetry| telemetry.estimated_prompt_tokens as u64),
     );
     if !measured.exchanges.is_empty() {
         count("model_requests", Some(measured.exchanges.len() as u64));
@@ -232,7 +252,7 @@ mod tests {
     use crate::recording::RecordedReply;
     use intern_engine::EngineErrorCode;
 
-    fn exchange(timings: Option<Value>) -> Exchange {
+    fn exchange(timings: Option<ModelTimings>) -> Exchange {
         Exchange {
             prompt_sha256: "0".repeat(64),
             prompt_characters: 4_000,
@@ -252,24 +272,47 @@ mod tests {
     }
 
     #[test]
-    fn worker_and_engine_figures_are_read_by_key_and_model_work_is_summed() {
-        let worker = json!({
-            "total_micros": 1_500_000, "snapshot_micros": 2_000, "parse_micros": 300_000,
-            "ocr_micros": 1_100_000, "ocr_pages": 2, "ocr_passes": 3, "orientation_passes": 2,
-            "rendered_pixels": 16_000_000
-        });
-        let telemetry = json!({
-            "sourceCharacters": 9_000, "digestCharacters": 7_000, "distillMicros": 1_234,
-            "inferenceMillis": 2_100, "promptMicros": 80, "redistillations": 1,
-            "model": {"promptTokens": 999, "cachedTokens": 0, "prefillMicros": 1, "generatedTokens": 1, "generationMicros": 1}
-        });
+    fn worker_and_engine_figures_are_flattened_and_model_work_is_summed() {
+        let worker = ExtractionTimings {
+            total_micros: 1_500_000,
+            snapshot_micros: 2_000,
+            parse_micros: 300_000,
+            ocr_micros: 1_100_000,
+            ocr_pages: 2,
+            ocr_passes: 3,
+            orientation_passes: 2,
+            rendered_pixels: 16_000_000,
+            ..ExtractionTimings::default()
+        };
+        let telemetry = AnalysisTelemetry {
+            source_characters: 9_000,
+            digest_characters: 7_000,
+            distill_micros: 1_234,
+            inference_millis: 2_100,
+            prompt_micros: 80,
+            redistillations: 1,
+            prompt_characters: 7_400,
+            model: Some(ModelTimings {
+                prompt_tokens: 999,
+                ..ModelTimings::default()
+            }),
+            ..AnalysisTelemetry::default()
+        };
         let exchanges = [
-            exchange(Some(
-                json!({"promptTokens": 3_000, "cachedTokens": 0, "prefillMicros": 1_000_000, "generatedTokens": 0, "generationMicros": 0}),
-            )),
-            exchange(Some(
-                json!({"promptTokens": 1_000, "cachedTokens": 600, "prefillMicros": 1_000_000, "generatedTokens": 100, "generationMicros": 2_000_000}),
-            )),
+            exchange(Some(ModelTimings {
+                prompt_tokens: 3_000,
+                cached_tokens: 0,
+                prefill_micros: 1_000_000,
+                generated_tokens: 0,
+                generation_micros: 0,
+            })),
+            exchange(Some(ModelTimings {
+                prompt_tokens: 1_000,
+                cached_tokens: 600,
+                prefill_micros: 1_000_000,
+                generated_tokens: 100,
+                generation_micros: 2_000_000,
+            })),
         ];
         let timings = flatten(&Measured {
             extraction_wall_micros: Some(1_600_000),
@@ -280,11 +323,11 @@ mod tests {
         });
         assert_eq!(timings["total_ms"], json!(4_100.0));
         assert_eq!(timings["worker_ocr_ms"], json!(1_100.0));
-        assert_eq!(timings["worker_render_ms"], Value::Null, "not reported");
+        assert_eq!(timings["worker_render_ms"], json!(0.0), "reported as none");
         assert_eq!(timings["worker_ocr_passes"], json!(3));
         assert_eq!(timings["distill_ms"], json!(1.234));
         assert_eq!(timings["inference_ms"], json!(2_100.0));
-        assert_eq!(timings["validation_ms"], Value::Null);
+        assert_eq!(timings["prompt_ms"], json!(0.08));
         assert_eq!(
             timings["prompt_tokens"],
             json!(4_000),
@@ -294,14 +337,17 @@ mod tests {
         assert_eq!(timings["prefill_tok_per_s"], json!(2_000.0));
         assert_eq!(timings["generation_tok_per_s"], json!(50.0));
         assert_eq!(timings["model_requests"], json!(2));
-        assert_eq!(timings["prompt_characters"], json!(4_000));
+        assert_eq!(timings["prompt_characters"], json!(7_400));
+        assert_eq!(timings["redistillations"], json!(1));
 
-        // Without per-request timings the telemetry's answer stands in.
+        // Without per-request timings the telemetry's answer stands in; a
+        // worker that reported nothing leaves its stages unmeasured.
         let timings = flatten(&Measured {
             telemetry: Some(&telemetry),
             ..Measured::default()
         });
         assert_eq!(timings["prompt_tokens"], json!(999));
+        assert_eq!(timings["worker_total_ms"], Value::Null);
         assert_eq!(timings["total_ms"], Value::Null);
     }
 }

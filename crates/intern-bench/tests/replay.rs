@@ -16,8 +16,8 @@ use intern_bench::{
     timing,
 };
 use intern_engine::{
-    DateRole, DigestBudget, DocumentSource, Evidence, ModelProposal, ModelRequest, PageOrigin,
-    PartyRelation, SourcePage, distill, source_from_text,
+    DateRole, DigestBudget, DocumentSource, Evidence, ModelProposal, ModelRequest, ModelTimings,
+    PageOrigin, PartyRelation, SourcePage, distill, source_from_text,
 };
 use serde_json::{Value, json};
 
@@ -134,9 +134,13 @@ fn exchange(sha: String, reply: RecordedReply) -> Exchange {
         prompt_sha256: sha,
         prompt_characters: 1_000,
         reply,
-        model_timings: Some(
-            json!({"promptTokens": 900, "cachedTokens": 400, "prefillMicros": 3_000_000, "generatedTokens": 120, "generationMicros": 6_000_000}),
-        ),
+        model_timings: Some(ModelTimings {
+            prompt_tokens: 900,
+            cached_tokens: 400,
+            prefill_micros: 3_000_000,
+            generated_tokens: 120,
+            generation_micros: 6_000_000,
+        }),
         wall_micros: 9_100_000,
     }
 }
