@@ -153,6 +153,54 @@ pub struct WorkerDocument {
     warnings: Vec<String>,
     truncated: bool,
     optional_image: Option<WorkerImage>,
+    /// Absent from a worker that predates it.
+    #[serde(default)]
+    timings: Option<ExtractionTimings>,
+}
+
+/// Where the worker says one extraction's time went, in microseconds, and
+/// how much OCR it needed. The worker's own type, mirrored rather than
+/// shared: the engine does not depend on the worker crate.
+///
+/// The figures are measurements, never inputs: nothing in the engine reads
+/// them, and a stage this build does not know is ignored rather than
+/// refused, as one it expects but was not sent reads as zero.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ExtractionTimings {
+    /// The whole extraction in the worker, the snapshot included.
+    pub total_micros: u64,
+    /// Copying the file into the worker's private workspace.
+    pub snapshot_micros: u64,
+    /// Reading the format: loading a PDF and its pages' text, or the whole
+    /// of every other reader less the stages below that it reported.
+    pub parse_micros: u64,
+    /// Measuring a PDF page's image coverage and deciding whether it is a
+    /// scan.
+    pub analysis_micros: u64,
+    /// PDFium rasterising pages: the ones that go to OCR, and the rare page
+    /// rendered only to be the page image.
+    pub render_micros: u64,
+    /// Decoding a standalone image file, scaling and turning it.
+    pub image_decode_micros: u64,
+    /// All OCR for the document: every recognition and orientation pass.
+    pub ocr_micros: u64,
+    /// Of `ocr_micros`: turning pages grey and encoding the PNGs Tesseract
+    /// is handed.
+    pub ocr_encode_micros: u64,
+    /// Of `ocr_micros`: waiting on Tesseract processes.
+    pub ocr_engine_micros: u64,
+    /// Building the optional page image.
+    pub vision_micros: u64,
+    /// Pages read by OCR.
+    pub ocr_pages: u32,
+    /// Recognition passes, in every orientation tried.
+    pub ocr_passes: u32,
+    /// Orientation-detection passes.
+    pub orientation_passes: u32,
+    /// Pixels PDFium rendered, summed over the pages counted in
+    /// `render_micros`.
+    pub rendered_pixels: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -429,15 +477,14 @@ impl SupervisedWorker {
             .map(|mut canceled| canceled.remove(request_id))
             .unwrap_or(false)
     }
-}
 
-impl DocumentExtractor for SupervisedWorker {
-    fn extract(
+    /// `extract`, plus how the worker spent the time, when it reported that.
+    pub fn extract_timed(
         &self,
         request_id: &str,
         path: &Path,
         progress: &mut dyn FnMut(ExtractProgress),
-    ) -> Result<DocumentSource, ExtractFailure> {
+    ) -> Result<(DocumentSource, Option<ExtractionTimings>), ExtractFailure> {
         {
             let mut active = self.active.lock().map_err(|_| ExtractFailure::crashed())?;
             if active.is_some() {
@@ -504,8 +551,9 @@ impl DocumentExtractor for SupervisedWorker {
                         total,
                     }),
                     WorkerEvent::Parsed { document } => {
+                        let timings = document.timings;
                         return match adapt_document(document) {
-                            Ok(document) => Ok(document),
+                            Ok(document) => Ok((document, timings)),
                             Err(error) => {
                                 process.terminate();
                                 self.clear_running(&process);
@@ -530,6 +578,18 @@ impl DocumentExtractor for SupervisedWorker {
             *active = None;
         }
         result
+    }
+}
+
+impl DocumentExtractor for SupervisedWorker {
+    fn extract(
+        &self,
+        request_id: &str,
+        path: &Path,
+        progress: &mut dyn FnMut(ExtractProgress),
+    ) -> Result<DocumentSource, ExtractFailure> {
+        self.extract_timed(request_id, path, progress)
+            .map(|(document, _)| document)
     }
 
     fn cancel(&self, request_id: &str) -> Result<(), ExtractFailure> {
@@ -1058,6 +1118,139 @@ The work covers the 2026 CRM implementation, its deliverables, and its fees.\n\n
             std::fs::read_to_string(&log).unwrap(),
             "{\"level\":\"warning\",\"code\":\"PARSE_FAILED\"}\n"
         );
+    }
+
+    /// The worker's report of where the time went is accepted beside the
+    /// pages, and changes nothing about the document built from them.
+    #[test]
+    fn worker_timings_are_accepted_and_change_nothing_else() {
+        let timed = decode_worker_response(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"parsed","document":{
+                "pages":[{"page_number":1,"text":"scan","source":"ocr","ocr_confidence":88.0,"vision_escalated":false}],
+                "warnings":[],"truncated":false,"optional_image":null,
+                "timings":{"total_micros":5100,"snapshot_micros":40,"parse_micros":300,
+                  "analysis_micros":20,"render_micros":900,"image_decode_micros":0,
+                  "ocr_micros":3800,"ocr_encode_micros":600,"ocr_engine_micros":3100,
+                  "vision_micros":0,"ocr_pages":1,"ocr_passes":2,"orientation_passes":1,
+                  "rendered_pixels":8415000,"a_stage_from_a_newer_worker":7}}}}"#,
+        )
+        .unwrap();
+        let WorkerEvent::Parsed { document } = timed.event else {
+            panic!("a parsed event");
+        };
+        assert_eq!(
+            document.timings,
+            Some(ExtractionTimings {
+                total_micros: 5_100,
+                snapshot_micros: 40,
+                parse_micros: 300,
+                analysis_micros: 20,
+                render_micros: 900,
+                image_decode_micros: 0,
+                ocr_micros: 3_800,
+                ocr_encode_micros: 600,
+                ocr_engine_micros: 3_100,
+                vision_micros: 0,
+                ocr_pages: 1,
+                ocr_passes: 2,
+                orientation_passes: 1,
+                rendered_pixels: 8_415_000,
+            })
+        );
+        let untimed = parsed(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"parsed","document":{
+                "pages":[{"page_number":1,"text":"scan","source":"ocr","ocr_confidence":88.0,"vision_escalated":false}],
+                "warnings":[],"truncated":false,"optional_image":null}}}"#,
+        )
+        .unwrap();
+        assert_eq!(adapt_document(document).unwrap(), untimed);
+
+        // A stage this build expects but was not sent reads as zero.
+        let partial: ExtractionTimings =
+            serde_json::from_str(r#"{"total_micros":9,"ocr_pages":2}"#).unwrap();
+        assert_eq!(partial.total_micros, 9);
+        assert_eq!(partial.ocr_pages, 2);
+        assert_eq!(partial.render_micros, 0);
+    }
+
+    /// A stand-in worker that answers the handshake and then each parse
+    /// request by its id: `timed` with a document and its timings, anything
+    /// else with the same document as a worker that predates them sends it.
+    #[cfg(unix)]
+    fn scripted_worker(directory: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let document = r#""pages":[{"page_number":1,"text":"Harbourline Storage Co. lease","source":"native","ocr_confidence":null,"vision_escalated":false}],"warnings":[],"truncated":false,"optional_image":null"#;
+        let script = format!(
+            "#!/bin/sh\n\
+             read hello\n\
+             echo '{{\"protocol_version\":1,\"request_id\":\"hello\",\"event\":{{\"type\":\"hello\",\"worker_version\":\"test\"}}}}'\n\
+             while read line; do\n\
+             case \"$line\" in\n\
+             *'\"timed\"'*)\n\
+             echo '{{\"protocol_version\":1,\"request_id\":\"timed\",\"event\":{{\"type\":\"progress\",\"stage\":\"extracting\",\"current\":0,\"total\":null}}}}'\n\
+             echo '{{\"protocol_version\":1,\"request_id\":\"timed\",\"event\":{{\"type\":\"parsed\",\"document\":{{{document},\"timings\":{{\"total_micros\":2500,\"snapshot_micros\":100,\"parse_micros\":2300,\"ocr_pages\":0}}}}}}}}' ;;\n\
+             *'\"parse\"'*)\n\
+             id=$(echo \"$line\" | sed 's/.*\"request_id\":\"\\([^\"]*\\)\".*/\\1/')\n\
+             echo '{{\"protocol_version\":1,\"request_id\":\"'\"$id\"'\",\"event\":{{\"type\":\"parsed\",\"document\":{{{document}}}}}}}' ;;\n\
+             esac\n\
+             done\n"
+        );
+        let helper = directory.join("worker.sh");
+        std::fs::write(&helper, script).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        helper
+    }
+
+    /// `extract_timed` hands back what the worker reported about its time
+    /// beside the document, and nothing when a worker reported nothing;
+    /// `extract` is the same document either way.
+    #[cfg(unix)]
+    #[test]
+    fn extract_timed_returns_the_workers_timings() {
+        let directory = tempfile::tempdir().unwrap();
+        let worker = SupervisedWorker::new(scripted_worker(directory.path()));
+        // A script written a moment ago can briefly be "text file busy" while
+        // another test's fork still holds the write handle; try again.
+        let mut progress = Vec::new();
+        let (timed, timings) = (0..20)
+            .find_map(|_| {
+                match worker.extract_timed("timed", Path::new("lease.pdf"), &mut |event| {
+                    progress.push(event)
+                }) {
+                    Err(failure) if failure.code == "WORKER_CRASHED" => {
+                        std::thread::sleep(Duration::from_millis(50));
+                        None
+                    }
+                    result => Some(result),
+                }
+            })
+            .expect("the stand-in worker starts")
+            .unwrap();
+
+        assert_eq!(
+            timings,
+            Some(ExtractionTimings {
+                total_micros: 2_500,
+                snapshot_micros: 100,
+                parse_micros: 2_300,
+                ..ExtractionTimings::default()
+            })
+        );
+        assert_eq!(timed.pages[0].text, "Harbourline Storage Co. lease");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].stage, "extracting");
+
+        let (untimed, none) = worker
+            .extract_timed("older", Path::new("lease.pdf"), &mut |_| {})
+            .unwrap();
+        assert_eq!(none, None);
+        assert_eq!(untimed, timed);
+        let extracted = worker
+            .extract("plain", Path::new("lease.pdf"), &mut |_| {})
+            .unwrap();
+        assert_eq!(extracted, timed);
+        worker.stop();
     }
 
     #[test]

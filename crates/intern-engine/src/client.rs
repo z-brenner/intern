@@ -12,7 +12,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::domain::{DateRole, Evidence, ModelProposal, PartyRelation, TokenConfidence};
+use crate::domain::{
+    DateRole, Evidence, ModelProposal, ModelTimings, PartyRelation, TokenConfidence,
+};
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
 use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
@@ -62,6 +64,17 @@ impl ModelRequest {
     }
 }
 
+/// A proposal and what the model reported about producing it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposerReply {
+    pub proposal: ModelProposal,
+    /// See [`Proposer::propose_scored`].
+    pub token_confidence: Option<TokenConfidence>,
+    /// How the server spent the request, when it said: the local server
+    /// does, and nothing else is asked.
+    pub timings: Option<ModelTimings>,
+}
+
 /// Anything that can turn the prompt for one document into a proposal: the
 /// local server, or a hosted model standing in for it.
 pub trait Proposer: Send + Sync {
@@ -75,6 +88,18 @@ pub trait Proposer: Send + Sync {
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         self.propose(request).map(|proposal| (proposal, None))
+    }
+
+    /// A proposal with whatever the model reported about the work: token
+    /// probabilities and server-side timings. Only the local server reports
+    /// timings, so by default this is [`Self::propose_scored`] without them.
+    fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
+        self.propose_scored(request)
+            .map(|(proposal, token_confidence)| ProposerReply {
+                proposal,
+                token_confidence,
+                timings: None,
+            })
     }
 
     /// The context the prompt and the reply share, in tokens, when it is
@@ -105,6 +130,10 @@ impl Proposer for ModelClient {
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         ModelClient::propose_scored(self, request)
+    }
+
+    fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
+        ModelClient::propose_measured(self, request)
     }
 
     /// The local server always runs with this context.
@@ -179,8 +208,15 @@ impl ModelClient {
         &self,
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
+        self.propose_measured(request)
+            .map(|reply| (reply.proposal, reply.token_confidence))
+    }
+
+    /// [`Self::propose_scored`], with the server's timings for the attempt
+    /// that was answered.
+    pub fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
         match self.propose_once(request) {
-            Ok(scored) => Ok(scored),
+            Ok(reply) => Ok(reply),
             Err(AttemptError(EngineErrorCode::ModelResponseInvalid)) => {
                 self.propose_once(request).map_err(AttemptError::into_error)
             }
@@ -191,7 +227,7 @@ impl ModelClient {
     pub(crate) fn propose_once(
         &self,
         request: &ModelRequest,
-    ) -> Result<(ModelProposal, Option<TokenConfidence>), AttemptError> {
+    ) -> Result<ProposerReply, AttemptError> {
         let response = self
             .http
             .post(self.endpoint.clone())
@@ -213,8 +249,13 @@ impl ModelClient {
         let bytes = read_capped(response, EngineErrorCode::ModelResponseInvalid)?;
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-        let confidence = completion.token_confidence();
-        decode(completion).map(|proposal| (proposal, confidence))
+        let token_confidence = completion.token_confidence();
+        let timings = completion.model_timings();
+        decode(completion).map(|proposal| ProposerReply {
+            proposal,
+            token_confidence,
+            timings,
+        })
     }
 
     /// The request body. Only the user turn identifies a request
@@ -463,6 +504,11 @@ pub fn extract_json_object(content: &str) -> Option<&str> {
 #[derive(Deserialize)]
 pub(crate) struct ChatCompletion {
     choices: Vec<Choice>,
+    /// llama-server's account of the request. Kept unparsed, like
+    /// [`Choice::logprobs`]: a service that sends something else under the
+    /// same name costs the measurement, never the reply.
+    #[serde(default)]
+    timings: Option<Value>,
 }
 
 impl ChatCompletion {
@@ -475,6 +521,39 @@ impl ChatCompletion {
             serde_json::from_value(logprobs.get("content")?.clone()).ok()?;
         token_confidence(&tokens)
     }
+
+    /// How the server spent the request, when it reported that in
+    /// llama-server's shape.
+    pub(crate) fn model_timings(&self) -> Option<ModelTimings> {
+        let timings: ServerTimings = serde_json::from_value(self.timings.clone()?).ok()?;
+        Some(ModelTimings {
+            prompt_tokens: timings.prompt_n,
+            cached_tokens: timings.cache_n,
+            prefill_micros: micros_from_millis(timings.prompt_ms),
+            generated_tokens: timings.predicted_n,
+            generation_micros: micros_from_millis(timings.predicted_ms),
+        })
+    }
+}
+
+/// The `timings` object llama-server adds to a chat completion. It carries
+/// per-token and per-second rates too; those follow from these.
+#[derive(Deserialize)]
+struct ServerTimings {
+    /// Absent from servers that predate prompt caching, which reused nothing.
+    #[serde(default)]
+    cache_n: u64,
+    prompt_n: u64,
+    prompt_ms: f64,
+    predicted_n: u64,
+    predicted_ms: f64,
+}
+
+/// Fractional milliseconds as whole microseconds. A float cast saturates, so
+/// a negative or non-finite figure from a confused server reads as zero
+/// rather than wrapping.
+fn micros_from_millis(millis: f64) -> u64 {
+    (millis * 1_000.0).round() as u64
 }
 
 #[derive(Deserialize)]
@@ -1032,6 +1111,132 @@ mod tests {
         let confidence = completion.token_confidence().unwrap();
         assert_eq!(confidence.tokens, 1);
         assert!(close(confidence.min, (-0.01_f32).exp()));
+    }
+
+    /// A live llama-server reply to a request shaped as this client sends
+    /// it, the second of two identical ones: all but four prompt tokens came
+    /// from the slot's cache. Only the echoed model path was replaced.
+    const LIVE_REPLY: &str = r#"{"choices":[{"finish_reason":"stop","index":0,"message":{"role":"assistant","content":"{\"type_evidence\":null,\"document_type\":\"invoice\",\"date_evidence\":\"March 4, 2026\",\"document_date\":\"2026-03-04\",\"date_role\":\"invoice\",\"parties\":[\"Halvorsen Fixture Works LLC\",\"Quillon Ridge Bakery\"],\"party_evidence\":[\"Halvorsen Fixture Works LLC\",\"Quillon Ridge Bakery\"],\"party_relation\":\"between\",\"description\":\"invoice\",\"confidence\":0.99,\"needs_review\":false}"}}],"created":1791321013,"model":"intern-local","system_fingerprint":"b1-14e78dd","object":"chat.completion","usage":{"completion_tokens":115,"prompt_tokens":127,"total_tokens":242,"prompt_tokens_details":{"cached_tokens":123}},"id":"chatcmpl-zUHUpNHINXuQa7x9KBvmW751fnA4oVxa","timings":{"cache_n":123,"prompt_n":4,"prompt_ms":206.87,"prompt_per_token_ms":51.7175,"prompt_per_second":19.33581476289457,"predicted_n":115,"predicted_ms":16131.292,"predicted_per_token_ms":140.2721043478261,"predicted_per_second":7.129001198416097}}"#;
+
+    #[test]
+    fn server_timings_are_read_from_the_servers_reply() {
+        let completion: ChatCompletion = serde_json::from_str(LIVE_REPLY).unwrap();
+
+        assert_eq!(
+            completion.model_timings(),
+            Some(ModelTimings {
+                prompt_tokens: 4,
+                cached_tokens: 123,
+                prefill_micros: 206_870,
+                generated_tokens: 115,
+                generation_micros: 16_131_292,
+            })
+        );
+        let proposal = decode(completion).unwrap();
+        assert_eq!(proposal.document_date.as_deref(), Some("2026-03-04"));
+    }
+
+    /// A hosted service sends no timings, and one that sends something else
+    /// under the name costs the measurement, never the reply.
+    #[test]
+    fn a_reply_without_readable_timings_still_decodes() {
+        for reply in [
+            json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":VALID_REPLY}}]}),
+            json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":VALID_REPLY}}],"timings":null}),
+            json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":VALID_REPLY}}],"timings":"fast"}),
+            json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":VALID_REPLY}}],"timings":{"prompt_n":-1,"prompt_ms":1.0,"predicted_n":2,"predicted_ms":3.0}}),
+        ] {
+            let completion: ChatCompletion = serde_json::from_value(reply.clone()).unwrap();
+            assert_eq!(completion.model_timings(), None, "{reply}");
+            assert!(decode(completion).is_ok(), "{reply}");
+        }
+        // A server that predates prompt caching reused nothing.
+        let completion: ChatCompletion = serde_json::from_value(json!({"choices":[],
+            "timings":{"prompt_n":10,"prompt_ms":2.5,"predicted_n":3,"predicted_ms":0.0004}}))
+        .unwrap();
+        assert_eq!(
+            completion.model_timings(),
+            Some(ModelTimings {
+                prompt_tokens: 10,
+                cached_tokens: 0,
+                prefill_micros: 2_500,
+                generated_tokens: 3,
+                generation_micros: 0,
+            })
+        );
+    }
+
+    /// The retry on a malformed reply is unchanged, and the timings that
+    /// come back are those of the attempt that was answered.
+    #[test]
+    fn measured_replies_carry_the_answered_attempts_timings() {
+        let timed = |content: &str, prompt_n: u64| {
+            http_reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                &json!({
+                    "choices": [{"finish_reason": "stop",
+                        "message": {"role": "assistant", "content": content}}],
+                    "timings": {"cache_n": 0, "prompt_n": prompt_n, "prompt_ms": 1.5,
+                        "predicted_n": 40, "predicted_ms": 900.25},
+                })
+                .to_string(),
+            )
+        };
+        let server = scripted_server(vec![
+            timed("I think this is a memo.", 111),
+            timed(VALID_REPLY, 222),
+        ]);
+
+        let reply = local_client(server.address)
+            .propose_measured(&ModelRequest { prompt: "p".into() })
+            .unwrap();
+
+        assert_eq!(server.attempts(), 2);
+        assert_eq!(reply.proposal.document_type.as_deref(), Some("Memo"));
+        assert_eq!(reply.token_confidence, None);
+        assert_eq!(
+            reply.timings,
+            Some(ModelTimings {
+                prompt_tokens: 222,
+                cached_tokens: 0,
+                prefill_micros: 1_500,
+                generated_tokens: 40,
+                generation_micros: 900_250,
+            })
+        );
+
+        // The scored and plain answers are the same reply without them.
+        let server = scripted_server(vec![timed(VALID_REPLY, 7)]);
+        let client = local_client(server.address);
+        let request = ModelRequest { prompt: "p".into() };
+        let measured = client.propose_measured(&request).unwrap();
+        assert_eq!(
+            client.propose_scored(&request).unwrap(),
+            (measured.proposal.clone(), None)
+        );
+        assert_eq!(client.propose(&request).unwrap(), measured.proposal);
+        assert_eq!(server.attempts(), 3);
+    }
+
+    /// A proposer that reports no timings - a hosted model, a test double -
+    /// is measured as its scored reply with none.
+    #[test]
+    fn the_default_measured_reply_is_the_scored_one_without_timings() {
+        struct Fixed;
+        impl Proposer for Fixed {
+            fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
+                proposal_from_text(VALID_REPLY).map_err(AttemptError::into_error)
+            }
+        }
+
+        let reply = Fixed
+            .propose_measured(&ModelRequest { prompt: "p".into() })
+            .unwrap();
+
+        assert_eq!(reply.proposal.document_type.as_deref(), Some("Memo"));
+        assert_eq!(reply.token_confidence, None);
+        assert_eq!(reply.timings, None);
     }
 
     #[test]

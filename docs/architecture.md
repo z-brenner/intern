@@ -866,6 +866,20 @@ when a reviewed answer that was right is now wrong, and a prompt change makes
 the recording stale rather than silently scoring replies to a question the
 engine no longer asks. [`evaluation.md`](evaluation.md) has the workflow.
 
+**Where the time goes.** Every parsed document carries the worker's own
+account of its extraction, `timings`: the whole extraction (`total_micros`),
+the snapshot, parsing the format, PDF page analysis, PDFium rendering, image
+decoding, OCR (and, of that, encoding pages for Tesseract and waiting on it),
+and building the page image, with OCR pages, recognition and orientation
+passes, and rendered pixels. `SupervisedWorker::extract_timed` returns it
+beside the document. After extraction, `AnalysisTelemetry` adds prompt
+construction, validation and naming times, how many re-distillations fitting
+the prompt took, the prompt's characters and estimated tokens, and, from the
+local server's own reply, `model`: prompt tokens evaluated and reused from
+its cache, and prefill and generation time. `inference_millis` stays the wall
+time of the request. All of it is measurement only: nothing reads it to
+decide anything, and none of it is sent anywhere.
+
 ## What it costs
 
 Measured on an AMD Ryzen 7 PRO 8840U with 14.7 GB usable RAM, CPU only, with
