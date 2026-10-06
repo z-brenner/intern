@@ -264,6 +264,23 @@ pub struct OcrResult {
     pub mean_confidence: f32,
     /// Clockwise non-EXIF rotation applied before OCR.
     pub rotation_degrees: u16,
+    /// The reading line by line, where the engine reports lines. Empty when
+    /// it does not, and then `text` is all there is.
+    #[serde(default)]
+    pub lines: Vec<OcrLine>,
+}
+
+/// One line of an OCR reading: what it says, where it sits, and how sure
+/// the engine was of it.
+///
+/// `bbox` is `[x0, y0, x1, y1]` in pixels of the image the engine read,
+/// turned by `rotation_degrees`, so it is in the page's upright orientation
+/// with the origin at the top left. `confidence` is 0-100.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OcrLine {
+    pub text: String,
+    pub bbox: [u32; 4],
+    pub confidence: u8,
 }
 
 impl OcrResult {
@@ -272,11 +289,17 @@ impl OcrResult {
             text: text.into(),
             mean_confidence,
             rotation_degrees: 0,
+            lines: Vec::new(),
         }
     }
 
     pub fn with_rotation(mut self, rotation_degrees: u16) -> Self {
         self.rotation_degrees = rotation_degrees;
+        self
+    }
+
+    pub fn with_lines(mut self, lines: Vec<OcrLine>) -> Self {
+        self.lines = lines;
         self
     }
 }
