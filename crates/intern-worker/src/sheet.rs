@@ -833,6 +833,7 @@ pub(crate) fn elided_document(pages: Vec<ExtractedPage>, elided: bool) -> Extrac
         },
         truncated: false,
         optional_image: None,
+        timings: None,
     }
 }
 

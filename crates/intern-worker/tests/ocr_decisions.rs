@@ -427,4 +427,24 @@ if [ "$name" = "{confident_output}" ]; then conf=93; else conf=41; fi
         assert_eq!(reading.rotation_degrees, 270);
         assert_eq!(reading.mean_confidence, 93.0);
     }
+
+    /// Every pass the adapter makes is counted on the request's token, and
+    /// its time is split between encoding what Tesseract is handed and
+    /// waiting for Tesseract.
+    #[test]
+    fn the_adapter_counts_its_passes_and_splits_their_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let ocr = fake_tesseract(directory.path(), 90, "ocr-rotated-270");
+        let cancel = CancellationToken::new();
+
+        ocr.recognize(&page(), &cancel).unwrap();
+
+        let timings = cancel.timings();
+        assert_eq!(timings.ocr_passes, 3, "{timings:?}");
+        assert_eq!(timings.orientation_passes, 1, "{timings:?}");
+        assert!(timings.ocr_encode_micros > 0, "{timings:?}");
+        assert!(timings.ocr_engine_micros > 0, "{timings:?}");
+        // The page itself is the reader's to count, not the adapter's.
+        assert_eq!(timings.ocr_pages, 0, "{timings:?}");
+    }
 }

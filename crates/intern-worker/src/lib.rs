@@ -8,3 +8,6 @@ pub mod pdf;
 pub mod protocol;
 pub mod sheet;
 pub mod temp;
+pub mod timing;
+
+pub use timing::ExtractionTimings;
