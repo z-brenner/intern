@@ -17,6 +17,9 @@
 #   INTERN_BENCH        the benchmark (default: built with cargo --release)
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
+#   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
+#                       the default corpus is generated when it is missing)
+#   MANIFEST            the generator's manifest (default: bench/manifest.json when present)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
 #
@@ -39,6 +42,11 @@ MODEL="${MODEL:?set MODEL to the GGUF model file}"
 LLAMA_SERVER="${LLAMA_SERVER:?set LLAMA_SERVER to the llama-server binary}"
 WORKER="${INTERN_WORKER:-$REPO/target/release/intern-worker}"
 PORT="${PORT:-18090}"
+CORPUS="${CORPUS:-$REPO/bench/generated}"
+GOLD="${GOLD:-$REPO/bench/gold.json}"
+if [ -z "${MANIFEST:-}" ] && [ -f "$REPO/bench/manifest.json" ]; then
+  MANIFEST="$REPO/bench/manifest.json"
+fi
 if [ -z "${THREADS:-}" ]; then
   LOGICAL="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)"
   THREADS=$(( LOGICAL / 2 ))
@@ -54,7 +62,7 @@ if [ -z "${INTERN_BENCH:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-bench)
   INTERN_BENCH="${CARGO_TARGET_DIR:-$REPO/target}/release/intern-bench"
 fi
-if [ ! -f "$REPO/bench/generated/manifest.json" ]; then
+if [ "$CORPUS" = "$REPO/bench/generated" ] && [ ! -f "$CORPUS/manifest.json" ]; then
   (cd "$REPO" && node bench/generate.mjs)
 fi
 mkdir -p "$OUT_DIR"
@@ -74,11 +82,13 @@ for _ in $(seq 1 90); do
 done
 curl -sf "http://127.0.0.1:$PORT/health" | grep -q '"ok"' || { echo "llama-server not healthy on port $PORT" >&2; exit 1; }
 
-MANIFEST=()
-[ -f "$REPO/bench/manifest.json" ] && MANIFEST=(--manifest "$REPO/bench/manifest.json")
+MANIFEST_ARGUMENTS=()
+if [ -n "${MANIFEST:-}" ]; then
+  MANIFEST_ARGUMENTS=(--manifest "$MANIFEST")
+fi
 
 status=0
-"$INTERN_BENCH" run --corpus "$REPO/bench/generated" --gold "$REPO/bench/gold.json" ${MANIFEST[@]+"${MANIFEST[@]}"} \
+"$INTERN_BENCH" run --corpus "$CORPUS" --gold "$GOLD" ${MANIFEST_ARGUMENTS[@]+"${MANIFEST_ARGUMENTS[@]}"} \
   --worker "$WORKER" --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" --api-key "$KEY" \
   --model-id intern-local --model-path "$MODEL" --server-pid "$SERVER" \
   --note "llama-server $THREADS threads, 8192 context, $(uname -sm)" \
