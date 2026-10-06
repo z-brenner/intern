@@ -170,6 +170,10 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         scores.insert("parties_matched".into(), json!(counts.matched));
         scores.insert("parties_expected".into(), json!(counts.expected));
         scores.insert("parties_spurious".into(), json!(counts.spurious));
+        // The connecting word is judged for the parties actually named:
+        // "for" is right for the tenant of a rent notice and wrong for its
+        // landlord, though both are acceptable parties - the landlord with
+        // "from".
         if gold
             .party_relation
             .as_deref()
@@ -177,17 +181,24 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
             && !outcome.parties.is_empty()
             && let Some(produced) = outcome.party_relation
         {
+            let judged_sets = if !judged.exact.is_empty() {
+                judged.exact.clone()
+            } else if !judged.overlapping.is_empty() {
+                judged.overlapping.clone()
+            } else {
+                vec![0]
+            };
             flag(
                 scores,
                 "relation_correct",
-                sets.iter()
-                    .any(|set| set.relation.as_deref() == Some(produced)),
+                judged_sets
+                    .iter()
+                    .any(|&index| sets[index].relation.as_deref() == Some(produced)),
             );
         }
-        // The relation the right answer is named under: the acceptable
-        // set the output matched, or the reviewed one.
-        let set = judged.correct_set.unwrap_or(0);
-        if let Some(correct) = party_role_correct(document, &sets[set], outcome.parties) {
+        if let Some(relation) = outcome.party_relation
+            && let Some(correct) = party_role_correct(document, &sets, relation, outcome.parties)
+        {
             flag(scores, "party_role_correct", correct);
         }
     }
@@ -411,7 +422,11 @@ struct PartyJudgement {
     /// The index of the first party set the output names exactly: every
     /// party, nobody else.
     correct_set: Option<usize>,
-    /// Against that set, or the reviewed one when none is right.
+    /// Every set the output names exactly.
+    exact: Vec<usize>,
+    /// Every set the output names at least one party of.
+    overlapping: Vec<usize>,
+    /// Against the first exact set, or the reviewed one when none is.
     counts: PartyCounts,
 }
 
@@ -428,49 +443,70 @@ fn judge_parties(sets: &[PartySet], produced: &[String]) -> PartyJudgement {
             .filter(|value| !set.parties.iter().any(|gold| party_matches(gold, value)))
             .count(),
     };
-    let correct_set = sets.iter().position(|set| {
-        let counts = counts(set);
-        counts.matched == counts.expected && counts.spurious == 0
-    });
+    let all = sets.iter().map(counts).collect::<Vec<_>>();
+    let exact = (0..sets.len())
+        .filter(|&index| all[index].matched == all[index].expected && all[index].spurious == 0)
+        .collect::<Vec<_>>();
+    let overlapping = (0..sets.len())
+        .filter(|&index| all[index].matched > 0)
+        .collect::<Vec<_>>();
+    let correct_set = exact.first().copied();
     PartyJudgement {
-        counts: sets
+        counts: all
             .get(correct_set.unwrap_or(0))
-            .map(counts)
+            .copied()
             .unwrap_or_default(),
         correct_set,
+        exact,
+        overlapping,
     }
 }
 
-/// Whether the party in the filename is the one the relation says it is.
+/// Whether the parties the filename names hold the roles its connecting
+/// word claims for them.
 ///
-/// For a one-sided relation the first party named must hold the role the
-/// relation implies: the issuer (or sender) of something `from`, the
-/// subject of something `for`, the recipient of something `to`, the
-/// counterparty of something `with`. For `between`, every party the gold
-/// gives a role must be named, in any order. Not scored when the gold
-/// names no holder of the role, or the output names nobody.
+/// For a one-sided relation the first party named must hold the role that
+/// word implies: the issuer (or sender) of something `from`, the subject of
+/// something `for`, the recipient of something `to`, the counterparty of
+/// something `with`. "Notice for" the landlord fails even though the
+/// landlord is an acceptable party, because the landlord is not its
+/// subject. For `between`, every party the gold gives a role in its
+/// `between` answer (or, without one, in any answer) must be named, in any
+/// order. Not scored when the gold gives no party the role in question, or
+/// the output names nobody.
 fn party_role_correct(
     document: &GoldDocument,
-    set: &PartySet,
+    sets: &[PartySet],
+    relation: &str,
     produced: &[String],
 ) -> Option<bool> {
     let roles = &document.gold.party_roles;
     if roles.is_empty() || produced.is_empty() {
         return None;
     }
-    let expected: &[&str] = match set.relation.as_deref()? {
+    let expected: &[&str] = match relation {
         "from" => &["issuer", "sender"],
         "for" => &["subject"],
         "to" => &["recipient"],
         "with" => &["counterparty"],
         "between" => {
+            let between = sets
+                .iter()
+                .filter(|set| set.relation.as_deref() == Some("between"))
+                .collect::<Vec<_>>();
+            let answers = if between.is_empty() {
+                sets.iter().collect()
+            } else {
+                between
+            };
             // A party is listed once per role it holds; it is one holder.
             let mut holders = roles
                 .iter()
                 .filter(|role| role.role != "other")
                 .filter(|role| {
-                    set.parties
+                    answers
                         .iter()
+                        .flat_map(|set| &set.parties)
                         .any(|party| party_matches(party, &role.name))
                 })
                 .map(|role| role.name.as_str())
@@ -796,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn party_role_follows_the_relation_the_right_answer_is_named_under() {
+    fn party_role_judges_the_role_the_connecting_word_claims() {
         let document = invoice();
         let issuer = halvorsen();
         let customer = vec!["Quillon Ridge Bakery".to_owned()];
@@ -814,9 +850,10 @@ mod tests {
             .get("party_role_correct")
             .cloned()
         };
-        // The issuer first: right, whatever the connecting word.
+        // The issuer, from: right. To the issuer claims a recipient, and
+        // the gold names none, so there is nothing to judge.
         assert_eq!(role(&issuer, "from"), Some(json!(true)));
-        assert_eq!(role(&issuer, "to"), Some(json!(true)));
+        assert_eq!(role(&issuer, "to"), None);
         // The bill-to customer in the issuer's place: wrong, and a trap.
         assert_eq!(role(&customer, "from"), Some(json!(false)));
         let trapped = score(
@@ -880,6 +917,71 @@ mod tests {
         assert!(
             !scored.scores.contains_key("party_role_correct"),
             "no holder of the role"
+        );
+    }
+
+    /// A rent notice is for its tenant or from its landlord. Naming the
+    /// landlord with "for" names an acceptable party under the wrong word:
+    /// the parties score, the relation and the role do not.
+    #[test]
+    fn an_acceptable_party_under_the_wrong_word_is_caught() {
+        let notice = GoldDocument {
+            id: "notice".into(),
+            file: "notice.pdf".into(),
+            gold: GoldAnswer {
+                document_type: Some("Notice of Rent Increase".into()),
+                document_date: Some("2026-05-12".into()),
+                parties: Some(vec!["Imogen Castellanos".into()]),
+                party_relation: Some("for".into()),
+                acceptable_party_sets: vec![
+                    PartySet {
+                        parties: vec!["Imogen Castellanos".into()],
+                        relation: Some("to".into()),
+                    },
+                    PartySet {
+                        parties: vec!["Cresthaven Court Holdings LLC".into()],
+                        relation: Some("from".into()),
+                    },
+                ],
+                party_roles: vec![
+                    PartyRole {
+                        name: "Imogen Castellanos".into(),
+                        role: "subject".into(),
+                    },
+                    PartyRole {
+                        name: "Imogen Castellanos".into(),
+                        role: "recipient".into(),
+                    },
+                    PartyRole {
+                        name: "Cresthaven Court Holdings LLC".into(),
+                        role: "issuer".into(),
+                    },
+                ],
+                ..GoldAnswer::default()
+            },
+            ..GoldDocument::default()
+        };
+        let judge = |party: &str, relation: &str| {
+            let parties = vec![party.to_owned()];
+            let name = format!("2026-05-12 Notice of Rent Increase {relation} {party}.pdf");
+            let mut outcome = outcome(&parties, relation, &name);
+            outcome.document_type = Some("Notice of Rent Increase");
+            outcome.document_date = Some("2026-05-12");
+            let scores = score(&notice, &outcome, &Texts::default()).scores;
+            [
+                "parties_correct",
+                "relation_correct",
+                "party_role_correct",
+                "filename_correct",
+            ]
+            .map(|key| scores[key].as_bool().unwrap())
+        };
+        assert_eq!(judge("Imogen Castellanos", "for"), [true; 4]);
+        assert_eq!(judge("Imogen Castellanos", "to"), [true; 4]);
+        assert_eq!(judge("Cresthaven Court Holdings LLC", "from"), [true; 4]);
+        assert_eq!(
+            judge("Cresthaven Court Holdings LLC", "for"),
+            [true, false, false, false]
         );
     }
 
