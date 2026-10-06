@@ -541,8 +541,13 @@ fn misses(out: &mut String, report: &Report) {
             } else {
                 format!(" · review: {}", record.review_reasons.join(", "))
             };
+            let traps = if record.traps.is_empty() {
+                String::new()
+            } else {
+                format!(" · trap: {}", record.traps.join("; "))
+            };
             Some(format!(
-                "- **{}**: expected `{}`, got `{}`{reasons}",
+                "- **{}**: expected `{}`, got `{}`{traps}{reasons}",
                 record.id,
                 record
                     .gold_filenames

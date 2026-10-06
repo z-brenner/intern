@@ -77,6 +77,8 @@ pub struct Scored {
     pub scores: BTreeMap<String, Value>,
     pub claims: Vec<Claim>,
     pub forbidden_description: Vec<String>,
+    /// Every trap the outcome sprang, with the gold's reason.
+    pub traps: Vec<String>,
     pub ocr: Option<OcrMeasure>,
 }
 
@@ -150,15 +152,15 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         }
     }
     if !dates.is_empty() || !gold.forbidden_dates.is_empty() {
-        flag(
-            scores,
-            "date_forbidden",
-            outcome.document_date.is_some_and(|date| {
-                gold.forbidden_dates
-                    .iter()
-                    .any(|forbidden| forbidden.value() == date)
-            }),
-        );
+        let trap = outcome.document_date.and_then(|date| {
+            gold.forbidden_dates
+                .iter()
+                .find(|forbidden| forbidden.value() == date)
+        });
+        flag(scores, "date_forbidden", trap.is_some());
+        scored
+            .traps
+            .extend(trap.map(|trap| format!("date {}", trap.describe())));
     }
 
     // Parties.
@@ -212,16 +214,21 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
                 .and_then(|index| sets.get(index))
                 .is_some_and(|set| set.parties.iter().any(|gold| party_matches(gold, party)))
         };
-        flag(
-            scores,
-            "party_forbidden",
-            outcome.parties.iter().any(|party| {
-                !in_matched_set(party)
-                    && gold
-                        .forbidden_parties
-                        .iter()
-                        .any(|forbidden| party_matches(forbidden.value(), party))
-            }),
+        let traps = outcome
+            .parties
+            .iter()
+            .filter(|party| !in_matched_set(party))
+            .filter_map(|party| {
+                gold.forbidden_parties
+                    .iter()
+                    .find(|forbidden| party_matches(forbidden.value(), party))
+            })
+            .collect::<Vec<_>>();
+        flag(scores, "party_forbidden", !traps.is_empty());
+        scored.traps.extend(
+            traps
+                .iter()
+                .map(|trap| format!("party {}", trap.describe())),
         );
     }
 
@@ -862,6 +869,7 @@ mod tests {
             &Texts::default(),
         );
         assert_eq!(trapped.scores["party_forbidden"], json!(true));
+        assert_eq!(trapped.traps, vec!["party Quillon Ridge Bakery"]);
         // Both, matching the acceptable `between` set: both role holders,
         // in either order.
         assert_eq!(role(&both, "between"), Some(json!(true)));
@@ -998,6 +1006,7 @@ mod tests {
         let scored = score(&document, &trapped, &Texts::default());
         assert_eq!(scored.scores["date_correct"], json!(false));
         assert_eq!(scored.scores["date_forbidden"], json!(true));
+        assert_eq!(scored.traps, vec!["date 2026-04-03"]);
         assert_eq!(scored.scores["date_present"], json!(true));
         assert_eq!(scored.scores["readiness_match"], json!(true));
         assert_eq!(scored.scores["unsafe_ready"], json!(true));

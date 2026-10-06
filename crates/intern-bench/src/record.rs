@@ -92,6 +92,9 @@ pub struct DocumentRecord {
     /// Gold `description_forbidden` strings the description asserted.
     #[serde(default)]
     pub forbidden_description: Vec<String>,
+    /// Every trap date or party the outcome chose, with the gold's reason.
+    #[serde(default)]
+    pub traps: Vec<String>,
     #[serde(default)]
     pub ocr: Option<OcrMeasure>,
     /// The SHA-256 of every prompt the engine sent, in order.
@@ -237,6 +240,7 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     record.scores = scored.scores;
     record.claims = scored.claims;
     record.forbidden_description = scored.forbidden_description;
+    record.traps = scored.traps;
     record.ocr = scored.ocr;
     record
 }

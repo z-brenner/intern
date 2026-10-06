@@ -181,6 +181,23 @@ impl Forbidden {
             Self::Name { name, .. } => name,
         }
     }
+
+    /// Why the value is a trap, when the gold says.
+    pub fn why(&self) -> &str {
+        match self {
+            Self::Plain(_) => "",
+            Self::Date { why, .. } | Self::Name { why, .. } => why,
+        }
+    }
+
+    /// "2026-04-03 (payment due date)", for a person reading a miss.
+    pub fn describe(&self) -> String {
+        if self.why().is_empty() {
+            self.value().to_owned()
+        } else {
+            format!("{} ({})", self.value(), self.why())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
