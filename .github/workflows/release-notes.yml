@@ -1,0 +1,43 @@
+name: Sync release notes
+
+# A published release's notes are its checked-in docs/releases/<tag>.md, as
+# release.yml published them. When that file is corrected after publication,
+# this puts the correction on the release page as well, from main. It replaces
+# the notes and nothing else: the assets, tag, title and the latest and
+# prerelease flags stay as the release workflow left them.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the published release whose notes to replace (for example v0.1.0-alpha.11)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Replace the release's notes with the checked-in file
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Not a release tag: $TAG"
+            exit 1
+          fi
+          notes="docs/releases/$TAG.md"
+          if ! test -f "$notes"; then
+            echo "::error::$notes does not exist on main"
+            exit 1
+          fi
+          # Only a published release; a draft is the release workflow's to finish.
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false
+          gh release edit "$TAG" --notes-file "$notes"
+          gh release view "$TAG" --json tagName,isDraft,isPrerelease,url

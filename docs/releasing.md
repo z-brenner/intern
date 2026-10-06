@@ -141,6 +141,11 @@ and accepts it. It is only worth anything if that is true.
 
 ## When something fails
 
+- **The published notes need a correction.** Fix `docs/releases/v<version>.md`
+  in a pull request and merge it, then run **Sync release notes**
+  (`release-notes.yml`) from `main` with the tag. It replaces the notes on the
+  release page with the corrected file and changes nothing else; the assets,
+  the tag and the latest flag stay as the release workflow left them.
 - **The preflight says the sign-off is stale.** Something outside `docs/qa/`
   changed after the review. Run QA again on the current `main` and review its
   capture, or revert the change if it was not meant for this release.
