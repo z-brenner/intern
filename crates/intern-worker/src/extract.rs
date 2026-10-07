@@ -661,13 +661,14 @@ enum PagePlan {
 }
 
 impl PagePlan {
-    /// Whether the page brings the page image with it already.
+    /// Whether the page brings the page image with it for certain. A page
+    /// read again does not: if the fresh reading wins, the image made from
+    /// its text layer goes with the layer, and a later page that wants one
+    /// has to have been rendered for it.
     fn has_page_image(&self) -> bool {
         match self {
-            PagePlan::Done { vision, .. }
-            | PagePlan::Reread { vision, .. }
-            | PagePlan::Regions { vision, .. } => vision.is_some(),
-            PagePlan::Scan { .. } => false,
+            PagePlan::Done { vision, .. } | PagePlan::Regions { vision, .. } => vision.is_some(),
+            PagePlan::Reread { .. } | PagePlan::Scan { .. } => false,
         }
     }
 }

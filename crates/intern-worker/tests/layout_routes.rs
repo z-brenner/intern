@@ -410,6 +410,41 @@ fn a_bad_prior_ocr_layer_is_read_again_and_replaced_only_when_the_reading_is_bet
     assert!(unread.warnings.is_empty());
 }
 
+/// A page whose text layer is one bad-OCR token over an image covering
+/// just under nine tenths of it: read again, and - with so little text -
+/// also a page that wants the page image.
+fn bad_layer_that_wants_the_page_image() -> PdfPageInspection {
+    let text = "INV0ICE2O26Ca1derT0TALWexcornbeMi11work";
+    let mut page = native_page(0, text, vec![run(54, 60, text, 9)]);
+    page.image_coverage = 0.8996;
+    let native = page.native.as_mut().unwrap();
+    native.text_objects = 10;
+    native.invisible_text_objects = 10;
+    page
+}
+
+/// A page read again does not take the page image for certain: when the
+/// fresh reading wins, the image made from its text layer goes, and the
+/// next page that wants one must have been rendered for it.
+#[test]
+fn a_page_read_again_does_not_keep_later_pages_from_the_page_image() {
+    let mut second = native_page(1, &"a".repeat(99), vec![run(54, 60, "aaaa", 9)]);
+    second.image_coverage = 0.65;
+    let pdf = StandInPdf::new(vec![bad_layer_that_wants_the_page_image(), second]);
+
+    let document = read(&pdf, &CleanReading(91.0));
+
+    assert_eq!(document.pages[0].source, PageSource::Ocr, "read again");
+    assert_eq!(
+        document
+            .optional_image
+            .as_ref()
+            .map(|image| image.page_number),
+        Some(2)
+    );
+    assert!(document.pages[1].vision_escalated);
+}
+
 /// A page of native text with a pasted image across its lower half, which
 /// holds the signature date.
 fn page_with_an_image_region() -> PdfPageInspection {
