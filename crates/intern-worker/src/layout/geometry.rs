@@ -1947,10 +1947,11 @@ mod tests {
             run(54.0, 92.0, "Hartsfield Insurance Brokers", 9.0),
             run(54.0, 104.0, "300 Bell Tower Road", 9.0),
             run(54.0, 116.0, "Calloway, SC 29630", 9.0),
-            run(320.0, 80.0, "INSURER A: Bramblecote Casualty Company", 9.0),
-            run(320.0, 92.0, "INSURER B: Wexley Indemnity Company", 9.0),
-            run(320.0, 104.0, "INSURER C: Fenmoor Specialty Co.", 9.0),
-            run(320.0, 116.0, "CERTIFICATE NUMBER: HQ-26-06-4415", 9.0),
+            // The boxes are set apart, their lines not level with each other.
+            run(320.0, 85.0, "INSURER A: Bramblecote Casualty Company", 9.0),
+            run(320.0, 96.0, "INSURER B: Wexley Indemnity Company", 9.0),
+            run(320.0, 107.0, "INSURER C: Fenmoor Specialty Co.", 9.0),
+            run(320.0, 120.0, "CERTIFICATE NUMBER: HQ-26-06-4415", 9.0),
         ];
         let rows = [
             ["LTR", "TYPE", "POLICY NUMBER", "EFF", "EXP", "LIMIT"],
@@ -1980,7 +1981,7 @@ mod tests {
             ],
         ];
         for (index, cells) in rows.iter().enumerate() {
-            let y = 140.0 + index as f64 * 14.0;
+            let y = 128.0 + index as f64 * 12.0;
             for (cell, x) in cells.iter().zip([54.0, 80.0, 200.0, 320.0, 390.0, 460.0]) {
                 runs.push(run(x, y, cell, 9.0));
             }
@@ -1988,24 +1989,17 @@ mod tests {
 
         let blocks = analyze(&runs);
 
-        let table = blocks
+        let tables = blocks
             .iter()
-            .find(|block| block.kind == BlockKind::Table)
-            .unwrap_or_else(|| panic!("{blocks:#?}"));
+            .filter(|block| block.kind == BlockKind::Table)
+            .collect::<Vec<_>>();
+        assert_eq!(tables.len(), 1, "{:#?}", texts(&blocks));
         assert!(
-            table.text.contains(
+            tables[0].text.contains(
                 "| A | General | BCC-GL-4471902 | 04/01/2026 | 04/01/2027 | $1,000,000 |"
             ),
-            "{}",
-            table.text
-        );
-        assert_eq!(
-            blocks
-                .iter()
-                .filter(|block| block.kind == BlockKind::Table)
-                .count(),
-            1,
-            "{blocks:#?}"
+            "{:#?}",
+            texts(&blocks)
         );
     }
 
