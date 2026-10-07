@@ -723,8 +723,10 @@ fn number_runs(text: &str) -> Vec<&str> {
 }
 
 /// The numbers a run of digits states: the run itself, read as one
-/// number, and - when it cannot be one ordinary number, like a dotted date
-/// or a comma-separated list - each of its groups as well.
+/// number when it can be one, or - when it cannot be one ordinary number,
+/// like a dotted date or a comma-separated list - each of its groups. A
+/// thousands-separated amount states only its whole value: "$14,250,000.00"
+/// does not support a description's "$250".
 fn run_numbers(run: &str) -> Vec<String> {
     let mut numbers = Vec::new();
     let ordinary = run.matches('.').count() <= 1
@@ -737,8 +739,7 @@ fn run_numbers(run: &str) -> Vec<String> {
             .all(|group| group.len() == 3);
     if ordinary {
         numbers.push(canonical_number(run));
-    }
-    if !ordinary || run.contains(',') {
+    } else {
         for group in run.split([',', '.']).filter(|group| !group.is_empty()) {
             numbers.push(canonical_number(group));
         }
@@ -930,6 +931,22 @@ mod tests {
                 "April 2027"
             ]
         );
+    }
+
+    #[test]
+    fn a_thousands_separated_amount_does_not_support_its_groups() {
+        let text = DocumentText::new(["Purchase price: $14,250,000.00, paid at closing."]);
+        let unsupported = |description: &str| {
+            check_claims(description, &text)
+                .into_iter()
+                .filter(|claim| !claim.supported)
+                .map(|claim| claim.text)
+                .collect::<Vec<_>>()
+        };
+        assert!(unsupported("A purchase price of $14,250,000.00.").is_empty());
+        assert!(unsupported("A purchase price of $14.25 million.").is_empty());
+        assert_eq!(unsupported("A deposit of $250."), vec!["$250"]);
+        assert_eq!(unsupported("A deposit of $14."), vec!["$14"]);
     }
 
     #[test]

@@ -981,13 +981,16 @@ fn score(fixture: &Value, actual: ScoreInput<'_>) -> Value {
         );
         // Picking the right date and knowing why it is the right date are two
         // different things, and the second is what keeps the first from being
-        // luck. Scored only where the corpus states a role and a date was
-        // produced, because a role attached to no date measures nothing.
+        // luck. The corpus's role is the role of its reviewed date, so it is
+        // scored only when that date was produced: an acceptable date can
+        // rightly carry another role, and a role attached to no date, or to
+        // a wrong one, measures nothing.
         if let Some(gold_role) = fixture
             .get("date_role")
             .and_then(Value::as_str)
             .filter(|role| !role.is_empty())
             && actual.document_date.is_some()
+            && actual.document_date == gold_date
         {
             scores.insert(
                 "date_role_correct".into(),

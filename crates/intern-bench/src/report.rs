@@ -338,6 +338,9 @@ pub fn latency(records: &[DocumentRecord]) -> Latency {
 pub struct OcrFigures {
     pub pages_compared: usize,
     pub pages_missing: usize,
+    /// Pages of scans whose extraction failed, counted as read empty.
+    #[serde(default)]
+    pub pages_failed: usize,
     pub cer: Option<f64>,
     pub cer_ci: Option<f64>,
     pub wer: Option<f64>,
@@ -353,6 +356,7 @@ impl OcrFigures {
         Self {
             pages_compared: measure.pages_compared,
             pages_missing: measure.pages_missing,
+            pages_failed: measure.pages_failed,
             cer: rounded(measure.cer()),
             cer_ci: rounded(measure.cer_ci()),
             wer: rounded(measure.wer()),
@@ -379,6 +383,7 @@ pub struct OcrRow {
 pub struct OcrReport {
     /// Distances summed over every compared page of every document, over
     /// the truth's total length; the targeted accuracies likewise pooled.
+    /// A scan whose extraction failed is in it, read as empty.
     #[serde(default)]
     pub aggregate: Option<OcrFigures>,
     #[serde(default)]

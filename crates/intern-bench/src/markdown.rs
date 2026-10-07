@@ -14,15 +14,26 @@ use crate::{
 /// The misses listed before the rest are left to the JSON.
 const MAX_MISSES: usize = 40;
 
-/// The headline boolean scores, in the order a reader asks about them.
+/// The headline boolean scores, in the order a reader asks about them. Three
+/// are judged only when the answer gives them something to judge; a failed
+/// document is a miss on all of them.
 pub const HEADLINE_RATES: &[(&str, &str)] = &[
     ("filename_correct", "Filename (the whole name)"),
     ("type_correct", "Document type"),
     ("date_correct", "Date"),
-    ("date_role_correct", "Date role"),
+    (
+        "date_role_correct",
+        "Date role (when the reviewed date was chosen)",
+    ),
     ("parties_correct", "Parties"),
-    ("relation_correct", "Relation word"),
-    ("party_role_correct", "Party in the right role"),
+    (
+        "relation_correct",
+        "Relation word (when parties were named)",
+    ),
+    (
+        "party_role_correct",
+        "Party in the right role (when parties were named)",
+    ),
     ("readiness_match", "Ready / review routing"),
     ("description_complete", "Description has every fact"),
     ("description_factual", "Description states nothing false"),
@@ -367,14 +378,13 @@ fn figure(value: Option<f64>) -> String {
 }
 
 fn ocr_row(name: String, layer: &str, figures: &OcrFigures, time: Option<f64>) -> Vec<String> {
-    let pages = if figures.pages_missing > 0 {
-        format!(
-            "{} (+{} unread)",
-            figures.pages_compared, figures.pages_missing
-        )
-    } else {
-        figures.pages_compared.to_string()
-    };
+    let mut pages = figures.pages_compared.to_string();
+    if figures.pages_missing > 0 {
+        let _ = write!(pages, " (+{} unread)", figures.pages_missing);
+    }
+    if figures.pages_failed > 0 {
+        let _ = write!(pages, " (+{} failed, read as empty)", figures.pages_failed);
+    }
     vec![
         name,
         layer.to_owned(),
@@ -424,7 +434,9 @@ fn ocr(out: &mut String, report: &Report) {
     );
     let _ = writeln!(
         out,
-        "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the scans that survive OCR.\n"
+        "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the read pages that survive OCR. \
+         A page the reader does not return (a TIFF frame it does not read) is reported as unread and left out, with what is drawn only on it. \
+         A scan whose extraction failed counts as read empty: every character and value on it missed.\n"
     );
 }
 
