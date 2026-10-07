@@ -5,8 +5,8 @@
     "manifest_sha256": "acc1a980dbb48666cee53355c3d3120571878ce2de6ad7e3438b0f71e246f66b",
     "only": []
   },
-  "created_at": "2026-10-07T02:35:48Z",
-  "git_commit": "f0be1f542721ca1a468447342645b7a830d61d16-dirty",
+  "created_at": "2026-10-07T03:20:42Z",
+  "git_commit": "2cb93ab716b4d88206091566564637ca2d3c88d7-dirty",
   "groups": {
     "category": {
       "amendment": {
@@ -223,15 +223,15 @@
             "total_docs": 42
           },
           "ocr_cer": {
-            "mean": 0.0834,
+            "mean": 0.1969,
             "total_docs": 5
           },
           "ocr_cer_ci": {
-            "mean": 0.0834,
+            "mean": 0.1969,
             "total_docs": 5
           },
           "ocr_date_accuracy": {
-            "mean": 1.0,
+            "mean": 0.9,
             "total_docs": 5
           },
           "ocr_identifier_accuracy": {
@@ -247,7 +247,7 @@
             "total_docs": 5
           },
           "ocr_wer": {
-            "mean": 0.2155,
+            "mean": 0.3213,
             "total_docs": 5
           },
           "prompt_recall": {
@@ -2077,15 +2077,15 @@
             "total_docs": 11
           },
           "ocr_cer": {
-            "mean": 0.1219,
+            "mean": 0.1735,
             "total_docs": 11
           },
           "ocr_cer_ci": {
-            "mean": 0.1219,
+            "mean": 0.1735,
             "total_docs": 11
           },
           "ocr_date_accuracy": {
-            "mean": 0.9394,
+            "mean": 0.8939,
             "total_docs": 11
           },
           "ocr_identifier_accuracy": {
@@ -2101,7 +2101,7 @@
             "total_docs": 11
           },
           "ocr_wer": {
-            "mean": 0.191,
+            "mean": 0.2391,
             "total_docs": 11
           },
           "prompt_recall": {
@@ -7054,15 +7054,15 @@
             "total_docs": 2
           },
           "ocr_cer": {
-            "mean": 0.3236,
+            "mean": 0.6073,
             "total_docs": 2
           },
           "ocr_cer_ci": {
-            "mean": 0.3236,
+            "mean": 0.6073,
             "total_docs": 2
           },
           "ocr_date_accuracy": {
-            "mean": 0.6667,
+            "mean": 0.4167,
             "total_docs": 2
           },
           "ocr_identifier_accuracy": {
@@ -7078,7 +7078,7 @@
             "total_docs": 2
           },
           "ocr_wer": {
-            "mean": 0.3445,
+            "mean": 0.6089,
             "total_docs": 2
           },
           "prompt_recall": {
@@ -8551,15 +8551,15 @@
             "total_docs": 2
           },
           "ocr_cer": {
-            "mean": 0.3236,
+            "mean": 0.6073,
             "total_docs": 2
           },
           "ocr_cer_ci": {
-            "mean": 0.3236,
+            "mean": 0.6073,
             "total_docs": 2
           },
           "ocr_date_accuracy": {
-            "mean": 0.6667,
+            "mean": 0.4167,
             "total_docs": 2
           },
           "ocr_identifier_accuracy": {
@@ -8575,7 +8575,7 @@
             "total_docs": 2
           },
           "ocr_wer": {
-            "mean": 0.3445,
+            "mean": 0.6089,
             "total_docs": 2
           },
           "prompt_recall": {
@@ -11720,15 +11720,15 @@
             "total_docs": 1
           },
           "ocr_cer": {
-            "mean": 0.0016,
+            "mean": 0.5689,
             "total_docs": 1
           },
           "ocr_cer_ci": {
-            "mean": 0.0016,
+            "mean": 0.5689,
             "total_docs": 1
           },
           "ocr_date_accuracy": {
-            "mean": 1.0,
+            "mean": 0.5,
             "total_docs": 1
           },
           "ocr_identifier_accuracy": {
@@ -11744,7 +11744,7 @@
             "total_docs": 1
           },
           "ocr_wer": {
-            "mean": 0.0097,
+            "mean": 0.5385,
             "total_docs": 1
           },
           "prompt_recall": {
@@ -13268,15 +13268,15 @@
             "total_docs": 18
           },
           "ocr_cer": {
-            "mean": 0.0108,
+            "mean": 0.1999,
             "total_docs": 3
           },
           "ocr_cer_ci": {
-            "mean": 0.0108,
+            "mean": 0.1999,
             "total_docs": 3
           },
           "ocr_date_accuracy": {
-            "mean": 1.0,
+            "mean": 0.8333,
             "total_docs": 3
           },
           "ocr_identifier_accuracy": {
@@ -13292,7 +13292,7 @@
             "total_docs": 3
           },
           "ocr_wer": {
-            "mean": 0.0267,
+            "mean": 0.203,
             "total_docs": 3
           },
           "prompt_recall": {
@@ -14766,15 +14766,15 @@
             "total_docs": 11
           },
           "ocr_cer": {
-            "mean": 0.1219,
+            "mean": 0.1735,
             "total_docs": 11
           },
           "ocr_cer_ci": {
-            "mean": 0.1219,
+            "mean": 0.1735,
             "total_docs": 11
           },
           "ocr_date_accuracy": {
-            "mean": 0.9394,
+            "mean": 0.8939,
             "total_docs": 11
           },
           "ocr_identifier_accuracy": {
@@ -14790,7 +14790,7 @@
             "total_docs": 11
           },
           "ocr_wer": {
-            "mean": 0.191,
+            "mean": 0.2391,
             "total_docs": 11
           },
           "prompt_recall": {
@@ -26011,16 +26011,16 @@
   },
   "ocr": {
     "aggregate": {
-      "cer": 0.025,
-      "cer_ci": 0.025,
-      "date_accuracy": 0.931,
-      "identifier_accuracy": 0.8571,
+      "cer": 0.0379,
+      "cer_ci": 0.0379,
+      "date_accuracy": 0.9,
+      "identifier_accuracy": 0.8,
       "mean_confidence": 94.1304,
       "name_accuracy": 1.0,
       "pages_compared": 46,
       "pages_failed": 0,
       "pages_missing": 1,
-      "wer": 0.0379
+      "wer": 0.0494
     },
     "documents": [
       {
@@ -26174,9 +26174,9 @@
         "wer": 0.0014
       },
       {
-        "cer": 0.0016,
-        "cer_ci": 0.0016,
-        "date_accuracy": 1.0,
+        "cer": 0.5689,
+        "cer_ci": 0.5689,
+        "date_accuracy": 0.5,
         "id": "scan-fax-two-frames",
         "identifier_accuracy": 0.0,
         "mean_confidence": 94.0,
@@ -26186,7 +26186,7 @@
         "pages_failed": 0,
         "pages_missing": 1,
         "text_layer": "scan",
-        "wer": 0.0097
+        "wer": 0.5385
       },
       {
         "cer": 0.0085,
@@ -34897,22 +34897,22 @@
         "party_relation": "to"
       },
       "ocr": {
-        "char_distance": 1,
-        "char_distance_ci": 1,
+        "char_distance": 817,
+        "char_distance_ci": 817,
         "confidence_pages": 1,
         "dates_found": 1,
-        "dates_total": 1,
+        "dates_total": 2,
         "identifiers_found": 0,
-        "identifiers_total": 1,
+        "identifiers_total": 2,
         "mean_confidence": 94.0,
         "names_found": 2,
         "names_total": 2,
         "pages_compared": 1,
         "pages_failed": 0,
         "pages_missing": 1,
-        "truth_chars": 620,
-        "truth_words": 103,
-        "word_distance": 1
+        "truth_chars": 1436,
+        "truth_words": 221,
+        "word_distance": 119
       },
       "page_bucket": "2-4",
       "pages": 2,
@@ -34957,13 +34957,13 @@
         "digest_recall": 1.0,
         "evidence_recall": 0.5,
         "filename_correct": false,
-        "ocr_cer": 0.0016,
-        "ocr_cer_ci": 0.0016,
-        "ocr_date_accuracy": 1.0,
+        "ocr_cer": 0.5689,
+        "ocr_cer_ci": 0.5689,
+        "ocr_date_accuracy": 0.5,
         "ocr_identifier_accuracy": 0.0,
         "ocr_mean_confidence": 94.0,
         "ocr_name_accuracy": 1.0,
-        "ocr_wer": 0.0097,
+        "ocr_wer": 0.5385,
         "parties_correct": true,
         "parties_expected": 1,
         "parties_matched": 1,
@@ -35242,15 +35242,15 @@
         "total_docs": 52
       },
       "ocr_cer": {
-        "mean": 0.1137,
+        "mean": 0.1609,
         "total_docs": 12
       },
       "ocr_cer_ci": {
-        "mean": 0.1137,
+        "mean": 0.1609,
         "total_docs": 12
       },
       "ocr_date_accuracy": {
-        "mean": 0.9444,
+        "mean": 0.9028,
         "total_docs": 12
       },
       "ocr_identifier_accuracy": {
@@ -35266,7 +35266,7 @@
         "total_docs": 12
       },
       "ocr_wer": {
-        "mean": 0.1799,
+        "mean": 0.224,
         "total_docs": 12
       },
       "prompt_recall": {
