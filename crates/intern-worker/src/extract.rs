@@ -530,6 +530,9 @@ pub struct ExtractedPage {
     pub page_number: usize,
     pub text: String,
     pub source: PageSource,
+    /// How sure OCR was of the page: its mean for a page read by OCR, and
+    /// for native text with OCR'd regions merged in, the least of theirs.
+    /// None for a page with no OCR'd text in it.
     pub ocr_confidence: Option<f32>,
     pub vision_escalated: bool,
     /// The page as blocks in reading order (see [`crate::layout`]). Every
@@ -747,7 +750,10 @@ where
         let mut vision_taken = false;
         // The characters of the pages read as their text so far, in page
         // order: a page past the document's is not read for its geometry.
-        let mut planned = MAX_DOCUMENT_CHARS;
+        // And the geometry layouts built so far, which are held until the
+        // pages are put back in order: one past what a document's layouts
+        // may hold is not kept, and its page is read as its text.
+        let mut planned = TextBudget::document();
         for inspection in inspections {
             let page_index = inspection.page_index;
             if let Err(error) = timed_check(cancel, started, limits) {
@@ -849,7 +855,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
-    planned: &mut usize,
+    planned: &mut TextBudget,
 ) -> Result<PagePlan, ExtractionError> {
     let page_index = inspection.page_index;
     let page_number = page_index + 1;
@@ -999,7 +1005,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     // for it and held until the pages are put in order, only to be dropped.
     // What the layouts held while planning repeat is bounded by the
     // document's characters and a page.
-    let route = if goes_out_whole(&inspection.native_text, planned) {
+    let route = if goes_out_whole(&inspection.native_text, &mut planned.characters) {
         route
     } else {
         PageRoute::Fast
@@ -1012,7 +1018,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || native_page(page_number, inspection, signals, route, &stop),
+        || native_page(page_number, inspection, signals, route, &stop, planned),
     );
     Ok(PagePlan::Done { page, vision })
 }
@@ -1125,16 +1131,17 @@ fn native_page(
     signals: RouteSignals,
     route: PageRoute,
     stop: &dyn Fn() -> bool,
+    held: &mut TextBudget,
 ) -> NativeRead {
     // A page past the analysis's bounds, or one the time ran out on, is
-    // read as its text.
+    // read as its text, and so is one whose layout is more than what is
+    // left of `held`.
     let geometry = inspection
         .native
         .as_ref()
         .filter(|native| route == PageRoute::Layout && !native.runs.is_empty())
-        .and_then(|native| {
-            crate::layout::geometry_layout(native, Vec::new(), signals, route, stop)
-        });
+        .and_then(|native| crate::layout::geometry_layout(native, Vec::new(), signals, route, stop))
+        .filter(|layout| held.keeps(layout));
     let (text, layout, fast) = match geometry {
         Some(mut layout) => {
             // The page's text is written from this layout, which the bounds
@@ -1146,7 +1153,17 @@ fn native_page(
             inspection.native_text,
             None,
             Some(FastLayout {
-                native: inspection.native,
+                // A fast layout reads only the page's size, its turn and its
+                // segments. Its runs - as many as the analysis takes on, and
+                // read for nothing when the geometry layout was not kept -
+                // and its images and rules go here, not when the pages are
+                // put in order.
+                native: inspection.native.map(|native| NativePage {
+                    runs: Vec::new(),
+                    images: Vec::new(),
+                    rulings: Vec::new(),
+                    ..native
+                }),
                 signals,
             }),
         ),
@@ -1193,11 +1210,11 @@ impl NativeRead {
                     let mut layout =
                         crate::layout::fast_layout(&page.text, native.as_ref(), signals);
                     crate::layout::number_blocks(page.page_number, &mut layout.blocks);
-                    page.layout = Some(layout);
+                    page.layout = Some(layout).filter(|layout| budget.keeps(layout));
                 }
                 page
             }
-            None => counted(page, &mut budget.characters),
+            None => counted(page, budget),
         }
     }
 }
@@ -1225,6 +1242,12 @@ fn assemble(
     // layout built, or keeps none. Fast layouts also count their lines and
     // cells against it.
     let mut budget = TextBudget::document();
+    // A page read as its text here, when reading it again or its regions
+    // came to nothing, is counted as it is put in order, not as it is read.
+    let mut unheld = TextBudget {
+        characters: usize::MAX,
+        layout_parts: usize::MAX,
+    };
     let mut outcomes = outcomes
         .into_iter()
         .map(|outcome| (outcome.page_index, outcome))
@@ -1265,7 +1288,7 @@ fn assemble(
                             signals,
                             stop,
                         ),
-                        &mut budget.characters,
+                        &mut budget,
                     ),
                     vision,
                 )
@@ -1295,7 +1318,7 @@ fn assemble(
                                     signals,
                                     stop,
                                 ),
-                                &mut budget.characters,
+                                &mut budget,
                             ),
                             page_vision,
                         )
@@ -1308,7 +1331,7 @@ fn assemble(
                         let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
                         let route = native_route(PageRoute::Ocr, &signals);
                         (
-                            native_page(page_number, inspection, signals, route, stop)
+                            native_page(page_number, inspection, signals, route, stop, &mut unheld)
                                 .finish(&mut budget),
                             vision.or(reread_vision),
                         )
@@ -1342,18 +1365,20 @@ fn assemble(
                     scale,
                     stop,
                 )
-                .map(|page| counted(page, &mut budget.characters))
+                .map(|page| counted(page, &mut budget))
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route, stop).finish(&mut budget)
+                    native_page(page_number, inspection, signals, route, stop, &mut unheld)
+                        .finish(&mut budget)
                 });
                 (page, vision)
             }
         };
-        if page.source == PageSource::Ocr
-            && page
-                .ocr_confidence
-                .is_some_and(|confidence| confidence < CONFIDENT_READING)
+        // A page read by OCR, or native text with OCR'd regions merged in,
+        // is only as sure as its least sure reading.
+        if page
+            .ocr_confidence
+            .is_some_and(|confidence| confidence < CONFIDENT_READING)
             && !warnings.contains(&ExtractionWarning::LowOcrConfidence)
         {
             warnings.push(ExtractionWarning::LowOcrConfidence);
@@ -1408,11 +1433,14 @@ impl ExtractedPage {
         source: PageSource,
         budget: &mut TextBudget,
     ) -> Self {
-        let layout = budget.admits(&text).then(|| {
-            let mut layout = PageLayout::of_text(page_number, &text);
-            crate::layout::assign_sections([&mut layout]);
-            layout
-        });
+        let layout = budget
+            .admits(&text)
+            .then(|| {
+                let mut layout = PageLayout::of_text(page_number, &text);
+                crate::layout::assign_sections([&mut layout]);
+                layout
+            })
+            .filter(|layout| budget.keeps(layout));
         Self {
             page_number,
             text,
@@ -1424,20 +1452,20 @@ impl ExtractedPage {
     }
 }
 
-/// What is left of a document's allowance for pages whose layouts are built
-/// from their text: its characters, as the worker counts them on the way
-/// out (see [`goes_out_whole`]), and the lines and table cells those
-/// layouts may hold.
+/// What is left of a document's allowance for the pages it sends: its
+/// characters, as the worker counts them on the way out (see
+/// [`goes_out_whole`]), and the lines, table cells and labelled values its
+/// layouts may hold (see [`PageLayout::parts`]).
 ///
-/// A layout holds an object for every line and cell, and the character caps
-/// alone do not bound how many: two million characters can be hundreds of
-/// thousands of one-letter lines, or of pipes. So a page built from text
-/// gets a layout only while its lines and cells fit both
-/// [`MAX_PAGE_LAYOUT_PARTS`] and what the document has left of
-/// [`MAX_DOCUMENT_LAYOUT_PARTS`]; otherwise it goes without one, as a page
-/// past the characters does, and the host segments it from its text.
-/// Layouts built from a page's geometry or its OCR are bounded where they
-/// are read, by runs and by what OCR can find on a page.
+/// A layout holds an object for every line, cell and value, and the
+/// character caps alone do not bound how many: two million characters can
+/// be hundreds of thousands of one-letter lines, or of pipes, and a page of
+/// one-character runs is a line for every character. So every layout a
+/// document keeps is counted in page order against
+/// [`MAX_DOCUMENT_LAYOUT_PARTS`], whatever route its page took, and one
+/// past what is left is let go; the page keeps its text. A layout built
+/// from text is not built at all when the text alone shows it would hold
+/// more than [`MAX_PAGE_LAYOUT_PARTS`] or than the document has left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextBudget {
     pub characters: usize,
@@ -1453,17 +1481,25 @@ impl TextBudget {
         }
     }
 
-    /// Counts a page built from `text` against the budget, and whether its
-    /// layout may be built: the page goes out whole, and its lines and
-    /// cells fit what a page may hold and what the document has left. Its
-    /// characters are counted either way; its lines and cells only when it
-    /// gets a layout.
+    /// Counts the characters of a page built from `text` against the
+    /// budget, and whether its layout is worth building: the page goes out
+    /// whole, and its text has no more lines and pipes than a page's layout
+    /// may hold or the document has left. The layout, once built, is
+    /// counted by [`TextBudget::keeps`].
     fn admits(&mut self, text: &str) -> bool {
         if !goes_out_whole(text, &mut self.characters) {
             return false;
         }
         let parts = layout_parts(text);
-        if parts > MAX_PAGE_LAYOUT_PARTS || parts > self.layout_parts {
+        parts <= MAX_PAGE_LAYOUT_PARTS && parts <= self.layout_parts
+    }
+
+    /// Counts a layout against what the document's layouts may hold, and
+    /// whether it fits: one that does not is let go, and its page keeps its
+    /// text.
+    fn keeps(&mut self, layout: &PageLayout) -> bool {
+        let parts = layout.parts();
+        if parts > self.layout_parts {
             return false;
         }
         self.layout_parts -= parts;
@@ -1509,13 +1545,19 @@ fn goes_out_whole(text: &str, budget: &mut usize) -> bool {
     }
 }
 
-/// A page read by OCR, counted against the document's characters as the
-/// worker will count them (see [`goes_out_whole`]). Its text is written
-/// from its layout, so the layout is built either way; a page the worker
-/// will cut lets it go here, as the page is read, instead of holding it
-/// until the whole document has been.
-fn counted(mut page: ExtractedPage, characters: &mut usize) -> ExtractedPage {
-    if !goes_out_whole(&page.text, characters) {
+/// A page whose text was written from its layout - read by OCR, or from
+/// its geometry - counted against the document's characters as the worker
+/// will count them (see [`goes_out_whole`]), and its layout against what
+/// the document's layouts may hold (see [`TextBudget`]). The layout is
+/// built either way; a page the worker will cut, or one whose layout does
+/// not fit, lets it go here, as the page is read, instead of holding it
+/// until the whole document has been. The page keeps its text.
+fn counted(mut page: ExtractedPage, budget: &mut TextBudget) -> ExtractedPage {
+    if !goes_out_whole(&page.text, &mut budget.characters) {
+        page.layout = None;
+    } else if let Some(layout) = &page.layout
+        && !budget.keeps(layout)
+    {
         page.layout = None;
     }
     page
@@ -2169,11 +2211,15 @@ pub fn extract_image(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     cancel.check()?;
+    let frames = later_frames(path, limits.max_page_count.saturating_sub(1), cancel)?;
+    // A TIFF that opens with a thumbnail has its first page further on.
     let image = cancel.timed(
         |timings| &mut timings.image_decode_micros,
-        || load_oriented_image(path, limits),
+        || match frames.first {
+            Some(directory) => decode_tiff_frame(path, directory, limits),
+            None => load_oriented_image(path, limits),
+        },
     )?;
-    let frames = later_frames(path, limits.max_page_count.saturating_sub(1));
     let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
     cancel.report_progress("ocr", 0, Some(page_count));
@@ -2188,8 +2234,9 @@ pub fn extract_image(
     // An image file has no physical size to go by; its pixels are taken to
     // be 300 DPI, which is what scanners write.
     // The document's characters, counted down frame by frame as the worker
-    // will count them when it sends them (see [`counted`]).
-    let mut characters = MAX_DOCUMENT_CHARS;
+    // will count them when it sends them, and its layouts (see
+    // [`counted`]).
+    let mut budget = TextBudget::document();
     let mut page = cancel.timed(
         |timings| &mut timings.analysis_micros,
         || {
@@ -2198,7 +2245,7 @@ pub fn extract_image(
             })
         },
     );
-    page = counted(page, &mut characters);
+    page = counted(page, &mut budget);
     page.vision_escalated = true;
     let mut pages = vec![page];
 
@@ -2235,7 +2282,7 @@ pub fn extract_image(
                 )
             },
         );
-        pages.push(counted(page, &mut characters));
+        pages.push(counted(page, &mut budget));
     }
     let mut warnings = Vec::new();
     if low_confidence {
@@ -2255,9 +2302,12 @@ pub fn extract_image(
 }
 
 /// The frames of an image file after its first: where each one's image file
-/// directory is, and whether there were more than the limit allowed.
+/// directory is, and whether there were more than the limit allowed. And,
+/// when the file's first directory is a reduced-resolution copy, where the
+/// first page's own directory is: that page is read in its place.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct LaterFrames {
+    first: Option<u64>,
     directories: Vec<u64>,
     beyond_limit: bool,
 }
@@ -2266,22 +2316,33 @@ struct LaterFrames {
 /// chain of image file directories without decoding anything.
 ///
 /// A reduced-resolution copy of a page (`NewSubfileType` bit 0) is not a
-/// page of its own and is passed over. Anything that does not read as a
+/// page of its own and is passed over, the file's first directory included:
+/// a file that opens with a thumbnail has its first page where the first
+/// full-resolution directory is. Anything that does not read as a
 /// TIFF holds one image by construction, and a chain that cannot be
 /// followed, or that loops, ends where it stops making sense: the frames
 /// read up to there are still the document's pages.
-fn later_frames(path: &Path, limit: usize) -> LaterFrames {
+///
+/// The walk reads at most [`MAX_TIFF_ENTRIES`] directory entries in all, and
+/// stops when the request is canceled: a chain of directories each with a
+/// table of tens of thousands of entries reads as truncated where it stops.
+fn later_frames(
+    path: &Path,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<LaterFrames, ExtractionError> {
     let mut frames = LaterFrames::default();
     let Ok(file) = File::open(path) else {
-        return frames;
+        return Ok(frames);
     };
     let mut file = BufReader::new(file);
     let Some(format) = TiffFormat::read(&mut file) else {
-        return frames;
+        return Ok(frames);
     };
+    let mut entries_left = MAX_TIFF_ENTRIES;
     let mut seen = std::collections::HashSet::new();
     let mut next = format.first;
-    let mut first = true;
+    let mut first_page_found = false;
     // A chain can be no longer than the file has room for directories.
     while next != 0 && seen.insert(next) {
         if seen.len() > MAX_TIFF_DIRECTORIES {
@@ -2290,25 +2351,53 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
             frames.beyond_limit = true;
             break;
         }
-        let Some(directory) = format.directory(&mut file, next) else {
-            break;
-        };
-        if !first && !directory.reduced_resolution {
-            if frames.directories.len() == limit {
+        cancel.check()?;
+        let directory = match format.directory(&mut file, next, &mut entries_left) {
+            DirectoryRead::Read(directory) => directory,
+            // The chain says there is more and it cannot be read: whatever
+            // was there is lost, and the document says so.
+            DirectoryRead::Unreadable | DirectoryRead::PastBudget => {
                 frames.beyond_limit = true;
                 break;
             }
-            frames.directories.push(next);
+        };
+        if !directory.reduced_resolution {
+            if !first_page_found {
+                first_page_found = true;
+                if next != format.first {
+                    frames.first = Some(next);
+                }
+            } else {
+                if frames.directories.len() == limit {
+                    frames.beyond_limit = true;
+                    break;
+                }
+                frames.directories.push(next);
+            }
         }
-        first = false;
         next = directory.next;
     }
-    frames
+    Ok(frames)
 }
 
 /// More directories than any document this reads could be pages of: the
 /// page limit, and then some for reduced-resolution copies.
 const MAX_TIFF_DIRECTORIES: usize = 4_096;
+
+/// The most directory entries a TIFF's walk reads in all. A directory
+/// has a few dozen; a table may say it has 65,535, and every directory of
+/// a chain may say so.
+const MAX_TIFF_ENTRIES: u64 = 262_144;
+
+/// What reading one image file directory came to.
+enum DirectoryRead {
+    Read(TiffDirectory),
+    /// Not a directory this can read: the chain ends there, with more
+    /// than was read.
+    Unreadable,
+    /// More entries than the walk has left to read.
+    PastBudget,
+}
 
 /// How a TIFF counts: its byte order, classic or BigTIFF, and where its
 /// first image file directory is.
@@ -2379,20 +2468,46 @@ impl TiffFormat {
         }
     }
 
-    fn directory(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<TiffDirectory> {
+    /// Reads the directory at `offset`, counting its entries against
+    /// `entries_left`.
+    fn directory(
+        &self,
+        file: &mut (impl Read + Seek),
+        offset: u64,
+        entries_left: &mut u64,
+    ) -> DirectoryRead {
+        let Some(entries) = self.entry_count(file, offset) else {
+            return DirectoryRead::Unreadable;
+        };
+        if entries > *entries_left {
+            return DirectoryRead::PastBudget;
+        }
+        *entries_left -= entries;
+        match self.entries(file, entries) {
+            Some(directory) => DirectoryRead::Read(directory),
+            None => DirectoryRead::Unreadable,
+        }
+    }
+
+    /// How many entries the directory at `offset` says it has: up to 65,535
+    /// in a classic TIFF, and as many as an eight-byte count says in a
+    /// BigTIFF, which the walk's budget, not this, bounds.
+    fn entry_count(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<u64> {
         file.seek(SeekFrom::Start(offset)).ok()?;
-        let entries = if self.big {
+        if self.big {
             let mut count = [0_u8; 8];
             file.read_exact(&mut count).ok()?;
-            self.quad(count)
+            Some(self.quad(count))
         } else {
             let mut count = [0_u8; 2];
             file.read_exact(&mut count).ok()?;
-            u64::from(self.word(count))
-        };
-        if entries > u64::from(u16::MAX) {
-            return None;
+            Some(u64::from(self.word(count)))
         }
+    }
+
+    /// A directory's `entries` entries and the offset after them, read from
+    /// where its count ends.
+    fn entries(&self, file: &mut impl Read, entries: u64) -> Option<TiffDirectory> {
         let entry_bytes = if self.big { 20 } else { 12 };
         let value_at = if self.big { 12 } else { 8 };
         let mut reduced_resolution = false;
@@ -2701,20 +2816,129 @@ mod tiff_chains {
         reduced.extend(std::iter::repeat_n(true, MAX_TIFF_DIRECTORIES + 10));
         reduced.push(false);
         let file = chain(&reduced, None);
-        let frames = later_frames(file.path(), 10);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
         assert!(frames.directories.is_empty());
         assert!(frames.beyond_limit, "pages may lie past the bound");
+    }
+
+    /// A file that opens with a thumbnail of its first page: the thumbnail
+    /// is passed over, the page after it is read in its place, and is not
+    /// read again as a later page.
+    #[test]
+    fn a_thumbnail_first_is_passed_over_for_the_page_after_it() {
+        const DIRECTORY: u64 = 2 + 12 + 4;
+        let file = chain(&[true, false, false], None);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, Some(8 + DIRECTORY));
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        let plain = chain(&[false, true, false], None);
+        let frames = later_frames(plain.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, None, "the first directory is the first page");
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        // Thumbnails only: the first directory is still read, as before.
+        let thumbnails = chain(&[true, true], None);
+        let frames = later_frames(thumbnails.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, None);
+        assert!(frames.directories.is_empty());
+    }
+
+    /// A chain of directories whose tables say they have more entries than
+    /// the walk reads in all stops where the budget runs out, and reads as
+    /// going on.
+    #[test]
+    fn a_chain_of_huge_entry_tables_stops_at_the_entry_budget() {
+        // A page, then directories that each claim the most entries a
+        // table may, all pointing at the same table.
+        let mut bytes = b"II".to_vec();
+        bytes.extend(42_u16.to_le_bytes());
+        bytes.extend(8_u32.to_le_bytes());
+        let directory = |bytes: &mut Vec<u8>, count: u16, next: u32| {
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, 12 * usize::from(count)));
+            bytes.extend(next.to_le_bytes());
+        };
+        let huge_at = (8 + 2 + 4) as u32;
+        directory(&mut bytes, 0, huge_at);
+        let huge_end = huge_at as usize + 2 + 12 * usize::from(u16::MAX);
+        let after = (huge_end + 4) as u32;
+        directory(&mut bytes, u16::MAX, after);
+        // Each next directory a fresh table, so the chain does not loop.
+        for _ in 0..8 {
+            let next = bytes.len() as u32 + 2 + 12 * u32::from(u16::MAX) + 4;
+            directory(&mut bytes, u16::MAX, next);
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+
+        let frames = later_frames(file.path(), 100, &CancellationToken::new()).unwrap();
+        assert!(frames.beyond_limit, "pages may lie past the budget");
+
+        let canceled = CancellationToken::new();
+        canceled.cancel();
+        assert!(later_frames(file.path(), 100, &canceled).is_err());
+    }
+
+    /// A BigTIFF directory counts its entries in eight bytes: more than a
+    /// classic table holds is read within the walk's budget, and past it
+    /// the document reads as going on rather than as complete.
+    #[test]
+    fn a_bigtiff_directory_of_many_entries_is_read_within_the_budget() {
+        let bigtiff = |entries: u64, entry_bytes: u64| {
+            let mut bytes = b"II".to_vec();
+            bytes.extend(43_u16.to_le_bytes());
+            bytes.extend(8_u16.to_le_bytes());
+            bytes.extend(0_u16.to_le_bytes());
+            bytes.extend(16_u64.to_le_bytes());
+            // The first page: no entries, then the next directory.
+            let second = 16 + 8 + 8;
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend((second as u64).to_le_bytes());
+            // A page with `entries` entries, of which `entry_bytes` are
+            // written, then the third page.
+            bytes.extend(entries.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, (20 * entry_bytes) as usize));
+            let third = bytes.len() as u64 + 8;
+            bytes.extend(third.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), bytes).unwrap();
+            file
+        };
+        let cancel = CancellationToken::new();
+
+        let wide = bigtiff(70_000, 70_000);
+        let frames = later_frames(wide.path(), 10, &cancel).unwrap();
+        assert_eq!(frames.directories.len(), 2);
+        assert!(!frames.beyond_limit);
+
+        let huge = bigtiff(1 << 40, 0);
+        let frames = later_frames(huge.path(), 10, &cancel).unwrap();
+        assert!(frames.directories.is_empty());
+        assert!(frames.beyond_limit, "pages may lie past the budget");
+    }
+
+    /// A chain whose next directory lies past the end of the file says
+    /// there is more than could be read: the document reads as going on.
+    #[test]
+    fn a_chain_pointing_past_the_file_is_marked_as_going_on() {
+        let pages = chain(&[false, false], Some(1_000));
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.directories.len(), 1);
+        assert!(frames.beyond_limit);
     }
 
     #[test]
     fn a_whole_chain_or_a_looping_one_is_not_marked_as_going_on() {
         let pages = chain(&[false, false, true, false], None);
-        let frames = later_frames(pages.path(), 10);
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.directories.len(), 2);
         assert!(!frames.beyond_limit);
 
         let looping = chain(&[false, false, false], Some(0));
-        let frames = later_frames(looping.path(), 10);
+        let frames = later_frames(looping.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.directories.len(), 2);
         assert!(
             !frames.beyond_limit,
@@ -2776,6 +3000,82 @@ mod text_page_layouts {
                 .layout
                 .is_some()
         );
+    }
+
+    /// A page whose geometry layout is not kept - the document's layouts
+    /// are full - is read as its text, and holds none of its runs while it
+    /// waits for its fast layout.
+    #[test]
+    fn a_page_read_as_its_text_holds_no_runs_while_it_waits() {
+        use crate::layout::TextRun;
+
+        let runs = (0..40)
+            .map(|line| TextRun {
+                text: format!("Line {line}"),
+                bbox: [540, 600 + line * 120, 1800, 690 + line * 120],
+                bold: false,
+                confidence: None,
+            })
+            .collect::<Vec<_>>();
+        let inspection = PdfPageInspection {
+            page_index: 0,
+            native_text: "Line 0".to_owned(),
+            native: Some(NativePage {
+                width: 6120,
+                height: 7920,
+                segments: runs.iter().map(|run| run.bbox).collect(),
+                runs,
+                ..NativePage::default()
+            }),
+            ..PdfPageInspection::default()
+        };
+        let mut full = TextBudget {
+            characters: MAX_DOCUMENT_CHARS,
+            layout_parts: 0,
+        };
+
+        let read = native_page(
+            1,
+            inspection,
+            RouteSignals::default(),
+            PageRoute::Layout,
+            &|| false,
+            &mut full,
+        );
+
+        assert!(read.page.layout.is_none());
+        let native = read.fast.unwrap().native.unwrap();
+        assert!(native.runs.is_empty());
+        assert_eq!(native.segments.len(), 40, "the fast layout's line boxes");
+        assert_eq!((native.width, native.height), (6120, 7920));
+    }
+
+    /// An OCR reading whose lines were not analysed, with more lines of
+    /// text than a page's layout may hold, goes without a layout and keeps
+    /// its text.
+    #[test]
+    fn an_ocr_reading_too_dense_for_a_layout_keeps_its_text_and_no_layout() {
+        let dense = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new(dense.clone(), 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_none());
+        assert_eq!(page.text, dense);
+
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new("RECEIPT\nTotal 4.00", 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_some());
     }
 
     /// Lines and cells are counted across the document in page order: once

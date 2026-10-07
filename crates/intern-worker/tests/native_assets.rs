@@ -539,6 +539,60 @@ fn a_page_of_more_runs_than_the_analysis_takes_on_keeps_its_text() {
     assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
 }
 
+/// A tall page of lines of type set so small - a twentieth of a point - that
+/// each glyph rounds to no width at all: thousands more runs than the layout
+/// analysis takes on, none of which it would read.
+#[cfg(feature = "native-pdfium")]
+fn zero_width_lines_pdf() -> Vec<u8> {
+    let mut contents = String::new();
+    for line in 0..7_500 {
+        let y = 1_450.0 - f64::from(line) * 0.18;
+        contents.push_str(&format!("BT /F1 0.05 Tf 54 {y:.2} Td (A) Tj ET\n"));
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 1500] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// Runs with no width are never read by the analysis, but each one kept
+/// still counts: a page of more of them than the analysis takes on keeps
+/// none, rather than a run for every line.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_of_runs_with_no_width_keeps_no_more_than_the_bound() {
+    use intern_worker::layout::router::bounds::MAX_RUNS;
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("zero-width.pdf");
+    std::fs::write(&path, zero_width_lines_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(
+        pages[0].native_text.lines().count() > MAX_RUNS,
+        "{} lines",
+        pages[0].native_text.lines().count()
+    );
+    let native = pages[0].native.as_ref().unwrap();
+    let runs = backend.page_runs(&path, 0, native, &cancel).unwrap();
+    assert!(runs.len() <= MAX_RUNS, "{} runs kept", runs.len());
+}
+
 /// Two pages of a few lines each.
 #[cfg(feature = "native-pdfium")]
 fn two_page_pdf() -> Vec<u8> {
@@ -859,6 +913,38 @@ fn many_objects_pdf() -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A page whose first objects are invisible text - somebody's OCR layer -
+/// and whose visible text is drawn only after more objects than the survey
+/// visits.
+#[cfg(feature = "native-pdfium")]
+fn hidden_layer_then_many_objects_pdf() -> Vec<u8> {
+    let mut contents = String::new();
+    for line in 0..10 {
+        let y = 700 - line * 14;
+        contents.push_str(&format!(
+            "BT 3 Tr /F1 12 Tf 54 {y} Td (Hidden layer line {line}.) Tj ET\n"
+        ));
+    }
+    for index in 0..(intern_worker::layout::router::bounds::MAX_SURVEY_OBJECTS + 500) {
+        let y = 100 + (index % 400);
+        contents.push_str(&format!("54 {y} m 300 {y} l S\n"));
+    }
+    contents.push_str("BT 0 Tr /F1 12 Tf 54 60 Td (The visible text of the page.) Tj ET\n");
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
 /// A page whose only text is drawn in forms nested `depth` deep.
 #[cfg(feature = "native-pdfium")]
 fn nested_forms_pdf(depth: usize) -> Vec<u8> {
@@ -949,6 +1035,16 @@ fn a_page_past_the_survey_bounds_is_read_as_its_text() {
             "{name}"
         );
     }
+
+    // What the walk counted before it stopped is part of the page, not a
+    // share of it: an invisible layer among the first objects says nothing
+    // about the page, which is routed on its text.
+    let path = directory.path().join("hidden.pdf");
+    std::fs::write(&path, hidden_layer_then_many_objects_pdf()).unwrap();
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(pages[0].native.is_none());
+    let signals = pages[0].signals.unwrap();
+    assert_eq!((signals.invisible, signals.segments), (0, 0), "{signals:?}");
 
     // Forms nested within the bound are followed as before.
     let path = directory.path().join("shallow.pdf");

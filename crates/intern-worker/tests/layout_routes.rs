@@ -210,6 +210,102 @@ fn columns_written_row_by_row_are_read_column_by_column() {
     assert_eq!(page.source, PageSource::Native);
 }
 
+/// Geometry layouts are built while the pages are planned and held until
+/// they are put back in order, and one-character runs are a line each, far
+/// inside the characters a document may carry. Every layout a document
+/// keeps counts against what its layouts may hold together: once the pages
+/// before have taken it, a page is read as its text.
+#[test]
+fn geometry_layouts_past_what_a_documents_layouts_may_hold_are_not_kept() {
+    use intern_worker::layout::RouteSignals;
+    use intern_worker::limits::MAX_DOCUMENT_LAYOUT_PARTS;
+
+    const RUNS: usize = 3_000;
+    let lines = (0..RUNS).map(|line| format!("w{line}")).collect::<Vec<_>>();
+    // PDFium's text runs the lines together; the geometry puts them a line
+    // each.
+    let text = lines.join(" ");
+    let page = |page_index: usize| {
+        let runs = lines
+            .iter()
+            .enumerate()
+            .map(|(line, word)| run(54, 10 + line as u32 * 2, word, 1))
+            .collect();
+        let mut page = native_page(page_index, &text, runs);
+        let native = page.native.as_mut().unwrap();
+        native.height = 10 * (20 + 2 * RUNS as u32);
+        // Two columns, so the page is rebuilt from its geometry.
+        page.signals = Some(RouteSignals {
+            chars: 1_000,
+            columns: 2,
+            ..RouteSignals::default()
+        });
+        page
+    };
+    let first = read(&StandInPdf::new(vec![page(0)]), &NoOcr);
+    let layout = first.pages[0].layout.as_ref().unwrap();
+    assert_eq!(layout.route, PageRoute::Layout);
+    let per_page = layout.parts();
+    assert!(per_page >= RUNS, "a line for every run: {per_page}");
+    let fitting = MAX_DOCUMENT_LAYOUT_PARTS / per_page;
+
+    let pages = (0..fitting + 3).map(page).collect();
+    let document = read(&StandInPdf::new(pages), &NoOcr);
+
+    let kept = document
+        .pages
+        .iter()
+        .map(|page| page.layout.as_ref().map(|layout| layout.route))
+        .collect::<Vec<_>>();
+    // The pages past what the layouts may hold are not rebuilt from their
+    // geometry while they are planned: they are read as their text, whose
+    // one line is a layout small enough to keep.
+    let mut expected = vec![Some(PageRoute::Layout); fitting];
+    expected.extend([Some(PageRoute::Fast); 3]);
+    assert_eq!(kept, expected);
+    let held = document
+        .pages
+        .iter()
+        .filter_map(|page| page.layout.as_ref())
+        .map(|layout| layout.parts())
+        .sum::<usize>();
+    assert!(held <= MAX_DOCUMENT_LAYOUT_PARTS);
+    assert_eq!(document.pages[fitting].text, text);
+    assert_ne!(document.pages[0].text, text, "rebuilt a line a run");
+}
+
+/// A page sent to the layout route whose runs all lack width - type too
+/// small for its glyphs to have any - has no geometry to be rebuilt from:
+/// it keeps its text as it was read, on the fast route, rather than going
+/// out empty.
+#[test]
+fn a_page_whose_runs_have_no_width_keeps_its_text() {
+    use intern_worker::layout::RouteSignals;
+
+    let text = "Payment due on receipt.\r\nRemit to the address above.";
+    let runs = text
+        .split("\r\n")
+        .enumerate()
+        .map(|(line, words)| {
+            let mut run = run(54, 60 + line as u32 * 12, words, 9);
+            run.bbox[2] = run.bbox[0];
+            run
+        })
+        .collect();
+    let mut page = native_page(0, text, runs);
+    page.signals = Some(RouteSignals {
+        chars: 1_000,
+        columns: 2,
+        ..RouteSignals::default()
+    });
+
+    let document = read(&StandInPdf::new(vec![page]), &NoOcr);
+
+    let page = &document.pages[0];
+    assert_eq!(page.text, text);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
+}
+
 /// A PDF whose inspection carries no characters: the runs of a page are
 /// handed over only when the page asks for them, and the asking counted.
 struct RunsOnRequest {
@@ -678,7 +774,19 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
     let region = layout.blocks.last().unwrap();
     assert_eq!(region.source, TextSource::Ocr);
     assert_eq!(region.confidence, Some(88));
+    assert_eq!(page.ocr_confidence, Some(88.0));
     assert!(document.warnings.is_empty());
+
+    // A region kept though OCR was unsure of it: the page is native text,
+    // but no surer than that reading, and the document says so.
+    let unsure = read(
+        &StandInPdf::new(vec![page_with_an_image_region()]),
+        &SignatureReader(68.0),
+    );
+    assert!(unsure.pages[0].text.ends_with("Signed April 30, 2026"));
+    assert_eq!(unsure.pages[0].source, PageSource::Native);
+    assert_eq!(unsure.pages[0].ocr_confidence, Some(68.0));
+    assert_eq!(unsure.warnings, vec![ExtractionWarning::LowOcrConfidence]);
 
     // A region read as noise adds nothing, and the page reads as it would
     // have without it.
@@ -687,6 +795,7 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
         &SignatureReader(31.0),
     );
     assert_eq!(noise.pages[0].text, page_with_an_image_region().native_text);
+    assert_eq!(noise.pages[0].ocr_confidence, None);
     // So does one OCR cannot read.
     let unread = read(
         &StandInPdf::new(vec![page_with_an_image_region()]),

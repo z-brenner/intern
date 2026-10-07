@@ -31,6 +31,7 @@ mod text;
 
 pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
+pub(crate) use text::escape_cell;
 pub use text::{blocks_from_lines, blocks_from_text};
 use text::{blocks_from_page_lines, line_spans};
 
@@ -200,6 +201,24 @@ impl LayoutBlock {
 }
 
 impl PageLayout {
+    /// How many lines, table cells and labelled values the layout holds:
+    /// the objects it has one of for every few characters, which the
+    /// character caps alone do not bound (see
+    /// [`crate::extract::TextBudget`]). Its blocks are never more than
+    /// these.
+    pub fn parts(&self) -> usize {
+        self.blocks
+            .iter()
+            .map(|block| {
+                block.lines.len()
+                    + block.fields.len()
+                    + block.table.as_ref().map_or(0, |table| {
+                        table.rows.iter().map(|row| row.cells.len()).sum()
+                    })
+            })
+            .sum()
+    }
+
     /// A page read by a reader that knows no geometry: the blocks of its
     /// text, on the fast route.
     pub fn of_text(page_number: usize, text: &str) -> Self {
@@ -323,11 +342,12 @@ pub fn mark_running_blocks(layouts: &mut [&mut PageLayout]) {
             .collect::<Vec<_>>()
             .join(" ")
     };
+    // A page of few blocks is split between its ends, the top taking the
+    // odd one: body text over a page number has its number at the bottom.
     let ends = |layout: &PageLayout| {
         let count = layout.blocks.len();
-        let top = (0..count.min(REACH)).collect::<Vec<_>>();
-        let bottom =
-            (count.saturating_sub(REACH).max(top.len().min(count))..count).collect::<Vec<_>>();
+        let top = (0..count.div_ceil(2).min(REACH)).collect::<Vec<_>>();
+        let bottom = (count.saturating_sub(REACH).max(top.len())..count).collect::<Vec<_>>();
         (top, bottom)
     };
     let pages = layouts.len();
@@ -583,6 +603,10 @@ pub fn ocr_page(
 ) -> ExtractedPage {
     let (mut layout, analysed) = ocr_layout_of(&reading, size, scale, signals, stop);
     number_blocks(page_number, &mut layout.blocks);
+    // A reading whose lines were not analysed, and whose text has more lines
+    // than a page's layout may hold, goes without a layout, as a text page
+    // that dense does, and keeps its text.
+    let dense = !analysed && too_dense(&reading.text);
     let text = if !analysed || layout.blocks.is_empty() {
         reading.text
     } else {
@@ -594,7 +618,7 @@ pub fn ocr_page(
         source: PageSource::Ocr,
         ocr_confidence: Some(reading.mean_confidence),
         vision_escalated: false,
-        layout: Some(layout),
+        layout: (!dense).then_some(layout),
     }
 }
 
@@ -646,6 +670,9 @@ fn ocr_layout_of(
     };
     let from_lines = analysed.is_some();
     let blocks = analysed.unwrap_or_else(|| {
+        if too_dense(&reading.text) {
+            return Vec::new();
+        }
         let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
         let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
         for block in &mut blocks {
@@ -661,6 +688,12 @@ fn ocr_layout_of(
         blocks,
     };
     (layout, from_lines)
+}
+
+/// Whether blocks built from `text` would hold more lines and cells than a
+/// page's layout may (see [`crate::extract::TextBudget`]).
+fn too_dense(text: &str) -> bool {
+    crate::extract::layout_parts(text) > crate::limits::MAX_PAGE_LAYOUT_PARTS
 }
 
 /// Images on a page that may hold text of their own: large, and with no
@@ -734,10 +767,14 @@ pub fn regions_page(
     }
     let (display_width, display_height) = native.display_size();
     let mut extra = Vec::new();
+    // The least sure of the readings merged in: a page with OCR'd text in
+    // it is only as sure as that text.
+    let mut least_confidence: Option<f32> = None;
     for (reading, crop) in readings {
         if reading.text.trim().is_empty() || reading.mean_confidence < REGION_CONFIDENCE {
             continue;
         }
+        let merged_before = extra.len();
         let whole = [crop[0], crop[1], crop[2], crop[3]];
         let lines = if reading.lines.is_empty() {
             vec![OcrLine {
@@ -776,6 +813,11 @@ pub fn regions_page(
                 confidence: Some(line.confidence),
             });
         }
+        if extra.len() > merged_before {
+            least_confidence = Some(least_confidence.map_or(reading.mean_confidence, |least| {
+                least.min(reading.mean_confidence)
+            }));
+        }
     }
     if extra.is_empty() {
         return None;
@@ -786,7 +828,7 @@ pub fn regions_page(
         page_number,
         text: linearize(&layout.blocks),
         source: PageSource::Native,
-        ocr_confidence: None,
+        ocr_confidence: least_confidence,
         vision_escalated: false,
         layout: Some(layout),
     })
@@ -969,6 +1011,12 @@ mod tests {
             assert_eq!(layout.blocks[2].kind, BlockKind::Paragraph);
             assert_eq!(layout.blocks[3].kind, BlockKind::PageFooter);
         }
+        // A page of two blocks has one at each end: its page number is at
+        // the bottom.
+        let mut sparse = PageLayout::of_text(4, "Margins held through the year.\n\n4");
+        mark_running_blocks(&mut [&mut sparse]);
+        assert_eq!(sparse.blocks[0].kind, BlockKind::Paragraph);
+        assert_eq!(sparse.blocks[1].kind, BlockKind::PageFooter);
         assert!(!is_page_number("2026"), "a year alone");
         assert!(is_page_number("- 17 -") && is_page_number("Page 4 of 12"));
         assert!(!is_page_number("Section 4"));

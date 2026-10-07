@@ -31,9 +31,10 @@ pub const MAX_DOCUMENT_CHARS: usize = 8_000_000;
 /// fixtures hold has under 700. A page past this goes without a layout, and
 /// the host segments it from its text.
 pub const MAX_PAGE_LAYOUT_PARTS: usize = 50_000;
-/// Lines and table cells every layout built from text may hold together,
-/// counted in page order. The densest document InternBench and the fixtures
-/// hold has about ten thousand.
+/// Lines, table cells and labelled values every layout a document keeps may
+/// hold together, whatever route each page took, counted in page order. The
+/// densest document InternBench and the fixtures hold has about ten
+/// thousand.
 pub const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
 pub const MAX_PAGE_MEGAPIXELS: u64 = 25;
 pub const MAX_PAGE_PIXELS: u64 = MAX_PAGE_MEGAPIXELS * 1_000_000;

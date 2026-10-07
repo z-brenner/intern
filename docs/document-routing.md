@@ -423,20 +423,30 @@ and inspection reads runs ahead only while the pages read so far stay
 within the document's characters, so the layouts and runs held while a
 document is planned repeat at most its characters and a page.
 
-The character caps do not bound how many objects a layout built from text
-holds, one for every line and every table cell: two million characters
-can be hundreds of thousands of one-letter lines, or of pipes. So a page
-whose layout is built from its text (a fast PDF page, or any reader with
-no geometry) gets one only while its lines and pipes fit both
-`MAX_PAGE_LAYOUT_PARTS` (50,000 on a page) and what the document has left
-of `MAX_DOCUMENT_LAYOUT_PARTS` (200,000), counted in page order. The
-densest page of InternBench and the fixtures has 647, and the densest
-document 10,192. A page past either is read as its text with no layout.
-The engine, segmenting a page that came without a layout, holds itself to
-the same two bounds; a page past them is cut into plain stretches of its
-text of at most 4 KB each, so it can still be indexed. Layouts from a
-page's geometry or its OCR are bounded where they are read, by runs and by
-what OCR finds on a page.
+The character caps do not bound how many objects a layout holds: one for
+every line, table cell and labelled value. Two million characters can be
+hundreds of thousands of one-letter lines or pipes, and a page of
+one-character runs is a line for every character. So every layout a
+document keeps is counted, whatever route its page took. Counting is in
+page order, against `MAX_DOCUMENT_LAYOUT_PARTS` (200,000 lines, cells and
+values), and a layout past what is left is let go while its page keeps its
+text.
+
+* **Built from text** (a fast PDF page, or any reader with no geometry): not
+  built at all when its text alone has more lines and pipes than
+  `MAX_PAGE_LAYOUT_PARTS` (50,000) or than the document has left.
+* **Geometry**: these layouts are built while a PDF is planned and held
+  until its pages are put back in order, so they are also counted as they
+  are built. One past what is left is not kept, and its page is read as its
+  text on the fast route.
+
+The densest page of InternBench and the fixtures has 647 lines and pipes,
+and the densest document 10,192.
+
+The engine segments a page that came without a layout. It holds itself to
+the same two bounds, counting the layouts the document arrived with first.
+A page past them is cut into plain stretches of its text of at most 4 KB
+each, so it can still be indexed.
 
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the

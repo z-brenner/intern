@@ -221,14 +221,17 @@ pub fn structured(source: &DocumentSource) -> StructuredDocument {
         .pages
         .iter()
         .map(|page| match &page.layout {
-            Some(layout) => StructuredPage {
-                page_number: page.page_number,
-                origin: page.origin,
-                route: Some(layout.route),
-                size: (layout.width > 0 && layout.height > 0)
-                    .then_some([layout.width, layout.height]),
-                blocks: layout.blocks.clone(),
-            },
+            Some(layout) => {
+                parts_left = parts_left.saturating_sub(parts_of(&layout.blocks));
+                StructuredPage {
+                    page_number: page.page_number,
+                    origin: page.origin,
+                    route: Some(layout.route),
+                    size: (layout.width > 0 && layout.height > 0)
+                        .then_some([layout.width, layout.height]),
+                    blocks: layout.blocks.clone(),
+                }
+            }
             None => {
                 let parts = layout_parts(&page.text);
                 let blocks = if parts <= MAX_PAGE_LAYOUT_PARTS && parts <= parts_left {
@@ -262,6 +265,23 @@ const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
 
 /// The most bytes of a page's text one of its [`stretches`] holds.
 const STRETCH_BYTES: usize = 4_096;
+
+/// How many lines, table cells and labelled values blocks hold, as the
+/// worker counts a layout's. The layouts a document arrived with count
+/// against [`MAX_DOCUMENT_LAYOUT_PARTS`] too, so the pages segmented here
+/// get only what they leave.
+fn parts_of(blocks: &[LayoutBlock]) -> usize {
+    blocks
+        .iter()
+        .map(|block| {
+            block.lines.len()
+                + block.fields.len()
+                + block.table.as_ref().map_or(0, |table| {
+                    table.rows.iter().map(|row| row.cells.len()).sum()
+                })
+        })
+        .sum()
+}
 
 /// How many lines and table cells blocks segmented from `text` can hold at
 /// most: one for each line, and one for each pipe, as the worker counts
@@ -884,6 +904,47 @@ mod tests {
         }
         assert!(
             document.pages[fitting]
+                .blocks
+                .iter()
+                .all(|block| block.lines.is_empty())
+        );
+    }
+
+    /// The layouts a document arrived with count against what its pages may
+    /// hold: a page without one after them gets only what they leave, and
+    /// is cut into stretches when that is not enough.
+    #[test]
+    fn layouts_that_arrived_count_against_what_segmented_pages_may_hold() {
+        let line = LayoutLine {
+            text: "A".to_owned(),
+            bbox: None,
+            confidence: None,
+        };
+        let mut first = SourcePage::new(1, "A", PageOrigin::Native);
+        first.layout = Some(PageLayout {
+            blocks: vec![LayoutBlock {
+                id: "p1.b1".to_owned(),
+                kind: BlockKind::Paragraph,
+                text: "A".to_owned(),
+                bbox: None,
+                level: None,
+                section: None,
+                source: TextSource::Native,
+                confidence: None,
+                lines: vec![line; MAX_DOCUMENT_LAYOUT_PARTS - 10],
+                table: None,
+                fields: Vec::new(),
+            }],
+            ..PageLayout::default()
+        });
+        let second = SourcePage::new(2, "TERMS\nNet 30.\n\nPaid in full.", PageOrigin::Native);
+        let third = SourcePage::new(3, "A\n".repeat(20), PageOrigin::Native);
+        let document = structured(&DocumentSource::from_pages(vec![first, second, third]));
+
+        assert_eq!(document.pages[1].blocks[0].kind, BlockKind::Heading);
+        assert!(!document.pages[1].blocks[0].lines.is_empty());
+        assert!(
+            document.pages[2]
                 .blocks
                 .iter()
                 .all(|block| block.lines.is_empty())

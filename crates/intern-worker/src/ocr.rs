@@ -23,6 +23,12 @@ use crate::limits::ResourceLimits;
 #[cfg(feature = "native-tesseract")]
 use crate::temp::TempWorkspace;
 
+/// The most words of a reading whose boxes are kept for its lines. The
+/// layout analysis takes on at most `MAX_RUNS` (4,000) lines, a dense page
+/// is a few thousand words, and a noisy image read as hundreds of thousands
+/// of them would otherwise hold a box for each.
+pub const MAX_TSV_WORDS: usize = 20_000;
+
 /// Rebuilds a page's text from Tesseract's TSV output, keeping the layout
 /// Tesseract found.
 ///
@@ -48,11 +54,17 @@ use crate::temp::TempWorkspace;
 /// reading's boxes are turned upright - the page the lines describe is the
 /// image turned a quarter - and the reading says so in its rotation, so
 /// the layout is built on the page as it reads.
+///
+/// A reading of more than [`MAX_TSV_WORDS`] words keeps its text and
+/// confidence but no lines: its words' boxes are let go once there are more
+/// than a page's layout could be analysed from, and its layout is built
+/// from its text.
 pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
     let tsv = std::str::from_utf8(bytes)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let mut text = String::new();
-    let mut confidences = Vec::new();
+    let (mut confidence_sum, mut confidence_count) = (0.0_f32, 0_usize);
+    let mut too_many_words = false;
     // The image Tesseract read, from its page row.
     let mut image = (0_u32, 0_u32);
     // Each word: whether it starts a line, the word, its box, its score.
@@ -88,7 +100,16 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
         previous = Some(position);
         let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
         if confidence >= 0.0 {
-            confidences.push(confidence);
+            confidence_sum += confidence;
+            confidence_count += 1;
+        }
+        if too_many_words {
+            continue;
+        }
+        if words.len() == MAX_TSV_WORDS {
+            too_many_words = true;
+            words = Vec::new();
+            continue;
         }
         let (left, top) = (number(6), number(7));
         words.push((
@@ -98,10 +119,10 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
             confidence,
         ));
     }
-    let mean_confidence = if confidences.is_empty() {
+    let mean_confidence = if confidence_count == 0 {
         0.0
     } else {
-        confidences.iter().sum::<f32>() / confidences.len() as f32
+        confidence_sum / confidence_count as f32
     };
     let turn = sideways(&words);
     let mut lines = LineBuilder::default();
@@ -729,6 +750,37 @@ mod tsv_tests {
 
     /// Only the layout changed. The confidence is still the mean over the
     /// words Tesseract scored, a 0 among them counting as a 0.
+    /// A reading of more words than a page's lines are kept for keeps all
+    /// of its text and its confidence, and no lines: its layout is built
+    /// from its text.
+    #[test]
+    fn a_reading_of_more_words_than_are_kept_keeps_its_text_but_no_lines() {
+        let mut tsv = String::from(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+             1\t1\t0\t0\t0\t0\t0\t0\t4000\t4000\t-1\t\n",
+        );
+        let words = super::MAX_TSV_WORDS + 1;
+        for word in 0..words {
+            let (line, column) = (word / 10, word % 10);
+            tsv.push_str(&format!(
+                "5\t1\t1\t1\t{line}\t{column}\t{}\t{}\t8\t8\t50\tw\n",
+                column * 10,
+                line * 10
+            ));
+        }
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert!(reading.lines.is_empty());
+        assert_eq!(reading.text.matches('w').count(), words);
+        assert_eq!(reading.mean_confidence, 50.0);
+
+        // One word fewer, and the lines are kept.
+        let kept = tsv.rsplit_once("5\t1").unwrap().0;
+        let reading = parse_tsv(kept.as_bytes()).unwrap();
+        assert_eq!(reading.lines.len(), super::MAX_TSV_WORDS / 10);
+    }
+
     #[test]
     fn parse_tsv_confidence_unchanged() {
         // The eleven word scores in the capture, as Tesseract wrote them.

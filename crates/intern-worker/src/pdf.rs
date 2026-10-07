@@ -508,7 +508,7 @@ fn character_runs(
     // it instead, and a face's name costs two calls and an allocation, so
     // it is asked of a run's ends rather than of every character.
     //
-    // Returns whether the run is one the analysis reads: one with width.
+    // Returns whether a run was kept: one with text, with width or not.
     fn finish(
         building: Option<Building>,
         chars: &PdfPageTextChars<'_>,
@@ -530,10 +530,14 @@ fn character_runs(
             bold,
             confidence: None,
         });
-        bbox[2] > bbox[0]
+        true
     }
     let mut runs = Vec::new();
-    // Runs the analysis would read; past MAX_RUNS it reads none.
+    // Runs kept so far. The analysis reads only those with width, and past
+    // MAX_RUNS none at all; a page of glyphs drawn with no width - text at
+    // zero horizontal scale - would otherwise keep a run for every line of
+    // them that it never reads. Every run kept counts, so a page holds at
+    // most MAX_RUNS of them.
     let mut read = 0_usize;
     let mut current: Option<Building> = None;
     let mut pending_space = false;
@@ -754,9 +758,16 @@ impl PdfiumBackend {
                 // geometry seen only in part.
                 let measured = !survey.incomplete;
                 if !measured {
+                    // What was counted before the walk stopped is a part of
+                    // the page, not a share of it: routed on its text alone.
+                    // The image area seen is kept - a lower bound on the
+                    // page's, it can only make a page with no text to read
+                    // less likely to be taken for a scan.
                     survey.text_boxes.clear();
                     survey.images.clear();
                     survey.rulings.clear();
+                    survey.text_objects = 0;
+                    survey.invisible_text_objects = 0;
                 }
                 let page_area = page.width().value.abs() * page.height().value.abs();
                 let image_coverage = if page_area <= f32::EPSILON {

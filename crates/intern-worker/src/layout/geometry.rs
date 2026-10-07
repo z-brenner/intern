@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use super::router::bounds::{MAX_GUTTER_CANDIDATES, MAX_RUNS, MAX_RUNS_PER_LINE};
 use super::text::{
-    is_heading_line, is_label, is_part_heading, median, opens_a_clause, reads_as_label,
-    split_key_value,
+    escape_cell, is_heading_line, is_label, is_part_heading, median, opens_a_clause,
+    reads_as_label, split_key_value,
 };
 use super::{
     BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, TextSource,
@@ -102,9 +102,10 @@ pub fn analyze_runs(
 }
 
 /// [`analyze_runs`], or none: for a page with more runs than the analysis
-/// takes on, in all or on one line, and as soon as `stop` says so - the
+/// takes on, in all or on one line, for one whose runs have text but none
+/// of them the width to place it, and as soon as `stop` says so - the
 /// request canceled, or its time up - between one region of the page and
-/// the next.
+/// the next. A caller with none keeps the page's text as it was read.
 pub fn analyze_runs_within(
     runs: &[TextRun],
     width: u32,
@@ -115,7 +116,13 @@ pub fn analyze_runs_within(
 ) -> Option<Vec<LayoutBlock>> {
     let items = items_of(runs);
     if items.is_empty() {
-        return Some(Vec::new());
+        // Text with no geometry to read it by - glyphs too small to have
+        // width - is not an empty page: an empty layout would be written
+        // out as its text, and the text it had lost.
+        return runs
+            .iter()
+            .all(|run| run.text.trim().is_empty())
+            .then(Vec::new);
     }
     if too_crowded(&items) {
         return None;
@@ -1348,7 +1355,7 @@ fn table_at(
             "| {} |",
             cells
                 .iter()
-                .map(|cell| cell.text.as_str())
+                .map(|cell| escape_cell(&cell.text))
                 .collect::<Vec<_>>()
                 .join(" | ")
         );

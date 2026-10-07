@@ -297,11 +297,11 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
             ParserWarning::new(code, field_affecting)
         })
         .collect::<Vec<_>>();
+    // A page of OCR, or of native text with OCR'd regions merged in, says
+    // how sure the OCR was; a native page says nothing.
     let low_confidence = document.pages.iter().any(|page| {
-        page.source == WorkerPageSource::Ocr
-            && page
-                .ocr_confidence
-                .is_some_and(|confidence| confidence < LOW_OCR_CONFIDENCE)
+        page.ocr_confidence
+            .is_some_and(|confidence| confidence < LOW_OCR_CONFIDENCE)
     });
     if low_confidence
         && !parser_warnings
