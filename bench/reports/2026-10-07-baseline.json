@@ -5,8 +5,8 @@
     "manifest_sha256": "acc1a980dbb48666cee53355c3d3120571878ce2de6ad7e3438b0f71e246f66b",
     "only": []
   },
-  "created_at": "2026-10-07T02:28:06Z",
-  "git_commit": "416b9acd72cc59857c5337726c8a51da421334d0",
+  "created_at": "2026-10-07T02:35:48Z",
+  "git_commit": "f0be1f542721ca1a468447342645b7a830d61d16-dirty",
   "groups": {
     "category": {
       "amendment": {
@@ -26015,7 +26015,7 @@
       "cer_ci": 0.025,
       "date_accuracy": 0.931,
       "identifier_accuracy": 0.8571,
-      "mean_confidence": 91.1433,
+      "mean_confidence": 94.1304,
       "name_accuracy": 1.0,
       "pages_compared": 46,
       "pages_failed": 0,
@@ -32820,6 +32820,7 @@
       "ocr": {
         "char_distance": 18,
         "char_distance_ci": 18,
+        "confidence_pages": 2,
         "dates_found": 3,
         "dates_total": 3,
         "identifiers_found": 1,
@@ -33025,6 +33026,7 @@
       "ocr": {
         "char_distance": 11,
         "char_distance_ci": 11,
+        "confidence_pages": 1,
         "dates_found": 2,
         "dates_total": 2,
         "identifiers_found": 0,
@@ -33204,6 +33206,7 @@
       "ocr": {
         "char_distance": 0,
         "char_distance_ci": 0,
+        "confidence_pages": 1,
         "dates_found": 2,
         "dates_total": 2,
         "identifiers_found": 1,
@@ -33391,6 +33394,7 @@
       "ocr": {
         "char_distance": 0,
         "char_distance_ci": 0,
+        "confidence_pages": 1,
         "dates_found": 2,
         "dates_total": 2,
         "identifiers_found": 1,
@@ -33596,6 +33600,7 @@
       "ocr": {
         "char_distance": 816,
         "char_distance_ci": 816,
+        "confidence_pages": 1,
         "dates_found": 1,
         "dates_total": 3,
         "identifiers_found": 1,
@@ -33763,6 +33768,7 @@
       "ocr": {
         "char_distance": 100,
         "char_distance_ci": 100,
+        "confidence_pages": 1,
         "dates_found": 3,
         "dates_total": 3,
         "identifiers_found": 2,
@@ -33954,6 +33960,7 @@
       "ocr": {
         "char_distance": 360,
         "char_distance_ci": 360,
+        "confidence_pages": 1,
         "dates_found": 2,
         "dates_total": 2,
         "identifiers_found": 2,
@@ -34159,6 +34166,7 @@
       "ocr": {
         "char_distance": 163,
         "char_distance_ci": 163,
+        "confidence_pages": 1,
         "dates_found": 2,
         "dates_total": 2,
         "identifiers_found": 0,
@@ -34343,6 +34351,7 @@
       "ocr": {
         "char_distance": 18,
         "char_distance_ci": 18,
+        "confidence_pages": 10,
         "dates_found": 3,
         "dates_total": 3,
         "identifiers_found": 1,
@@ -34546,6 +34555,7 @@
       "ocr": {
         "char_distance": 29,
         "char_distance_ci": 29,
+        "confidence_pages": 25,
         "dates_found": 3,
         "dates_total": 3,
         "identifiers_found": 1,
@@ -34889,6 +34899,7 @@
       "ocr": {
         "char_distance": 1,
         "char_distance_ci": 1,
+        "confidence_pages": 1,
         "dates_found": 1,
         "dates_total": 1,
         "identifiers_found": 0,
@@ -35077,6 +35088,7 @@
       "ocr": {
         "char_distance": 10,
         "char_distance_ci": 10,
+        "confidence_pages": 1,
         "dates_found": 3,
         "dates_total": 3,
         "identifiers_found": 2,

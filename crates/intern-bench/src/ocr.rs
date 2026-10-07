@@ -96,6 +96,10 @@ pub struct OcrMeasure {
     /// Mean of the worker's per-page OCR confidence over the compared
     /// pages that reported one.
     pub mean_confidence: Option<f64>,
+    /// How many pages `mean_confidence` is the mean of, so means are pooled
+    /// by page like every other figure here rather than by document.
+    #[serde(default)]
+    pub confidence_pages: usize,
 }
 
 impl OcrMeasure {
@@ -161,6 +165,16 @@ impl OcrMeasure {
         self.names_total += other.names_total;
         self.identifiers_found += other.identifiers_found;
         self.identifiers_total += other.identifiers_total;
+        // A page-weighted mean of the two means. A measure written before
+        // the page count was kept carries none, and counts as one page.
+        if let Some(mean) = other.mean_confidence {
+            let weight = other.confidence_pages.max(1);
+            let pages = self.confidence_pages + weight;
+            let sum = self.mean_confidence.unwrap_or(0.0) * self.confidence_pages as f64
+                + mean * weight as f64;
+            self.mean_confidence = Some(sum / pages as f64);
+            self.confidence_pages = pages;
+        }
     }
 }
 
@@ -245,6 +259,7 @@ pub fn measure(truth: &OcrTruth, source: &DocumentSource) -> OcrMeasure {
     (measure.identifiers_found, measure.identifiers_total) = count(&truth.identifiers, false);
     measure.mean_confidence = (!confidences.is_empty())
         .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
+    measure.confidence_pages = confidences.len();
     measure
 }
 
@@ -256,6 +271,30 @@ mod tests {
 
     fn chars(value: &str) -> Vec<char> {
         value.chars().collect()
+    }
+
+    /// Confidence is pooled by page, like the error rates: a one-page scan
+    /// does not count as much as a three-page one.
+    #[test]
+    fn confidence_is_pooled_by_page_not_by_document() {
+        let one_page = OcrMeasure {
+            mean_confidence: Some(60.0),
+            confidence_pages: 1,
+            ..OcrMeasure::default()
+        };
+        let three_pages = OcrMeasure {
+            mean_confidence: Some(100.0),
+            confidence_pages: 3,
+            ..OcrMeasure::default()
+        };
+        let mut pooled = OcrMeasure::default();
+        pooled.accumulate(&one_page);
+        pooled.accumulate(&three_pages);
+        assert_eq!(pooled.mean_confidence, Some(90.0));
+        assert_eq!(pooled.confidence_pages, 4);
+        // A measure with no confidence leaves the pool alone.
+        pooled.accumulate(&OcrMeasure::default());
+        assert_eq!(pooled.mean_confidence, Some(90.0));
     }
 
     #[test]

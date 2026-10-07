@@ -403,14 +403,12 @@ pub struct OcrReport {
 
 pub fn ocr_report(records: &[DocumentRecord]) -> OcrReport {
     let mut pooled = OcrMeasure::default();
-    let mut confidences = Vec::new();
     let mut rows = Vec::new();
     for record in records {
         let Some(measure) = &record.ocr else {
             continue;
         };
         pooled.accumulate(measure);
-        confidences.extend(measure.mean_confidence);
         rows.push(OcrRow {
             id: record.id.clone(),
             text_layer: record.text_layer.clone(),
@@ -421,8 +419,6 @@ pub fn ocr_report(records: &[DocumentRecord]) -> OcrReport {
     if rows.is_empty() {
         return OcrReport::default();
     }
-    pooled.mean_confidence = (!confidences.is_empty())
-        .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
     OcrReport {
         aggregate: Some(OcrFigures::of(&pooled)),
         documents: rows,
