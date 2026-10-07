@@ -758,11 +758,18 @@ where
     });
 
     // The error reading the pages in order would have met first: a scan
-    // OCR could not read, or anything that ends the document.
+    // OCR could not read, or anything that ends the document. A reading
+    // skipped as canceled is not one: the workers skip what is left once a
+    // scan has failed - even a region of an earlier page, still queued - and
+    // that scan's own error is the one to report. A request that really was
+    // canceled is reported by the check below.
     let ocr_failure = outcomes.iter().find_map(|outcome| {
         let scan = matches!(plans.get(outcome.page_index), Some(PagePlan::Scan { .. }));
         outcome.readings.iter().find_map(|reading| match reading {
-            Err(error) if scan || ends_the_document(error) => {
+            Err(error)
+                if error.kind != ExtractionErrorKind::Canceled
+                    && (scan || ends_the_document(error)) =>
+            {
                 Some((outcome.page_index, error.clone()))
             }
             _ => None,
