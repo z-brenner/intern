@@ -672,14 +672,17 @@ impl EvidenceSettings {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
         }
+        // The instructions and the reply take most of a small context; one
+        // with no room left for evidence would fail every document.
+        let least = intern_engine::engine::min_evidence_context_tokens();
         let context_tokens = arguments
             .get("context-tokens")
             .map(|value| {
                 value
                     .parse::<usize>()
                     .ok()
-                    .filter(|tokens| *tokens >= 1_024)
-                    .ok_or_else(|| "--context-tokens must be a number of at least 1024".to_owned())
+                    .filter(|tokens| *tokens >= least)
+                    .ok_or_else(|| format!("--context-tokens must be a number of at least {least}"))
             })
             .transpose()?;
         if pipeline == Pipeline::Digest
@@ -1775,6 +1778,20 @@ mod tests {
 
     fn digest_settings() -> EvidenceSettings {
         EvidenceSettings::parse("new", &HashMap::new()).unwrap()
+    }
+
+    /// A context the instructions and the reply already fill is refused
+    /// before any document is read; the least one that leaves room is not.
+    #[test]
+    fn a_context_with_no_room_for_evidence_is_refused() {
+        let least = intern_engine::engine::min_evidence_context_tokens();
+        let with = |tokens: usize| {
+            let arguments = HashMap::from([("context-tokens".to_owned(), tokens.to_string())]);
+            EvidenceSettings::parse("evidence", &arguments)
+        };
+        assert!(with(1_024).is_err());
+        assert!(with(least - 1).is_err());
+        assert_eq!(with(least).unwrap().context_tokens, Some(least));
     }
 
     /// A live run reads with the engine `configure` returns, whose own

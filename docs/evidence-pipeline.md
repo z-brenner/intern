@@ -312,6 +312,12 @@ the filename and the folder only.
 | `intern-bench run` | `--pipeline evidence\|digest` (evidence by default) `--id-style stable\|ordinal` `--retrieval-tier auto\|whole\|small\|normal\|dense` `--context-tokens N` |
 | `intern-evaluate` | the same flags; `--pipeline new` is the digest pipeline under its old name, and `legacy` keeps its meaning |
 
+`--context-tokens` refuses a context that leaves no room for evidence. The
+floor is `engine::min_evidence_context_tokens()`: the chat template, the fixed
+instructions, the whole reply budget, and a full-length line for each field.
+That comes to 2,560 tokens today, and the error message names the current
+figure.
+
 A recording made with the evidence pipeline carries extra fields in its
 header:
 

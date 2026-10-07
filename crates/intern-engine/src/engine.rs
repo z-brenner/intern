@@ -548,6 +548,25 @@ fn request_tokens(request: &ModelRequest) -> usize {
     estimated_tokens(&request.prompt) + request.system.as_deref().map_or(0, estimated_tokens)
 }
 
+/// The least context, in tokens, the evidence pipeline can answer in.
+///
+/// The chat template, the fixed instructions with an empty context's
+/// scaffolding, and the whole reply budget are spent before any evidence: a
+/// context no larger fits no request at any retrieval scale, and every
+/// document would end in `MODEL_INPUT_TOO_LARGE`. On top of them is room for
+/// a full-length line for each field, about what retrieval takes at its
+/// smallest.
+pub fn min_evidence_context_tokens() -> usize {
+    let index = EvidenceIndex::build(&crate::distill::source_from_text(""));
+    let context = retrieve(&index, &RetrievalConfig::default(), 100);
+    let fixed = request_tokens(&build_evidence_request(&index, &context));
+    let line = estimated_tokens(&format!(
+        "[p100.b100.r100] {}\n",
+        "a".repeat(crate::index::DEFAULT_MAX_UNIT_CHARACTERS)
+    ));
+    TEMPLATE_TOKENS + fixed + MAX_REPLY_TOKENS as usize + crate::retrieve::Field::ALL.len() * line
+}
+
 pub(crate) fn estimated_tokens(text: &str) -> usize {
     let mut single = 0_usize;
     let mut other = 0_usize;
@@ -1347,5 +1366,44 @@ mod tests {
         let analysis = engine.analyze(&source_from_text(long), "pdf", &[]).unwrap();
         assert_eq!(analysis.telemetry.redistillations, 1);
         assert_eq!(analysis.status, ProposalStatus::NeedsReview);
+    }
+
+    /// At the least context the measurement tools accept, a document still
+    /// fits once retrieval shrinks: the fixed instructions and the reply
+    /// leave room for evidence. At the old floor, 1,024 tokens, the reply
+    /// budget alone overflowed and nothing could.
+    #[test]
+    fn the_least_evidence_context_fits_a_document_by_retrieving_less() {
+        let least = min_evidence_context_tokens();
+        assert!(least > 1_024 + TEMPLATE_TOKENS, "{least}");
+        assert!(least <= crate::server::CONTEXT_TOKENS as usize, "{least}");
+        // A ledger short enough to be shown whole, and too long to fit the
+        // least context that way: retrieval must shrink for it to fit.
+        let mut ledger = String::from(
+            "MASTER SERVICES AGREEMENT\n\nThis Agreement is made on March 3, 2026 between \
+             Halvorsen Fixture Works LLC and Quillon Ridge Bakery, Inc.\n\n",
+        );
+        for entry in 1..=30 {
+            ledger.push_str(&format!(
+                "On April {}, 2026 Supplier {entry} LLC invoiced Quillon Ridge Bakery, Inc. \
+                 ${entry},250.00 under invoice INV-{:05} for delivery {entry}.\n",
+                entry % 28 + 1,
+                10_000 + entry,
+            ));
+        }
+        let proposer = std::sync::Arc::new(Recording {
+            context: Some(least),
+            ..Recording::new(vec![Ok(())])
+        });
+        let prepared = Engine::with_proposer(Box::new(proposer))
+            .prepare(&source_from_text(ledger))
+            .unwrap();
+        let needed = request_tokens(&prepared.request) + MAX_REPLY_TOKENS as usize;
+        assert!(
+            needed <= least - TEMPLATE_TOKENS,
+            "{needed} of {least} at {}%",
+            prepared.scale_pct
+        );
+        assert!(prepared.scale_pct < 100, "{}", prepared.scale_pct);
     }
 }

@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use intern_engine::{
     DocumentAnalysis, Engine, Pipeline,
+    engine::min_evidence_context_tokens,
     prompt::evidence_prompt_version,
     retrieve::{IdStyle, RetrievalConfig},
 };
@@ -68,13 +69,16 @@ impl EngineSettings {
             })?;
         }
         if let Some(value) = values.get("context-tokens") {
+            // The instructions and the reply take most of a small context;
+            // one with no room left for evidence would fail every document.
+            let least = min_evidence_context_tokens();
             settings.context_tokens = Some(
                 value
                     .parse::<usize>()
                     .ok()
-                    .filter(|tokens| *tokens >= 1_024)
+                    .filter(|tokens| *tokens >= least)
                     .ok_or_else(|| {
-                        "--context-tokens must be a number of at least 1024".to_owned()
+                        format!("--context-tokens must be a number of at least {least}")
                     })?,
             );
         }
@@ -268,6 +272,8 @@ mod tests {
             ("id-style", "handles"),
             ("retrieval-tier", "huge"),
             ("context-tokens", "12"),
+            // The reply budget alone is 1,024 tokens.
+            ("context-tokens", "1024"),
         ] {
             assert!(
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),

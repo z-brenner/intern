@@ -672,7 +672,10 @@ pub(crate) fn facts_from_text(
 /// role - and the ids of its lines, `amount` the id of the amount's line,
 /// `review` the one request for a person. Lenient as [`facts_from_text`]
 /// is: the parts of an array are told apart by what they are, not only by
-/// where they stand, so `[id, value]` reads as well as `[value, id]`.
+/// where they stand, so `[id, value]` reads as well as `[value, id]`. Only
+/// a stable id is told apart that way: the grammar writes the value first
+/// and ordinal ids as bare numbers, so the first other string is the value
+/// even when it is all digits, and a quoted number after it an id.
 ///
 /// A compact reply asks for no confidence of its own; it reads as full,
 /// and only `review` or the document's own checks send it to a person.
@@ -700,8 +703,8 @@ fn compact_wire(value: &Value) -> Option<WireFacts> {
                 .collect(),
         )
     };
-    // A fact's value and its ids: the first string that is not an id is
-    // the value, everything else its ids.
+    // A fact's value and its ids: the first string that is not a stable
+    // id is the value, even all digits, and everything else its ids.
     fn split(value: Option<&Value>) -> (Option<String>, Vec<&Value>) {
         match value {
             Some(Value::String(text)) => (Some(text.clone()), Vec::new()),
@@ -710,8 +713,10 @@ fn compact_wire(value: &Value) -> Option<WireFacts> {
                 let mut ids = Vec::new();
                 for part in parts {
                     match part {
+                        Value::String(word) if text.is_none() && !is_stable_id(word) => {
+                            text = Some(word.clone());
+                        }
                         Value::String(word) if looks_like_id(word) => ids.push(part),
-                        Value::String(word) if text.is_none() => text = Some(word.clone()),
                         Value::Number(_) => ids.push(part),
                         _ => {}
                     }
@@ -761,8 +766,10 @@ fn compact_wire(value: &Value) -> Option<WireFacts> {
                 let mut ids = Vec::new();
                 for part in parts {
                     match part {
+                        Value::String(text) if name.is_none() && !is_stable_id(text) => {
+                            name = Some(text.clone());
+                        }
                         Value::String(text) if looks_like_id(text) => ids.push(part),
-                        Value::String(text) if name.is_none() => name = Some(text.clone()),
                         // A role, or a word that is none: the reply's role
                         // either way, and no role if it is not one.
                         Value::String(text) if role.is_none() => role = Some(text.clone()),
@@ -781,12 +788,7 @@ fn compact_wire(value: &Value) -> Option<WireFacts> {
     }
     let (subject, subject_ids) = split(object.get("subject"));
     let amount_ids = match object.get("amount") {
-        Some(Value::Array(parts)) => ids_of(
-            parts
-                .iter()
-                .filter(|part| part.as_str().is_none_or(looks_like_id))
-                .collect(),
-        ),
+        Some(amount @ Value::Array(_)) => ids_of(split(Some(amount)).1),
         Some(other) => ids_of(vec![other]),
         None => WireIds::None,
     };
@@ -816,9 +818,15 @@ fn compact_wire(value: &Value) -> Option<WireFacts> {
 /// `p1.b2`, `p3.b7.r4`, `[p1.b2]`, or a bare number.
 fn looks_like_id(text: &str) -> bool {
     let bare = text.trim().trim_start_matches('[').trim_end_matches(']');
-    if !bare.is_empty() && bare.chars().all(|character| character.is_ascii_digit()) {
-        return true;
-    }
+    (!bare.is_empty() && bare.chars().all(|character| character.is_ascii_digit()))
+        || is_stable_id(bare)
+}
+
+/// Whether a string is a unit's stable id, `p3.b2.f1`, bracketed or not -
+/// never a value, wherever it stands. An all-digit string can be either:
+/// a quoted ordinal id, or a value such as a `1099` or a suite `101`.
+fn is_stable_id(text: &str) -> bool {
+    let bare = text.trim().trim_start_matches('[').trim_end_matches(']');
     let mut parts = bare.split('.');
     parts.next().is_some_and(|page| {
         page.strip_prefix('p')
@@ -1899,6 +1907,25 @@ mod tests {
         assert_eq!(facts.parties[0].name, "Quillon Ridge Bakery, Inc.");
         assert_eq!(facts.parties[0].role, None);
         assert_eq!(facts.amount_evidence, vec!["p1.b6.r2"]);
+        assert!(facts.unknown_evidence.is_empty());
+    }
+
+    /// With ordinal handles the grammar writes ids as bare numbers, so an
+    /// all-digit string where a fact's value stands is the value - a form
+    /// 1099, a suite 101 - and a quoted number after it is still an id.
+    #[test]
+    fn an_all_digit_value_is_not_taken_for_an_ordinal_id() {
+        let reply = r#"{"type":["1099",1],"date":["2025-05-01","invoice",2],"parties":[["2024","tenant",3]],"subject":["101","3"]}"#;
+        let proposal = proposal_from_text(reply, Some(&ordinal_handles())).unwrap();
+        let facts = proposal.facts.as_ref().unwrap();
+        assert_eq!(facts.document_type.as_deref(), Some("1099"));
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert_eq!(facts.date_evidence, vec!["p1.b3.f1"]);
+        assert_eq!(facts.parties[0].name, "2024");
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Tenant));
+        assert_eq!(facts.parties[0].evidence, vec!["p1.b5"]);
+        assert_eq!(facts.subject.as_deref(), Some("101"));
+        assert_eq!(facts.subject_evidence, vec!["p1.b5"]);
         assert!(facts.unknown_evidence.is_empty());
     }
 
