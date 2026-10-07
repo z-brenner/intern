@@ -22,11 +22,10 @@
 //! a type from a heading, an issuer from a party the model already named.
 
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, NOT_A_TITLE, TYPE_NOUNS};
-use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
-    NumericDate, NumericOrder, date_match_positions, extract_stated_dates, is_valid_iso_date,
-    normalize, normalize_loosely, numeric_dates,
+    NumericDate, NumericOrder, Segments, date_match_positions, extract_stated_dates,
+    is_valid_iso_date, normalize, normalize_loosely, numeric_dates,
 };
 use crate::validate::rfind_word;
 
@@ -199,13 +198,13 @@ const CUE_WINDOW: usize = 96;
 /// back to what the document type implies. `None` when the wording says
 /// nothing, in which case the model's own answer stands.
 pub fn infer_date_role(
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     date: &str,
     document_type: Option<&str>,
 ) -> Option<DateRole> {
     let mut found: Vec<DateRole> = Vec::new();
     let mut generic = false;
-    for segment in &digest.segments {
+    for segment in digest.segments() {
         for line in wrapped_lines(segment) {
             let normalized = normalize(&line);
             for position in date_match_positions(date, &normalized) {
@@ -609,7 +608,7 @@ impl TypeKind {
 /// document's title and never a guess.
 pub fn complete_type_from_title(
     document_type: &str,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     parties: &[String],
 ) -> String {
     let Some(title) = infer_document_type(digest) else {
@@ -674,9 +673,9 @@ const INITIALISMS: &[&str] = &[
 /// PAGE 1" becomes "Moonlit Archive Project Journal". A heading that names a
 /// part ("EXHIBIT A", "CONFIDENTIAL") is skipped, and a document whose first
 /// headings name nothing gets no type from here.
-pub fn infer_document_type(digest: &DocumentDigest) -> Option<String> {
+pub fn infer_document_type(digest: &impl Segments) -> Option<String> {
     digest
-        .outline
+        .headings()
         .iter()
         .take(2)
         .find_map(|heading| title_type(heading))
@@ -817,7 +816,7 @@ pub fn repair_issued_relation(
     document_type: Option<&str>,
     parties: Vec<String>,
     relation: PartyRelation,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
 ) -> (Vec<String>, PartyRelation) {
     let issued_type = document_type.is_some_and(|value| {
         let lowered = value.to_lowercase();
@@ -827,7 +826,7 @@ pub fn repair_issued_relation(
         return (parties, relation);
     }
     let lines: Vec<String> = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| segment.lines())
         .map(normalize_loosely)
@@ -878,6 +877,7 @@ pub fn repair_issued_relation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distill::DocumentDigest;
     use crate::distill::{DigestBudget, distill, source_from_text};
 
     fn digest_of(text: &str) -> DocumentDigest {

@@ -7,13 +7,12 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::distill::DocumentDigest;
 use crate::domain::{
     DateRole, ModelProposal, PartyRelation, ProposalStatus, ReviewReason, ValidatedProposal,
     ValidationOutcome,
 };
 use crate::evidence::{
-    DateSpelling, NumericOrder, date_match_positions, date_statements, digest_contains,
+    DateSpelling, NumericOrder, Segments, date_match_positions, date_statements, digest_contains,
     digest_contains_date, digest_contains_loosely, extract_stated_dates, is_valid_iso_date,
     normalize, normalize_loosely, numeric_date_order,
 };
@@ -48,7 +47,7 @@ const EARLIEST_PLAUSIBLE_YEAR: i32 = 1900;
 ///
 /// Whether a date's year is plausible is judged against the current year;
 /// [`validate_at`] takes that year as an argument instead.
-pub fn validate(candidate: ModelProposal, digest: &DocumentDigest) -> ValidationOutcome {
+pub fn validate(candidate: ModelProposal, digest: &impl Segments) -> ValidationOutcome {
     validate_at(candidate, digest, current_year())
 }
 
@@ -56,7 +55,7 @@ pub fn validate(candidate: ModelProposal, digest: &DocumentDigest) -> Validation
 /// clock, so a test can pin the one judgment that depends on today.
 pub fn validate_at(
     candidate: ModelProposal,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     current_year: i32,
 ) -> ValidationOutcome {
     let mut reasons = Vec::new();
@@ -192,7 +191,7 @@ pub fn validate_at(
         push(&mut reasons, ReviewReason::ModelRequestedReview);
     }
     if digest
-        .parser_warnings
+        .parser_warnings()
         .iter()
         .any(|warning| warning.field_affecting)
     {
@@ -237,7 +236,7 @@ pub fn validate_at(
 /// statement of work, because "settlement" is nowhere in it.
 fn validate_document_type(
     candidate: &ModelProposal,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
 ) -> (Option<String>, bool) {
     let Some(document_type) = candidate
         .document_type
@@ -273,7 +272,7 @@ fn validate_document_type(
 /// not be thrown away because the sentence around it was reworded.
 fn validate_date(
     candidate: &ModelProposal,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     document_type: Option<&str>,
 ) -> (
     Option<String>,
@@ -301,7 +300,7 @@ fn validate_date(
     // document states exactly one other date on an effective/commencement
     // line, that date is the answer; otherwise the document goes to review.
     let lines: Vec<&str> = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| segment.lines())
         .collect();
@@ -314,7 +313,7 @@ fn validate_date(
     // as of April 1, 2026 and continues" / "through March 31, 2027" states
     // one effective date and one end of term, not two candidates.
     let wrapped: Vec<String> = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| crate::infer::wrapped_lines(segment))
         .collect();
@@ -385,9 +384,9 @@ enum Deadline {
 ///
 /// A single unlabelled statement of the date anywhere clears it: the
 /// document then says something besides "this is when it is due".
-fn deadline_redirect(digest: &DocumentDigest, date: &str) -> Option<Deadline> {
+fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
     let lines: Vec<String> = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| wrapped_lines(segment))
         .collect();
@@ -444,7 +443,7 @@ fn deadline_redirect(digest: &DocumentDigest, date: &str) -> Option<Deadline> {
 ///
 /// A day above 12 or a day equal to the month reads one way only, and is
 /// never ambiguous.
-fn reading_is_unsettled(digest: &DocumentDigest, date: &str) -> bool {
+fn reading_is_unsettled(digest: &impl Segments, date: &str) -> bool {
     let (Some(month), Some(day)) = (
         date.get(5..7).and_then(|value| value.parse::<u32>().ok()),
         date.get(8..10).and_then(|value| value.parse::<u32>().ok()),
@@ -455,7 +454,7 @@ fn reading_is_unsettled(digest: &DocumentDigest, date: &str) -> bool {
         return false;
     }
     let spellings = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| date_statements(date, &normalize(segment)))
         .map(|(_, spelling)| spelling)
@@ -815,7 +814,7 @@ const EFFECTIVE_CUES: &[&str] = &[
 /// letterhead and "Acme Corp." from the body are one company, and the first
 /// spelling is kept. A name is never merged into a longer one that contains
 /// it - "Acme" and "Acme Holdings" are an affiliate agreement's two sides.
-fn validate_parties(candidate: &ModelProposal, digest: &DocumentDigest) -> (Vec<String>, bool) {
+fn validate_parties(candidate: &ModelProposal, digest: &impl Segments) -> (Vec<String>, bool) {
     let mut kept = Vec::new();
     let mut all_supported = true;
     for party in &candidate.parties {
@@ -842,7 +841,7 @@ fn validate_parties(candidate: &ModelProposal, digest: &DocumentDigest) -> (Vec<
 
 fn validate_description(
     description: &str,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     reasons: &mut Vec<ReviewReason>,
 ) -> String {
     let trimmed = description.trim();
@@ -1004,7 +1003,7 @@ fn is_usable_sentence(description: &str) -> bool {
 /// Only specifics are checked. Ordinary prose the model wrote to glue the
 /// sentence together is not a claim about the document and must not send an
 /// otherwise good proposal to review.
-fn first_unsupported_claim(description: &str, digest: &DocumentDigest) -> Option<String> {
+fn first_unsupported_claim(description: &str, digest: &impl Segments) -> Option<String> {
     let restated = restated_dates(description, digest);
     for (index, raw) in description.split_whitespace().enumerate() {
         if restated[index] {
@@ -1035,7 +1034,7 @@ fn first_unsupported_claim(description: &str, digest: &DocumentDigest) -> Option
 /// state it - month, day or ordinal, year, and the comma between - and only
 /// a date the document itself states is excused; any other is checked as
 /// before.
-fn restated_dates(description: &str, digest: &DocumentDigest) -> Vec<bool> {
+fn restated_dates(description: &str, digest: &impl Segments) -> Vec<bool> {
     // "1st day of April, 2026" is the longest shape a date is read in.
     const LONGEST: usize = 5;
     let words: Vec<&str> = description.split_whitespace().collect();
@@ -1076,7 +1075,7 @@ fn restated_dates(description: &str, digest: &DocumentDigest) -> Vec<bool> {
 /// model added between two words that the document keeps apart are all the
 /// same fact. Words themselves are never changed; a name that is not in the
 /// document is still an unsupported claim.
-fn claim_is_supported(digest: &DocumentDigest, token: &str) -> bool {
+fn claim_is_supported(digest: &impl Segments, token: &str) -> bool {
     if digest_contains(digest, token) {
         return true;
     }
@@ -1106,6 +1105,7 @@ fn push(reasons: &mut Vec<ReviewReason>, reason: ReviewReason) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distill::DocumentDigest;
     use crate::distill::{DigestBudget, distill, source_from_text};
     use crate::domain::{DateRole, Evidence};
 

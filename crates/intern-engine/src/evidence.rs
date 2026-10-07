@@ -10,6 +10,41 @@ use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::distill::DocumentDigest;
+use crate::domain::ParserWarning;
+
+/// The text the literal checks read: the blocks a fact must be found inside,
+/// the document's headings, the lines that carry its dates, and what
+/// extraction warned about. A [`DocumentDigest`] is one; the evidence
+/// pipeline's views of the context and of the whole document are the
+/// others, so every check runs the same code
+/// over whichever text it is asked about.
+pub trait Segments {
+    /// The verbatim blocks, in document order. A quote must lie inside one.
+    fn segments(&self) -> &[String];
+    /// Every heading, in document order.
+    fn headings(&self) -> &[String];
+    /// The lines that carry a date, in document order.
+    fn date_lines(&self) -> &[String];
+    fn parser_warnings(&self) -> &[ParserWarning];
+}
+
+impl Segments for DocumentDigest {
+    fn segments(&self) -> &[String] {
+        &self.segments
+    }
+
+    fn headings(&self) -> &[String] {
+        &self.outline
+    }
+
+    fn date_lines(&self) -> &[String] {
+        &self.date_lines
+    }
+
+    fn parser_warnings(&self) -> &[ParserWarning] {
+        &self.parser_warnings
+    }
+}
 
 /// Folds case, normalizes Unicode, unifies quote characters, and collapses
 /// whitespace so that a quote survives PDF and OCR typography differences.
@@ -42,11 +77,11 @@ pub fn normalize(value: &str) -> String {
 ///
 /// Checking per block rather than against the joined digest means a quote can
 /// never be "supported" by text that straddles an elision marker.
-pub fn digest_contains(digest: &DocumentDigest, excerpt: &str) -> bool {
+pub fn digest_contains(digest: &impl Segments, excerpt: &str) -> bool {
     let excerpt = normalize(excerpt);
     !excerpt.is_empty()
         && digest
-            .segments
+            .segments()
             .iter()
             .any(|segment| contains_whole(&normalize(segment), &excerpt))
 }
@@ -114,24 +149,24 @@ pub fn normalize_loosely(value: &str) -> String {
 /// True when `excerpt` appears inside a single kept block once punctuation is
 /// disregarded on both sides. Used only for names, where punctuation is
 /// typography rather than meaning.
-pub fn digest_contains_loosely(digest: &DocumentDigest, excerpt: &str) -> bool {
+pub fn digest_contains_loosely(digest: &impl Segments, excerpt: &str) -> bool {
     let excerpt = normalize_loosely(excerpt);
     !excerpt.is_empty()
         && digest
-            .segments
+            .segments()
             .iter()
             .any(|segment| contains_whole(&normalize_loosely(segment), &excerpt))
 }
 
 /// True when the quoted evidence both contains the claimed field value and is
 /// itself present in the digest.
-pub fn evidence_supports(digest: &DocumentDigest, excerpt: &str, field: &str) -> bool {
+pub fn evidence_supports(digest: &impl Segments, excerpt: &str, field: &str) -> bool {
     let normalized_excerpt = normalize(excerpt);
     let normalized_field = normalize(field);
     !normalized_field.is_empty()
         && normalized_excerpt.contains(&normalized_field)
         && digest
-            .segments
+            .segments()
             .iter()
             .any(|segment| normalize(segment).contains(&normalized_excerpt))
 }
@@ -144,9 +179,9 @@ pub fn evidence_supports(digest: &DocumentDigest, excerpt: &str, field: &str) ->
 /// document whose line actually reads "Effective date: February 14, 2025" - so
 /// gating on the exact wrapper wording throws away correct dates. Gating on
 /// whether the *date* is really in the document does not.
-pub fn digest_contains_date(digest: &DocumentDigest, iso_date: &str) -> bool {
+pub fn digest_contains_date(digest: &impl Segments, iso_date: &str) -> bool {
     digest
-        .segments
+        .segments()
         .iter()
         .any(|segment| date_matches_evidence(iso_date, segment))
 }
@@ -682,11 +717,11 @@ mod tests {
 /// order that way, its "03/04/2026" is 3 April. A numeric date that could be
 /// either, in a document that never says which, is left out rather than
 /// offered under a guess - and so is a two-digit year, whose century is one.
-pub fn stated_dates(digest: &DocumentDigest) -> Vec<String> {
+pub fn stated_dates(digest: &impl Segments) -> Vec<String> {
     const MOST: usize = 8;
     let order = numeric_date_order(digest);
     let mut found: Vec<String> = Vec::new();
-    for line in &digest.date_lines {
+    for line in digest.date_lines() {
         let normalized = normalize(line);
         let mut on_line = extract_stated_dates(line)
             .into_iter()
@@ -906,8 +941,8 @@ pub enum NumericOrder {
 /// "30/01/2026" has no thirtieth month - and no other numeric date can only
 /// be read the other way. `None` when nothing settles it, or when the
 /// document contradicts itself, because then any one reading is a guess.
-pub fn numeric_date_order(digest: &DocumentDigest) -> Option<NumericOrder> {
-    numeric_date_order_of(digest.segments.iter().map(String::as_str))
+pub fn numeric_date_order(digest: &impl Segments) -> Option<NumericOrder> {
+    numeric_date_order_of(digest.segments().iter().map(String::as_str))
 }
 
 /// [`numeric_date_order`] over any texts: the evidence index settles the
