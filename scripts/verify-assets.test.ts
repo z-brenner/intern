@@ -97,33 +97,6 @@ describe('runtime asset verification', () => {
       .resolves.toMatchObject({ verifiedFiles: 1 });
   });
 
-  it('refuses a bundled OCR runtime file that is not its pinned download', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'intern-assets-ocr-pin-'));
-    const bytes = Buffer.from('some other onnxruntime build');
-    await writeFile(join(root, 'onnxruntime.dll'), bytes);
-    const manifest = {
-      schema_version: 1,
-      downloads: [{
-        id: 'onnxruntime', size: 1, sha256: 'a'.repeat(64),
-        extract: { path: 'runtimes/win-x64/native/onnxruntime.dll', size: 1, sha256: 'b'.repeat(64) },
-      }],
-      bundled_files: [{
-        path: 'onnxruntime.dll',
-        install_path: 'onnxruntime.dll',
-        packages: [{ name: 'onnxruntime', version: '1.30.0' }],
-        size: bytes.length,
-        // The staged bytes' own digest: true of the file, not of the pin.
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-      }],
-      license_files: [],
-    };
-    const manifestPath = join(root, 'runtime-assets.json');
-    await writeFile(manifestPath, JSON.stringify(manifest));
-
-    await expect(verifyRuntimeAssets(manifestPath, { root }))
-      .rejects.toThrow(/not the pinned download/);
-  });
-
   it('rejects manifest paths that escape the verification root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'intern-assets-path-'));
     const manifestPath = join(root, 'runtime-assets.json');
@@ -204,6 +177,15 @@ describe('runtime asset verification', () => {
       await writeFile(join(root, 'staged', installPath), installPath);
     }
     const pinned = JSON.parse(await readFile(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), 'utf8'));
+    // Each staged stand-in is what its download is pinned to, as a real
+    // staging step's files are.
+    const releasePins = structuredClone(pinned.downloads);
+    const digest = (installPath: string) => createHash('sha256').update(installPath).digest('hex');
+    const download = (id: string) => pinned.downloads.find((entry: any) => entry.id === id);
+    download('onnxruntime').extract.sha256 = digest('onnxruntime.dll');
+    download('ocr-text-detection').sha256 = digest('ocr-models/text-detection.onnx');
+    download('ocr-text-recognition').sha256 = digest('ocr-models/text-recognition.onnx');
+    download('ocr-page-orientation').sha256 = digest('ocr-models/page-orientation.onnx');
     const manifestPath = join(root, 'runtime-assets.json');
     const write = (files: string[]) => writeFile(manifestPath, JSON.stringify({
       ...pinned, bundled_files: files.map(entry), license_files: [license],
@@ -219,15 +201,26 @@ describe('runtime asset verification', () => {
     await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
       .resolves.toMatchObject({ verifiedFiles: 5 });
 
+    // The same files, but the DLL is not the one its download is pinned to:
+    // a file can match its own inventory line and still not be what ships.
+    const dllPin = download('onnxruntime').extract.sha256;
+    download('onnxruntime').extract.sha256 = 'b'.repeat(64);
+    await write(['pdfium.dll', ...ocr]);
+    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+      .rejects.toThrow(/onnxruntime\.dll is not the pinned download/);
+    download('onnxruntime').extract.sha256 = dllPin;
+
     // An inventory from before PP-OCR is still a valid inventory...
+    pinned.downloads = releasePins;
     await write(['pdfium.dll']);
     await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
       .resolves.toMatchObject({ verifiedFiles: 1 });
     // ...but not a release one, which is staged against pins that include it.
     await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
       .rejects.toThrow(/OCR runtime is incomplete: missing onnxruntime\.dll/);
+    // And a release bundle's OCR files must be the pinned ones, not stand-ins.
     await write(['pdfium.dll', ...ocr]);
     await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
-      .resolves.toMatchObject({ verifiedFiles: 5 });
+      .rejects.toThrow(/is not the pinned download/);
   });
 });

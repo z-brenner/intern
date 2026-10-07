@@ -154,6 +154,11 @@ export async function verifyRuntimeAssets(manifestPath = DEFAULT_MANIFEST, optio
     assert(await sha256(path) === file.sha256, `runtime asset SHA-256 mismatch: ${file.path}`);
     verifiedFiles += 1;
   }
+  const stagedOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
+  const missingOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));
+  const ocrRequired = requireBundled && requireExpectedPins;
+  assert(missingOcr.length === 0 || (stagedOcr.length === 0 && !ocrRequired),
+    `bundled OCR runtime is incomplete: missing ${missingOcr.join(', ')}`);
   // What ships must be what was pinned, not only what staging wrote down: a
   // bundled OCR file whose digest is not its download's pin is refused.
   const pinnedOcr = pinnedOcrDigests(manifest.downloads);
@@ -163,11 +168,6 @@ export async function verifyRuntimeAssets(manifestPath = DEFAULT_MANIFEST, optio
     assert(pinned !== undefined, `no pinned download for bundled ${file.install_path}`);
     assert(file.sha256 === pinned, `bundled ${file.install_path} is not the pinned download: ${file.sha256} != ${pinned}`);
   }
-  const stagedOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
-  const missingOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));
-  const ocrRequired = requireBundled && requireExpectedPins;
-  assert(missingOcr.length === 0 || (stagedOcr.length === 0 && !ocrRequired),
-    `bundled OCR runtime is incomplete: missing ${missingOcr.join(', ')}`);
   let verifiedLicenses = 0;
   const seenLicensePaths = new Set();
   for (const file of manifest.license_files) {
