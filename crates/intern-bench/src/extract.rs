@@ -19,10 +19,11 @@ use std::{
     time::Instant,
 };
 
-use intern_engine::{DigestBudget, DocumentSource, SupervisedWorker};
+use intern_engine::{DigestBudget, DocumentSource, SupervisedWorker, retrieve::RetrievalConfig};
 use serde_json::json;
 
 use crate::{
+    context::context_scores,
     gold::GoldDocument,
     live::{extract, micros_since, warm_up_worker},
     memory::{MemoryPeaks, MemorySampler},
@@ -60,6 +61,12 @@ pub const EXTRACTION_SCORES: &[&str] = &[
     "ocr_identifier_accuracy",
     "ocr_mean_confidence",
     "digest_recall",
+    "context_type_recall",
+    "context_date_recall",
+    "context_party_recall",
+    "context_recall",
+    "context_fact_recall",
+    "context_subject_recall",
 ];
 
 /// One document's record from what its extraction produced: the source the
@@ -85,6 +92,9 @@ pub fn extraction_record(
             .scores
             .insert("digest_recall".into(), json!(round(recall, 4)));
     }
+    let context = context_scores(document, source, &RetrievalConfig::default());
+    record.scores.extend(context.scores);
+    record.timings.extend(context.timings);
     record.ocr = extraction.ocr;
     record.structure = extraction.structure;
     if let Some(source) = source {

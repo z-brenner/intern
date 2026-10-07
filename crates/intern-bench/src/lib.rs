@@ -18,12 +18,16 @@
 //!   person, [`compare`] diffs two reports, and [`baseline`] gates a run.
 //! * [`merge`] replaces or adds documents in a recording, so a few can be
 //!   recorded again without the whole corpus.
+//! * [`context`] measures whether the gold's evidence reaches the context
+//!   evidence retrieval builds, and sweeps retrieval configurations over
+//!   recorded sources without a model.
 
 #![deny(unsafe_code)]
 
 pub mod baseline;
 pub mod claims;
 pub mod compare;
+pub mod context;
 pub mod extract;
 pub mod gold;
 pub mod live;

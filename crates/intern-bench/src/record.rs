@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use intern_engine::{DigestBudget, DocumentAnalysis, DocumentSource, domain::ProposalStatus};
+use intern_engine::{
+    DigestBudget, DocumentAnalysis, DocumentSource, domain::ProposalStatus,
+    retrieve::RetrievalConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -263,6 +266,13 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     };
     let scored = score(document, &outcome, &texts);
     record.scores = scored.scores;
+    // Beside `digest_recall`: what the evidence context would carry.
+    if let Some(source) = observation.source {
+        record.scores.extend(
+            crate::context::context_scores(document, Some(source), &RetrievalConfig::default())
+                .scores,
+        );
+    }
     record.claims = scored.claims;
     record.forbidden_description = scored.forbidden_description;
     record.traps = scored.traps;

@@ -15,6 +15,10 @@
 //! intern-bench report  --input report.json --markdown out.md
 //! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
 //!                  [--gold bench/gold.json] [--only id,id] [--note TEXT]
+//! intern-bench retrieval --recording bench/recording.json[,more.json] --gold bench/gold.json
+//!                  [--fixtures fixtures/corpus-recording.json --expected fixtures/expected.json]
+//!                  [--config a.json,b.json] [--sweep] [--only id,id]
+//!                  [--output sweep.json] [--markdown sweep.md]
 //! ```
 //!
 //! Exit status: 0 when the run scored; 2 when it regressed against the
@@ -40,10 +44,14 @@ const USAGE: &str = "usage:
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
-                   [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]";
+                   [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]
+  intern-bench retrieval --recording A.json[,B.json] --gold GOLD.json
+                   [--fixtures RECORDING.json --expected EXPECTED.json]
+                   [--config C.json[,D.json]] [--sweep] [--only id,id]
+                   [--output SWEEP.json] [--markdown SWEEP.md]";
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only"];
+const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only", "sweep"];
 
 const RUN_KEYS: &[&str] = &[
     "corpus",
@@ -114,6 +122,50 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                 &id_list(values.get("only")),
                 values.get("note").map(String::as_str),
             )
+        }
+        "retrieval" => {
+            let values = parse(
+                rest,
+                &[
+                    "recording",
+                    "gold",
+                    "fixtures",
+                    "expected",
+                    "config",
+                    "sweep",
+                    "only",
+                    "output",
+                    "markdown",
+                ],
+            )?;
+            let paths = |key: &str| -> Vec<PathBuf> {
+                id_list(values.get(key))
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect()
+            };
+            let fixtures = match (values.get("fixtures"), values.get("expected")) {
+                (Some(recording), Some(expected)) => {
+                    Some((PathBuf::from(recording), PathBuf::from(expected)))
+                }
+                (None, None) => None,
+                _ => return Err("--fixtures and --expected go together".to_owned()),
+            };
+            if !values.contains_key("recording") && fixtures.is_none() {
+                return Err(format!("missing --recording or --fixtures\n{USAGE}"));
+            }
+            intern_bench::context::retrieval_command(&intern_bench::context::RetrievalOptions {
+                recordings: paths("recording"),
+                gold: values
+                    .get("gold")
+                    .map_or_else(|| PathBuf::from("bench/gold.json"), PathBuf::from),
+                fixtures,
+                configs: paths("config"),
+                sweep: values.contains_key("sweep"),
+                only: id_list(values.get("only")),
+                output: values.get("output").map(PathBuf::from),
+                markdown: values.get("markdown").map(PathBuf::from),
+            })
         }
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
