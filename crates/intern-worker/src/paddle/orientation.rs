@@ -16,12 +16,13 @@ use crate::extract::{OcrResult, better_reading, upright_reading_is_accepted};
 
 use super::geometry::Quad;
 
-/// One recognition pass, and whether the detector found the page lying on
-/// its side at that turn.
+/// One recognition pass, whether the detector found the page lying on its
+/// side at that turn, and how many lines it found there - read or not.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PassReading {
     pub result: OcrResult,
     pub sideways: bool,
+    pub detected: usize,
 }
 
 /// Whether most of the text the detector found runs down the page: more
@@ -46,10 +47,17 @@ pub fn mostly_vertical(quads: &[Quad]) -> bool {
 }
 
 /// Whether a pass ends the search: read the right way round and
-/// confidently, or nothing at all to read.
+/// confidently, or nothing to read.
+///
+/// A pass that read nothing is proof of a blank page only where nothing
+/// would be read at any turn: the detector found no lines, or the pass was
+/// upright, as the page is nearly always scanned. Lines read at the wrong
+/// turn come back below the score a line is kept at, so a turned pass that
+/// found lines but read none of them says only that the turn was wrong.
 pub fn pass_is_final(reading: &PassReading) -> bool {
-    reading.result.text.trim().is_empty()
-        || (!reading.sideways && upright_reading_is_accepted(&reading.result))
+    let blank = reading.result.text.trim().is_empty()
+        && (reading.detected == 0 || reading.result.rotation_degrees % 360 == 0);
+    blank || (!reading.sideways && upright_reading_is_accepted(&reading.result))
 }
 
 /// Of two passes over the same page, the one to keep.
@@ -82,6 +90,7 @@ pub fn better_pass(incumbent: PassReading, challenger: PassReading) -> PassReadi
                 PassReading {
                     result: kept,
                     sideways,
+                    detected: challenger.detected,
                 }
             }
         }
@@ -157,7 +166,48 @@ mod tests {
         PassReading {
             result: OcrResult::new(text, confidence).with_rotation(rotation),
             sideways,
+            detected: text.lines().count(),
         }
+    }
+
+    /// The classifier names a wrong turn, and the lines read there come back
+    /// below the score a line is kept at: nothing is read, but lines were
+    /// found, so the search goes on and reads the page upright.
+    #[test]
+    fn a_turned_pass_that_reads_none_of_the_lines_it_found_is_not_a_blank_page() {
+        let mut turns = Vec::new();
+        let result = search_orientation::<()>(180, None, |turn| {
+            turns.push(turn);
+            Ok(if turn == 0 {
+                pass(PROSE, 97.0, false, turn)
+            } else {
+                PassReading {
+                    detected: 12,
+                    ..pass("", 0.0, false, turn)
+                }
+            })
+        })
+        .unwrap();
+        assert_eq!(turns, vec![180, 0]);
+        assert_eq!(result.text, PROSE);
+
+        // Where the detector found nothing at all, the page is blank at any
+        // turn: one pass.
+        let mut turns = Vec::new();
+        let result = search_orientation::<()>(180, None, |turn| {
+            turns.push(turn);
+            Ok(pass("", 0.0, false, turn))
+        })
+        .unwrap();
+        assert_eq!(turns, vec![180]);
+        assert!(result.text.is_empty());
+
+        // And an upright pass that read nothing still ends the search.
+        let upright = PassReading {
+            detected: 3,
+            ..pass("", 0.0, false, 0)
+        };
+        assert!(pass_is_final(&upright));
     }
 
     const PROSE: &str = "Invoice Date: April 14, 2026 Bill To: Larkspur Bistro LLC";

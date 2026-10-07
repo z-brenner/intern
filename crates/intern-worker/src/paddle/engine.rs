@@ -153,6 +153,12 @@ impl<T> SessionPool<T> {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0;
             cancel.check()?;
+            // Every other set failed to build too, or was released: none
+            // will come back, so this page builds its own again, and fails
+            // with that build's error if it will not.
+            if state.created == 0 && state.idle.is_empty() {
+                may_build = true;
+            }
         }
     }
 
@@ -532,12 +538,13 @@ impl PaddleOcr {
         rotation: u16,
         cancel: &CancellationToken,
     ) -> Result<PassReading, ExtractionError> {
-        let (placed, sideways) = self.read_lines_at(sessions, page, rotation, cancel)?;
+        let (placed, sideways, detected) = self.read_lines_at(sessions, page, rotation, cancel)?;
         Ok(PassReading {
             result: OcrResult::new(page_text(&placed), page_confidence(&placed))
                 .with_rotation(rotation % 360)
                 .with_lines(placed.iter().map(PlacedLine::to_ocr_line).collect()),
             sideways,
+            detected,
         })
     }
 
@@ -549,7 +556,7 @@ impl PaddleOcr {
         page: &RgbImage,
         rotation: u16,
         cancel: &CancellationToken,
-    ) -> Result<(Vec<PlacedLine>, bool), ExtractionError> {
+    ) -> Result<(Vec<PlacedLine>, bool, usize), ExtractionError> {
         cancel.check()?;
         cancel.record(|timings| timings.ocr_passes += 1);
         let turned: Cow<'_, RgbImage> = match rotation % 360 {
@@ -620,7 +627,7 @@ impl PaddleOcr {
                 char_probabilities: decoded[index].char_probabilities.clone(),
             })
             .collect();
-        Ok((placed, sideways))
+        Ok((placed, sideways, quads.len()))
     }
 
     /// The selective second pass: the lines holding a critical field that
@@ -870,6 +877,39 @@ mod tests {
         assert_eq!(pool.release_idle(), 0, "a leased set is not dropped");
         drop(held);
         assert_eq!(pool.release_idle(), 1);
+        assert_eq!(pool.lock().created, 0);
+    }
+
+    /// Two pages build sets at once into an empty pool and both builds
+    /// fail: neither waits for a set that no one is building, and each
+    /// page fails with its build's error.
+    #[test]
+    fn pages_whose_builds_all_fail_fail_rather_than_wait() {
+        let pool = std::sync::Arc::new(SessionPool::<u32>::new(2));
+        let both_building = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        for _ in 0..2 {
+            let (pool, both_building, sender) =
+                (pool.clone(), both_building.clone(), sender.clone());
+            std::thread::spawn(move || {
+                let first = std::sync::atomic::AtomicBool::new(true);
+                let build = || {
+                    // Only the first builds race; a retry fails on its own.
+                    if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        both_building.wait();
+                    }
+                    Err(ExtractionError::resource_limit("out of memory"))
+                };
+                let outcome = pool.acquire(build, &CancellationToken::new()).map(|_| ());
+                let _ = sender.send(outcome.is_err());
+            });
+        }
+        for _ in 0..2 {
+            let failed = receiver
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a page waited for a set no one was building");
+            assert!(failed);
+        }
         assert_eq!(pool.lock().created, 0);
     }
 }
