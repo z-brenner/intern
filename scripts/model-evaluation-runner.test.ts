@@ -45,3 +45,30 @@ it('the release gate only accepts evidence from the shipping pipeline', async ()
   expect(release).toContain('validate-model-evaluation.mjs');
   expect(release.indexOf('run-model-evaluation.ps1')).toBeLessThan(release.indexOf('validate-model-evaluation.mjs'));
 });
+
+it('the runner scores with the pipeline the release gate accepts, unless told otherwise', async () => {
+  const [script, validator, evaluate, release, qa] = await Promise.all([
+    readFile('scripts/run-model-evaluation.ps1', 'utf8'),
+    readFile('scripts/validate-model-evaluation.mjs', 'utf8'),
+    readFile('crates/intern-engine/src/bin/intern-evaluate.rs', 'utf8'),
+    readFile('.github/workflows/release.yml', 'utf8'),
+    readFile('.github/workflows/qa.yml', 'utf8'),
+  ]);
+  const accepted = /report\.pipeline === '([a-z]+)'/.exec(validator)?.[1];
+  expect(accepted).toBe('evidence');
+  // intern-evaluate writes the --pipeline it was given into the report, so the
+  // runner's default is exactly what the gate reads back. A default the gate
+  // refuses fails every release only after the whole corpus has been scored.
+  const parameter = /\[ValidateSet\(([^)]*)\)\]\[string\]\$Pipeline = "([a-z]+)"/.exec(script);
+  expect(parameter).not.toBeNull();
+  const [, set, fallback] = parameter!;
+  expect(fallback).toBe(accepted);
+  expect(set.split(',').map((word) => word.trim().replace(/"/g, ''))).toContain(accepted);
+  expect(script).toContain('--pipeline $Pipeline');
+  expect(evaluate).toContain(`"${accepted}" => Pipeline::Evidence`);
+  // Both workflows that gate on the report rely on that default.
+  for (const workflow of [release, qa]) {
+    expect(workflow).toContain('run-model-evaluation.ps1');
+    expect(workflow).not.toMatch(/-Pipeline\b/);
+  }
+});
