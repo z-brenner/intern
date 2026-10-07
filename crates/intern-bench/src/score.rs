@@ -45,16 +45,26 @@ pub fn bad_when_true(key: &str) -> bool {
     key.ends_with("_forbidden") || matches!(key, "unsafe_ready" | "needless_review")
 }
 
-/// Fractions where a smaller number is the better one.
+/// OCR's edit distances, in characters (exact and ignoring case) and in
+/// words: the counts the error rates are made of, which the extract-only
+/// gate holds instead of the rates.
+pub const OCR_EDIT_COUNTS: [&str; 3] = [
+    "ocr_char_distance",
+    "ocr_char_distance_ci",
+    "ocr_word_distance",
+];
+
+/// Fractions, and OCR's edit distances, where a smaller number is the
+/// better one.
 pub fn lower_is_better(key: &str) -> bool {
-    key.starts_with("ocr_cer") || key.starts_with("ocr_wer")
+    key.starts_with("ocr_cer") || key.starts_with("ocr_wer") || OCR_EDIT_COUNTS.contains(&key)
 }
 
 /// Fractional scores that are not a share of one: Tesseract's mean
 /// confidence runs from 0 to 100, so it is shown as a number, never as a
-/// percentage or a change in points.
+/// percentage or a change in points; an edit distance is a count.
 pub fn is_unit_fraction(key: &str) -> bool {
-    key != "ocr_mean_confidence"
+    key != "ocr_mean_confidence" && !OCR_EDIT_COUNTS.contains(&key)
 }
 
 /// What Intern produced for a document, in the terms it is scored on.

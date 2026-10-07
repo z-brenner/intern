@@ -11,9 +11,10 @@
 //! *broken*, from bad to good *fixed* - trap scores being good when false,
 //! as in the baseline gate.
 //!
-//! A fractional score - a structure score, an OCR error rate or accuracy,
-//! digest recall - that moved further than the extract-only gate tolerates
-//! ([`value_tolerance`]) is listed per document as *worse* or *better*.
+//! A value the extract-only gate holds ([`extract_values`]) - a structure
+//! score, an OCR accuracy, digest recall, or OCR's character or word edit
+//! distance - that moved further than the gate tolerates is listed per
+//! document as *worse* or *better*.
 //!
 //! Latency is compared, as each stage's p50 and p95 change in per cent, over
 //! the documents both runs completed, and only between two runs that
@@ -27,11 +28,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    baseline::value_tolerance,
+    baseline::{extract_values, value_moved},
     markdown::{HEADLINE_MEANS, HEADLINE_RATES, duration, metric_value, percent},
     record::{COMPLETED, DocumentRecord, PENDING, is_unscorable},
     report::{self, Rate, Report, Summary},
-    score::{bad_when_true, is_unit_fraction, lower_is_better},
+    score::{OCR_EDIT_COUNTS, bad_when_true, is_unit_fraction, lower_is_better},
     stats::{Distribution, round},
     timing::{self, METRICS},
 };
@@ -391,38 +392,24 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             }
         }
         if scored(record) && scored(now) {
-            let keys = record
-                .scores
-                .keys()
-                .filter(|key| now.scores.contains_key(*key))
-                .collect::<Vec<_>>();
-            for key in keys {
-                let (Some(was), Some(is), Some(tolerance)) = (
-                    record.scores[key]
-                        .as_f64()
-                        .filter(|_| record.scores[key].is_f64()),
-                    now.scores[key]
-                        .as_f64()
-                        .filter(|_| now.scores[key].is_f64()),
-                    value_tolerance(key),
-                ) else {
+            let after_values = extract_values(now);
+            for (key, was) in extract_values(record) {
+                let Some(is) = after_values.get(&key).copied() else {
                     continue;
                 };
-                let gain = if lower_is_better(key) {
-                    was - is
-                } else {
-                    is - was
+                let Some(better) = value_moved(&key, was, is) else {
+                    continue;
                 };
                 let flip = Flip {
                     id: record.id.clone(),
-                    score: key.clone(),
+                    score: key,
                     before: json!(was),
                     after: json!(is),
                 };
-                if gain < -tolerance - 1e-9 {
-                    comparison.worse.push(flip);
-                } else if gain > tolerance + 1e-9 {
+                if better {
                     comparison.better.push(flip);
+                } else {
+                    comparison.worse.push(flip);
                 }
             }
         }
@@ -806,6 +793,8 @@ pub fn render(comparison: &Comparison) -> String {
                     |value| {
                         if is_unit_fraction(&flip.score) {
                             percent(value)
+                        } else if OCR_EDIT_COUNTS.contains(&flip.score.as_str()) {
+                            format!("{value:.0}")
                         } else {
                             format!("{value:.1}")
                         }
@@ -923,6 +912,7 @@ pub fn render(comparison: &Comparison) -> String {
 mod tests {
     use super::*;
     use crate::{
+        ocr::OcrMeasure,
         record::DocumentRecord,
         report::{RunInfo, build},
         timing,
@@ -1219,24 +1209,36 @@ mod tests {
 
     #[test]
     fn extraction_scores_that_moved_past_tolerance_are_named() {
-        let run = |cer: f64, rows: f64, completeness: f64| {
+        let run = |chars: usize, rows: f64, completeness: f64| {
             let mut report = report(vec![(
                 "a",
-                json!({"ocr_cer": cer, "table_row_accuracy": rows, "description_completeness": completeness, "ocr_mean_confidence": 80.0}),
+                json!({"ocr_cer": chars as f64 / 600.0, "table_row_accuracy": rows, "description_completeness": completeness, "ocr_mean_confidence": 80.0}),
                 "a.pdf",
                 100.0,
             )]);
             report.mode = "extract".into();
+            report.records[0].ocr = Some(OcrMeasure {
+                char_distance: chars,
+                char_distance_ci: chars,
+                truth_chars: 600,
+                word_distance: 10,
+                truth_words: 100,
+                ..OcrMeasure::default()
+            });
             report
         };
-        let comparison = compare(&run(0.05, 0.5, 0.5), &run(0.03, 0.25, 1.0));
+        let comparison = compare(&run(30, 0.5, 0.5), &run(18, 0.25, 1.0));
         let named = |flips: &[Flip]| {
             flips
                 .iter()
                 .map(|flip| format!("{}:{}", flip.id, flip.score))
                 .collect::<Vec<_>>()
         };
-        assert_eq!(named(&comparison.better), vec!["a:ocr_cer"]);
+        assert_eq!(
+            named(&comparison.better),
+            vec!["a:ocr_char_distance", "a:ocr_char_distance_ci"],
+            "OCR is compared by its edit distances, not its rates"
+        );
         assert_eq!(
             named(&comparison.worse),
             vec!["a:table_row_accuracy"],
@@ -1248,12 +1250,16 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("| a | `ocr_char_distance` | 30 | 18 |"),
+            "{rendered}"
+        );
+        assert!(
             !rendered.contains("## Safety counts") && !rendered.contains("review_rate"),
             "two extract-only runs name nothing: {rendered}"
         );
-        // Within the error rate's tolerance: not listed.
+        // Within the edit distance's tolerance: not listed.
         assert!(
-            compare(&run(0.05, 0.5, 0.5), &run(0.053, 0.5, 0.5))
+            compare(&run(30, 0.5, 0.5), &run(33, 0.5, 0.5))
                 .worse
                 .is_empty()
         );

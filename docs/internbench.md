@@ -267,9 +267,10 @@ computed again over the documents both runs scored, and each score over the
 documents that have it in both, so a subset run, a document added since or
 one that went stale moves no figure; the comparison says when the two runs
 cover different documents or gold. It lists every document that flipped on
-every score (fixed or broken), and every extraction score (structure, OCR,
-digest recall) that moved further than the extract-only gate tolerates,
-worse or better. Latency, as the change in p50 and p95 of every stage, is
+every score (fixed or broken), and every value the extract-only gate holds
+(structure scores, OCR's accuracies and its character and word edit
+distances, digest recall) that moved further than the gate tolerates, worse
+or better. Latency, as the change in p50 and p95 of every stage, is
 compared over the documents both runs completed, and only between two runs
 that measured their timings (live or extract-only): a replay reports its
 recording's timings, so a comparison involving one shows no latency change
@@ -444,16 +445,20 @@ refusal exits 2.
   worker build on one machine - two runs over the corpus produce the same
   scores, routes and texts - so a fall is a real change. Every structure
   score, OCR's date, name and identifier accuracy and `digest_recall` count
-  whole items, so any fall fails. The error rates are the only continuous
-  scores: `ocr_cer` (and `ocr_cer_ci`) may rise by 0.005 and `ocr_wer` by
-  0.01 before a document regresses - about three characters of the
-  smallest scanned page in the corpus (some 600 drawn), a page read in
-  another line order or by another Tesseract build, while the date, name
-  and identifier accuracies still catch any critical field lost.
-  `ocr_mean_confidence` is reported, never gated. A status that changes
-  fails as in replay, and latency is gated only with `--latency-gate`, over
-  the worker's stages. An extract-only run is never held to a live or
-  replay baseline, nor the other way round.
+  whole items, so any fall fails. OCR's error rates are held as the edit
+  distances they are made of, which the baseline keeps per document
+  (`ocr_char_distance`, `ocr_char_distance_ci`, `ocr_word_distance`): a
+  document regresses when its character edit distance rises by more than
+  three characters, or its word edit distance by more than one word. A
+  tolerance on the rate would be a share of the page, so a long scan could
+  lose a line (0.005 of 6,000 characters is thirty) where a short one could
+  lose three characters; a count gives every page the same room - a
+  character or two misread by another Tesseract build - while the date,
+  name and identifier accuracies still catch any critical field lost. The
+  rates themselves, and `ocr_mean_confidence`, are reported, never gated.
+  A status that changes fails as in replay, and latency is gated only with
+  `--latency-gate`, over the worker's stages. An extract-only run is never
+  held to a live or replay baseline, nor the other way round.
 
 A regression exits 2. There are deliberately no absolute thresholds:
 the baseline is what Intern does today, and the gates stop it getting
