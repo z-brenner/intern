@@ -2473,18 +2473,20 @@ impl TiffFormat {
         }
     }
 
+    /// How many entries the directory at `offset` says it has: up to 65,535
+    /// in a classic TIFF, and as many as an eight-byte count says in a
+    /// BigTIFF, which the walk's budget, not this, bounds.
     fn entry_count(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<u64> {
         file.seek(SeekFrom::Start(offset)).ok()?;
-        let entries = if self.big {
+        if self.big {
             let mut count = [0_u8; 8];
             file.read_exact(&mut count).ok()?;
-            self.quad(count)
+            Some(self.quad(count))
         } else {
             let mut count = [0_u8; 2];
             file.read_exact(&mut count).ok()?;
-            u64::from(self.word(count))
-        };
-        (entries <= u64::from(u16::MAX)).then_some(entries)
+            Some(u64::from(self.word(count)))
+        }
     }
 
     /// A directory's `entries` entries and the offset after them, read from
@@ -2860,6 +2862,46 @@ mod tiff_chains {
         let canceled = CancellationToken::new();
         canceled.cancel();
         assert!(later_frames(file.path(), 100, &canceled).is_err());
+    }
+
+    /// A BigTIFF directory counts its entries in eight bytes: more than a
+    /// classic table holds is read within the walk's budget, and past it
+    /// the document reads as going on rather than as complete.
+    #[test]
+    fn a_bigtiff_directory_of_many_entries_is_read_within_the_budget() {
+        let bigtiff = |entries: u64, entry_bytes: u64| {
+            let mut bytes = b"II".to_vec();
+            bytes.extend(43_u16.to_le_bytes());
+            bytes.extend(8_u16.to_le_bytes());
+            bytes.extend(0_u16.to_le_bytes());
+            bytes.extend(16_u64.to_le_bytes());
+            // The first page: no entries, then the next directory.
+            let second = 16 + 8 + 8;
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend((second as u64).to_le_bytes());
+            // A page with `entries` entries, of which `entry_bytes` are
+            // written, then the third page.
+            bytes.extend(entries.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, (20 * entry_bytes) as usize));
+            let third = bytes.len() as u64 + 8;
+            bytes.extend(third.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), bytes).unwrap();
+            file
+        };
+        let cancel = CancellationToken::new();
+
+        let wide = bigtiff(70_000, 70_000);
+        let frames = later_frames(wide.path(), 10, &cancel).unwrap();
+        assert_eq!(frames.directories.len(), 2);
+        assert!(!frames.beyond_limit);
+
+        let huge = bigtiff(1 << 40, 0);
+        let frames = later_frames(huge.path(), 10, &cancel).unwrap();
+        assert!(frames.directories.is_empty());
+        assert!(frames.beyond_limit, "pages may lie past the budget");
     }
 
     #[test]
