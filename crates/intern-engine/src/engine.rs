@@ -343,14 +343,21 @@ impl Engine {
         let prepared = self.prepare(source)?;
         match self.analyze_prepared(source, &prepared, extension, existing_names) {
             Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
-                let scale = (prepared.scale_pct / 2).max(1);
-                let refits = prepared.refits + 1;
-                let mut halved = self.fit(prepared.index, prepared.index_micros, scale)?;
-                halved.refits += refits;
+                let halved = self.refit_halved(&prepared)?;
                 self.analyze_prepared(source, &halved, extension, existing_names)
             }
             result => result,
         }
+    }
+
+    /// The evidence prepared again at half the scale: what the engine sends a
+    /// model that said the prompt did not fit. The estimate is an estimate;
+    /// the server counts exactly.
+    pub fn refit_halved(&self, prepared: &PreparedEvidence) -> EngineResult<PreparedEvidence> {
+        let scale = (prepared.scale_pct / 2).max(1);
+        let mut halved = self.fit(prepared.index.clone(), prepared.index_micros, scale)?;
+        halved.refits += prepared.refits + 1;
+        Ok(halved)
     }
 
     /// Builds a document's evidence index, chooses the units its prompt

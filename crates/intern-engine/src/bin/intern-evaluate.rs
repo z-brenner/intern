@@ -68,6 +68,7 @@ use intern_engine::{
     SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
+    error::EngineErrorCode,
     legacy::{
         LEGACY_GRAMMAR, LegacyProposal, legacy_digest, legacy_filename, legacy_prompt,
         legacy_validate,
@@ -784,19 +785,10 @@ fn evaluate_evidence(
             "extraction_millis": extraction_millis,
         })
     };
-    let (record, prompt_sha256) = match live.engine.prepare(&source) {
-        Err(error) => (failed(error.code().as_str()), None),
-        Ok(prepared) => {
-            let prompt_sha256 = prepared.request.sha256();
-            let record = match live
-                .engine
-                .analyze_prepared(&source, &prepared, extension, &[])
-            {
-                Ok(analysis) => evidence_record(fixture, &analysis, &source, extraction_millis),
-                Err(error) => failed(error.code().as_str()),
-            };
-            (record, Some(prompt_sha256))
-        }
+    let (result, prompt_sha256) = analyze_evidence_live(live.engine, &source, extension);
+    let record = match result {
+        Ok(analysis) => evidence_record(fixture, &analysis, &source, extraction_millis),
+        Err(error) => failed(error.code().as_str()),
     };
     let entry = live.recorder.map(|recorder| RecordedFixture {
         file: name.to_owned(),
@@ -810,6 +802,33 @@ fn evaluate_evidence(
         prompt_sha256,
     });
     (record, entry)
+}
+
+/// One document through the evidence pipeline as the app reads it, and the
+/// prompt its last answer was to. A model that says the prompt did not fit
+/// is asked once more at half the evidence, as [`Engine::analyze`] does;
+/// the recording keeps that second prompt and its answer.
+fn analyze_evidence_live(
+    engine: &Engine,
+    source: &DocumentSource,
+    extension: &str,
+) -> (EngineResult<DocumentAnalysis>, Option<String>) {
+    let prepared = match engine.prepare(source) {
+        Ok(prepared) => prepared,
+        Err(error) => return (Err(error), None),
+    };
+    match engine.analyze_prepared(source, &prepared, extension, &[]) {
+        Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+            match engine.refit_halved(&prepared) {
+                Ok(halved) => (
+                    engine.analyze_prepared(source, &halved, extension, &[]),
+                    Some(halved.request.sha256()),
+                ),
+                Err(error) => (Err(error), Some(prepared.request.sha256())),
+            }
+        }
+        result => (result, Some(prepared.request.sha256())),
+    }
 }
 
 /// One fixture through the evidence pipeline, from the recording.
@@ -832,11 +851,20 @@ fn replay_evidence(
         None,
         context,
     ))));
-    let prepared = match preparer.prepare(source) {
+    let mut prepared = match preparer.prepare(source) {
         Ok(prepared) => prepared,
         Err(error) => return failed(error.code().as_str(), false),
     };
-    let prompt_sha256 = prepared.request.sha256();
+    let mut prompt_sha256 = prepared.request.sha256();
+    // A recording made when the model refused the first prompt as too large
+    // answers the engine's second one, at half the evidence.
+    if recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str())
+        && let Ok(halved) = preparer.refit_halved(&prepared)
+        && recorded.prompt_sha256.as_deref() == Some(halved.request.sha256().as_str())
+    {
+        prompt_sha256 = halved.request.sha256();
+        prepared = halved;
+    }
     let stale = recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str());
     if stale && !allow_stale {
         return json!({
@@ -1741,6 +1769,117 @@ mod tests {
              Invoice Date: January 5, 2026\nPayment Due Date: February 4, 2026\n\
              Bill To: Contoso Worldwide, Inc.\nConsulting services for January, $1,248.00.",
         )
+    }
+
+    /// A ledger the local context holds whole, and half the evidence does
+    /// not: its prompt at half scale differs from its first.
+    fn ledger_source() -> DocumentSource {
+        let mut text = String::from(
+            "MASTER SERVICES AGREEMENT\n\nThis Agreement is made on March 3, 2026 between \
+             Halvorsen Fixture Works LLC and Quillon Ridge Bakery, Inc.\n\n",
+        );
+        for entry in 1..=30 {
+            text.push_str(&format!(
+                "On April {}, 2026 Supplier {entry} LLC invoiced Quillon Ridge Bakery, Inc. \
+                 ${entry},250.00 under invoice INV-{:05} for delivery {entry}.\n",
+                entry % 28 + 1,
+                10_000 + entry,
+            ));
+        }
+        source_from_text(text)
+    }
+
+    /// Refuses the first prompt as too large, as llama-server does when the
+    /// engine's estimate undercounts, and answers every later one.
+    struct TooLargeOnce(Arc<Mutex<Vec<String>>>);
+
+    impl Proposer for TooLargeOnce {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
+            let mut prompts = self.0.lock().unwrap();
+            prompts.push(request.sha256());
+            if prompts.len() == 1 {
+                return Err(intern_engine::EngineError::new(
+                    EngineErrorCode::ModelInputTooLarge,
+                    "too large",
+                ));
+            }
+            Ok(ModelProposal::default())
+        }
+
+        fn context_tokens(&self) -> Option<usize> {
+            Some(intern_engine::server::CONTEXT_TOKENS as usize)
+        }
+    }
+
+    /// A live run reads a document the way the app does: a prompt the model
+    /// says is too large is sent again at half the evidence, and the run
+    /// keeps the prompt that was answered.
+    #[test]
+    fn a_prompt_the_model_finds_too_large_is_asked_again_at_half_the_evidence() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let engine = Engine::with_proposer(Box::new(TooLargeOnce(Arc::clone(&prompts))));
+        let (result, prompt_sha256) = analyze_evidence_live(&engine, &ledger_source(), "txt");
+        assert!(
+            result.is_ok(),
+            "{:?}",
+            result.err().map(|error| error.code())
+        );
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert_ne!(prompts[0], prompts[1]);
+        assert_eq!(prompt_sha256.as_deref(), Some(prompts[1].as_str()));
+    }
+
+    /// A recording of that second prompt replays as current, not stale.
+    #[test]
+    fn a_recording_of_the_half_evidence_retry_replays_as_current() {
+        let settings = EvidenceSettings::parse("evidence", &HashMap::new()).unwrap();
+        let source = ledger_source();
+        let preparer = settings.configure(Engine::with_proposer(Box::new(FixedReply(
+            ModelProposal::default(),
+            None,
+            settings.context(),
+        ))));
+        let full = preparer.prepare(&source).unwrap();
+        let halved = preparer.refit_halved(&full).unwrap();
+        assert_ne!(full.request.sha256(), halved.request.sha256());
+        let recorded = |prompt_sha256: String| RecordedFixture {
+            file: "ledger.txt".into(),
+            sha256: None,
+            extraction: RecordedExtraction::Parsed {
+                source: source.clone(),
+            },
+            prompt_sha256: Some(prompt_sha256),
+            reply: Some(RecordedReply::Proposed {
+                proposal: ModelProposal::default(),
+                token_confidence: None,
+            }),
+        };
+        let fixture = json!({"file": "ledger.txt"});
+        for prompt_sha256 in [full.request.sha256(), halved.request.sha256()] {
+            let record = replay_evidence(
+                &fixture,
+                "ledger.txt",
+                &source,
+                "txt",
+                &recorded(prompt_sha256),
+                false,
+                None,
+                &settings,
+            );
+            assert_eq!(record["stale"], json!(false), "{record}");
+        }
+        let other = replay_evidence(
+            &fixture,
+            "ledger.txt",
+            &source,
+            "txt",
+            &recorded("0".repeat(64)),
+            false,
+            None,
+            &settings,
+        );
+        assert_eq!(other["status"], json!("stale_prompt"));
     }
 
     fn invoice_reply() -> ModelProposal {
