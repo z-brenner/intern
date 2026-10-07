@@ -301,6 +301,31 @@ fn is_table_separator(line: &str) -> bool {
         })
 }
 
+/// A cell's text as it is written into a `| a | b |` row: every pipe in it
+/// escaped, and the backslashes just before a pipe doubled, so the row
+/// splits back into the cells it was written from (see [`table_cells`]).
+/// The cell's own text is left as it is.
+pub(crate) fn escape_cell(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut backslashes = 0;
+    for character in text.chars() {
+        if character == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        let run = if character == '|' {
+            2 * backslashes + 1
+        } else {
+            backslashes
+        };
+        escaped.extend(std::iter::repeat_n('\\', run));
+        escaped.push(character);
+        backslashes = 0;
+    }
+    escaped.extend(std::iter::repeat_n('\\', backslashes));
+    escaped
+}
+
 /// A table row's cells: the text between unescaped pipes, trimmed. Empty
 /// cells are kept, so a cell stays in its column.
 pub(crate) fn table_cells(line: &str) -> Vec<String> {
@@ -757,6 +782,26 @@ fn key_value_block(lines: &[LayoutLine], source: TextSource) -> LayoutBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cell holding a pipe, or backslashes before one, is written so the
+    /// row still splits into the cells it was written from.
+    #[test]
+    fn a_cell_with_pipes_and_backslashes_keeps_its_row_together() {
+        let cells = ["A | B", "a\\|b", "a\\\\|b", "C:\\path\\", "plain"];
+        let row = format!(
+            "| {} |",
+            cells
+                .iter()
+                .map(|cell| escape_cell(cell))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        let read = table_cells(&row);
+        assert_eq!(read.len(), cells.len(), "{row}");
+        assert_eq!(read[0], "A \\| B");
+        assert_eq!(read[4], "plain");
+        assert_eq!(escape_cell("no pipes here"), "no pipes here");
+    }
 
     fn kinds(blocks: &[LayoutBlock]) -> Vec<BlockKind> {
         blocks.iter().map(|block| block.kind).collect()

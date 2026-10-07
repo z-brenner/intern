@@ -530,6 +530,9 @@ pub struct ExtractedPage {
     pub page_number: usize,
     pub text: String,
     pub source: PageSource,
+    /// How sure OCR was of the page: its mean for a page read by OCR, and
+    /// for native text with OCR'd regions merged in, the least of theirs.
+    /// None for a page with no OCR'd text in it.
     pub ocr_confidence: Option<f32>,
     pub vision_escalated: bool,
     /// The page as blocks in reading order (see [`crate::layout`]). Every
@@ -1361,10 +1364,11 @@ fn assemble(
                 (page, vision)
             }
         };
-        if page.source == PageSource::Ocr
-            && page
-                .ocr_confidence
-                .is_some_and(|confidence| confidence < CONFIDENT_READING)
+        // A page read by OCR, or native text with OCR'd regions merged in,
+        // is only as sure as its least sure reading.
+        if page
+            .ocr_confidence
+            .is_some_and(|confidence| confidence < CONFIDENT_READING)
             && !warnings.contains(&ExtractionWarning::LowOcrConfidence)
         {
             warnings.push(ExtractionWarning::LowOcrConfidence);

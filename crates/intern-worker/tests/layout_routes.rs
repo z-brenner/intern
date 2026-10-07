@@ -742,7 +742,19 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
     let region = layout.blocks.last().unwrap();
     assert_eq!(region.source, TextSource::Ocr);
     assert_eq!(region.confidence, Some(88));
+    assert_eq!(page.ocr_confidence, Some(88.0));
     assert!(document.warnings.is_empty());
+
+    // A region kept though OCR was unsure of it: the page is native text,
+    // but no surer than that reading, and the document says so.
+    let unsure = read(
+        &StandInPdf::new(vec![page_with_an_image_region()]),
+        &SignatureReader(68.0),
+    );
+    assert!(unsure.pages[0].text.ends_with("Signed April 30, 2026"));
+    assert_eq!(unsure.pages[0].source, PageSource::Native);
+    assert_eq!(unsure.pages[0].ocr_confidence, Some(68.0));
+    assert_eq!(unsure.warnings, vec![ExtractionWarning::LowOcrConfidence]);
 
     // A region read as noise adds nothing, and the page reads as it would
     // have without it.
@@ -751,6 +763,7 @@ fn an_image_region_on_a_text_page_is_read_and_merged_in_reading_order() {
         &SignatureReader(31.0),
     );
     assert_eq!(noise.pages[0].text, page_with_an_image_region().native_text);
+    assert_eq!(noise.pages[0].ocr_confidence, None);
     // So does one OCR cannot read.
     let unread = read(
         &StandInPdf::new(vec![page_with_an_image_region()]),

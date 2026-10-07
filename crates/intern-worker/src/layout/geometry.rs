@@ -21,8 +21,8 @@ use serde::{Deserialize, Serialize};
 
 use super::router::bounds::{MAX_GUTTER_CANDIDATES, MAX_RUNS, MAX_RUNS_PER_LINE};
 use super::text::{
-    is_heading_line, is_label, is_part_heading, median, opens_a_clause, reads_as_label,
-    split_key_value,
+    escape_cell, is_heading_line, is_label, is_part_heading, median, opens_a_clause,
+    reads_as_label, split_key_value,
 };
 use super::{
     BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, TextSource,
@@ -1348,7 +1348,7 @@ fn table_at(
             "| {} |",
             cells
                 .iter()
-                .map(|cell| cell.text.as_str())
+                .map(|cell| escape_cell(&cell.text))
                 .collect::<Vec<_>>()
                 .join(" | ")
         );

@@ -31,6 +31,7 @@ mod text;
 
 pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
+pub(crate) use text::escape_cell;
 pub use text::{blocks_from_lines, blocks_from_text};
 use text::{blocks_from_page_lines, line_spans};
 
@@ -765,10 +766,14 @@ pub fn regions_page(
     }
     let (display_width, display_height) = native.display_size();
     let mut extra = Vec::new();
+    // The least sure of the readings merged in: a page with OCR'd text in
+    // it is only as sure as that text.
+    let mut least_confidence: Option<f32> = None;
     for (reading, crop) in readings {
         if reading.text.trim().is_empty() || reading.mean_confidence < REGION_CONFIDENCE {
             continue;
         }
+        let merged_before = extra.len();
         let whole = [crop[0], crop[1], crop[2], crop[3]];
         let lines = if reading.lines.is_empty() {
             vec![OcrLine {
@@ -807,6 +812,11 @@ pub fn regions_page(
                 confidence: Some(line.confidence),
             });
         }
+        if extra.len() > merged_before {
+            least_confidence = Some(least_confidence.map_or(reading.mean_confidence, |least| {
+                least.min(reading.mean_confidence)
+            }));
+        }
     }
     if extra.is_empty() {
         return None;
@@ -817,7 +827,7 @@ pub fn regions_page(
         page_number,
         text: linearize(&layout.blocks),
         source: PageSource::Native,
-        ocr_confidence: None,
+        ocr_confidence: least_confidence,
         vision_escalated: false,
         layout: Some(layout),
     })

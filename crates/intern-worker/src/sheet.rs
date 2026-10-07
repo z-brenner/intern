@@ -966,18 +966,15 @@ fn cell_text(data: &Data) -> String {
 }
 
 /// Keeps a value on one table line: newlines become spaces and pipes are
-/// escaped so a cell cannot break the row it sits in, and a value past
+/// escaped (see [`crate::layout::escape_cell`]) so a cell cannot break
+/// the row it sits in, and a value past
 /// [`MAX_CELL_CHARS`] is cut with an ellipsis.
 pub(crate) fn sanitize_cell(value: &str) -> String {
     let value = match value.char_indices().nth(MAX_CELL_CHARS) {
         Some((end, _)) => format!("{}…", &value[..end]),
         None => value.to_owned(),
     };
-    value
-        .replace(['\r', '\n'], " ")
-        .replace('|', "\\|")
-        .trim()
-        .to_owned()
+    crate::layout::escape_cell(value.replace(['\r', '\n'], " ").trim())
 }
 
 #[cfg(test)]
