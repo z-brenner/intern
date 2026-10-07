@@ -45,7 +45,9 @@ jobs:
   # and what the model replied: no runtime, no model, seconds. A change to
   # validation, evidence, distillation, or naming is measured here on every
   # push; a change to the prompt makes the recording stale, and the job says
-  # so rather than scoring the wrong replies. See docs/evaluation.md.
+  # so rather than scoring the wrong replies. See docs/evaluation.md. The
+  # recording of record is the evidence pipeline's, the default; the digest
+  # pipeline, which a hosted model reads, is replayed from its own.
   # InternBench is replayed the same way, from bench/recording.json against
   # bench/baseline.json, and needs no generated corpus: a document's bytes are
   # checked against bench/manifest.json. See docs/internbench.md.
@@ -77,6 +79,14 @@ jobs:
           --fixtures fixtures/generated --expected fixtures/expected.json
           --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
           --output corpus-report.json
+      # The digest pipeline a hosted model reads, from its own recording.
+      - name: Replay the corpus through the digest pipeline and compare with its baseline
+        if: always()
+        run: >-
+          cargo run --locked -p intern-engine --bin intern-evaluate --
+          --fixtures fixtures/generated --expected fixtures/expected.json --pipeline digest
+          --replay fixtures/corpus-recording-digest.json --baseline fixtures/corpus-baseline-digest.json
+          --output corpus-report-digest.json
       - name: Replay InternBench and compare with its baseline
         if: always()
         run: >-
@@ -91,6 +101,7 @@ jobs:
           name: corpus-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             corpus-report.json
+            corpus-report-digest.json
             internbench-report.json
             internbench-report.md
           if-no-files-found: ignore
