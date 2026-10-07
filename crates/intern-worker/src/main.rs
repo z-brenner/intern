@@ -57,10 +57,10 @@ fn select_ocr_backend(
             )),
         }
     }
-    Ok(Box::new(TesseractOcr::new(
+    Ok(Box::new(ParallelTesseract(TesseractOcr::new(
         runtime.join("tesseract.exe"),
         runtime.join("tessdata"),
-    )?))
+    )?)))
 }
 
 #[cfg(feature = "onnx-ocr")]
@@ -100,19 +100,55 @@ impl OcrBackend for LazyOcr {
         }
     }
 
-    /// Tesseract reads a page in a process of its own, so pages can be read
-    /// side by side; how many is [`ocr_workers`].
+    /// How many pages the engine reads at once. Asked before the first page
+    /// is read, so it is answered from what is installed rather than by
+    /// loading an engine a document with a text layer will never use.
     fn concurrency(&self) -> usize {
+        match self.engine.get() {
+            Some(Ok(engine)) => engine.concurrency(),
+            _ => planned_ocr_workers(),
+        }
+    }
+}
+
+/// How many pages the engine [`select_ocr_backend`] would choose reads at
+/// once: PP-OCR's own thread budget when it is installed, [`ocr_workers`]
+/// Tesseract processes otherwise.
+fn planned_ocr_workers() -> usize {
+    let paddle = cfg!(feature = "onnx-ocr")
+        && runtime_directory().is_ok_and(|runtime| {
+            intern_worker::paddle::PaddleAssets::in_directory(&runtime).present()
+        });
+    if paddle {
+        intern_worker::paddle::default_thread_budget().workers
+    } else {
         ocr_workers()
     }
 }
 
-/// How many pages are read by OCR at once: half the machine's logical
+/// How many pages Tesseract reads at once: half the machine's logical
 /// cores, so the app and the model server keep the rest, and never more
-/// than four.
+/// than four. Each page is a process of its own, held to one thread.
 fn ocr_workers() -> usize {
     let cores = std::thread::available_parallelism().map_or(2, std::num::NonZero::get);
     (cores / 2).clamp(1, 4)
+}
+
+/// Tesseract with the number of pages it may read at once.
+struct ParallelTesseract(TesseractOcr);
+
+impl OcrBackend for ParallelTesseract {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        cancel: &CancellationToken,
+    ) -> Result<intern_worker::extract::OcrResult, ExtractionError> {
+        self.0.recognize(page, cancel)
+    }
+
+    fn concurrency(&self) -> usize {
+        ocr_workers()
+    }
 }
 
 /// The reader a file is handed to.
@@ -322,7 +358,8 @@ mod tests {
         // Tesseract is built only with the native feature; without it the
         // selection fails exactly as building Tesseract always has.
         if cfg!(feature = "native-tesseract") {
-            assert!(selected.is_ok());
+            // Tesseract pages are processes of their own, read side by side.
+            assert_eq!(selected.unwrap().concurrency(), ocr_workers());
         } else {
             assert_eq!(selected.err().unwrap().code(), "NATIVE_ASSETS_MISSING");
         }

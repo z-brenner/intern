@@ -736,4 +736,10 @@ impl OcrBackend for PaddleOcr {
         let mut lease = self.pool.acquire(|| self.build_sessions(), cancel)?;
         self.read_page(lease.sessions(), &rgb, cancel)
     }
+
+    /// As many pages as the pool has sessions for; a page past that would
+    /// only wait for one.
+    fn concurrency(&self) -> usize {
+        self.config.workers.max(1)
+    }
 }
