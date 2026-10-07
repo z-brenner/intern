@@ -14,6 +14,8 @@
 //!   [`recording`] again without either.
 //! * [`report`] summarises the records, [`markdown`] renders them for a
 //!   person, [`compare`] diffs two reports, and [`baseline`] gates a run.
+//! * [`merge`] replaces or adds documents in a recording, so a few can be
+//!   recorded again without the whole corpus.
 
 #![deny(unsafe_code)]
 
@@ -25,6 +27,7 @@ pub mod live;
 pub mod machine;
 pub mod markdown;
 pub mod memory;
+pub mod merge;
 pub mod ocr;
 pub mod record;
 pub mod recording;

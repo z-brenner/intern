@@ -684,3 +684,73 @@ fn allowing_staleness_never_passes_a_changed_fixture_and_is_shown() {
         "{page}"
     );
 }
+
+/// One document's bytes changed: it is recorded again on its own and merged
+/// into the recording of record, which then replays clean.
+#[test]
+fn a_document_recorded_again_on_its_own_is_merged_in() {
+    let bench = Bench::new();
+    let with_model = |mut recording: Recording| {
+        recording.model.sha256 = Some("ab".repeat(32));
+        recording
+    };
+    with_model(recording())
+        .save(&bench.path("recording.json"))
+        .unwrap();
+    let mut again = with_model(recording());
+    again.recorded_at = "2026-10-07T10:00:00Z".into();
+    again
+        .documents
+        .retain(|document| document.id == "scan-delta");
+    again.documents[0].sha256 = Some("regenerated".into());
+    again.save(&bench.path("again.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let only = |options: &mut RunOptions| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+    };
+    let (exit, report) = bench.replay("stale.json", only);
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+
+    intern_bench::merge::merge_command(
+        &bench.path("recording.json"),
+        &bench.path("again.json"),
+        &bench.path("recording.json"),
+        &bench.path("gold.json"),
+        &[],
+        Some("scan-delta regenerated"),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("merged.json", only);
+    assert_eq!(exit, 0);
+    assert_eq!(report.record("scan-delta").unwrap().status, "completed");
+    let merged = Recording::load(&bench.path("recording.json")).unwrap().0;
+    assert_eq!(
+        merged
+            .documents
+            .iter()
+            .map(|document| document.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "invoice-alpha",
+            "notice-beta",
+            "scan-delta",
+            "broken-epsilon"
+        ],
+        "the gold's order"
+    );
+    assert!(
+        merged.note.ends_with("scan-delta regenerated"),
+        "{}",
+        merged.note
+    );
+}
