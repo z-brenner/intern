@@ -412,10 +412,16 @@ pub struct EvidenceRef {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ValidatedParty {
     pub name: String,
-    /// The role the reply gave. Only a role whose `role_support` is
-    /// [`Support::Cited`] or [`Support::Context`] decides the relation.
+    /// The role the document supports: the reply's when its `role_support`
+    /// is [`Support::Cited`] or [`Support::Context`], else the
+    /// `document_role`, else none - an unsupported role is never kept.
+    /// Someone the document only copies in is [`PartyRole::Other`].
     #[serde(default)]
     pub role: Option<PartyRole>,
+    /// The role the reply gave, supported or not, for the record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_role: Option<PartyRole>,
+    /// How the document supports `proposed_role`.
     #[serde(default)]
     pub role_support: Support,
     /// The role the document's own wording gives the party - `Resident:`
@@ -424,6 +430,9 @@ pub struct ValidatedParty {
     /// role's place; an unsupported role never does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_role: Option<PartyRole>,
+    /// Named only on a "cc:" line: a bystander, never a filename's party.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copied: bool,
     #[serde(default)]
     pub support: Support,
     /// The stable ids of the units that state the name.
@@ -949,10 +958,12 @@ mod tests {
             parties: vec![ValidatedParty {
                 name: "Acme".into(),
                 role: Some(PartyRole::Issuer),
+                proposed_role: None,
                 role_support: Support::Cited,
                 support: Support::Cited,
                 evidence: vec!["p1.b1".into()],
                 document_role: None,
+                copied: false,
             }],
             document_class: DocumentClass::Issued,
             support: FactSupport {

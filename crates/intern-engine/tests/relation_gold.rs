@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use intern_engine::compose::{CastMember, relation_from_roles};
+use intern_engine::compose::{CastMember, RelationCues, relation_from_roles};
 use intern_engine::{DocumentClass, PartyRelation, PartyRole};
 use serde_json::Value;
 
@@ -121,7 +121,8 @@ fn the_relation_table_gives_every_gold_document_an_accepted_relation() {
                         }
                     })
                     .collect::<Vec<_>>();
-                let derived = relation_from_roles(class, Some(document_type), &cast, None);
+                let derived =
+                    relation_from_roles(class, Some(document_type), &cast, RelationCues::default());
                 checked += 1;
                 let accepted_here = accepted.contains(&key(derived.relation, &derived.parties))
                     || (derived.relation == PartyRelation::None && none_accepted);

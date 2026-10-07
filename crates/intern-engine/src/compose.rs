@@ -206,14 +206,27 @@ const BILATERAL: &[(PartyRole, PartyRole)] = &[
     (PartyRole::Vendor, PartyRole::Customer),
 ];
 
+/// What the document's own layout and wording say about its parties,
+/// besides their roles.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RelationCues {
+    /// The party an issued document's cues nominate as its issuer: a
+    /// "Remit To" line with its name, a "Bill To" line with the other's (the
+    /// digest pipeline's repair), or the one party at the head of its first
+    /// page, before any line that names the customer. Used only when no
+    /// supported role settles it.
+    pub issuer: Option<usize>,
+    /// Whether the document names its first two parties as its two sides:
+    /// "by and between A and B".
+    pub between: bool,
+}
+
 /// The filename's parties and joining word, from the document's class and
 /// the roles validation supported.
 ///
 /// `parties` are the validated parties in the order the document first
-/// names them. `cue_issuer` is the party the document's own issuer and
-/// customer cues nominate as an issued document's issuer - a "Remit To" line
-/// with its name, or a "Bill To" line with the other's - the digest
-/// pipeline's repair, used only when no supported role settles it.
+/// names them; `cues` what the document's layout and wording say besides
+/// (see [`RelationCues`]).
 ///
 /// Only a supported role counts. When nothing settles the question the
 /// first party is kept with no joining word ([`PartyRelation::None`]): the
@@ -222,7 +235,7 @@ pub fn relation_from_roles(
     class: DocumentClass,
     document_type: Option<&str>,
     parties: &[CastMember],
-    cue_issuer: Option<usize>,
+    cues: RelationCues,
 ) -> Relation {
     let Some(first) = parties.first() else {
         return Relation {
@@ -268,6 +281,15 @@ pub fn relation_from_roles(
         basis: format!("{}: unresolved", class.as_str()),
     };
     let lowered = document_type.unwrap_or_default().to_lowercase();
+    // The two sides the document itself names: "by and between A and B".
+    let sides = || match parties {
+        [a, b, ..] if cues.between => Some(Relation {
+            relation: PartyRelation::Between,
+            parties: vec![a.name.clone(), b.name.clone()],
+            basis: format!("{}: by and between", class.as_str()),
+        }),
+        _ => None,
+    };
     match class {
         DocumentClass::Agreement | DocumentClass::Amendment => match parties {
             [a, b, ..] => Relation {
@@ -290,7 +312,7 @@ pub fn relation_from_roles(
             if let Some(seller) = with(&[PartyRole::Vendor, PartyRole::Seller, PartyRole::Sender]) {
                 return one(PartyRelation::From, seller, "the vendor");
             }
-            if let Some(index) = cue_issuer
+            if let Some(index) = cues.issuer
                 && let Some(issuer) = parties.get(index)
             {
                 return one(PartyRelation::From, issuer, "the issuer's cues");
@@ -411,6 +433,9 @@ pub fn relation_from_roles(
             unresolved()
         }
         DocumentClass::Form => {
+            if let Some(relation) = sides() {
+                return relation;
+            }
             if let Some(party) = with(&[PartyRole::Issuer, PartyRole::Sender]).or_else(|| {
                 with(&[
                     PartyRole::Employee,
@@ -436,6 +461,9 @@ pub fn relation_from_roles(
                     };
                 }
             }
+            if let Some(relation) = sides() {
+                return relation;
+            }
             if let Some(party) = with(&[PartyRole::Issuer]) {
                 return one(PartyRelation::From, party, "the issuer");
             }
@@ -460,8 +488,11 @@ pub struct DescriptionFacts<'a> {
     /// The identifier and the word its label gives it: `("invoice",
     /// "INV-10438")`.
     pub identifier: Option<(&'a str, &'a str)>,
-    /// An amount worth stating, and the word its label gives it when it is
-    /// not an issued document's total: `(Some("principal"), "$2,500,000")`.
+    /// Whether the identifier stands on the title line with the type -
+    /// "PACKING SLIP PS-311" - and reads after it: "Packing Slip PS-311".
+    pub identifier_in_title: bool,
+    /// An amount worth stating, and the label the document gives it:
+    /// `(Some("annual fee"), "$96,000")`.
     pub amount: Option<(Option<&'a str>, &'a str)>,
     /// A key fact that is not an amount; it stands in for an absent subject.
     pub other_fact: Option<&'a str>,
@@ -474,9 +505,9 @@ pub struct DescriptionFacts<'a> {
 /// the sentence is too long.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
 enum Part {
-    Amount,
-    Identifier,
     PreparedBy,
+    Identifier,
+    Amount,
     Subject,
     SecondParty,
 }
@@ -485,8 +516,8 @@ enum Part {
 ///
 /// A template per class, filled only with what validation accepted. A
 /// sentence over [`MAX_DESCRIPTION_WORDS`] sheds its optional parts in a
-/// fixed order - the amount, the identifier, the preparer, the subject's
-/// tail, the subject, the second party - and is never cut mid-phrase. One
+/// fixed order - the preparer, the identifier, the subject's tail, the
+/// amount, the subject, the second party - and is never cut mid-phrase. One
 /// under six words gets the document's date, as the document writes it;
 /// if it is still too short, validation says so, as it would of a sentence
 /// the model wrote.
@@ -501,16 +532,16 @@ pub fn describe(facts: &DescriptionFacts<'_>) -> String {
             }
             return sentence;
         }
-        // The fixed drop order: the amount, the identifier, the preparer,
-        // the subject's tail, the whole subject, the second party.
-        if !dropped.contains(&Part::Amount) {
-            dropped.push(Part::Amount);
+        // The fixed drop order: the preparer, the identifier, the subject's
+        // tail, the amount, the whole subject, the second party.
+        if !dropped.contains(&Part::PreparedBy) {
+            dropped.push(Part::PreparedBy);
         } else if !dropped.contains(&Part::Identifier) {
             dropped.push(Part::Identifier);
-        } else if !dropped.contains(&Part::PreparedBy) {
-            dropped.push(Part::PreparedBy);
         } else if !short_subject {
             short_subject = true;
+        } else if !dropped.contains(&Part::Amount) {
+            dropped.push(Part::Amount);
         } else if !dropped.contains(&Part::Subject) {
             dropped.push(Part::Subject);
         } else if !dropped.contains(&Part::SecondParty) {
@@ -556,6 +587,16 @@ fn compose(
             }
         })
         .filter(|_| keep(Part::Subject));
+    // An amount with no label reads beside the subject it is the price of,
+    // or as what the document is for; a labelled one or a total at the end.
+    let amount = facts.amount.filter(|_| keep(Part::Amount));
+    let beside_subject = amount.is_some_and(|(label, _)| {
+        label.is_none() && facts.class != DocumentClass::Issued && subject.is_some()
+    });
+    let subject = match (subject, amount) {
+        (Some(subject), Some((_, money))) if beside_subject => Some(format!("{subject} ({money})")),
+        (subject, _) => subject,
+    };
     let relation = facts.relation;
     let named = relation
         .map(|relation| relation.parties.as_slice())
@@ -576,7 +617,11 @@ fn compose(
     let issuer_side = || other(PROVIDER);
     let receiving_side = || other(RECEIVING);
 
-    let mut text = kind;
+    let in_title = facts.identifier_in_title && keep(Part::Identifier);
+    let mut text = match facts.identifier {
+        Some((_, identifier)) if in_title => format!("{kind} {}", clean(identifier)),
+        _ => kind,
+    };
     let mut tail: Vec<String> = Vec::new();
     match (facts.class, joining) {
         (_, PartyRelation::Between) => {
@@ -707,15 +752,18 @@ fn compose(
         text.push_str(&part);
     }
     if keep(Part::Identifier)
+        && !in_title
         && let Some((label, identifier)) = facts.identifier
     {
         text.push_str(&format!(", {label} {}", clean(identifier)));
     }
-    if keep(Part::Amount)
-        && let Some((label, amount)) = facts.amount
-    {
+    if !beside_subject && let Some((label, amount)) = amount {
+        let total = label.is_none_or(is_total_label);
         match label {
-            None => text.push_str(&format!(", totalling {amount}")),
+            _ if total && (facts.class == DocumentClass::Issued || label.is_some()) => {
+                text.push_str(&format!(", totalling {amount}"));
+            }
+            None => text.push_str(&format!(", for {amount}")),
             Some(label) => text.push_str(&format!(", {label} of {amount}")),
         }
     }
@@ -723,6 +771,25 @@ fn compose(
         text.push_str(&format!(", dated {}", clean(date)));
     }
     finish_sentence(text)
+}
+
+/// Whether an amount's label names a total: "Total", "Amount Due",
+/// "Balance due".
+fn is_total_label(label: &str) -> bool {
+    let lowered = label.to_lowercase();
+    [
+        "total",
+        "amount due",
+        "balance due",
+        "balance",
+        "amount",
+        "sum",
+        "grand total",
+        "net amount",
+        "amount payable",
+    ]
+    .iter()
+    .any(|word| contains_word(&lowered, word))
 }
 
 /// The word a one-sided relation reads with, and "involving" for none.
@@ -1028,6 +1095,21 @@ pub fn money_in(fact: &str) -> Option<&str> {
                 end += 1;
             }
             if end > digits_start {
+                // "$5.2 million" is the amount, not "$5.2".
+                let rest = &fact[end..];
+                for scale in [" million", " billion", " thousand"] {
+                    if rest
+                        .get(..scale.len())
+                        .is_some_and(|word| word.eq_ignore_ascii_case(scale))
+                        && !rest[scale.len()..]
+                            .chars()
+                            .next()
+                            .is_some_and(char::is_alphanumeric)
+                    {
+                        end += scale.len();
+                        break;
+                    }
+                }
                 return Some(&fact[index..end]);
             }
         }
@@ -1124,13 +1206,25 @@ mod tests {
         ]);
         parties[1].role_supported = false;
         parties[0].role_supported = false;
-        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, None);
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &parties,
+            RelationCues::default(),
+        );
         assert_eq!(relation.relation, PartyRelation::None);
         assert_eq!(relation.parties, vec!["Halvorsen Fixture Works LLC"]);
         // The document's own cues still settle it, as the digest pipeline's
         // repair does.
-        let relation =
-            relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, Some(0));
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &parties,
+            RelationCues {
+                issuer: Some(0),
+                between: false,
+            },
+        );
         assert_eq!(relation.relation, PartyRelation::From);
         assert_eq!(relation.parties, vec!["Halvorsen Fixture Works LLC"]);
     }
@@ -1141,7 +1235,12 @@ mod tests {
             ("Acme", Some(PartyRole::Issuer)),
             ("Contoso", Some(PartyRole::Customer)),
         ]);
-        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, None);
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &parties,
+            RelationCues::default(),
+        );
         assert_eq!(relation.relation, PartyRelation::From);
         assert_eq!(relation.parties, vec!["Acme"]);
         let description = describe(&DescriptionFacts {
@@ -1166,7 +1265,7 @@ mod tests {
             DocumentClass::Agreement,
             Some("Services Agreement"),
             &parties,
-            None,
+            RelationCues::default(),
         );
         assert_eq!(relation.relation, PartyRelation::Between);
         let description = describe(&DescriptionFacts {
@@ -1186,7 +1285,7 @@ mod tests {
             DocumentClass::Agreement,
             Some("Services Agreement"),
             &parties[..1],
-            None,
+            RelationCues::default(),
         );
         assert_eq!(alone.relation, PartyRelation::With);
     }
@@ -1203,7 +1302,12 @@ mod tests {
                 Some(PartyRole::Customer),
             ),
         ]);
-        let relation = relation_from_roles(DocumentClass::Issued, Some("Invoice"), &parties, None);
+        let relation = relation_from_roles(
+            DocumentClass::Issued,
+            Some("Invoice"),
+            &parties,
+            RelationCues::default(),
+        );
         let facts = DescriptionFacts {
             class: DocumentClass::Issued,
             document_type: Some("Invoice"),
@@ -1224,7 +1328,11 @@ mod tests {
             word_count(&description) <= MAX_DESCRIPTION_WORDS,
             "{description}"
         );
-        assert!(!description.contains("$12,450.00"), "the amount goes first");
+        assert!(
+            !description.contains("INV-2026-0042"),
+            "the identifier goes before the amount: {description}"
+        );
+        assert!(description.contains("$12,450.00"), "{description}");
         assert!(description.ends_with('.'));
         assert!(description.contains("Larkspur"), "{description}");
     }
@@ -1232,8 +1340,12 @@ mod tests {
     #[test]
     fn a_short_description_gets_the_documents_own_date() {
         let parties = cast(&[("Rowanbrae Vineyards", Some(PartyRole::Issuer))]);
-        let relation =
-            relation_from_roles(DocumentClass::Record, Some("Harvest Log"), &parties, None);
+        let relation = relation_from_roles(
+            DocumentClass::Record,
+            Some("Harvest Log"),
+            &parties,
+            RelationCues::default(),
+        );
         let description = describe(&DescriptionFacts {
             class: DocumentClass::Record,
             document_type: Some("Harvest Log"),
@@ -1256,6 +1368,10 @@ mod tests {
         );
         assert_eq!(money_in("USD 1,000 per month"), Some("USD 1,000"));
         assert_eq!(money_in("net 30 days"), None);
+        assert_eq!(
+            money_in("revenue of $5.2 million in 2026"),
+            Some("$5.2 million")
+        );
         assert_eq!(money_in("FOCUSD 12"), None);
         assert_eq!(
             amount_label("Principal amount of $2,500,000"),

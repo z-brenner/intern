@@ -748,7 +748,7 @@ fn rfind_ignoring_ascii_case(haystack: &str, marker: &str) -> Option<usize> {
 
 /// Title case for an all-capitals heading; a mixed-case heading is left as
 /// the document wrote it.
-fn title_case(value: &str) -> String {
+pub(crate) fn title_case(value: &str) -> String {
     let all_capitals = value
         .chars()
         .filter(|character| character.is_alphabetic())

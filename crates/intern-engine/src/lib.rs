@@ -42,6 +42,7 @@ pub mod logs;
 pub mod manifest;
 pub mod naming;
 pub mod own_names;
+pub(crate) mod phrases;
 mod process;
 pub mod prompt;
 pub mod retrieve;

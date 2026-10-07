@@ -28,8 +28,8 @@
 use std::collections::BTreeSet;
 
 use crate::compose::{
-    CastMember, DescriptionFacts, amount_label, describe, identifier_word, money_in,
-    relation_from_roles,
+    CastMember, DescriptionFacts, Relation, RelationCues, amount_label, describe, identifier_word,
+    money_in, relation_from_roles,
 };
 use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, STOPWORDS};
 use crate::distill::normalize_heading;
@@ -44,14 +44,16 @@ use crate::evidence::{
     stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
-use crate::infer::{
-    complete_type_from_title, infer_date_role, infer_document_type, repair_issued_relation,
+use crate::infer::{infer_date_role, repair_issued_relation};
+use crate::phrases::{
+    has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
+    opens_with_party_label, phrase_positions, subject_value, title_phrase, trim_name, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
     GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_is_tainted, deadline_fires,
     effective_alternates, first_unsupported_claim, issue_date_alternates, push,
-    reading_is_unsettled, type_is_supported, validate_description, year_is_plausible,
+    reading_is_unsettled, validate_description, year_is_plausible,
 };
 
 /// Share of a subject's significant words its cited units must hold for it
@@ -347,49 +349,52 @@ pub fn validate_facts_at(
     };
     let mut references: Vec<EvidenceRef> = Vec::new();
 
-    // The type.
+    // The type: the document's own title phrase where the reply cited its
+    // title, else the reply's words where the document states them whole
+    // and not as another document's name. A type the document does not
+    // state is never written; the title, if one names the same kind of
+    // document, stands in for review.
     let mut type_line = None;
-    let proposed_type = present(facts.document_type.as_deref());
+    let mut type_title = None;
+    let proposed_type = content(facts.document_type.as_deref(), scope);
     let (mut document_type, type_supported) = match proposed_type {
         None => (None, true),
-        Some(value) => {
-            let words = significant_words(value);
-            let found = find(
-                scope,
-                &facts.type_evidence,
-                |view| type_is_supported(value, view),
-                |unit| {
-                    line_where(unit, |line| {
-                        words.iter().any(|word| contains_whole(line, word))
-                    })
-                },
-            );
-            support.document_type = found.support;
-            support.miscited_ids += found.miscited;
-            if found.support == Support::Unsupported {
-                (None, false)
-            } else {
+        Some(value) => match read_type(scope, &facts.type_evidence, value) {
+            TypeReading::Title { phrase, found } => {
+                support.document_type = found.support;
                 remember(&found, &mut references);
-                type_line = found.line;
+                type_line = found.line.clone();
+                type_title = Some(phrase.clone());
+                (Some(phrase), true)
+            }
+            TypeReading::Stated { found } => {
+                support.document_type = found.support;
+                support.miscited_ids += found.miscited;
+                remember(&found, &mut references);
+                type_line = found.line.clone();
                 (Some(titled(value)), true)
             }
-        }
+            TypeReading::Retitled { phrase, line } => {
+                support.document_type = Support::Unsupported;
+                type_line = Some(line);
+                type_title = Some(phrase.clone());
+                push(&mut reasons, ReviewReason::TypeInferred);
+                (Some(phrase), true)
+            }
+            TypeReading::Unsupported => {
+                support.document_type = Support::Unsupported;
+                (None, false)
+            }
+        },
     };
     if !type_supported {
         push(&mut reasons, ReviewReason::TypeUnsupported);
     }
-    let names = facts
-        .parties
-        .iter()
-        .map(|party| party.name.clone())
-        .collect::<Vec<_>>();
-    if type_supported {
-        document_type =
-            document_type.map(|value| complete_type_from_title(&value, context, &names));
-    }
     if document_type.is_none() {
-        match infer_document_type(context) {
-            Some(inferred) => {
+        match title_of(scope) {
+            Some((inferred, line)) => {
+                type_line = Some(line);
+                type_title = Some(inferred.clone());
                 document_type = Some(inferred);
                 push(&mut reasons, ReviewReason::TypeInferred);
             }
@@ -486,6 +491,34 @@ pub fn validate_facts_at(
             }
         }
     }
+    // A signed-on date loses to a stated effective or start date: an
+    // agreement or a form takes effect when it says it does, not on the day
+    // it was signed. Only the one effective date both views agree on
+    // replaces it.
+    if !replaced
+        && matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Agreement | DocumentClass::Form
+        )
+        && let Some(date) = document_date.clone()
+    {
+        let cited = scope.cited_units(&facts.date_evidence);
+        let wording = (!cited.is_empty())
+            .then(|| infer_date_role(&scope.view(&cited), &date, document_type.as_deref()))
+            .flatten()
+            .or_else(|| infer_date_role(context, &date, document_type.as_deref()));
+        if wording == Some(DateRole::Execution)
+            && let Some((alternate, line)) = single_agreed(
+                effective_alternates(context, &date),
+                effective_alternates(document, &date),
+            )
+        {
+            document_date = Some(alternate);
+            date_role = Some(DateRole::Effective);
+            date_line = Some(line);
+            replaced = true;
+        }
+    }
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
     }
@@ -511,14 +544,18 @@ pub fn validate_facts_at(
             .or(date_role)
     });
 
-    // The parties.
+    // The parties: each name as the document writes it, without a label or
+    // an address the layout ran into it, and with the role the document
+    // supports, or none.
     let mut parties: Vec<(ValidatedParty, Option<u32>)> = Vec::new();
     let mut parties_supported = true;
     for party in &facts.parties {
-        let Some(name) = present(Some(party.name.as_str())) else {
+        let Some(written) = content(Some(party.name.as_str()), scope) else {
             parties_supported = false;
             continue;
         };
+        let trimmed = trim_name(written);
+        let name = trimmed.as_str();
         let loose = normalize_loosely(name);
         let normalized = normalize(name);
         let found = find(
@@ -545,20 +582,33 @@ pub fn validate_facts_at(
             continue;
         }
         remember(&found, &mut references);
+        let copied = copied(scope, name);
         let role_support = match party.role {
             None | Some(PartyRole::Other) => Support::Absent,
             Some(role) => role_support(scope, name, role, &party.evidence),
         };
-        let document_role = (!matches!(role_support, Support::Cited | Support::Context))
+        let supported = matches!(role_support, Support::Cited | Support::Context);
+        let document_role = (!supported && !copied)
             .then(|| labelled_role(scope, name))
             .flatten();
+        // The role the document supports: the reply's, else the one its
+        // own wording gives, else none. Someone copied is a bystander.
+        let role = if copied {
+            Some(PartyRole::Other)
+        } else if supported {
+            party.role
+        } else {
+            document_role
+        };
         let first_seen = first_appearance(scope, name);
         parties.push((
             ValidatedParty {
                 name: name.to_owned(),
-                role: party.role,
+                role,
+                proposed_role: party.role,
                 role_support,
                 document_role,
+                copied,
                 support: found.support,
                 evidence: found
                     .unit
@@ -581,35 +631,32 @@ pub fn validate_facts_at(
         .into_iter()
         .map(|(party, _)| party)
         .collect::<Vec<_>>();
-    // The reply's role where the document supports it, else the role the
-    // document's own wording gives, else the reply's role, unsupported.
+    // Who the filename and the description can name: everyone but the
+    // people copied, each with the role the document supports.
     let cast = parties
         .iter()
-        .map(|party| {
-            let supported = matches!(party.role_support, Support::Cited | Support::Context);
-            match (supported, party.document_role) {
-                (false, Some(role)) => CastMember {
-                    name: party.name.clone(),
-                    role: Some(role),
-                    role_supported: true,
-                },
-                _ => CastMember {
-                    name: party.name.clone(),
-                    role: party.role,
-                    role_supported: supported,
-                },
-            }
+        .filter(|party| !party.copied)
+        .map(|party| CastMember {
+            name: party.name.clone(),
+            role: party.role,
+            role_supported: party.role.is_some(),
         })
         .collect::<Vec<_>>();
     let class = DocumentClass::of(document_type.as_deref());
-    let cue_issuer = cue_issuer(document_type.as_deref(), &cast, context);
-    let relation = relation_from_roles(class, document_type.as_deref(), &cast, cue_issuer);
+    let cues = RelationCues {
+        issuer: cue_issuer(document_type.as_deref(), &cast, context).or_else(|| {
+            (class == DocumentClass::Issued)
+                .then(|| header_issuer(scope, &cast))
+                .flatten()
+        }),
+        between: between_cue(context, &cast),
+    };
+    let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown.
-    let subject_value = present(facts.subject.as_deref());
     let mut subject = None;
-    if let Some(value) = subject_value {
+    if let Some(value) = content(facts.subject.as_deref(), scope) {
         let found = claims_found(scope, &facts.subject_evidence, value);
         support.subject = found.support;
         support.miscited_ids += found.miscited;
@@ -624,7 +671,8 @@ pub fn validate_facts_at(
         }
     }
     let mut identifier = None;
-    if let Some(value) = present(facts.identifier.as_deref()) {
+    let mut identifier_line = None;
+    if let Some(value) = content(facts.identifier.as_deref(), scope) {
         let loose = normalize_loosely(value);
         let found = find(
             scope,
@@ -642,11 +690,13 @@ pub fn validate_facts_at(
                 .unit
                 .and_then(|unit| identifier_label(scope.index, unit, found.line.as_deref(), value));
             identifier = Some((identifier_word(label.as_deref()), value.to_owned()));
+            identifier_line = found.line.clone();
         }
     }
     let mut key_facts = Vec::new();
+    let mut key_units = Vec::new();
     for fact in &facts.key_facts {
-        let Some(value) = present(Some(fact.fact.as_str())) else {
+        let Some(value) = content(Some(fact.fact.as_str()), scope) else {
             continue;
         };
         let found = claims_found(scope, &fact.evidence, value);
@@ -657,45 +707,70 @@ pub fn validate_facts_at(
         } else {
             remember(&found, &mut references);
             key_facts.push(value.to_owned());
+            key_units.push(found.unit);
         }
     }
 
-    // The description, composed, then held to the digest pipeline's rules.
-    let amount = key_facts.iter().find_map(|fact| {
+    // The description, composed from what was validated, then held to the
+    // digest pipeline's rules. Values, not labels: a subject is what a
+    // "Project:" field holds, never a "Bill to" line, the type again or a
+    // party's name; an amount reads with the label the document gives it.
+    let identifier = identifier.filter(|(_, value)| {
+        value.chars().any(|character| character.is_ascii_digit())
+            && !repeats(value, document_type.as_deref())
+    });
+    let says_something = |value: &str| -> Option<String> {
+        let value = subject_value(value)?
+            .trim()
+            .trim_end_matches(['.', ';', ',']);
+        let names_party = cast.iter().any(|party| {
+            contains_whole(&normalize_loosely(value), &normalize_loosely(&party.name))
+        });
+        let holds_identifier = identifier
+            .as_ref()
+            .is_some_and(|(_, id)| normalize_loosely(value).contains(&normalize_loosely(id)));
+        (!value.is_empty()
+            && !opens_with_party_label(value)
+            && !repeats(value, document_type.as_deref())
+            && !names_party
+            && !holds_identifier
+            && money_in(value).is_none())
+        .then(|| value.to_owned())
+    };
+    let subject = subject.as_deref().and_then(says_something);
+    let amount = key_facts.iter().zip(&key_units).find_map(|(fact, unit)| {
         let money = money_in(fact)?;
-        if class == DocumentClass::Issued {
-            Some((None, money))
-        } else {
-            amount_label(fact).map(|label| (Some(label), money))
-        }
+        Some((amount_label_of(fact, *unit, money), money.to_owned()))
     });
     let other_fact = key_facts
         .iter()
-        .find(|fact| money_in(fact).is_none())
-        .map(String::as_str);
+        .filter(|fact| money_in(fact).is_none())
+        .find_map(|fact| says_something(fact));
+    let identifier_in_title = match (&identifier, &type_line) {
+        (Some((_, value)), Some(line)) => {
+            identifier_line.as_deref() == Some(line.as_str())
+                && normalize_loosely(line).contains(&normalize_loosely(value))
+        }
+        _ => false,
+    };
     let date_surface = document_date
         .as_deref()
         .zip(date_line.as_deref())
         .and_then(|(date, line)| surface_form(date, line));
     let composed = describe(&DescriptionFacts {
         class,
-        document_type: document_type.as_deref(),
+        document_type: type_title.as_deref().or(document_type.as_deref()),
         relation: Some(&relation),
         parties: &cast,
-        // A subject or a number that only repeats the type says nothing
-        // the sentence does not already, and a number has a digit in it.
-        subject: subject
-            .as_deref()
-            .filter(|value| !repeats(value, document_type.as_deref())),
+        subject: subject.as_deref(),
         identifier: identifier
             .as_ref()
-            .filter(|(_, value)| {
-                value.chars().any(|character| character.is_ascii_digit())
-                    && !repeats(value, document_type.as_deref())
-            })
             .map(|(word, value)| (*word, value.as_str())),
-        amount,
-        other_fact,
+        identifier_in_title,
+        amount: amount
+            .as_ref()
+            .map(|(label, money)| (label.as_deref(), money.as_str())),
+        other_fact: other_fact.as_deref(),
         date_surface: date_surface.as_deref(),
     });
     let description = validate_description(&composed, context, &mut reasons);
@@ -713,6 +788,12 @@ pub fn validate_facts_at(
     {
         push(&mut reasons, ReviewReason::ParserWarning);
     }
+
+    // A title too long to name both sides loses what follows its kind's
+    // "and" - a "Settlement Agreement and Mutual Release" is a Settlement
+    // Agreement - before the filename loses a party to fit.
+    let document_type = document_type
+        .map(|value| fit_type(&value, &relation, document_date.as_deref()).unwrap_or(value));
 
     let party_lines = relation
         .parties
@@ -783,6 +864,262 @@ fn remember(found: &Found<'_>, references: &mut Vec<EvidenceRef>) {
 /// A reply's value, trimmed; blank is absent.
 fn present(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// A reply's value when it says something about the document: present,
+/// not a placeholder ("..", "null") and not an evidence id written where a
+/// value belongs ("p1.b1"). None of those is a statement the document could
+/// support or contradict; each is as good as left out.
+fn content<'v>(value: Option<&'v str>, scope: &ValidationScope<'_>) -> Option<&'v str> {
+    let value = present(value)?;
+    if is_placeholder(value) {
+        return None;
+    }
+    let bare = value.trim_matches(|character: char| matches!(character, '[' | ']' | '"' | '\''));
+    if scope.index.unit(bare).is_some() {
+        return None;
+    }
+    Some(value)
+}
+
+/// How a reply's type reads in the document.
+enum TypeReading<'a> {
+    /// A cited unit's title line names the reply's kind of document: its
+    /// phrase, whole.
+    Title {
+        phrase: String,
+        found: Found<'a>,
+    },
+    /// The reply's own words, stated whole and not as the name of another
+    /// document.
+    Stated {
+        found: Found<'a>,
+    },
+    /// The reply's words are not stated, but a title of the document names
+    /// the same kind: its phrase, for a person to confirm.
+    Retitled {
+        phrase: String,
+        line: String,
+    },
+    Unsupported,
+}
+
+/// Whether a line of a unit can be a title: a heading, a field, a row, or
+/// a line short enough not to be a sentence.
+fn title_like(unit: &EvidenceUnit, line: &str) -> bool {
+    matches!(
+        unit.kind,
+        UnitKind::Heading | UnitKind::Field | UnitKind::TableRow | UnitKind::TableHeader
+    ) || words(line).len() <= 8
+}
+
+/// Where a phrase may stand on a line to name the document: anywhere, but
+/// on a "Re:" or "Subject:" line only first, right after the label - "Re:
+/// Offer of Employment - ..." names a letter, "Subject: RE: Approval
+/// needed: ... fleet monitoring renewal" names no email - and never as
+/// another document's name ("Re: Residential Lease Agreement dated ...").
+fn names_document_at(line_words: &[String], start: usize, end: usize, line: &str) -> bool {
+    if is_reference(line_words, start, end) {
+        return false;
+    }
+    if !names_a_matter(line) {
+        return true;
+    }
+    let label = line_words
+        .iter()
+        .take_while(|word| {
+            matches!(
+                word.as_str(),
+                "re" | "subject" | "subj" | "regarding" | "fw" | "fwd"
+            )
+        })
+        .count();
+    start == label
+}
+
+/// Whether a line's letters are mostly capitals, the way a title is set.
+fn in_capitals(line: &str) -> bool {
+    let letters = line.chars().filter(|character| character.is_alphabetic());
+    let (upper, total) = letters.fold((0, 0), |(upper, total), letter| {
+        (upper + usize::from(letter.is_uppercase()), total + 1)
+    });
+    total >= 4 && upper * 10 >= total * 8
+}
+
+/// Whether a line opens with "Re:", "Subject:" or "Regarding:".
+fn names_a_matter(line: &str) -> bool {
+    let opening = line
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    matches!(
+        opening.trim_end_matches(':'),
+        "re" | "subject" | "regarding" | "subj"
+    ) && opening.ends_with(':')
+}
+
+/// A unit's lines as a title is read from them: a heading's lines are one
+/// title wrapped across them.
+fn title_lines(unit: &EvidenceUnit) -> Vec<String> {
+    if unit.kind == UnitKind::Heading {
+        vec![unit.text.split_whitespace().collect::<Vec<_>>().join(" ")]
+    } else {
+        unit.text.lines().map(str::to_owned).collect()
+    }
+}
+
+/// Reads a reply's type against the document: the title phrase of a cited
+/// title line that names the same kind of document - preferred when it
+/// holds the reply's words or the reply's words are not on it - else the
+/// reply's words where a unit states them whole, not as another document's
+/// name, else a title of the document with the same kind.
+fn read_type<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> TypeReading<'a> {
+    let value_words = words(value);
+    let Some(head) = head_noun(&value_words).map(str::to_owned) else {
+        return TypeReading::Unsupported;
+    };
+    // A type names a kind of document; a reply's phrase that does not -
+    // a company's name, a street address - is no type, wherever it stands.
+    let kind = has_a_kind(&value_words);
+    let stated_on = |line: &str| {
+        let line_words = words(line);
+        kind && phrase_positions(&line_words, &value_words)
+            .into_iter()
+            .any(|at| names_document_at(&line_words, at, at + value_words.len(), line))
+    };
+    // A title phrase of a line, where it names this document.
+    let title_on = |line: &str| {
+        let phrase = title_phrase(line, &head)?;
+        let line_words = words(line);
+        let phrase_words = words(&phrase);
+        phrase_positions(&line_words, &phrase_words)
+            .into_iter()
+            .any(|at| names_document_at(&line_words, at, at + phrase_words.len(), line))
+            .then_some(phrase)
+    };
+    let found_in = |unit: &'a EvidenceUnit, line: &str, support: Support| Found {
+        support,
+        unit: Some(unit),
+        line: Some(line.trim().to_owned()),
+        miscited: 0,
+    };
+    let cited_units = scope.cited_units(cited);
+    for unit in &cited_units {
+        for line in title_lines(unit) {
+            if !title_like(unit, &line) {
+                continue;
+            }
+            let Some(phrase) = title_on(&line) else {
+                continue;
+            };
+            let holds_reply = !phrase_positions(&words(&phrase), &value_words).is_empty();
+            if holds_reply || !stated_on(&line) {
+                return TypeReading::Title {
+                    phrase,
+                    found: found_in(unit, &line, Support::Cited),
+                };
+            }
+            return TypeReading::Stated {
+                found: found_in(unit, &line, Support::Cited),
+            };
+        }
+    }
+    for unit in &cited_units {
+        if let Some(line) = unit.text.lines().find(|line| stated_on(line)) {
+            return TypeReading::Stated {
+                found: found_in(unit, line, Support::Cited),
+            };
+        }
+    }
+    let miscited = cited_units.len() as u32;
+    for unit in scope.context_units() {
+        if let Some(line) = unit.text.lines().find(|line| stated_on(line)) {
+            let mut found = found_in(unit, line, Support::Context);
+            found.miscited = miscited;
+            return TypeReading::Stated { found };
+        }
+    }
+    for unit in title_units(scope) {
+        for line in title_lines(unit) {
+            if title_like(unit, &line)
+                && let Some(phrase) = title_on(&line)
+            {
+                return TypeReading::Retitled {
+                    phrase,
+                    line: line.trim().to_owned(),
+                };
+            }
+        }
+    }
+    TypeReading::Unsupported
+}
+
+/// The context's title units: the units at the head of its first page and
+/// its first headings, in document order - a letterhead's company aside.
+fn title_units<'s, 'a>(
+    scope: &'s ValidationScope<'a>,
+) -> impl Iterator<Item = &'a EvidenceUnit> + 's {
+    let first_page = scope.context_units().map(|unit| unit.page).min();
+    scope
+        .context_units()
+        .filter(move |unit| {
+            unit.kind == UnitKind::Heading
+                || (Some(unit.page) == first_page
+                    && (unit.features.position.title
+                        || unit.features.position.letterhead
+                        || unit.features.position.page_index < 8))
+        })
+        .filter(|unit| !names_an_organisation(unit))
+        .take(8)
+}
+
+/// Words a delivery line or a stamp is written in, never a title.
+const NOT_TITLE_WORDS: &[&str] = &[
+    "certified mail",
+    "return receipt",
+    "via ",
+    "delivered by",
+    "by email",
+    "by hand",
+    "confidential",
+    "privileged",
+];
+
+/// Whether a unit is only an organisation's name - a letterhead's
+/// "Meadowlark Health Plan" - or a delivery line: no title either way.
+fn names_an_organisation(unit: &EvidenceUnit) -> bool {
+    let text = normalize(&unit.text);
+    let text = text.trim();
+    NOT_TITLE_WORDS.iter().any(|words| text.contains(words))
+        || unit
+            .features
+            .organisations
+            .iter()
+            .any(|name| normalize(name).trim() == text)
+        || text.split_whitespace().any(|word| {
+            crate::cues::ORGANISATION_ENDINGS.contains(
+                &word
+                    .trim_matches(|c: char| !c.is_alphanumeric() && c != '.')
+                    .trim_end_matches('.'),
+            )
+        })
+}
+
+/// The type the document's title states when the reply gave none it
+/// supports: the first title line that names a kind of document, and the
+/// line.
+fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
+    title_units(scope).find_map(|unit| {
+        title_lines(unit).into_iter().find_map(|line| {
+            if !title_like(unit, &line) || !(unit.kind == UnitKind::Heading || in_capitals(&line)) {
+                return None;
+            }
+            let line_words = words(&line);
+            let head = head_noun(&line_words).filter(|head| names_a_kind(head))?;
+            title_phrase(&line, head).map(|phrase| (phrase, line.trim().to_owned()))
+        })
+    })
 }
 
 /// A type the reply wrote all in lower case - "invoice", "notice of
@@ -1108,10 +1445,16 @@ fn unit_supports_role(
         }
     }
     // A letterhead is a few short lines at the top of the first page, not
-    // the opening paragraph that happens to be among them.
+    // the opening paragraph that happens to be among them, and its name
+    // opens a line of its own: a line OCR ran two names into is no one's
+    // letterhead.
     if matches!(role, PartyRole::Issuer | PartyRole::Sender)
         && unit.features.position.letterhead
         && unit.text.chars().count() <= LETTERHEAD_CHARACTERS
+        && unit
+            .text
+            .lines()
+            .any(|line| normalize_loosely(line).starts_with(loose))
     {
         return true;
     }
@@ -1296,6 +1639,220 @@ fn cue_issuer(
     }
 }
 
+/// Wording that copies someone in on a document rather than addressing it
+/// to them.
+const COPY_CUES: &[&str] = &["cc", "bcc", "copy to", "copies to", "copied to"];
+
+/// Whether `text` holds one of `cues` as whole words.
+fn has_cue(text: &str, cues: &[&str]) -> bool {
+    cues.iter()
+        .any(|cue| !whole_positions(text, cue).is_empty())
+}
+
+/// Whether every line of the context that names `name` copies them in -
+/// "cc: Marcus Reyes, Esq., outside counsel" - so they are a bystander to
+/// the document, never one of its parties.
+fn copied(scope: &ValidationScope<'_>, name: &str) -> bool {
+    let loose = normalize_loosely(name);
+    let mut naming = 0;
+    for unit in scope.context_units() {
+        for line in unit.text.lines() {
+            let line = normalize_loosely(line);
+            let Some(at) = whole_positions(&line, &loose).first().copied() else {
+                continue;
+            };
+            naming += 1;
+            if !has_cue(&line[..at], COPY_CUES) {
+                return false;
+            }
+        }
+    }
+    naming > 0
+}
+
+/// The one party at the head of an issued document's first page: named
+/// before any line that names a customer, and not under a customer's label
+/// itself. An invoice's, an order's or a slip's issuer is its letterhead
+/// or header, and is seldom labelled as such; this is that structural cue.
+/// `None` unless exactly one party stands there.
+fn header_issuer(scope: &ValidationScope<'_>, cast: &[CastMember]) -> Option<usize> {
+    let units = scope.context_units().collect::<Vec<_>>();
+    let first_page = units.iter().map(|unit| unit.page).min()?;
+    let page = units
+        .iter()
+        .filter(|unit| unit.page == first_page)
+        .collect::<Vec<_>>();
+    let heads = cast
+        .iter()
+        .enumerate()
+        .filter(|(_, party)| {
+            let loose = normalize_loosely(&party.name);
+            let mut customer_seen = false;
+            for unit in &page {
+                let labelled = unit
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| has_cue(&normalize_loosely(label), CUSTOMER_CUES));
+                let lines = unit.text.lines().map(normalize_loosely).collect::<Vec<_>>();
+                for (index, line) in lines.iter().enumerate() {
+                    if let Some(at) = whole_positions(line, &loose).first().copied() {
+                        let under_label = index > 0
+                            && lines[index - 1].split_whitespace().count() <= 3
+                            && has_cue(&lines[index - 1], CUSTOMER_CUES);
+                        return !customer_seen
+                            && !labelled
+                            && !under_label
+                            && !has_cue(&line[..at], CUSTOMER_CUES);
+                    }
+                    if labelled || has_cue(line, CUSTOMER_CUES) {
+                        customer_seen = true;
+                    }
+                }
+            }
+            false
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    match heads.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
+/// Whether the context names the first two parties as the document's two
+/// sides: "by and between Tessellate Analytics Ltd. and Contoso Worldwide,
+/// Inc.".
+fn between_cue(context: &ScopeView, cast: &[CastMember]) -> bool {
+    let [first, second, ..] = cast else {
+        return false;
+    };
+    let (first, second) = (
+        normalize_loosely(&first.name),
+        normalize_loosely(&second.name),
+    );
+    context.segments().iter().any(|segment| {
+        let text = normalize_loosely(segment);
+        whole_positions(&text, "between").into_iter().any(|at| {
+            let after = window_forward(&text, at, 300);
+            let named = |name: &str| whole_positions(after, name).first().copied();
+            matches!((named(&first), named(&second)), (Some(a), Some(b)) if a != b)
+        })
+    })
+}
+
+/// Room an extension takes at the end of a filename, its dot included.
+const EXTENSION_ROOM: usize = 6;
+
+/// A shorter type for a filename that names two parties but would not fit
+/// them: a compound title's first part when that part is itself a kind of
+/// document ("Settlement Agreement" of "Settlement Agreement and Mutual
+/// Release"). `None` when the name fits or there is no such part.
+fn fit_type(document_type: &str, relation: &Relation, date: Option<&str>) -> Option<String> {
+    let [first, second] = relation.parties.as_slice() else {
+        return None;
+    };
+    if relation.relation != PartyRelation::Between {
+        return None;
+    }
+    let length = |kind: &str| {
+        date.map_or(0, |date| date.chars().count() + 1)
+            + kind.chars().count()
+            + " between ".len()
+            + first.chars().count()
+            + " and ".len()
+            + second.chars().count()
+    };
+    let room = crate::naming::MAX_FILENAME_CHARS - EXTENSION_ROOM;
+    if length(document_type) <= room {
+        return None;
+    }
+    let lowered = document_type.to_lowercase();
+    let at = lowered.find(" and ")?;
+    let shorter = document_type[..at].trim();
+    let shorter_words = words(shorter);
+    let last = shorter_words.last()?;
+    (names_a_kind(last)
+        && head_noun(&shorter_words) == Some(last.as_str())
+        && length(shorter) <= room)
+        .then(|| shorter.to_owned())
+}
+
+/// The label the document gives an amount: a "Total:" before it in the
+/// fact, the field's label or the row's first cell it stands in ("| Annual
+/// Fee | $96,000 |"), or a word the fact itself names it by ("principal").
+/// Lower case, at most four words, and none with a digit.
+fn amount_label_of(fact: &str, unit: Option<&EvidenceUnit>, money: &str) -> Option<String> {
+    let from_fact = label_and_value(fact)
+        .filter(|(_, value)| value.contains(money))
+        .map(|(label, _)| label.to_owned());
+    let from_unit = unit.and_then(|unit| match unit.kind {
+        UnitKind::Field => unit.label.clone(),
+        UnitKind::TableRow => unit
+            .text
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .next()
+            .filter(|cell| !cell.is_empty() && !cell.contains(money))
+            .map(str::to_owned),
+        _ => None,
+    });
+    // What else a short fact says of the amount: "$9,500 monthly retainer",
+    // "$412,000 in bookings".
+    let from_words = || {
+        let rest = fact.replacen(money, " ", 1);
+        let kept = rest
+            .split_whitespace()
+            .map(|word| word.trim_matches(|character: char| !character.is_alphanumeric()))
+            .filter(|word| {
+                !word.is_empty()
+                    && !matches!(
+                        word.to_lowercase().as_str(),
+                        "in" | "of" | "for" | "at" | "a" | "an" | "the" | "per" | "is" | "was"
+                    )
+            })
+            .collect::<Vec<_>>();
+        (!kept.is_empty() && kept.len() <= 2).then(|| kept.join(" "))
+    };
+    from_fact
+        .or(from_unit)
+        .or_else(|| amount_label(fact).map(str::to_owned))
+        .or_else(from_words)
+        .map(|label| {
+            label
+                .trim()
+                .trim_end_matches([':', '.'])
+                .trim()
+                .to_lowercase()
+        })
+        .filter(|label| {
+            label
+                .chars()
+                .filter(|character| character.is_alphabetic())
+                .count()
+                >= 3
+                && label.split_whitespace().count() <= 4
+                && !label.chars().any(|character| character.is_ascii_digit())
+                && !label.split_whitespace().all(|word| {
+                    matches!(
+                        word,
+                        "year"
+                            | "month"
+                            | "week"
+                            | "day"
+                            | "hour"
+                            | "annum"
+                            | "annually"
+                            | "each"
+                            | "unit"
+                            | "item"
+                            | "per"
+                    )
+                })
+        })
+}
+
 /// The label an identifier carries: its field's or row's label, or the
 /// words just before it on its line ("Invoice No.").
 fn identifier_label(
@@ -1418,8 +1975,13 @@ fn complete_candidate(
         })
         .collect::<Vec<_>>();
     let document_type = facts.document_type.as_deref();
-    candidate.party_relation =
-        relation_from_roles(DocumentClass::of(document_type), document_type, &cast, None).relation;
+    candidate.party_relation = relation_from_roles(
+        DocumentClass::of(document_type),
+        document_type,
+        &cast,
+        RelationCues::default(),
+    )
+    .relation;
 }
 
 #[cfg(test)]
@@ -2079,5 +2641,280 @@ Dated May 12, 2026";
         assert_eq!(outcome.status, ProposalStatus::NeedsReview);
         assert!(outcome.reasons.contains(&ReviewReason::DateMissing));
         assert!(outcome.proposal.parties.is_empty());
+    }
+
+    /// A reply of the given facts about the whole of `text`.
+    fn facts_for(
+        text: &str,
+        build: impl FnOnce(&EvidenceIndex) -> ModelFacts,
+    ) -> (ValidationOutcome, EvidenceIndex) {
+        let index = index_of(text);
+        let context = whole(&index);
+        let facts = build(&index);
+        let outcome = check(facts, &context, &index);
+        (outcome, index)
+    }
+
+    #[test]
+    fn an_id_or_a_placeholder_written_as_a_value_is_no_value_at_all() {
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            identifier: Some(id_of(index, "INVOICE")),
+            subject: Some("..".into()),
+            ..invoice_facts(index)
+        });
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.identifier, None);
+        assert_eq!(facts.subject, None);
+    }
+
+    #[test]
+    fn a_type_is_the_cited_titles_phrase_and_an_unstated_one_goes_to_review() {
+        const NOTICE: &str = "Basalt Commercial Credit Corp.\n\nOctober 14, 2025\n\n\
+NOTICE OF DEFAULT AND RESERVATION OF RIGHTS\n\n\
+Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 2023.";
+        let notice = |index: &EvidenceIndex, kind: &str, cited: &str| ModelFacts {
+            document_type: Some(kind.into()),
+            type_evidence: vec![id_of(index, cited)],
+            document_date: Some("2025-10-14".into()),
+            date_evidence: vec![id_of(index, "October 14")],
+            ..ModelFacts::default()
+        };
+        // The reply's "Loan Notice" cites the title: the title's words are
+        // the type.
+        let (outcome, _) = facts_for(NOTICE, |index| notice(index, "Loan Notice", "NOTICE OF"));
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Notice of Default and Reservation of Rights")
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::TypeUnsupported));
+        // Cited elsewhere, its words stated nowhere: the title stands in,
+        // for review.
+        let (outcome, _) = facts_for(NOTICE, |index| {
+            notice(index, "Loan Notice", "Glasswing Ceramics")
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Notice of Default and Reservation of Rights")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        // Another document's name is not this one's type.
+        let (outcome, _) = facts_for(NOTICE, |index| {
+            notice(index, "Loan Agreement", "Glasswing Ceramics")
+        });
+        assert_ne!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Loan Agreement")
+        );
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+    }
+
+    #[test]
+    fn a_name_loses_the_address_ocr_ran_into_it() {
+        const LEASE: &str = "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024\n\n\
+PrOperty 47 JUniper LOOP Cedar Finch Properties Llc Orion Glass Studio inc";
+        let (outcome, _) = facts_for(LEASE, |index| ModelFacts {
+            document_type: Some("Lease Agreement".into()),
+            type_evidence: vec![id_of(index, "LEASE")],
+            document_date: Some("2024-09-01".into()),
+            date_evidence: vec![id_of(index, "LEASE")],
+            parties: vec![
+                party(
+                    "PrOperty 47 JUniper LOOP Cedar Finch Properties Llc",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "Orion")],
+                ),
+                party(
+                    "Orion Glass Studio inc",
+                    Some(PartyRole::Tenant),
+                    &[id_of(index, "Orion")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Cedar Finch Properties Llc", "Orion Glass Studio inc"]
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        let facts = outcome.facts.expect("facts");
+        // Neither role is the document's: neither is kept.
+        assert!(
+            facts.parties.iter().all(|party| party.role.is_none()),
+            "{:?}",
+            facts.parties
+        );
+        assert_eq!(facts.parties[1].proposed_role, Some(PartyRole::Tenant));
+    }
+
+    #[test]
+    fn someone_copied_in_is_never_a_filename_party() {
+        const NOTICE: &str = "NOTICE OF TERMINATION\n\nDate of this Notice: December 29, 2026\n\n\
+To: John Smith, 1420 Fielder Lane\n\n\
+Northstar Lantern Works LLC, 88 Harbour Street cc: Marcus Reyes, Esq., outside counsel";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Termination".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-12-29".into()),
+            date_evidence: vec![id_of(index, "Date of this")],
+            parties: vec![
+                party(
+                    "Marcus Reyes",
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "cc:")],
+                ),
+                party(
+                    "John Smith",
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "To:")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        let facts = outcome.facts.expect("facts");
+        let reyes = facts
+            .parties
+            .iter()
+            .find(|party| party.name == "Marcus Reyes")
+            .expect("validated");
+        assert!(reyes.copied);
+        assert_eq!(reyes.role, Some(PartyRole::Other));
+    }
+
+    #[test]
+    fn an_issued_documents_header_party_is_its_issuer() {
+        const INVOICE: &str = "INVOICE INV-2048\n\nInvoice date: April 30, 2025\n\n\
+Due date: May 30, 2025\n\nNimbus Orchard Supply Co. Bill to Atlas Threadworks LLC\n\n\
+Total: $1,248.00";
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-04-30".into()),
+            date_role: Some(DateRole::Invoice),
+            date_evidence: vec![id_of(index, "Invoice date")],
+            parties: vec![party(
+                "Nimbus Orchard Supply Co.",
+                Some(PartyRole::Vendor),
+                &[id_of(index, "Nimbus")],
+            )],
+            subject: Some("Bill to Atlas Threadworks LLC".into()),
+            subject_evidence: vec![id_of(index, "Nimbus")],
+            identifier: Some("INV-2048".into()),
+            identifier_evidence: vec![id_of(index, "INVOICE")],
+            key_facts: vec![KeyFact {
+                fact: "Total: $1,248.00".into(),
+                evidence: vec![id_of(index, "Total")],
+            }],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["Nimbus Orchard Supply Co."]);
+        assert_eq!(
+            outcome.proposal.description,
+            "Invoice INV-2048 from Nimbus Orchard Supply Co., totalling $1,248.00."
+        );
+        // The customer alone, under its label, is never the issuer.
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            parties: vec![party(
+                "Atlas Threadworks LLC",
+                Some(PartyRole::Vendor),
+                &[id_of(index, "Nimbus")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_ne!(outcome.proposal.party_relation, PartyRelation::From);
+    }
+
+    #[test]
+    fn a_form_by_and_between_two_parties_is_between_them_and_dated_when_it_starts() {
+        const FORM: &str = "# Order Form\n\nThis Order Form is entered into by and between \
+Tessellate Analytics Ltd. and Contoso Worldwide, Inc. under the Master Subscription Agreement \
+dated August 8, 2022.\n\n| Subscription Start Date | February 1, 2026 |\n| Annual Fee | $96,000 |\n\n\
+Signed on January 14, 2026 by authorized representatives of both parties.";
+        let (outcome, _) = facts_for(FORM, |index| ModelFacts {
+            document_type: Some("Order Form".into()),
+            type_evidence: vec![id_of(index, "Order Form")],
+            document_date: Some("2026-01-14".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(index, "Signed on")],
+            parties: vec![
+                party(
+                    "Tessellate Analytics Ltd.",
+                    Some(PartyRole::Client),
+                    &[id_of(index, "by and between")],
+                ),
+                party(
+                    "Contoso Worldwide, Inc.",
+                    Some(PartyRole::Contractor),
+                    &[id_of(index, "by and between")],
+                ),
+            ],
+            key_facts: vec![KeyFact {
+                fact: "$96,000".into(),
+                evidence: vec![id_of(index, "Annual Fee")],
+            }],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::Between);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-02-01")
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Effective));
+        assert!(
+            outcome
+                .proposal
+                .description
+                .contains("annual fee of $96,000"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    #[test]
+    fn a_compound_title_too_long_for_both_parties_keeps_its_first_kind() {
+        const SETTLEMENT: &str = "SETTLEMENT AGREEMENT AND MUTUAL RELEASE\n\n\
+This Settlement Agreement and Mutual Release is made effective as of July 22, 2026, by and \
+between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.";
+        let (outcome, _) = facts_for(SETTLEMENT, |index| ModelFacts {
+            document_type: Some("Settlement Agreement and Mutual Release".into()),
+            type_evidence: vec![id_of(index, "SETTLEMENT")],
+            document_date: Some("2026-07-22".into()),
+            date_evidence: vec![id_of(index, "July 22")],
+            parties: vec![
+                party(
+                    "Harborline Freight Systems LLC",
+                    None,
+                    &[id_of(index, "Harborline")],
+                ),
+                party(
+                    "Quill and Vane Advisory Group, Inc.",
+                    None,
+                    &[id_of(index, "Harborline")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Settlement Agreement")
+        );
+        assert_eq!(outcome.proposal.parties.len(), 2);
+        assert!(
+            outcome
+                .proposal
+                .description
+                .starts_with("Settlement Agreement and Mutual Release between"),
+            "{}",
+            outcome.proposal.description
+        );
     }
 }
