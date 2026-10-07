@@ -6,6 +6,22 @@ Each pair is one report: the Markdown is for reading, the JSON for
 | Report | What it is |
 | --- | --- |
 | `2026-10-07-baseline` | The baseline: Intern as InternBench found it, before any work it was built to measure. Scores replayed from `bench/recording.json` against today's gold; timings and memory are the recording's. |
+| `2026-10-07-phase2-before` | All 72 documents through the reader as it was before document routing and PP-OCR (Tesseract, page text as the PDF gives it), recorded live and replayed against the current gold and scorer. |
+| `2026-10-07-phase2-after` | The same 72 documents through the routing reader with PP-OCR, replayed from today's `bench/recording.json`, the recording of record since. |
+| `2026-10-07-phase2-compare` | `intern-bench compare` of the two: what document routing, layout and PP-OCR changed, document by document. |
+
+## The phase 2 runs
+
+Both were recorded live one after the other on the same otherwise idle
+4-core Xeon, with the pinned model at 4 threads and an 8,192-token context.
+"Before" used a reader built from the code before routing, with the
+Tesseract runtime; "after" the routing reader with the PP-OCR runtime. Eight
+scans were recorded again after a layout fix that stopped OCR pages from
+pairing headings, names and addresses as labels, and merged into the "after"
+recording; the other 64 documents' page text is byte-identical under that fix.
+Both reports were then replayed with the same scorer and gold, so every score
+is computed the same way. `docs/pipeline-bottlenecks.md` (Phase 2: measured)
+reads them.
 
 ## The baseline run
 
