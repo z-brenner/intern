@@ -71,10 +71,8 @@ pub struct OcrMeasure {
     /// Truth pages compared with a page the extractor returned.
     pub pages_compared: usize,
     /// Truth pages of a document the extractor returned without them (a
-    /// TIFF frame it does not read, say). Reported, not folded into the
-    /// rates, and the dates, names and identifiers drawn only on them are
-    /// left out of the targeted accuracies: no reading could have found
-    /// them.
+    /// TIFF frame it does not read, say). Each counts as read empty, like a
+    /// failed page: a lost page is lost text, and the figures say so.
     pub pages_missing: usize,
     /// Truth pages of a scan whose extraction failed, so nothing was read
     /// at all. Each counts as read empty - every character, word, date,
@@ -186,47 +184,52 @@ fn fraction(found: usize, total: usize) -> Option<f64> {
 /// drawn there.
 ///
 /// The targeted checks ask whether each date, name, and identifier drawn on
-/// the compared pages survives somewhere in the read text: dates and names
+/// the scanned pages survives somewhere in the read text: dates and names
 /// compared ignoring case (a capitalised month is the same date),
-/// identifiers exactly, because `INV-2O417` is not `INV-20417`. A value
-/// drawn only on a page the extractor did not return is not counted: no
-/// reading of the returned pages could have found it.
+/// identifiers exactly, because `INV-2O417` is not `INV-20417`.
+///
+/// A page the extractor did not return - the second frame of a fax it does
+/// not read - counts as read empty, as every page of a failed extraction
+/// does in [`OcrMeasure::unread`]: its characters and words are all errors
+/// and the values drawn on it are missed, so losing a page costs accuracy
+/// instead of leaving the figures as they were.
 pub fn measure(truth: &OcrTruth, source: &DocumentSource) -> OcrMeasure {
     let mut measure = OcrMeasure::default();
     let mut read_pages = Vec::new();
     let mut truth_pages = Vec::new();
     let mut confidences = Vec::new();
     for page in &truth.pages {
-        let Some(read) = source
+        let read = source
             .pages
             .iter()
-            .find(|candidate| candidate.page_number == page.page)
-        else {
-            measure.pages_missing += 1;
-            continue;
-        };
-        measure.pages_compared += 1;
-        let (distance, length) = char_distance(&page.text, &read.text);
+            .find(|candidate| candidate.page_number == page.page);
+        let read_text = read.map_or("", |read| read.text.as_str());
+        match read {
+            Some(_) => measure.pages_compared += 1,
+            None => measure.pages_missing += 1,
+        }
+        let (distance, length) = char_distance(&page.text, read_text);
         measure.char_distance += distance;
         measure.truth_chars += length;
-        let (distance_ci, _) = char_distance(&page.text.to_lowercase(), &read.text.to_lowercase());
+        let (distance_ci, _) = char_distance(&page.text.to_lowercase(), &read_text.to_lowercase());
         measure.char_distance_ci += distance_ci;
-        let (words, word_count) = word_distance(&page.text, &read.text);
+        let (words, word_count) = word_distance(&page.text, read_text);
         measure.word_distance += words;
         measure.truth_words += word_count;
-        if read.origin == PageOrigin::Ocr
+        if let Some(read) = read
+            && read.origin == PageOrigin::Ocr
             && let Some(confidence) = read.ocr_confidence
         {
             confidences.push(f64::from(confidence));
         }
-        read_pages.push(read.text.as_str());
+        read_pages.push(read_text);
         truth_pages.push(page.text.as_str());
     }
     let read = collapse_whitespace(&read_pages.join(" "));
     let read_folded = read.to_lowercase();
     let drawn = collapse_whitespace(&truth_pages.join(" "));
     let drawn_folded = drawn.to_lowercase();
-    // Each value counts when it is drawn on a compared page, and is found
+    // Each value counts when it is drawn on a scanned page, and is found
     // when the reading has it too: dates and names ignoring case,
     // identifiers exactly.
     let count = |values: &[String], fold: bool| {
@@ -379,10 +382,11 @@ mod tests {
         let measure = measure(&truth, &source);
         assert_eq!(measure.pages_compared, 2);
         assert_eq!(measure.pages_missing, 1, "page 3 was never returned");
-        // O for 0, and four letters of MARCH; then one lower-case m.
-        assert_eq!(measure.char_distance, 1 + 4 + 1);
-        assert_eq!(measure.char_distance_ci, 1);
-        assert_eq!(measure.truth_chars, 37 + 21);
+        // O for 0, and four letters of MARCH; then one lower-case m; then
+        // all ten characters of the page never returned.
+        assert_eq!(measure.char_distance, 1 + 4 + 1 + 10);
+        assert_eq!(measure.char_distance_ci, 1 + 10);
+        assert_eq!(measure.truth_chars, 37 + 21 + 10);
         assert_eq!(measure.date_accuracy(), Some(1.0), "case-insensitive");
         assert_eq!(measure.name_accuracy(), Some(1.0));
         assert_eq!(
@@ -395,15 +399,16 @@ mod tests {
 
         let nothing = super::measure(&truth, &scanned(&[(9, "unrelated", None)]));
         assert_eq!((nothing.pages_compared, nothing.pages_missing), (0, 3));
-        assert_eq!(nothing.cer(), None, "nothing compared, no rate");
-        assert_eq!(nothing.dates_total, 0);
+        assert_eq!(nothing.cer(), Some(1.0), "every page lost, every character");
+        assert_eq!((nothing.dates_found, nothing.dates_total), (0, 1));
+        assert_eq!(nothing.mean_confidence, None);
     }
 
-    /// A fax whose second frame the reader never returns: what is drawn
-    /// only there is reported as unread and left out of the accuracies, so
-    /// a perfect reading of the first frame scores perfectly.
+    /// A fax whose second frame the reader never returns: the frame counts
+    /// as read empty, so a perfect reading of the first frame does not
+    /// score perfectly, and what is drawn only on the second is missed.
     #[test]
-    fn values_drawn_only_on_an_unread_page_are_not_counted() {
+    fn a_page_the_extractor_did_not_return_counts_as_read_empty() {
         let truth = OcrTruth {
             pages: vec![
                 OcrTruthPage {
@@ -421,14 +426,22 @@ mod tests {
         };
         let source = scanned(&[(1, "FAX Date: August 12, 2026 Re: N0612X", Some(90))]);
         let measure = measure(&truth, &source);
-        assert_eq!(measure.pages_missing, 1);
-        assert_eq!((measure.dates_found, measure.dates_total), (1, 1));
+        assert_eq!((measure.pages_compared, measure.pages_missing), (1, 1));
+        assert_eq!((measure.dates_found, measure.dates_total), (1, 2));
         assert_eq!(
             (measure.identifiers_found, measure.identifiers_total),
-            (1, 1)
+            (1, 2)
         );
-        assert_eq!(measure.date_accuracy(), Some(1.0));
-        assert_eq!(measure.cer(), Some(0.0));
+        assert_eq!(measure.date_accuracy(), Some(0.5));
+        // The second frame's 56 characters, all missed, of 36 + 56.
+        assert_eq!(measure.char_distance, 56);
+        assert_eq!(measure.truth_chars, 36 + 56);
+        assert_eq!(measure.wer(), Some(8.0 / 15.0));
+        assert_eq!(
+            measure.mean_confidence,
+            Some(90.0),
+            "only pages read have one"
+        );
     }
 
     /// A scan the extractor failed on reads as empty: a total miss that

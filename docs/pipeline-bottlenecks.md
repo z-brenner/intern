@@ -229,8 +229,11 @@ Where the misses come from:
   41, was dated correctly.
 * **Scans.** OCR fidelity explains two misses outright. The skewed notice
   lost three paragraphs (64.6% CER), and the noisy statement read at 38% CER
-  with the issuer's name destroyed. The other scans read at 0–2.5% CER and
-  failed for the same reasons digital documents do.
+  with the issuer's name destroyed. The fax lost its whole second frame: the
+  worker reads only a TIFF's first frame, so 57% of the fax's text, the
+  quotation and its validity date included, never reached the model. The
+  other scans read at 0–2.5% CER and failed for the same reasons digital
+  documents do.
 
 On this corpus, digest recall and prompt recall are 100%. Distillation is
 **not** losing the facts. Long documents miss because of how the facts are
@@ -270,15 +273,18 @@ Ranked by what the measurements say they are worth.
 ### OCR
 
 1. **A modern recognizer.** PP-OCRv5 through ONNX Runtime, measured on the
-   same 13 InternBench scans, cut character errors from 2.5% to 0.5%. It
-   raised date accuracy from 0.90 to 0.97 and identifier accuracy from 0.80
-   to 0.93. It costs more per page, but OCR is 2.5% of the time.
-2. **Deskew and orientation that do not drop text.** The 3° skewed page lost
+   pages of the same 13 InternBench scans that the worker reads (the fax's
+   second frame aside), cut character errors from 2.5% to 0.5%. It raised
+   date accuracy from 0.90 to 0.97 and identifier accuracy from 0.80 to
+   0.93. It costs more per page, but OCR is 2.5% of the time.
+2. **Read every frame of a TIFF.** A fax or batch scan is usually one TIFF
+   with a page per frame, and the worker reads the first.
+3. **Deskew and orientation that do not drop text.** The 3° skewed page lost
    three paragraphs.
-3. **Second readings only where it matters.** Re-read a low-confidence line
+4. **Second readings only where it matters.** Re-read a low-confidence line
    only when it carries a date, an amount, an identifier or a name, instead
    of re-reading whole pages.
-4. **Keep the native layer when it is trustworthy, and only then.** The
+5. **Keep the native layer when it is trustworthy, and only then.** The
    invisible, OCR-corrupted text layer was trusted and the date could not be
    confirmed.
 
