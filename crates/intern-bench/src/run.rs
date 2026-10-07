@@ -11,6 +11,7 @@ use intern_engine::DigestBudget;
 use crate::{
     baseline::{self, Baseline},
     compare,
+    extract::{self, ExtractOptions},
     gold::{GoldDocument, GoldFile},
     live::{self, LiveOptions},
     machine::{MachineInfo, git_commit, utc_now},
@@ -18,7 +19,8 @@ use crate::{
     record::{DocumentRecord, PENDING, STALE_PROMPT, is_unscorable},
     recording::{RECORDING_SCHEMA_VERSION, Recording, sha256_hex},
     replay::{self, Manifest},
-    report::{self, CorpusInfo, RecordingInfo, Report, RunInfo, SUITE},
+    report::{self, CorpusInfo, EXTRACT, RecordingInfo, Report, RunInfo, SUITE},
+    stats::round,
 };
 
 /// The run scored, but worse than the baseline, or with documents replay
@@ -35,6 +37,8 @@ pub enum Mode {
         recording: PathBuf,
         allow_stale: bool,
     },
+    /// The worker alone, scored on extraction.
+    Extract { options: ExtractOptions },
 }
 
 pub struct RunOptions {
@@ -167,59 +171,61 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     configuration_change,
                 }),
                 corpus,
+                wall_ms: None,
             };
             (records, info, allow_stale)
+        }
+        Mode::Extract {
+            options: extract_options,
+        } => {
+            // Nothing is recorded, but scores against the gold mean nothing
+            // for bytes the gold was not written for.
+            check_corpus(
+                &documents,
+                &options.corpus,
+                manifest.as_ref().map(|(manifest, _)| manifest),
+            )?;
+            let machine = MachineInfo::current();
+            let owned = documents
+                .iter()
+                .map(|document| (*document).clone())
+                .collect::<Vec<_>>();
+            let outcome = extract::run(&owned, &options.corpus, &extract_options)?;
+            let info = RunInfo {
+                mode: EXTRACT.into(),
+                created_at,
+                machine,
+                model: Default::default(),
+                git_commit: commit,
+                worker: Some(extract_options.worker.display().to_string()),
+                timings_source: "measured".into(),
+                recording: None,
+                corpus,
+                wall_ms: Some(round(outcome.wall_micros as f64 / 1000.0, 1)),
+            };
+            (outcome.records, info, false)
         }
         Mode::Live {
             options: live_options,
             record,
             note,
         } => {
-            let missing = documents
-                .iter()
-                .filter(|document| !options.corpus.join(&document.file).is_file())
-                .map(|document| document.file.as_str())
-                .collect::<Vec<_>>();
-            if !missing.is_empty() {
-                return Err(format!(
-                    "{} document(s) missing from {} (generate the corpus with `node bench/generate.mjs`): {}",
-                    missing.len(),
-                    options.corpus.display(),
-                    missing.join(", ")
-                ));
-            }
             // A live run is expensive and its recording is only worth keeping
             // if it read the documents the manifest vouches for, so a
             // mismatch stops it before the first document.
-            if let Some((manifest, _)) = &manifest {
-                let differ = documents
-                    .iter()
-                    .filter(|document| {
-                        let bytes =
-                            std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
-                        // A document the manifest does not list is not
-                        // vouched for either.
-                        manifest
-                            .sha256(&document.file)
-                            .is_none_or(|expected| expected != sha256_hex(&bytes))
-                    })
-                    .map(|document| document.file.as_str())
-                    .collect::<Vec<_>>();
-                if !differ.is_empty() {
-                    return Err(format!(
-                        "{} document(s) in {} differ from the manifest or are not in it (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
-                        differ.len(),
-                        options.corpus.display(),
-                        differ.join(", ")
-                    ));
-                }
-            }
+            check_corpus(
+                &documents,
+                &options.corpus,
+                manifest.as_ref().map(|(manifest, _)| manifest),
+            )?;
             let machine = MachineInfo::current();
             let owned = documents
                 .iter()
                 .map(|document| (*document).clone())
                 .collect::<Vec<_>>();
+            let started = std::time::Instant::now();
             let outcome = live::run(&owned, &options.corpus, &live_options)?;
+            let wall_ms = round(started.elapsed().as_secs_f64() * 1000.0, 1);
             if let Some(path) = &record {
                 Recording {
                     schema_version: RECORDING_SCHEMA_VERSION,
@@ -251,6 +257,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                 timings_source: "measured".into(),
                 recording: None,
                 corpus,
+                wall_ms: Some(wall_ms),
             };
             (outcome.records, info, false)
         }
@@ -365,6 +372,52 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
     Ok(exit)
 }
 
+/// Refuses a corpus that lacks a selected document, or - given a manifest -
+/// holds one whose bytes it does not vouch for: a measurement of other bytes
+/// than the gold describes would be scored against the wrong answers.
+fn check_corpus(
+    documents: &[&GoldDocument],
+    corpus: &Path,
+    manifest: Option<&Manifest>,
+) -> Result<(), String> {
+    let missing = documents
+        .iter()
+        .filter(|document| !corpus.join(&document.file).is_file())
+        .map(|document| document.file.as_str())
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{} document(s) missing from {} (generate the corpus with `node bench/generate.mjs`): {}",
+            missing.len(),
+            corpus.display(),
+            missing.join(", ")
+        ));
+    }
+    if let Some(manifest) = manifest {
+        let differ = documents
+            .iter()
+            .filter(|document| {
+                let bytes = std::fs::read(corpus.join(&document.file)).unwrap_or_default();
+                // A document the manifest does not list is not vouched for
+                // either.
+                manifest
+                    .sha256(&document.file)
+                    .is_none_or(|expected| expected != sha256_hex(&bytes))
+            })
+            .map(|document| document.file.as_str())
+            .collect::<Vec<_>>();
+        if !differ.is_empty() {
+            return Err(format!(
+                "{} document(s) in {} differ from the manifest or are not in it (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
+                differ.len(),
+                corpus.display(),
+                differ.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// "id: expected X, got Y" for every scored name that missed, as
 /// `intern-evaluate` prints them.
 fn miss_lines(records: &[DocumentRecord]) -> Vec<String> {
@@ -388,6 +441,10 @@ fn miss_lines(records: &[DocumentRecord]) -> Vec<String> {
 
 /// Three lines on standard error, so a terminal run ends with the answer.
 fn headline(report: &Report) {
+    if report.mode == EXTRACT {
+        extraction_headline(report);
+        return;
+    }
     let summary = &report.summary;
     let rate = |key: &str| {
         summary.rates.get(key).map_or_else(
@@ -429,6 +486,50 @@ fn headline(report: &Report) {
             } else {
                 ""
             }
+        );
+    }
+}
+
+/// An extract-only run's answer: what was read, how well, and how fast.
+fn extraction_headline(report: &Report) {
+    let summary = &report.summary;
+    let figure = |value: Option<f64>| value.map_or_else(|| "–".to_owned(), markdown::percent);
+    eprintln!(
+        "extracted {} of {} documents{}",
+        summary.completed,
+        summary.documents,
+        report
+            .wall_ms
+            .map(|wall| format!(" in {}", markdown::duration(wall)))
+            .unwrap_or_default()
+    );
+    if let Some(structure) = &report.structure {
+        let figures = &structure.aggregate;
+        eprintln!(
+            "reading order {} · table rows {} · table cells {} · key-values {} · routes {}",
+            figure(figures.reading_order_accuracy),
+            figure(figures.table_row_accuracy),
+            figure(figures.table_cell_recall),
+            figure(figures.kv_accuracy),
+            figure(figures.route_correct)
+        );
+    }
+    if let Some(ocr) = &report.ocr.aggregate {
+        eprintln!(
+            "OCR: CER {} · WER {} · dates {} · names {} · identifiers {}",
+            figure(ocr.cer),
+            figure(ocr.wer),
+            figure(ocr.date_accuracy),
+            figure(ocr.name_accuracy),
+            figure(ocr.identifier_accuracy)
+        );
+    }
+    if let Some(total) = report.latency.overall.get("worker_total_ms") {
+        eprintln!(
+            "worker per document: p50 {} · p95 {} · max {}",
+            markdown::duration(total.p50),
+            markdown::duration(total.p95),
+            markdown::duration(total.max)
         );
     }
 }

@@ -10,7 +10,8 @@
 //! answer would be scored on, and is a miss on every one: each
 //! good-when-true score is false (the conditional ones too: the date role,
 //! the relation word, the party's role), each fraction is 0, and a scan's
-//! OCR counts as read empty. It sprang no trap and was filed under no name,
+//! OCR, like the structure the gold gives (see [`crate::structure`]),
+//! counts as read empty when the worker failed. It sprang no trap and was filed under no name,
 //! so the trap and unsafe scores are false. It asserted nothing, so the
 //! description's claims are not checked (`description_factual` and the
 //! claim counts are absent).
@@ -23,7 +24,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use intern_engine::{
-    DocumentSource, Evidence, PartyRelation, ValidatedProposal, compose_filename,
+    DigestBudget, DocumentSource, Evidence, PartyRelation, ValidatedProposal, compose_filename,
     evidence::{date_match_positions, normalize},
     naming::windows_name_key,
 };
@@ -34,6 +35,7 @@ use crate::{
     gold::{GoldDocument, PartySet},
     ocr::{OcrMeasure, measure},
     stats::round,
+    structure::{self, StructureMeasure},
 };
 
 /// The keys whose `true` is the failure, not the success: a trap sprung, a
@@ -98,6 +100,7 @@ pub struct Scored {
     /// Every trap the outcome sprang, with the gold's reason.
     pub traps: Vec<String>,
     pub ocr: Option<OcrMeasure>,
+    pub structure: Option<StructureMeasure>,
 }
 
 pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) -> Scored {
@@ -361,31 +364,76 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         }
     }
 
-    // OCR, on the pages that were scanned. A scan the extractor failed on
-    // is read as empty rather than left out, so failing is never better
-    // than reading badly.
+    // What extraction alone decides: OCR and the page's structure.
+    let extraction = extraction_scores(document, texts.source);
+    scores.extend(extraction.scores);
+    scored.ocr = extraction.ocr;
+    scored.structure = extraction.structure;
+    scored
+}
+
+/// The scores extraction alone decides, before any model is asked.
+#[derive(Clone, Debug, Default)]
+pub struct ExtractionScores {
+    pub scores: BTreeMap<String, Value>,
+    pub ocr: Option<OcrMeasure>,
+    pub structure: Option<StructureMeasure>,
+}
+
+/// OCR on the pages that were scanned, and the structure of the text read,
+/// for the documents whose gold describes them. A document the extractor
+/// failed on (`source` none) is read as empty rather than left out, so
+/// failing is never better than reading badly.
+pub fn extraction_scores(
+    document: &GoldDocument,
+    source: Option<&DocumentSource>,
+) -> ExtractionScores {
+    let mut extraction = ExtractionScores::default();
+    let mut fraction = |key: &str, value: Option<f64>| {
+        if let Some(value) = value {
+            extraction
+                .scores
+                .insert(key.to_owned(), json!(round(value, 4)));
+        }
+    };
     if let Some(truth) = &document.ocr_truth {
-        let measured = match texts.source {
+        let measured = match source {
             Some(source) => measure(truth, source),
             None => OcrMeasure::unread(truth),
         };
-        let ocr_scores = [
-            ("ocr_cer", measured.cer()),
-            ("ocr_cer_ci", measured.cer_ci()),
-            ("ocr_wer", measured.wer()),
-            ("ocr_date_accuracy", measured.date_accuracy()),
-            ("ocr_name_accuracy", measured.name_accuracy()),
-            ("ocr_identifier_accuracy", measured.identifier_accuracy()),
-            ("ocr_mean_confidence", measured.mean_confidence),
-        ];
-        for (key, value) in ocr_scores {
-            if let Some(value) = value {
-                fraction(scores, key, value);
-            }
-        }
-        scored.ocr = Some(measured);
+        fraction("ocr_cer", measured.cer());
+        fraction("ocr_cer_ci", measured.cer_ci());
+        fraction("ocr_wer", measured.wer());
+        fraction("ocr_date_accuracy", measured.date_accuracy());
+        fraction("ocr_name_accuracy", measured.name_accuracy());
+        fraction("ocr_identifier_accuracy", measured.identifier_accuracy());
+        fraction("ocr_mean_confidence", measured.mean_confidence);
+        extraction.ocr = Some(measured);
     }
-    scored
+    if let Some(truth) = &document.structure {
+        let measured = match source {
+            Some(source) => structure::measure(truth, source),
+            None => StructureMeasure::unread(truth),
+        };
+        for (key, value) in measured.scores() {
+            fraction(key, value);
+        }
+        extraction.structure = Some(measured);
+    }
+    extraction
+}
+
+/// The fraction of the gold's evidence the digest a fresh distillation of
+/// `source` builds carries, or of none of it when nothing was read.
+pub fn digest_recall(
+    document: &GoldDocument,
+    source: Option<&DocumentSource>,
+    budget: DigestBudget,
+) -> Option<f64> {
+    let digest = source.map_or_else(String::new, |source| {
+        intern_engine::distill(source, budget).text
+    });
+    text_recall(document, &digest)
 }
 
 /// The filenames the reviewed answer composes to, the reviewed one first:

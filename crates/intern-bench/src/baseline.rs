@@ -33,6 +33,21 @@
 //!   run look faster (it fails the run instead). A stage whose baseline p95
 //!   is under a millisecond is too small to time and is not gated.
 //!
+//! * **Extract-only** runs (`--extract-only`) are their own mode: their
+//!   baseline (`"mode": "extract"`) also keeps every document's fractional
+//!   scores, and a run is held to it document by document, as replay is.
+//!   Extraction is deterministic for one worker build on one machine (two
+//!   runs over the corpus give the same report), so a score that falls is a
+//!   real change. Every structure score, OCR's date, name and identifier
+//!   accuracy and `digest_recall` count whole items (a pair, a row, a cell,
+//!   a value, a page, a date), so any fall fails. Only the error rates are
+//!   continuous: `ocr_cer` and `ocr_cer_ci` may rise by up to 0.005 and
+//!   `ocr_wer` by up to 0.01 (see [`value_tolerance`]); `ocr_mean_confidence`
+//!   is a diagnostic and not gated. A status that changes fails as in
+//!   replay; latency is gated only with `--latency-gate`, as live is. An
+//!   extract-only run is never held to a live or replay baseline, nor a
+//!   live or replay run to an extract-only one.
+//!
 //! There are no absolute thresholds: a baseline records what the code
 //! achieved, and accepting a new state of the world is writing a new one.
 
@@ -43,8 +58,8 @@ use serde_json::Value;
 
 use crate::{
     record::{COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, PENDING, is_unscorable},
-    report::Report,
-    score::bad_when_true,
+    report::{EXTRACT, Report},
+    score::{bad_when_true, lower_is_better},
     stats::{Distribution, round},
     timing::{self, Unit, unit},
 };
@@ -78,6 +93,36 @@ pub struct BaselineDocument {
     /// a baseline written before it was kept.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timings: BTreeMap<String, f64>,
+    /// An extract-only baseline's fractional scores, each held to within
+    /// [`value_tolerance`]. Empty in a live or replay baseline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, f64>,
+}
+
+/// How far an extract-only score may move the wrong way before the
+/// document regresses, or `None` for a score that is not gated.
+///
+/// Extraction is deterministic for one worker build on one machine, so the
+/// tolerance is not for noise. A score that counts whole items - a snippet
+/// pair, a row, a cell, a labelled value, a page's route, a date, a name,
+/// an identifier, a piece of evidence in the digest - moves by a whole item
+/// or not at all, and any fall is a real loss: no tolerance. The error
+/// rates are continuous: a page read again with its lines in another order,
+/// or by another Tesseract build, moves a few characters without losing
+/// anything the targeted accuracies would notice. 0.005 is three
+/// characters of the smallest scanned page in the corpus (the low-resolution
+/// receipt draws about 600) and half a point of character error anywhere;
+/// a word error rate moves roughly twice as far for the same misreads
+/// (about five characters a word), so it gets 0.01. Mean OCR confidence is
+/// the engine's opinion of itself, not a measure of what was read, and is
+/// reported but never gated.
+pub fn value_tolerance(key: &str) -> Option<f64> {
+    match key {
+        "ocr_mean_confidence" => None,
+        "ocr_cer" | "ocr_cer_ci" => Some(0.005),
+        "ocr_wer" => Some(0.01),
+        _ => Some(0.0),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -91,6 +136,7 @@ impl Baseline {
     /// left out: once recorded it arrives as new, not as a regression from
     /// "pending".
     pub fn from_report(report: &Report) -> Self {
+        let extract = report.mode == EXTRACT;
         let documents = report
             .records
             .iter()
@@ -102,6 +148,11 @@ impl Baseline {
                         status: record.status.clone(),
                         scores: bool_scores(record),
                         timings: stage_times(record),
+                        values: if extract {
+                            gated_values(record)
+                        } else {
+                            BTreeMap::new()
+                        },
                     },
                 )
             })
@@ -113,13 +164,14 @@ impl Baseline {
             .filter(|(key, _)| key.as_str() != "ready")
             .map(|(key, rate)| (key.clone(), rate.rate))
             .collect::<BTreeMap<_, _>>();
-        for (name, key) in COUNTS {
+        // Extraction springs no traps: there is no name to count them in.
+        for (name, key) in COUNTS.iter().filter(|_| !extract) {
             let count = report
                 .records
                 .iter()
                 .filter(|record| record.bool_score(key) == Some(true))
                 .count();
-            aggregate.insert(name.to_owned(), count as f64);
+            aggregate.insert((*name).to_owned(), count as f64);
         }
         let latency = report
             .latency
@@ -170,6 +222,22 @@ fn bool_scores(record: &DocumentRecord) -> BTreeMap<String, bool> {
         .scores
         .iter()
         .filter_map(|(key, value)| value.as_bool().map(|flag| (key.clone(), flag)))
+        .collect()
+}
+
+/// Every fractional score the extract-only gate holds.
+fn gated_values(record: &DocumentRecord) -> BTreeMap<String, f64> {
+    record
+        .scores
+        .iter()
+        .filter(|(key, _)| value_tolerance(key).is_some())
+        .filter_map(|(key, value)| {
+            value
+                .is_f64()
+                .then(|| value.as_f64())
+                .flatten()
+                .map(|value| (key.clone(), value))
+        })
         .collect()
 }
 
@@ -258,6 +326,9 @@ pub fn compare(
     latency_gate: Option<f64>,
 ) -> BaselineComparison {
     let live = report.mode == "live";
+    let extract = report.mode == EXTRACT;
+    // The modes whose timings were measured by the run itself.
+    let measured = live || extract;
     let mut comparison = BaselineComparison {
         baseline_mode: baseline.mode.clone(),
         ..BaselineComparison::default()
@@ -265,8 +336,20 @@ pub fn compare(
     comparison
         .gates
         .push(if live { "aggregate" } else { "documents" }.to_owned());
-    if live && latency_gate.is_some() {
+    if measured && latency_gate.is_some() {
         comparison.gates.push("latency".to_owned());
+    }
+    // An extract-only run scores none of what a live or replay baseline
+    // holds, and the other way round: every score would read as lost.
+    if extract != (baseline.mode == EXTRACT) {
+        comparison.failures.push(format!(
+            "the baseline was written by a{} {} run and this is a{} {} run: an extract-only run is held only to an extract-only baseline (write one with --extract-only --write-baseline), and a live or replay run never to one",
+            if baseline.mode == EXTRACT { "n" } else { "" },
+            baseline.mode,
+            if extract { "n" } else { "" },
+            report.mode
+        ));
+        return comparison;
     }
 
     let mut shared = Vec::new();
@@ -324,6 +407,33 @@ pub fn compare(
                 comparison.document_improvements.push(line);
             }
         }
+        for (key, was) in &expected.values {
+            let Some(tolerance) = value_tolerance(key) else {
+                continue;
+            };
+            let Some(now) = record.scores.get(key).and_then(Value::as_f64) else {
+                comparison
+                    .document_regressions
+                    .push(format!("{}: {key} was {was}, now absent", record.id));
+                continue;
+            };
+            // Positive is better.
+            let gain = if lower_is_better(key) {
+                was - now
+            } else {
+                now - was
+            };
+            let line = format!("{}: {key} was {was}, now {now}", record.id);
+            if gain < -tolerance - 1e-9 {
+                comparison.document_regressions.push(if tolerance > 0.0 {
+                    format!("{line} (tolerance {tolerance})")
+                } else {
+                    line
+                });
+            } else if gain > tolerance + 1e-9 {
+                comparison.document_improvements.push(line);
+            }
+        }
     }
     let run = report
         .records
@@ -340,7 +450,7 @@ pub fn compare(
 
     comparison.aggregate = aggregate_checks(&shared);
     let mut latency_refused = None;
-    if live && let Some(ratio) = latency_gate {
+    if measured && let Some(ratio) = latency_gate {
         match latency_checks(report, baseline, ratio) {
             Ok(checks) => comparison.latency = checks,
             Err(reason) => latency_refused = Some(format!("latency: {reason}")),
@@ -365,25 +475,18 @@ pub fn compare(
                     )
                 }),
         );
-        comparison.failures.extend(
-            comparison
-                .latency
-                .iter()
-                .filter(|check| check.regressed)
-                .map(|check| {
-                    format!(
-                        "{} p95: {} ms against a baseline of {} ms (limit {} ms, {} documents)",
-                        check.metric,
-                        check.current_p95,
-                        check.baseline_p95,
-                        check.limit,
-                        check.documents
-                    )
-                }),
-        );
+        comparison
+            .failures
+            .extend(latency_failures(&comparison.latency));
         comparison.failures.extend(latency_refused);
     } else {
         comparison.failures = comparison.document_regressions.clone();
+        if extract {
+            comparison
+                .failures
+                .extend(latency_failures(&comparison.latency));
+            comparison.failures.extend(latency_refused);
+        }
     }
     // A full run that no longer scores a document the baseline holds has
     // dropped its coverage - a gold entry deleted by accident reads exactly
@@ -404,6 +507,20 @@ pub fn compare(
         }));
     comparison.passed = comparison.failures.is_empty();
     comparison
+}
+
+/// One line per stage whose p95 went over its limit.
+fn latency_failures(checks: &[LatencyCheck]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|check| check.regressed)
+        .map(|check| {
+            format!(
+                "{} p95: {} ms against a baseline of {} ms (limit {} ms, {} documents)",
+                check.metric, check.current_p95, check.baseline_p95, check.limit, check.documents
+            )
+        })
+        .collect()
 }
 
 fn is_good(key: &str, value: bool) -> bool {
