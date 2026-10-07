@@ -1694,8 +1694,10 @@ fn labelled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
 }
 
 /// Where a letter's first page ends its letterhead: at a dateline standing
-/// alone near the top. The lines after it are the inside address - who the
-/// letter is to - and never the letterhead of who it is from.
+/// alone near the top of a page that greets someone ("Dear ..."). The
+/// lines after it are the inside address - who the letter is to - and
+/// never the letterhead of who it is from. A receipt's or a form's date
+/// line ends nothing.
 #[derive(Clone, Copy, Debug, Default)]
 struct LetterLayout {
     /// The ordinal of the dateline.
@@ -1706,12 +1708,17 @@ impl LetterLayout {
     fn of(scope: &ValidationScope<'_>) -> Self {
         let units = scope.index.units();
         let first_page = units.iter().map(|unit| unit.page).min();
-        let dateline = units
-            .iter()
-            .filter(|unit| Some(unit.page) == first_page && !unit.running)
+        let page = || {
+            units
+                .iter()
+                .filter(move |unit| Some(unit.page) == first_page && !unit.running)
+        };
+        let greets = page().any(|unit| !whole_positions(&unit.normalized, "dear").is_empty());
+        let dateline = page()
             .take(6)
             .find(|unit| is_bare_date(unit))
-            .map(|unit| unit.ordinal);
+            .map(|unit| unit.ordinal)
+            .filter(|_| greets);
         Self { dateline }
     }
 
@@ -4451,6 +4458,22 @@ Dear Dr. Pemberton:\n\nPlease accept this letter as formal notice of my resignat
         };
         assert_eq!(role_of("Mireille Saltonstall"), Some(PartyRole::Sender));
         assert_ne!(role_of("Dr. Rufus Pemberton"), Some(PartyRole::Issuer));
+        // A receipt greets no one: its date line ends no letterhead.
+        const RECEIPT: &str = "DELIVERY RECEIPT DR-771\n\nJUNE 12 2025\n\nPine Echo Couriers LLC";
+        let (outcome, _) = facts_for(RECEIPT, |index| ModelFacts {
+            document_type: Some("Delivery Receipt".into()),
+            type_evidence: vec![id_of(index, "DELIVERY")],
+            parties: vec![party(
+                "Pine Echo Couriers LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Pine")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.facts.expect("facts").parties[0].role,
+            Some(PartyRole::Issuer)
+        );
     }
 
     #[test]
