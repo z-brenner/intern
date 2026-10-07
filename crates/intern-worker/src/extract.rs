@@ -506,6 +506,13 @@ pub trait OcrBackend {
     fn concurrency(&self) -> usize {
         1
     }
+
+    /// Lets go of what the engine keeps between pages once a document has
+    /// been read, so a worker that outlives every document does not hold a
+    /// document's working memory while it waits for the next. The next page
+    /// builds what it needs again. Nothing to let go of unless the engine
+    /// says so.
+    fn release(&self) {}
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
