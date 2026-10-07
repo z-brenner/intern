@@ -25,9 +25,54 @@ fn pdf_backend() -> Result<PdfiumBackend, ExtractionError> {
     PdfiumBackend::new(runtime_directory()?)
 }
 
-fn ocr_backend() -> Result<TesseractOcr, ExtractionError> {
+/// An OCR engine any number of pages can be read with at once.
+type SharedOcr = Box<dyn OcrBackend + Send + Sync>;
+
+fn ocr_backend() -> Result<SharedOcr, ExtractionError> {
     let runtime = runtime_directory()?;
-    TesseractOcr::new(runtime.join("tesseract.exe"), runtime.join("tessdata"))
+    select_ocr_backend(&runtime, |message| {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "{{\"level\":\"warning\",\"code\":\"OCR_ENGINE_FALLBACK\",\"message\":{}}}",
+            serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_owned())
+        );
+    })
+}
+
+/// PP-OCR when its runtime and models are installed beside the worker and
+/// load; Tesseract, exactly as before, when they are not.
+///
+/// An install without them is a development machine or a CI runner, and
+/// says nothing. One that has them and cannot load them is worth a line in
+/// the log, which `report` writes - it names the file, never a document.
+fn select_ocr_backend(
+    runtime: &Path,
+    report: impl FnOnce(&str),
+) -> Result<SharedOcr, ExtractionError> {
+    if intern_worker::paddle::PaddleAssets::in_directory(runtime).present() {
+        match paddle_backend(runtime) {
+            Ok(engine) => return Ok(engine),
+            Err(error) => report(&format!(
+                "PP-OCR did not load; reading scans with Tesseract: {error}"
+            )),
+        }
+    }
+    Ok(Box::new(TesseractOcr::new(
+        runtime.join("tesseract.exe"),
+        runtime.join("tessdata"),
+    )?))
+}
+
+#[cfg(feature = "onnx-ocr")]
+fn paddle_backend(runtime: &Path) -> Result<SharedOcr, ExtractionError> {
+    Ok(Box::new(intern_worker::paddle::PaddleOcr::new(runtime)?))
+}
+
+#[cfg(not(feature = "onnx-ocr"))]
+fn paddle_backend(_runtime: &Path) -> Result<SharedOcr, ExtractionError> {
+    Err(ExtractionError::native_assets_missing(
+        "intern-worker was built without the onnx-ocr feature",
+    ))
 }
 
 /// Builds the OCR engine the first time a page actually needs it.
@@ -36,7 +81,7 @@ fn ocr_backend() -> Result<TesseractOcr, ExtractionError> {
 /// documents must not fail, wait, or load anything because an OCR engine
 /// happens to be unavailable.
 struct LazyOcr {
-    engine: std::sync::OnceLock<Result<TesseractOcr, ExtractionError>>,
+    engine: std::sync::OnceLock<Result<SharedOcr, ExtractionError>>,
 }
 
 static LAZY_OCR: LazyOcr = LazyOcr {
@@ -246,6 +291,57 @@ mod tests {
         assert_eq!(timings.ocr_micros, 0, "{timings:?}");
         // The protocol, not the dispatch, takes the whole extraction's time.
         assert_eq!(timings.total_micros, 0, "{timings:?}");
+    }
+
+    /// A runtime directory without ONNX Runtime and the models - every
+    /// development machine and CI runner - reads scans with Tesseract as it
+    /// always has, and says nothing about it.
+    #[test]
+    fn without_the_pp_ocr_runtime_scans_go_to_tesseract_silently() {
+        let runtime = tempfile::tempdir().unwrap();
+        let mut reported = Vec::new();
+
+        let selected =
+            select_ocr_backend(runtime.path(), |message| reported.push(message.to_owned()));
+
+        assert!(reported.is_empty(), "{reported:?}");
+        // Tesseract is built only with the native feature; without it the
+        // selection fails exactly as building Tesseract always has.
+        if cfg!(feature = "native-tesseract") {
+            assert!(selected.is_ok());
+        } else {
+            assert_eq!(selected.err().unwrap().code(), "NATIVE_ASSETS_MISSING");
+        }
+    }
+
+    /// Files that look like the PP-OCR runtime but do not load are not a
+    /// reason to fail a scan: the worker says so once, in the log, and reads
+    /// with Tesseract.
+    #[test]
+    fn a_pp_ocr_runtime_that_does_not_load_falls_back_to_tesseract() {
+        let runtime = tempfile::tempdir().unwrap();
+        let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime.path());
+        std::fs::create_dir(runtime.path().join(intern_worker::paddle::MODEL_DIRECTORY)).unwrap();
+        for path in [
+            &assets.runtime_library,
+            &assets.detection_model,
+            &assets.recognition_model,
+        ] {
+            std::fs::write(path, b"not a library or a model").unwrap();
+        }
+        let mut reported = Vec::new();
+
+        let selected =
+            select_ocr_backend(runtime.path(), |message| reported.push(message.to_owned()));
+
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(
+            reported[0].starts_with("PP-OCR did not load; reading scans with Tesseract"),
+            "{reported:?}"
+        );
+        if cfg!(feature = "native-tesseract") {
+            assert!(selected.is_ok());
+        }
     }
 
     /// The admission list and the router are two lists that must name the
