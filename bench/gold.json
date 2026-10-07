@@ -6426,7 +6426,7 @@
         "ocr_corrupted",
         "invoice"
       ],
-      "notes": "The page image is a clean scan of an invoice dated 03/10/2026 from Wexcombe Millwork Co., but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads \"O3/lO/2O26\", the letterhead \"Wexcornbe Mi11work Co.\"). The worker trusts a text layer of this length, so the engine sees only the corrupted text: the date cannot be read with confidence, and the right outcome is review. Gold facts come from the image (the issuer's name survives intact only in the payment line); evidence strings are as the text layer states them; clean_text is the text actually printed.",
+      "notes": "The page image is a clean scan of an invoice dated 03/10/2026 from Wexcombe Millwork Co., but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads \"O3/lO/2O26\", the letterhead \"Wexcornbe Mi11work Co.\"). The routing worker sees an invisible layer over a full-page image and reads the page again, so the engine gets the printed text and the right outcome is the correct name. A reader that trusts the layer gets only the corrupted text, where the date cannot be read with confidence, so review stays acceptable: readiness is either, and a ready name that is wrong is still unsafe. Gold facts come from the image (in the text layer the issuer's name survives intact only in the payment line); evidence strings are given in both spellings, the text layer's and the printed one, so either reading is credited for what it carries; clean_text is the text actually printed.",
       "gold": {
         "document_type": "Invoice",
         "acceptable_types": [],
@@ -6477,14 +6477,16 @@
           "stair treads",
           "invoice"
         ],
-        "expected_readiness": "needs_review",
+        "expected_readiness": "either",
         "evidence": {
           "date_text": [
-            "O3/lO/2O26"
+            "O3/lO/2O26",
+            "03/10/2026"
           ],
           "party_text": {
             "Wexcombe Millwork Co.": [
-              "Wexcornbe Mi11work Co."
+              "Wexcornbe Mi11work Co.",
+              "Wexcombe Millwork Co."
             ]
           }
         }

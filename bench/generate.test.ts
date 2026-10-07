@@ -308,12 +308,24 @@ describe('InternBench corpus generator', () => {
   it('only cites evidence the document actually carries', () => {
     for (const document of documents) {
       const where = document.id;
-      const text = carried(document, generated.texts);
+      // An OCR-corrupted document is read either way: from its text layer,
+      // or again from the image as the printed text. Each evidence form is
+      // carried by one of the two, and each reading carries a form of every
+      // item, so either reading can be credited.
+      const readings = [carried(document, generated.texts)];
+      if (document.clean_text !== undefined) readings.push(printed(document, generated.texts));
+      const carries = (form: string) => readings.some((text) => text.includes(normalise(form)));
       const { gold } = document;
-      for (const form of gold.evidence.date_text) expect(text.includes(normalise(form)), `${where}: date evidence "${form}"`).toBe(true);
+      for (const form of gold.evidence.date_text) expect(carries(form), `${where}: date evidence "${form}"`).toBe(true);
       for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
-        for (const form of forms) expect(text.includes(normalise(form)), `${where}: party evidence "${form}" for ${party}`).toBe(true);
+        for (const form of forms) expect(carries(form), `${where}: party evidence "${form}" for ${party}`).toBe(true);
       }
+      readings.forEach((text, reading) => {
+        if (gold.evidence.date_text.length > 0) expect(gold.evidence.date_text.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no date evidence`).toBe(true);
+        for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
+          expect(forms.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no evidence for ${party}`).toBe(true);
+        }
+      });
       if (document.ocr_truth) {
         const truth = normalise(document.ocr_truth.pages.map((page) => page.text).join('\n'));
         for (const value of [...document.ocr_truth.dates, ...document.ocr_truth.names, ...document.ocr_truth.identifiers]) {
