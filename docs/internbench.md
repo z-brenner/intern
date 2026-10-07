@@ -156,7 +156,9 @@ differs from the recording's, the run says so on standard error, in the
 report and on its page. It follows the same rules as the existing corpus:
 
 * a document whose prompt the engine no longer builds is `stale_prompt`;
-* a document whose bytes changed is `stale_fixture`;
+* a document whose bytes changed is `stale_fixture`, and so is one a
+  `--manifest` does not list when there is no file to hash either (with no
+  manifest and no corpus, nothing is checked, and the run warns);
 * a document the recording lacks is `unrecorded`.
 
 Each one fails the run (exit 2). `--allow-stale` lets only `stale_prompt`
@@ -257,7 +259,10 @@ count, and read p95 as "the slow documents" rather than as a guarantee.
 
 ## Gates
 
-`--write-baseline bench/baseline.json` records a run as the baseline.
+`--write-baseline bench/baseline.json` records a run as the baseline. A
+run limited with `--only` refuses to overwrite a baseline that covers
+other documents: the documents left out would read as new, and new
+documents gate nothing.
 `--baseline bench/baseline.json` compares a run with it:
 
 * **Replay is gated per document.** A score that was good and is now bad is

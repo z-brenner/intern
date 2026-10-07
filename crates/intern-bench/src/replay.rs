@@ -167,6 +167,17 @@ pub fn replay_document(
                 .ok()
                 .map(|bytes| sha256_hex(&bytes))
         });
+    // A manifest was given to vouch for every document, and this one is not
+    // in it, nor is there a file to hash - CI, where the corpus is not
+    // generated. It is not known to be the document recorded, so it is not
+    // scored as if it were. With no manifest at all, nothing was asked to be
+    // verified; `run` says so once for the whole replay.
+    if current.is_none() && manifest.is_some() {
+        return unscored(
+            STALE_FIXTURE,
+            Some("not in the manifest, and no file to check the recording against".to_owned()),
+        );
+    }
     if let (Some(current), Some(was)) = (&current, &recorded.sha256)
         && current != was
     {

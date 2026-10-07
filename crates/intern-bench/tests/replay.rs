@@ -279,7 +279,14 @@ impl Bench {
     }
 
     fn replay(&self, output: &str, configure: impl FnOnce(&mut RunOptions)) -> (i32, Report) {
-        let mut options = RunOptions {
+        let mut options = self.options(output);
+        configure(&mut options);
+        let exit = run(options).unwrap();
+        (exit, read_report(&self.path(output)))
+    }
+
+    fn options(&self, output: &str) -> RunOptions {
+        RunOptions {
             // The corpus is never generated here: replay needs only the
             // recording.
             corpus: self.path("generated"),
@@ -295,10 +302,7 @@ impl Bench {
                 recording: self.path("recording.json"),
                 allow_stale: false,
             },
-        };
-        configure(&mut options);
-        let exit = run(options).unwrap();
-        (exit, read_report(&self.path(output)))
+        }
     }
 }
 
@@ -475,6 +479,56 @@ fn a_manifest_that_disagrees_with_the_recording_marks_the_document_stale() {
 }
 
 #[test]
+fn a_document_the_manifest_does_not_vouch_for_is_stale_when_there_is_no_file() {
+    let bench = Bench::new();
+    // The manifest lists one document; the other is in the gold and the
+    // recording but nowhere a replay could check its bytes.
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into(), "notice-beta".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("invoice-alpha").unwrap().status, "completed");
+    assert_eq!(
+        report.record("notice-beta").unwrap().status,
+        "stale_fixture"
+    );
+}
+
+#[test]
+fn a_subset_run_never_overwrites_a_baseline_that_covers_more() {
+    let bench = Bench::new();
+    let (exit, _) = bench.replay("full.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+    let before = std::fs::read(bench.path("baseline.json")).unwrap();
+
+    let mut options = bench.options("subset.json");
+    options.only = vec!["invoice-alpha".into()];
+    options.write_baseline = Some(bench.path("baseline.json"));
+    let error = run(options).unwrap_err();
+    assert!(error.contains("would drop 1 document"), "{error}");
+    assert_eq!(std::fs::read(bench.path("baseline.json")).unwrap(), before);
+
+    // The same subset may rewrite a baseline of exactly that subset.
+    let (exit, _) = bench.replay("again.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+}
+
+#[test]
 fn a_baseline_holds_replay_to_every_document_and_compare_names_the_flip() {
     let bench = Bench::new();
     let scorable = |options: &mut RunOptions| {
@@ -648,7 +702,12 @@ fn allowing_staleness_never_passes_a_changed_fixture_and_is_shown() {
     let bench = Bench::new();
     std::fs::write(
         bench.path("manifest.json"),
-        json!({"files": [{"file": "scan-delta.png", "sha256": "regenerated"}]}).to_string(),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "notice-beta.pdf", "sha256": "sha-of-notice-beta"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
     )
     .unwrap();
     let (exit, report) = bench.replay("report.json", |options| {

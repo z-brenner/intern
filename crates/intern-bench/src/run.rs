@@ -79,6 +79,30 @@ pub fn select<'a>(gold: &'a GoldFile, only: &[String]) -> Result<Vec<&'a GoldDoc
 }
 
 pub fn run(options: RunOptions) -> Result<i32, String> {
+    // A baseline written from a subset over one that covers more would hold
+    // later full runs to the subset alone: every document left out would
+    // read as new, and new documents gate nothing. Re-record a subset with
+    // `merge-recordings` instead, then write the baseline from a replay of
+    // the whole corpus.
+    if let Some(path) = &options.write_baseline
+        && !options.only.is_empty()
+        && let Ok(bytes) = std::fs::read(path)
+    {
+        let existing = Baseline::parse(&bytes)?;
+        let dropped = existing
+            .documents
+            .keys()
+            .filter(|id| !options.only.contains(id))
+            .count();
+        if dropped > 0 {
+            return Err(format!(
+                "--write-baseline with --only would drop {dropped} document(s) from {}; \
+                 merge the subset's recording with `intern-bench merge-recordings`, \
+                 then write the baseline from a replay of the whole corpus",
+                path.display()
+            ));
+        }
+    }
     let (gold, gold_bytes) = GoldFile::load(&options.gold)?;
     let documents = select(&gold, &options.only)?;
     let manifest = match &options.manifest {
@@ -107,6 +131,12 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             let configuration_change = replay::configuration_change(&recorded);
             if let Some(change) = &configuration_change {
                 eprintln!("WARNING: {change}");
+            }
+            if manifest.is_none() && !options.corpus.is_dir() {
+                eprintln!(
+                    "WARNING: no --manifest and no corpus at {}: nothing checks that the documents are the ones recorded",
+                    options.corpus.display()
+                );
             }
             let records = documents
                 .iter()
