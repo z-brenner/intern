@@ -237,8 +237,10 @@ against the drawn text, the [structure scores](#structure-scores), and
 digest the engine would build from the text. A document is `completed` when
 the worker read it and `extraction_failed` when it did not; a failure is a
 miss on every score its gold defines (0 for each accuracy, an error rate of
-1, every structure item missed). Documents whose recording is pending are
-read like any other: extraction needs no reply.
+1, every structure item missed), except `route_correct`: nothing was read,
+so nothing was routed, and it is left unscored as for a worker that sends no
+layouts. Documents whose recording is pending are read like any other:
+extraction needs no reply.
 
 The run refuses a corpus that lacks a selected document or, given
 `--manifest`, holds bytes the manifest does not vouch for. `--only`,
@@ -368,7 +370,7 @@ one line.
 | `table_row_accuracy` | A gold row (its non-empty cells) is found when one line of its table's region (see `table_cell_recall`) holds every cell in order, each starting after the end of the one before, with no cell of another row of the table wholly between two of them, so two rows read across each other are neither found. A blank leading cell counts too: when some rows of a table leave it blank and others do not (a check-box group, its chosen options marked `X`), the values the others hold there are the table's marks, and a row with a blank leading cell is not found on a line where a mark stands between the cell of another row before it (or the line's start) and its first cell - that `X` is beside an option the gold leaves unmarked. The share of rows found, over every table of the document. |
 | `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding a cell of the table's first row (or the first line, if none does) to the last one, from there on, holding a cell of its last row (or the last line, if none does). Only cells of two characters or more place the region - a lone `X` or digit is printed all over a page, so it neither anchors nor widens a table - and a first or last row without one gives way to the nearest row with one. A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
 | `kv_accuracy` | A labelled value is found when a line holds the label and, after it but before the next gold label on the line, the value (a value after another label is that label's); or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label as a whole cell (a colon after it aside; `CONTRACT DATE` is not the cell of `DATE`) and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
-| `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all. |
+| `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all, nor for a document whose extraction failed (nothing was read, so nothing was routed). |
 
 Every count behind them is in the record (`structure`), so a corpus figure
 pools items rather than averaging documents: the report's `structure`

@@ -127,11 +127,13 @@ fn every_failed_extraction_is_scored_as_a_miss_and_gated_but_never_the_baseline(
         "table_row_accuracy",
         "table_cell_recall",
         "kv_accuracy",
-        "route_correct",
         "digest_recall",
     ] {
         assert_eq!(notice.scores[key], json!(0.0), "{key}");
     }
+    // Nothing was read, so nothing was routed: as for a worker that sends
+    // no layouts, the route is not judged.
+    assert!(!notice.scores.contains_key("route_correct"));
     let receipt = report.record("scan-receipt").unwrap();
     assert_eq!(receipt.scores["ocr_cer"], json!(1.0));
     assert_eq!(receipt.scores["ocr_identifier_accuracy"], json!(0.0));

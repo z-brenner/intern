@@ -63,7 +63,8 @@
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
-//!   not scored.
+//!   not scored, and nor is one whose extraction failed - nothing was read,
+//!   so nothing was routed, as with a worker that sends no layouts.
 
 use serde::{Deserialize, Serialize};
 
@@ -445,7 +446,8 @@ pub struct StructureMeasure {
     pub key_values: usize,
     pub key_values_found: usize,
     /// Pages with an expected route that could be judged, and how many
-    /// took it. Zero when the worker sent no layouts.
+    /// took it. Zero when the worker sent no layouts or the extraction
+    /// failed.
     pub route_pages: usize,
     pub routes_correct: usize,
     /// The extraction failed: nothing was read, every item missed.
@@ -496,7 +498,8 @@ impl StructureMeasure {
     }
 
     /// A document whose extraction failed: every item the gold lists is
-    /// missed, every page with an expected route took none.
+    /// missed. Its routes are not judged: no page was read, so none took a
+    /// route, as when the worker sends no layouts.
     pub fn unread(truth: &StructureTruth) -> Self {
         let (rows, cells) = table_counts(truth);
         Self {
@@ -512,7 +515,6 @@ impl StructureMeasure {
                 .iter()
                 .filter(|pair| !normalise(&pair.value).is_empty())
                 .count(),
-            route_pages: truth.expected_routes.len(),
             failed: true,
             ..Self::default()
         }
@@ -1229,19 +1231,23 @@ mod tests {
         };
         let unread = StructureMeasure::unread(&truth);
         assert!(unread.failed);
+        // Nothing was read, so nothing was routed: the route is not judged.
         assert_eq!(
             unread.scores().map(|(_, value)| value),
-            [Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)]
+            [Some(0.0), Some(0.0), Some(0.0), Some(0.0), None]
         );
         assert_eq!((unread.snippets, unread.rows, unread.cells), (3, 2, 3));
-        let mut pooled = measure(&truth, &source(&["a b c\nx\ny z\nk: v"]));
+        let mut pooled = measure(
+            &truth,
+            &routed(source(&["a b c\nx\ny z\nk: v"]), &[Some(PageRoute::Fast)]),
+        );
         assert_eq!(
             pooled.scores().map(|(_, value)| value),
-            [Some(1.0), Some(1.0), Some(1.0), Some(1.0), None]
+            [Some(1.0), Some(1.0), Some(1.0), Some(1.0), Some(1.0)]
         );
         pooled.accumulate(&unread);
         assert_eq!(pooled.reading_order_accuracy(), Some(0.5));
         assert_eq!(pooled.table_cell_recall(), Some(0.5));
-        assert_eq!(pooled.route_correct(), Some(0.0));
+        assert_eq!(pooled.route_correct(), Some(1.0));
     }
 }
