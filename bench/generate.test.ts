@@ -103,6 +103,28 @@ function readable(document: BenchDocument, texts: Record<string, string[]>) {
   return printed(document, texts);
 }
 
+/// Whether a page states a fact: its words in order, or - for an amount or
+/// other number - the same value however the page groups it.
+function states(page: string, fact: string) {
+  if (loose(page).includes(loose(fact))) return true;
+  const value = fact.replace(/[$,%\s]/g, '');
+  if (!/^\d+(\.\d+)?$/.test(value)) return false;
+  return (normalise(page).match(/\d[\d,]*(\.\d+)?/g) ?? []).some((number) => Number(number.replace(/,/g, '')) === Number(value));
+}
+
+/// Words that state nothing on their own.
+const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'and', 'or', 'for', 'to', 'in', 'on', 'at', 'by', 'with', 'from', 'as', 'per', 'no', 'not', 'will', 'is', 'this', 'that']);
+const NUMBER_WORDS = new Set([
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+  'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred',
+  'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth',
+]);
+
+/// Whether a form states a number: digits, or a number spelled out.
+function statesNumber(form: string) {
+  return /\d/.test(form) || form.toLowerCase().split(/[^a-z]+/).some((word) => NUMBER_WORDS.has(word));
+}
+
 async function inventory(root: string) {
   const names = (await readdir(root)).sort();
   return Promise.all(names.map(async (name) => ({ name, sha256: createHash('sha256').update(await readFile(join(root, name))).digest('hex') })));
@@ -254,8 +276,59 @@ describe('InternBench corpus generator', () => {
       for (const name of names) expect(text.includes(loose(name)), `${where}: "${name}"`).toBe(true);
       // A description is built from what Intern reads, so what it should
       // state must be on a page Intern reads.
-      for (const group of gold.description_facts) expect(group.some((fact) => read.includes(loose(fact))), `${where}: none of ${JSON.stringify(group)} is on a page Intern reads`).toBe(true);
+      for (const group of gold.description_facts) expect(read.includes(loose(group[0])), `${where}: fact "${group[0]}" is not on a page Intern reads`).toBe(true);
       for (const term of gold.subject_terms) expect(read.includes(loose(term)), `${where}: subject term "${term}"`).toBe(true);
+    }
+  });
+
+  it('never forbids a fact the document states', () => {
+    // description_forbidden holds what a careless reading would assert and
+    // the document does not say: a description containing one is scored as
+    // stating something false. A value the page prints (an invoice's real
+    // subtotal) is true, so it may never be listed.
+    const invoice = documents.find((document) => document.id === 'invoice-date-in-table');
+    expect(invoice && states(printed(invoice, generated.texts), '$4,296.75'), 'the check finds the invoice subtotal it was written for').toBe(true);
+    for (const document of documents) {
+      const text = printed(document, generated.texts);
+      for (const fact of document.gold.description_forbidden) {
+        expect(states(text, fact), `${document.id}: description_forbidden "${fact}" is printed on the document`).toBe(false);
+      }
+    }
+  });
+
+  it('lists only specific, stated spellings of each description fact', () => {
+    // A fact counts as covered when any of its forms is in the description
+    // (a substring, ignoring case), so every form must say the fact itself:
+    // not a stop word, not a word the document type already says, not
+    // another of the document's subject terms (which any description of it
+    // uses), and - for a fact that is a number - not the number's label
+    // without the number ("Loan No" for a loan number, "vendor" for "32
+    // vendors").
+    for (const document of documents) {
+      const where = document.id;
+      const { gold } = document;
+      const typeWords = new Set(loose(gold.document_type).split(' '));
+      const subjects = new Set(gold.subject_terms.map(loose));
+      for (const group of gold.description_facts) {
+        const [primary, ...alternates] = group;
+        const forms = group.map((form) => normalise(form).toLowerCase());
+        expect(new Set(forms).size, `${where}: ${JSON.stringify(group)} repeats a form (matching ignores case)`).toBe(forms.length);
+        for (const form of group) {
+          const words = loose(form).split(' ').filter(Boolean);
+          expect(words.every((word) => STOP_WORDS.has(word) || typeWords.has(word)), `${where}: "${form}" says no more than the type "${gold.document_type}"`).toBe(false);
+        }
+        for (const alternate of alternates) {
+          // A shorter spelling of the primary ("Basalt Telemetry" for
+          // "Basalt Telemetry Inc.") states it, whatever else it is.
+          const shortening = loose(primary).includes(loose(alternate));
+          if (!shortening) expect(subjects.has(loose(alternate)), `${where}: "${alternate}" is a subject term, not a statement of "${primary}"`).toBe(false);
+          if (!statesNumber(primary)) continue;
+          // An address may drop its house number ("Gristmill Lane"); any
+          // other spelling of a number fact keeps the number.
+          const street = shortening && loose(alternate).split(' ').length >= 2;
+          expect(statesNumber(alternate) || street, `${where}: "${alternate}" drops the number "${primary}" states`).toBe(true);
+        }
+      }
     }
   });
 

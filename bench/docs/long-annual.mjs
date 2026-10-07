@@ -830,7 +830,7 @@ export function annualReport() {
       acceptablePartySets: [{ parties: [COOP], relation: 'for' }],
       roles: [[COOP, 'issuer'], [COOP, 'subject']],
       forbiddenParties: [[AUDITOR, 'independent auditors'], [directors[0], 'board chair'], [executives[0], 'chief executive']],
-      facts: [['Fiscal Year 2026', 'fiscal 2026', 'FY2026'], ['cooperative', 'Cooperative'], [`$${k(totalRevenue[4])}`, k(totalRevenue[4]), 'patronage']],
+      facts: [['Fiscal Year 2026', 'fiscal 2026', 'FY2026'], ['Tamsin Valley Farmers Cooperative', 'Tamsin Valley'], [`$${k(totalRevenue[4])}`, k(totalRevenue[4])]],
       subjectTerms: ['annual report', 'cooperative', 'patronage', 'grain', 'members'],
       readiness: 'ready',
       dateText: [longDate(reportDate)],

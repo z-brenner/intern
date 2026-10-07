@@ -281,7 +281,7 @@ export function creditAgreement() {
       acceptablePartySets: [{ parties: [BORROWER], relation: 'for' }, { parties: [BORROWER], relation: 'with' }],
       roles: [[BORROWER, 'borrower'], [AGENT, 'lender']],
       forbiddenParties: [[LENDERS[1], 'lender'], [LENDERS[2], 'lender'], [ARRANGERS[0], 'joint lead arranger'], [EXISTING_AGENT, 'agent under the Existing Credit Agreement'], [SUBSIDIARIES[0][0], 'subsidiary guarantor']],
-      facts: [[money(revolving + termA, { cents: false }), '$350,000,000', '350 million', '$350 million'], ['revolving', 'term loan', 'Term A'], [longDate(maturity), '2031', 'five-year']],
+      facts: [[money(revolving + termA, { cents: false }), '350,000,000', '350 million'], ['Term A'], [longDate(maturity), '2031', 'five-year']],
       subjectTerms: ['credit agreement', 'senior secured', 'revolving credit', 'term loan'],
       readiness: 'ready',
       dateText: [longDate(closing)],

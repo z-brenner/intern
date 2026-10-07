@@ -78,8 +78,12 @@ Each entry in `bench/gold.json` gives the document's `kind`, `format`,
 * `parties`, `party_relation`, `acceptable_party_sets` (other defensible
   answers, each with its own relation), `party_roles`, `forbidden_parties`
   (each with its reason)
-* `description_facts` (each a list of acceptable spellings),
-  `description_forbidden`, `subject_terms`
+* `description_facts`: the facts a good description states, each a list of
+  spellings of that one fact, every one specific enough that a description
+  containing it states the fact (a loan number, not "Loan No")
+* `description_forbidden`: what a careless reading would assert that the
+  document does not say. A value the document prints is never one.
+* `subject_terms`
 * `expected_readiness`: `ready`, `needs_review` or `either`
 * `evidence`: the verbatim forms in which the document states its date and
   names its parties
