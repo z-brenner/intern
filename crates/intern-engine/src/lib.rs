@@ -23,6 +23,7 @@
 #![deny(unsafe_code)]
 
 pub mod client;
+pub mod cues;
 pub mod distill;
 pub mod domain;
 pub mod download;
