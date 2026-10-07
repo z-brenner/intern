@@ -46,11 +46,19 @@ MODEL="${MODEL:?set MODEL to the GGUF model file}"
 LLAMA_SERVER="${LLAMA_SERVER:?set LLAMA_SERVER to the llama-server binary}"
 WORKER="${INTERN_WORKER:-$REPO/target/release/intern-worker}"
 PORT="${PORT:-18090}"
-CORPUS="${CORPUS:-$REPO/bench/generated}"
+# A path with its directory resolved, so `bench/generated`, a trailing slash
+# or a symlinked checkout all name the default corpus the same way.
+canonical() {
+  local parent
+  parent="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" || { printf '%s\n' "$1"; return; }
+  printf '%s/%s\n' "$parent" "$(basename "$1")"
+}
+DEFAULT_CORPUS="$(canonical "$REPO/bench/generated")"
+CORPUS="$(canonical "${CORPUS:-$DEFAULT_CORPUS}")"
 GOLD="${GOLD:-$REPO/bench/gold.json}"
 # The committed manifest vouches for the default corpus only; a corpus of
 # your own brings its own, or none.
-if [ -z "${MANIFEST+set}" ] && [ "$CORPUS" = "$REPO/bench/generated" ] && [ -f "$REPO/bench/manifest.json" ]; then
+if [ -z "${MANIFEST+set}" ] && [ "$CORPUS" = "$DEFAULT_CORPUS" ] && [ -f "$REPO/bench/manifest.json" ]; then
   MANIFEST="$REPO/bench/manifest.json"
 fi
 if [ -z "${THREADS:-}" ]; then
@@ -83,7 +91,7 @@ corpus_matches_manifest() {
     }
   ' "$CORPUS" "$REPO/bench/manifest.json"
 }
-if [ "$CORPUS" = "$REPO/bench/generated" ] && ! corpus_matches_manifest; then
+if [ "$CORPUS" = "$DEFAULT_CORPUS" ] && ! corpus_matches_manifest; then
   (cd "$REPO" && node bench/generate.mjs)
 fi
 mkdir -p "$OUT_DIR"
