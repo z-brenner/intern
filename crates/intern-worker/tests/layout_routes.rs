@@ -274,6 +274,38 @@ fn geometry_layouts_past_what_a_documents_layouts_may_hold_are_not_kept() {
     assert_ne!(document.pages[0].text, text, "rebuilt a line a run");
 }
 
+/// A page sent to the layout route whose runs all lack width - type too
+/// small for its glyphs to have any - has no geometry to be rebuilt from:
+/// it keeps its text as it was read, on the fast route, rather than going
+/// out empty.
+#[test]
+fn a_page_whose_runs_have_no_width_keeps_its_text() {
+    use intern_worker::layout::RouteSignals;
+
+    let text = "Payment due on receipt.\r\nRemit to the address above.";
+    let runs = text
+        .split("\r\n")
+        .enumerate()
+        .map(|(line, words)| {
+            let mut run = run(54, 60 + line as u32 * 12, words, 9);
+            run.bbox[2] = run.bbox[0];
+            run
+        })
+        .collect();
+    let mut page = native_page(0, text, runs);
+    page.signals = Some(RouteSignals {
+        chars: 1_000,
+        columns: 2,
+        ..RouteSignals::default()
+    });
+
+    let document = read(&StandInPdf::new(vec![page]), &NoOcr);
+
+    let page = &document.pages[0];
+    assert_eq!(page.text, text);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
+}
+
 /// A PDF whose inspection carries no characters: the runs of a page are
 /// handed over only when the page asks for them, and the asking counted.
 struct RunsOnRequest {
