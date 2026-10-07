@@ -210,6 +210,88 @@ fn columns_written_row_by_row_are_read_column_by_column() {
     assert_eq!(page.source, PageSource::Native);
 }
 
+/// A PDF whose inspection carries no characters: the runs of a page are
+/// handed over only when the page asks for them, and the asking counted.
+struct RunsOnRequest {
+    pages: Vec<PdfPageInspection>,
+    runs: Vec<Vec<TextRun>>,
+    asked: Mutex<Vec<usize>>,
+}
+
+impl RunsOnRequest {
+    fn new(mut pages: Vec<PdfPageInspection>) -> Self {
+        let runs = pages
+            .iter_mut()
+            .map(|page| std::mem::take(&mut page.native.as_mut().unwrap().runs))
+            .collect();
+        Self {
+            pages,
+            runs,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl PdfBackend for RunsOnRequest {
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        Ok(self.pages.clone())
+    }
+
+    fn render_within(
+        &self,
+        _path: &Path,
+        _page_index: usize,
+        _max_pixels: u64,
+        _cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        panic!("a text page was rendered")
+    }
+
+    fn page_runs(
+        &self,
+        _path: &Path,
+        page_index: usize,
+        _native: &NativePage,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<TextRun>, ExtractionError> {
+        self.asked.lock().unwrap().push(page_index);
+        Ok(self.runs[page_index].clone())
+    }
+}
+
+/// A page's characters are read when the page is, and only for a page
+/// whose geometry is read: inspection holds none of them.
+#[test]
+fn a_page_s_characters_are_read_when_the_page_is_and_only_if_it_needs_them() {
+    let plain = native_page(
+        1,
+        "Plain text page.\r\nSecond line.",
+        vec![
+            run(54, 60, "Plain text page.", 9),
+            run(54, 72, "Second line.", 9),
+        ],
+    );
+    let pdf = RunsOnRequest::new(vec![interleaved_columns(), plain]);
+
+    let document = read_with(&pdf, &NoOcr);
+
+    assert_eq!(*pdf.asked.lock().unwrap(), [0], "only the layout page");
+    let layout = document.pages[0].layout.as_ref().unwrap();
+    assert_eq!(layout.route, PageRoute::Layout);
+    assert!(
+        document.pages[0]
+            .text
+            .starts_with("The tenant leases the premises for\nthe term"),
+        "{}",
+        document.pages[0].text
+    );
+    assert_eq!(document.pages[1].text, "Plain text page.\r\nSecond line.");
+}
+
 /// OCR that takes longer on early pages than late ones, so that with
 /// several workers the readings come back out of order.
 struct UnevenOcr {

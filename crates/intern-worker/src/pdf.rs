@@ -8,7 +8,7 @@ use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
-use crate::layout::{NativePage, TextRun, measure_signals, route_page, router::needs_runs};
+use crate::layout::{NativePage, PageRoute, TextRun, measure_signals, router::needs_runs};
 #[cfg(feature = "native-pdfium")]
 use crate::limits::{MAX_PAGE_COUNT, render_size_within};
 #[cfg(feature = "native-pdfium")]
@@ -594,12 +594,13 @@ fn rotation_degrees(page: &PdfPage<'_>) -> u16 {
 
 #[cfg(feature = "native-pdfium")]
 impl PdfiumBackend {
-    /// [`PdfBackend::inspect`] with the router supplied: `router` decides
-    /// from each page's signals, and whether the scan rule sends it to OCR,
-    /// which pages have their characters read into runs. Inspection always
-    /// routes with [`route_page`]; the routing calibration in
-    /// `examples/route_calibration.rs` reads every page's runs to see what
-    /// the router passed over.
+    /// [`PdfBackend::inspect`], with the characters of the pages `router`
+    /// sends down a geometry route - decided from each page's signals, and
+    /// whether the scan rule sends it to OCR - read into runs as well.
+    /// Inspection reads none: a page's characters are read when the page
+    /// is ([`PdfBackend::page_runs`]). The routing calibration in
+    /// `examples/route_calibration.rs` reads every page's runs here, to see
+    /// what the router passed over.
     pub fn inspect_routed(
         &self,
         path: &Path,
@@ -692,7 +693,27 @@ impl PdfBackend for PdfiumBackend {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
-        self.inspect_routed(path, cancel, route_page)
+        // No page's characters are read here; see `page_runs`.
+        self.inspect_routed(path, cancel, |_, _| PageRoute::Fast)
+    }
+
+    fn page_runs(
+        &self,
+        path: &Path,
+        page_index: usize,
+        native: &NativePage,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<TextRun>, ExtractionError> {
+        cancel.check()?;
+        self.with_document(path, |document| {
+            let page = document
+                .pages()
+                .get(page_index as i32)
+                .map_err(|error| one_line(&error))?;
+            let text = page.text().map_err(|error| one_line(&error))?;
+            let frame = Frame::of(&page, native.rotation);
+            Ok(text_runs(&text, &frame, native))
+        })
     }
 
     fn render_within(

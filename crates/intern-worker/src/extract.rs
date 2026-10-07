@@ -475,6 +475,21 @@ pub trait PdfBackend {
     ) -> Result<RenderedPage, ExtractionError> {
         self.render_within(path, page_index, u64::MAX, cancel)
     }
+
+    /// The page's text as runs ([`crate::layout::TextRun`]), for a page
+    /// routed to read its geometry. `native` is what inspection measured
+    /// of it. Asked for one page at a time, as each is read, so a document
+    /// never holds every page's characters at once. A backend whose
+    /// inspection already carries them - or that has none - returns none.
+    fn page_runs(
+        &self,
+        _path: &Path,
+        _page_index: usize,
+        _native: &NativePage,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<crate::layout::TextRun>, ExtractionError> {
+        Ok(Vec::new())
+    }
 }
 
 pub trait OcrBackend {
@@ -797,7 +812,7 @@ where
 /// Decides how one page is read, finishes it if it needs no OCR, and hands
 /// it to the OCR workers if it does.
 fn plan_page<O: OcrBackend + Sync + ?Sized>(
-    inspection: PdfPageInspection,
+    mut inspection: PdfPageInspection,
     pdf: &dyn PdfBackend,
     path: &Path,
     limits: &ResourceLimits,
@@ -849,6 +864,24 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
             signals,
             scale,
         });
+    }
+
+    // A page whose geometry is read has its characters read now, while the
+    // backend has the document open, and not at inspection: a document's
+    // pages are held all at once from then until they are read. A page
+    // whose characters cannot be read keeps its text.
+    if crate::layout::router::needs_runs(route)
+        && let Some(native) = inspection.native.as_mut()
+        && native.runs.is_empty()
+    {
+        match cancel.timed(
+            |timings| &mut timings.analysis_micros,
+            || pdf.page_runs(path, page_index, native, cancel),
+        ) {
+            Ok(runs) => native.runs = runs,
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
     }
 
     // Native text from here on. Whatever OCR adds is optional: a page that
