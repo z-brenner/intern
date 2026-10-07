@@ -406,7 +406,10 @@ count, and read p95 as "the slow documents" rather than as a guarantee.
 run limited with `--only` refuses to overwrite a baseline that covers
 other documents: the documents left out would read as new, and new
 documents gate nothing. A replay that could not score every document, or
-scored some from stale replies, never writes a baseline.
+scored some from stale replies, never writes a baseline; nor does a run of
+any mode in which no document completed (a worker that would not start,
+say), which would hold every later run to having read nothing. Either
+refusal exits 2.
 `--baseline bench/baseline.json` compares a run with it:
 
 * **Replay is gated per document.** A score that was good and is now bad is

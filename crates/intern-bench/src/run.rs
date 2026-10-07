@@ -345,7 +345,26 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
         .filter(|record| is_unscorable(&record.status) || record.stale)
         .map(|record| record.id.as_str())
         .collect::<Vec<_>>();
-    if options.write_baseline.is_some() && !unfit.is_empty() {
+    // Nor is a run in which no document completed: written from a worker
+    // that would not start, or a model that never answered, the baseline
+    // would hold every later run to having read nothing.
+    if options.write_baseline.is_some() && report.summary.completed == 0 {
+        let statuses = report
+            .summary
+            .statuses
+            .iter()
+            .map(|(status, count)| format!("{count} {status}"))
+            .collect::<Vec<_>>();
+        eprintln!(
+            "not writing the baseline: no document completed ({}), so it would hold later runs to nothing",
+            if statuses.is_empty() {
+                "no documents".to_owned()
+            } else {
+                statuses.join(", ")
+            }
+        );
+        exit = EXIT_REGRESSED;
+    } else if options.write_baseline.is_some() && !unfit.is_empty() {
         eprintln!(
             "not writing the baseline: {} document(s) are stale or could not be scored ({})",
             unfit.len(),
