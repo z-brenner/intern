@@ -729,7 +729,7 @@ impl EvidenceSettings {
     }
 
     fn header_prompt_version(&self) -> Option<String> {
-        self.evidence().then(|| evidence_prompt_version())
+        self.evidence().then(evidence_prompt_version)
     }
 
     /// Refuses a recording of the other pipeline, and says when the
