@@ -444,6 +444,11 @@ pub struct ValidatedParty {
     /// Named only on a "cc:" line: a bystander, never a filename's party.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub copied: bool,
+    /// A person who signs for an organisation that is a party - "Harriet
+    /// Voss, Vice President of People Operations, Northstar Lantern Works
+    /// LLC" - and so is not a party of their own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signatory: bool,
     #[serde(default)]
     pub support: Support,
     /// The stable ids of the units that state the name.
@@ -980,6 +985,7 @@ mod tests {
                 evidence: vec!["p1.b1".into()],
                 document_role: None,
                 copied: false,
+                signatory: false,
             }],
             document_class: DocumentClass::Issued,
             support: FactSupport {

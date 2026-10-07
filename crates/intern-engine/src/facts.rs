@@ -618,6 +618,7 @@ pub fn validate_facts_at(
                 role_support,
                 document_role,
                 copied,
+                signatory: false,
                 support: found.support,
                 evidence: found
                     .unit
@@ -636,22 +637,54 @@ pub fn validate_facts_at(
     // In the order the document first names them, the reply's order
     // breaking ties.
     parties.sort_by_key(|(_, first_seen)| first_seen.unwrap_or(u32::MAX));
-    let parties = parties
+    let mut parties = parties
         .into_iter()
         .map(|(party, _)| party)
         .collect::<Vec<_>>();
+    // A person who signs for an organisation among the parties acts for it
+    // and is no party of their own.
+    let organisations = parties
+        .iter()
+        .filter(|party| is_organisation(&party.name))
+        .map(|party| normalize_loosely(&party.name))
+        .collect::<Vec<_>>();
+    for party in &mut parties {
+        if !party.copied && signs_for(scope, &party.name, &organisations) {
+            party.signatory = true;
+            party.role = Some(PartyRole::Other);
+        }
+    }
+    let class = DocumentClass::of(document_type.as_deref());
+    // An issued document whose reply said what it is but named no one: the
+    // one organisation at the head of its first page, before any customer,
+    // is its issuer.
+    if class == DocumentClass::Issued
+        && proposed_type.is_some()
+        && type_supported
+        && parties.is_empty()
+        && let Some((name, unit)) = header_organisation(scope)
+    {
+        parties.push(ValidatedParty {
+            name: display_name(&name),
+            role: Some(PartyRole::Issuer),
+            document_role: Some(PartyRole::Issuer),
+            support: Support::Context,
+            evidence: vec![unit.id.clone()],
+            ..ValidatedParty::default()
+        });
+    }
     // Who the filename and the description can name: everyone but the
-    // people copied, each with the role the document supports.
+    // people copied and those who sign for a party, each with the role the
+    // document supports.
     let cast = parties
         .iter()
-        .filter(|party| !party.copied)
+        .filter(|party| !party.copied && !party.signatory)
         .map(|party| CastMember {
             name: party.name.clone(),
             role: party.role,
             role_supported: party.role.is_some(),
         })
         .collect::<Vec<_>>();
-    let class = DocumentClass::of(document_type.as_deref());
     let cues = RelationCues {
         issuer: cue_issuer(document_type.as_deref(), &cast, context).or_else(|| {
             (class == DocumentClass::Issued)
@@ -1737,18 +1770,7 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
                         || matches!(*word, "and" | "&" | "of")
                 })
         })?;
-        unit.text.lines().find_map(|line| {
-            let tokens = line.split_whitespace().collect::<Vec<_>>();
-            (0..tokens.len()).find_map(|start| {
-                (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
-                    let span = tokens[start..end].join(" ");
-                    (normalize_loosely(&span) == *organisation).then(|| {
-                        span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'))
-                            .to_owned()
-                    })
-                })
-            })
-        })
+        written_span(unit, organisation)
     })
 }
 
@@ -1769,6 +1791,119 @@ fn is_first_name_alone(name: &str) -> bool {
             .all(|character| character.is_alphabetic() || character == '-' || character == '\'')
         && !all_capitals
         && !crate::cues::ORGANISATION_ENDINGS.contains(&word.to_lowercase().as_str())
+}
+
+/// Whether a name is an organisation's: it ends on a legal form or an
+/// organisation's noun.
+fn is_organisation(name: &str) -> bool {
+    normalize_loosely(name)
+        .split_whitespace()
+        .last()
+        .is_some_and(|word| crate::cues::ORGANISATION_ENDINGS.contains(&word))
+}
+
+/// Words a person's job title is made of.
+const JOB_TITLE_WORDS: &[&str] = &[
+    "president",
+    "director",
+    "manager",
+    "officer",
+    "counsel",
+    "secretary",
+    "treasurer",
+    "chief",
+    "ceo",
+    "cfo",
+    "coo",
+    "cto",
+    "head",
+    "partner",
+    "principal",
+    "administrator",
+    "coordinator",
+    "supervisor",
+    "representative",
+    "agent",
+    "chair",
+    "chairman",
+    "chairperson",
+    "owner",
+    "controller",
+];
+
+/// Whether a person signs for one of `organisations`: a unit names them,
+/// then a job title, then the organisation - "Harriet Voss, Vice President
+/// of People Operations Northstar Lantern Works LLC", "Keziah Ambrose,
+/// Owner, Briarport Coffee Roasters LLC".
+fn signs_for(scope: &ValidationScope<'_>, name: &str, organisations: &[String]) -> bool {
+    if is_organisation(name) || organisations.is_empty() {
+        return false;
+    }
+    let loose = normalize_loosely(name);
+    scope.context_units().any(|unit| {
+        let text = normalize_loosely(&unit.text);
+        whole_positions(&text, &loose).into_iter().any(|at| {
+            let after = window_forward(&text, at + loose.len(), 160);
+            let titled = after
+                .split_whitespace()
+                .take(6)
+                .any(|word| JOB_TITLE_WORDS.contains(&word));
+            titled
+                && organisations
+                    .iter()
+                    .any(|organisation| !whole_positions(after, organisation).is_empty())
+        })
+    })
+}
+
+/// The one organisation the first page of the context names before any
+/// line with a customer cue, as the document writes it, and its unit.
+fn header_organisation<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit)> {
+    let units = scope.context_units().collect::<Vec<_>>();
+    let first_page = units.iter().map(|unit| unit.page).min()?;
+    let mut found: Vec<(String, &EvidenceUnit)> = Vec::new();
+    for unit in units.iter().filter(|unit| unit.page == first_page) {
+        if has_cue(&normalize_loosely(&unit.text), CUSTOMER_CUES)
+            || unit
+                .label
+                .as_deref()
+                .is_some_and(|label| has_cue(&normalize_loosely(label), CUSTOMER_CUES))
+        {
+            break;
+        }
+        for organisation in &unit.features.organisations {
+            if found
+                .iter()
+                .any(|(known, _)| normalize_loosely(known) == *organisation)
+            {
+                continue;
+            }
+            if let Some(span) = written_span(unit, organisation) {
+                found.push((span, unit));
+            }
+        }
+    }
+    match found.as_slice() {
+        [only] => Some(only.clone()),
+        _ => None,
+    }
+}
+
+/// The words of a unit that read, loosely, as `loose`: the document's own
+/// spelling of a name the index found.
+fn written_span(unit: &EvidenceUnit, loose: &str) -> Option<String> {
+    unit.text.lines().find_map(|line| {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        (0..tokens.len()).find_map(|start| {
+            (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
+                let span = tokens[start..end].join(" ");
+                (normalize_loosely(&span) == loose).then(|| {
+                    span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'))
+                        .to_owned()
+                })
+            })
+        })
+    })
 }
 
 /// Wording that copies someone in on a document rather than addressing it
@@ -3337,5 +3472,56 @@ Date of notice: August 12, 2026";
             outcome.proposal.parties,
             vec!["EMBER POST MANUFACTURING LLC"]
         );
+    }
+
+    #[test]
+    fn someone_who_signs_for_a_party_is_no_party_of_their_own() {
+        const NOTICE: &str = "NOTICE OF TERMINATION\n\nDate of this Notice: December 29, 2026\n\n\
+From: Harriet Voss, Vice President of People Operations\n\n\
+This letter is notice that Northstar Lantern Works LLC is ending your employment.\n\n\
+Sincerely, Harriet Voss, Vice President of People Operations, Northstar Lantern Works LLC";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice of Termination".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-12-29".into()),
+            date_evidence: vec![id_of(index, "Date of this")],
+            parties: vec![
+                party(
+                    "Harriet Voss",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "From:")],
+                ),
+                party(
+                    "Northstar Lantern Works LLC",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "This letter")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        assert!(
+            !outcome
+                .proposal
+                .parties
+                .iter()
+                .any(|party| party.contains("Harriet")),
+            "{:?}",
+            outcome.proposal
+        );
+        let facts = outcome.facts.unwrap();
+        assert!(facts.parties.iter().any(|party| party.signatory));
+    }
+
+    #[test]
+    fn an_issued_document_whose_reply_named_no_one_is_from_its_header() {
+        const SLIP: &str = "PACKING SLIP PS-311\n\nDATE JULY 15 2025 QUARTZ MEADOW RETAIL LLC\n\n\
+Ship to: Larkspur Bistro LLC";
+        let (outcome, _) = facts_for(SLIP, |index| ModelFacts {
+            document_type: Some("Packing Slip".into()),
+            type_evidence: vec![id_of(index, "PACKING")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert_eq!(outcome.proposal.parties, vec!["QUARTZ MEADOW RETAIL LLC"]);
     }
 }
