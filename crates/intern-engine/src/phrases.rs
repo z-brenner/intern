@@ -559,7 +559,19 @@ pub(crate) fn trim_name(name: &str) -> String {
             part.iter()
                 .any(|token| token.chars().next().is_some_and(char::is_uppercase))
         };
-        tokens = if named(&after) { after } else { before };
+        // What follows a street word and its comma - "Lane, Cedar Rapids,
+        // IA 52402" - or ends in a postal code is the rest of the address.
+        let postal = after.last().is_some_and(|token| {
+            let digits = token.trim_end_matches([',', '.']);
+            (5..=10).contains(&digits.len())
+                && digits.chars().all(|c| c.is_ascii_digit() || c == '-')
+        });
+        let address_goes_on = tokens[end].ends_with(',') || postal;
+        tokens = if named(&after) && !(address_goes_on && named(&before)) {
+            after
+        } else {
+            before
+        };
     }
     // A legal form ends a company's name.
     if let Some(at) = tokens
@@ -790,6 +802,10 @@ mod tests {
         assert_eq!(
             trim_name("Acme Corporation 12 Main Street"),
             "Acme Corporation"
+        );
+        assert_eq!(
+            trim_name("John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402"),
+            "John Smith"
         );
         for kept in [
             "Orion Glass Studio inc",

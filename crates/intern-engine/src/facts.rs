@@ -697,7 +697,53 @@ pub fn validate_facts_at(
             ValidatedParty {
                 name: display_name(&name),
                 role: Some(PartyRole::Issuer),
+                role_support: Support::Context,
                 document_role: Some(PartyRole::Issuer),
+                support: Support::Context,
+                evidence: vec![unit.id.clone()],
+                ..ValidatedParty::default()
+            },
+        );
+    }
+    // A notice or a letter whose reply named no one it is addressed to
+    // takes as its addressee the one its first page's "To:" field names:
+    // the field's own label says who the document is to.
+    let addressed = parties.iter().any(|party| {
+        !party.copied
+            && !party.signatory
+            && (party
+                .role
+                .is_some_and(|role| ADDRESSED_ROLES.contains(&role))
+                || labelled_role(scope, &party.name)
+                    .is_some_and(|role| ADDRESSED_ROLES.contains(&role)))
+    });
+    if matches!(class, DocumentClass::Notice | DocumentClass::Letter)
+        && proposed_type.is_some()
+        && type_supported
+        && !addressed
+        && parties.len() < crate::client::MAX_PARTIES
+        && let Some((name, unit, line)) = addressee_field(scope)
+        && !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
+        && !copied(scope, &name)
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(line),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        parties.insert(
+            0,
+            ValidatedParty {
+                name: display_name(&name),
+                role: Some(PartyRole::Addressee),
+                role_support: Support::Context,
+                document_role: Some(PartyRole::Addressee),
                 support: Support::Context,
                 evidence: vec![unit.id.clone()],
                 ..ValidatedParty::default()
@@ -821,6 +867,15 @@ pub fn validate_facts_at(
         value.chars().any(|character| character.is_ascii_digit())
             && !repeats(value, document_type.as_deref())
     });
+    // The words the type and the parties' names already say: a subject of
+    // nothing else - "retail" for Quartz Meadow Retail LLC's packing slip -
+    // says nothing more.
+    let named_words = document_type
+        .iter()
+        .map(String::as_str)
+        .chain(parties.iter().map(|party| party.name.as_str()))
+        .flat_map(words)
+        .collect::<BTreeSet<_>>();
     let says_something = |value: &str| -> Option<String> {
         let value = subject_value(value)?
             .trim()
@@ -828,6 +883,12 @@ pub fn validate_facts_at(
         let names_party = cast.iter().any(|party| {
             contains_whole(&normalize_loosely(value), &normalize_loosely(&party.name))
         });
+        let subject_words = words(value)
+            .into_iter()
+            .filter(|word| word.len() > 2 && !STOPWORDS.contains(&word.as_str()))
+            .collect::<Vec<_>>();
+        let only_names = !subject_words.is_empty()
+            && subject_words.iter().all(|word| named_words.contains(word));
         let holds_identifier = identifier
             .as_ref()
             .is_some_and(|(_, id)| normalize_loosely(value).contains(&normalize_loosely(id)));
@@ -835,6 +896,7 @@ pub fn validate_facts_at(
             && !opens_with_party_label(value)
             && !repeats(value, document_type.as_deref())
             && !names_party
+            && !only_names
             && !holds_identifier
             && money_in(value).is_none())
         .then(|| value.to_owned())
@@ -1306,7 +1368,31 @@ fn names_an_organisation(unit: &EvidenceUnit) -> bool {
 fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
     title_units(scope).find_map(|unit| {
         title_lines(unit).into_iter().find_map(|line| {
-            if !title_like(unit, &line) || !(unit.kind == UnitKind::Heading || in_capitals(&line)) {
+            // A letter's "Re:" line names it when its matter opens with a
+            // kind of document: "Re: Demand for Payment - Highmeadow ...".
+            if names_a_matter(line.trim_matches(|c: char| c == '*' || c.is_whitespace())) {
+                let line = line.trim_matches(|c: char| c == '*' || c.is_whitespace());
+                let line_words = words(line);
+                let label = 1;
+                let head = line_words
+                    .get(label..)?
+                    .iter()
+                    .find(|word| names_a_kind(word))?;
+                let phrase = title_phrase(line, head)?;
+                let phrase_words = words(&phrase);
+                return phrase_positions(&line_words, &phrase_words)
+                    .into_iter()
+                    .any(|at| {
+                        at == label
+                            && names_document_at(&line_words, at, at + phrase_words.len(), line)
+                    })
+                    .then(|| (phrase, line.to_owned()));
+            }
+            // A title in capitals whose capitals OCR scattered ("DElIvery
+            // RECeIPt DR-771") is still set in capitals.
+            if !title_like(unit, &line)
+                || !(unit.kind == UnitKind::Heading || in_capitals(&tidy_case(&line)))
+            {
                 return None;
             }
             // The longest title any kind word on the line heads: "Lease
@@ -1491,6 +1577,7 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
                 "payable to",
                 "from",
                 "prepared by",
+                "presented by",
             ],
             &["issuer"],
         ),
@@ -1525,7 +1612,10 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
         PartyRole::Lender => (&["lender"], &["lender", "holder", "payee"]),
         PartyRole::Licensor => (&["licensor"], &["licensor"]),
         PartyRole::Licensee => (&["licensee"], &["licensee"]),
-        PartyRole::Sender => (&["from", "sender"], &["sender"]),
+        PartyRole::Sender => (
+            &["from", "sender", "prepared by", "presented by"],
+            &["sender"],
+        ),
         PartyRole::Addressee => (
             &["to", "attn", "attention", "dear", "addressee"],
             &["addressee"],
@@ -1547,7 +1637,9 @@ fn role_support(
 ) -> Support {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
-    let supports = |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role, true);
+    let letter = LetterLayout::of(scope);
+    let supports =
+        |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role, true, letter);
     if scope.cited_units(cited).into_iter().any(supports) {
         return Support::Cited;
     }
@@ -1593,11 +1685,64 @@ fn labelled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
                 || contains_whole(&normalize_loosely(&unit.text), &loose)
         })
         .collect::<Vec<_>>();
+    let letter = LetterLayout::of(scope);
     LABELLED_ROLES.into_iter().find(|role| {
         naming
             .iter()
-            .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false))
+            .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false, letter))
     })
+}
+
+/// Where a letter's first page ends its letterhead: at a dateline standing
+/// alone near the top. The lines after it are the inside address - who the
+/// letter is to - and never the letterhead of who it is from.
+#[derive(Clone, Copy, Debug, Default)]
+struct LetterLayout {
+    /// The ordinal of the dateline.
+    dateline: Option<u32>,
+}
+
+impl LetterLayout {
+    fn of(scope: &ValidationScope<'_>) -> Self {
+        let units = scope.index.units();
+        let first_page = units.iter().map(|unit| unit.page).min();
+        let dateline = units
+            .iter()
+            .filter(|unit| Some(unit.page) == first_page && !unit.running)
+            .take(6)
+            .find(|unit| is_bare_date(unit))
+            .map(|unit| unit.ordinal);
+        Self { dateline }
+    }
+
+    /// Whether a unit stands before the dateline, where a letterhead can.
+    fn before_dateline(self, unit: &EvidenceUnit) -> bool {
+        self.dateline.is_none_or(|dateline| unit.ordinal < dateline)
+    }
+}
+
+/// Whether a unit is a date and nothing else - "March 2, 2026" - as a
+/// letter's dateline is written.
+fn is_bare_date(unit: &EvidenceUnit) -> bool {
+    const MONTHS: &[&str] = &[
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ];
+    unit.label.is_none()
+        && !unit.features.dates.is_empty()
+        && words(&unit.text)
+            .iter()
+            .all(|word| MONTHS.contains(&word.as_str()) || word.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// `cues`: whether an issued document's issuer and customer cues count.
@@ -1610,6 +1755,7 @@ fn unit_supports_role(
     loose: &str,
     role: PartyRole,
     cues: bool,
+    letter: LetterLayout,
 ) -> bool {
     let (labels, terms) = role_words(role);
     let mut positions = whole_positions(&unit.normalized, normalized)
@@ -1649,6 +1795,7 @@ fn unit_supports_role(
     // letterhead.
     if matches!(role, PartyRole::Issuer | PartyRole::Sender)
         && unit.features.position.letterhead
+        && letter.before_dateline(unit)
         && unit.text.chars().count() <= LETTERHEAD_CHARACTERS
         && unit
             .text
@@ -2092,6 +2239,51 @@ fn signs_for(scope: &ValidationScope<'_>, name: &str, organisations: &[String]) 
     })
 }
 
+/// Roles a notice or a letter gives the one it is addressed to.
+const ADDRESSED_ROLES: &[PartyRole] = &[PartyRole::Addressee, PartyRole::Recipient];
+
+/// Labels of a field that names who a notice or a letter is to. An
+/// "Attn:" line names the person who reads it for the organisation it is
+/// addressed to, never the addressee itself.
+const ADDRESSEE_LABELS: &[&str] = &["to", "addressee"];
+
+/// The person or organisation a first-page "To:" field names, as the
+/// document writes it, with its unit and line: the name the field's value
+/// opens with, an address after it left out ("To: John Smith, 1420 Fielder
+/// Lane, ...").
+fn addressee_field<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit, String)> {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    scope
+        .context_units()
+        .filter(|unit| unit.page == first_page && !unit.running)
+        .find_map(|unit| {
+            let label = normalize(unit.label.as_deref()?);
+            let label = label.trim().trim_end_matches([':', '.']).trim();
+            if !ADDRESSEE_LABELS.contains(&label) {
+                return None;
+            }
+            let line = unit.text.lines().next()?.trim();
+            let value = line.split_once(':').map_or(line, |(_, value)| value);
+            let opening = normalize_loosely(&trim_name(value.trim()));
+            let named = unit
+                .features
+                .people
+                .iter()
+                .chain(&unit.features.organisations)
+                .filter(|known| {
+                    !known.is_empty()
+                        && opening.starts_with(known.as_str())
+                        && opening[known.len()..]
+                            .chars()
+                            .next()
+                            .is_none_or(|next| !next.is_alphanumeric())
+                })
+                .max_by_key(|known| known.len())?;
+            let span = written_span(unit, named)?;
+            (!is_first_name_alone(&span)).then(|| (span, unit, line.to_owned()))
+        })
+}
+
 /// The one organisation the first page of the context names before any
 /// line with a customer cue, as the document writes it, and its unit.
 fn header_organisation<'a>(scope: &ValidationScope<'a>) -> Option<(String, &'a EvidenceUnit)> {
@@ -2323,6 +2515,7 @@ struct ReadAmount<'a> {
 /// rent, a salary, a principal.
 const AMOUNT_LABELS: &[&str] = &[
     "purchase price",
+    "credit limit",
     "principal",
     "settlement payment",
     "base salary",
@@ -2381,23 +2574,42 @@ fn document_amount<'a>(
                 .map(|(label, money)| vec![(label, money, unit.text.trim().to_owned())])
                 .unwrap_or_default(),
             UnitKind::TableRow => {
-                let cells = unit
-                    .text
-                    .trim()
-                    .trim_matches('|')
-                    .split('|')
-                    .map(str::trim)
-                    .collect::<Vec<_>>();
-                let money = cells.iter().rev().find_map(|cell| money_in(cell));
-                match (cells.first(), money) {
-                    (Some(label), Some(money))
-                        if !label.chars().any(|c| c.is_ascii_digit()) && !label.contains(money) =>
-                    {
-                        vec![(
-                            (*label).to_owned(),
-                            money.to_owned(),
-                            unit.text.trim().to_owned(),
-                        )]
+                let cells = cells_of(&unit.text);
+                let Some((at, money)) = cells
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(at, cell)| money_in(cell).map(|money| (at, money)))
+                else {
+                    continue;
+                };
+                // The cell that labels the amount: the nearest one before
+                // it ("| | | Order Total (USD) | $84,438.00 |"), or, when
+                // none does, the header's cell above it.
+                let label = match cells[..at]
+                    .iter()
+                    .rev()
+                    .find(|cell| !cell.is_empty() && money_in(cell).is_none())
+                {
+                    Some(cell) => Some((*cell).to_owned()),
+                    None => unit
+                        .table_header
+                        .and_then(|header| {
+                            scope
+                                .index
+                                .units()
+                                .iter()
+                                .find(|header_unit| header_unit.ordinal == header)
+                        })
+                        .and_then(|header| {
+                            cells_of(&header.text)
+                                .get(at)
+                                .map(|cell| cell.trim_matches('*').trim().to_owned())
+                        }),
+                };
+                match label {
+                    Some(label) if is_amount_label(&label, money, &named) => {
+                        vec![(label, money.to_owned(), unit.text.trim().to_owned())]
                     }
                     _ => Vec::new(),
                 }
@@ -2429,7 +2641,13 @@ fn document_amount<'a>(
                         unit,
                     },
                 ));
-            } else if let Some(kind) = named(&label, AMOUNT_LABELS) {
+            } else if let Some(kind) = named(&label, AMOUNT_LABELS).or_else(|| {
+                // A field or a row that labels its value as an amount
+                // ("Amount claimed", "Estimated amount of loss").
+                matches!(unit.kind, UnitKind::Field | UnitKind::TableRow)
+                    .then(|| named(&label, &["amount"]))
+                    .flatten()
+            }) {
                 let label = if matches!(unit.kind, UnitKind::Field | UnitKind::TableRow) {
                     label.trim().trim_end_matches([':', '.']).to_lowercase()
                 } else {
@@ -2447,6 +2665,25 @@ fn document_amount<'a>(
             }
         }
     }
+    // No labelled amount: one a first-page title states - "$350,000,000
+    // Senior Secured Credit Facilities" - is what the document is for.
+    if found.is_empty() && class != DocumentClass::Issued {
+        let first_page = scope.context_units().map(|unit| unit.page).min()?;
+        return title_units(scope).find_map(|unit| {
+            if unit.page != first_page {
+                return None;
+            }
+            let line = unit.text.lines().find(|line| {
+                money_in(line).is_some() && (unit.kind == UnitKind::Heading || in_capitals(line))
+            })?;
+            Some(ReadAmount {
+                label: None,
+                money: money_in(line)?.to_owned(),
+                line: line.trim().to_owned(),
+                unit,
+            })
+        });
+    }
     if class == DocumentClass::Issued {
         let (_, read) = found.into_iter().rfind(|(total, _)| *total)?;
         return Some(ReadAmount {
@@ -2459,6 +2696,40 @@ fn document_amount<'a>(
         .position(|(total, _)| !*total)
         .or_else(|| (!found.is_empty()).then_some(0))?;
     Some(found.swap_remove(index).1)
+}
+
+/// A table row's cells, its outer pipes taken off.
+fn cells_of(row: &str) -> Vec<&str> {
+    row.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(str::trim)
+        .collect()
+}
+
+/// Whether a row's cell labels the amount after it: not the amount
+/// itself, and not an item's code or quantity - a label with a digit
+/// ("Ending balance on March 31, 2026") only when it opens with a word and
+/// names a total or an amount.
+fn is_amount_label(
+    label: &str,
+    money: &str,
+    named: &impl Fn(&str, &[&str]) -> Option<String>,
+) -> bool {
+    if label.is_empty() || label.contains(money) || money_in(label).is_some() {
+        return false;
+    }
+    if !label.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let opens_with_word = label
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| !word.chars().any(|c| c.is_ascii_digit()));
+    opens_with_word
+        && (named(label, TOTAL_LABELS).is_some()
+            || named(label, AMOUNT_LABELS).is_some()
+            || named(label, &["amount"]).is_some())
 }
 
 /// An identifier the document gives itself, read without the reply.
@@ -3782,6 +4053,137 @@ Northstar Lantern Works LLC, 88 Harbour Street cc: Marcus Reyes, Esq., outside c
     }
 
     #[test]
+    fn a_notice_whose_reply_named_no_addressee_is_to_its_to_field() {
+        const NOTICE: &str = "NOTICE OF TERMINATION\n\nDate of this Notice: December 29, 2026\n\n\
+To: John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402\n\n\
+From: Harriet Voss, Vice President of People Operations\n\n\
+Northstar Lantern Works LLC, 88 Harbour Street cc: Marcus Reyes, Esq., outside counsel\n\n\
+Sincerely, Harriet Voss, Vice President of People Operations Northstar Lantern Works LLC";
+        let reply = |index: &EvidenceIndex| ModelFacts {
+            document_type: Some("Notice of Termination".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-12-29".into()),
+            date_evidence: vec![id_of(index, "Date of this")],
+            parties: vec![
+                party(
+                    "Harriet Voss",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "From:")],
+                ),
+                party(
+                    "Northstar Lantern Works LLC",
+                    Some(PartyRole::Other),
+                    &[id_of(index, "Northstar")],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(NOTICE, reply);
+        assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        assert_eq!(
+            outcome.proposal.description,
+            "Notice of Termination from Northstar Lantern Works LLC to John Smith."
+        );
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Addressee));
+        assert_eq!(facts.parties[0].support, Support::Context);
+        // A reply that names the addressee itself is left as it is.
+        let (named, _) = facts_for(NOTICE, |index| {
+            let mut facts = reply(index);
+            facts.parties.insert(
+                0,
+                party(
+                    "John Smith",
+                    Some(PartyRole::Addressee),
+                    &[id_of(index, "To:")],
+                ),
+            );
+            facts
+        });
+        assert_eq!(named.facts.expect("facts").parties.len(), 3);
+    }
+
+    #[test]
+    fn a_subject_of_the_types_and_the_parties_words_says_nothing() {
+        const SLIP: &str = "PACKING SLIP PS-311\n\nDATE JULY 15 2025 QUARTZ MEADOW RETAIL LLC";
+        let (outcome, _) = facts_for(SLIP, |index| ModelFacts {
+            document_type: Some("Packing Slip".into()),
+            type_evidence: vec![id_of(index, "PACKING")],
+            document_date: Some("2025-07-15".into()),
+            date_evidence: vec![id_of(index, "DATE")],
+            parties: vec![party(
+                "Quartz Meadow Retail LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "DATE")],
+            )],
+            subject: Some("retail packing".into()),
+            subject_evidence: vec![id_of(index, "DATE")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.facts.expect("facts").subject, None);
+        assert!(!outcome.proposal.description.contains("retail packing"));
+    }
+
+    #[test]
+    fn a_title_whose_capitals_ocr_scattered_names_a_document_the_reply_did_not() {
+        const RECEIPT: &str = "DElIvery RECeIPt DR-771\n\nJUNE 12 2025.\n\n\
+Pine Echo Couriers LLC Violet Cartography Studio";
+        let (outcome, _) = facts_for(RECEIPT, |index| ModelFacts {
+            document_type: Some("Document".into()),
+            type_evidence: vec![id_of(index, "DElIvery")],
+            document_date: Some("2025-06-12".into()),
+            date_evidence: vec![id_of(index, "JUNE")],
+            parties: vec![party(
+                "Pine Echo Couriers LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Pine")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Delivery Receipt")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
+        assert_eq!(outcome.status, ProposalStatus::NeedsReview);
+    }
+
+    #[test]
+    fn a_deck_presented_by_a_party_is_from_it() {
+        const DECK: &str = "QUARTERLY BUSINESS REVIEW\n\nPrepared for Contoso Worldwide, Inc.\n\n\
+Presented by Ridgeline Cartography LLC\n\nPresented on May 21, 2026";
+        let (outcome, _) = facts_for(DECK, |index| ModelFacts {
+            document_type: Some("Quarterly Business Review".into()),
+            type_evidence: vec![id_of(index, "QUARTERLY")],
+            document_date: Some("2026-05-21".into()),
+            date_evidence: vec![id_of(index, "Presented on")],
+            parties: vec![
+                party(
+                    "Contoso Worldwide, Inc.",
+                    Some(PartyRole::Recipient),
+                    &[id_of(index, "Prepared for")],
+                ),
+                party(
+                    "Ridgeline Cartography LLC",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "Presented by")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        let facts = outcome.facts.expect("facts");
+        assert_eq!(facts.parties[1].role, Some(PartyRole::Sender));
+        assert!(
+            outcome
+                .proposal
+                .description
+                .contains("Ridgeline Cartography LLC"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    #[test]
     fn an_issued_documents_header_party_is_its_issuer() {
         const INVOICE: &str = "INVOICE INV-2048\n\nInvoice date: April 30, 2025\n\n\
 Due date: May 30, 2025\n\nNimbus Orchard Supply Co. Bill to Atlas Threadworks LLC\n\n\
@@ -3972,6 +4374,101 @@ $28,703.00.";
                 .reasons
                 .contains(&ReviewReason::DescriptionUnsupported)
         );
+    }
+
+    #[test]
+    fn an_amount_is_read_from_its_rows_label_its_header_or_its_title() {
+        let described = |text: &str, kind: &str| {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some(kind.into()),
+                type_evidence: vec![id_of(index, &kind.to_uppercase())],
+                ..ModelFacts::default()
+            });
+            outcome.proposal.description
+        };
+        // The nearest cell before the amount labels it, past empty cells
+        // and the amount it replaces.
+        let order = described(
+            "PURCHASE ORDER\n\n| Line | Item | Ext. Price |\n| 1 | Servo motor | $37,530.00 |\n\
+| | | | Order Total (USD) | $84,438.00 |",
+            "Purchase Order",
+        );
+        assert!(order.contains("totalling $84,438.00"), "{order}");
+        let rent = described(
+            "NOTICE OF RENT INCREASE\n\n| Charge | Current | New |\n\
+| Base rent | $1,845.00 | $1,965.00 |\n\nThe base rent increase is $120.00 per month.",
+            "Notice of Rent Increase",
+        );
+        assert!(rent.contains("base rent of $1,965.00"), "{rent}");
+        // An amount alone in its row is labelled by its header.
+        let loss = described(
+            "PROPERTY LOSS NOTICE\n\n| Estimated amount of loss | Property damaged |\n\
+| $38,500.00 | Flooring, two mixers |",
+            "Property Loss Notice",
+        );
+        assert!(loss.contains("$38,500.00"), "{loss}");
+        // With no labelled amount, the one a first-page title states.
+        let credit = described(
+            "CREDIT AGREEMENT\n\n$350,000,000 SENIOR SECURED CREDIT FACILITIES\n\n\
+The Lenders agree to lend on the terms below.",
+            "Credit Agreement",
+        );
+        assert!(credit.contains("$350,000,000"), "{credit}");
+    }
+
+    #[test]
+    fn a_letters_inside_address_after_its_dateline_is_no_letterhead() {
+        const LETTER: &str = "Mireille Saltonstall 18 Alder Court Bellmoor, WI 53511\n\n\
+March 2, 2026\n\nDr. Rufus Pemberton, Practice Owner\n\n\
+Ashgrove Veterinary Clinic 640 Kingsfold Avenue\n\nRe: Letter of Resignation\n\n\
+Dear Dr. Pemberton:\n\nPlease accept this letter as formal notice of my resignation.";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("Letter of Resignation".into()),
+            type_evidence: vec![id_of(index, "Re:")],
+            document_date: Some("2026-03-02".into()),
+            date_evidence: vec![id_of(index, "March 2")],
+            parties: vec![
+                party(
+                    "Mireille Saltonstall",
+                    Some(PartyRole::Sender),
+                    &[id_of(index, "Mireille")],
+                ),
+                party(
+                    "Dr. Rufus Pemberton",
+                    Some(PartyRole::Issuer),
+                    &[id_of(index, "Dr. Rufus")],
+                ),
+            ],
+            ..ModelFacts::default()
+        });
+        let facts = outcome.facts.expect("facts");
+        let role_of = |name: &str| {
+            facts
+                .parties
+                .iter()
+                .find(|party| party.name == name)
+                .and_then(|party| party.role)
+        };
+        assert_eq!(role_of("Mireille Saltonstall"), Some(PartyRole::Sender));
+        assert_ne!(role_of("Dr. Rufus Pemberton"), Some(PartyRole::Issuer));
+    }
+
+    #[test]
+    fn a_letters_re_line_names_it_when_the_reply_named_no_kind_it_states() {
+        const LETTER: &str = "February 10, 2026\n\nRe: Offer of Employment - Senior Data Engineer\n\n\
+Dear Ms. Vance:\n\nWe are pleased to offer you the position of Senior Data Engineer.";
+        let (outcome, _) = facts_for(LETTER, |index| ModelFacts {
+            document_type: Some("Job Offer Letter".into()),
+            type_evidence: vec![id_of(index, "Re:")],
+            document_date: Some("2026-02-10".into()),
+            date_evidence: vec![id_of(index, "February")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Offer of Employment")
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::TypeInferred));
     }
 
     #[test]

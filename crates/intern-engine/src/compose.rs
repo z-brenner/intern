@@ -734,6 +734,11 @@ fn compose(
                 _ => {
                     if let Some(first) = &first {
                         text.push_str(&format!(" {} {first}", word_for(joining)));
+                        if joining == PartyRelation::None
+                            && let Some(second) = lone_other()
+                        {
+                            text.push_str(&format!(" and {second}"));
+                        }
                     }
                 }
             }
