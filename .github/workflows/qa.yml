@@ -151,6 +151,16 @@ jobs:
           ./scripts/stage-windows-runtime.ps1 -Destination $Stage
           ./scripts/smoke-worker.ps1 -WorkerPath (Join-Path $Stage "intern-worker.exe") -RuntimeDirectory $Stage
           "INTERN_QA_RUNTIME_STAGE=$Stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # The worker smoke only proves the staged runtime reads its fixtures;
+      # this reads them through PP-OCR itself, from the staged ONNX Runtime
+      # and models, and fails if either is missing rather than skipping.
+      - name: Read scans through the staged PP-OCR runtime
+        shell: pwsh
+        run: |
+          $env:INTERN_RUNTIME_DIR = $env:INTERN_QA_RUNTIME_STAGE
+          $env:INTERN_REQUIRE_PP_OCR = "1"
+          cargo test --locked -p intern-worker --test paddle_ocr --features windows-native
+          if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       # Same pinned toolset the CI and release builds use; see
       # scripts/prefetch-nsis.ps1 for why the bundler must not fetch its own.
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

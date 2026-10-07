@@ -365,8 +365,9 @@ SHA-256, and `scripts/fetch-windows-assets.ps1` fetches and verifies each:
 `scripts/verify-assets.mjs` holds the pins, including the DLL's, and
 refuses an inventory that carries part of the OCR runtime without the rest;
 the release inventory must carry all of it. The installer smoke requires
-the four files, and the worker smoke fails if a runtime that carries them
-falls back to Tesseract.
+the four files, the worker smoke fails if a runtime that carries them
+falls back to Tesseract, and QA and release run the engine's own tests
+against the staged runtime with `INTERN_REQUIRE_PP_OCR` set.
 
 The install grows by 36.3 MB (34.6 MiB): 16.5 MB of runtime, 19.5 MB of
 models and 0.36 MB of licence text. The installer compresses with LZMA;

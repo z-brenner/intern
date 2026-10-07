@@ -180,6 +180,16 @@ jobs:
           ./scripts/stage-windows-runtime.ps1 -Destination $Stage
           ./scripts/smoke-worker.ps1 -WorkerPath (Join-Path $Stage "intern-worker.exe") -RuntimeDirectory $Stage
           "INTERN_RUNTIME_STAGE=$Stage" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # The worker smoke only proves the staged runtime reads its fixtures;
+      # this reads them through PP-OCR itself, from the staged ONNX Runtime
+      # and models, and fails if either is missing rather than skipping.
+      - name: Read scans through the staged PP-OCR runtime
+        shell: pwsh
+        run: |
+          $env:INTERN_RUNTIME_DIR = $env:INTERN_RUNTIME_STAGE
+          $env:INTERN_REQUIRE_PP_OCR = "1"
+          cargo test --locked -p intern-worker --test paddle_ocr --features windows-native
+          if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       - name: Score the corpus through the shipping pipeline for this exact commit
         shell: pwsh
         # Downloads 1.19 GiB and scores the corpus with real inference, about
