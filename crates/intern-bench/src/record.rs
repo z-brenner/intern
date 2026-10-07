@@ -259,6 +259,10 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
                         .as_ref()
                         .map_or(&proposal.evidence, |candidate| &candidate.evidence),
                 ),
+                unsupported_reason: analysis
+                    .review_reasons
+                    .iter()
+                    .any(|reason| crate::score::is_unsupported_reason(reason.as_str())),
             }
         }
         None => {

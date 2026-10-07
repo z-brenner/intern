@@ -207,6 +207,7 @@ mod tests {
                         "Saltmarsh Boat Club".to_owned(),
                         vec!["SALTMARSH BOAT CLUB".to_owned()],
                     )]),
+                    ..GoldEvidence::default()
                 },
                 ..GoldAnswer::default()
             },

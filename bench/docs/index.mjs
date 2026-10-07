@@ -16,6 +16,11 @@ import { annualReport } from './long-annual.mjs';
 import { agreementTwoColumnFootnotes, meetingNoticeColumns, meetingNoticeInterleaved, meetingNoticeReversed, newsletterThreeColumn, rateConfirmationRotated } from './columns.mjs';
 import { benefitsChangeForm, inspectionLogTwoPages, invoiceBoxedGrid, invoiceLabelAbove, invoiceRightAligned, lossNoticeBoxedFields, priceListUnruled } from './grids.mjs';
 import { mixedSignatureRegion, scanBillOfLading, scanCancellationNotice150, scanCertificateOfInsurance, scanMixedMiddlePage, scanRemittanceAdvice120, scanRotatedPageInPdf } from './critical.mjs';
+import { masterServicesAgreement12 } from './long-msa.mjs';
+import { industrialLease25 } from './long-lease-schedule.mjs';
+import { termLoan40 } from './long-loan.mjs';
+import { propertyPolicy60 } from './long-policy.mjs';
+import { watershedMonitoringReport100 } from './long-monitoring.mjs';
 import { ocrCorruptedInvoice, scanAgreement, scanCleanLease, scanFaintLetter, scanFaxTwoFrames, scanLease, scanLowResReceipt, scanMixedAmendment, scanNoisyStatement, scanPatientIntakeForm, scanRotatedInvoice, scanSkewedNotice, scanUpsideDownPo } from './scans.mjs';
 
 export const BUILDERS = [
@@ -92,4 +97,11 @@ export const BUILDERS = [
   ['mixed-signature-region', mixedSignatureRegion],
   ['scan-certificate-of-insurance', scanCertificateOfInsurance],
   ['scan-bill-of-lading', scanBillOfLading],
+  // Added for phase 3: long documents whose deciding evidence sits deep
+  // inside, far from the first page; recorded live later.
+  ['msa-effective-date-in-definitions-12p', masterServicesAgreement12],
+  ['industrial-lease-dated-in-schedule-25p', industrialLease25],
+  ['term-loan-parties-apart-40p', termLoan40],
+  ['property-policy-declarations-mid-60p', propertyPolicy60],
+  ['watershed-monitoring-report-100p', watershedMonitoringReport100],
 ];

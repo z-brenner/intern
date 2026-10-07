@@ -7,7 +7,10 @@ use crate::{
     extract::EXTRACTION_SCORES,
     gold::{PAGE_BUCKETS, ROUTES},
     record::{COMPLETED, PENDING},
-    report::{EXTRACT, OcrFigures, Rate, Report, StructureFigures, Summary},
+    report::{
+        COMPLEX_CATEGORIES, EXTRACT, LONG_PAGES, OcrFigures, Rate, Report, SCORECARD,
+        ScorecardKind, StructureFigures, Summary,
+    },
     score::is_unit_fraction,
     stats::Distribution,
     timing::{METRICS, Unit},
@@ -61,6 +64,7 @@ pub fn render(report: &Report) -> String {
     let mut out = String::new();
     header(&mut out, report);
     scorecard(&mut out, &report.summary);
+    phase3_scorecard(&mut out, report);
     safety(&mut out, &report.summary);
     groups(&mut out, report);
     ocr(&mut out, report);
@@ -282,6 +286,49 @@ fn scorecard(out: &mut String, summary: &Summary) {
     table(out, &["Score", "Result"], &rows);
 }
 
+/// The phase 3 comparison list for this run alone.
+fn phase3_scorecard(out: &mut String, report: &Report) {
+    if report.scorecard.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## Phase 3 scorecard");
+    let _ = writeln!(out);
+    let rows = SCORECARD
+        .iter()
+        .filter_map(|(key, label, kind)| {
+            let entry = report.scorecard.iter().find(|entry| entry.metric == *key)?;
+            let value = entry.value.map_or_else(
+                || "–".to_owned(),
+                |value| match kind {
+                    ScorecardKind::Milliseconds => duration(value),
+                    ScorecardKind::Tokens => format!("{value:.0}"),
+                    _ => percent(value),
+                },
+            );
+            Some(vec![
+                (*label).to_owned(),
+                value,
+                entry.documents.to_string(),
+            ])
+        })
+        .collect::<Vec<_>>();
+    table(out, &["Figure", "Value", "Docs"], &rows);
+    let _ = writeln!(
+        out,
+        "Long: {LONG_PAGES} pages or more. Complex: any of {}. Unsupported-fact rate: documents with any `*_UNSUPPORTED` review reason. Latency and tokens over the documents that completed{}.\n",
+        COMPLEX_CATEGORIES
+            .iter()
+            .map(|category| format!("`{category}`"))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if report.timings_source == "recorded" {
+            "; this run replays a recording, so they are the recording's"
+        } else {
+            ""
+        }
+    );
+}
+
 fn safety(out: &mut String, summary: &Summary) {
     let _ = writeln!(out, "## Safety");
     let _ = writeln!(out);
@@ -324,6 +371,12 @@ fn safety(out: &mut String, summary: &Summary) {
     if let Some(rate) = summary.rates.get("needless_review") {
         rows.push(vec![
             "Right name sent to review anyway".to_owned(),
+            format!("{} of {}", rate.correct, rate.total),
+        ]);
+    }
+    if let Some(rate) = summary.rates.get("unsupported_fact_doc") {
+        rows.push(vec![
+            "Sent to review for an unsupported fact".to_owned(),
             format!("{} of {}", rate.correct, rate.total),
         ]);
     }
@@ -708,6 +761,7 @@ fn latency_cells(report: &Report, by: &str, value: &str) -> [String; 2] {
     let slice = match by {
         "kind" => report.latency.by_kind.get(value),
         "text_layer" => report.latency.by_text_layer.get(value),
+        "slice" => report.latency.by_slice.get(value),
         _ => report.latency.by_page_bucket.get(value),
     };
     let total = slice.and_then(|metrics| metrics.get("total_ms"));
@@ -765,6 +819,67 @@ fn groups(out: &mut String, report: &Report) {
                 "p95 total",
             ],
             &rows,
+        );
+    }
+    if let Some(slices) = report.groups.get("slice") {
+        let rows = ["long", "complex"]
+            .iter()
+            .filter_map(|slice| {
+                let summary = slices.get(*slice)?;
+                let [p50, p95] = latency_cells(report, "slice", slice);
+                let generation_ms = report
+                    .latency
+                    .by_slice
+                    .get(*slice)
+                    .and_then(|metrics| metrics.get("generation_ms"));
+                let generation = |pick: fn(&Distribution) -> f64| {
+                    generation_ms
+                        .map_or_else(|| "–".into(), |distribution| duration(pick(distribution)))
+                };
+                Some(vec![
+                    (*slice).to_owned(),
+                    summary.documents.to_string(),
+                    rate_short(summary.rates.get("filename_correct")),
+                    rate_short(summary.rates.get("date_correct")),
+                    rate_short(summary.rates.get("parties_correct")),
+                    rate_short(summary.rates.get("readiness_match")),
+                    format!(
+                        "{} of {}",
+                        summary.counts.unsafe_ready,
+                        summary
+                            .rates
+                            .get("unsafe_ready")
+                            .map_or(0, |rate| rate.total)
+                    ),
+                    p50,
+                    p95,
+                    generation(|distribution| distribution.p50),
+                    generation(|distribution| distribution.p95),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let _ = writeln!(out, "## By slice");
+        let _ = writeln!(out);
+        table(
+            out,
+            &[
+                "Slice",
+                "Docs",
+                "Filename",
+                "Date",
+                "Parties",
+                "Routing",
+                "Unsafe ready",
+                "p50 total",
+                "p95 total",
+                "p50 generation",
+                "p95 generation",
+            ],
+            &rows,
+        );
+        let _ = writeln!(
+            out,
+            "`long`: {LONG_PAGES} pages or more. `complex`: any of the categories listed under the phase 3 scorecard. A document may be in both.\n"
         );
     }
     if let Some(categories) = report.groups.get("category") {
