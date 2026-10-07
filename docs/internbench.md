@@ -252,6 +252,20 @@ The scoring is `extract::extraction_record`, a pure function of the gold,
 what the worker returned and the timings; the worker loop around it only
 feeds it.
 
+### Retrieval sweeps
+
+```sh
+cargo run --release --locked -p intern-bench -- retrieval \
+  --recording RECORDING.json --gold bench/gold.json \
+  --fixtures fixtures/corpus-recording.json --expected fixtures/expected.json \
+  --sweep --output sweep.json --markdown sweep.md [--dump DIR]
+```
+
+Evidence retrieval's configurations over a recording's sources, with no
+worker and no model, on a tuning half and a held-out half of the
+documents. [evidence-retrieval.md](evidence-retrieval.md) describes the
+scores, the sweep and what it found.
+
 ### Comparing two runs
 
 ```sh
@@ -330,6 +344,7 @@ found.
 | `description_specificity` | The mean of three marks: names a party or gold fact; carries a concrete detail; 10–42 words. |
 | `evidence_recall` | The model's quoted evidence contains the date and each party. |
 | `digest_recall`, `prompt_recall` | The gold evidence is in the distilled digest, or in the prompt actually sent. This is deterministic, so a distillation change can be measured in replay without a model. |
+| `context_type_recall`, `context_date_recall`, `context_party_recall`, `context_recall`, `context_fact_recall`, `context_subject_recall` | The gold's type, date, parties (and their mean), description facts and subject terms are in the context evidence retrieval would build from the same text. Deterministic, in every mode; see [evidence-retrieval.md](evidence-retrieval.md). |
 | `readiness_match`, `unsafe_ready`, `needless_review` | Routing against the gold; ready with a wrong name; review although the name was right and the gold says ready. |
 | `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. Whitespace, `|` and `:` are set aside on both sides first, so a page whose text is its blocks (table rows between rules, `Label: value` lines) is judged on what it read, not on how it is laid out. A scanned page the extractor did not return (a TIFF frame it does not read), or every page of a scan whose extraction failed, counts as read empty. |
 
