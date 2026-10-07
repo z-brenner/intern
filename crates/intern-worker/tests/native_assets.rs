@@ -287,6 +287,123 @@ fn turned_landscape_pdf() -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A letter page a tool wrapped whole in one form XObject - iText's
+/// imported pages, pdfpages, macOS - with the sender's logo drawn inside
+/// the form beside its text, placed through the form's own map.
+#[cfg(feature = "native-pdfium")]
+fn wrapped_page_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            concat!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Matrix [1 0 0 1 10 0] ",
+                "/Resources << /Font << /F1 6 0 R >> /XObject << /Im0 7 0 R >> >>"
+            ),
+            b"q 72 0 0 36 54 700 cm /Im0 Do Q \
+              BT /F1 14 Tf 140 712 Td (WEXCOMBE MILLWORK CO.) Tj ET \
+              BT /F1 10 Tf 54 650 Td (Invoice WMC-11047 for stair treads delivered to Lot 17.) Tj ET \
+              BT /F1 10 Tf 54 636 Td (Payment is due within thirty days of the invoice date.) Tj ET \
+              BT /F1 10 Tf 54 622 Td (Questions go to the billing office at the address above.) Tj ET",
+        ),
+        stream("", b"q 0.9 0 0 0.9 21 40 cm /Fm0 Do Q"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+            &[0, 255],
+        ),
+    ];
+    pdf(&objects)
+}
+
+/// A page wrapped in a form with a logo inside is a text page: its text
+/// objects are its segments, its logo an image the size of the logo, and
+/// nothing on it is read twice. It used to be taken for a page-sized image
+/// no text overlapped, OCR'd whole, and every line merged in a second time.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_wrapped_in_a_form_with_a_logo_reads_its_text_once() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::PageRoute;
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page wrapped in a form was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("wrapped.pdf");
+    std::fs::write(&path, wrapped_page_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+    let native = pages[0].native.as_ref().unwrap();
+    assert!(native.segments.len() >= 4, "{:?}", native.segments);
+    assert_eq!(native.images.len(), 1);
+    // The logo, 72 x 36 points at nine tenths: about 0.4% of the page.
+    assert!(
+        pages[0].image_coverage < 0.01,
+        "{}",
+        pages[0].image_coverage
+    );
+    // Placed through the form's own matrix and the page's where it draws
+    // the form - PDFium applies the first to a form's children and keeps
+    // the second on the form: the title's box starts at
+    // 21 + 0.9 x (10 + 140) = 156 points from the left.
+    assert!(
+        native
+            .segments
+            .iter()
+            .any(|segment| segment[0].abs_diff(1560) <= 20),
+        "{:?}",
+        native.segments
+    );
+
+    let document = extract_pdf(
+        &path,
+        &backend,
+        &NoOcr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let page = &document.pages[0];
+    let route = page.layout.as_ref().unwrap().route;
+    assert!(
+        matches!(route, PageRoute::Fast | PageRoute::Layout),
+        "{route:?}"
+    );
+    for line in [
+        "WEXCOMBE MILLWORK CO.",
+        "Invoice WMC-11047 for stair treads delivered to Lot 17.",
+        "Payment is due within thirty days of the invoice date.",
+    ] {
+        assert_eq!(
+            page.text.matches(line).count(),
+            1,
+            "{line}: {:?}",
+            page.text
+        );
+    }
+}
+
 /// Text on a quarter-turned page is all read: drawn past the displayed
 /// width, it used to be dropped.
 #[cfg(feature = "native-pdfium")]

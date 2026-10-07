@@ -119,25 +119,6 @@ fn one_line(error: &PdfiumError) -> ExtractionError {
     ExtractionError::parse_failed(format!("PDFium could not read the document: {error:?}"))
 }
 
-#[cfg(feature = "native-pdfium")]
-fn contains_rendered_image(object: &PdfPageObject<'_>) -> bool {
-    if object.as_image_object().is_some() {
-        return true;
-    }
-    if let Some(form) = object.as_x_object_form_object() {
-        for index in form.as_range() {
-            if form
-                .get(index)
-                .map(|child| contains_rendered_image(&child))
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// A page's own frame: the box its content is drawn in, before `/Rotate`.
 /// Converts PDF user space (points, origin bottom left) into tenths of a
 /// point with the origin at the frame's top left.
@@ -236,98 +217,164 @@ const RULE_THICKNESS: f32 = 2.0;
 #[cfg(feature = "native-pdfium")]
 const RULE_LENGTH: f32 = 10.0;
 
+/// An affine map from an object's own space to the page's user space,
+/// `[a, b, c, d, e, f]` as PDF writes them: `x' = a x + c y + e`,
+/// `y' = b x + d y + f`.
 #[cfg(feature = "native-pdfium")]
-fn survey_object(object: &PdfPageObject<'_>, frame: &Frame, survey: &mut ObjectSurvey) {
-    let bounds = object.bounds().map(|bounds| bounds.to_rect()).ok();
+type Placement = [f32; 6];
+
+#[cfg(feature = "native-pdfium")]
+const ON_THE_PAGE: Placement = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+/// `inner` followed by `outer`: where a form's child lands on the page.
+#[cfg(feature = "native-pdfium")]
+fn placed_within(inner: &Placement, outer: &Placement) -> Placement {
+    let [a, b, c, d, e, f] = *inner;
+    let [oa, ob, oc, od, oe, of] = *outer;
+    [
+        oa * a + oc * b,
+        ob * a + od * b,
+        oa * c + oc * d,
+        ob * c + od * d,
+        oa * e + oc * f + oe,
+        ob * e + od * f + of,
+    ]
+}
+
+/// A box in an object's own space, `left, bottom, right, top`, placed on the
+/// page: the box around its four placed corners.
+#[cfg(feature = "native-pdfium")]
+fn place(placement: &Placement, rect: &PdfRect) -> [f32; 4] {
+    let [a, b, c, d, e, f] = *placement;
+    let (left, bottom, right, top) = (
+        rect.left().value,
+        rect.bottom().value,
+        rect.right().value,
+        rect.top().value,
+    );
+    let corners = [(left, bottom), (right, bottom), (left, top), (right, top)]
+        .map(|(x, y)| (a * x + c * y + e, b * x + d * y + f));
+    let xs = corners.map(|corner| corner.0);
+    let ys = corners.map(|corner| corner.1);
+    [
+        xs.iter().copied().fold(f32::INFINITY, f32::min),
+        ys.iter().copied().fold(f32::INFINITY, f32::min),
+        xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        ys.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+    ]
+}
+
+/// The map a form XObject draws its children with, from its own space to
+/// its parent's.
+#[cfg(feature = "native-pdfium")]
+fn form_placement(object: &PdfPageObject<'_>) -> Placement {
+    object.matrix().map_or(ON_THE_PAGE, |matrix| {
+        [
+            matrix.a(),
+            matrix.b(),
+            matrix.c(),
+            matrix.d(),
+            matrix.e(),
+            matrix.f(),
+        ]
+    })
+}
+
+/// Surveys one object drawn with `placement`. PDFium gives an object's
+/// bounds in the space of whatever holds it: the page, or the form XObject
+/// it is drawn in. A form's children are placed on the page through the
+/// form's own map, so a page a tool wrapped whole in one form - an imported
+/// page from iText, pdfpages, or macOS - is surveyed as the page it is: its
+/// text objects are text boxes, its logo an image the size of the logo.
+#[cfg(feature = "native-pdfium")]
+fn survey_object(
+    object: &PdfPageObject<'_>,
+    placement: &Placement,
+    frame: &Frame,
+    survey: &mut ObjectSurvey,
+) {
+    if let Some(form) = object.as_x_object_form_object() {
+        let inner = placed_within(&form_placement(object), placement);
+        for index in form.as_range() {
+            if let Ok(child) = form.get(index) {
+                survey_object(&child, &inner, frame, survey);
+            }
+        }
+        return;
+    }
+    let Some(bounds) = object.bounds().map(|bounds| bounds.to_rect()).ok() else {
+        if let Some(text) = object.as_text_object() {
+            survey.text_objects += 1;
+            if text.render_mode() == PdfPageTextRenderMode::Invisible {
+                survey.invisible_text_objects += 1;
+            }
+        }
+        return;
+    };
+    let [left, bottom, right, top] = place(placement, &bounds);
     if let Some(text) = object.as_text_object() {
         survey.text_objects += 1;
         if text.render_mode() == PdfPageTextRenderMode::Invisible {
             survey.invisible_text_objects += 1;
         }
-        if let Some(bounds) = bounds {
-            let bbox = frame.rect(&bounds);
-            if bbox[2] > bbox[0] && bbox[3] > bbox[1] {
-                survey.text_boxes.push(bbox);
-            }
+        let bbox = frame.points(left, bottom, right, top);
+        if bbox[2] > bbox[0] && bbox[3] > bbox[1] {
+            survey.text_boxes.push(bbox);
         }
         return;
     }
-    if contains_rendered_image(object) {
-        // For a Form XObject, its own transformed bounds describe the
-        // stamped area on the containing page. This is conservative for
-        // mixed-content forms and avoids incorrectly treating nested child
-        // coordinates as page coordinates.
-        if let Some(bounds) = bounds {
-            survey.image_area += bounds.width().value.abs() * bounds.height().value.abs();
-            survey.images.push(frame.rect(&bounds));
-        }
-        if let Some(form) = object.as_x_object_form_object() {
-            // Text inside a stamped form still counts towards the page's.
-            for index in form.as_range() {
-                if let Ok(child) = form.get(index)
-                    && let Some(text) = child.as_text_object()
-                {
-                    survey.text_objects += 1;
-                    if text.render_mode() == PdfPageTextRenderMode::Invisible {
-                        survey.invisible_text_objects += 1;
-                    }
-                }
-            }
-        }
+    if object.as_image_object().is_some() {
+        survey.image_area += (right - left).abs() * (top - bottom).abs();
+        survey.images.push(frame.points(left, bottom, right, top));
         return;
     }
-    if let Some(form) = object.as_x_object_form_object() {
-        // A form's children are placed in the form's own space; its text is
-        // counted, and placed where the form is.
-        let text_before = survey.text_objects;
-        let boxes_before = survey.text_boxes.len();
-        for index in form.as_range() {
-            if let Ok(child) = form.get(index) {
-                survey_object(&child, frame, survey);
-            }
-        }
-        survey.text_boxes.truncate(boxes_before);
-        if survey.text_objects > text_before
-            && let Some(bounds) = bounds
-        {
-            survey.text_boxes.push(frame.rect(&bounds));
-        }
-        return;
+    if let Some(path) = object.as_path_object() {
+        // Where the path sits in whatever holds it.
+        let held = [
+            bounds.left().value,
+            bounds.bottom().value,
+            bounds.right().value,
+            bounds.top().value,
+        ];
+        survey_path(path, held, frame, survey);
     }
-    if let (Some(path), Some(bounds)) = (object.as_path_object(), bounds) {
-        let width = bounds.width().value.abs();
-        let height = bounds.height().value.abs();
-        let thin_across = height <= RULE_THICKNESS && width >= RULE_LENGTH;
-        let thin_down = width <= RULE_THICKNESS && height >= RULE_LENGTH;
-        if thin_across || thin_down {
-            survey.rulings.push(frame.rect(&bounds));
-        } else if path.is_stroked().unwrap_or(false)
-            && path
-                .fill_mode()
-                .is_ok_and(|mode| mode == PdfPathFillMode::None)
-            && width >= RULE_LENGTH
-            && height >= RULE_LENGTH
-        {
-            // An outlined box: its four sides are rules.
-            let (left, bottom, right, top) = (
-                bounds.left().value,
-                bounds.bottom().value,
-                bounds.right().value,
-                bounds.top().value,
-            );
-            survey
-                .rulings
-                .push(frame.points(left, top - 0.5, right, top));
-            survey
-                .rulings
-                .push(frame.points(left, bottom, right, bottom + 0.5));
-            survey
-                .rulings
-                .push(frame.points(left, bottom, left + 0.5, top));
-            survey
-                .rulings
-                .push(frame.points(right - 0.5, bottom, right, top));
-        }
+}
+
+/// A path's rules: a thin line across or down, or the four sides of an
+/// outlined box, from its box on the page.
+#[cfg(feature = "native-pdfium")]
+fn survey_path(
+    path: &PdfPagePathObject<'_>,
+    [left, bottom, right, top]: [f32; 4],
+    frame: &Frame,
+    survey: &mut ObjectSurvey,
+) {
+    let width = (right - left).abs();
+    let height = (top - bottom).abs();
+    let thin_across = height <= RULE_THICKNESS && width >= RULE_LENGTH;
+    let thin_down = width <= RULE_THICKNESS && height >= RULE_LENGTH;
+    if thin_across || thin_down {
+        survey.rulings.push(frame.points(left, bottom, right, top));
+    } else if path.is_stroked().unwrap_or(false)
+        && path
+            .fill_mode()
+            .is_ok_and(|mode| mode == PdfPathFillMode::None)
+        && width >= RULE_LENGTH
+        && height >= RULE_LENGTH
+    {
+        // An outlined box: its four sides are rules.
+        survey
+            .rulings
+            .push(frame.points(left, top - 0.5, right, top));
+        survey
+            .rulings
+            .push(frame.points(left, bottom, right, bottom + 0.5));
+        survey
+            .rulings
+            .push(frame.points(left, bottom, left + 0.5, top));
+        survey
+            .rulings
+            .push(frame.points(right - 0.5, bottom, right, top));
     }
 }
 
@@ -601,7 +648,7 @@ impl PdfiumBackend {
                 let frame = Frame::of(&page, rotation);
                 let mut survey = ObjectSurvey::default();
                 for object in page.objects().iter() {
-                    survey_object(&object, &frame, &mut survey);
+                    survey_object(&object, &ON_THE_PAGE, &frame, &mut survey);
                 }
                 let page_area = page.width().value.abs() * page.height().value.abs();
                 let image_coverage = if page_area <= f32::EPSILON {
