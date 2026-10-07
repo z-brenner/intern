@@ -270,7 +270,10 @@ pub struct OcrTruthPage {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StructureTruth {
     /// Distinctive phrases in the order a person reads them, each printed
-    /// once, each on one line of the page.
+    /// once. Most span a line break - the last words of one line and the
+    /// first of the next - so a reading that puts anything between those
+    /// two lines does not hold them; the break itself, like any whitespace,
+    /// is compared as one space.
     #[serde(default)]
     pub reading_order: Vec<String>,
     /// Each table's rows. In a check-box group the first column is the

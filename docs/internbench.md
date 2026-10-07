@@ -299,9 +299,12 @@ names its machine and, for a replay, its recording. `intern-bench report
 * `ocr`: OCR figures per scanned document and pooled.
 * `structure`: the structure figures per document and pooled by item
   (absent when no document has a structure block).
-* `routes`: pages per route, documents per route class, and the confusion
-  of expected route against the route taken (absent when no page came with
-  a layout and nothing expects a route).
+* `routes`: pages per route, documents per route class, the pages the
+  gold gives a route for (`expected_pages`), and the confusion of expected
+  route against the route taken over those that could be judged. It is
+  there whenever the gold expects a route or a page came with a layout - a
+  run of a worker that sends no layouts still shows the expected routes
+  went unjudged - and absent only when neither holds.
 * `wall_ms`: the whole run, worker start included (live and extract-only).
 * `memory`, and one record per document holding the name, the
   description, the review reasons, the scores, the claims checked, the traps

@@ -450,6 +450,9 @@ pub struct StructureMeasure {
     /// failed.
     pub route_pages: usize,
     pub routes_correct: usize,
+    /// Pages the gold gives a route for, judged or not.
+    #[serde(default)]
+    pub route_expected: usize,
     /// The extraction failed: nothing was read, every item missed.
     #[serde(default)]
     pub failed: bool,
@@ -515,6 +518,7 @@ impl StructureMeasure {
                 .iter()
                 .filter(|pair| !normalise(&pair.value).is_empty())
                 .count(),
+            route_expected: truth.expected_routes.len(),
             failed: true,
             ..Self::default()
         }
@@ -533,6 +537,7 @@ impl StructureMeasure {
         self.key_values_found += other.key_values_found;
         self.route_pages += other.route_pages;
         self.routes_correct += other.routes_correct;
+        self.route_expected += other.route_expected;
     }
 }
 
@@ -736,6 +741,7 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
     }
 
     // Routes, when the worker sent layouts at all.
+    measure.route_expected = truth.expected_routes.len();
     if source.pages.iter().any(|page| page.layout.is_some()) {
         for (page_number, expected) in &truth.expected_routes {
             measure.route_pages += 1;
@@ -1189,7 +1195,9 @@ mod tests {
             ..StructureTruth::default()
         };
         let plain = source(&["a", "b"]);
-        assert_eq!(measure(&truth, &plain).route_correct(), None);
+        let unjudged = measure(&truth, &plain);
+        assert_eq!(unjudged.route_correct(), None);
+        assert_eq!((unjudged.route_expected, unjudged.route_pages), (2, 0));
         assert_eq!(route_class(&plain), "unrouted");
         let both = routed(
             source(&["a", "b"]),

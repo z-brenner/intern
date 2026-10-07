@@ -513,8 +513,26 @@ fn routes(out: &mut String, report: &Report) {
             classes.join(" · ")
         );
     }
+    let judged = routes
+        .confusion
+        .values()
+        .flat_map(|taken| taken.values())
+        .sum::<usize>();
+    if routes.expected_pages > 0 {
+        let _ = writeln!(
+            out,
+            "- **Pages the gold gives a route for:** {}, {judged} judged",
+            routes.expected_pages
+        );
+    }
     let _ = writeln!(out);
     if routes.confusion.is_empty() {
+        if routes.expected_pages > 0 {
+            let _ = writeln!(
+                out,
+                "None was judged: a route is judged only on a page read with a layout, and those documents came without one (a worker before the router, or an extraction that failed).\n"
+            );
+        }
         return;
     }
     let mut taken = routes
