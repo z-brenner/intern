@@ -33,6 +33,7 @@ pub mod evidence;
 pub mod fingerprint;
 pub mod hosted;
 pub mod house_style;
+pub mod index;
 pub mod infer;
 pub mod legacy;
 pub mod logs;

@@ -482,7 +482,7 @@ pub(crate) fn dates_stated_on(
     found
 }
 
-fn role_from_wording(window: &str) -> Option<DateRole> {
+pub(crate) fn role_from_wording(window: &str) -> Option<DateRole> {
     let has = |cues: &[&str]| cues.iter().any(|cue| window.contains(cue));
     if has(INVOICE_CUES) {
         return Some(DateRole::Invoice);

@@ -907,8 +907,16 @@ pub enum NumericOrder {
 /// be read the other way. `None` when nothing settles it, or when the
 /// document contradicts itself, because then any one reading is a guess.
 pub fn numeric_date_order(digest: &DocumentDigest) -> Option<NumericOrder> {
+    numeric_date_order_of(digest.segments.iter().map(String::as_str))
+}
+
+/// [`numeric_date_order`] over any texts: the evidence index settles the
+/// order over every unit of the document the same way.
+pub(crate) fn numeric_date_order_of<'a>(
+    texts: impl IntoIterator<Item = &'a str>,
+) -> Option<NumericOrder> {
     let mut order = None;
-    for segment in &digest.segments {
+    for segment in texts {
         let normalized = normalize(segment);
         for token in numeric_dates(&normalized) {
             let Some(settled) = order_of(&token) else {
