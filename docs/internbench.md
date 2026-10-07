@@ -295,7 +295,9 @@ scored some from stale replies, never writes a baseline.
   `--latency-gate RATIO`. Then p95 of the total and of every stage, over the
   documents that completed in both the run and the baseline, must stay
   within RATIO times the baseline's; a subset run is held to the same subset.
-  Use it only between runs on the same machine.
+  A stage the baseline measured for such a document and the run did not
+  (a worker that reports no timings) fails the gate rather than shrinking
+  its sample. Use it only between runs on the same machine.
 
 A regression exits 2. There are deliberately no absolute thresholds:
 the baseline is what Intern does today, and the gates stop it getting

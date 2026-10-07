@@ -299,18 +299,34 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             }
         })
         .collect();
+    // Every count either side has: an optional one - a rate with nothing
+    // to be a rate of yet - can appear only after a change, or only before.
     let (was_counts, now_counts) = (counts(&was_summary), counts(&now_summary));
-    comparison.counts = was_counts
+    let value = |counts: &[(&str, f64)], metric: &str| {
+        counts
+            .iter()
+            .find(|(other, _)| *other == metric)
+            .map(|(_, value)| *value)
+    };
+    let mut count_names = was_counts
         .iter()
-        .map(|(metric, was)| {
-            let now = now_counts
-                .iter()
-                .find(|(other, _)| other == metric)
-                .map(|(_, value)| *value);
+        .map(|(metric, _)| *metric)
+        .collect::<Vec<_>>();
+    count_names.extend(
+        now_counts
+            .iter()
+            .map(|(metric, _)| *metric)
+            .filter(|metric| !was_counts.iter().any(|(other, _)| other == metric)),
+    );
+    comparison.counts = count_names
+        .into_iter()
+        .map(|metric| {
+            let was = value(&was_counts, metric);
+            let now = value(&now_counts, metric);
             ValueDelta {
-                metric: (*metric).to_owned(),
-                before: Some(*was),
-                delta: now.map(|now| round(now - was, 4)),
+                metric: metric.to_owned(),
+                before: was,
+                delta: was.zip(now).map(|(was, now)| round(now - was, 4)),
                 after: now,
             }
         })
@@ -1053,6 +1069,48 @@ mod tests {
                 .as_deref()
                 .unwrap()
                 .contains("not measured by that run")
+        );
+    }
+
+    /// A count only one side has - a rate of claims when the run before made
+    /// none - is still compared, with a dash for the side that lacks it.
+    #[test]
+    fn a_count_only_the_after_run_has_is_shown() {
+        let with = |claims: u64| {
+            let mut report = report(vec![(
+                "a",
+                json!({"filename_correct": true, "description_claims": claims, "description_unsupported": 0}),
+                "a.pdf",
+                100.0,
+            )]);
+            report.summary = report::summarize(&report.records);
+            report
+        };
+        assert!(with(0).summary.unsupported_fact_rate.is_none());
+        let comparison = compare(&with(0), &with(4));
+        let rate = comparison
+            .counts
+            .iter()
+            .find(|delta| delta.metric == "unsupported_fact_rate")
+            .expect("the after run's rate is compared");
+        assert_eq!(
+            (rate.before, rate.after, rate.delta),
+            (None, Some(0.0), None)
+        );
+        let rendered = render(&comparison);
+        assert!(
+            rendered.contains("| unsupported_fact_rate | – | 0.0% | – |"),
+            "{rendered}"
+        );
+        // And the other way round.
+        let comparison = compare(&with(4), &with(0));
+        assert!(
+            comparison
+                .counts
+                .iter()
+                .any(|delta| delta.metric == "unsupported_fact_rate"
+                    && delta.before == Some(0.0)
+                    && delta.after.is_none())
         );
     }
 
