@@ -45,8 +45,11 @@ that marks the annual reports' running titles and page numbers and the
 agreements' `Page 2 of 10` footers, and leaves a first page's letterhead
 alone.
 
-A page past the protocol's layout budget (16 MiB of serialised layouts per
-document, a page whose text was cut) is sent without one, and the engine's
+A page past the protocol's layout budget is sent without one. That budget
+is 16 MiB of serialised layouts per document, or whatever the rest of the
+response leaves of the host's 64 MiB line, if that is less: escaped text and
+an image document's page image count against it. A page whose text was cut
+is also sent without one. For any such page, the engine's
 `structured()` segments it from its text with the same id scheme, using the
 distiller's own heading and table rules. So does a page stored before layouts
 existed. Phase 3 can therefore index every page of every document.

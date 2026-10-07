@@ -34,6 +34,9 @@ const LOW_OCR_CONFIDENCE: f32 = 75.0;
 ///
 /// The worker caps a document at eight million characters, so an honest
 /// reply - JSON escaping and a page image included - stays well inside this.
+/// The worker gives page layouts only what the rest of its reply leaves of
+/// this line, through its own copy of it (`protocol::MAX_RESPONSE_BYTES`),
+/// so the two change together.
 /// A longer line is a worker gone wrong, and reading it whole would put an
 /// unbounded allocation in the app's own process rather than the worker's.
 const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
