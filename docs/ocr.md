@@ -92,10 +92,23 @@ machine with eight or more logical cores a second page can be read at the
 same time, with its own sessions, so OCR never uses more than half the
 cores and never more than two pages' worth of memory - about 570 MB each
 at their peak. A page that arrives while every set of sessions is busy
-waits for one. Sessions are made once per worker process and kept, but
-not their working memory: ONNX Runtime's arena would hold the largest
-page's buffers for the life of the worker, which outlives every document,
-so it is off and each run hands its memory back. A second set of sessions
+waits for one. A document's pages share their sessions, and ONNX Runtime's
+arena keeps each page's buffers for the next run instead of allocating them
+again. When the document has been read, the worker drops the sessions,
+arena and all, and the next scanned document builds them again. The worker
+outlives every document and waits for the next one beside the model server,
+which by then is reading this one. Measured on InternBench's 20 scans on a
+quiet 4-core machine, alternating:
+
+| Sessions | OCR, 20 scans | Worker idle after a 10-page scan | Worker peak while reading |
+| --- | ---: | ---: | ---: |
+| dropped after each document (shipped) | 126 s | 96 MB | 660-840 MB |
+| kept, arena on | 122 s | 527 MB | about 740 MB |
+| kept, arena off | 151 s | 156 MB | 430-480 MB |
+
+Without the arena, OCR takes a fifth longer, and the dense forms and the
+10-page scan take half as long again. Rebuilding the sessions for each
+document costs about 3%. A second set of sessions
 that cannot be built - memory is short - makes the page wait for the first
 instead of failing it, and a run that fails on networks that loaded is
 reported as worth trying again. Lines are cut into crops one batch at a
