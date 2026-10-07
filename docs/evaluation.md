@@ -18,11 +18,28 @@ intern-evaluate --fixtures fixtures/generated --expected fixtures/expected.json 
 
 A recording (`fixtures/corpus-recording.json`) holds, per fixture, the text
 the worker extracted and the reply the model gave, keyed by the SHA-256 of
-the exact prompt that reply answers. Replay distils the recorded text again,
+the exact prompt that reply answers. Replay indexes the recorded text again
+and retrieves its evidence (or, for a digest recording, distils it),
 rebuilds the prompt to check it is still the one the reply answers, and then
 re-runs everything *after* the model - validation, evidence checks, date-role
-and type inference, house style, naming - from that text and that reply, so
-a change to those stages is scored the way a live run would score it.
+and type inference, composition, house style, naming - from that text and
+that reply, so a change to those stages is scored the way a live run would
+score it.
+
+The evaluator runs the evidence pipeline, the default, unless asked for
+another (`--pipeline digest`, or `legacy` live). A recording says which
+pipeline made it and is replayed only through that one:
+`fixtures/corpus-recording.json` and `corpus-baseline.json` are the evidence
+pipeline's, recorded live from `902c7fe`, and
+`fixtures/corpus-recording-digest.json` and `corpus-baseline-digest.json`
+the digest pipeline's, which a hosted model still reads through. CI replays
+both:
+
+```text
+intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
+intern-evaluate ... --pipeline digest --replay fixtures/corpus-recording-digest.json \
+  --baseline fixtures/corpus-baseline-digest.json
+```
 
 ## What replay can and cannot tell you
 
@@ -40,10 +57,12 @@ the prompt from the recorded text and compares the hash with the one recorded:
 * **The fixture bytes changed** (the generator was edited without
   re-recording): `stale_fixture`, same treatment.
 
-So: a change to `validate.rs`, `evidence.rs`, `infer.rs`, `house_style.rs`,
-or `naming.rs` is measured for free. A change to `prompt.rs` costs one live
-recording on a machine with the runtime - and so, almost always, does a
-change to `distill.rs`. The hash is taken over the whole prompt, and the
+So: a change to `facts.rs`, `compose.rs`, `validate.rs`, `evidence.rs`,
+`infer.rs`, `house_style.rs`, or `naming.rs` is measured for free. A change
+to `prompt.rs` costs one live recording on a machine with the runtime - and
+so, almost always, does a change to `index.rs` or `retrieve.rs`, which
+choose the evidence lines the prompt carries, or, for the digest pipeline,
+to `distill.rs`. The hash is taken over the whole prompt, and the
 digest distillation builds is most of the prompt: a heuristic that keeps a
 different block, orders the date index differently, or trims one more
 character changes the hash, and every fixture it touches replays as
@@ -112,18 +131,22 @@ npm run fixtures
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
 pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
 8,192-token context, the model's own chat template), records, writes the
-baseline, and stops the server. Commit `fixtures/corpus-recording.json`,
-`fixtures/corpus-baseline.json`, and the report's summary in
-`docs/model-bakeoff.md`.
+baseline, and stops the server. It records the evidence pipeline, the
+default; the digest pipeline's recording is made the same way by
+`intern-evaluate --pipeline digest --record fixtures/corpus-recording-digest.json
+--write-baseline fixtures/corpus-baseline-digest.json`. Commit
+`fixtures/corpus-recording.json`, `fixtures/corpus-baseline.json`, and the
+report's summary in `docs/model-bakeoff.md`.
 
 ## Recording elsewhere
 
 The engine and the worker are portable; only the packaged runtime is not. The
-committed recording was made on Linux with the same pinned model, the same
-llama.cpp release built from source, PDFium `chromium/7881` for Linux, the
-same pinned `tessdata_fast` files, and the distribution's Tesseract 5.3.4
-rather than the vcpkg 5.5.2 the installer ships; the `note` field of the
-recording says so. OCR output can differ by a character between Tesseract
+committed recordings were made on Linux with the same pinned model and a
+llama.cpp CPU build from source; the digest pipeline's with PDFium
+`chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
+distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer
+ships, the evidence pipeline's with the routing reader and PP-OCR; the
+`note` field of each recording says so. OCR output can differ by a character between Tesseract
 builds, which is why the OCR fixtures are marked `needs_review` in the gold
 corpus and scored on routing rather than on the digits they misread. A
 recording made on the packaged Windows runtime supersedes it; the workflow is

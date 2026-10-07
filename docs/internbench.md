@@ -73,7 +73,7 @@ when any selected document's bytes disagree with it or it does not list one.
 | Office, sheets, mail, text | separation agreement, demand letter, written consent (`.docx`); quarterly business review, launch plan (`.pptx`); payroll register with a date serial cell, harvest log (`.xlsx`); AP aging (`.csv`); approval email quoting an older message (`.eml`); hearing notice (`.txt`) |
 | Scans | clean 2- and 10-page image-only PDFs; a 25-page 200-DPI lease; a mixed PDF whose signature page is scanned; rotated 90° and 180°; 3° skew; 100 DPI; speckle noise and blur; faint uneven light; an invisible OCR text layer full of OCR errors; a two-frame TIFF fax; a scanned intake form |
 | Layout and OCR (added with the structure gold; first recorded in the phase 2 run) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organisations and identifiers |
-| Long documents for retrieval (`"recording": "pending"`) | evidence that decides the name, deep inside: a 12-page master services agreement whose Effective Date is stated only in its definitions schedule on page 9; a 25-page industrial lease dated only in its Lease Particulars on page 23, after a letter of intent and an old lease dated on page 1; a 40-page term loan whose lender and borrower are named only on page 1 and on the signature page; a 60-page commercial property policy whose declarations - and policy period - sit on page 30 of its renewal packet; a 100-page watershed monitoring report whose cover dates the review draft and whose final issue date is in the certification on page 88 |
+| Long documents for retrieval (added for phase 3, first recorded in its live run) | evidence that decides the name, deep inside: a 12-page master services agreement whose Effective Date is stated only in its definitions schedule on page 9; a 25-page industrial lease dated only in its Lease Particulars on page 23, after a letter of intent and an old lease dated on page 1; a 40-page term loan whose lender and borrower are named only on page 1 and on the signature page; a 60-page commercial property policy whose declarations - and policy period - sit on page 30 of its renewal packet; a 100-page watershed monitoring report whose cover dates the review draft and whose final issue date is in the certification on page 88 |
 
 Every document carries category tags (`multi_column`, `date_in_table`,
 `referenced_agreement`, `middle_fact`, `pages_50`, `key_value`,
@@ -161,7 +161,8 @@ scores.
 
 A document added before anyone recorded it says `"recording": "pending"`.
 Replay leaves it unscored (and a baseline may not hold it); extract-only
-reads it like any other.
+reads it like any other. No document is pending today: the phase 3 live run
+recorded the five long documents with the rest.
 
 To change an answer, edit the builder in `bench/docs/`, review the
 regenerated document, and run
@@ -196,10 +197,14 @@ the worker is started again after a timeout, a cancellation or a crash.
 `--only id,id` runs a subset.
 
 Each document goes the way it goes in the app: `SupervisedWorker` extracts
-it, then `Engine::analyze` distils it, fits the prompt to the context, asks
-the model, validates the reply and composes the name. A recording proposer
+it, then `Engine::analyze` indexes it, retrieves the evidence that fits the
+context, asks the model, validates the facts and composes the name, through
+the evidence pipeline the app reads with. `--pipeline digest` runs the
+digest pipeline a hosted model reads through instead. A recording proposer
 sits in front of the model client and keeps every prompt's SHA-256, the
-reply, and the server's timings.
+reply, and the server's timings. A recording says which pipeline, retrieval
+and prompt made it, and is replayed only through the same pipeline: a
+digest recording with `--pipeline digest`.
 
 ### Replay
 
@@ -210,9 +215,9 @@ cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
   --output report.json --markdown report.md
 ```
 
-Replay re-runs everything after the model (distillation, validation, role
-and type inference, naming, scoring) from what the worker read and what the
-model replied. It needs no worker, model or generated corpus: fixture
+Replay re-runs everything after the model (indexing and retrieval, or
+distillation; validation, role and type inference, naming, scoring) from
+what the worker read and what the model replied. It needs no worker, model or generated corpus: fixture
 staleness is checked against the manifest. Prompts are built as the app
 builds them today, with today's digest budget and context size; when either
 differs from the recording's, the run says so on standard error, in the
@@ -558,9 +563,16 @@ worse while the work makes it better.
 Reports of record, the baseline first, are in [`bench/reports/`](../bench/reports/).
 
 The recording and baseline of record are `bench/recording.json` and
-`bench/baseline.json`. A live run writes them (`--record`,
+`bench/baseline.json`: the evidence pipeline's, all 77 documents recorded
+live from `902c7fe`. A live run writes them (`--record`,
 `--write-baseline`), and they are committed with the change that produced
-them; replay and the gates read them.
+them; replay and the gates read them. A recording keeps its header indented
+and each document compact on a line of its own, its layouts without their
+lines or cell boxes, so the 77 documents fit in 6.5 MB and a review still
+sees which documents a re-recording changed. The digest pipeline's last
+recording of record, of 72 documents, is `bench/recording.json` at
+`79e8bba`; the phase 3 "before" report was made from it with the five long
+documents, recorded live through the digest pipeline, added.
 
 For a change to anything after the model (validation, inference, naming,
 house style), replay against `bench/recording.json`, and check the

@@ -4,10 +4,12 @@ Phase 3 replaces "one heuristic compressor decides what text the model
 sees" with an index over the document's blocks and retrieval per field.
 This page describes the index and the retriever (Stages 3 and 4 of the
 phase), how they were tuned offline on InternBench and the fixture corpus,
-and what the measurements say. Nothing here changes what the engine sends
-today: the digest is still the prompt, and both replay gates are
-unchanged. The retriever is measured beside it, so the switch (Stages 5 to
-8) can be decided on numbers.
+and what the measurements say. It was written when the retriever was
+measured beside the digest, before anything sent it; since Stage 8 the
+evidence pipeline built on it is the default for the local model
+([`evidence-pipeline.md`](evidence-pipeline.md)), and the digest is what a
+hosted model reads. The acceptance table at the end records Stage 4 as it
+stood.
 
 ## The index
 

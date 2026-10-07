@@ -346,11 +346,120 @@ Latency, from the two live runs:
 * Over all 71 documents both completed, the total is +4.7% at the median and
   −1.3% at the 95th percentile.
 
+## Phase 3: measured
+
+Phase 3 changed how the model is asked, and what is done with its answer:
+* an evidence index of the document's units, each with a stable id, and
+  retrieval of the units each fact needs (`docs/evidence-retrieval.md`);
+* a reply of facts only - the type, the date and its role, up to three
+  parties with their roles, a subject - each as a short array with the id
+  of the line that states it, under a grammar that lets the model cite only
+  the lines it was shown;
+* the fixed instructions in the system turn, the same for every document;
+* validation of every fact against the document, and the filename and the
+  description composed from the facts it accepts, with the joining word
+  decided by a relation table from the parties' roles
+  (`docs/evidence-pipeline.md`).
+
+The evidence pipeline is the default since. All 77 InternBench documents
+were recorded live through each pipeline on the same idle 4-core Xeon at 4
+threads, and both recordings scored by the same scorer and gold
+(`bench/reports/2026-10-07-phase3-*`).
+
+| | Digest (before) | Evidence (after) |
+| --- | ---: | ---: |
+| Filename right | 26/77 | 54/77 |
+| Long documents (10+ pages, 12): filename right | 66.7% | 75.0% |
+| Complex documents (56): filename right | 33.9% | 73.2% |
+| Type right | 61/77 | 72/77 |
+| Date right | 65/77 | 75/77 |
+| Parties right | 53/77 | 67/77 |
+| Ready/review routing right | 37/57 | 44/57 |
+| Sent to review | 32.9% | 15.6% |
+| Filed without review under a wrong name | 30 | 15 |
+| Trap date chosen | 11 | 1 |
+| Forbidden party named | 9 | 8 |
+| Unsupported description claims | 1 of 264 | 0 of 290 |
+| Documents with an unsupported fact | 27.3% | 11.7% |
+| Evidence recall | 51.7% | 66.0% |
+| Description completeness | 53.5% | 53.7% |
+
+On the fixture corpus the evidence pipeline names 13 of 18 files right
+against the digest pipeline's 12, its parties 18 of 19 against 17, and sends
+31.6% to review, as the digest did, with no forbidden date or party.
+
+**Description completeness did not move**, and its margin is inside live
+drift: the same code scored 50.9% and 55.1% on the 72 documents both
+pipelines had recorded before, from two live recordings whose prompts
+differed only in one instruction line. Read it as about ±2 points between
+live runs. The descriptions are now composed from validated facts only, so
+they state nothing unsupported, but a fact the reply does not give - a
+subject, an amount the document labels unusually - is not in them.
+
+**What the evidence pipeline still gets wrong.**
+* A record - minutes, a board consent, a maintenance or condition report -
+  is named for a person the reply names first, often an attendee or a
+  signer the gold forbids: most of the 8 forbidden parties.
+* The joining word of a record's recipient is "to" in the filename and
+  "for" in the description.
+* A scan whose OCR keeps neither its type nor its year (`document-image.tiff`
+  reads `DATE JULY.15` and no title) is described as "Document from Harbor
+  Comet Repairs LLC." and sent to review; the digest pipeline described it as
+  a notice of termination of 2024.
+
+Latency, from the two live recordings:
+
+| | Digest | Evidence |
+| --- | ---: | ---: |
+| Total p50 / p95 | 38.94 s / 96.03 s | 19.21 s / 33.88 s |
+| Prefill p50 / p95 | 25.65 s / 78.53 s | 11.41 s / 24.14 s |
+| Generation p50 / p95 | 10.69 s / 16.18 s | 6.53 s / 8.82 s |
+| Generated tokens p50 / p95 | 141 / 204 | 87 / 116 |
+| Prompt tokens p50 | 2,144 | 914 |
+| Prompt tokens read from the cache p50 | 46 | 477 |
+
+On the fixtures, recorded live the same way, the median document took
+8.75 s against 15.92 s, and the 95th percentile 18.15 s against 62.02 s;
+prefill p50 fell from 6.14 s to 1.90 s.
+
+**The cached prefix.** The pinned model is a hybrid: many of its layers
+keep a recurrent state rather than a key-value cache, and a recurrent state
+cannot be cut back to an earlier token. llama-server therefore reuses a
+hybrid model's cache only from checkpoints it saves at the start of the
+last user message and a few tokens before the end of the prompt. The digest
+prompt's instructions, and the first evidence prompt's, opened the user
+turn, so they were past the only reusable checkpoint and were prefilled
+again for every document: `cached_tokens` was 46, the chat template and
+the system instruction. Moving the fixed instructions into the system turn
+puts them before that checkpoint. They are the same for every document,
+read once and reused: 477 cached tokens a request. Shrinking them to 430
+tokens and the reply to facts with one id each did the rest; the reply no
+longer quotes, so generation fell with it.
+
+**Where the gold and the documents disagree.** Found while tuning; the gold
+is unchanged:
+* `board-deck.pptx` (fixtures) says "Prepared for Contoso Worldwide, Inc.
+  / Presented by Ridgeline Cartography LLC", and its gold files it "for
+  Ridgeline Cartography LLC". The same layout in InternBench
+  (`quarterly-business-review`) is filed for the client it was prepared
+  for. The deck is for Contoso, from Ridgeline.
+* `termination-notice.pdf` accepts only "for John Smith"; a notice is
+  addressed to someone, and "to John Smith", which both pipelines write, is
+  as right.
+* `long-document-100-pages.pdf` expects the type "Project Journal"; the
+  document's title is "Moonlit Archive Project Journal".
+* `scanned-lease.pdf` and `mixed-signature.pdf` expect review although both
+  are read and named right.
+
 ## The highest-value changes
 
 Ranked by what the measurements say they are worth, as the baseline showed
-them. Phase 2 (above) did every OCR item and the second complex-document item:
-the layout as blocks with identifiers. The rest is phase 3's.
+them. Phase 2 did every OCR item and the second complex-document item: the
+layout as blocks with identifiers. Phase 3 did the rest of the complex
+document items (roles and a derived joining word, the document's own
+titles), the long-document items (retrieval by field, evidence by
+identifier with bounded strings) and the first three latency items
+(above).
 
 ### Complex document understanding
 

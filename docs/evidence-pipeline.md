@@ -1,10 +1,14 @@
 # The evidence pipeline
 
-The evidence pipeline reads a document a second way. It is opt-in
-(`Engine::with_pipeline(Pipeline::Evidence)`, `--pipeline evidence` in the
-evaluation tools) until a live evaluation shows it does at least as well
-as the digest pipeline. The digest pipeline stays the default, and both
-replay gates run on it unchanged.
+The evidence pipeline is how Intern reads a document with its local model,
+the default since phase 3 (`Pipeline::Evidence`; `--pipeline evidence` in
+the evaluation tools, where it is also the default). The digest pipeline
+before it stays in the engine: a hosted model reads through it
+(`HostedClient::engine`), and `--pipeline digest` measures it. The recordings
+of record, `bench/recording.json` and `fixtures/corpus-recording.json`, are
+this pipeline's; `fixtures/corpus-recording-digest.json` is the digest
+pipeline's, and CI replays both. `docs/pipeline-bottlenecks.md` (Phase 3:
+measured) has what it changed.
 
 ```text
 DocumentSource ─▶ index ─▶ retrieve ─▶ prompt + grammar ─▶ one inference
@@ -18,10 +22,9 @@ validation, and the filename and description composed from it.
 ## The reply: facts, each with the id of its line
 
 The model never writes the description or the filename. It gives facts
-only, and with each fact the id of the line that states it. The reply has
-two forms (`prompt::ReplyForm`).
+only, and with each fact the id of the line that states it.
 
-### The compact reply (the default)
+### The compact reply
 
 ```json
 {"type":["Invoice","p1.b2"],"date":["2025-05-01","invoice","p1.b4.f1"],
@@ -64,27 +67,16 @@ two forms (`prompt::ReplyForm`).
   run copied from its skeleton as the type of 11 of 19 fixtures. Strings are
   bounded: 80 characters for a type or a name, 60 for the subject.
 
-### The fields reply (`--reply-form facts`)
+The first live recordings were made with a longer form - named fields and
+id lists, an identifier, key facts, a confidence and a review flag, after
+instructions at the head of the user turn. Its replies were 178 generated
+tokens on the median InternBench document against the compact reply's 87,
+and given each fact's ids before the fact, the model answered the empty list
+- and with it no type, no date and no parties - on every document whose
+handles were quoted ids. It was removed once the compact reply's recordings
+became the recordings of record.
 
-The form the first live recordings were made with: named fields and id
-lists, a subject, an identifier, up to two key facts, a confidence and a
-review flag, after instructions at the head of the user turn
-(`EVIDENCE_INSTRUCTIONS`). It keeps its prompt version (`6134f0168dcf`), so
-those recordings still replay.
-
-```json
-{"type":"Invoice","type_ids":["p1.b2"],"date":"2025-05-01","date_role":"invoice",
- "date_ids":["p1.b4.f1"],"parties":[{"name":"Halvorsen Fixture Works LLC","role":"issuer",
- "ids":["p1.b1"]}],"subject":"display shelving","subject_ids":["p1.b7"],
- "identifier":"INV-10438","identifier_ids":["p1.b3.f1"],"confidence":0.9,"needs_review":false}
-```
-
-`FieldOrder::EvidenceFirst` puts each fact's ids before it in this form.
-Given the ids first, the model in the first live run answered the empty
-list - and with it no type, no date and no parties - on every document
-whose handles were quoted ids; fact first is the default.
-
-### Both forms
+### What every reply is held to
 
 - **Ids, not quotes.** The model cites a line by its handle and never copies
   it back. The engine dereferences each id to the line's own text.
@@ -101,9 +93,10 @@ whose handles were quoted ids; fact first is the default.
   the default) or numbers local to the prompt (`IdStyle::Ordinal`).
   Either way, only stable ids are ever stored.
 
-A hosted model receives the same prompt with no grammar, and its reply is
-read leniently (`client::facts_from_text`): either form, one id or a list,
-numbers or strings, an array's parts told apart by what they are. An id
+A model answering without the grammar - a hosted one, the day one reads
+through this pipeline - has its reply read leniently
+(`client::facts_from_text`): compact arrays or named fields, one id or a
+list, numbers or strings, an array's parts told apart by what they are. An id
 the prompt did not show is set aside (`ModelFacts::unknown_evidence`),
 counted, and is never evidence.
 
@@ -296,8 +289,8 @@ Values, not labels:
 - **The identifier** stands after the type when it is on the type's title
   line (`Invoice INV-2048 from ...`), and reads with its label elsewhere
   (`policy KC-WC-7710345`). An identifier without a digit is not a number.
-- **A key fact** of the fields reply that is not an amount stands in for a
-  missing subject.
+- **A key fact** a reply in named fields gives, if it is not an amount,
+  stands in for a missing subject.
 - **The type** is the document's whole title; a compound title too long for
   the filename to name both parties keeps its first kind there
   ("Settlement Agreement" of "Settlement Agreement and Mutual Release")
@@ -316,8 +309,8 @@ the filename and the folder only.
 
 | Tool | Flags |
 | --- | --- |
-| `intern-bench run` | `--pipeline digest\|evidence` `--id-style stable\|ordinal` `--retrieval-tier auto\|whole\|small\|normal\|dense` `--reply-form compact\|facts` `--field-order fact-first\|evidence-first` (fields reply only) `--string-limits bounded\|unbounded` `--context-tokens N` |
-| `intern-evaluate` | the same flags; `--pipeline new` (the default) and `legacy` keep their meaning |
+| `intern-bench run` | `--pipeline evidence\|digest` (evidence by default) `--id-style stable\|ordinal` `--retrieval-tier auto\|whole\|small\|normal\|dense` `--context-tokens N` |
+| `intern-evaluate` | the same flags; `--pipeline new` is the digest pipeline under its old name, and `legacy` keeps its meaning |
 
 A recording made with the evidence pipeline carries extra fields in its
 header:

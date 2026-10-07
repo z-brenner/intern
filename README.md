@@ -17,8 +17,9 @@ statement of work was signed, and `2026-04-01` is the date it takes effect. Only
 one of those is what the document *is*.
 
 Alongside the name it produces one sentence saying what the document actually
-concerns, the verbatim excerpts behind every fact it used, and a confidence. If
-anything is unsupported, the document goes to review instead of being renamed.
+concerns, composed from the facts it found, and the line of the document behind
+every one of them. If anything is unsupported, the document goes to review
+instead of being renamed.
 
 No account, no per-document cost, no file limit: the model runs on your own
 computer, so a thousand documents cost what one does, and nothing caps how many
@@ -383,7 +384,11 @@ cargo run --locked -p intern-engine --bin intern-evaluate -- \
   --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
 ```
 
-A prompt change makes the recording stale and needs a live re-record;
+That is the evidence pipeline the local model reads with; CI also replays the
+digest pipeline a hosted model reads through, from
+`fixtures/corpus-recording-digest.json` with `--pipeline digest`, and
+InternBench from `bench/recording.json`. A prompt change makes the recording
+stale and needs a live re-record;
 [`docs/evaluation.md`](docs/evaluation.md) has the workflow, and
 [`docs/model-bakeoff.md`](docs/model-bakeoff.md) the numbers.
 
@@ -391,7 +396,7 @@ A prompt change makes the recording stale and needs a live re-record;
 
 | Crate | What it owns |
 | --- | --- |
-| `intern-engine` | Document understanding: distillation, prompt, local model client and server, the optional hosted-model client, evidence validation, house style learned from review, filename composition, model installation, and the corpus evaluator with its record-and-replay mode. |
+| `intern-engine` | Document understanding: the evidence index and retrieval, the prompt and its grammar, local model client and server, fact validation against the document, composition of the filename and description, the digest pipeline the optional hosted-model client reads through, house style learned from review, model installation, and the corpus evaluator with its record-and-replay mode. |
 | `intern-intake` | Shared intake folders: the multi-machine claim protocol, cloud sync-root detection, and the polling watcher. |
 | `intern-queue` | The durable queue: ordering, leases, retries, the review/apply workflow, and the spellings it learns from approvals. |
 | `intern-core` | Crash-safe queue storage and journalled file operations. |
@@ -407,9 +412,11 @@ intern-analyze --file contract.pdf --worker intern-worker.exe \
 ```
 
 It prints the proposed filename, the description, the evidence, the review
-reasons, and local timings as one JSON object. `--distill-only` prints the
-digest without running a model. This is the same code path the app uses, so a
-watched folder, a script, or a future connector gets identical results.
+reasons, and local timings as one JSON object, through the evidence pipeline
+the app uses (`--pipeline digest` for the digest pipeline). `--distill-only`
+prints the digest without running a model. This is the same code path the app
+uses, so a watched folder, a script, or a future connector gets identical
+results.
 
 ## Windows runtime assets and installer
 
