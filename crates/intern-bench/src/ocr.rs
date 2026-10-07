@@ -1,12 +1,13 @@
 //! How close OCR came to what was drawn on a scanned page.
 //!
 //! Distances are Levenshtein edit distances, page by page, over the text
-//! with whitespace collapsed - line breaks and spacing are layout, not
-//! reading. A corpus figure is the sum of the distances over the sum of the
-//! truth lengths, never a mean of per-page rates, so one short page cannot
-//! outweigh a long one. Every comparison is per page with a two-row table:
-//! a 100-page scan compared as one string would cost the square of its
-//! whole length.
+//! with whitespace collapsed and table rules set aside - line breaks,
+//! spacing and the `|` around a table row are layout, not reading (see
+//! [`comparable`]). A corpus figure is the sum of the distances over the
+//! sum of the truth lengths, never a mean of per-page rates, so one short
+//! page cannot outweigh a long one. Every comparison is per page with a
+//! two-row table: a 100-page scan compared as one string would cost the
+//! square of its whole length.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,14 +46,16 @@ pub fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Text as recognition is judged on: the cell rules and label colons a
-/// layout writes around what was read - `| a | b |` rows, `Label: value`
-/// lines - set aside on both sides, then whitespace collapsed. A page whose
-/// text is its blocks is held to what it read, not to how it was laid out;
-/// a colon or a rule the engine read wrongly is still a miss, because the
-/// truth's own colons and rules are set aside the same way.
+/// Text as recognition is judged on: the cell rules a layout writes around
+/// a table row it read (`| a | b |`) set aside on both sides, then
+/// whitespace collapsed. A rule is never text a page prints in a sentence,
+/// so a page whose text is its blocks is not charged for its tables'
+/// rules. A colon is text, and is kept: one the page printed and the
+/// reading dropped or misread is a miss, and the colon a layout writes
+/// after a label (`Label: value`) where the page printed none costs a
+/// character - the reading says something the page does not.
 pub fn comparable(text: &str) -> String {
-    collapse_whitespace(&text.replace(['|', ':'], " "))
+    collapse_whitespace(&text.replace('|', " "))
 }
 
 /// Character edit distance and the truth's length in characters.
@@ -287,15 +290,24 @@ mod tests {
         value.chars().collect()
     }
 
-    /// A page read as its blocks writes rows between rules and labels with
-    /// colons; recognition is judged without them, on both sides.
+    /// A page read as its blocks writes table rows between rules, which are
+    /// set aside on both sides; a colon is text, so a dropped one is a miss
+    /// and one the layout added after a label costs a character.
     #[test]
-    fn layout_punctuation_is_not_an_ocr_error() {
+    fn table_rules_are_set_aside_but_colons_are_read() {
         let drawn = "Full legal name Date of birth\nIone Kowalczyk 11/23/1990\nHome address\n52 Umber Street";
         let read = "| Full legal name | Date of birth |\n| Ione Kowalczyk | 11/23/1990 |\n\nHome address: 52 Umber Street";
-        assert_eq!(char_distance(drawn, read).0, 0);
-        assert_eq!(word_distance(drawn, read).0, 0);
-        // A colon read wrongly is still a miss.
+        // The rules cost nothing; the colon the layout wrote after "Home
+        // address" costs a character, and makes "address:" another word.
+        assert_eq!(char_distance(drawn, read).0, 1);
+        assert_eq!(word_distance(drawn, read).0, 1);
+        assert_eq!(
+            char_distance("Date 11/23/1990", "| Date | 11/23/1990 |").0,
+            0
+        );
+        // A colon the page printed and the reading dropped is a miss.
+        assert_eq!(char_distance("Date: 11/23/1990", "Date 11/23/1990").0, 1);
+        // So is one read wrongly.
         assert_eq!(char_distance("Date: 11/23/1990", "Date; 11/23/1990").0, 1);
     }
 
@@ -409,8 +421,7 @@ mod tests {
         // all ten characters of the page never returned.
         assert_eq!(measure.char_distance, 1 + 4 + 1 + 10);
         assert_eq!(measure.char_distance_ci, 1 + 10);
-        // Colons set aside: "Date: March" is compared as "Date March".
-        assert_eq!(measure.truth_chars, 36 + 21 + 10);
+        assert_eq!(measure.truth_chars, 37 + 21 + 10);
         assert_eq!(measure.date_accuracy(), Some(1.0), "case-insensitive");
         assert_eq!(measure.name_accuracy(), Some(1.0));
         assert_eq!(
@@ -457,10 +468,9 @@ mod tests {
             (1, 2)
         );
         assert_eq!(measure.date_accuracy(), Some(0.5));
-        // The second frame's 55 characters, all missed, of 34 + 55 (colons
-        // set aside).
-        assert_eq!(measure.char_distance, 55);
-        assert_eq!(measure.truth_chars, 34 + 55);
+        // The second frame's 56 characters, all missed, of 36 + 56.
+        assert_eq!(measure.char_distance, 56);
+        assert_eq!(measure.truth_chars, 36 + 56);
         assert_eq!(measure.wer(), Some(8.0 / 15.0));
         assert_eq!(
             measure.mean_confidence,
