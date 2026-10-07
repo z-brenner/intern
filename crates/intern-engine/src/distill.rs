@@ -487,6 +487,21 @@ fn duplicate_shapes(kind: BlockKind, body: &str) -> (String, Option<String>) {
     (head, tail)
 }
 
+/// The keys selection deduplicates a block's text under: the exact text
+/// (clause number stripped, whitespace collapsed) and its digit-masked
+/// shapes ([`duplicate_shapes`]), the tail only for body text. The evidence
+/// retriever drops repeats by the same keys the digest does.
+pub(crate) fn duplicate_keys(text: &str, body: bool) -> (String, String, Option<String>) {
+    let stripped = strip_enumerators(text.trim());
+    let kind = if body {
+        BlockKind::Body
+    } else {
+        BlockKind::Table
+    };
+    let (head, tail) = duplicate_shapes(kind, stripped);
+    (collapse_whitespace(stripped), head, tail)
+}
+
 /// Lowercased with runs of whitespace collapsed, so a clause re-flowed onto
 /// different line breaks still reads as the same text.
 fn collapse_whitespace(value: &str) -> String {

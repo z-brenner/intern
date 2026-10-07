@@ -42,6 +42,7 @@ pub mod naming;
 pub mod own_names;
 mod process;
 pub mod prompt;
+pub mod retrieve;
 pub mod server;
 pub mod setup;
 pub mod structure;
