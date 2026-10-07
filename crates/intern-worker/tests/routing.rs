@@ -603,3 +603,30 @@ fn scanned_pages_past_the_documents_characters_keep_no_layout() {
             .all(|page| page.source == PageSource::Ocr)
     );
 }
+
+/// The document's characters are counted in page order whatever the route:
+/// a scan first keeps its layout, and the native page past the document's
+/// characters is the one without - as the worker cuts them on the way out.
+#[test]
+fn a_mixed_documents_characters_are_counted_in_page_order() {
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    let line = "word ".repeat(16);
+    let full = format!("{line}\n").repeat(MAX_PAGE_CHARS / (line.len() + 1));
+    let mut pages = vec![page("", 1.0)];
+    pages.extend((1..5).map(|index| PdfPageInspection {
+        page_index: index,
+        ..page(&full, 0.0)
+    }));
+    let mut readings = vec![OcrResult::new(full.clone(), 91.0)];
+    readings.extend((1..5).map(|_| OcrResult::new("", 0.0)));
+    let (document, renders) = route(pages, readings);
+    assert_eq!(renders, 1);
+    assert_eq!(document.pages[0].source, PageSource::Ocr);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(built, [true, true, true, true, false]);
+}

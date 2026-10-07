@@ -406,10 +406,12 @@ than coming back half-read.
 A page read as its text has no layout built when the worker will cut that
 text on the way out - a page past `MAX_PAGE_CHARS` (2,000,000 characters),
 or past the document's first `MAX_DOCUMENT_CHARS` (8,000,000) - since a
-layout repeats its text several times over; every reader counts a
-document's characters the way the worker does when it sends them. A page
-read by OCR has its text written from its layout, so that layout is built,
-but a page the worker will cut lets it go as soon as the page is read.
+layout repeats its text several times over. Every reader counts a
+document's characters the way the worker does when it sends them, in page
+order whatever route each page took: a PDF's fast layouts are built when
+its pages are put back in order, not as they are first read. A page read
+by OCR has its text written from its layout, so that layout is built, but
+a page the worker will cut lets it go there.
 
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the

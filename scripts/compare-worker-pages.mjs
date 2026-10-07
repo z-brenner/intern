@@ -59,28 +59,60 @@ export function compareDocuments(name, before, after) {
   return { problems, routes, identical };
 }
 
-/** Reads every file with one worker process; resolves to {file: event}. */
+/**
+ * Reads every file with one worker process; resolves to {file: event}.
+ * Rejects if the worker cannot be started, writes a line that is not JSON,
+ * or exits before answering a request: a comparison that waited on a dead
+ * worker would wait forever.
+ */
 export async function readWithWorker(worker, files, environment = process.env) {
   const child = spawn(worker, [], { env: environment, stdio: ['pipe', 'pipe', 'ignore'] });
-  const lines = createInterface({ input: child.stdout });
   const pending = new Map();
+  let ended = null;
+  const fail = (reason) => {
+    ended ??= reason;
+    for (const { reject } of pending.values()) reject(ended);
+    pending.clear();
+  };
+  const closed = new Promise((done) => {
+    child.on('close', (code, signal) => {
+      fail(new Error(`worker ${worker} exited (${signal ?? code}) before answering`));
+      done();
+    });
+  });
+  child.on('error', (error) => fail(new Error(`worker ${worker} could not run: ${error.message}`)));
+  // A write to a worker that has died is answered by the exit above.
+  child.stdin.on('error', () => {});
+  const lines = createInterface({ input: child.stdout });
   lines.on('line', (line) => {
-    const response = JSON.parse(line);
+    let response;
+    try {
+      response = JSON.parse(line);
+    } catch {
+      fail(new Error(`worker ${worker} wrote a line that is not JSON: ${line.slice(0, 80)}`));
+      child.kill();
+      return;
+    }
     const event = response.event;
-    if (event.type !== 'parsed' && event.type !== 'error') return;
-    pending.get(response.request_id)?.(event);
+    if (event?.type !== 'parsed' && event?.type !== 'error') return;
+    pending.get(response.request_id)?.resolve(event);
+    pending.delete(response.request_id);
   });
   const results = {};
   for (const [index, file] of files.entries()) {
     const id = `r${index}`;
-    const event = await new Promise((done) => {
-      pending.set(id, done);
+    const event = await new Promise((resolveEvent, reject) => {
+      if (ended) {
+        reject(ended);
+        return;
+      }
+      pending.set(id, { resolve: resolveEvent, reject });
       child.stdin.write(`${JSON.stringify({ protocol_version: 1, request_id: id, command: { type: 'parse', path: resolve(file) } })}\n`);
     });
     results[file] = event;
   }
   child.stdin.end(`${JSON.stringify({ protocol_version: 1, request_id: 'shutdown', command: { type: 'shutdown' } })}\n`);
-  await new Promise((done) => child.on('close', done));
+  await closed;
   return results;
 }
 

@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -651,7 +650,7 @@ const MAX_OCR_WORKERS: usize = 8;
 /// waiting for OCR.
 enum PagePlan {
     Done {
-        page: ExtractedPage,
+        page: NativeRead,
         /// The page image this page would become, if it is the first page
         /// that wants one.
         vision: Option<VisionImage>,
@@ -736,10 +735,6 @@ where
     let page_count = inspections.len();
     let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
     let queue = limits.max_queued_rendered_pages.max(1);
-    // The document's characters, counted down as pages read as their text
-    // are built: a page the worker will cut has no layout built for it.
-    let characters = Cell::new(MAX_DOCUMENT_CHARS);
-
     let (plans, outcomes, failure) = std::thread::scope(|scope| {
         let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
         let mut plans = Vec::with_capacity(page_count);
@@ -771,7 +766,6 @@ where
                 started,
                 &mut pool,
                 vision_taken,
-                &characters,
             ) {
                 Ok(plan) => {
                     if matches!(plan, PagePlan::Done { .. }) {
@@ -823,7 +817,7 @@ where
         |inspection: &mut PdfPageInspection, route| read_runs(inspection, route, pdf, path, cancel);
     let document = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || assemble(plans, outcomes, &runs, &stop, &characters),
+        || assemble(plans, outcomes, &runs, &stop),
     )?;
     // A layout the time ran out on was left unbuilt; the document is not
     // returned half-read as if it were whole.
@@ -850,7 +844,6 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
-    characters: &Cell<usize>,
 ) -> Result<PagePlan, ExtractionError> {
     let page_index = inspection.page_index;
     let page_number = page_index + 1;
@@ -1002,7 +995,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || native_page(page_number, inspection, signals, route, &stop, characters),
+        || native_page(page_number, inspection, signals, route, &stop),
     );
     Ok(PagePlan::Done { page, vision })
 }
@@ -1105,17 +1098,16 @@ fn render_for_ocr(
 /// the page is past what the analysis takes on, or `stop` says the request
 /// is canceled or out of time, when it is read as on the fast route.
 ///
-/// A page read as its text has no layout built when the worker will cut
-/// that text on the way out (see [`goes_out_whole`]); `characters` is what
-/// is left of the document's characters, counted down page by page.
+/// A page read as its text has its layout built only when the pages are
+/// put in order (see [`NativeRead::finish`]), and only if the worker will
+/// send that text whole.
 fn native_page(
     page_number: usize,
     inspection: PdfPageInspection,
     signals: RouteSignals,
     route: PageRoute,
     stop: &dyn Fn() -> bool,
-    characters: &Cell<usize>,
-) -> ExtractedPage {
+) -> NativeRead {
     // A page past the analysis's bounds, or one the time ran out on, is
     // read as its text.
     let geometry = inspection
@@ -1125,37 +1117,69 @@ fn native_page(
         .and_then(|native| {
             crate::layout::geometry_layout(native, Vec::new(), signals, route, stop)
         });
-    let mut remaining = characters.get();
-    let (text, mut layout) = match geometry {
-        Some(layout) => {
-            // The page's text is written from its layout, which the bounds
-            // on the analysis already keep small; it still counts.
-            let text = crate::layout::linearize(&layout.blocks);
-            goes_out_whole(&text, &mut remaining);
-            (text, Some(layout))
+    let (text, layout, fast) = match geometry {
+        Some(mut layout) => {
+            // The page's text is written from this layout, which the bounds
+            // on the analysis already keep small.
+            crate::layout::number_blocks(page_number, &mut layout.blocks);
+            (crate::layout::linearize(&layout.blocks), Some(layout), None)
         }
-        None => {
-            let layout = goes_out_whole(&inspection.native_text, &mut remaining).then(|| {
-                crate::layout::fast_layout(
-                    &inspection.native_text,
-                    inspection.native.as_ref(),
-                    signals,
-                )
-            });
-            (inspection.native_text, layout)
-        }
+        None => (
+            inspection.native_text,
+            None,
+            Some(FastLayout {
+                native: inspection.native,
+                signals,
+            }),
+        ),
     };
-    characters.set(remaining);
-    if let Some(layout) = layout.as_mut() {
-        crate::layout::number_blocks(page_number, &mut layout.blocks);
+    NativeRead {
+        page: ExtractedPage {
+            page_number,
+            text,
+            source: PageSource::Native,
+            ocr_confidence: None,
+            vision_escalated: false,
+            layout,
+        },
+        fast,
     }
-    ExtractedPage {
-        page_number,
-        text,
-        source: PageSource::Native,
-        ocr_confidence: None,
-        vision_escalated: false,
-        layout,
+}
+
+/// What a fast layout is built from, kept until the pages are in order.
+struct FastLayout {
+    native: Option<NativePage>,
+    signals: RouteSignals,
+}
+
+/// A page read from its own text: with the layout its text was written
+/// from, or, read as its text, with what its fast layout would be built
+/// from.
+struct NativeRead {
+    page: ExtractedPage,
+    fast: Option<FastLayout>,
+}
+
+impl NativeRead {
+    /// The page, counted against the document's characters in page order
+    /// as the worker will count them (see [`goes_out_whole`]): a page read
+    /// as its text gets its fast layout only if it goes out whole - a
+    /// layout repeats its text several times over - and a page whose text
+    /// was written from its layout lets that layout go if it does not.
+    fn finish(self, characters: &mut usize) -> ExtractedPage {
+        let Self { mut page, fast } = self;
+        match fast {
+            Some(FastLayout { native, signals }) => {
+                if goes_out_whole(&page.text, characters) {
+                    let mut layout =
+                        crate::layout::fast_layout(&page.text, native.as_ref(), signals);
+                    crate::layout::number_blocks(page.page_number, &mut layout.blocks);
+                    page.layout = Some(layout);
+                }
+                page
+            }
+            None => counted(page, characters),
+        }
     }
 }
 
@@ -1176,8 +1200,11 @@ fn assemble(
     outcomes: Vec<OcrOutcome>,
     runs: &dyn Fn(&mut PdfPageInspection, PageRoute) -> Result<(), ExtractionError>,
     stop: &dyn Fn() -> bool,
-    characters: &Cell<usize>,
 ) -> Result<ExtractedDocument, ExtractionError> {
+    // The document's characters, counted down in page order as the worker
+    // will count them when it sends the pages: a page it will cut has no
+    // layout built, or keeps none.
+    let mut characters = MAX_DOCUMENT_CHARS;
     let mut outcomes = outcomes
         .into_iter()
         .map(|outcome| (outcome.page_index, outcome))
@@ -1188,7 +1215,7 @@ fn assemble(
     for (page_index, plan) in plans.into_iter().enumerate() {
         let outcome = outcomes.remove(&page_index);
         let (mut page, vision) = match plan {
-            PagePlan::Done { page, vision } => (page, vision),
+            PagePlan::Done { page, vision } => (page.finish(&mut characters), vision),
             PagePlan::Scan {
                 page_number,
                 corrupt,
@@ -1209,7 +1236,7 @@ fn assemble(
                 let size = sizes.first().copied().ok_or_else(unread)?;
                 let vision = vision.transpose()?;
                 (
-                    counted_in(
+                    counted(
                         crate::layout::ocr_page(
                             page_number,
                             reading,
@@ -1218,7 +1245,7 @@ fn assemble(
                             signals,
                             stop,
                         ),
-                        characters,
+                        &mut characters,
                     ),
                     vision,
                 )
@@ -1239,7 +1266,7 @@ fn assemble(
                     Some((reading, size, page_vision)) if reread_is_better(&reading, &signals) => {
                         let scale = display_width(&inspection) / f64::from(size.0.max(1));
                         (
-                            counted_in(
+                            counted(
                                 crate::layout::ocr_page(
                                     page_number,
                                     reading,
@@ -1248,7 +1275,7 @@ fn assemble(
                                     signals,
                                     stop,
                                 ),
-                                characters,
+                                &mut characters,
                             ),
                             page_vision,
                         )
@@ -1256,7 +1283,8 @@ fn assemble(
                     _ => {
                         let route = native_route(PageRoute::Ocr, &signals);
                         (
-                            native_page(page_number, inspection, signals, route, stop, characters),
+                            native_page(page_number, inspection, signals, route, stop)
+                                .finish(&mut characters),
                             vision,
                         )
                     }
@@ -1289,10 +1317,11 @@ fn assemble(
                     scale,
                     stop,
                 )
-                .map(|page| counted_in(page, characters))
+                .map(|page| counted(page, &mut characters))
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route, stop, characters)
+                    native_page(page_number, inspection, signals, route, stop)
+                        .finish(&mut characters)
                 });
                 (page, vision)
             }
@@ -1398,15 +1427,6 @@ fn counted(mut page: ExtractedPage, characters: &mut usize) -> ExtractedPage {
     if !goes_out_whole(&page.text, characters) {
         page.layout = None;
     }
-    page
-}
-
-/// [`counted`], against a document's characters shared between the stages
-/// that read its pages.
-fn counted_in(page: ExtractedPage, characters: &Cell<usize>) -> ExtractedPage {
-    let mut remaining = characters.get();
-    let page = counted(page, &mut remaining);
-    characters.set(remaining);
     page
 }
 
