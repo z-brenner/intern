@@ -463,8 +463,10 @@ pub struct StructureFigures {
     pub table_cell_recall: Option<f64>,
     pub kv_accuracy: Option<f64>,
     pub route_correct: Option<f64>,
-    pub pairs: usize,
-    pub pairs_in_order: usize,
+    #[serde(default)]
+    pub snippets: usize,
+    #[serde(default)]
+    pub snippets_in_order: usize,
     pub rows: usize,
     pub rows_found: usize,
     pub cells: usize,
@@ -484,8 +486,8 @@ impl StructureFigures {
             table_cell_recall: rounded(measure.table_cell_recall()),
             kv_accuracy: rounded(measure.kv_accuracy()),
             route_correct: rounded(measure.route_correct()),
-            pairs: measure.pairs,
-            pairs_in_order: measure.pairs_in_order,
+            snippets: measure.snippets,
+            snippets_in_order: measure.snippets_in_order,
             rows: measure.rows,
             rows_found: measure.rows_found,
             cells: measure.cells,
@@ -512,7 +514,7 @@ pub struct StructureRow {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StructureReport {
     /// Every count summed over the documents, each score the share of the
-    /// pooled items (pairs, rows, cells, labelled values, pages): a document with
+    /// pooled items (snippets, rows, cells, labelled values, pages): a document with
     /// forty table rows weighs forty times one with one. A document whose
     /// extraction failed is in it, every item missed.
     pub aggregate: StructureFigures,

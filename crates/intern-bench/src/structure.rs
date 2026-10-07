@@ -22,10 +22,13 @@
 //! the worker linearised as `| a | b |` is one line.
 //!
 //! * `reading_order_accuracy`: each snippet's position is its first
-//!   occurrence in the whole text (pages joined, normalised). A pair of
-//!   consecutive gold snippets is in order when both are found and the
-//!   first starts before the second. The score is the share of the n - 1
-//!   pairs in order, so a missing snippet breaks both pairs it belongs to.
+//!   occurrence in the whole text (pages joined, normalised). The snippets
+//!   in order are the most of the found ones whose positions rise in the
+//!   gold's order (a longest increasing subsequence), and the score is
+//!   their share of every gold snippet: a snippet not found is out of
+//!   order. Two whole columns read the wrong way round keep only the
+//!   longer column in order, where counting consecutive pairs would lose
+//!   only the one pair across the swap.
 //! * `table_row_accuracy`: a gold row is found when one line of its
 //!   table's region (below) holds all of its non-empty cells in order, each
 //!   after the end of the one before, with no cell of another row of the
@@ -427,12 +430,12 @@ pub struct RouteCheck {
 /// pools them by item.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct StructureMeasure {
-    /// Reading-order snippets, and how many were found at all.
+    /// Reading-order snippets, how many were found at all, and how many
+    /// of those the longest run in the gold's order holds.
     pub snippets: usize,
     pub snippets_found: usize,
-    /// Consecutive snippet pairs, and how many were in order.
-    pub pairs: usize,
-    pub pairs_in_order: usize,
+    #[serde(default)]
+    pub snippets_in_order: usize,
     /// Table rows with a non-empty cell, and how many sat on one line.
     pub rows: usize,
     pub rows_found: usize,
@@ -462,7 +465,7 @@ fn share(found: usize, total: usize) -> Option<f64> {
 
 impl StructureMeasure {
     pub fn reading_order_accuracy(&self) -> Option<f64> {
-        share(self.pairs_in_order, self.pairs)
+        share(self.snippets_in_order, self.snippets)
     }
 
     pub fn table_row_accuracy(&self) -> Option<f64> {
@@ -495,11 +498,13 @@ impl StructureMeasure {
     /// A document whose extraction failed: every item the gold lists is
     /// missed, every page with an expected route took none.
     pub fn unread(truth: &StructureTruth) -> Self {
-        let (snippets, pairs) = snippet_counts(truth);
         let (rows, cells) = table_counts(truth);
         Self {
-            snippets,
-            pairs,
+            snippets: truth
+                .reading_order
+                .iter()
+                .filter(|snippet| !normalise(snippet).is_empty())
+                .count(),
             rows,
             cells,
             key_values: truth
@@ -517,8 +522,7 @@ impl StructureMeasure {
     pub fn accumulate(&mut self, other: &Self) {
         self.snippets += other.snippets;
         self.snippets_found += other.snippets_found;
-        self.pairs += other.pairs;
-        self.pairs_in_order += other.pairs_in_order;
+        self.snippets_in_order += other.snippets_in_order;
         self.rows += other.rows;
         self.rows_found += other.rows_found;
         self.cells += other.cells;
@@ -530,14 +534,31 @@ impl StructureMeasure {
     }
 }
 
-/// Snippets, and the pairs they make.
-fn snippet_counts(truth: &StructureTruth) -> (usize, usize) {
-    let snippets = truth
-        .reading_order
-        .iter()
-        .filter(|snippet| !normalise(snippet).is_empty())
-        .count();
-    (snippets, snippets.saturating_sub(1))
+/// The indices of a longest strictly increasing run of `positions`, in
+/// order (the earliest such run where there are several).
+fn longest_increasing(positions: &[usize]) -> Vec<usize> {
+    let mut length = vec![1_usize; positions.len()];
+    let mut previous: Vec<Option<usize>> = vec![None; positions.len()];
+    for (index, position) in positions.iter().enumerate() {
+        for (earlier, before) in positions[..index].iter().enumerate() {
+            if before < position && length[earlier] + 1 > length[index] {
+                length[index] = length[earlier] + 1;
+                previous[index] = Some(earlier);
+            }
+        }
+    }
+    let Some(mut at) =
+        (0..positions.len()).max_by_key(|index| (length[*index], std::cmp::Reverse(*index)))
+    else {
+        return Vec::new();
+    };
+    let mut run = vec![at];
+    while let Some(before) = previous[at] {
+        run.push(before);
+        at = before;
+    }
+    run.reverse();
+    run
 }
 
 /// Rows with a cell, and non-empty cells.
@@ -594,24 +615,26 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
         .map(|snippet| find_bounded(&text, snippet, 0))
         .collect::<Vec<_>>();
     measure.snippets = snippets.len();
-    measure.snippets_found = positions.iter().flatten().count();
-    measure.pairs = snippets.len().saturating_sub(1);
-    for (index, pair) in positions.windows(2).enumerate() {
-        match pair {
-            [Some(first), Some(second)] if first < second => measure.pairs_in_order += 1,
-            [Some(_), Some(_)] => measure.misses.push(format!(
-                "reading order: \"{}\" comes before \"{}\"",
-                snippets[index + 1],
-                snippets[index]
-            )),
-            _ => {}
-        }
+    let found = positions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, position)| position.map(|position| (index, position)))
+        .collect::<Vec<_>>();
+    measure.snippets_found = found.len();
+    let mut in_order = vec![false; snippets.len()];
+    for run_index in longest_increasing(&found.iter().map(|(_, at)| *at).collect::<Vec<_>>()) {
+        in_order[found[run_index].0] = true;
+        measure.snippets_in_order += 1;
     }
-    for (snippet, position) in snippets.iter().zip(&positions) {
+    for ((snippet, position), in_order) in snippets.iter().zip(&positions).zip(in_order) {
         if position.is_none() {
             measure
                 .misses
                 .push(format!("reading order: \"{snippet}\" not found"));
+        } else if !in_order {
+            measure
+                .misses
+                .push(format!("reading order: \"{snippet}\" out of order"));
         }
     }
 
@@ -797,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn reading_order_is_the_share_of_consecutive_pairs_found_in_order() {
+    fn reading_order_is_the_longest_run_of_snippets_in_the_gold_order() {
         let truth = StructureTruth {
             reading_order: vec![
                 "Annual meeting".into(),
@@ -817,24 +840,71 @@ mod tests {
         );
         assert_eq!(read.reading_order_accuracy(), Some(1.0));
         // Row-interleaved: the second column's first snippet comes between
-        // the first column's two.
+        // the first column's two, so three of the four are in order.
         let interleaved = measure(
             &truth,
             &source(&["Annual meeting set Slip fees rise\nDock repairs begin Winter storage"]),
         );
-        assert_eq!(interleaved.pairs_in_order, 2);
-        assert_eq!(interleaved.reading_order_accuracy(), Some(2.0 / 3.0));
-        // A snippet OCR lost breaks both of its pairs.
+        assert_eq!(interleaved.snippets_in_order, 3);
+        assert_eq!(interleaved.reading_order_accuracy(), Some(0.75));
+        assert_eq!(
+            interleaved.misses,
+            vec!["reading order: \"Slip fees\" out of order"]
+        );
+        // A snippet OCR lost is out of order too.
         let lost = measure(
             &truth,
             &source(&["Annual meeting\nDock repalrs\nSlip fees\nWinter storage"]),
         );
         assert_eq!(lost.snippets_found, 3);
-        assert_eq!(lost.reading_order_accuracy(), Some(1.0 / 3.0));
-        assert!(
-            lost.misses[0].contains("\"Dock repairs\" not found"),
-            "{:?}",
-            lost.misses
+        assert_eq!(lost.reading_order_accuracy(), Some(0.75));
+        assert_eq!(
+            lost.misses,
+            vec!["reading order: \"Dock repairs\" not found"]
+        );
+    }
+
+    #[test]
+    fn two_columns_read_the_wrong_way_round_keep_only_the_longer_in_order() {
+        let first = [
+            "Annual meeting",
+            "Dock repairs",
+            "Slip fees",
+            "Winter storage",
+            "Fuel dock",
+            "Launch ramp",
+            "Guest moorings",
+        ];
+        let second = [
+            "Race committee",
+            "Junior sailing",
+            "Social calendar",
+            "Club burgee",
+        ];
+        let truth = StructureTruth {
+            reading_order: first
+                .iter()
+                .chain(&second)
+                .map(|s| (*s).to_owned())
+                .collect(),
+            ..StructureTruth::default()
+        };
+        let read = second
+            .iter()
+            .chain(&first)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
+        let swapped = measure(&truth, &source(&[read.as_str()]));
+        assert_eq!((swapped.snippets_found, swapped.snippets_in_order), (11, 7));
+        // About 0.64; counted by consecutive pairs it was 9 of 10.
+        assert_eq!(swapped.reading_order_accuracy(), Some(7.0 / 11.0));
+        assert_eq!(
+            swapped.misses,
+            second
+                .iter()
+                .map(|snippet| format!("reading order: \"{snippet}\" out of order"))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1163,7 +1233,7 @@ mod tests {
             unread.scores().map(|(_, value)| value),
             [Some(0.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)]
         );
-        assert_eq!((unread.pairs, unread.rows, unread.cells), (2, 2, 3));
+        assert_eq!((unread.snippets, unread.rows, unread.cells), (3, 2, 3));
         let mut pooled = measure(&truth, &source(&["a b c\nx\ny z\nk: v"]));
         assert_eq!(
             pooled.scores().map(|(_, value)| value),
