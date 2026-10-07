@@ -5,10 +5,10 @@
 /// or to later events.
 import { Flow } from '../lib/layout.mjs';
 import { Rng } from '../lib/rng.mjs';
-import { gold } from '../lib/gold.mjs';
+import { gold, structure } from '../lib/gold.mjs';
 import { addMonths, decimal, longDate, money, numericDate } from '../lib/format.mjs';
 import { COMMERCIAL, writeClauses } from './clauses.mjs';
-import { digitalPdf, result, signatureBlocks } from './common.mjs';
+import { digitalPdf, readingSnippets, result, signatureBlocks } from './common.mjs';
 
 function pageFooter(label) {
   return (page, { number, total }) => {
@@ -432,7 +432,7 @@ export function leaseTwoColumn() {
   flow.paragraph(`This Retail Lease is made as of ${longDate(effective)} (the "Effective Date") between ${landlord}, a North Carolina limited liability company ("Landlord"), and ${tenant}, a North Carolina limited liability company ("Tenant").`, { size: 10 });
   flow.heading('Article 1. Basic Lease Information', { level: 3, size: 10 });
   const base = [3400, 3502, 3607, 3715, 3827];
-  flow.table([{ header: 'Term', width: 0.3 }, { header: 'Provision', width: 0.7 }], [
+  const basics = [
     ['Premises', 'Suite 108, approximately 2,140 rentable square feet, Oakhaven Commons, 1800 Lamplighter Drive, Briarport, NC 27519'],
     ['Commencement Date', `${longDate(commencement)}, or the date Landlord delivers the Premises with Landlord's Work substantially complete, if later`],
     ['Rent Commencement Date', `${longDate(rentStart)} (sixty days of free base rent for Tenant's build-out)`],
@@ -442,7 +442,8 @@ export function leaseTwoColumn() {
     ['Security Deposit', money(1450000)],
     ['Permitted Use', 'Retail sale of loose-leaf tea, tea ware, and pastries; on-premises tea service with seating for up to 40'],
     ['Guarantor', 'Linnea Thorne, individually'],
-  ], { size: 8.5, border: 'grid' });
+  ];
+  flow.table([{ header: 'Term', width: 0.3 }, { header: 'Provision', width: 0.7 }], basics, { size: 8.5, border: 'grid' });
   flow.startColumns(2, 20);
   const clauses = [
     ['Premises and Common Areas', `Landlord leases the Premises to Tenant for the Term. Tenant may use, in common with other tenants, the parking areas, sidewalks, and other common areas of the Shopping Center, subject to rules Landlord adopts from time to time. Landlord may change the common areas if access to and visibility of the Premises are not materially impaired.`],
@@ -480,6 +481,15 @@ export function leaseTwoColumn() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['multi_column', 'contract', 'competing_dates', 'table'],
+    structure: structure({
+      // Page 1's columns, which start after the basic lease information.
+      readingOrder: (() => {
+        const lines = text[0].split('\n');
+        return readingSnippets(lines.slice(lines.findIndex((line) => line.startsWith('2. Premises and Common Areas')), -1), 8);
+      })(),
+      tables: [[['Term', 'Provision'], ...basics]],
+      routes: { 1: 'layout' },
+    }),
     notes: `Two-column body, written column by column so the text layer reads in order. The lease is made as of ${longDate(effective)}; the basic lease information table also gives a Commencement Date (${longDate(commencement)}), a Rent Commencement Date (${longDate(rentStart)}), and an Expiration Date (${longDate(expiration)}). The commencement date is accepted because the prompt treats a commencement date as an agreement's own date; the rent start and expiration are traps.`,
     gold: gold({
       type: 'Retail Lease',

@@ -264,6 +264,106 @@
       "file": "scan-patient-intake-form.png",
       "size": 37700,
       "sha256": "d54b80b71aa477bf62f78ba80b945ede5f56bed449dcee3b204a07be70ad569b"
+    },
+    {
+      "file": "newsletter-three-column.pdf",
+      "size": 3406,
+      "sha256": "2c887302e972588a57db0b7018a4173be4d8fcfcc1bc92bd65aa78f603ed160b"
+    },
+    {
+      "file": "agreement-two-column-footnotes.pdf",
+      "size": 3506,
+      "sha256": "a83f8c4cc53809787511b1f6b81b430b50a0675a8b84e040ac9ddec61521a97c"
+    },
+    {
+      "file": "meeting-notice-columns.pdf",
+      "size": 2419,
+      "sha256": "9ffd2768889e86b0e30095ef66a95d773da45db1d44524d53c364ec7122f0943"
+    },
+    {
+      "file": "meeting-notice-interleaved.pdf",
+      "size": 2435,
+      "sha256": "b4f3110cdc28413e2ef79cd95e1f4ccc36f2b179818d4bac4cde7ca2f294a496"
+    },
+    {
+      "file": "meeting-notice-reversed.pdf",
+      "size": 2427,
+      "sha256": "db407b44e9ac9f2223e08b0b0bcd80faae35c308f45d5585e450dede9fa7bd77"
+    },
+    {
+      "file": "rate-confirmation-rotated.pdf",
+      "size": 2967,
+      "sha256": "70855077c126f4123cd5e2803c44c10bfdc06e9909568ab5d3f066b700bc46ee"
+    },
+    {
+      "file": "inspection-log-ruled-2p.pdf",
+      "size": 5985,
+      "sha256": "478a0a6921741e80a3590d59a1cf86f769550f2b0ab2675c97261b5708c64ca5"
+    },
+    {
+      "file": "price-list-unruled.pdf",
+      "size": 2711,
+      "sha256": "5dc09b9d2e30b169b85ca818b31649f8d3b78a4c104a788201c1951b88923dac"
+    },
+    {
+      "file": "invoice-label-above.pdf",
+      "size": 2140,
+      "sha256": "bc5c216332548ba3886b35c4514ffdb1ae7eea7a2e630f4b03823202fd198801"
+    },
+    {
+      "file": "invoice-right-aligned.pdf",
+      "size": 2167,
+      "sha256": "0278e8e7eb5a1990e044534950a6d97d3ed2b189dffea24ca483616396729144"
+    },
+    {
+      "file": "invoice-boxed-grid.pdf",
+      "size": 2306,
+      "sha256": "db58e4bdb68735258e9e581a1225f3e9c48d6c58b2064b428d78b55f9005fca9"
+    },
+    {
+      "file": "benefits-change-checkbox-form.pdf",
+      "size": 2322,
+      "sha256": "c9b22a259cf4f170b59ea6da6e81ca44596cba3faf6122b598266d9f07a492ab"
+    },
+    {
+      "file": "loss-notice-boxed-fields.pdf",
+      "size": 2098,
+      "sha256": "c7ab3428fc1f80209ca5423087426d11ecdff1555a5b7983d6c2661d0c45d332"
+    },
+    {
+      "file": "scan-rotated-page-in-pdf.pdf",
+      "size": 58488,
+      "sha256": "f4649078a13a307a3b12b6cf70b7533848acef985035eb222344230557831116"
+    },
+    {
+      "file": "scan-cancellation-notice-150dpi.pdf",
+      "size": 57287,
+      "sha256": "26f6b1a81f9186d7aee726ef75bfa6d2e0fab0de0319d26b1c1ae1f90cf41428"
+    },
+    {
+      "file": "scan-remittance-advice-120dpi.png",
+      "size": 592057,
+      "sha256": "35367bbdd6b1cd84bbf68585f7270d0cd3fd3eac6189c2dedb52d5b35266b4bf"
+    },
+    {
+      "file": "scan-mixed-middle-page.pdf",
+      "size": 37599,
+      "sha256": "22d7bc5f08899ea1345ca6f4c98092b70a3ebbf623dcd85d5402adcfc7e4c578"
+    },
+    {
+      "file": "mixed-signature-region.pdf",
+      "size": 359329,
+      "sha256": "7be50d58e3575f499e03d53ff1ef2642a9700cab7b36eac80f6c935e84a101d5"
+    },
+    {
+      "file": "scan-certificate-of-insurance.pdf",
+      "size": 44518,
+      "sha256": "909413ffedb6851a847356b9919529d6430176652e8b3c555f9fa1efb8400375"
+    },
+    {
+      "file": "scan-bill-of-lading.pdf",
+      "size": 23385,
+      "sha256": "8d90522be0e5666009c73a18b8bb72e94d05b9269f863e0efcb1eed6951ffe47"
     }
   ]
 }

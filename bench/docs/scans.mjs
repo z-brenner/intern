@@ -5,7 +5,7 @@
 /// exactly the text drawn on every scanned page.
 import { Flow, Page, pageText, signatureStroke, visualText } from '../lib/layout.mjs';
 import { Rng } from '../lib/rng.mjs';
-import { gold } from '../lib/gold.mjs';
+import { gold, structure } from '../lib/gold.mjs';
 import { boxBlur, downsample, grain, lowContrast, pdfImage, rasterize, rotate, skew, speckle, threshold } from '../lib/raster.mjs';
 import { buildPdf } from '../lib/pdf.mjs';
 import { addDays, amount, longDate, money, numericDate, shortMonthDate } from '../lib/format.mjs';
@@ -967,6 +967,10 @@ export function scanPatientIntakeForm() {
     textLayer: 'scan',
     pages: 1,
     categories: ['form', 'healthcare', 'image_only_scan', 'png', 'competing_dates'],
+    structure: structure({
+      keyValues: [['Full legal name', patient], ['Date of birth', numericDate(birth)], ['Insurance plan', 'Meadowlark Health Plan'], ['Member ID', memberId], ['Coverage effective', numericDate(coverage)], ['Requested physician', 'Dr. Saoirse Brightwater']],
+      routes: { 1: 'ocr' },
+    }),
     notes: `A filled clinic form scanned as an image: values in boxes under small captions, two and three boxes to a row, so OCR order across a row is not reading order. The form is dated by the signature date box (${numericDate(signed)}); the date of birth (${numericDate(birth)}) and insurance coverage date (${numericDate(coverage)}) are traps. The patient is the party; the emergency contact and requested physician are not.`,
     ocrTruth: truth,
     gold: gold({

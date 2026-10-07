@@ -218,7 +218,105 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Invoice No.",
+                "Invoice Date",
+                "Customer PO",
+                "PO Date",
+                "Ship Date",
+                "Terms",
+                "Due Date"
+              ],
+              [
+                "INV-20417",
+                "03/04/2026",
+                "PO-88213",
+                "02/11/2026",
+                "02/27/2026",
+                "Net 30",
+                "04/03/2026"
+              ]
+            ]
+          },
+          {
+            "rows": [
+              [
+                "Item",
+                "Description",
+                "Qty",
+                "Unit Price",
+                "Amount"
+              ],
+              [
+                "HFW-DC48",
+                "Curved-glass refrigerated pastry display case, 48 in., walnut base",
+                "1",
+                "2,385.00",
+                "2,385.00"
+              ],
+              [
+                "HFW-SH12",
+                "Tiered bread shelving, powder-coated steel, 72 x 18 in.",
+                "3",
+                "264.50",
+                "793.50"
+              ],
+              [
+                "HFW-CT06",
+                "Point-of-sale counter top, quartz, 6 ft., with cut-out",
+                "1",
+                "548.25",
+                "548.25"
+              ],
+              [
+                "HFW-LBR",
+                "On-site installation and leveling, 2 technicians (hours)",
+                "6",
+                "95.00",
+                "570.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Invoice Date",
+            "value": "03/04/2026"
+          },
+          {
+            "key": "PO Date",
+            "value": "02/11/2026"
+          },
+          {
+            "key": "Ship Date",
+            "value": "02/27/2026"
+          },
+          {
+            "key": "Due Date",
+            "value": "04/03/2026"
+          },
+          {
+            "key": "BILL TO",
+            "value": "Quillon Ridge Bakery, Inc."
+          },
+          {
+            "key": "SHIP TO",
+            "value": "Quillon Ridge Bakery - Harbor Street Cafe"
+          },
+          {
+            "key": "TOTAL DUE (USD)",
+            "value": "$4,805.98"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "invoice-layout-only",
@@ -308,7 +406,83 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Item",
+                "Description",
+                "Qty",
+                "Price",
+                "Extended"
+              ],
+              [
+                "IMC-2210",
+                "Two-part epoxy barrier coat, grey, 4 gal kit",
+                "12",
+                "318.40",
+                "3,820.80"
+              ],
+              [
+                "IMC-4415",
+                "Copper-free ablative antifouling, black, 1 gal",
+                "30",
+                "179.25",
+                "5,377.50"
+              ],
+              [
+                "IMC-0090",
+                "Solvent reducer #90, 1 gal",
+                "8",
+                "44.50",
+                "356.00"
+              ],
+              [
+                "IMC-SVC",
+                "Technical rep site visit, Dock C haul-out (half day)",
+                "1",
+                "650.00",
+                "650.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Invoice #",
+            "value": "7731-B"
+          },
+          {
+            "key": "Invoice Date",
+            "value": "17-Feb-2026"
+          },
+          {
+            "key": "Order Date",
+            "value": "03-Feb-2026"
+          },
+          {
+            "key": "Customer #",
+            "value": "C-00418"
+          },
+          {
+            "key": "Due",
+            "value": "19-Mar-2026"
+          },
+          {
+            "key": "SOLD TO",
+            "value": "Thornbury Harbor Marina LLC"
+          },
+          {
+            "key": "Balance Due",
+            "value": "$10,616.30"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "account-statement",
@@ -545,7 +719,100 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "PO Number",
+                "PO Date",
+                "Buyer",
+                "Ship Via",
+                "F.O.B.",
+                "Payment Terms"
+              ],
+              [
+                "LR-PO-260117",
+                "January 29, 2026",
+                "Juniper Okonkwo",
+                "Best way, prepaid",
+                "Destination",
+                "2% 10, Net 45"
+              ]
+            ]
+          },
+          {
+            "rows": [
+              [
+                "Line",
+                "Part No.",
+                "Description",
+                "Qty",
+                "Unit Price",
+                "Ext. Price"
+              ],
+              [
+                "1",
+                "KI-SM57-24",
+                "Brushless servo motor, 400 W, 24 V, IP65",
+                "120",
+                "312.75",
+                "37,530.00"
+              ],
+              [
+                "2",
+                "KI-ENC-17A",
+                "Absolute rotary encoder, 17-bit, hollow shaft",
+                "120",
+                "88.40",
+                "10,608.00"
+              ],
+              [
+                "3",
+                "KI-DRV-2",
+                "Dual-axis servo drive, EtherCAT",
+                "60",
+                "465.00",
+                "27,900.00"
+              ],
+              [
+                "4",
+                "KI-CAB-5M",
+                "Shielded motor/feedback cable assembly, 5 m",
+                "240",
+                "31.25",
+                "7,500.00"
+              ],
+              [
+                "5",
+                "KI-CAL",
+                "Factory calibration certificate per lot",
+                "4",
+                "225.00",
+                "900.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "VENDOR",
+            "value": "Kestrel Instruments Ltd."
+          },
+          {
+            "key": "SHIP TO",
+            "value": "Lamplighter Robotics Inc. - Receiving Dock 3"
+          },
+          {
+            "key": "Order Total (USD)",
+            "value": "$84,438.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "services-agreement",
@@ -1989,7 +2256,68 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "to rules Landlord adopts",
+          "the greater of the",
+          "charge of five percent",
+          "the next installments, and",
+          "Saturday), and will not",
+          "demised HVAC unit. Landlord",
+          "negligence, but if an",
+          "with a licensed contractor"
+        ],
+        "tables": [
+          {
+            "rows": [
+              [
+                "Term",
+                "Provision"
+              ],
+              [
+                "Premises",
+                "Suite 108, approximately 2,140 rentable square feet, Oakhaven Commons, 1800 Lamplighter Drive, Briarport, NC 27519"
+              ],
+              [
+                "Commencement Date",
+                "July 1, 2026, or the date Landlord delivers the Premises with Landlord's Work substantially complete, if later"
+              ],
+              [
+                "Rent Commencement Date",
+                "September 1, 2026 (sixty days of free base rent for Tenant's build-out)"
+              ],
+              [
+                "Expiration Date",
+                "June 30, 2031"
+              ],
+              [
+                "Base Rent",
+                "Year 1: $34.00 per sq. ft.; Year 2: $35.02 per sq. ft.; Year 3: $36.07 per sq. ft.; Year 4: $37.15 per sq. ft.; Year 5: $38.27 per sq. ft."
+              ],
+              [
+                "Additional Rent",
+                "Tenant's Share (3.1%) of Operating Costs, Taxes, and Insurance; 2026 estimate $7.85 per sq. ft."
+              ],
+              [
+                "Security Deposit",
+                "$14,500.00"
+              ],
+              [
+                "Permitted Use",
+                "Retail sale of loose-leaf tea, tea ware, and pastries; on-premises tea service with seating for up to 40"
+              ],
+              [
+                "Guarantor",
+                "Linnea Thorne, individually"
+              ]
+            ]
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "declarations-interleaved",
@@ -2107,7 +2435,79 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "POLICY NUMBER",
+          "Wexcombe Bicycle Cooperative 2214 Kingsfold Avenue Westharrow, MI 49103",
+          "Retail bicycle sales, repair, and rental",
+          "AGENT / PRODUCER",
+          "Producer: Selby Marchetti Agent code 00-4417",
+          "DATE ISSUED",
+          "TOTAL ADVANCE PREMIUM",
+          "LOCATION SCHEDULE"
+        ],
+        "tables": [
+          {
+            "rows": [
+              [
+                "COVERAGE PARTS",
+                "PREMIUM"
+              ],
+              [
+                "Commercial Property",
+                "$4,812.00"
+              ],
+              [
+                "Commercial General Liability",
+                "$3,205.00"
+              ],
+              [
+                "Commercial Inland Marine",
+                "$644.00"
+              ],
+              [
+                "Commercial Crime",
+                "$318.00"
+              ],
+              [
+                "Terrorism (TRIA)",
+                "$97.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "POLICY NUMBER",
+            "value": "CPP-4471-208815"
+          },
+          {
+            "key": "NAMED INSURED",
+            "value": "Wexcombe Bicycle Cooperative"
+          },
+          {
+            "key": "FORM OF BUSINESS",
+            "value": "Cooperative corporation"
+          },
+          {
+            "key": "DATE ISSUED",
+            "value": "06/18/2026"
+          },
+          {
+            "key": "PRIOR POLICY",
+            "value": "CPP-4471-197322"
+          },
+          {
+            "key": "TOTAL ADVANCE PREMIUM",
+            "value": "$9,076.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout",
+          "2": "layout"
+        }
+      }
     },
     {
       "id": "annual-report-excerpt-8p",
@@ -2325,7 +2725,38 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "key_values": [
+          {
+            "key": "1. Legal business name (as shown on your income tax return)",
+            "value": "Emberglow Coatings Ltd."
+          },
+          {
+            "key": "3. Federal employer identification number (EIN)",
+            "value": "84-0293157"
+          },
+          {
+            "key": "6. Date of incorporation",
+            "value": "11/03/2014"
+          },
+          {
+            "key": "14. General liability carrier",
+            "value": "Highmeadow Casualty Company"
+          },
+          {
+            "key": "16. Policy expiration date",
+            "value": "12/31/2026"
+          },
+          {
+            "key": "22. Date signed",
+            "value": "04/22/2026"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "change-order-form",
@@ -2442,7 +2873,78 @@
           }
         }
       },
-      "ocr_truth": null
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Reference",
+                "Description",
+                "Amount"
+              ],
+              [
+                "RFI 41",
+                "Replace specified skylight glazing in the reading room with laminated low-E insulating units",
+                "$18,420.00"
+              ],
+              [
+                "ASI 12",
+                "Add structural steel lintel and flashing at the relocated north entry",
+                "$6,215.00"
+              ],
+              [
+                "PCO 58",
+                "Owner-requested additional data drops (24) and two floor boxes in the teen area",
+                "$4,887.50"
+              ],
+              [
+                "PCO 61",
+                "Unforeseen condition: abandoned fuel oil tank removal and soil disposal at the east addition",
+                "$13,073.00"
+              ],
+              [
+                "PCO 63",
+                "Delete bicycle rack allowance (owner to furnish)",
+                "($3,500.00)"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "TO OWNER",
+            "value": "Briarport Library District"
+          },
+          {
+            "key": "TO CONTRACTOR",
+            "value": "Stonebridge Builders Inc."
+          },
+          {
+            "key": "CHANGE ORDER NUMBER",
+            "value": "006"
+          },
+          {
+            "key": "DATE",
+            "value": "05/07/2026"
+          },
+          {
+            "key": "CONTRACT DATE",
+            "value": "01/15/2025"
+          },
+          {
+            "key": "The original Contract Sum was",
+            "value": "$4,812,000.00"
+          },
+          {
+            "key": "The new Contract Sum including this Change Order will be",
+            "value": "$4,947,525.50"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      }
     },
     {
       "id": "board-minutes",
@@ -6253,7 +6755,3957 @@
           "MHP-60218843",
           "77120"
         ]
+      },
+      "structure": {
+        "key_values": [
+          {
+            "key": "Full legal name",
+            "value": "Ione Kowalczyk"
+          },
+          {
+            "key": "Date of birth",
+            "value": "11/23/1990"
+          },
+          {
+            "key": "Insurance plan",
+            "value": "Meadowlark Health Plan"
+          },
+          {
+            "key": "Member ID",
+            "value": "MHP-60218843"
+          },
+          {
+            "key": "Coverage effective",
+            "value": "01/01/2026"
+          },
+          {
+            "key": "Requested physician",
+            "value": "Dr. Saoirse Brightwater"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr"
+        }
       }
+    },
+    {
+      "id": "newsletter-three-column",
+      "file": "newsletter-three-column.pdf",
+      "title": "Homeowners association newsletter set in three columns",
+      "kind": "newsletter",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "multi_column",
+        "complex_pdf",
+        "competing_dates",
+        "irrelevant_names"
+      ],
+      "notes": "A one-page newsletter under a full-width masthead, its eight articles set in three narrow columns. The issue is dated in the masthead (September 14, 2026); the meeting (October 22, 2026), the pool closing (September 27, 2026), the start of dock repairs (October 5, 2026) and the assessment due date (November 30, 2026) are traps in the body. Written column by column, so a reader that follows the stream reads the right order; one that reads across the page does not. The association issues it; the contractor, the landscaper, the manager and the candidates are not parties.",
+      "gold": {
+        "document_type": "Newsletter",
+        "acceptable_types": [
+          "Homeowners Association Newsletter",
+          "Association Newsletter"
+        ],
+        "document_date": "2026-09-14",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-10-22",
+            "why": "date of the annual meeting"
+          },
+          {
+            "date": "2026-09-27",
+            "why": "pool closing"
+          },
+          {
+            "date": "2026-10-05",
+            "why": "start of dock repairs"
+          },
+          {
+            "date": "2026-11-30",
+            "why": "special assessment due date"
+          }
+        ],
+        "parties": [
+          "Saltmarsh Point Homeowners Association"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Saltmarsh Point Homeowners Association",
+            "role": "issuer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Brackwell Marine Construction LLC",
+            "why": "contractor surveying the seawall"
+          },
+          {
+            "name": "Fernhollow Grounds Care",
+            "why": "grounds contractor"
+          },
+          {
+            "name": "Tamsin Oyelaran",
+            "why": "community manager"
+          },
+          {
+            "name": "Desmond Achterberg",
+            "why": "board candidate"
+          }
+        ],
+        "description_facts": [
+          [
+            "$1,150",
+            "1,150"
+          ],
+          [
+            "$186,400",
+            "186,400"
+          ],
+          [
+            "October 22, 2026",
+            "October 22"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "annual meeting",
+          "special assessment",
+          "seawall",
+          "pool"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "September 14, 2026"
+          ],
+          "party_text": {
+            "Saltmarsh Point Homeowners Association": [
+              "Saltmarsh Point Homeowners Association"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "in the Grange Hall,",
+          "Survey Findings In July",
+          "The south wall, rebuilt",
+          "cover the balance and",
+          "on the community dock",
+          "Board Candidates Three seats",
+          "association website. Pool Closing",
+          "month, unchanged from the",
+          "Street will be limited"
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "agreement-two-column-footnotes",
+      "file": "agreement-two-column-footnotes.pdf",
+      "title": "Seed supply agreement: full-width title, two columns of terms, footnotes",
+      "kind": "contract",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 2,
+      "categories": [
+        "multi_column",
+        "contract",
+        "competing_dates",
+        "referenced_agreement"
+      ],
+      "notes": "Page 1 opens with a full-width title and preamble, sets ten sections in two columns, and ends with footnotes across the page; page 2 is the signature page. The agreement is dated as of March 2, 2026 in the preamble. The superseded letter of intent (December 9, 2025), the delivery deadline (September 30, 2026) and the end of the term (December 31, 2027) are all in footnotes, which a reader must keep apart from the columns. Between the seed company and the growers' cooperative.",
+      "gold": {
+        "document_type": "Seed Production and Supply Agreement",
+        "acceptable_types": [
+          "Seed Supply Agreement",
+          "Supply Agreement",
+          "Seed Production Agreement"
+        ],
+        "document_date": "2026-03-02",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2025-12-09",
+            "why": "superseded letter of intent"
+          },
+          {
+            "date": "2026-09-30",
+            "why": "delivery deadline"
+          },
+          {
+            "date": "2027-12-31",
+            "why": "end of the term"
+          }
+        ],
+        "parties": [
+          "Larkhaven Seed Company",
+          "Prairie Wren Growers Cooperative"
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Larkhaven Seed Company",
+            "role": "buyer"
+          },
+          {
+            "name": "Prairie Wren Growers Cooperative",
+            "role": "seller"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ilse Brannagan",
+            "why": "signatory"
+          },
+          {
+            "name": "Thaddeus Okonkwo",
+            "why": "signatory"
+          }
+        ],
+        "description_facts": [
+          [
+            "$18.40",
+            "18.40"
+          ],
+          [
+            "640 acres",
+            "640"
+          ],
+          [
+            "soybean"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "seed",
+          "production",
+          "supply",
+          "bushel"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "March 2, 2026"
+          ],
+          "party_text": {
+            "Larkhaven Seed Company": [
+              "Larkhaven Seed Company"
+            ],
+            "Prairie Wren Growers Cooperative": [
+              "Prairie Wren Growers Cooperative"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "SEED PRODUCTION AND SUPPLY AGREEMENT",
+          "and Hamilton Counties, Iowa.",
+          "growing season. 2. Production.",
+          "at any reasonable time.",
+          "in Ames. Company will",
+          "to Company when each",
+          "within 30 days after",
+          "and 4. 9. Term.",
+          "parties, and may be",
+          "supersedes the letter of intent"
+        ],
+        "expected_routes": {
+          "1": "layout",
+          "2": "fast"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "meeting-notice-columns",
+      "file": "meeting-notice-columns.pdf",
+      "title": "Credit union notice of a special members' meeting, two columns written column by column",
+      "kind": "notice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "multi_column",
+        "notice",
+        "competing_dates",
+        "stream_order"
+      ],
+      "notes": "One of three files that are the same page to the eye and differ only in the order the text is written into the content stream: here column by column, the order it is read in. The notice is dated August 3, 2026 under its heading; the meeting (September 15, 2026), the record date (July 31, 2026), the ballot deadline (September 11, 2026) and the merger's proposed effective date (January 1, 2027) are traps. The credit union calling the meeting is the party; its merger partner and the teller are not.",
+      "gold": {
+        "document_type": "Notice of Special Meeting of Members",
+        "acceptable_types": [
+          "Notice of Special Meeting",
+          "Special Meeting Notice"
+        ],
+        "document_date": "2026-08-03",
+        "acceptable_dates": [],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-09-15",
+            "why": "date of the meeting"
+          },
+          {
+            "date": "2026-07-31",
+            "why": "record date"
+          },
+          {
+            "date": "2026-09-11",
+            "why": "ballot deadline"
+          },
+          {
+            "date": "2027-01-01",
+            "why": "proposed effective date of the merger"
+          }
+        ],
+        "parties": [
+          "Larchmont Valley Federal Credit Union"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Larchmont Valley Federal Credit Union",
+            "role": "issuer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ironbridge Community Credit Union",
+            "why": "merger partner"
+          },
+          {
+            "name": "Cobbleford Election Services",
+            "why": "independent teller"
+          },
+          {
+            "name": "Corinne Abernethy-Vale",
+            "why": "board secretary who signs"
+          }
+        ],
+        "description_facts": [
+          [
+            "Ironbridge Community Credit Union",
+            "Ironbridge"
+          ],
+          [
+            "merge",
+            "merger"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "special meeting",
+          "members",
+          "ballot"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "August 3, 2026"
+          ],
+          "party_text": {
+            "Larchmont Valley Federal Credit Union": [
+              "Larchmont Valley Federal Credit Union"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "NOTICE OF SPECIAL MEETING OF MEMBERS",
+          "held on September 15,",
+          "registration. Purpose of",
+          "a state-chartered credit union",
+          "of the continuing credit",
+          "business on July 31,",
+          "to Vote Members may",
+          "not vote. Written Ballots",
+          "date will not be",
+          "recommending the merger are",
+          "By order of the Board of Directors"
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "meeting-notice-interleaved",
+      "file": "meeting-notice-interleaved.pdf",
+      "title": "Credit union notice of a special members' meeting, two columns written row by row",
+      "kind": "notice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "multi_column",
+        "complex_pdf",
+        "notice",
+        "competing_dates",
+        "stream_order"
+      ],
+      "notes": "One of three files that are the same page to the eye and differ only in the order the text is written into the content stream: here row by row across both columns, so each left-column line is followed by the right-column line beside it. The notice is dated August 3, 2026 under its heading; the meeting (September 15, 2026), the record date (July 31, 2026), the ballot deadline (September 11, 2026) and the merger's proposed effective date (January 1, 2027) are traps. The credit union calling the meeting is the party; its merger partner and the teller are not.",
+      "gold": {
+        "document_type": "Notice of Special Meeting of Members",
+        "acceptable_types": [
+          "Notice of Special Meeting",
+          "Special Meeting Notice"
+        ],
+        "document_date": "2026-08-03",
+        "acceptable_dates": [],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-09-15",
+            "why": "date of the meeting"
+          },
+          {
+            "date": "2026-07-31",
+            "why": "record date"
+          },
+          {
+            "date": "2026-09-11",
+            "why": "ballot deadline"
+          },
+          {
+            "date": "2027-01-01",
+            "why": "proposed effective date of the merger"
+          }
+        ],
+        "parties": [
+          "Larchmont Valley Federal Credit Union"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Larchmont Valley Federal Credit Union",
+            "role": "issuer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ironbridge Community Credit Union",
+            "why": "merger partner"
+          },
+          {
+            "name": "Cobbleford Election Services",
+            "why": "independent teller"
+          },
+          {
+            "name": "Corinne Abernethy-Vale",
+            "why": "board secretary who signs"
+          }
+        ],
+        "description_facts": [
+          [
+            "Ironbridge Community Credit Union",
+            "Ironbridge"
+          ],
+          [
+            "merge",
+            "merger"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "special meeting",
+          "members",
+          "ballot"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "August 3, 2026"
+          ],
+          "party_text": {
+            "Larchmont Valley Federal Credit Union": [
+              "Larchmont Valley Federal Credit Union"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "NOTICE OF SPECIAL MEETING OF MEMBERS",
+          "held on September 15,",
+          "registration. Purpose of",
+          "a state-chartered credit union",
+          "of the continuing credit",
+          "business on July 31,",
+          "to Vote Members may",
+          "not vote. Written Ballots",
+          "date will not be",
+          "recommending the merger are",
+          "By order of the Board of Directors"
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "meeting-notice-reversed",
+      "file": "meeting-notice-reversed.pdf",
+      "title": "Credit union notice of a special members' meeting, two columns written back to front",
+      "kind": "notice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "multi_column",
+        "complex_pdf",
+        "notice",
+        "competing_dates",
+        "stream_order"
+      ],
+      "notes": "One of three files that are the same page to the eye and differ only in the order the text is written into the content stream: here back to front: the signature line first and the heading last. The notice is dated August 3, 2026 under its heading; the meeting (September 15, 2026), the record date (July 31, 2026), the ballot deadline (September 11, 2026) and the merger's proposed effective date (January 1, 2027) are traps. The credit union calling the meeting is the party; its merger partner and the teller are not.",
+      "gold": {
+        "document_type": "Notice of Special Meeting of Members",
+        "acceptable_types": [
+          "Notice of Special Meeting",
+          "Special Meeting Notice"
+        ],
+        "document_date": "2026-08-03",
+        "acceptable_dates": [],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-09-15",
+            "why": "date of the meeting"
+          },
+          {
+            "date": "2026-07-31",
+            "why": "record date"
+          },
+          {
+            "date": "2026-09-11",
+            "why": "ballot deadline"
+          },
+          {
+            "date": "2027-01-01",
+            "why": "proposed effective date of the merger"
+          }
+        ],
+        "parties": [
+          "Larchmont Valley Federal Credit Union"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Larchmont Valley Federal Credit Union",
+            "role": "issuer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ironbridge Community Credit Union",
+            "why": "merger partner"
+          },
+          {
+            "name": "Cobbleford Election Services",
+            "why": "independent teller"
+          },
+          {
+            "name": "Corinne Abernethy-Vale",
+            "why": "board secretary who signs"
+          }
+        ],
+        "description_facts": [
+          [
+            "Ironbridge Community Credit Union",
+            "Ironbridge"
+          ],
+          [
+            "merge",
+            "merger"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "special meeting",
+          "members",
+          "ballot"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "August 3, 2026"
+          ],
+          "party_text": {
+            "Larchmont Valley Federal Credit Union": [
+              "Larchmont Valley Federal Credit Union"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "NOTICE OF SPECIAL MEETING OF MEMBERS",
+          "held on September 15,",
+          "registration. Purpose of",
+          "a state-chartered credit union",
+          "of the continuing credit",
+          "business on July 31,",
+          "to Vote Members may",
+          "not vote. Written Ballots",
+          "date will not be",
+          "recommending the merger are",
+          "By order of the Board of Directors"
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "rate-confirmation-rotated",
+      "file": "rate-confirmation-rotated.pdf",
+      "title": "Freight rate confirmation with a landscape page stored turned (/Rotate 90)",
+      "kind": "rate_confirmation",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 2,
+      "categories": [
+        "rotated_page",
+        "table",
+        "key_value",
+        "competing_dates",
+        "layout_parties"
+      ],
+      "notes": "Page 1 is a landscape stop table stored as a portrait page with /Rotate 90 and its content turned into it, as many dispatch systems write it; a reader that ignores the rotation measures every box sideways. The confirmation is dated June 8, 2026 in its heading; the pickup (06/10/2026) and delivery (06/12/2026) dates in the stop table are traps. Issued by the broker to the carrier; the shipper and consignees are stops, not parties. Page 2 is ordinary portrait text.",
+      "gold": {
+        "document_type": "Carrier Rate Confirmation",
+        "acceptable_types": [
+          "Rate Confirmation",
+          "Load Confirmation"
+        ],
+        "document_date": "2026-06-08",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-06-10",
+            "why": "pickup date"
+          },
+          {
+            "date": "2026-06-12",
+            "why": "final delivery date"
+          },
+          {
+            "date": "2026-06-11",
+            "why": "second stop date"
+          }
+        ],
+        "parties": [
+          "Copperline Freight Brokerage LLC"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Halden Ridge Trucking Inc."
+            ],
+            "relation": "to"
+          },
+          {
+            "parties": [
+              "Copperline Freight Brokerage LLC",
+              "Halden Ridge Trucking Inc."
+            ],
+            "relation": "between"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Copperline Freight Brokerage LLC",
+            "role": "issuer"
+          },
+          {
+            "name": "Halden Ridge Trucking Inc.",
+            "role": "recipient"
+          },
+          {
+            "name": "Halden Ridge Trucking Inc.",
+            "role": "counterparty"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ostrowski Cold Storage",
+            "why": "shipper at the pickup stop"
+          },
+          {
+            "name": "Fennimore Grocers DC",
+            "why": "consignee at a drop stop"
+          }
+        ],
+        "description_facts": [
+          [
+            "CFB-260608-117"
+          ],
+          [
+            "$3,168.00",
+            "3,168.00"
+          ],
+          [
+            "Halden Ridge Trucking Inc.",
+            "Halden Ridge"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "freight",
+          "reefer",
+          "linehaul",
+          "load"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "June 8, 2026"
+          ],
+          "party_text": {
+            "Copperline Freight Brokerage LLC": [
+              "Copperline Freight Brokerage LLC"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Stop",
+                "Type",
+                "Facility",
+                "Address",
+                "Date",
+                "Window",
+                "Reference"
+              ],
+              [
+                "1",
+                "Pickup",
+                "Ostrowski Cold Storage",
+                "1120 Dock Street, Grand Isle, NE 68803",
+                "06/10/2026",
+                "06:00-10:00",
+                "PU 448120"
+              ],
+              [
+                "2",
+                "Drop",
+                "Fennimore Grocers DC",
+                "75 Commerce Loop, Pella, IA 50219",
+                "06/11/2026",
+                "14:00-18:00",
+                "PO 91-2240"
+              ],
+              [
+                "3",
+                "Drop",
+                "Brightwater Market #12",
+                "400 River Road, Galena, IL 61036",
+                "06/12/2026",
+                "05:00-09:00",
+                "PO 77-0918"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Load number",
+            "value": "CFB-260608-117"
+          },
+          {
+            "key": "Carrier",
+            "value": "Halden Ridge Trucking Inc."
+          },
+          {
+            "key": "Carrier MC",
+            "value": "MC 610553"
+          },
+          {
+            "key": "Equipment",
+            "value": "53' reefer, set at 34 F"
+          },
+          {
+            "key": "Total rate",
+            "value": "$3,168.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout",
+          "2": "fast"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "inspection-log-ruled-2p",
+      "file": "inspection-log-ruled-2p.pdf",
+      "title": "Fire extinguisher inspection log: a ruled table split across two pages",
+      "kind": "inspection_report",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 2,
+      "categories": [
+        "table",
+        "date_in_table",
+        "competing_dates",
+        "key_value"
+      ],
+      "notes": "A 44-row ruled grid starts on page 1 and finishes on page 2 under its repeated header. The report is dated by its inspection date (05/19/2026) in the header fields; the next inspection due (05/19/2027) is a trap, and every row carries a manufacture year and a hydrostatic test year. Prepared by the fire protection company for the condominium association.",
+      "gold": {
+        "document_type": "Fire Extinguisher Inspection Report",
+        "acceptable_types": [
+          "Inspection Report",
+          "Fire Extinguisher Inspection"
+        ],
+        "document_date": "2026-05-19",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2027-05-19",
+            "why": "next annual inspection due"
+          }
+        ],
+        "parties": [
+          "Corbel Street Lofts Condominium Association"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Emberwatch Fire Protection Inc."
+            ],
+            "relation": "from"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Corbel Street Lofts Condominium Association",
+            "role": "subject"
+          },
+          {
+            "name": "Corbel Street Lofts Condominium Association",
+            "role": "customer"
+          },
+          {
+            "name": "Emberwatch Fire Protection Inc.",
+            "role": "issuer"
+          },
+          {
+            "name": "Emberwatch Fire Protection Inc.",
+            "role": "provider"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Leopold Haverkamp",
+            "why": "inspector who signs"
+          }
+        ],
+        "description_facts": [
+          [
+            "44 extinguishers",
+            "44"
+          ],
+          [
+            "FE-032"
+          ],
+          [
+            "220 Corbel Street",
+            "Corbel Street"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "fire extinguisher",
+          "inspection",
+          "NFPA 10"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "05/19/2026"
+          ],
+          "party_text": {
+            "Corbel Street Lofts Condominium Association": [
+              "Corbel Street Lofts Condominium Association"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Unit",
+                "Location",
+                "Type",
+                "Size",
+                "Made",
+                "Hydro due",
+                "Result"
+              ],
+              [
+                "FE-001",
+                "Garage P1, north stair",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-002",
+                "Garage P1, south stair",
+                "ABC",
+                "5 lb",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-003",
+                "Garage P1, corridor east",
+                "CO2",
+                "10 lb",
+                "2022",
+                "2027",
+                "Pass"
+              ],
+              [
+                "FE-004",
+                "Garage P1, corridor west",
+                "ABC",
+                "10 lb",
+                "2022",
+                "2034",
+                "Pass"
+              ],
+              [
+                "FE-005",
+                "Garage P1, trash room",
+                "K",
+                "6 L",
+                "2020",
+                "2032",
+                "Pass"
+              ],
+              [
+                "FE-006",
+                "Garage P2, north stair",
+                "ABC",
+                "10 lb",
+                "2014",
+                "2026",
+                "Pass"
+              ],
+              [
+                "FE-007",
+                "Garage P2, south stair",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-008",
+                "Garage P2, corridor east",
+                "ABC",
+                "10 lb",
+                "2020",
+                "2032",
+                "Pass"
+              ],
+              [
+                "FE-009",
+                "Garage P2, corridor west",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-010",
+                "Garage P2, trash room",
+                "K",
+                "6 L",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-011",
+                "Floor 1, north stair",
+                "ABC",
+                "10 lb",
+                "2022",
+                "2034",
+                "Pass"
+              ],
+              [
+                "FE-012",
+                "Floor 1, south stair",
+                "ABC",
+                "5 lb",
+                "2015",
+                "2027",
+                "Pass"
+              ],
+              [
+                "FE-013",
+                "Floor 1, elevator lobby",
+                "ABC",
+                "10 lb",
+                "2019",
+                "2031",
+                "Pass"
+              ],
+              [
+                "FE-014",
+                "Floor 1, corridor east",
+                "ABC",
+                "5 lb",
+                "2015",
+                "2027",
+                "Recharged"
+              ],
+              [
+                "FE-015",
+                "Floor 1, corridor west",
+                "ABC",
+                "5 lb",
+                "2015",
+                "2027",
+                "Pass"
+              ],
+              [
+                "FE-016",
+                "Floor 1, trash room",
+                "K",
+                "6 L",
+                "2018",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-017",
+                "Floor 2, north stair",
+                "ABC",
+                "10 lb",
+                "2024",
+                "2036",
+                "Pass"
+              ],
+              [
+                "FE-018",
+                "Floor 2, south stair",
+                "ABC",
+                "10 lb",
+                "2014",
+                "2026",
+                "Pass"
+              ],
+              [
+                "FE-019",
+                "Floor 2, elevator lobby",
+                "ABC",
+                "10 lb",
+                "2014",
+                "2026",
+                "Pass"
+              ],
+              [
+                "FE-020",
+                "Floor 2, corridor east",
+                "ABC",
+                "10 lb",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-021",
+                "Floor 2, corridor west",
+                "ABC",
+                "5 lb",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-022",
+                "Floor 2, trash room",
+                "K",
+                "6 L",
+                "2024",
+                "2036",
+                "Pass"
+              ],
+              [
+                "FE-023",
+                "Floor 3, north stair",
+                "CO2",
+                "10 lb",
+                "2025",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-024",
+                "Floor 3, south stair",
+                "ABC",
+                "5 lb",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-025",
+                "Floor 3, elevator lobby",
+                "ABC",
+                "5 lb",
+                "2022",
+                "2034",
+                "Pass"
+              ],
+              [
+                "FE-026",
+                "Floor 3, corridor east",
+                "ABC",
+                "10 lb",
+                "2020",
+                "2032",
+                "Pass"
+              ],
+              [
+                "FE-027",
+                "Floor 3, corridor west",
+                "ABC",
+                "5 lb",
+                "2023",
+                "2035",
+                "Pass"
+              ],
+              [
+                "FE-028",
+                "Floor 3, trash room",
+                "K",
+                "6 L",
+                "2018",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-029",
+                "Floor 4, north stair",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-030",
+                "Floor 4, south stair",
+                "ABC",
+                "10 lb",
+                "2023",
+                "2035",
+                "Pass"
+              ],
+              [
+                "FE-031",
+                "Floor 4, elevator lobby",
+                "ABC",
+                "5 lb",
+                "2019",
+                "2031",
+                "Pass"
+              ],
+              [
+                "FE-032",
+                "Floor 4, corridor east",
+                "CO2",
+                "10 lb",
+                "2025",
+                "2030",
+                "Replaced"
+              ],
+              [
+                "FE-033",
+                "Floor 4, corridor west",
+                "CO2",
+                "10 lb",
+                "2022",
+                "2027",
+                "Pass"
+              ],
+              [
+                "FE-034",
+                "Floor 4, trash room",
+                "K",
+                "6 L",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-035",
+                "Floor 5, north stair",
+                "ABC",
+                "5 lb",
+                "2016",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-036",
+                "Floor 5, south stair",
+                "ABC",
+                "5 lb",
+                "2022",
+                "2034",
+                "Pass"
+              ],
+              [
+                "FE-037",
+                "Floor 5, elevator lobby",
+                "ABC",
+                "10 lb",
+                "2022",
+                "2034",
+                "Pass"
+              ],
+              [
+                "FE-038",
+                "Floor 5, corridor east",
+                "ABC",
+                "5 lb",
+                "2018",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-039",
+                "Floor 5, corridor west",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ],
+              [
+                "FE-040",
+                "Floor 5, trash room",
+                "K",
+                "6 L",
+                "2023",
+                "2035",
+                "Pass"
+              ],
+              [
+                "FE-041",
+                "Floor 6, north stair",
+                "CO2",
+                "10 lb",
+                "2025",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-042",
+                "Floor 6, south stair",
+                "CO2",
+                "10 lb",
+                "2025",
+                "2030",
+                "Pass"
+              ],
+              [
+                "FE-043",
+                "Floor 6, elevator lobby",
+                "CO2",
+                "10 lb",
+                "2022",
+                "2027",
+                "Pass"
+              ],
+              [
+                "FE-044",
+                "Floor 6, corridor east",
+                "CO2",
+                "10 lb",
+                "2023",
+                "2028",
+                "Pass"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Property",
+            "value": "Corbel Street Lofts Condominium Association"
+          },
+          {
+            "key": "Address",
+            "value": "220 Corbel Street, Ashby Falls, OR 97321"
+          },
+          {
+            "key": "Inspection date",
+            "value": "05/19/2026"
+          },
+          {
+            "key": "Inspector",
+            "value": "Leopold Haverkamp, certificate 7731"
+          },
+          {
+            "key": "Next annual inspection due",
+            "value": "05/19/2027"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout",
+          "2": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "price-list-unruled",
+      "file": "price-list-unruled.pdf",
+      "title": "Wholesale nursery price list: an unruled table aligned only by position",
+      "kind": "price_list",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "table",
+        "competing_dates",
+        "unusual"
+      ],
+      "notes": "Twenty items in six columns with no rules, boxes or shading: only alignment says which number is a quantity and which a price. Issued March 16, 2026; the price period's start (April 1, 2026) and end (June 30, 2026) are traps. From the nursery, to no one in particular.",
+      "gold": {
+        "document_type": "Price List",
+        "acceptable_types": [
+          "Wholesale Price List",
+          "Availability and Price List"
+        ],
+        "document_date": "2026-03-16",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-04-01",
+            "why": "start of the price period"
+          },
+          {
+            "date": "2026-06-30",
+            "why": "end of the price period"
+          }
+        ],
+        "parties": [
+          "Thistledown Wholesale Nursery"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Thistledown Wholesale Nursery",
+            "role": "issuer"
+          },
+          {
+            "name": "Thistledown Wholesale Nursery",
+            "role": "seller"
+          }
+        ],
+        "forbidden_parties": [],
+        "description_facts": [
+          [
+            "$750.00",
+            "750.00"
+          ],
+          [
+            "Red maple",
+            "Acer rubrum"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "nursery",
+          "wholesale",
+          "availability"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "March 16, 2026"
+          ],
+          "party_text": {
+            "Thistledown Wholesale Nursery": [
+              "THISTLEDOWN WHOLESALE NURSERY"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Item",
+                "Common name",
+                "Botanical name",
+                "Size",
+                "Avail.",
+                "Price"
+              ],
+              [
+                "TW-1100",
+                "Red maple",
+                "Acer rubrum",
+                "#7 cont.",
+                "395",
+                "60.50"
+              ],
+              [
+                "TW-1107",
+                "Allegheny serviceberry",
+                "Amelanchier laevis",
+                "#5 cont.",
+                "113",
+                "63.50"
+              ],
+              [
+                "TW-1114",
+                "River birch",
+                "Betula nigra",
+                "B&B 2 in.",
+                "20",
+                "188.50"
+              ],
+              [
+                "TW-1121",
+                "Eastern redbud",
+                "Cercis canadensis",
+                "B&B 2 in.",
+                "182",
+                "143.50"
+              ],
+              [
+                "TW-1128",
+                "Red twig dogwood",
+                "Cornus sericea",
+                "#7 cont.",
+                "294",
+                "45.00"
+              ],
+              [
+                "TW-1135",
+                "Smooth hydrangea",
+                "Hydrangea arborescens",
+                "#3 cont.",
+                "87",
+                "184.50"
+              ],
+              [
+                "TW-1142",
+                "Winterberry",
+                "Ilex verticillata",
+                "#7 cont.",
+                "121",
+                "46.00"
+              ],
+              [
+                "TW-1149",
+                "Virginia sweetspire",
+                "Itea virginica",
+                "B&B 2 in.",
+                "423",
+                "184.00"
+              ],
+              [
+                "TW-1156",
+                "Eastern red cedar",
+                "Juniperus virginiana",
+                "#7 cont.",
+                "156",
+                "94.00"
+              ],
+              [
+                "TW-1163",
+                "Ninebark",
+                "Physocarpus opulifolius",
+                "#5 cont.",
+                "286",
+                "116.00"
+              ],
+              [
+                "TW-1170",
+                "Swamp white oak",
+                "Quercus bicolor",
+                "#3 cont.",
+                "80",
+                "170.50"
+              ],
+              [
+                "TW-1177",
+                "Fragrant sumac",
+                "Rhus aromatica",
+                "#5 cont.",
+                "32",
+                "83.00"
+              ],
+              [
+                "TW-1184",
+                "American elderberry",
+                "Sambucus canadensis",
+                "#5 cont.",
+                "110",
+                "45.50"
+              ],
+              [
+                "TW-1191",
+                "Meadowsweet",
+                "Spiraea alba",
+                "#7 cont.",
+                "66",
+                "142.00"
+              ],
+              [
+                "TW-1198",
+                "Arborvitae",
+                "Thuja occidentalis",
+                "#5 cont.",
+                "401",
+                "45.00"
+              ],
+              [
+                "TW-1205",
+                "Arrowwood viburnum",
+                "Viburnum dentatum",
+                "#7 cont.",
+                "17",
+                "160.50"
+              ],
+              [
+                "TW-1212",
+                "Purple coneflower",
+                "Echinacea purpurea",
+                "#1 cont.",
+                "164",
+                "10.25"
+              ],
+              [
+                "TW-1219",
+                "Orange coneflower",
+                "Rudbeckia fulgida",
+                "#1 cont.",
+                "271",
+                "7.25"
+              ],
+              [
+                "TW-1226",
+                "Little bluestem",
+                "Schizachyrium scoparium",
+                "#1 cont.",
+                "466",
+                "7.75"
+              ],
+              [
+                "TW-1233",
+                "Butterfly weed",
+                "Asclepias tuberosa",
+                "#1 cont.",
+                "19",
+                "7.75"
+              ]
+            ]
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "invoice-label-above",
+      "file": "invoice-label-above.pdf",
+      "title": "Sign shop invoice whose header facts sit under small captions",
+      "kind": "invoice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "invoice",
+        "key_value",
+        "competing_dates",
+        "layout_parties"
+      ],
+      "notes": "Five header facts in a shaded band, each under a small grey caption, so a line-by-line reading gives five captions and then five values and leaves the reader to pair them by position. The invoice date (05/11/2026) is the second; the due date (06/10/2026) and the installation date (05/06/2026) are traps. The issuer is named only in the letterhead; the customer, in bold under BILL TO, is the trap.",
+      "gold": {
+        "document_type": "Invoice",
+        "acceptable_types": [],
+        "document_date": "2026-05-11",
+        "acceptable_dates": [],
+        "date_role": "invoice",
+        "forbidden_dates": [
+          {
+            "date": "2026-06-10",
+            "why": "payment due date"
+          },
+          {
+            "date": "2026-05-06",
+            "why": "installation date"
+          }
+        ],
+        "parties": [
+          "Quarrystone Signs & Graphics"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Quarrystone Signs & Graphics",
+            "role": "issuer"
+          },
+          {
+            "name": "Bellhaven Physical Therapy PLLC",
+            "role": "customer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Bellhaven Physical Therapy PLLC",
+            "why": "bill-to customer"
+          }
+        ],
+        "description_facts": [
+          [
+            "$9,603.06",
+            "9,603.06"
+          ],
+          [
+            "QSG-10482"
+          ],
+          [
+            "channel letters"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "sign",
+          "installation",
+          "vinyl"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "05/11/2026"
+          ],
+          "party_text": {
+            "Quarrystone Signs & Graphics": [
+              "Quarrystone Signs & Graphics"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "key_values": [
+          {
+            "key": "INVOICE NUMBER",
+            "value": "QSG-10482"
+          },
+          {
+            "key": "INVOICE DATE",
+            "value": "05/11/2026"
+          },
+          {
+            "key": "CUSTOMER NO.",
+            "value": "C-2291"
+          },
+          {
+            "key": "TERMS",
+            "value": "Net 30"
+          },
+          {
+            "key": "DUE DATE",
+            "value": "06/10/2026"
+          },
+          {
+            "key": "BILL TO",
+            "value": "Bellhaven Physical Therapy PLLC"
+          },
+          {
+            "key": "INSTALLATION DATE",
+            "value": "05/06/2026"
+          },
+          {
+            "key": "TOTAL DUE",
+            "value": "$9,603.06"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "invoice-right-aligned",
+      "file": "invoice-right-aligned.pdf",
+      "title": "Laboratory invoice with each label at the left margin and its value at the right",
+      "kind": "invoice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "invoice",
+        "key_value",
+        "date_in_table",
+        "table",
+        "competing_dates"
+      ],
+      "notes": "The header facts are two-cell table rows with the label at the left margin and the value right-aligned at the right one, so each value - the invoice date (05/04/2026) among them - sits about 350 points from its label. The service period's ends (04/01/2026, 04/30/2026) and the payment due date (06/03/2026) are traps. From the laboratory to the veterinary hospital.",
+      "gold": {
+        "document_type": "Invoice",
+        "acceptable_types": [],
+        "document_date": "2026-05-04",
+        "acceptable_dates": [],
+        "date_role": "invoice",
+        "forbidden_dates": [
+          {
+            "date": "2026-06-03",
+            "why": "payment due date"
+          },
+          {
+            "date": "2026-04-01",
+            "why": "start of the service period"
+          },
+          {
+            "date": "2026-04-30",
+            "why": "end of the service period"
+          }
+        ],
+        "parties": [
+          "Mossgiel Laboratory Services Inc."
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Mossgiel Laboratory Services Inc.",
+              "Ferncastle Veterinary Hospital"
+            ],
+            "relation": "between"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Mossgiel Laboratory Services Inc.",
+            "role": "issuer"
+          },
+          {
+            "name": "Ferncastle Veterinary Hospital",
+            "role": "customer"
+          }
+        ],
+        "forbidden_parties": [],
+        "description_facts": [
+          [
+            "$3,006.42",
+            "3,006.42"
+          ],
+          [
+            "MLS-2604-0317"
+          ],
+          [
+            "Ferncastle Veterinary Hospital",
+            "Ferncastle"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "laboratory",
+          "chemistry panel",
+          "blood count"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "05/04/2026"
+          ],
+          "party_text": {
+            "Mossgiel Laboratory Services Inc.": [
+              "Mossgiel Laboratory Services Inc."
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Test",
+                "Count",
+                "Unit price",
+                "Amount"
+              ],
+              [
+                "Complete blood count, canine/feline",
+                "38",
+                "24.50",
+                "931.00"
+              ],
+              [
+                "Chemistry panel, 24 analytes",
+                "31",
+                "42.75",
+                "1,325.25"
+              ],
+              [
+                "Urinalysis with sediment",
+                "12",
+                "18.90",
+                "226.80"
+              ],
+              [
+                "Fecal flotation and Giardia antigen",
+                "17",
+                "21.60",
+                "367.20"
+              ],
+              [
+                "Thyroid panel (T4, free T4)",
+                "6",
+                "52.40",
+                "314.40"
+              ],
+              [
+                "Courier pickups",
+                "20",
+                "0.00",
+                "0.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Invoice number",
+            "value": "MLS-2604-0317"
+          },
+          {
+            "key": "Invoice date",
+            "value": "05/04/2026"
+          },
+          {
+            "key": "Client account",
+            "value": "FVH-0088"
+          },
+          {
+            "key": "Service period",
+            "value": "04/01/2026 - 04/30/2026"
+          },
+          {
+            "key": "Payment due",
+            "value": "06/03/2026"
+          },
+          {
+            "key": "Subtotal",
+            "value": "3,164.65"
+          },
+          {
+            "key": "Client discount (5%)",
+            "value": "-158.23"
+          },
+          {
+            "key": "Amount due",
+            "value": "$3,006.42"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "invoice-boxed-grid",
+      "file": "invoice-boxed-grid.pdf",
+      "title": "Plumbing service invoice laid out as a grid of labelled boxes",
+      "kind": "invoice",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "invoice",
+        "key_value",
+        "competing_dates",
+        "layout_parties"
+      ],
+      "notes": "Header facts in a grid of bordered boxes, two labelled values to a row, and the bill-to and service addresses in two boxes side by side, so their lines are read across each other. The invoice date (07/09/2026) shares a row with the invoice number; the service date (07/02/2026) and due date (07/24/2026) are traps. From the plumber; the dental studio is the customer, named in bold in both address boxes.",
+      "gold": {
+        "document_type": "Invoice",
+        "acceptable_types": [
+          "Service Invoice"
+        ],
+        "document_date": "2026-07-09",
+        "acceptable_dates": [],
+        "date_role": "invoice",
+        "forbidden_dates": [
+          {
+            "date": "2026-07-02",
+            "why": "service date"
+          },
+          {
+            "date": "2026-07-24",
+            "why": "payment due date"
+          }
+        ],
+        "parties": [
+          "Whitlock & Sons Plumbing LLC"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Whitlock & Sons Plumbing LLC",
+            "role": "issuer"
+          },
+          {
+            "name": "Ravensby Dental Studio",
+            "role": "customer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ravensby Dental Studio",
+            "why": "bill-to customer"
+          },
+          {
+            "name": "Dr. Amara Ellingsworth",
+            "why": "customer contact"
+          },
+          {
+            "name": "Gideon Whitlock",
+            "why": "technician"
+          }
+        ],
+        "description_facts": [
+          [
+            "$1,257.00",
+            "1,257.00"
+          ],
+          [
+            "88-2041"
+          ],
+          [
+            "vacuum pump"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "plumbing",
+          "waste line",
+          "amalgam separator"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "07/09/2026"
+          ],
+          "party_text": {
+            "Whitlock & Sons Plumbing LLC": [
+              "Whitlock & Sons Plumbing LLC"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Work performed",
+                "Qty",
+                "Rate",
+                "Amount"
+              ],
+              [
+                "Replace dental vacuum pump check valve and union",
+                "1",
+                "286.00",
+                "286.00"
+              ],
+              [
+                "Clear and jet 2 in. waste line, operatory 3",
+                "1",
+                "345.00",
+                "345.00"
+              ],
+              [
+                "Install amalgam separator cartridge (customer supplied)",
+                "1",
+                "95.00",
+                "95.00"
+              ],
+              [
+                "Labor, journeyman plumber (hours)",
+                "4.5",
+                "118.00",
+                "531.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Invoice No.",
+            "value": "88-2041"
+          },
+          {
+            "key": "Invoice Date",
+            "value": "07/09/2026"
+          },
+          {
+            "key": "Job No.",
+            "value": "J-5512"
+          },
+          {
+            "key": "Service Date",
+            "value": "07/02/2026"
+          },
+          {
+            "key": "Customer PO",
+            "value": "RDS-0413"
+          },
+          {
+            "key": "Due Date",
+            "value": "07/24/2026"
+          },
+          {
+            "key": "Technician",
+            "value": "Gideon Whitlock"
+          },
+          {
+            "key": "Terms",
+            "value": "Net 15"
+          },
+          {
+            "key": "Bill To",
+            "value": "Ravensby Dental Studio"
+          },
+          {
+            "key": "Service Address",
+            "value": "Ravensby Dental Studio - Suite 200"
+          },
+          {
+            "key": "Balance Due",
+            "value": "$1,257.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "benefits-change-checkbox-form",
+      "file": "benefits-change-checkbox-form.pdf",
+      "title": "Employee benefits change form: check boxes and boxed fields",
+      "kind": "form",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "form",
+        "hr",
+        "key_value",
+        "competing_dates"
+      ],
+      "notes": "Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. Dated by the signature box (06/29/2026); the event date (06/20/2026), the requested effective date (07/01/2026), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.",
+      "gold": {
+        "document_type": "Benefits Enrollment Change Form",
+        "acceptable_types": [
+          "Benefits Change Form",
+          "Benefits Enrollment Form"
+        ],
+        "document_date": "2026-06-29",
+        "acceptable_dates": [],
+        "date_role": "execution",
+        "forbidden_dates": [
+          {
+            "date": "2026-06-20",
+            "why": "date of the qualifying event (marriage)"
+          },
+          {
+            "date": "2026-07-01",
+            "why": "requested effective date"
+          },
+          {
+            "date": "1991-02-14",
+            "why": "spouse date of birth"
+          },
+          {
+            "date": "2021-03-08",
+            "why": "date of hire"
+          }
+        ],
+        "parties": [
+          "Annika Solberg-Reyes"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Annika Solberg-Reyes"
+            ],
+            "relation": "from"
+          },
+          {
+            "parties": [
+              "Westbrook Kettle Brewing Co."
+            ],
+            "relation": "with"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Annika Solberg-Reyes",
+            "role": "subject"
+          },
+          {
+            "name": "Annika Solberg-Reyes",
+            "role": "employee"
+          },
+          {
+            "name": "Annika Solberg-Reyes",
+            "role": "issuer"
+          },
+          {
+            "name": "Westbrook Kettle Brewing Co.",
+            "role": "employer"
+          },
+          {
+            "name": "Westbrook Kettle Brewing Co.",
+            "role": "counterparty"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Mateo Solberg-Reyes",
+            "why": "spouse being added as a dependent"
+          }
+        ],
+        "description_facts": [
+          [
+            "Silver PPO"
+          ],
+          [
+            "Employee and spouse",
+            "spouse"
+          ],
+          [
+            "Annika Solberg-Reyes",
+            "Solberg-Reyes"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "benefits",
+          "marriage",
+          "medical plan"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "06/29/2026"
+          ],
+          "party_text": {
+            "Annika Solberg-Reyes": [
+              "Annika Solberg-Reyes"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "X",
+                "Marriage"
+              ],
+              [
+                "",
+                "Birth or adoption"
+              ],
+              [
+                "",
+                "Divorce"
+              ],
+              [
+                "",
+                "Loss of other coverage"
+              ],
+              [
+                "",
+                "Spouse gained coverage"
+              ],
+              [
+                "",
+                "Other"
+              ]
+            ]
+          },
+          {
+            "rows": [
+              [
+                "",
+                "Gold PPO"
+              ],
+              [
+                "X",
+                "Silver PPO"
+              ],
+              [
+                "",
+                "High-deductible HSA"
+              ],
+              [
+                "",
+                "Waive coverage"
+              ]
+            ]
+          },
+          {
+            "rows": [
+              [
+                "",
+                "Employee only"
+              ],
+              [
+                "X",
+                "Employee and spouse"
+              ],
+              [
+                "",
+                "Employee and children"
+              ],
+              [
+                "",
+                "Family"
+              ]
+            ]
+          },
+          {
+            "rows": [
+              [
+                "X",
+                "Dental"
+              ],
+              [
+                "X",
+                "Vision"
+              ],
+              [
+                "",
+                "No change"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Employee name",
+            "value": "Annika Solberg-Reyes"
+          },
+          {
+            "key": "Employee ID",
+            "value": "WK-0417"
+          },
+          {
+            "key": "Department",
+            "value": "Brewhouse operations"
+          },
+          {
+            "key": "Date of qualifying event",
+            "value": "06/20/2026"
+          },
+          {
+            "key": "Requested effective date",
+            "value": "07/01/2026"
+          },
+          {
+            "key": "Spouse name",
+            "value": "Mateo Solberg-Reyes"
+          },
+          {
+            "key": "Date signed",
+            "value": "06/29/2026"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "loss-notice-boxed-fields",
+      "file": "loss-notice-boxed-fields.pdf",
+      "title": "Property loss notice of boxed fields, up to four to a row",
+      "kind": "form",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 1,
+      "categories": [
+        "form",
+        "key_value",
+        "competing_dates",
+        "layout_parties"
+      ],
+      "notes": "Every fact is a value in a bordered box under a small caption, two to four boxes to a row, so a line-by-line reading strings the captions of a row together and the values after them. The notice is dated by its report date (02/16/2026, top right); the date of loss (02/14/2026) and the policy period (09/01/2025 to 09/01/2026) are traps. The insured gives notice to the insurer; the agency is not a party.",
+      "gold": {
+        "document_type": "Property Loss Notice",
+        "acceptable_types": [
+          "Notice of Loss",
+          "Loss Notice"
+        ],
+        "document_date": "2026-02-16",
+        "acceptable_dates": [],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-02-14",
+            "why": "date of loss"
+          },
+          {
+            "date": "2025-09-01",
+            "why": "policy period start"
+          },
+          {
+            "date": "2026-09-01",
+            "why": "policy period end"
+          }
+        ],
+        "parties": [
+          "Delacroix Bakehouse LLC"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Delacroix Bakehouse LLC"
+            ],
+            "relation": "from"
+          },
+          {
+            "parties": [
+              "Harrowmere Mutual Insurance Company"
+            ],
+            "relation": "to"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Delacroix Bakehouse LLC",
+            "role": "subject"
+          },
+          {
+            "name": "Delacroix Bakehouse LLC",
+            "role": "issuer"
+          },
+          {
+            "name": "Harrowmere Mutual Insurance Company",
+            "role": "recipient"
+          },
+          {
+            "name": "Harrowmere Mutual Insurance Company",
+            "role": "counterparty"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Pemberton & Vail Insurance Agency",
+            "why": "insurance agency"
+          },
+          {
+            "name": "Solenne Delacroix",
+            "why": "owner who reported the loss"
+          }
+        ],
+        "description_facts": [
+          [
+            "$38,500.00",
+            "38,500"
+          ],
+          [
+            "CPP-88-410273"
+          ],
+          [
+            "water damage",
+            "burst"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "loss",
+          "water",
+          "claim"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "02/16/2026"
+          ],
+          "party_text": {
+            "Delacroix Bakehouse LLC": [
+              "Delacroix Bakehouse LLC"
+            ]
+          }
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "key_values": [
+          {
+            "key": "Policy number",
+            "value": "CPP-88-410273"
+          },
+          {
+            "key": "Policy period",
+            "value": "09/01/2025 to 09/01/2026"
+          },
+          {
+            "key": "Agency",
+            "value": "Pemberton & Vail Insurance Agency"
+          },
+          {
+            "key": "Named insured",
+            "value": "Delacroix Bakehouse LLC"
+          },
+          {
+            "key": "Insured phone",
+            "value": "(603) 555-0119"
+          },
+          {
+            "key": "Mailing address",
+            "value": "17 Ovenstone Street, Hollis Bend, NH 03049"
+          },
+          {
+            "key": "Date of loss",
+            "value": "02/14/2026"
+          },
+          {
+            "key": "Time of loss",
+            "value": "3:40 a.m."
+          },
+          {
+            "key": "Kind of loss",
+            "value": "Water damage"
+          },
+          {
+            "key": "Police or fire report",
+            "value": "None"
+          },
+          {
+            "key": "Location of loss",
+            "value": "Same as mailing address - kitchen and walk-in cooler"
+          },
+          {
+            "key": "Description of loss",
+            "value": "Supply line to the proofing cabinet burst; water spread across the kitchen floor"
+          },
+          {
+            "key": "Estimated amount of loss",
+            "value": "$38,500.00"
+          },
+          {
+            "key": "Property damaged",
+            "value": "Flooring, two mixers, stock"
+          },
+          {
+            "key": "Damage still occurring",
+            "value": "No"
+          },
+          {
+            "key": "Reported by",
+            "value": "Solenne Delacroix, Owner"
+          },
+          {
+            "key": "Contact phone",
+            "value": "(603) 555-0144"
+          }
+        ],
+        "expected_routes": {
+          "1": "layout"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-rotated-page-in-pdf",
+      "file": "scan-rotated-page-in-pdf.pdf",
+      "title": "Freight claim scanned at 300 DPI; its landscape damage schedule lies on its side",
+      "kind": "claim",
+      "format": "pdf",
+      "text_layer": "scan",
+      "pages": 2,
+      "categories": [
+        "rotated_scan",
+        "image_only_scan",
+        "table",
+        "competing_dates",
+        "key_value"
+      ],
+      "notes": "Two 1-bit scans. Page 1 is an upright claim letter dated April 27, 2026; page 2, a landscape schedule of damaged items, went through the scanner sideways, so its image is turned 90 degrees inside an otherwise upright PDF. The ship date (04/14/2026) and delivery date (04/20/2026) are traps. From the consignee making the claim to the carrier; the shipper is not a party.",
+      "gold": {
+        "document_type": "Notice of Freight Claim",
+        "acceptable_types": [
+          "Freight Claim",
+          "Freight Claim Letter"
+        ],
+        "document_date": "2026-04-27",
+        "acceptable_dates": [],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-04-20",
+            "why": "delivery date"
+          },
+          {
+            "date": "2026-04-14",
+            "why": "ship date"
+          }
+        ],
+        "parties": [
+          "Hollin Brook Furniture Gallery"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Redgate Interstate Freight Inc."
+            ],
+            "relation": "to"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Hollin Brook Furniture Gallery",
+            "role": "issuer"
+          },
+          {
+            "name": "Hollin Brook Furniture Gallery",
+            "role": "sender"
+          },
+          {
+            "name": "Redgate Interstate Freight Inc.",
+            "role": "recipient"
+          },
+          {
+            "name": "Redgate Interstate Freight Inc.",
+            "role": "counterparty"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ashmore Upholstery Works",
+            "why": "shipper of the goods"
+          },
+          {
+            "name": "Wilhelmina Strand",
+            "why": "manager who signs"
+          }
+        ],
+        "description_facts": [
+          [
+            "$6,842.00",
+            "6,842"
+          ],
+          [
+            "449-1182-07"
+          ],
+          [
+            "Redgate Interstate Freight Inc.",
+            "Redgate"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "freight claim",
+          "damage",
+          "shipment"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "April 27, 2026"
+          ],
+          "party_text": {
+            "Hollin Brook Furniture Gallery": [
+              "Hollin Brook Furniture Gallery"
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 1,
+            "text": "Hollin Brook Furniture Gallery\n612 Larch Avenue, Hollin Brook, PA 18925 - (215) 555-0181\nApril 27, 2026\nClaims Department\nRedgate Interstate Freight Inc.\n90 Terminal Way\nRedgate, NJ 08077\nNOTICE OF FREIGHT CLAIM\nPro number: 449-1182-07\nBill of lading: AUW-26-0331\nShipper: Ashmore Upholstery Works\nDelivery date: 04/20/2026\nAmount claimed: $6,842.00\nThe shipment shipped 04/14/2026 and was delivered to us on 04/20/2026 with visible damage, which\nour receiver noted on the delivery receipt. We claim the invoice value of the damaged and missing\npieces listed on the attached schedule, $6,842.00 in all, under 49 U.S.C. 14706.\nThe damaged pieces are held at our warehouse for your inspection for thirty days. Please acknowledge\nthis claim in writing within thirty days.\nSincerely,\nWilhelmina Strand, Operations Manager"
+          },
+          {
+            "page": 2,
+            "text": "SCHEDULE OF DAMAGED AND MISSING ITEMS\nClaim of Hollin Brook Furniture Gallery - Pro 449-1182-07 - delivered 04/20/2026\nItem Description Pieces Damage Unit value Claimed\n1 Three-seat sofa, oatmeal linen, SKU 4410-OAT 1 Frame cracked, left arm 1,960.00 1,960.00\n2 Lounge chair, walnut frame, SKU 2207-WAL 2 Leg snapped; fabric torn 845.00 1,690.00\n3 Ottoman, matching, SKU 2208-WAL 1 Crushed corner 395.00 395.00\n4 Sectional, chaise piece only, SKU 5512-GRY 1 Water stain across seat 1,840.00 1,840.00\n5 Dining chairs, set of 4, SKU 3301-ASH 1 Two chairs missing 957.00 957.00\nTotal claimed 6,842.00"
+          }
+        ],
+        "dates": [
+          "April 27, 2026",
+          "04/20/2026",
+          "04/14/2026"
+        ],
+        "names": [
+          "Hollin Brook Furniture Gallery",
+          "Redgate Interstate Freight Inc.",
+          "Ashmore Upholstery Works"
+        ],
+        "identifiers": [
+          "449-1182-07",
+          "AUW-26-0331",
+          "4410-OAT",
+          "5512-GRY"
+        ]
+      },
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Item",
+                "Description",
+                "Pieces",
+                "Damage",
+                "Unit value",
+                "Claimed"
+              ],
+              [
+                "1",
+                "Three-seat sofa, oatmeal linen, SKU 4410-OAT",
+                "1",
+                "Frame cracked, left arm",
+                "1,960.00",
+                "1,960.00"
+              ],
+              [
+                "2",
+                "Lounge chair, walnut frame, SKU 2207-WAL",
+                "2",
+                "Leg snapped; fabric torn",
+                "845.00",
+                "1,690.00"
+              ],
+              [
+                "3",
+                "Ottoman, matching, SKU 2208-WAL",
+                "1",
+                "Crushed corner",
+                "395.00",
+                "395.00"
+              ],
+              [
+                "4",
+                "Sectional, chaise piece only, SKU 5512-GRY",
+                "1",
+                "Water stain across seat",
+                "1,840.00",
+                "1,840.00"
+              ],
+              [
+                "5",
+                "Dining chairs, set of 4, SKU 3301-ASH",
+                "1",
+                "Two chairs missing",
+                "957.00",
+                "957.00"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Pro number",
+            "value": "449-1182-07"
+          },
+          {
+            "key": "Bill of lading",
+            "value": "AUW-26-0331"
+          },
+          {
+            "key": "Shipper",
+            "value": "Ashmore Upholstery Works"
+          },
+          {
+            "key": "Delivery date",
+            "value": "04/20/2026"
+          },
+          {
+            "key": "Amount claimed",
+            "value": "$6,842.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr",
+          "2": "ocr"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-cancellation-notice-150dpi",
+      "file": "scan-cancellation-notice-150dpi.pdf",
+      "title": "Insurance cancellation notice scanned at 150 DPI in grey",
+      "kind": "notice",
+      "format": "pdf",
+      "text_layer": "scan",
+      "pages": 1,
+      "categories": [
+        "low_resolution_scan",
+        "image_only_scan",
+        "notice",
+        "competing_dates",
+        "ocr_critical_fields",
+        "key_value"
+      ],
+      "notes": "A grey scan at 150 DPI: 10.5-point text is about 22 pixels to the em, enough to read but not to read every digit. Five dates compete: the notice is dated 08/12/2026; the cancellation's effective date (09/11/2026), the policy period (03/01/2026 to 03/01/2027) and the missed installment's due date (07/01/2026) are traps. From the insurer to the insured; the producer receives a copy.",
+      "gold": {
+        "document_type": "Notice of Cancellation",
+        "acceptable_types": [
+          "Cancellation Notice",
+          "Notice of Cancellation for Nonpayment of Premium"
+        ],
+        "document_date": "2026-08-12",
+        "acceptable_dates": [
+          "2026-09-11"
+        ],
+        "date_role": "notice",
+        "forbidden_dates": [
+          {
+            "date": "2026-03-01",
+            "why": "policy period start"
+          },
+          {
+            "date": "2027-03-01",
+            "why": "policy period end"
+          },
+          {
+            "date": "2026-07-01",
+            "why": "unpaid installment due date"
+          }
+        ],
+        "parties": [
+          "Brannock Tool & Die Inc."
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Kestrelmoor Casualty Company"
+            ],
+            "relation": "from"
+          },
+          {
+            "parties": [
+              "Brannock Tool & Die Inc."
+            ],
+            "relation": "to"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Brannock Tool & Die Inc.",
+            "role": "subject"
+          },
+          {
+            "name": "Brannock Tool & Die Inc.",
+            "role": "recipient"
+          },
+          {
+            "name": "Kestrelmoor Casualty Company",
+            "role": "issuer"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Ridley Cross Insurance Services",
+            "why": "insurance producer copied on the notice"
+          }
+        ],
+        "description_facts": [
+          [
+            "KC-WC-7710345"
+          ],
+          [
+            "$4,318.00",
+            "4,318"
+          ],
+          [
+            "workers compensation"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "cancellation",
+          "nonpayment",
+          "premium"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "08/12/2026"
+          ],
+          "party_text": {
+            "Brannock Tool & Die Inc.": [
+              "Brannock Tool & Die Inc."
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 1,
+            "text": "KESTRELMOOR CASUALTY COMPANY\nPolicy Services - 1500 Granite Mill Road, Stoneham Falls, MA 01880\nNOTICE OF CANCELLATION FOR NONPAYMENT OF PREMIUM\nDate of notice: 08/12/2026\nPolicy number: KC-WC-7710345\nPolicy period: 03/01/2026 to 03/01/2027\nNamed insured: Brannock Tool & Die Inc.\nProducer: Ridley Cross Insurance Services, code 4471\nCancellation effective: 09/11/2026, 12:01 a.m.\nAmount past due: $4,318.00\nThe installment of premium due on 07/01/2026 for the workers compensation and employers liability policy\nshown above has not been paid. In accordance with the policy and the law of the Commonwealth, the policy\nwill be cancelled as of the effective time shown above unless we receive the amount past due before that time.\nIf payment is received before the cancellation takes effect, this notice is withdrawn and coverage continues\nwithout interruption. A payment received after that time will not reinstate the policy, and any return premium\nwill be calculated pro rata and refunded to the named insured.\nYou may pay online at kestrelmoor.example/pay, by telephone at (978) 555-0136, or by mail to the address\nabove. Please write the policy number on your check.\nCopy to: Ridley Cross Insurance Services"
+          }
+        ],
+        "dates": [
+          "08/12/2026",
+          "09/11/2026",
+          "03/01/2026",
+          "03/01/2027",
+          "07/01/2026"
+        ],
+        "names": [
+          "KESTRELMOOR CASUALTY COMPANY",
+          "Brannock Tool & Die Inc.",
+          "Ridley Cross Insurance Services"
+        ],
+        "identifiers": [
+          "KC-WC-7710345",
+          "$4,318.00"
+        ]
+      },
+      "structure": {
+        "key_values": [
+          {
+            "key": "Date of notice",
+            "value": "08/12/2026"
+          },
+          {
+            "key": "Policy number",
+            "value": "KC-WC-7710345"
+          },
+          {
+            "key": "Policy period",
+            "value": "03/01/2026 to 03/01/2027"
+          },
+          {
+            "key": "Named insured",
+            "value": "Brannock Tool & Die Inc."
+          },
+          {
+            "key": "Producer",
+            "value": "Ridley Cross Insurance Services, code 4471"
+          },
+          {
+            "key": "Cancellation effective",
+            "value": "09/11/2026, 12:01 a.m."
+          },
+          {
+            "key": "Amount past due",
+            "value": "$4,318.00"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-remittance-advice-120dpi",
+      "file": "scan-remittance-advice-120dpi.png",
+      "title": "Remittance advice scanned at 120 DPI, blurred and grainy",
+      "kind": "remittance_advice",
+      "format": "png",
+      "text_layer": "scan",
+      "pages": 1,
+      "categories": [
+        "low_resolution_scan",
+        "noisy_scan",
+        "image_only_scan",
+        "png",
+        "ocr_critical_fields",
+        "table",
+        "competing_dates"
+      ],
+      "notes": "A dense page of identifiers - six invoice and credit memo numbers, a 15-digit ACH trace number, payment and vendor numbers - and seven dates, scanned at 120 DPI with blur and grain, so 9-point digits are about 15 pixels tall. The payment date (07/17/2026) is the document's; the invoice dates are traps. From the cooperative paying to its supplier; the bank only carries the payment.",
+      "gold": {
+        "document_type": "Remittance Advice",
+        "acceptable_types": [
+          "Payment Remittance Advice",
+          "Remittance"
+        ],
+        "document_date": "2026-07-17",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-05-28",
+            "why": "date of SPC-30417"
+          },
+          {
+            "date": "2026-06-04",
+            "why": "date of SPC-30552"
+          },
+          {
+            "date": "2026-06-11",
+            "why": "date of SPC-30618"
+          },
+          {
+            "date": "2026-06-18",
+            "why": "date of SPC-30701"
+          },
+          {
+            "date": "2026-06-25",
+            "why": "date of SPC-30779"
+          },
+          {
+            "date": "2026-06-30",
+            "why": "date of CM-1182"
+          }
+        ],
+        "parties": [
+          "Tolliver Grain & Feed Cooperative"
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Sablewood Packaging Corp."
+            ],
+            "relation": "to"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Tolliver Grain & Feed Cooperative",
+            "role": "issuer"
+          },
+          {
+            "name": "Tolliver Grain & Feed Cooperative",
+            "role": "payer"
+          },
+          {
+            "name": "Sablewood Packaging Corp.",
+            "role": "recipient"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "First Prairie Bank",
+            "why": "bank that carried the payment"
+          }
+        ],
+        "description_facts": [
+          [
+            "$47,016.96",
+            "47,016.96"
+          ],
+          [
+            "071000301884412"
+          ],
+          [
+            "Sablewood Packaging Corp.",
+            "Sablewood"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "remittance",
+          "payment",
+          "invoice"
+        ],
+        "expected_readiness": "needs_review",
+        "evidence": {
+          "date_text": [
+            "07/17/2026"
+          ],
+          "party_text": {
+            "Tolliver Grain & Feed Cooperative": [
+              "TOLLIVER GRAIN & FEED COOPERATIVE"
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 1,
+            "text": "TOLLIVER GRAIN & FEED COOPERATIVE REMITTANCE ADVICE\nAccounts Payable - 2 Elevator Road, Tolliver, KS 67880 - (620) 555-0105\nPayment date: 07/17/2026 Payment no.: ACH-0071184\nPayee: Sablewood Packaging Corp. Vendor no.: V-20931\nPaid through: First Prairie Bank Trace no.: 071000301884412\nInvoice Invoice date Gross Discount Paid\nSPC-30417 05/28/2026 18,480.00 369.60 18,110.40\nSPC-30552 06/04/2026 9,225.00 184.50 9,040.50\nSPC-30618 06/11/2026 4,872.00 97.44 4,774.56\nSPC-30701 06/18/2026 12,600.00 252.00 12,348.00\nSPC-30779 06/25/2026 3,156.00 0.00 3,156.00\nCM-1182 06/30/2026 (412.50) 0.00 (412.50)\nNet payment $47,016.96\nFunds were sent by ACH credit to the account on file ending 6620 and should be available on July 17, 2026. Discounts were taken under\n2% 10 net 30 terms; invoice SPC-30779 was paid after the discount period. Credit memo CM-1182 (returned pallets) was applied.\nQuestions: ap@tolliver-coop.example."
+          }
+        ],
+        "dates": [
+          "07/17/2026",
+          "05/28/2026",
+          "06/04/2026",
+          "06/11/2026",
+          "06/18/2026",
+          "06/25/2026",
+          "06/30/2026"
+        ],
+        "names": [
+          "TOLLIVER GRAIN & FEED COOPERATIVE",
+          "Sablewood Packaging Corp.",
+          "First Prairie Bank"
+        ],
+        "identifiers": [
+          "071000301884412",
+          "ACH-0071184",
+          "V-20931",
+          "SPC-30417",
+          "SPC-30552",
+          "SPC-30618",
+          "SPC-30701",
+          "SPC-30779",
+          "CM-1182"
+        ]
+      },
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Invoice",
+                "Invoice date",
+                "Gross",
+                "Discount",
+                "Paid"
+              ],
+              [
+                "SPC-30417",
+                "05/28/2026",
+                "18,480.00",
+                "369.60",
+                "18,110.40"
+              ],
+              [
+                "SPC-30552",
+                "06/04/2026",
+                "9,225.00",
+                "184.50",
+                "9,040.50"
+              ],
+              [
+                "SPC-30618",
+                "06/11/2026",
+                "4,872.00",
+                "97.44",
+                "4,774.56"
+              ],
+              [
+                "SPC-30701",
+                "06/18/2026",
+                "12,600.00",
+                "252.00",
+                "12,348.00"
+              ],
+              [
+                "SPC-30779",
+                "06/25/2026",
+                "3,156.00",
+                "0.00",
+                "3,156.00"
+              ],
+              [
+                "CM-1182",
+                "06/30/2026",
+                "(412.50)",
+                "0.00",
+                "(412.50)"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Payment date",
+            "value": "07/17/2026"
+          },
+          {
+            "key": "Payment no.",
+            "value": "ACH-0071184"
+          },
+          {
+            "key": "Payee",
+            "value": "Sablewood Packaging Corp."
+          },
+          {
+            "key": "Vendor no.",
+            "value": "V-20931"
+          },
+          {
+            "key": "Paid through",
+            "value": "First Prairie Bank"
+          },
+          {
+            "key": "Trace no.",
+            "value": "071000301884412"
+          },
+          {
+            "key": "Net payment",
+            "value": "$47,016.96"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-mixed-middle-page",
+      "file": "scan-mixed-middle-page.pdf",
+      "title": "Lease renewal: a scanned rent schedule between two digital pages",
+      "kind": "contract",
+      "format": "pdf",
+      "text_layer": "mixed",
+      "pages": 3,
+      "categories": [
+        "mixed_scan",
+        "contract",
+        "table",
+        "competing_dates",
+        "referenced_agreement"
+      ],
+      "notes": "Pages 1 and 3 have a text layer; page 2, the initialed rent schedule, was printed and scanned back in at 200 DPI in grey, so its figures exist only through OCR. The renewal is made as of March 18, 2026; the original lease (May 14, 2021) and the renewal term (June 1, 2026 to May 31, 2031) are traps. A reader should read pages 1 and 3 as text and OCR only page 2.",
+      "gold": {
+        "document_type": "Lease Renewal Agreement",
+        "acceptable_types": [
+          "Lease Renewal",
+          "Lease Extension Agreement"
+        ],
+        "document_date": "2026-03-18",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2021-05-14",
+            "why": "date of the lease being renewed"
+          },
+          {
+            "date": "2026-06-01",
+            "why": "start of the renewal term"
+          },
+          {
+            "date": "2031-05-31",
+            "why": "end of the renewal term"
+          }
+        ],
+        "parties": [
+          "Ashcombe Commercial Properties LLC",
+          "Vellacott Optometry PC"
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Ashcombe Commercial Properties LLC",
+            "role": "landlord"
+          },
+          {
+            "name": "Vellacott Optometry PC",
+            "role": "tenant"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Harriet Ashcombe-Lowe",
+            "why": "signatory"
+          },
+          {
+            "name": "Dr. Felix Vellacott",
+            "why": "signatory"
+          }
+        ],
+        "description_facts": [
+          [
+            "Suite 120"
+          ],
+          [
+            "five years",
+            "5 years"
+          ],
+          [
+            "$4,012.50",
+            "4,012.50"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "lease renewal",
+          "rent",
+          "suite"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "March 18, 2026"
+          ],
+          "party_text": {
+            "Ashcombe Commercial Properties LLC": [
+              "Ashcombe Commercial Properties LLC"
+            ],
+            "Vellacott Optometry PC": [
+              "Vellacott Optometry PC"
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 2,
+            "text": "EXHIBIT B - RENT SCHEDULE\nSuite 120, 2,140 rentable square feet. Base rent excludes the tenant’s share of operating expenses.\nLease year Period Annual rate per sq ft Monthly base rent\n1 06/2026 - 05/2027 $22.50 $4,012.50\n2 06/2027 - 05/2028 $23.18 $4,133.77\n3 06/2028 - 05/2029 $23.87 $4,256.82\n4 06/2029 - 05/2030 $24.59 $4,385.22\n5 06/2030 - 05/2031 $25.33 $4,517.18\nInitials: Landlord ________ Tenant ________\nLease Renewal Agreement - Page 2 of 3"
+          }
+        ],
+        "dates": [],
+        "names": [],
+        "identifiers": [
+          "$4,012.50",
+          "$4,517.18",
+          "2,140"
+        ]
+      },
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Lease year",
+                "Period",
+                "Annual rate per sq ft",
+                "Monthly base rent"
+              ],
+              [
+                "1",
+                "06/2026 - 05/2027",
+                "$22.50",
+                "$4,012.50"
+              ],
+              [
+                "2",
+                "06/2027 - 05/2028",
+                "$23.18",
+                "$4,133.77"
+              ],
+              [
+                "3",
+                "06/2028 - 05/2029",
+                "$23.87",
+                "$4,256.82"
+              ],
+              [
+                "4",
+                "06/2029 - 05/2030",
+                "$24.59",
+                "$4,385.22"
+              ],
+              [
+                "5",
+                "06/2030 - 05/2031",
+                "$25.33",
+                "$4,517.18"
+              ]
+            ]
+          }
+        ],
+        "expected_routes": {
+          "1": "fast",
+          "2": "ocr",
+          "3": "fast"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "mixed-signature-region",
+      "file": "mixed-signature-region.pdf",
+      "title": "License amendment whose signature block, and the date that makes it effective, is a pasted scan",
+      "kind": "amendment",
+      "format": "pdf",
+      "text_layer": "mixed",
+      "pages": 2,
+      "categories": [
+        "mixed_scan",
+        "image_region",
+        "amendment",
+        "contract",
+        "competing_dates",
+        "referenced_agreement"
+      ],
+      "notes": "Both pages are digital, but page 2's signature block is a scanned image pasted below the text (26% of the page, overlapping no text). The amendment takes effect on the date of the last signature, and the two signature dates - August 18, 2026 and August 21, 2026, the later one the gold - are printed only in that image; the original agreement (September 30, 2024) and the new end of term (September 30, 2028) are in the text and are traps. Page 2's ocr_truth is everything the page shows, top to bottom: its native text, the image's text, then the footer. This is the page the ocr_regions route exists for.",
+      "gold": {
+        "document_type": "First Amendment to Software License Agreement",
+        "acceptable_types": [
+          "Amendment to Software License Agreement",
+          "License Amendment"
+        ],
+        "document_date": "2026-08-21",
+        "acceptable_dates": [],
+        "date_role": "amendment",
+        "forbidden_dates": [
+          {
+            "date": "2026-08-18",
+            "why": "earlier of the two signatures, not the last"
+          },
+          {
+            "date": "2024-09-30",
+            "why": "date of the agreement being amended"
+          },
+          {
+            "date": "2028-09-30",
+            "why": "new end of term"
+          }
+        ],
+        "parties": [
+          "Corvane Analytics Inc.",
+          "Pellworth County Water Authority"
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Corvane Analytics Inc.",
+            "role": "licensor"
+          },
+          {
+            "name": "Pellworth County Water Authority",
+            "role": "licensee"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Rosalind Achterberg",
+            "why": "signatory"
+          },
+          {
+            "name": "Barnaby Quist",
+            "why": "signatory"
+          }
+        ],
+        "description_facts": [
+          [
+            "$64,800",
+            "64,800"
+          ],
+          [
+            "September 30, 2028",
+            "2028"
+          ],
+          [
+            "Leak Detection"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "amendment",
+          "software license",
+          "water"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "August 21, 2026"
+          ],
+          "party_text": {
+            "Corvane Analytics Inc.": [
+              "Corvane Analytics Inc."
+            ],
+            "Pellworth County Water Authority": [
+              "Pellworth County Water Authority"
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 2,
+            "text": "5. Effect of Amendment. Except as amended here, the Agreement remains in full force and effect. If\nthis Amendment conflicts with the Agreement, this Amendment controls.\n6. Counterparts. This Amendment may be signed in counterparts and delivered electronically, and a\nscanned signature has the effect of an original.\nIN WITNESS WHEREOF, the parties have signed this Amendment on the dates written below.\nCORVANE ANALYTICS INC.\nBy:\nName: Rosalind Achterberg\nTitle: Chief Revenue Officer\nDate: August 18, 2026\nPELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manager\nDate: August 21, 2026\nFirst Amendment - Page 2 of 2"
+          }
+        ],
+        "dates": [
+          "August 18, 2026",
+          "August 21, 2026"
+        ],
+        "names": [
+          "CORVANE ANALYTICS INC.",
+          "PELLWORTH COUNTY WATER AUTHORITY",
+          "Rosalind Achterberg",
+          "Barnaby Quist"
+        ],
+        "identifiers": []
+      },
+      "structure": {
+        "reading_order": [
+          "IN WITNESS WHEREOF",
+          "Rosalind Achterberg",
+          "August 18, 2026",
+          "Barnaby Quist",
+          "August 21, 2026"
+        ],
+        "expected_routes": {
+          "1": "fast",
+          "2": "ocr_regions"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-certificate-of-insurance",
+      "file": "scan-certificate-of-insurance.pdf",
+      "title": "Certificate of liability insurance scanned at 300 DPI: dense with dates, insurers and policy numbers",
+      "kind": "certificate",
+      "format": "pdf",
+      "text_layer": "scan",
+      "pages": 1,
+      "categories": [
+        "image_only_scan",
+        "ocr_critical_fields",
+        "table",
+        "form",
+        "competing_dates",
+        "irrelevant_names",
+        "key_value"
+      ],
+      "notes": "A boxed certificate form scanned clean at 300 DPI, holding seven dates, six organisations and eight identifiers. The certificate is dated in its top-right box (06/23/2026); every policy effective and expiration date in the coverage table is a trap. It certifies the insured's coverage: the insured is the party, the producer issues it, and it goes to the certificate holder; the three insurers are not parties to the certificate.",
+      "gold": {
+        "document_type": "Certificate of Liability Insurance",
+        "acceptable_types": [
+          "Certificate of Insurance"
+        ],
+        "document_date": "2026-06-23",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-04-01",
+            "why": "policy effective date"
+          },
+          {
+            "date": "2027-04-01",
+            "why": "policy expiration date"
+          },
+          {
+            "date": "2026-01-15",
+            "why": "auto policy effective date"
+          },
+          {
+            "date": "2027-01-15",
+            "why": "auto policy expiration date"
+          },
+          {
+            "date": "2025-10-01",
+            "why": "workers compensation effective date"
+          },
+          {
+            "date": "2026-10-01",
+            "why": "workers compensation expiration date"
+          }
+        ],
+        "parties": [
+          "Ostergaard Roofing Contractors LLC"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Hartsfield & Quail Insurance Brokers"
+            ],
+            "relation": "from"
+          },
+          {
+            "parties": [
+              "Calloway Crossing Shopping Center LLC"
+            ],
+            "relation": "to"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Ostergaard Roofing Contractors LLC",
+            "role": "subject"
+          },
+          {
+            "name": "Hartsfield & Quail Insurance Brokers",
+            "role": "issuer"
+          },
+          {
+            "name": "Calloway Crossing Shopping Center LLC",
+            "role": "recipient"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Bramblecote Casualty Company",
+            "why": "insurer A affording coverage"
+          },
+          {
+            "name": "Wexley Indemnity Insurance Company",
+            "why": "insurer B affording coverage"
+          },
+          {
+            "name": "Fenmoor Specialty Insurance Co.",
+            "why": "insurer C affording coverage"
+          },
+          {
+            "name": "Brightmoor Property Management",
+            "why": "holder's property manager"
+          }
+        ],
+        "description_facts": [
+          [
+            "BCC-GL-4471902"
+          ],
+          [
+            "Calloway Crossing Shopping Center LLC",
+            "Calloway Crossing"
+          ],
+          [
+            "$5,000,000",
+            "5,000,000"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "certificate",
+          "liability insurance",
+          "roofing"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "06/23/2026"
+          ],
+          "party_text": {
+            "Ostergaard Roofing Contractors LLC": [
+              "Ostergaard Roofing Contractors LLC"
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 1,
+            "text": "DATE (MM/DD/YYYY)\nCERTIFICATE OF LIABILITY INSURANCE\n06/23/2026\nThis certificate is issued as a matter of information only and confers no rights upon the certificate holder. It does not amend, extend or alter the coverage\nafforded by the policies below.\nPRODUCER INSURERS AFFORDING COVERAGE\nHartsfield & Quail Insurance Brokers INSURER A: Bramblecote Casualty Company - NAIC 24117\nINSURER B: Wexley Indemnity Insurance Company - NAIC 39042 300 Bell Tower Road, Suite 5\nINSURER C: Fenmoor Specialty Insurance Co. - NAIC 11583 Calloway, SC 29630\nTel. (864) 555-0121\nINSURED CERTIFICATE NUMBER\nOstergaard Roofing Contractors LLC HQ-26-06-4415\n71 Slate Quarry Lane Revision 1\nEasley, SC 29640\nCOVERAGES\nLTR TYPE OF INSURANCE POLICY NUMBER POLICY EFF POLICY EXP LIMITS\nA Commercial general liability BCC-GL-4471902 04/01/2026 04/01/2027 Each occurrence $1,000,000\nB Automobile liability WIC-CA-208815 01/15/2026 01/15/2027 Combined single limit $1,000,000\nC Umbrella liability FSI-UMB-77310 04/01/2026 04/01/2027 Each occurrence $5,000,000\nA Workers compensation BCC-WC-5530118 10/01/2025 10/01/2026 E.L. each accident $500,000\nDESCRIPTION OF OPERATIONS / LOCATIONS\nRoof replacement, Building C, Calloway Crossing Shopping Center, 1800 Calloway Parkway, Calloway, SC.\nThe certificate holder is an additional insured on the general liability policy as required by written contract.\nCERTIFICATE HOLDER CANCELLATION\nCalloway Crossing Shopping Center LLC Should any of the above policies be cancelled before\nthe expiration date, notice will be delivered in c/o Brightmoor Property Management\naccordance with the policy provisions. 1800 Calloway Parkway\nCalloway, SC 29630\nAUTHORIZED REPRESENTATIVE\n/s/ Lorna Quail"
+          }
+        ],
+        "dates": [
+          "06/23/2026",
+          "04/01/2026",
+          "04/01/2027",
+          "01/15/2026",
+          "01/15/2027",
+          "10/01/2025",
+          "10/01/2026"
+        ],
+        "names": [
+          "Hartsfield & Quail Insurance Brokers",
+          "Ostergaard Roofing Contractors LLC",
+          "Calloway Crossing Shopping Center LLC",
+          "Bramblecote Casualty Company",
+          "Wexley Indemnity Insurance Company",
+          "Fenmoor Specialty Insurance Co."
+        ],
+        "identifiers": [
+          "BCC-GL-4471902",
+          "WIC-CA-208815",
+          "FSI-UMB-77310",
+          "BCC-WC-5530118",
+          "24117",
+          "39042",
+          "11583",
+          "HQ-26-06-4415"
+        ]
+      },
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "LTR",
+                "TYPE OF INSURANCE",
+                "POLICY NUMBER",
+                "POLICY EFF",
+                "POLICY EXP",
+                "LIMITS"
+              ],
+              [
+                "A",
+                "Commercial general liability",
+                "BCC-GL-4471902",
+                "04/01/2026",
+                "04/01/2027",
+                "Each occurrence $1,000,000"
+              ],
+              [
+                "B",
+                "Automobile liability",
+                "WIC-CA-208815",
+                "01/15/2026",
+                "01/15/2027",
+                "Combined single limit $1,000,000"
+              ],
+              [
+                "C",
+                "Umbrella liability",
+                "FSI-UMB-77310",
+                "04/01/2026",
+                "04/01/2027",
+                "Each occurrence $5,000,000"
+              ],
+              [
+                "A",
+                "Workers compensation",
+                "BCC-WC-5530118",
+                "10/01/2025",
+                "10/01/2026",
+                "E.L. each accident $500,000"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "DATE (MM/DD/YYYY)",
+            "value": "06/23/2026"
+          },
+          {
+            "key": "PRODUCER",
+            "value": "Hartsfield & Quail Insurance Brokers"
+          },
+          {
+            "key": "INSURED",
+            "value": "Ostergaard Roofing Contractors LLC"
+          },
+          {
+            "key": "CERTIFICATE HOLDER",
+            "value": "Calloway Crossing Shopping Center LLC"
+          },
+          {
+            "key": "CERTIFICATE NUMBER",
+            "value": "HQ-26-06-4415"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr"
+        }
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "scan-bill-of-lading",
+      "file": "scan-bill-of-lading.pdf",
+      "title": "Straight bill of lading scanned at 200 DPI: four companies and seven identifiers",
+      "kind": "bill_of_lading",
+      "format": "pdf",
+      "text_layer": "scan",
+      "pages": 1,
+      "categories": [
+        "image_only_scan",
+        "ocr_critical_fields",
+        "table",
+        "form",
+        "competing_dates",
+        "layout_parties",
+        "key_value"
+      ],
+      "notes": "A 1-bit scan at 200 DPI of a short-form bill of lading: four organisations (shipper, consignee, carrier, third-party payer) in boxes and labelled lines, a commodity table and seven identifiers (BOL, pro, seal, trailer, shipper ID, NMFC numbers). Issued on the ship date (09/08/2026); the deliver-by date (09/11/2026) and the customer PO date (08/29/2026) are traps. From the shipper; the consignee is accepted as the recipient, the carrier as the counterparty; the freight bill-to is a trap.",
+      "gold": {
+        "document_type": "Bill of Lading",
+        "acceptable_types": [
+          "Straight Bill of Lading"
+        ],
+        "document_date": "2026-09-08",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-09-11",
+            "why": "deliver-by date"
+          },
+          {
+            "date": "2026-08-29",
+            "why": "customer purchase order date"
+          }
+        ],
+        "parties": [
+          "Corriveau Millwork Supply Co."
+        ],
+        "party_relation": "from",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Tamberlane Builders Supply"
+            ],
+            "relation": "to"
+          },
+          {
+            "parties": [
+              "Pinecrest Motor Freight Inc."
+            ],
+            "relation": "with"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Corriveau Millwork Supply Co.",
+            "role": "issuer"
+          },
+          {
+            "name": "Corriveau Millwork Supply Co.",
+            "role": "sender"
+          },
+          {
+            "name": "Tamberlane Builders Supply",
+            "role": "recipient"
+          },
+          {
+            "name": "Pinecrest Motor Freight Inc.",
+            "role": "counterparty"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Quillfeather Logistics Group",
+            "why": "third party paying the freight"
+          },
+          {
+            "name": "Ansel Pruett",
+            "why": "driver"
+          },
+          {
+            "name": "Odile Corriveau",
+            "why": "shipper's signer"
+          }
+        ],
+        "description_facts": [
+          [
+            "BL-2026-118745"
+          ],
+          [
+            "8,055 lb",
+            "8,055"
+          ],
+          [
+            "Tamberlane Builders Supply",
+            "Tamberlane"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "bill of lading",
+          "millwork",
+          "freight"
+        ],
+        "expected_readiness": "either",
+        "evidence": {
+          "date_text": [
+            "09/08/2026"
+          ],
+          "party_text": {
+            "Corriveau Millwork Supply Co.": [
+              "Corriveau Millwork Supply Co."
+            ]
+          }
+        }
+      },
+      "ocr_truth": {
+        "pages": [
+          {
+            "page": 1,
+            "text": "STRAIGHT BILL OF LADING - SHORT FORM\nOriginal - not negotiable\nSHIP FROM Bill of lading no.: BL-2026-118745\nCorriveau Millwork Supply Co. Ship date: 09/08/2026\n4180 Sawmill Creek Road\nCarrier: Pinecrest Motor Freight Inc.\nCorriveau, VT 05473\nSCAC: PCMF\nSID: CMS-0019\nPro no.: 552-0917734 SHIP TO\nTamberlane Builders Supply Trailer no.: PC-53118\n22 Depot Street, Dock 3\nSeal no.: SL-4407219\nTamberlane, NH 03276\nCustomer PO: TBS-7731 dated 08/29/2026\nDeliver by 09/11/2026\nTHIRD PARTY FREIGHT CHARGES BILL TO\nQuillfeather Logistics Group\nFreight terms: Third party\n600 Wharf Road, Portsmouth, NH 03801\nSpecial instructions: call 2 hrs before arrival\nUnits Type Weight (lb) HM Description of articles NMFC no. Class\n6 PLT 3,840 Interior door slabs, primed pine, wrapped 109300 70\n4 PLT 2,610 Window casing and trim, finger-jointed pine 157600 70\n2 CRT 1,125 Stair parts: treads, risers, balusters 109300 70\n1 PLT 480 Adhesive, construction grade, non-hazardous 4610 55\nTotal: 13 handling units, 8,055 lb\nReceived, subject to the classifications and tariffs in effect on the date of issue of this bill of lading, the property described above in apparent good order, except\nas noted, marked, consigned and destined as shown. The carrier agrees to carry it to its usual place of delivery at the destination.\nSHIPPER SIGNATURE / DATE CARRIER SIGNATURE / PICKUP DATE\n/s/ Odile Corriveau Driver: Ansel Pruett, unit 4417\nDate: 09/08/2026 Time in 07:40 out 08:25 Date: 09/08/2026"
+          }
+        ],
+        "dates": [
+          "09/08/2026",
+          "09/11/2026",
+          "08/29/2026"
+        ],
+        "names": [
+          "Corriveau Millwork Supply Co.",
+          "Tamberlane Builders Supply",
+          "Pinecrest Motor Freight Inc.",
+          "Quillfeather Logistics Group"
+        ],
+        "identifiers": [
+          "BL-2026-118745",
+          "552-0917734",
+          "SL-4407219",
+          "PC-53118",
+          "CMS-0019",
+          "109300",
+          "157600"
+        ]
+      },
+      "structure": {
+        "tables": [
+          {
+            "rows": [
+              [
+                "Units",
+                "Type",
+                "Weight (lb)",
+                "HM",
+                "Description of articles",
+                "NMFC no.",
+                "Class"
+              ],
+              [
+                "6",
+                "PLT",
+                "3,840",
+                "",
+                "Interior door slabs, primed pine, wrapped",
+                "109300",
+                "70"
+              ],
+              [
+                "4",
+                "PLT",
+                "2,610",
+                "",
+                "Window casing and trim, finger-jointed pine",
+                "157600",
+                "70"
+              ],
+              [
+                "2",
+                "CRT",
+                "1,125",
+                "",
+                "Stair parts: treads, risers, balusters",
+                "109300",
+                "70"
+              ],
+              [
+                "1",
+                "PLT",
+                "480",
+                "",
+                "Adhesive, construction grade, non-hazardous",
+                "4610",
+                "55"
+              ]
+            ]
+          }
+        ],
+        "key_values": [
+          {
+            "key": "Bill of lading no.",
+            "value": "BL-2026-118745"
+          },
+          {
+            "key": "Ship date",
+            "value": "09/08/2026"
+          },
+          {
+            "key": "Carrier",
+            "value": "Pinecrest Motor Freight Inc."
+          },
+          {
+            "key": "SCAC",
+            "value": "PCMF"
+          },
+          {
+            "key": "Pro no.",
+            "value": "552-0917734"
+          },
+          {
+            "key": "Trailer no.",
+            "value": "PC-53118"
+          },
+          {
+            "key": "Seal no.",
+            "value": "SL-4407219"
+          },
+          {
+            "key": "Customer PO",
+            "value": "TBS-7731 dated 08/29/2026"
+          },
+          {
+            "key": "SHIP FROM",
+            "value": "Corriveau Millwork Supply Co."
+          },
+          {
+            "key": "SHIP TO",
+            "value": "Tamberlane Builders Supply"
+          }
+        ],
+        "expected_routes": {
+          "1": "ocr"
+        }
+      },
+      "recording": "pending"
     }
   ]
 }
