@@ -31,7 +31,7 @@ const TYPE_OVERLAP: f32 = 0.6;
 
 /// Capitalised words that routinely open or punctuate a description and are not
 /// claims about the document.
-const GENERIC_CAPITALS: &[&str] = &[
+pub(crate) const GENERIC_CAPITALS: &[&str] = &[
     "a", "an", "and", "as", "at", "between", "by", "for", "from", "in", "of", "on", "the", "this",
     "to", "with", "it", "its", "their",
 ];
@@ -247,22 +247,28 @@ fn validate_document_type(
     else {
         return (None, true);
     };
+    if !type_is_supported(document_type, digest) {
+        return (None, false);
+    }
+    (Some(document_type.to_owned()), true)
+}
+
+/// Whether enough of a document type's significant words are in `digest`
+/// ([`TYPE_OVERLAP`]).
+pub(crate) fn type_is_supported(document_type: &str, digest: &impl Segments) -> bool {
     let words = normalize(document_type);
     let significant = words
         .split_whitespace()
         .filter(|word| word.len() > 2 && !GENERIC_CAPITALS.contains(word))
         .collect::<Vec<_>>();
     if significant.is_empty() {
-        return (None, false);
+        return false;
     }
     let matched = significant
         .iter()
         .filter(|word| digest_contains(digest, word))
         .count();
-    if (matched as f32) < significant.len() as f32 * TYPE_OVERLAP {
-        return (None, false);
-    }
-    (Some(document_type.to_owned()), true)
+    (matched as f32) >= significant.len() as f32 * TYPE_OVERLAP
 }
 
 /// A date is accepted when it is a real calendar date that is written, in some
@@ -300,19 +306,37 @@ fn validate_date(
     // apart, so the guarantee lives here, where nothing wobbles: if the
     // document states exactly one other date on an effective/commencement
     // line, that date is the answer; otherwise the document goes to review.
-    let lines: Vec<&str> = digest
-        .segments()
-        .iter()
-        .flat_map(|segment| segment.lines())
-        .collect();
+    if date_is_tainted(digest, date, document_type) {
+        if let [(alternate, line)] = effective_alternates(digest, date).as_slice() {
+            return (
+                Some(alternate.clone()),
+                Some(crate::domain::DateRole::Effective),
+                true,
+                Some(line.clone()),
+            );
+        }
+        return (None, None, false, None);
+    }
+    (Some(date.to_owned()), candidate.date_role, true, None)
+}
+
+/// Whether `digest` states `date` only as another document's date: every
+/// statement of it introduced by a reference to another agreement, and none
+/// naming this document.
+pub(crate) fn date_is_tainted(
+    digest: &impl Segments,
+    date: &str,
+    document_type: Option<&str>,
+) -> bool {
     // The taint is judged over wrapped lines, not raw ones. A PDF breaks
     // "... Northstar Lantern Works LLC dated" from "March 3, 2024" wherever
     // the margin falls, and read raw the second half looks like a date
     // nothing introduced - which clears the taint and lets the referenced
-    // agreement's date through. The search for a replacement below stays on
-    // raw lines, because there a line break is a real boundary: "effective
-    // as of April 1, 2026 and continues" / "through March 31, 2027" states
-    // one effective date and one end of term, not two candidates.
+    // agreement's date through. The search for a replacement
+    // ([`effective_alternates`]) stays on raw lines, because there a line
+    // break is a real boundary: "effective as of April 1, 2026 and
+    // continues" / "through March 31, 2027" states one effective date and
+    // one end of term, not two candidates.
     let wrapped: Vec<String> = digest
         .segments()
         .iter()
@@ -331,37 +355,37 @@ fn validate_date(
             }
         }
     }
-    let tainted = stated && tainted;
-    if tainted {
-        let mut alternates: Vec<(String, String)> = Vec::new();
-        for line in &lines {
-            let normalized = normalize(line);
-            if !EFFECTIVE_CUES.iter().any(|cue| normalized.contains(cue)) {
+    stated && tainted
+}
+
+/// The dates other than `date` that `digest` states cleanly on an
+/// effective or commencement line, each once with the line it stands on:
+/// the candidates to replace a tainted date with.
+pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = digest
+        .segments()
+        .iter()
+        .flat_map(|segment| segment.lines())
+        .collect();
+    let mut alternates: Vec<(String, String)> = Vec::new();
+    for line in &lines {
+        let normalized = normalize(line);
+        if !EFFECTIVE_CUES.iter().any(|cue| normalized.contains(cue)) {
+            continue;
+        }
+        for found in extract_stated_dates(line) {
+            if found == *date || alternates.iter().any(|(existing, _)| *existing == found) {
                 continue;
             }
-            for found in extract_stated_dates(line) {
-                if found == *date || alternates.iter().any(|(existing, _)| *existing == found) {
-                    continue;
-                }
-                let clean = date_match_positions(&found, &normalized)
-                    .iter()
-                    .any(|&position| !reference_introduced(&normalized, position));
-                if clean {
-                    alternates.push((found, line.trim().to_owned()));
-                }
+            let clean = date_match_positions(&found, &normalized)
+                .iter()
+                .any(|&position| !reference_introduced(&normalized, position));
+            if clean {
+                alternates.push((found, line.trim().to_owned()));
             }
         }
-        if let [(alternate, line)] = alternates.as_slice() {
-            return (
-                Some(alternate.clone()),
-                Some(crate::domain::DateRole::Effective),
-                true,
-                Some(line.clone()),
-            );
-        }
-        return (None, None, false, None);
     }
-    (Some(date.to_owned()), candidate.date_role, true, None)
+    alternates
 }
 
 /// What became of a date the document states only as a deadline.
@@ -386,6 +410,21 @@ enum Deadline {
 /// A single unlabelled statement of the date anywhere clears it: the
 /// document then says something besides "this is when it is due".
 fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
+    if !deadline_fires(digest, date) {
+        return None;
+    }
+    Some(match issue_date_alternates(digest, date).as_slice() {
+        [(alternate, line)] => Deadline::Replaced {
+            date: alternate.clone(),
+            line: line.clone(),
+        },
+        _ => Deadline::Withheld,
+    })
+}
+
+/// Whether every statement of `date` in `digest`, references to other
+/// documents aside, is labelled a deadline - and there is at least one.
+pub(crate) fn deadline_fires(digest: &impl Segments, date: &str) -> bool {
     let lines: Vec<String> = digest
         .segments()
         .iter()
@@ -399,14 +438,23 @@ fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
                 continue;
             }
             if !labels_a_deadline(&window_before(&normalized, position)) {
-                return None;
+                return false;
             }
             stated = true;
         }
     }
-    if !stated {
-        return None;
-    }
+    stated
+}
+
+/// The dates other than `date` that `digest` labels as the date of issue,
+/// each once with the line it stands on: the candidates to replace a
+/// deadline with.
+pub(crate) fn issue_date_alternates(digest: &impl Segments, date: &str) -> Vec<(String, String)> {
+    let lines: Vec<String> = digest
+        .segments()
+        .iter()
+        .flat_map(|segment| wrapped_lines(segment))
+        .collect();
     let order = numeric_date_order(digest);
     let mut alternates: Vec<(String, String)> = Vec::new();
     for line in &lines {
@@ -422,13 +470,7 @@ fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
             alternates.push((found, line.trim().to_owned()));
         }
     }
-    Some(match alternates.as_slice() {
-        [(alternate, line)] => Deadline::Replaced {
-            date: alternate.clone(),
-            line: line.clone(),
-        },
-        _ => Deadline::Withheld,
-    })
+    alternates
 }
 
 /// True when the document writes `date` only in numbers that read as two
@@ -444,7 +486,7 @@ fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
 ///
 /// A day above 12 or a day equal to the month reads one way only, and is
 /// never ambiguous.
-fn reading_is_unsettled(digest: &impl Segments, date: &str) -> bool {
+pub(crate) fn reading_is_unsettled(digest: &impl Segments, date: &str) -> bool {
     let (Some(month), Some(day)) = (
         date.get(5..7).and_then(|value| value.parse::<u32>().ok()),
         date.get(8..10).and_then(|value| value.parse::<u32>().ok()),
@@ -475,7 +517,7 @@ fn reading_is_unsettled(digest: &impl Segments, date: &str) -> bool {
 }
 
 /// Whether an accepted ISO date's year is one a document could carry.
-fn year_is_plausible(date: &str, current_year: i32) -> bool {
+pub(crate) fn year_is_plausible(date: &str, current_year: i32) -> bool {
     date.get(..4)
         .and_then(|year| year.parse::<i32>().ok())
         .is_none_or(|year| {
@@ -486,7 +528,7 @@ fn year_is_plausible(date: &str, current_year: i32) -> bool {
 
 /// The current year in UTC, from the system clock. A clock set before 1970
 /// reads as 1970, which only makes the plausibility check more lenient.
-fn current_year() -> i32 {
+pub(crate) fn current_year() -> i32 {
     let days = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs() / 86_400);
@@ -840,7 +882,7 @@ fn validate_parties(candidate: &ModelProposal, digest: &impl Segments) -> (Vec<S
     (kept, all_supported)
 }
 
-fn validate_description(
+pub(crate) fn validate_description(
     description: &str,
     digest: &impl Segments,
     reasons: &mut Vec<ReviewReason>,
@@ -1004,7 +1046,7 @@ fn is_usable_sentence(description: &str) -> bool {
 /// Only specifics are checked. Ordinary prose the model wrote to glue the
 /// sentence together is not a claim about the document and must not send an
 /// otherwise good proposal to review.
-fn first_unsupported_claim(description: &str, digest: &impl Segments) -> Option<String> {
+pub(crate) fn first_unsupported_claim(description: &str, digest: &impl Segments) -> Option<String> {
     let restated = restated_dates(description, digest);
     for (index, raw) in description.split_whitespace().enumerate() {
         if restated[index] {
@@ -1097,7 +1139,7 @@ fn claim_is_supported(digest: &impl Segments, token: &str) -> bool {
         .any(|variant| variant.chars().count() >= 3 && digest_contains(digest, variant))
 }
 
-fn push(reasons: &mut Vec<ReviewReason>, reason: ReviewReason) {
+pub(crate) fn push(reasons: &mut Vec<ReviewReason>, reason: ReviewReason) {
     if !reasons.contains(&reason) {
         reasons.push(reason);
     }
@@ -1111,7 +1153,53 @@ mod tests {
     use crate::domain::{DateRole, Evidence};
 
     fn digest_of(text: &str) -> DocumentDigest {
-        distill(&source_from_text(text), DigestBudget::default())
+        let digest = distill(&source_from_text(text), DigestBudget::default());
+        SOURCES.with(|sources| {
+            sources
+                .borrow_mut()
+                .push((digest.text.clone(), text.to_owned()))
+        });
+        digest
+    }
+
+    thread_local! {
+        /// The text each digest of this module's tests was distilled from.
+        static SOURCES: std::cell::RefCell<Vec<(String, String)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Every test here validates against a digest; this validates the same
+    /// reply against the evidence pipeline's view of the same document -
+    /// its units, all of them, as the context of a document that goes
+    /// whole - and requires the same outcome. The literal checks read the
+    /// two views alike, so a difference is a difference in how the index
+    /// cuts a document into units, which matters to the evidence pipeline.
+    fn validate(candidate: ModelProposal, digest: &DocumentDigest) -> ValidationOutcome {
+        let outcome = super::validate(candidate.clone(), digest);
+        let source = SOURCES.with(|sources| {
+            sources
+                .borrow()
+                .iter()
+                .find(|(text, _)| *text == digest.text)
+                .map(|(_, source)| source.clone())
+        });
+        if let Some(source) = source
+            && !digest.compressed
+        {
+            let index = crate::index::EvidenceIndex::build(&source_from_text(source));
+            let config = crate::retrieve::RetrievalConfig {
+                whole_document_tokens: u32::MAX,
+                ..crate::retrieve::RetrievalConfig::default()
+            };
+            let context = crate::retrieve::retrieve(&index, &config, 100);
+            let scope = crate::facts::ValidationScope::new(&index, &context, &[]);
+            let units = super::validate(candidate, scope.context());
+            assert_eq!(
+                units, outcome,
+                "the evidence index's units validate this reply differently from the digest"
+            );
+        }
+        outcome
     }
 
     fn proposal() -> ModelProposal {

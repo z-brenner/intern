@@ -94,7 +94,7 @@ pub fn digest_contains(digest: &impl Segments, excerpt: &str) -> bool {
 /// Form". The boundary is only required where the needle itself ends in a
 /// word character, so a quote that starts or ends on punctuation still
 /// matches the way it reads.
-fn contains_whole(haystack: &str, needle: &str) -> bool {
+pub(crate) fn contains_whole(haystack: &str, needle: &str) -> bool {
     let word_start = needle.chars().next().is_some_and(char::is_alphanumeric);
     let word_end = needle
         .chars()

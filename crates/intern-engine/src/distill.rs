@@ -282,7 +282,7 @@ pub(crate) fn is_heading_line(line: &str) -> bool {
     uppercase * 10 >= letter_count * 8
 }
 
-fn normalize_heading(value: &str) -> String {
+pub(crate) fn normalize_heading(value: &str) -> String {
     value
         .trim()
         .trim_start_matches('#')

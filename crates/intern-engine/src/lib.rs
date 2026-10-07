@@ -23,6 +23,7 @@
 #![deny(unsafe_code)]
 
 pub mod client;
+pub mod compose;
 pub mod cues;
 pub mod distill;
 pub mod domain;
@@ -30,6 +31,7 @@ pub mod download;
 pub mod engine;
 pub mod error;
 pub mod evidence;
+pub mod facts;
 pub mod fingerprint;
 pub mod hosted;
 pub mod house_style;
@@ -55,7 +57,7 @@ pub mod worker;
 pub use client::{EvidenceHandles, ModelClient, ModelRequest, Proposer, ProposerReply};
 pub use distill::{DigestBudget, DocumentDigest, distill, source_from_text};
 pub use domain::*;
-pub use engine::{Engine, estimated_prompt_tokens};
+pub use engine::{Engine, Pipeline, PreparedEvidence, estimated_prompt_tokens};
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};

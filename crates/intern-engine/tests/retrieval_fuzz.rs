@@ -14,14 +14,25 @@
 //! within budget unless the document went whole; and the same input gives
 //! the same context.
 //!
+//! Then a random reply is validated over that evidence, as the evidence
+//! pipeline validates one, and of that it asks: nothing panics; every line
+//! shown as evidence is the document's own text, in a unit the model was
+//! shown; the grammar offers exactly the prompt's handles; the composed
+//! description stays a sentence of at most 42 words.
+//!
 //! Deterministic: each case has its own seed, printed when it fails.
 
 use std::collections::BTreeSet;
 use std::panic::catch_unwind;
 
-use intern_engine::domain::{DocumentSource, PageOrigin, SourcePage};
+use intern_engine::domain::{
+    DateRole, DocumentSource, KeyFact, ModelFacts, ModelProposal, PageOrigin, PartyFact, PartyRole,
+    ProposalStatus, SourcePage,
+};
 use intern_engine::evidence::{date_match_positions, normalize};
+use intern_engine::facts::{ValidationScope, validate_facts_at};
 use intern_engine::index::EvidenceIndex;
+use intern_engine::prompt::{FieldOrder, ReplyShape, StringLimits, build_evidence_request};
 use intern_engine::retrieve::{
     IdStyle, RetrievalConfig, Strategy, Tier, prepare_evidence, retrieve,
 };
@@ -329,7 +340,187 @@ fn run_case(case: u64) -> usize {
             "case {case}: the index is not deterministic"
         );
     }
+    validate_a_random_reply(&mut rng, case, &source, &index, &context);
     context.units.len()
+}
+
+/// Some text of a shown unit, cut at random character boundaries, or a
+/// random line: what a reply could quote, and what it could invent.
+fn reply_text(rng: &mut Rng, shown: &[&str]) -> String {
+    if !shown.is_empty() && rng.chance(70) {
+        let text = rng.pick(shown);
+        let from = boundary(rng, text);
+        let to = boundary(rng, &text[from..]) + from;
+        text[from..to].trim().chars().take(80).collect()
+    } else {
+        random_line(rng).chars().take(80).collect()
+    }
+}
+
+fn validate_a_random_reply(
+    rng: &mut Rng,
+    case: u64,
+    source: &DocumentSource,
+    index: &EvidenceIndex,
+    context: &intern_engine::retrieve::EvidenceContext,
+) {
+    let shape = ReplyShape {
+        order: [FieldOrder::FactFirst, FieldOrder::EvidenceFirst][rng.below(2)],
+        limits: [StringLimits::Bounded, StringLimits::Unbounded][rng.below(2)],
+    };
+    let request = build_evidence_request(index, context, shape);
+    let grammar = request.grammar.as_deref().expect("a grammar");
+    let handles = context
+        .handles
+        .iter()
+        .map(|(handle, _)| handle.as_str())
+        .collect::<Vec<_>>();
+    // The grammar offers ids exactly when the prompt shows handles; that
+    // it offers exactly those is the prompt module's test.
+    assert_eq!(
+        grammar.lines().any(|line| line.starts_with("id ::= ")),
+        !handles.is_empty(),
+        "case {case}: the grammar's ids do not follow the prompt's handles"
+    );
+    let units = index.units();
+    let shown_ids = context
+        .units
+        .iter()
+        .map(|ordinal| units[*ordinal as usize].id.clone())
+        .collect::<Vec<_>>();
+    let shown_texts = context
+        .units
+        .iter()
+        .map(|ordinal| units[*ordinal as usize].text.as_str())
+        .collect::<Vec<_>>();
+    let cite = |rng: &mut Rng, most: usize| {
+        let mut ids = Vec::new();
+        for _ in 0..rng.below(most + 1) {
+            if !shown_ids.is_empty() && rng.chance(85) {
+                ids.push(
+                    rng.pick(&shown_ids.iter().map(String::as_str).collect::<Vec<_>>())
+                        .to_owned(),
+                );
+            } else {
+                ids.push(
+                    rng.pick(&["p99.b99", "p1.b1", "7", "[p2.b3]", ""])
+                        .to_owned(),
+                );
+            }
+        }
+        ids
+    };
+    let date = if rng.chance(70) {
+        let stated = units
+            .iter()
+            .flat_map(|unit| {
+                unit.features
+                    .dates
+                    .iter()
+                    .map(|mention| mention.iso.clone())
+            })
+            .collect::<Vec<_>>();
+        if stated.is_empty() || rng.chance(20) {
+            Some(random_date(rng).0)
+        } else {
+            Some(
+                rng.pick(&stated.iter().map(String::as_str).collect::<Vec<_>>())
+                    .to_owned(),
+            )
+        }
+    } else {
+        None
+    };
+    let mut parties = Vec::new();
+    for _ in 0..rng.below(4) {
+        parties.push(PartyFact {
+            name: reply_text(rng, &shown_texts),
+            role: rng.chance(80).then(|| rng.pick(&PartyRole::ALL)),
+            evidence: cite(rng, 2),
+        });
+    }
+    let mut key_facts = Vec::new();
+    for _ in 0..rng.below(3) {
+        key_facts.push(KeyFact {
+            fact: reply_text(rng, &shown_texts),
+            evidence: cite(rng, 2),
+        });
+    }
+    let facts = ModelFacts {
+        document_type: rng.chance(85).then(|| reply_text(rng, &shown_texts)),
+        type_evidence: cite(rng, 3),
+        document_date: date,
+        date_role: rng.chance(70).then(|| rng.pick(&DateRole::ALL)),
+        date_evidence: cite(rng, 3),
+        parties,
+        subject: rng.chance(60).then(|| reply_text(rng, &shown_texts)),
+        subject_evidence: cite(rng, 3),
+        identifier: rng.chance(40).then(|| reply_text(rng, &shown_texts)),
+        identifier_evidence: cite(rng, 2),
+        key_facts,
+        unknown_evidence: if rng.chance(20) {
+            vec!["p42.b1".into()]
+        } else {
+            Vec::new()
+        },
+    };
+    let proposal = ModelProposal {
+        document_type: facts.document_type.clone(),
+        document_date: facts.document_date.clone(),
+        date_role: facts.date_role,
+        parties: facts
+            .parties
+            .iter()
+            .map(|party| party.name.clone())
+            .collect(),
+        confidence: [0.0, 0.5, 0.9][rng.below(3)],
+        needs_review: rng.chance(10),
+        facts: Some(Box::new(facts)),
+        ..ModelProposal::default()
+    };
+    let scope = ValidationScope::new(index, context, &source.parser_warnings);
+    let outcome = validate_facts_at(proposal, &scope, 2026);
+    let facts = outcome.facts.as_ref().expect("validated facts");
+    let in_document = |line: &str| {
+        let line = normalize(line);
+        units.iter().any(|unit| unit.normalized.contains(&line))
+    };
+    for reference in &facts.evidence {
+        assert!(
+            shown_ids.contains(&reference.id),
+            "case {case}: evidence from {}, which was not shown",
+            reference.id
+        );
+        assert!(
+            in_document(&reference.text),
+            "case {case}: evidence {:?} is not the document's text",
+            reference.text
+        );
+    }
+    let evidence = &outcome.proposal.evidence;
+    for line in evidence
+        .date
+        .iter()
+        .chain(&evidence.document_type)
+        .chain(&evidence.parties)
+    {
+        assert!(
+            in_document(line),
+            "case {case}: {line:?} shown as evidence is not the document's text"
+        );
+    }
+    let words = outcome.proposal.description.split_whitespace().count();
+    assert!(words <= 42, "case {case}: {words} words");
+    if outcome.status == ProposalStatus::Ready {
+        assert!(outcome.proposal.document_date.is_some(), "case {case}");
+        assert!(outcome.proposal.document_type.is_some(), "case {case}");
+    }
+    for party in &outcome.proposal.parties {
+        assert!(
+            facts.parties.iter().any(|kept| kept.name == *party),
+            "case {case}: {party:?} in the filename but not validated"
+        );
+    }
 }
 
 #[test]

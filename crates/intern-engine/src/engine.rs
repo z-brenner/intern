@@ -4,6 +4,11 @@
 //! DocumentSource ─▶ distill ─▶ prompt ─▶ one inference ─▶ validate ─▶ name
 //! ```
 //!
+//! [`Pipeline::Evidence`] reads a document another way: an evidence index
+//! and the units retrieval chooses from it, a reply of facts that cite those
+//! units by id, and a filename and description composed from the facts that
+//! validation accepts. It is opt-in until it is measured live.
+//!
 //! Everything above this line (extraction, OCR) and everything below it (the
 //! queue, the file operations, the UI) is somebody else's problem. That is what
 //! makes a CLI, a watched folder, or a future connector able to reuse this
@@ -16,16 +21,22 @@
 
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::client::{MAX_REPLY_TOKENS, ModelClient, ModelRequest, Proposer, ProposerReply};
 use crate::distill::{DigestBudget, DocumentDigest, distill};
 use crate::domain::{
     AnalysisTelemetry, DocumentAnalysis, DocumentSource, ProposalStatus, ReviewReason,
-    ValidationOutcome,
+    TokenConfidence, ValidationOutcome,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::stated_dates;
+use crate::facts::{ValidationScope, validate_facts};
 use crate::fingerprint::{self, source_fingerprint};
+use crate::index::EvidenceIndex;
 use crate::naming::compose_filename;
+use crate::prompt::{ReplyShape, build_evidence_request};
+use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
 use crate::validate::validate;
 
 /// Below this much extracted text, a document is treated as unreadable rather
@@ -49,10 +60,60 @@ const MIN_REDISTILLED_CHARACTERS: usize = 2_000;
 /// is sent anyway, for the server to have the last word.
 const MAX_REDISTILLATIONS: usize = 2;
 
+/// How the engine reads a document.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pipeline {
+    /// A distilled digest of the whole document; a reply that quotes its
+    /// evidence and writes the description.
+    #[default]
+    Digest,
+    /// Retrieved evidence units; a reply of facts that cite them by id, and
+    /// a filename and description composed from the validated facts.
+    Evidence,
+}
+
+impl Pipeline {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Digest => "digest",
+            Self::Evidence => "evidence",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim() {
+            "digest" => Some(Self::Digest),
+            "evidence" => Some(Self::Evidence),
+            _ => None,
+        }
+    }
+}
+
+/// A document's evidence, fitted to the model's context, and the request
+/// that carries it: everything [`Engine::analyze_prepared`] needs besides the
+/// model.
+pub struct PreparedEvidence {
+    pub index: EvidenceIndex,
+    pub context: EvidenceContext,
+    pub request: ModelRequest,
+    /// The retrieval budget the context was chosen at, in percent of the
+    /// configured one.
+    pub scale_pct: u32,
+    /// Retrievals after the first, to fit the prompt.
+    pub refits: u32,
+    pub index_micros: u64,
+    pub retrieval_micros: u64,
+    pub prompt_micros: u64,
+}
+
 pub struct Engine {
     client: Box<dyn Proposer>,
     budget: DigestBudget,
     min_token_confidence: Option<f32>,
+    pipeline: Pipeline,
+    retrieval: RetrievalConfig,
+    reply_shape: ReplyShape,
 }
 
 impl Engine {
@@ -67,7 +128,41 @@ impl Engine {
             client,
             budget: DigestBudget::default(),
             min_token_confidence: None,
+            pipeline: Pipeline::default(),
+            retrieval: RetrievalConfig::default(),
+            reply_shape: ReplyShape::default(),
         }
+    }
+
+    /// Reads documents with `pipeline`. [`Pipeline::Digest`] by default.
+    pub fn with_pipeline(mut self, pipeline: Pipeline) -> Self {
+        self.pipeline = pipeline;
+        self
+    }
+
+    pub fn pipeline(&self) -> Pipeline {
+        self.pipeline
+    }
+
+    /// How the evidence pipeline chooses what the prompt carries.
+    pub fn with_retrieval(mut self, config: RetrievalConfig) -> Self {
+        self.retrieval = config;
+        self
+    }
+
+    pub fn retrieval(&self) -> &RetrievalConfig {
+        &self.retrieval
+    }
+
+    /// How the evidence pipeline's reply is shaped: which comes first,
+    /// a fact or its evidence ids, and whether its strings are bounded.
+    pub fn with_reply_shape(mut self, shape: ReplyShape) -> Self {
+        self.reply_shape = shape;
+        self
+    }
+
+    pub fn reply_shape(&self) -> ReplyShape {
+        self.reply_shape
     }
 
     /// Routes a proposal to review when the model's least probable date or
@@ -113,6 +208,9 @@ impl Engine {
         extension: &str,
         existing_names: &[&str],
     ) -> EngineResult<DocumentAnalysis> {
+        if self.pipeline == Pipeline::Evidence {
+            return self.analyze_evidence(source, extension, existing_names);
+        }
         let distill_started = Instant::now();
         let mut budget = self.budget;
         let mut digest = distill(source, budget);
@@ -179,23 +277,7 @@ impl Engine {
         guard_analysis(|| {
             let validation_started = Instant::now();
             let mut outcome = validate(proposal, digest);
-            if barely_readable(source) {
-                // A page that yielded almost no text cannot support a
-                // confident name, whatever the model returned about it.
-                if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
-                    outcome.reasons.push(ReviewReason::ParserWarning);
-                }
-                outcome.status = ProposalStatus::NeedsReview;
-            }
-            if let (Some(threshold), Some(confidence)) =
-                (self.min_token_confidence, token_confidence)
-                && confidence.min < threshold
-            {
-                if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
-                    outcome.reasons.push(ReviewReason::LowConfidence);
-                }
-                outcome.status = ProposalStatus::NeedsReview;
-            }
+            self.apply_gates(&mut outcome, source, token_confidence);
             let validation_micros = micros_since(validation_started);
             let naming_started = Instant::now();
             let mut analysis = finish(
@@ -229,6 +311,193 @@ impl Engine {
     pub fn distill(&self, source: &DocumentSource) -> DocumentDigest {
         distill(source, self.budget)
     }
+
+    /// The checks that follow validation in both pipelines: a page that
+    /// yielded almost no text, and the model's own token probabilities
+    /// when a threshold is set.
+    fn apply_gates(
+        &self,
+        outcome: &mut ValidationOutcome,
+        source: &DocumentSource,
+        token_confidence: Option<TokenConfidence>,
+    ) {
+        if barely_readable(source) {
+            // A page that yielded almost no text cannot support a
+            // confident name, whatever the model returned about it.
+            if !outcome.reasons.contains(&ReviewReason::ParserWarning) {
+                outcome.reasons.push(ReviewReason::ParserWarning);
+            }
+            outcome.status = ProposalStatus::NeedsReview;
+        }
+        if let (Some(threshold), Some(confidence)) = (self.min_token_confidence, token_confidence)
+            && confidence.min < threshold
+        {
+            if !outcome.reasons.contains(&ReviewReason::LowConfidence) {
+                outcome.reasons.push(ReviewReason::LowConfidence);
+            }
+            outcome.status = ProposalStatus::NeedsReview;
+        }
+    }
+
+    /// The evidence pipeline: index, retrieve, propose, validate, compose.
+    /// A prompt the model says does not fit is retried once with half the
+    /// evidence.
+    fn analyze_evidence(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> EngineResult<DocumentAnalysis> {
+        let prepared = self.prepare(source)?;
+        match self.analyze_prepared(source, &prepared, extension, existing_names) {
+            Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+                let scale = (prepared.scale_pct / 2).max(1);
+                let refits = prepared.refits + 1;
+                let mut halved = self.fit(prepared.index, prepared.index_micros, scale)?;
+                halved.refits += refits;
+                self.analyze_prepared(source, &halved, extension, existing_names)
+            }
+            result => result,
+        }
+    }
+
+    /// Builds a document's evidence index, chooses the units its prompt
+    /// carries, and fits the prompt to the model's context the way the
+    /// digest pipeline does: a prompt estimated not to fit is retrieved
+    /// again at a smaller budget, at most twice.
+    pub fn prepare(&self, source: &DocumentSource) -> EngineResult<PreparedEvidence> {
+        let index_started = Instant::now();
+        let options = self.retrieval.index_options();
+        let index = guarded(|| EvidenceIndex::build_with(source, options))?;
+        let index_micros = micros_since(index_started);
+        self.fit(index, index_micros, 100)
+    }
+
+    fn fit(
+        &self,
+        index: EvidenceIndex,
+        index_micros: u64,
+        start_pct: u32,
+    ) -> EngineResult<PreparedEvidence> {
+        let retrieval_started = Instant::now();
+        let mut scale_pct = start_pct.max(1);
+        let mut context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
+        let mut retrieval_micros = micros_since(retrieval_started);
+        let prompt_started = Instant::now();
+        let mut request = build_evidence_request(&index, &context, self.reply_shape);
+        let mut prompt_micros = micros_since(prompt_started);
+        let mut refits = 0_u32;
+        if let Some(context_tokens) = self.client.context_tokens() {
+            let ceiling = context_tokens.saturating_sub(TEMPLATE_TOKENS);
+            let target = ceiling.saturating_sub(CONDENSING_MARGIN_TOKENS).max(1);
+            for _ in 0..MAX_REDISTILLATIONS {
+                let estimate = estimated_tokens(&request.prompt);
+                if estimate + MAX_REPLY_TOKENS as usize <= ceiling || scale_pct <= 1 {
+                    break;
+                }
+                // Only the evidence shrinks; the instructions do not.
+                let evidence = context.estimated_tokens.max(1);
+                let room = target
+                    .saturating_sub(estimate.saturating_sub(evidence))
+                    .max(1);
+                let scaled =
+                    (scale_pct as usize * room / evidence).clamp(1, scale_pct as usize - 1);
+                scale_pct = u32::try_from(scaled).unwrap_or(1);
+                let started = Instant::now();
+                context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
+                retrieval_micros = retrieval_micros.saturating_add(micros_since(started));
+                let started = Instant::now();
+                request = build_evidence_request(&index, &context, self.reply_shape);
+                prompt_micros = prompt_micros.saturating_add(micros_since(started));
+                refits += 1;
+            }
+        }
+        Ok(PreparedEvidence {
+            index,
+            context,
+            request,
+            scale_pct,
+            refits,
+            index_micros,
+            retrieval_micros,
+            prompt_micros,
+        })
+    }
+
+    /// Runs inference, validation and composition over prepared evidence.
+    pub fn analyze_prepared(
+        &self,
+        source: &DocumentSource,
+        prepared: &PreparedEvidence,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> EngineResult<DocumentAnalysis> {
+        let request = &prepared.request;
+        let prompt_characters = request.prompt.chars().count();
+        let estimated_prompt_tokens = estimated_tokens(&request.prompt);
+        let inference_started = Instant::now();
+        let ProposerReply {
+            proposal,
+            token_confidence,
+            timings: model,
+        } = self.client.propose_measured(request)?;
+        let inference_millis =
+            u64::try_from(inference_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        guard_analysis(|| {
+            let validation_started = Instant::now();
+            let scope =
+                ValidationScope::new(&prepared.index, &prepared.context, &source.parser_warnings);
+            let mut outcome = validate_facts(proposal, &scope);
+            self.apply_gates(&mut outcome, source, token_confidence);
+            let validation_micros = micros_since(validation_started);
+            let naming_started = Instant::now();
+            let source_characters = source.character_count();
+            let context_characters = prepared.context.characters;
+            let mut analysis = finish_with_dates(
+                outcome,
+                scope.stated_dates(),
+                extension,
+                existing_names,
+                AnalysisTelemetry {
+                    source_characters,
+                    digest_characters: context_characters,
+                    compression_ratio: if source_characters == 0 {
+                        1.0
+                    } else {
+                        context_characters as f32 / source_characters as f32
+                    },
+                    distill_micros: prepared
+                        .index_micros
+                        .saturating_add(prepared.retrieval_micros),
+                    inference_millis,
+                    prompt_micros: prepared.prompt_micros,
+                    validation_micros,
+                    naming_micros: 0,
+                    redistillations: prepared.refits,
+                    prompt_characters,
+                    estimated_prompt_tokens,
+                    model,
+                    index_micros: prepared.index_micros,
+                    retrieval_micros: prepared.retrieval_micros,
+                    index_units: u32::try_from(prepared.index.units().len()).unwrap_or(u32::MAX),
+                    context_units: u32::try_from(prepared.context.units.len()).unwrap_or(u32::MAX),
+                    context_tier: Some(prepared.context.tier),
+                },
+            );
+            analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
+            analysis.token_confidence = token_confidence;
+            analysis.telemetry.naming_micros = micros_since(naming_started);
+            analysis
+        })
+    }
+}
+
+/// Runs index or retrieval work where a panic fails this document, as
+/// [`guard_analysis`] does for the work after the reply.
+fn guarded<T>(work: impl FnOnce() -> T) -> EngineResult<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
+        .map_err(|_| EngineError::new(EngineErrorCode::AnalysisFailed, "document analysis failed"))
 }
 
 /// Builds the final analysis from an already-validated proposal.
@@ -238,6 +507,23 @@ impl Engine {
 pub fn finish(
     outcome: ValidationOutcome,
     digest: &DocumentDigest,
+    extension: &str,
+    existing_names: &[&str],
+    telemetry: AnalysisTelemetry,
+) -> DocumentAnalysis {
+    finish_with_dates(
+        outcome,
+        stated_dates(digest),
+        extension,
+        existing_names,
+        telemetry,
+    )
+}
+
+/// [`finish`], with the dates the document states already read.
+pub fn finish_with_dates(
+    outcome: ValidationOutcome,
+    stated_dates: Vec<String>,
     extension: &str,
     existing_names: &[&str],
     telemetry: AnalysisTelemetry,
@@ -252,7 +538,7 @@ pub fn finish(
         proposal: outcome.proposal,
         telemetry,
         model_proposal: Some(outcome.candidate),
-        stated_dates: stated_dates(digest),
+        stated_dates,
         text_fingerprint: None,
         token_confidence: None,
         facts: outcome_facts,
@@ -861,5 +1147,157 @@ mod tests {
         // A one-line note is short but perfectly legible; only a page the parser
         // gave up on arrives with an image attached.
         assert!(!barely_readable(&source_from_text("Paid in full.")));
+    }
+
+    /// A model that reads the evidence lines it is shown and answers with
+    /// the facts `answer` finds in them, citing their handles.
+    struct Reader(fn(&[(String, String)]) -> String);
+
+    impl Proposer for Reader {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<crate::domain::ModelProposal> {
+            let lines = request
+                .prompt
+                .lines()
+                .filter_map(|line| line.strip_prefix('['))
+                .filter_map(|line| line.split_once("] "))
+                .map(|(handle, text)| (handle.to_owned(), text.to_owned()))
+                .collect::<Vec<_>>();
+            assert!(
+                request.grammar.is_some(),
+                "an evidence request carries its grammar"
+            );
+            crate::client::proposal_from_text(&(self.0)(&lines), request.evidence.as_ref())
+                .map_err(|_| EngineError::new(EngineErrorCode::ModelResponseInvalid, "unreadable"))
+        }
+    }
+
+    fn handle_of(lines: &[(String, String)], needle: &str) -> String {
+        lines
+            .iter()
+            .find(|(_, text)| text.contains(needle))
+            .map(|(handle, _)| handle.clone())
+            .unwrap_or_else(|| panic!("no line holds {needle:?}"))
+    }
+
+    fn calibration_reply(lines: &[(String, String)]) -> String {
+        format!(
+            r#"{{"type_ids":["{}"],"type":"Notice of Calibration","date_ids":["{}"],"date":"2024-01-02","date_role":"notice","parties":[{{"ids":["{}"],"name":"Northstar Calibration Holdings LLC","role":"addressee"}}],"subject_ids":["{}"],"subject":"the local text model path","confidence":0.9,"needs_review":false}}"#,
+            handle_of(lines, "NOTICE OF CALIBRATION"),
+            handle_of(lines, "January 2, 2024"),
+            handle_of(lines, "Northstar"),
+            handle_of(lines, "model path"),
+        )
+    }
+
+    /// The setup probe a hosted model is checked with passes on the
+    /// evidence pipeline too, whichever way the prompt names its lines.
+    #[test]
+    fn the_semantic_probe_passes_on_the_evidence_pipeline() {
+        for style in [
+            crate::retrieve::IdStyle::Stable,
+            crate::retrieve::IdStyle::Ordinal,
+        ] {
+            let engine = Engine::with_proposer(Box::new(Reader(calibration_reply)))
+                .with_pipeline(Pipeline::Evidence)
+                .with_retrieval(RetrievalConfig {
+                    id_style: style,
+                    ..RetrievalConfig::default()
+                });
+            for probe in crate::setup::semantic_probes().unwrap() {
+                let analysis = engine.analyze(&probe.document, "pdf", &[]).unwrap();
+                crate::setup::validate_semantic_probe(&probe, &analysis)
+                    .unwrap_or_else(|_| panic!("{style:?}: {analysis:#?}"));
+                assert_eq!(
+                    analysis.proposal.party_relation,
+                    crate::domain::PartyRelation::To
+                );
+                assert!(
+                    analysis.filename.starts_with("2024-01-02 ")
+                        && analysis
+                            .filename
+                            .ends_with(" to Northstar Calibration Holdings LLC.pdf"),
+                    "{}",
+                    analysis.filename
+                );
+                assert!(analysis.facts.is_some());
+                let facts = analysis
+                    .model_proposal
+                    .as_ref()
+                    .and_then(|proposal| proposal.facts.as_ref())
+                    .unwrap();
+                // Stored ids are stable whatever the prompt showed.
+                assert!(facts.cited_ids().all(|id| id.starts_with('p')), "{facts:?}");
+                assert_eq!(
+                    analysis.telemetry.context_tier,
+                    Some(crate::retrieve::Tier::Whole)
+                );
+                assert!(analysis.telemetry.index_units > 0);
+                assert_eq!(
+                    analysis.telemetry.context_units,
+                    analysis.telemetry.index_units
+                );
+                assert_eq!(analysis.stated_dates, vec!["2024-01-02"]);
+            }
+        }
+    }
+
+    /// The default pipeline is the digest's: an engine nobody configured
+    /// sends the digest prompt under the fixed grammar.
+    #[test]
+    fn the_digest_pipeline_is_the_default() {
+        struct Plain;
+        impl Proposer for Plain {
+            fn propose(
+                &self,
+                request: &ModelRequest,
+            ) -> EngineResult<crate::domain::ModelProposal> {
+                assert_eq!(request.grammar, None);
+                assert_eq!(request.evidence, None);
+                assert!(request.prompt.contains("--- BEGIN DOCUMENT ---"));
+                crate::client::proposal_from_text(crate::test_support::VALID_REPLY, None)
+                    .map_err(|_| EngineError::new(EngineErrorCode::ModelResponseInvalid, "x"))
+            }
+        }
+        let engine = Engine::with_proposer(Box::new(Plain));
+        assert_eq!(engine.pipeline(), Pipeline::Digest);
+        let analysis = analyze_with(engine);
+        assert_eq!(analysis.facts, None);
+        assert_eq!(analysis.telemetry.context_tier, None);
+    }
+
+    /// A model that says the prompt did not fit is asked once more with
+    /// half the evidence.
+    #[test]
+    fn an_evidence_prompt_too_large_for_the_model_is_retried_with_half_the_evidence() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Tight(AtomicUsize);
+        impl Proposer for Tight {
+            fn propose(
+                &self,
+                request: &ModelRequest,
+            ) -> EngineResult<crate::domain::ModelProposal> {
+                if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(EngineError::new(
+                        EngineErrorCode::ModelInputTooLarge,
+                        "too large",
+                    ));
+                }
+                crate::client::proposal_from_text(
+                    r#"{"type_ids":[],"type":null,"date_ids":[],"date":null,"date_role":null,"parties":[],"confidence":0.9,"needs_review":false}"#,
+                    request.evidence.as_ref(),
+                )
+                .map_err(|_| EngineError::new(EngineErrorCode::ModelResponseInvalid, "x"))
+            }
+        }
+        let long = format!(
+            "MASTER SERVICES AGREEMENT\n\n{}",
+            "Each party shall perform its obligations under this Agreement with due care. "
+                .repeat(400)
+        );
+        let engine = Engine::with_proposer(Box::new(Tight(AtomicUsize::new(0))))
+            .with_pipeline(Pipeline::Evidence);
+        let analysis = engine.analyze(&source_from_text(long), "pdf", &[]).unwrap();
+        assert_eq!(analysis.telemetry.redistillations, 1);
+        assert_eq!(analysis.status, ProposalStatus::NeedsReview);
     }
 }
