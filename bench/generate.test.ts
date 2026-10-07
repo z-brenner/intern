@@ -14,6 +14,7 @@ import { Rng } from './lib/rng.mjs';
 import { textWidth, unsupportedCharacters } from './lib/fonts.mjs';
 import { wrap } from './lib/layout.mjs';
 import { addDays, fromDays, isRealDate, toDays } from './lib/format.mjs';
+import { result } from './docs/common.mjs';
 
 const BENCH = dirname(fileURLToPath(import.meta.url));
 
@@ -307,12 +308,24 @@ describe('InternBench corpus generator', () => {
   it('only cites evidence the document actually carries', () => {
     for (const document of documents) {
       const where = document.id;
-      const text = carried(document, generated.texts);
+      // An OCR-corrupted document is read either way: from its text layer,
+      // or again from the image as the printed text. Each evidence form is
+      // carried by one of the two, and each reading carries a form of every
+      // item, so either reading can be credited.
+      const readings = [carried(document, generated.texts)];
+      if (document.clean_text !== undefined) readings.push(printed(document, generated.texts));
+      const carries = (form: string) => readings.some((text) => text.includes(normalise(form)));
       const { gold } = document;
-      for (const form of gold.evidence.date_text) expect(text.includes(normalise(form)), `${where}: date evidence "${form}"`).toBe(true);
+      for (const form of gold.evidence.date_text) expect(carries(form), `${where}: date evidence "${form}"`).toBe(true);
       for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
-        for (const form of forms) expect(text.includes(normalise(form)), `${where}: party evidence "${form}" for ${party}`).toBe(true);
+        for (const form of forms) expect(carries(form), `${where}: party evidence "${form}" for ${party}`).toBe(true);
       }
+      readings.forEach((text, reading) => {
+        if (gold.evidence.date_text.length > 0) expect(gold.evidence.date_text.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no date evidence`).toBe(true);
+        for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
+          expect(forms.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no evidence for ${party}`).toBe(true);
+        }
+      });
       if (document.ocr_truth) {
         const truth = normalise(document.ocr_truth.pages.map((page) => page.text).join('\n'));
         for (const value of [...document.ocr_truth.dates, ...document.ocr_truth.names, ...document.ocr_truth.identifiers]) {
@@ -508,6 +521,16 @@ describe('InternBench structure gold and the documents added for it', () => {
     for (const document of withStructure.filter((entry) => entry.text_layer === 'scan')) {
       for (const route of Object.values(document.structure!.expected_routes ?? {})) expect(route, document.id).toBe('ocr');
     }
+  });
+
+  it('refuses a labelled value printed under two occurrences of its label', () => {
+    // A change order's DATE box and the architect's signature DATE box,
+    // both dated the same day: the scorer could credit either.
+    const text = ['CONTRACT DATE\n01/15/2025\nDATE\n05/07/2026\nARCHITECT\nDATE\n05/07/2026'];
+    const structure = { key_values: [{ key: 'DATE', value: '05/07/2026' }] };
+    expect(() => result({ id: 'twice', files: [], text, structure })).toThrow('the value "05/07/2026" is printed under 2 occurrences of the label "DATE"');
+    const changeOrder = documents.find((document) => document.id === 'change-order-form')!;
+    expect((changeOrder.structure!.key_values ?? []).map((pair) => pair.key)).not.toContain('DATE');
   });
 
   it('writes one meeting notice three ways: the same runs, in three content-stream orders', async () => {

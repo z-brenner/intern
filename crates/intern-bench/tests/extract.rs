@@ -1,6 +1,7 @@
 //! The `run` command in extract-only mode, end to end over a tiny gold
 //! corpus, with a worker that cannot start: every document fails, and
-//! every failure is scored, reported, baselined and gated.
+//! every failure is scored, reported and gated - but never written as the
+//! baseline, which would hold later runs to having read nothing.
 
 use std::path::PathBuf;
 
@@ -106,11 +107,13 @@ fn a_worker_that_cannot_start_fails_the_warm_up() {
 }
 
 #[test]
-fn every_failed_extraction_is_scored_as_a_miss_baselined_and_gated() {
+fn every_failed_extraction_is_scored_as_a_miss_and_gated_but_never_the_baseline() {
     let bench = Bench::new();
     let mut options = bench.options("report.json", false);
     options.write_baseline = Some(bench.path("baseline.json"));
-    assert_eq!(run(options).unwrap(), 0);
+    // Nothing completed: the report is written, the baseline refused.
+    assert_eq!(run(options).unwrap(), EXIT_REGRESSED);
+    assert!(!bench.path("baseline.json").exists());
     let report = bench.report("report.json");
     assert_eq!(report.mode, "extract");
     assert_eq!(report.timings_source, "measured");
@@ -124,11 +127,16 @@ fn every_failed_extraction_is_scored_as_a_miss_baselined_and_gated() {
         "table_row_accuracy",
         "table_cell_recall",
         "kv_accuracy",
-        "route_correct",
         "digest_recall",
     ] {
         assert_eq!(notice.scores[key], json!(0.0), "{key}");
     }
+    // Nothing was read, so nothing was routed: as for a worker that sends
+    // no layouts, the route is not judged.
+    assert!(!notice.scores.contains_key("route_correct"));
+    // The routes section still says the gold expected one.
+    let routes = report.routes.as_ref().unwrap();
+    assert_eq!((routes.expected_pages, routes.confusion.len()), (1, 0));
     let receipt = report.record("scan-receipt").unwrap();
     assert_eq!(receipt.scores["ocr_cer"], json!(1.0));
     assert_eq!(receipt.scores["ocr_identifier_accuracy"], json!(0.0));
@@ -136,6 +144,12 @@ fn every_failed_extraction_is_scored_as_a_miss_baselined_and_gated() {
     assert_eq!(structure.aggregate.rows, 2);
     assert_eq!(structure.aggregate.reading_order_accuracy, Some(0.0));
 
+    // Held to a baseline of the same failures, it passes.
+    std::fs::write(
+        bench.path("baseline.json"),
+        Baseline::from_report(&report).to_json(),
+    )
+    .unwrap();
     let baseline = Baseline::parse(&std::fs::read(bench.path("baseline.json")).unwrap()).unwrap();
     assert_eq!(baseline.mode, "extract");
     assert_eq!(
@@ -152,7 +166,7 @@ fn every_failed_extraction_is_scored_as_a_miss_baselined_and_gated() {
         "{page}"
     );
 
-    // Held to its own baseline it passes; a replay baseline it is never
+    // Held to its own failures it passes; a replay baseline it is never
     // held to.
     let mut again = bench.options("again.json", false);
     again.baseline = Some(bench.path("baseline.json"));

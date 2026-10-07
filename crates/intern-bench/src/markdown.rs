@@ -385,7 +385,7 @@ fn extraction_scorecard(out: &mut String, report: &Report) {
         };
         let rate = |value: Option<f64>| value.map_or_else(|| "–".to_owned(), percent);
         match key {
-            "reading_order_accuracy" => structure(|f| (f.pairs_in_order, f.pairs)),
+            "reading_order_accuracy" => structure(|f| (f.snippets_in_order, f.snippets)),
             "table_row_accuracy" => structure(|f| (f.rows_found, f.rows)),
             "table_cell_recall" => structure(|f| (f.cells_found, f.cells)),
             "kv_accuracy" => structure(|f| (f.key_values_found, f.key_values)),
@@ -421,7 +421,7 @@ fn extraction_scorecard(out: &mut String, report: &Report) {
     table(out, &["Score", "Pooled", "Mean per document"], &rows);
     let _ = writeln!(
         out,
-        "Pooled figures count items over every document (snippet pairs, rows, cells, labelled values, pages; OCR characters, words and values); the mean gives each document one vote. A document whose extraction failed counts with every item missed. `digest_recall` is the share of the gold's date and party evidence in the digest the engine would build from this text.\n"
+        "Pooled figures count items over every document (snippets, rows, cells, labelled values, pages; OCR characters, words and values); the mean gives each document one vote. A document whose extraction failed counts with every item missed. `digest_recall` is the share of the gold's date and party evidence in the digest the engine would build from this text.\n"
     );
 }
 
@@ -435,7 +435,7 @@ fn structure(out: &mut String, report: &Report) {
         vec![
             name,
             class.to_owned(),
-            share(figures.pairs_in_order, figures.pairs),
+            share(figures.snippets_in_order, figures.snippets),
             share(figures.rows_found, figures.rows),
             share(figures.cells_found, figures.cells),
             share(figures.key_values_found, figures.key_values),
@@ -460,7 +460,7 @@ fn structure(out: &mut String, report: &Report) {
         &[
             "Document",
             "Route class",
-            "Reading order (pairs)",
+            "Reading order (snippets)",
             "Table rows",
             "Table cells",
             "Key-values",
@@ -470,7 +470,7 @@ fn structure(out: &mut String, report: &Report) {
     );
     let _ = writeln!(
         out,
-        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line, in order. Table cells: cells found in their table's lines. Key-values: values after their label on its line, alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
+        "Measured over the page text the engine receives. Reading order: the most gold snippets found in the gold's order (a longest increasing run), of all of them. Table rows: rows whose cells are all on one line of their table, in order, with no other row between them and an empty check box left empty. Table cells: cells found in their table's lines. Key-values: values after their label on its line (before the next label), alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
     );
 }
 
@@ -513,8 +513,26 @@ fn routes(out: &mut String, report: &Report) {
             classes.join(" · ")
         );
     }
+    let judged = routes
+        .confusion
+        .values()
+        .flat_map(|taken| taken.values())
+        .sum::<usize>();
+    if routes.expected_pages > 0 {
+        let _ = writeln!(
+            out,
+            "- **Pages the gold gives a route for:** {}, {judged} judged",
+            routes.expected_pages
+        );
+    }
     let _ = writeln!(out);
     if routes.confusion.is_empty() {
+        if routes.expected_pages > 0 {
+            let _ = writeln!(
+                out,
+                "None was judged: a route is judged only on a page read with a layout, and those documents came without one (a worker before the router, or an extraction that failed).\n"
+            );
+        }
         return;
     }
     let mut taken = routes

@@ -223,7 +223,9 @@ export function changeOrderForm() {
     categories: ['form', 'table', 'date_in_table', 'competing_dates', 'layout_parties'],
     structure: structure({
       tables: [[['Reference', 'Description', 'Amount'], ...changes.map(([reference, description, value]) => [reference, description, value < 0 ? `(${money(-value)})` : money(value)])]],
-      keyValues: [['TO OWNER', owner], ['TO CONTRACTOR', contractor], ['CHANGE ORDER NUMBER', '006'], ['DATE', numericDate(coDate)], ['CONTRACT DATE', numericDate(contractDate)], ['The original Contract Sum was', money(original)], ['The new Contract Sum including this Change Order will be', money(original + previous + net)]],
+      // Not the change order's DATE: the architect signs under a DATE box
+      // with the same date, so the pair could be credited to either.
+      keyValues: [['TO OWNER', owner], ['TO CONTRACTOR', contractor], ['CHANGE ORDER NUMBER', '006'], ['CONTRACT DATE', numericDate(contractDate)], ['The original Contract Sum was', money(original)], ['The new Contract Sum including this Change Order will be', money(original + previous + net)]],
       routes: { 1: 'layout' },
     }),
     notes: `The change order's date (${numericDate(coDate)}) is a cell in a row of boxed fields beside the contract date (${numericDate(contractDate)}), which belongs to the underlying construction contract. The revised substantial completion date (${numericDate(completion)}) is a trap; the three signature dates (05/07, 05/11, 05/14/2026) are left unscored. A change order modifies the contract between owner and contractor; the architect prepares and signs it but is not a party.`,

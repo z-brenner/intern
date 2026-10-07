@@ -39,11 +39,14 @@
 //!   Extraction is deterministic for one worker build on one machine (two
 //!   runs over the corpus give the same report), so a score that falls is a
 //!   real change. Every structure score, OCR's date, name and identifier
-//!   accuracy and `digest_recall` count whole items (a pair, a row, a cell,
-//!   a value, a page, a date), so any fall fails. Only the error rates are
-//!   continuous: `ocr_cer` and `ocr_cer_ci` may rise by up to 0.005 and
-//!   `ocr_wer` by up to 0.01 (see [`value_tolerance`]); `ocr_mean_confidence`
-//!   is a diagnostic and not gated. A status that changes fails as in
+//!   accuracy and `digest_recall` count whole items (a snippet, a row, a
+//!   cell, a value, a page, a date), so any fall fails. OCR's error rates
+//!   are held as the edit distances they are made of: a document's
+//!   character edit distance (`ocr_char_distance`, and `ocr_char_distance_ci`
+//!   ignoring case) may rise by up to three characters and its word edit
+//!   distance (`ocr_word_distance`) by one word (see [`value_tolerance`]);
+//!   the rates themselves, and `ocr_mean_confidence`, a diagnostic, are not
+//!   gated. A status that changes fails as in
 //!   replay; latency is gated only with `--latency-gate`, as live is. An
 //!   extract-only run is never held to a live or replay baseline, nor a
 //!   live or replay run to an extract-only one.
@@ -60,7 +63,7 @@ use crate::{
     extract::EXTRACTION_SCORES,
     record::{COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, PENDING, is_unscorable},
     report::{EXTRACT, Report},
-    score::{bad_when_true, lower_is_better},
+    score::{OCR_EDIT_COUNTS, bad_when_true, lower_is_better},
     stats::{Distribution, round},
     timing::{self, Unit, unit},
 };
@@ -94,37 +97,91 @@ pub struct BaselineDocument {
     /// a baseline written before it was kept.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timings: BTreeMap<String, f64>,
-    /// An extract-only baseline's fractional scores, each held to within
-    /// [`value_tolerance`]. Empty in a live or replay baseline.
+    /// An extract-only baseline's gated values (see [`extract_values`]),
+    /// each held to within [`value_tolerance`]. Empty in a live or replay
+    /// baseline.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub values: BTreeMap<String, f64>,
 }
 
-/// How far an extract-only score may move the wrong way before the
-/// document regresses, or `None` for a score that is not gated (one
-/// extraction does not decide, or OCR's mean confidence).
+/// How far an extract-only value may move the wrong way before the
+/// document regresses, or `None` for one that is not gated (one extraction
+/// does not decide it, an OCR error rate, or OCR's mean confidence).
 ///
 /// Extraction is deterministic for one worker build on one machine, so the
-/// tolerance is not for noise. A score that counts whole items - a snippet
-/// pair, a row, a cell, a labelled value, a page's route, a date, a name,
-/// an identifier, a piece of evidence in the digest - moves by a whole item
-/// or not at all, and any fall is a real loss: no tolerance. The error
-/// rates are continuous: a page read again with its lines in another order,
-/// or by another Tesseract build, moves a few characters without losing
-/// anything the targeted accuracies would notice. 0.005 is three
-/// characters of the smallest scanned page in the corpus (the low-resolution
-/// receipt draws about 600) and half a point of character error anywhere;
-/// a word error rate moves roughly twice as far for the same misreads
-/// (about five characters a word), so it gets 0.01. Mean OCR confidence is
-/// the engine's opinion of itself, not a measure of what was read, and is
-/// reported but never gated.
+/// tolerance is not for noise. A score that counts whole items - a snippet,
+/// a row, a cell, a labelled value, a page's route, a date, a name, an
+/// identifier, a piece of evidence in the digest - moves by a whole item or
+/// not at all, and any fall is a real loss: no tolerance.
+///
+/// OCR's errors are held as counts, not rates. A rate's tolerance is a
+/// share of the page, so it would let a long scan lose many times the
+/// characters a short one may: 0.005 of a 6,000-character page is thirty
+/// characters, a lost line. A document's character edit distance (and its
+/// case-insensitive one) may instead rise by three characters, and its word
+/// edit distance by one word, whatever its length: room for a page read
+/// again by another Tesseract build to misread a character or two - one
+/// word - never for a line lost. The targeted date, name and identifier
+/// accuracies still catch any critical field misread. The rates are
+/// reported, and compared run to run, but their counts are what is gated.
+/// Mean OCR confidence is the engine's opinion of itself, not a measure of
+/// what was read, and is reported but never gated.
 pub fn value_tolerance(key: &str) -> Option<f64> {
     match key {
-        "ocr_mean_confidence" => None,
-        "ocr_cer" | "ocr_cer_ci" => Some(0.005),
-        "ocr_wer" => Some(0.01),
+        "ocr_char_distance" | "ocr_char_distance_ci" => Some(3.0),
+        "ocr_word_distance" => Some(1.0),
+        "ocr_mean_confidence" | "ocr_cer" | "ocr_cer_ci" | "ocr_wer" => None,
         key if EXTRACTION_SCORES.contains(&key) => Some(0.0),
         _ => None,
+    }
+}
+
+/// Every value the extract-only gate holds for a document: each fractional
+/// score [`value_tolerance`] gates, and - for a scan - OCR's edit distances
+/// as counts (`ocr_char_distance`, `ocr_char_distance_ci`,
+/// `ocr_word_distance`).
+pub fn extract_values(record: &DocumentRecord) -> BTreeMap<String, f64> {
+    let mut values = record
+        .scores
+        .iter()
+        .filter(|(key, _)| value_tolerance(key).is_some())
+        .filter_map(|(key, value)| {
+            value
+                .is_f64()
+                .then(|| value.as_f64())
+                .flatten()
+                .map(|value| (key.clone(), value))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(ocr) = &record.ocr {
+        for (key, count) in
+            OCR_EDIT_COUNTS
+                .iter()
+                .zip([ocr.char_distance, ocr.char_distance_ci, ocr.word_distance])
+        {
+            values.insert((*key).to_owned(), count as f64);
+        }
+    }
+    values
+}
+
+/// Whether a gated value moved past its tolerance: `Some(true)` for
+/// better, `Some(false)` for worse, `None` within it or for a value that is
+/// not gated.
+pub fn value_moved(key: &str, was: f64, now: f64) -> Option<bool> {
+    let tolerance = value_tolerance(key)?;
+    // Positive is better.
+    let gain = if lower_is_better(key) {
+        was - now
+    } else {
+        now - was
+    };
+    if gain < -tolerance - 1e-9 {
+        Some(false)
+    } else if gain > tolerance + 1e-9 {
+        Some(true)
+    } else {
+        None
     }
 }
 
@@ -152,7 +209,7 @@ impl Baseline {
                         scores: bool_scores(record),
                         timings: stage_times(record),
                         values: if extract {
-                            gated_values(record)
+                            extract_values(record)
                         } else {
                             BTreeMap::new()
                         },
@@ -225,22 +282,6 @@ fn bool_scores(record: &DocumentRecord) -> BTreeMap<String, bool> {
         .scores
         .iter()
         .filter_map(|(key, value)| value.as_bool().map(|flag| (key.clone(), flag)))
-        .collect()
-}
-
-/// Every fractional score the extract-only gate holds.
-fn gated_values(record: &DocumentRecord) -> BTreeMap<String, f64> {
-    record
-        .scores
-        .iter()
-        .filter(|(key, _)| value_tolerance(key).is_some())
-        .filter_map(|(key, value)| {
-            value
-                .is_f64()
-                .then(|| value.as_f64())
-                .flatten()
-                .map(|value| (key.clone(), value))
-        })
         .collect()
 }
 
@@ -410,31 +451,25 @@ pub fn compare(
                 comparison.document_improvements.push(line);
             }
         }
+        let current = extract_values(record);
         for (key, was) in &expected.values {
             let Some(tolerance) = value_tolerance(key) else {
                 continue;
             };
-            let Some(now) = record.scores.get(key).and_then(Value::as_f64) else {
+            let Some(now) = current.get(key).copied() else {
                 comparison
                     .document_regressions
                     .push(format!("{}: {key} was {was}, now absent", record.id));
                 continue;
             };
-            // Positive is better.
-            let gain = if lower_is_better(key) {
-                was - now
-            } else {
-                now - was
-            };
             let line = format!("{}: {key} was {was}, now {now}", record.id);
-            if gain < -tolerance - 1e-9 {
-                comparison.document_regressions.push(if tolerance > 0.0 {
-                    format!("{line} (tolerance {tolerance})")
-                } else {
-                    line
-                });
-            } else if gain > tolerance + 1e-9 {
-                comparison.document_improvements.push(line);
+            match value_moved(key, *was, now) {
+                Some(false) if tolerance > 0.0 => comparison
+                    .document_regressions
+                    .push(format!("{line} (tolerance {tolerance})")),
+                Some(false) => comparison.document_regressions.push(line),
+                Some(true) => comparison.document_improvements.push(line),
+                None => {}
             }
         }
     }
@@ -750,6 +785,7 @@ fn latency_check(
 mod tests {
     use super::*;
     use crate::{
+        ocr::OcrMeasure,
         report::{EXTRACT, RunInfo, build},
         timing,
     };
@@ -1280,13 +1316,30 @@ mod tests {
         record
     }
 
+    /// A scan's record with OCR's counts: `chars` and `words` edit distance
+    /// over 600 characters and 100 words drawn.
+    fn scanned(scores: Value, chars: usize, words: usize, worker_ms: f64) -> DocumentRecord {
+        let mut record = extracted("scan", scores, worker_ms);
+        record.ocr = Some(OcrMeasure {
+            pages_compared: 1,
+            char_distance: chars,
+            char_distance_ci: chars,
+            truth_chars: 600,
+            word_distance: words,
+            truth_words: 100,
+            ..OcrMeasure::default()
+        });
+        record
+    }
+
     fn extract_baseline() -> Baseline {
         Baseline::from_report(&report(
             EXTRACT,
             vec![
-                extracted(
-                    "scan",
+                scanned(
                     json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 91.0}),
+                    24,
+                    10,
                     900.0,
                 ),
                 extracted(
@@ -1303,7 +1356,14 @@ mod tests {
         let baseline = extract_baseline();
         assert_eq!(baseline.mode, EXTRACT);
         let scan = &baseline.documents["scan"];
-        assert_eq!(scan.values["ocr_cer"], 0.04);
+        assert_eq!(scan.values["ocr_char_distance"], 24.0);
+        assert_eq!(scan.values["ocr_char_distance_ci"], 24.0);
+        assert_eq!(scan.values["ocr_word_distance"], 10.0);
+        assert_eq!(scan.values["ocr_date_accuracy"], 1.0);
+        assert!(
+            !scan.values.contains_key("ocr_cer") && !scan.values.contains_key("ocr_wer"),
+            "a rate is held by its counts"
+        );
         assert!(
             !scan.values.contains_key("ocr_mean_confidence"),
             "a diagnostic is not held"
@@ -1329,39 +1389,47 @@ mod tests {
     }
 
     #[test]
-    fn extract_runs_are_held_per_document_with_tolerance_only_on_error_rates() {
+    fn extract_runs_are_held_per_document_with_tolerance_only_on_ocr_edit_counts() {
         let baseline = extract_baseline();
-        let run = |scan: Value, lease: Value, ms: f64| {
-            report(
-                EXTRACT,
-                vec![extracted("scan", scan, ms), extracted("lease", lease, 5.0)],
-            )
+        let run = |scan: DocumentRecord, lease: Value| {
+            report(EXTRACT, vec![scan, extracted("lease", lease, 5.0)])
         };
-        // The same scores, OCR a few characters worse and less sure of
-        // itself: within tolerance.
+        let lease = || json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0});
+        // The same scores, OCR three characters and a word worse and less
+        // sure of itself: within tolerance.
         let jitter = run(
-            json!({"ocr_cer": 0.044, "ocr_wer": 0.108, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 60.0}),
-            json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
-            900.0,
+            scanned(
+                json!({"ocr_cer": 0.045, "ocr_wer": 0.11, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 60.0}),
+                27,
+                11,
+                900.0,
+            ),
+            lease(),
         );
         let comparison = compare(&jitter, &baseline, None);
         assert_eq!(comparison.gates, vec!["documents"]);
         assert!(comparison.passed, "{:?}", comparison.failures);
 
-        // One row lost, one snippet pair gained, the error rate past its
-        // tolerance, a date misread.
+        // One row lost, one snippet gained, OCR four characters and two
+        // words worse, a date misread.
         let moved = run(
-            json!({"ocr_cer": 0.046, "ocr_wer": 0.1, "ocr_date_accuracy": 0.5}),
+            scanned(
+                json!({"ocr_cer": 0.0467, "ocr_wer": 0.12, "ocr_date_accuracy": 0.5}),
+                28,
+                12,
+                900.0,
+            ),
             json!({"reading_order_accuracy": 1.0, "table_row_accuracy": 0.25, "route_correct": 1.0}),
-            900.0,
         );
         let comparison = compare(&moved, &baseline, None);
         assert!(!comparison.passed);
         assert_eq!(
             comparison.failures,
             vec![
-                "scan: ocr_cer was 0.04, now 0.046 (tolerance 0.005)",
+                "scan: ocr_char_distance was 24, now 28 (tolerance 3)",
+                "scan: ocr_char_distance_ci was 24, now 28 (tolerance 3)",
                 "scan: ocr_date_accuracy was 1, now 0.5",
+                "scan: ocr_word_distance was 10, now 12 (tolerance 1)",
                 "lease: table_row_accuracy was 0.5, now 0.25",
             ]
         );
@@ -1370,11 +1438,39 @@ mod tests {
             vec!["lease: reading_order_accuracy was 0.75, now 1"]
         );
 
+        // The tolerance does not grow with the page: twenty characters
+        // more on a 6,000-character scan is a rate up only 0.0033, but
+        // twenty characters lost.
+        let long = |chars: usize| {
+            let mut record = extracted("ledger", json!({}), 900.0);
+            record.ocr = Some(OcrMeasure {
+                char_distance: chars,
+                char_distance_ci: chars,
+                truth_chars: 6_000,
+                word_distance: 40,
+                truth_words: 1_000,
+                ..OcrMeasure::default()
+            });
+            report(EXTRACT, vec![record])
+        };
+        let comparison = compare(&long(320), &Baseline::from_report(&long(300)), None);
+        assert_eq!(
+            comparison.failures,
+            vec![
+                "ledger: ocr_char_distance was 300, now 320 (tolerance 3)",
+                "ledger: ocr_char_distance_ci was 300, now 320 (tolerance 3)",
+            ]
+        );
+
         // Latency only when asked, over the worker's stages.
         let slow = run(
-            json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0}),
-            json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
-            2_000.0,
+            scanned(
+                json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0}),
+                24,
+                10,
+                2_000.0,
+            ),
+            lease(),
         );
         assert!(compare(&slow, &baseline, None).passed);
         let gated = compare(&slow, &baseline, Some(1.5));

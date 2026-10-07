@@ -71,8 +71,10 @@ pub struct Report {
     /// when no document has a structure block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure: Option<StructureReport>,
-    /// Which route each page took; absent when no page came with a layout
-    /// and the gold expects no route.
+    /// Which route each page took, and how the pages the gold gives a route
+    /// for were judged: present whenever a page came with a layout or the
+    /// gold expects a route (so a run whose worker sends no layouts says
+    /// its expected routes went unjudged), absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routes: Option<RouteReport>,
     #[serde(default)]
@@ -463,8 +465,10 @@ pub struct StructureFigures {
     pub table_cell_recall: Option<f64>,
     pub kv_accuracy: Option<f64>,
     pub route_correct: Option<f64>,
-    pub pairs: usize,
-    pub pairs_in_order: usize,
+    #[serde(default)]
+    pub snippets: usize,
+    #[serde(default)]
+    pub snippets_in_order: usize,
     pub rows: usize,
     pub rows_found: usize,
     pub cells: usize,
@@ -484,8 +488,8 @@ impl StructureFigures {
             table_cell_recall: rounded(measure.table_cell_recall()),
             kv_accuracy: rounded(measure.kv_accuracy()),
             route_correct: rounded(measure.route_correct()),
-            pairs: measure.pairs,
-            pairs_in_order: measure.pairs_in_order,
+            snippets: measure.snippets,
+            snippets_in_order: measure.snippets_in_order,
             rows: measure.rows,
             rows_found: measure.rows_found,
             cells: measure.cells,
@@ -512,7 +516,7 @@ pub struct StructureRow {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StructureReport {
     /// Every count summed over the documents, each score the share of the
-    /// pooled items (pairs, rows, cells, labelled values, pages): a document with
+    /// pooled items (snippets, rows, cells, labelled values, pages): a document with
     /// forty table rows weighs forty times one with one. A document whose
     /// extraction failed is in it, every item missed.
     pub aggregate: StructureFigures,
@@ -552,6 +556,10 @@ pub struct RouteReport {
     /// the gold gives a route for, in documents whose pages came with
     /// layouts.
     pub confusion: BTreeMap<String, BTreeMap<String, usize>>,
+    /// Pages the gold gives a route for, over every document, judged or
+    /// not: the confusion holds those that were.
+    #[serde(default)]
+    pub expected_pages: usize,
 }
 
 pub fn route_report(records: &[DocumentRecord]) -> Option<RouteReport> {
@@ -562,6 +570,9 @@ pub fn route_report(records: &[DocumentRecord]) -> Option<RouteReport> {
         }
         if let Some(class) = &record.route_class {
             *report.classes.entry(class.clone()).or_default() += 1;
+        }
+        if let Some(measure) = &record.structure {
+            report.expected_pages += measure.route_expected;
         }
         for check in record
             .structure
@@ -577,7 +588,8 @@ pub fn route_report(records: &[DocumentRecord]) -> Option<RouteReport> {
                 .or_default() += 1;
         }
     }
-    let routed = !report.pages.is_empty() || !report.confusion.is_empty();
+    let routed =
+        !report.pages.is_empty() || !report.confusion.is_empty() || report.expected_pages > 0;
     routed.then_some(report)
 }
 
@@ -791,6 +803,39 @@ mod tests {
         assert!(
             !latency.overall.contains_key("worker_ocr_ms"),
             "never measured"
+        );
+    }
+
+    /// A worker that sends no layouts judges no route, but the report still
+    /// says the gold expected some.
+    #[test]
+    fn routes_are_reported_whenever_the_gold_expects_one() {
+        let mut plain = record("a", "invoice", 2, json!({}), 1.0);
+        plain.route_class = Some("unrouted".into());
+        assert!(
+            route_report(std::slice::from_ref(&plain)).is_none(),
+            "no layout, and no route expected"
+        );
+        plain.structure = Some(StructureMeasure {
+            route_expected: 2,
+            ..StructureMeasure::default()
+        });
+        let routes = route_report(std::slice::from_ref(&plain)).unwrap();
+        assert_eq!(routes.expected_pages, 2);
+        assert!(routes.pages.is_empty() && routes.confusion.is_empty());
+        assert_eq!(routes.classes["unrouted"], 1);
+        let page = crate::markdown::render(&build(
+            RunInfo {
+                mode: "replay".into(),
+                ..RunInfo::default()
+            },
+            vec![plain],
+        ));
+        assert!(
+            page.contains("## Routes")
+                && page.contains("- **Pages the gold gives a route for:** 2, 0 judged")
+                && page.contains("None was judged"),
+            "{page}"
         );
     }
 

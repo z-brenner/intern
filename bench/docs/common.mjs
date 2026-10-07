@@ -86,8 +86,59 @@ export function normaliseText(text) {
     .trim();
 }
 
+const alphanumeric = (character) => character !== undefined && /[\p{L}\p{N}]/u.test(character);
+const digit = (character) => character !== undefined && /[0-9]/.test(character);
+
+/// Where `needle` first stands on its own in `haystack` at or after
+/// `from`, as the structure scorer finds it (`find_bounded` in
+/// crates/intern-bench/src/structure.rs): not continuing a word, nor a
+/// number. -1 when it does not.
+function boundedAt(haystack, needle, from = 0) {
+  if (!needle) return -1;
+  const first = needle[0];
+  const last = needle[needle.length - 1];
+  for (let start = from; start <= haystack.length;) {
+    const at = haystack.indexOf(needle, start);
+    if (at < 0) return -1;
+    const end = at + needle.length;
+    const before = haystack[at - 1];
+    const after = haystack[end];
+    const numberBefore = digit(before) || ((before === '.' || before === ',') && digit(haystack[at - 2]));
+    const numberAfter = digit(after) || ((after === '.' || after === ',') && digit(haystack[end + 1]));
+    const joinedBefore = (alphanumeric(first) && alphanumeric(before)) || (digit(first) && numberBefore);
+    const joinedAfter = (alphanumeric(last) && alphanumeric(after)) || (digit(last) && numberAfter);
+    if (!joinedBefore && !joinedAfter) return at;
+    start = at + 1;
+  }
+  return -1;
+}
+
+/// How many occurrences of a pair's label carry its value in the text, by
+/// the scorer's line rules: the value after the label on its line and
+/// before the next label there, or on the next line under a label that
+/// stands alone on its line.
+function labelsCarrying(lines, labels, key, value) {
+  const separators = (part) => /^[\s:|.-]*$/.test(part);
+  let carriers = 0;
+  lines.forEach((line, index) => {
+    for (let at = boundedAt(line, key); at >= 0; at = boundedAt(line, key, at + key.length)) {
+      const rest = line.slice(at + key.length);
+      const start = boundedAt(rest, value);
+      const after = start >= 0 && !labels.some((label) => {
+        const labelAt = boundedAt(rest, label);
+        return labelAt >= 0 && labelAt + label.length <= start;
+      });
+      const below = separators(line.slice(0, at)) && separators(rest) && index + 1 < lines.length && boundedAt(lines[index + 1], value) >= 0;
+      if (after || below) carriers += 1;
+    }
+  });
+  return carriers;
+}
+
 /// Every string a structure block names must be printed on the document -
-/// each reading-order snippet exactly once, so its position is unambiguous.
+/// each reading-order snippet exactly once, so its position is unambiguous,
+/// and each labelled value under one occurrence of its label, so the
+/// scorer cannot credit it to another.
 function checkStructure(id, layout, text) {
   const printed = normaliseText(text.join('\n'));
   const occurrences = (value) => printed.split(normaliseText(value)).length - 1;
@@ -99,6 +150,12 @@ function checkStructure(id, layout, text) {
     for (const value of [pair.key, pair.value]) {
       if (!occurrences(value)) throw new Error(`${id}: structure names ${JSON.stringify(value)}, which is not printed`);
     }
+  }
+  const lines = text.join('\n').split('\n').map(normaliseText).filter(Boolean);
+  const labels = (layout.key_values ?? []).map((pair) => normaliseText(pair.key)).filter(Boolean);
+  for (const pair of layout.key_values ?? []) {
+    const carriers = labelsCarrying(lines, labels, normaliseText(pair.key), normaliseText(pair.value));
+    if (carriers > 1) throw new Error(`${id}: the value ${JSON.stringify(pair.value)} is printed under ${carriers} occurrences of the label ${JSON.stringify(pair.key)}, so the scorer could credit it to the wrong one`);
   }
   // A table cell that wraps is printed line by line between its
   // neighbours' lines: its words are on the page in order, not together.

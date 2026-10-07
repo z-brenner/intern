@@ -123,9 +123,13 @@ block, every part optional:
   reading that puts anything between those two lines loses the phrase.
 * `tables`: each table's rows, header first, each a list of cells as
   printed (`""` for a blank cell). A check-box group is a table of two
-  columns, the mark (`X` or blank) and the option.
+  columns, the mark (`X` or blank) and the option; a blank mark is scored
+  as an empty box, so an `X` read beside that option is wrong.
 * `key_values`: `{key, value}` pairs, the label as printed without its
-  colon.
+  colon. The generator refuses a pair whose value is printed under two
+  occurrences of its label (after it on its line, before the next label,
+  or on the line below a label standing alone): the scorer could credit
+  either, so the pair would not say which one is meant.
 * `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
   only for the pages where the route is not a judgement call.
 
@@ -233,8 +237,10 @@ against the drawn text, the [structure scores](#structure-scores), and
 digest the engine would build from the text. A document is `completed` when
 the worker read it and `extraction_failed` when it did not; a failure is a
 miss on every score its gold defines (0 for each accuracy, an error rate of
-1, every structure item missed). Documents whose recording is pending are
-read like any other: extraction needs no reply.
+1, every structure item missed), except `route_correct`: nothing was read,
+so nothing was routed, and it is left unscored as for a worker that sends no
+layouts. Documents whose recording is pending are read like any other:
+extraction needs no reply.
 
 The run refuses a corpus that lacks a selected document or, given
 `--manifest`, holds bytes the manifest does not vouch for. `--only`,
@@ -263,9 +269,10 @@ computed again over the documents both runs scored, and each score over the
 documents that have it in both, so a subset run, a document added since or
 one that went stale moves no figure; the comparison says when the two runs
 cover different documents or gold. It lists every document that flipped on
-every score (fixed or broken), and every extraction score (structure, OCR,
-digest recall) that moved further than the extract-only gate tolerates,
-worse or better. Latency, as the change in p50 and p95 of every stage, is
+every score (fixed or broken), and every value the extract-only gate holds
+(structure scores, OCR's accuracies and its character and word edit
+distances, digest recall) that moved further than the gate tolerates, worse
+or better. Latency, as the change in p50 and p95 of every stage, is
 compared over the documents both runs completed, and only between two runs
 that measured their timings (live or extract-only): a replay reports its
 recording's timings, so a comparison involving one shows no latency change
@@ -292,9 +299,12 @@ names its machine and, for a replay, its recording. `intern-bench report
 * `ocr`: OCR figures per scanned document and pooled.
 * `structure`: the structure figures per document and pooled by item
   (absent when no document has a structure block).
-* `routes`: pages per route, documents per route class, and the confusion
-  of expected route against the route taken (absent when no page came with
-  a layout and nothing expects a route).
+* `routes`: pages per route, documents per route class, the pages the
+  gold gives a route for (`expected_pages`), and the confusion of expected
+  route against the route taken over those that could be judged. It is
+  there whenever the gold expects a route or a page came with a layout - a
+  run of a worker that sends no layouts still shows the expected routes
+  went unjudged - and absent only when neither holds.
 * `wall_ms`: the whole run, worker start included (live and extract-only).
 * `memory`, and one record per document holding the name, the
   description, the review reasons, the scores, the claims checked, the traps
@@ -331,7 +341,7 @@ found.
 | `evidence_recall` | The model's quoted evidence contains the date and each party. |
 | `digest_recall`, `prompt_recall` | The gold evidence is in the distilled digest, or in the prompt actually sent. This is deterministic, so a distillation change can be measured in replay without a model. |
 | `readiness_match`, `unsafe_ready`, `needless_review` | Routing against the gold; ready with a wrong name; review although the name was right and the gold says ready. |
-| `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. Whitespace, `|` and `:` are set aside on both sides first, so a page whose text is its blocks (table rows between rules, `Label: value` lines) is judged on what it read, not on how it is laid out. A scanned page the extractor did not return (a TIFF frame it does not read), or every page of a scan whose extraction failed, counts as read empty. |
+| `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. Whitespace and the `|` rules a layout writes around a table row are set aside on both sides first, so a page whose text is its blocks is not charged for its tables' rules. A colon is text and is kept: one the page printed and the reading dropped is a miss, and the colon a layout writes after a label (`Label: value`) where the page printed none costs a character, and its word. Typographic quotes and apostrophes (`‘ ’ “ ”` and their low forms) are folded to `'` and `"` on both sides: a glyph style that carries no filing information, and PP-OCR, whose recognition dictionary has no curly quotes, emits every one straight. Nothing else is folded, so a misread such as `0ccurrence` still counts. A scanned page the extractor did not return (a TIFF frame it does not read), or every page of a scan whose extraction failed, counts as read empty. |
 
 A score the gold does not define is omitted rather than counted as false,
 so a rate's denominator is the documents that could be right or wrong about
@@ -359,11 +369,11 @@ one line.
 
 | Score | Exact definition |
 | --- | --- |
-| `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalised). A pair of consecutive gold snippets is in order when both are found and the first starts before the second. The score is the share of the n − 1 pairs in order; a snippet not found breaks both pairs it belongs to. |
-| `table_row_accuracy` | A gold row (its non-empty cells) is found when one line holds every cell in order, each starting after the end of the one before. The share of rows found, over every table of the document. |
-| `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding any cell of the table's first row (or the first line, if none does) to the last one, from there on, holding any cell of its last row (or the last line, if none does). A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
-| `kv_accuracy` | A labelled value is found when a line holds the label and, after it, the value; or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label in a cell and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
-| `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all. |
+| `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalised). The snippets in order are the most of the found ones whose positions rise in the gold's order (a longest increasing subsequence); the score is their number over the number of gold snippets, so a snippet not found is out of order. Two whole columns read the wrong way round keep only the longer column in order: of eleven snippets, seven and four, the score is 7/11 (about 0.64), where counting consecutive pairs would have lost one pair in ten. |
+| `table_row_accuracy` | A gold row (its non-empty cells) is found when one line of its table's region (see `table_cell_recall`) holds every cell in order, each starting after the end of the one before, with no cell of another row of the table wholly between two of them, so two rows read across each other are neither found. A blank leading cell counts too: when some rows of a table leave it blank and others do not (a check-box group, its chosen options marked `X`), the values the others hold there are the table's marks, and a row with a blank leading cell is not found on a line where a mark stands between the cell of another row before it (or the line's start) and its first cell - that `X` is beside an option the gold leaves unmarked. The share of rows found, over every table of the document. |
+| `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding a cell of the table's first row (or the first line, if none does) to the last one, from there on, holding a cell of its last row (or the last line, if none does). Only cells of two characters or more place the region - a lone `X` or digit is printed all over a page, so it neither anchors nor widens a table - and a first or last row without one gives way to the nearest row with one. A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
+| `kv_accuracy` | A labelled value is found when a line holds the label and, after it but before the next gold label on the line, the value (a value after another label is that label's); or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label as a whole cell (a colon after it aside; `CONTRACT DATE` is not the cell of `DATE`) and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
+| `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all, nor for a document whose extraction failed (nothing was read, so nothing was routed). |
 
 Every count behind them is in the record (`structure`), so a corpus figure
 pools items rather than averaging documents: the report's `structure`
@@ -402,7 +412,10 @@ count, and read p95 as "the slow documents" rather than as a guarantee.
 run limited with `--only` refuses to overwrite a baseline that covers
 other documents: the documents left out would read as new, and new
 documents gate nothing. A replay that could not score every document, or
-scored some from stale replies, never writes a baseline.
+scored some from stale replies, never writes a baseline; nor does a run of
+any mode in which no document completed (a worker that would not start,
+say), which would hold every later run to having read nothing. Either
+refusal exits 2.
 `--baseline bench/baseline.json` compares a run with it:
 
 * **Replay is gated per document.** A score that was good and is now bad is
@@ -437,16 +450,20 @@ scored some from stale replies, never writes a baseline.
   worker build on one machine - two runs over the corpus produce the same
   scores, routes and texts - so a fall is a real change. Every structure
   score, OCR's date, name and identifier accuracy and `digest_recall` count
-  whole items, so any fall fails. The error rates are the only continuous
-  scores: `ocr_cer` (and `ocr_cer_ci`) may rise by 0.005 and `ocr_wer` by
-  0.01 before a document regresses - about three characters of the
-  smallest scanned page in the corpus (some 600 drawn), a page read in
-  another line order or by another Tesseract build, while the date, name
-  and identifier accuracies still catch any critical field lost.
-  `ocr_mean_confidence` is reported, never gated. A status that changes
-  fails as in replay, and latency is gated only with `--latency-gate`, over
-  the worker's stages. An extract-only run is never held to a live or
-  replay baseline, nor the other way round.
+  whole items, so any fall fails. OCR's error rates are held as the edit
+  distances they are made of, which the baseline keeps per document
+  (`ocr_char_distance`, `ocr_char_distance_ci`, `ocr_word_distance`): a
+  document regresses when its character edit distance rises by more than
+  three characters, or its word edit distance by more than one word. A
+  tolerance on the rate would be a share of the page, so a long scan could
+  lose a line (0.005 of 6,000 characters is thirty) where a short one could
+  lose three characters; a count gives every page the same room - a
+  character or two misread by another Tesseract build - while the date,
+  name and identifier accuracies still catch any critical field lost. The
+  rates themselves, and `ocr_mean_confidence`, are reported, never gated.
+  A status that changes fails as in replay, and latency is gated only with
+  `--latency-gate`, over the worker's stages. An extract-only run is never
+  held to a live or replay baseline, nor the other way round.
 
 A regression exits 2. There are deliberately no absolute thresholds:
 the baseline is what Intern does today, and the gates stop it getting
