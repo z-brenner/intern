@@ -47,7 +47,8 @@ use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, repair_issued_relation};
 use crate::phrases::{
     has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
-    opens_with_party_label, phrase_positions, subject_value, title_phrase, trim_name, words,
+    opens_with_party_label, phrase_positions, subject_value, tidy_case, title_phrase, trim_name,
+    words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -555,6 +556,7 @@ pub fn validate_facts_at(
             continue;
         };
         let trimmed = trim_name(written);
+        let trimmed = completed_name(scope, &trimmed).unwrap_or(trimmed);
         let name = trimmed.as_str();
         // A first name on its own is never a party: one word, not an
         // initialism, with nothing that makes it an organisation.
@@ -610,7 +612,7 @@ pub fn validate_facts_at(
         let first_seen = first_appearance(scope, name);
         parties.push((
             ValidatedParty {
-                name: name.to_owned(),
+                name: display_name(name),
                 role,
                 proposed_role: party.role,
                 role_support,
@@ -1698,6 +1700,56 @@ fn cue_issuer(
         (PartyRelation::From, [issuer]) => cast.iter().position(|party| party.name == *issuer),
         _ => None,
     }
+}
+
+/// A name as a filename and a description show it: a name OCR wrote with
+/// scattered capitals in capitals throughout, for the filename's casing to
+/// read as it reads any name in capitals.
+fn display_name(name: &str) -> String {
+    tidy_case(name)
+}
+
+/// The whole organisation name a reply's name is the end of - "MANUFACTURING
+/// LLC" of "EMBer POSt MANUFACtURInG LLC" - when a unit of the context names
+/// the organisation, as the document writes it. `None` when the name is no
+/// organisation's end, or names it whole.
+fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
+    let loose = normalize_loosely(name);
+    let last = loose.split_whitespace().last()?;
+    if !crate::cues::ORGANISATION_ENDINGS.contains(&last) {
+        return None;
+    }
+    scope.context_units().find_map(|unit| {
+        // What completes the name is a few words of its own, never another
+        // organisation's legal form or noun: "Systems LLC and" is no part
+        // of "Quill and Vane Advisory Group, Inc.".
+        let organisation = unit.features.organisations.iter().find(|organisation| {
+            let Some(before) = organisation
+                .strip_suffix(loose.as_str())
+                .filter(|before| before.ends_with(' '))
+            else {
+                return false;
+            };
+            let words = before.split_whitespace().collect::<Vec<_>>();
+            (1..=4).contains(&words.len())
+                && !words.iter().any(|word| {
+                    crate::cues::ORGANISATION_ENDINGS.contains(word)
+                        || matches!(*word, "and" | "&" | "of")
+                })
+        })?;
+        unit.text.lines().find_map(|line| {
+            let tokens = line.split_whitespace().collect::<Vec<_>>();
+            (0..tokens.len()).find_map(|start| {
+                (start + 1..=tokens.len().min(start + 10)).find_map(|end| {
+                    let span = tokens[start..end].join(" ");
+                    (normalize_loosely(&span) == *organisation).then(|| {
+                        span.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '"'))
+                            .to_owned()
+                    })
+                })
+            })
+        })
+    })
 }
 
 /// Whether a name is one capitalised word and nothing else - "Rowan",
@@ -3170,7 +3222,9 @@ between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.";
         });
         assert_eq!(
             outcome.proposal.document_type.as_deref(),
-            Some("Settlement Agreement")
+            Some("Settlement Agreement"),
+            "{:?}",
+            outcome.proposal
         );
         assert_eq!(outcome.proposal.parties.len(), 2);
         assert!(
@@ -3263,5 +3317,25 @@ Date of notice: August 12, 2026";
             ..ModelFacts::default()
         });
         assert!(outcome.facts.unwrap().identifier.is_none());
+    }
+
+    #[test]
+    fn a_name_cut_short_is_completed_to_the_organisation_and_its_scattered_capitals_tidied() {
+        const ORDER: &str =
+            "PURCHASE ORDER PO-310\n\nDAtE JULY 14 20z5\n\nEMBer POSt MANUFACtURInG LLC";
+        let (outcome, _) = facts_for(ORDER, |index| ModelFacts {
+            document_type: Some("Purchase Order".into()),
+            type_evidence: vec![id_of(index, "PURCHASE")],
+            parties: vec![party(
+                "MANUFACTURING LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "EMBer")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["EMBER POST MANUFACTURING LLC"]
+        );
     }
 }

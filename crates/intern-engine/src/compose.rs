@@ -353,8 +353,10 @@ pub fn relation_from_roles(
             if let Some(party) = with(SUBSTANTIVE) {
                 return one(PartyRelation::For, party, "the party it is about");
             }
+            // A notice is for the one it is given to: "Notice of
+            // Termination for John Smith".
             if let Some(party) = with(&[PartyRole::Recipient, PartyRole::Addressee]) {
-                return one(PartyRelation::To, party, "the recipient");
+                return one(PartyRelation::For, party, "the recipient");
             }
             if let Some(party) = with(&[PartyRole::Issuer, PartyRole::Sender]) {
                 return one(PartyRelation::From, party, "the issuer");

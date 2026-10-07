@@ -260,7 +260,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     {
         return None;
     }
-    Some(crate::infer::title_case(&phrase))
+    Some(crate::infer::title_case(&tidy_case(&phrase)))
 }
 
 /// How a word is written: in capitals, with a capital, or in lower case.
@@ -293,6 +293,39 @@ fn writing(token: &str) -> Writing {
         Writing::Capitals
     } else {
         Writing::Lower
+    }
+}
+
+/// Whether a word's capitals are where OCR put them, not where a writer
+/// would: two capitals and then a lower-case letter ("EMBer", "JUniper",
+/// "RECeIPt"), or lower case broken by a capital more than once
+/// ("MANUFACtURInG"). "McKinsey", "MacBook" and "LinkedIn" are written so.
+fn is_irregular_word(word: &str) -> bool {
+    let letters = word
+        .chars()
+        .filter(|c| c.is_alphabetic())
+        .collect::<Vec<_>>();
+    if letters.len() <= 3 {
+        return false;
+    }
+    let two_capitals_then_lower = letters
+        .windows(3)
+        .any(|w| w[0].is_uppercase() && w[1].is_uppercase() && w[2].is_lowercase());
+    let breaks = letters
+        .windows(2)
+        .filter(|w| w[0].is_lowercase() && w[1].is_uppercase())
+        .count();
+    two_capitals_then_lower || breaks >= 2
+}
+
+/// Text whose capitals OCR scattered ("EMBer POSt MANUFACtURInG LLC"), as
+/// capitals throughout, so the name and title casing that reads a heading
+/// in capitals reads it too; any other text as it is.
+pub(crate) fn tidy_case(text: &str) -> String {
+    if text.split_whitespace().any(is_irregular_word) {
+        text.to_uppercase()
+    } else {
+        text.to_owned()
     }
 }
 
@@ -613,6 +646,11 @@ mod tests {
             ),
             ("THISTLEDOWN WHOLESALE NURSERY", "nursery", None),
             (
+                "DElIvery RECeIPt DR-771",
+                "receipt",
+                Some("Delivery Receipt"),
+            ),
+            (
                 "ASSIGNMENT AND ASSUMPTION OF LEASE",
                 "assignment",
                 Some("Assignment and Assumption of Lease"),
@@ -706,6 +744,23 @@ mod tests {
             phrase_positions(&w("BOARD MINUTES"), &w("Board Minute")),
             vec![0]
         );
+    }
+
+    #[test]
+    fn scattered_capitals_are_read_as_capitals_and_a_writers_are_kept() {
+        assert_eq!(
+            tidy_case("EMBer POSt MANUFACtURInG LLC"),
+            "EMBER POST MANUFACTURING LLC"
+        );
+        for kept in [
+            "McKinsey & Company",
+            "MacBook Repairs LLC",
+            "LinkedIn",
+            "NDA",
+            "Acme LLC",
+        ] {
+            assert_eq!(tidy_case(kept), kept);
+        }
     }
 
     #[test]

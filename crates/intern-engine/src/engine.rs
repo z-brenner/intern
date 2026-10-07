@@ -1216,13 +1216,13 @@ mod tests {
                     .unwrap_or_else(|_| panic!("{style:?}: {analysis:#?}"));
                 assert_eq!(
                     analysis.proposal.party_relation,
-                    crate::domain::PartyRelation::To
+                    crate::domain::PartyRelation::For
                 );
                 assert!(
                     analysis.filename.starts_with("2024-01-02 ")
                         && analysis
                             .filename
-                            .ends_with(" to Northstar Calibration Holdings LLC.pdf"),
+                            .ends_with(" for Northstar Calibration Holdings LLC.pdf"),
                     "{}",
                     analysis.filename
                 );
