@@ -519,9 +519,9 @@ pub struct ExtractedPage {
 pub enum ExtractionWarning {
     LowOcrConfidence,
     NativeTextCorrupt,
-    /// Text that was lost: a page cut at the size cap, frames of a TIFF that
-    /// were never read. What was dropped is unknown, so it may be the fact
-    /// that names the document.
+    /// Text that was lost: a page cut at the size cap, frames of a TIFF past
+    /// the page limit or that could not be decoded. What was dropped is
+    /// unknown, so it may be the fact that names the document.
     TextTruncated,
     /// Content deliberately left out by design and marked where it was left
     /// out - the rows and columns past a spreadsheet's rendered window. The
@@ -1855,10 +1855,11 @@ fn holds_utf8_text(bytes: &[u8]) -> bool {
 /// layer to prefer, so the page is OCR'd and kept as the page image.
 ///
 /// A TIFF can hold a page per frame - a fax or a batch scan usually does -
-/// and only the first frame is read here, because neither this decoder nor
-/// the CCITT-compressed files these arrive in support the rest. What the
-/// caller must not do is believe it received the whole document, so unread
-/// frames are reported as truncation.
+/// and every frame is a page, read in order up to the document's page
+/// limit. A frame this decoder cannot read (CCITT Group 3 compression, say)
+/// ends the reading there, and so does the limit: what the caller must not
+/// do is believe it received the whole document, so the frames that were
+/// not read are reported as truncation.
 pub fn extract_image(
     path: &Path,
     ocr: &dyn OcrBackend,
@@ -1870,17 +1871,12 @@ pub fn extract_image(
         |timings| &mut timings.image_decode_micros,
         || load_oriented_image(path, limits),
     )?;
+    let frames = later_frames(path, limits.max_page_count.saturating_sub(1));
+    let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
-    cancel.report_progress("ocr", 0, Some(1));
+    cancel.report_progress("ocr", 0, Some(page_count));
     let result = recognize_timed(ocr, &rendered, cancel)?;
-    let mut warnings = Vec::new();
-    if result.mean_confidence < CONFIDENT_READING {
-        warnings.push(ExtractionWarning::LowOcrConfidence);
-    }
-    let truncated = has_unread_frames(path);
-    if truncated {
-        warnings.push(ExtractionWarning::TextTruncated);
-    }
+    let mut low_confidence = result.mean_confidence < CONFIDENT_READING;
     let optional_image = Some(cancel.timed(
         |timings| &mut timings.vision_micros,
         || page_image(0, &rendered.image, result.rotation_degrees),
@@ -1895,6 +1891,41 @@ pub fn extract_image(
     );
     page.vision_escalated = true;
     let mut pages = vec![page];
+
+    let mut truncated = frames.beyond_limit;
+    if !frames.directories.is_empty() {
+        // The file was already held to the source size, and each frame is
+        // held to the same pixel and decode caps as the first.
+        let mut bytes = std::fs::read(path).map_err(ExtractionError::io)?;
+        for (index, directory) in frames.directories.iter().enumerate() {
+            cancel.check()?;
+            cancel.report_progress("ocr", index + 1, Some(page_count));
+            let decoded = cancel.timed(
+                |timings| &mut timings.image_decode_micros,
+                || decode_tiff_frame(&mut bytes, *directory, limits),
+            );
+            let Ok(image) = decoded else {
+                truncated = true;
+                break;
+            };
+            let rendered = RenderedPage::new(index + 1, image);
+            let result = recognize_timed(ocr, &rendered, cancel)?;
+            low_confidence |= result.mean_confidence < CONFIDENT_READING;
+            let size = rendered.image.dimensions();
+            drop(rendered);
+            pages.push(cancel.timed(
+                |timings| &mut timings.analysis_micros,
+                || crate::layout::ocr_page(index + 2, result, size, None, RouteSignals::default()),
+            ));
+        }
+    }
+    let mut warnings = Vec::new();
+    if low_confidence {
+        warnings.push(ExtractionWarning::LowOcrConfidence);
+    }
+    if truncated {
+        warnings.push(ExtractionWarning::TextTruncated);
+    }
     link_sections(&mut pages);
     Ok(ExtractedDocument {
         pages,
@@ -1905,17 +1936,74 @@ pub fn extract_image(
     })
 }
 
-/// Whether an image file holds frames after the one that was read.
+/// The frames of an image file after its first: where each one's image file
+/// directory is, and whether there were more than the limit allowed.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LaterFrames {
+    directories: Vec<u64>,
+    beyond_limit: bool,
+}
+
+/// The frames after the first, up to `limit` of them, following the TIFF's
+/// chain of image file directories without decoding anything.
 ///
-/// A TIFF is a chain of image file directories; the first one's link to the
-/// next is all this needs, and it is read rather than decoded so a
-/// twelve-frame fax costs one seek. Anything that does not read as a TIFF
-/// holds one image by construction, and a file whose chain cannot be
-/// followed is reported as single-framed rather than as an error: the frame
-/// that was read is still the document's first page.
-fn has_unread_frames(path: &Path) -> bool {
-    fn next_directory(path: &Path) -> Option<u64> {
-        let mut file = File::open(path).ok()?;
+/// A reduced-resolution copy of a page (`NewSubfileType` bit 0) is not a
+/// page of its own and is passed over. Anything that does not read as a
+/// TIFF holds one image by construction, and a chain that cannot be
+/// followed, or that loops, ends where it stops making sense: the frames
+/// read up to there are still the document's pages.
+fn later_frames(path: &Path, limit: usize) -> LaterFrames {
+    let mut frames = LaterFrames::default();
+    let Ok(file) = File::open(path) else {
+        return frames;
+    };
+    let mut file = BufReader::new(file);
+    let Some(format) = TiffFormat::read(&mut file) else {
+        return frames;
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut next = format.first;
+    let mut first = true;
+    // A chain can be no longer than the file has room for directories.
+    while next != 0 && seen.insert(next) && seen.len() <= MAX_TIFF_DIRECTORIES {
+        let Some(directory) = format.directory(&mut file, next) else {
+            break;
+        };
+        if !first && !directory.reduced_resolution {
+            if frames.directories.len() == limit {
+                frames.beyond_limit = true;
+                break;
+            }
+            frames.directories.push(next);
+        }
+        first = false;
+        next = directory.next;
+    }
+    frames
+}
+
+/// More directories than any document this reads could be pages of: the
+/// page limit, and then some for reduced-resolution copies.
+const MAX_TIFF_DIRECTORIES: usize = 4_096;
+
+/// How a TIFF counts: its byte order, classic or BigTIFF, and where its
+/// first image file directory is.
+struct TiffFormat {
+    big_endian: bool,
+    big: bool,
+    first: u64,
+}
+
+/// What a frame's directory says that matters here.
+struct TiffDirectory {
+    reduced_resolution: bool,
+    next: u64,
+}
+
+const NEW_SUBFILE_TYPE: u16 = 254;
+
+impl TiffFormat {
+    fn read(file: &mut (impl Read + Seek)) -> Option<Self> {
         let mut header = [0_u8; 8];
         file.read_exact(&mut header).ok()?;
         let big_endian = match &header[..2] {
@@ -1923,67 +2011,140 @@ fn has_unread_frames(path: &Path) -> bool {
             b"MM" => true,
             _ => return None,
         };
-        let word = |bytes: [u8; 2]| {
-            if big_endian {
-                u16::from_be_bytes(bytes)
-            } else {
-                u16::from_le_bytes(bytes)
-            }
-        };
-        let long = |bytes: [u8; 4]| {
-            if big_endian {
-                u32::from_be_bytes(bytes)
-            } else {
-                u32::from_le_bytes(bytes)
-            }
-        };
-        let quad = |bytes: [u8; 8]| {
-            if big_endian {
-                u64::from_be_bytes(bytes)
-            } else {
-                u64::from_le_bytes(bytes)
-            }
+        let mut format = Self {
+            big_endian,
+            big: false,
+            first: 0,
         };
         // Classic TIFF marks itself 42 and counts in 32-bit words; BigTIFF
         // marks itself 43 and counts in 64-bit ones, with wider entries.
-        let (first, entry_bytes, big) = match word([header[2], header[3]]) {
-            42 => (
-                u64::from(long([header[4], header[5], header[6], header[7]])),
-                12_u64,
-                false,
-            ),
+        match format.word([header[2], header[3]]) {
+            42 => format.first = u64::from(format.long(header[4..8].try_into().ok()?)),
             43 => {
+                format.big = true;
                 let mut offset = [0_u8; 8];
                 file.read_exact(&mut offset).ok()?;
-                (quad(offset), 20_u64, true)
+                format.first = format.quad(offset);
             }
             _ => return None,
-        };
-        file.seek(SeekFrom::Start(first)).ok()?;
-        let entries = if big {
+        }
+        Some(format)
+    }
+
+    fn word(&self, bytes: [u8; 2]) -> u16 {
+        if self.big_endian {
+            u16::from_be_bytes(bytes)
+        } else {
+            u16::from_le_bytes(bytes)
+        }
+    }
+
+    fn long(&self, bytes: [u8; 4]) -> u32 {
+        if self.big_endian {
+            u32::from_be_bytes(bytes)
+        } else {
+            u32::from_le_bytes(bytes)
+        }
+    }
+
+    fn quad(&self, bytes: [u8; 8]) -> u64 {
+        if self.big_endian {
+            u64::from_be_bytes(bytes)
+        } else {
+            u64::from_le_bytes(bytes)
+        }
+    }
+
+    fn directory(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<TiffDirectory> {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let entries = if self.big {
             let mut count = [0_u8; 8];
             file.read_exact(&mut count).ok()?;
-            quad(count)
+            self.quad(count)
         } else {
             let mut count = [0_u8; 2];
             file.read_exact(&mut count).ok()?;
-            u64::from(word(count))
+            u64::from(self.word(count))
         };
-        file.seek(SeekFrom::Current(
-            i64::try_from(entries.checked_mul(entry_bytes)?).ok()?,
-        ))
-        .ok()?;
-        if big {
+        if entries > u64::from(u16::MAX) {
+            return None;
+        }
+        let entry_bytes = if self.big { 20 } else { 12 };
+        let value_at = if self.big { 12 } else { 8 };
+        let mut reduced_resolution = false;
+        let mut entry = [0_u8; 20];
+        for _ in 0..entries {
+            file.read_exact(&mut entry[..entry_bytes]).ok()?;
+            if self.word([entry[0], entry[1]]) != NEW_SUBFILE_TYPE {
+                continue;
+            }
+            // A LONG by the specification; a SHORT from some writers. Either
+            // sits at the start of the entry's value field.
+            let value = match self.word([entry[2], entry[3]]) {
+                3 => u32::from(self.word([entry[value_at], entry[value_at + 1]])),
+                _ => self.long(entry[value_at..value_at + 4].try_into().ok()?),
+            };
+            reduced_resolution = value & 1 == 1;
+        }
+        let next = if self.big {
             let mut next = [0_u8; 8];
             file.read_exact(&mut next).ok()?;
-            Some(quad(next))
+            self.quad(next)
         } else {
             let mut next = [0_u8; 4];
             file.read_exact(&mut next).ok()?;
-            Some(u64::from(long(next)))
-        }
+            u64::from(self.long(next))
+        };
+        Some(TiffDirectory {
+            reduced_resolution,
+            next,
+        })
     }
-    next_directory(path).is_some_and(|next| next != 0)
+}
+
+/// Decodes the TIFF frame whose image file directory is at `directory`.
+///
+/// Every offset in a TIFF is from the start of the file, so pointing the
+/// header at another directory makes that frame the file's first image,
+/// and the decoder reads it exactly as it reads a first frame - colour,
+/// bit depth, compression and orientation included. The header is pointed
+/// back before this returns.
+fn decode_tiff_frame(
+    bytes: &mut [u8],
+    directory: u64,
+    limits: &ResourceLimits,
+) -> Result<DynamicImage, ExtractionError> {
+    let format = TiffFormat::read(&mut Cursor::new(&bytes[..]))
+        .ok_or_else(|| ExtractionError::parse_failed("not a TIFF"))?;
+    let (field, pointer) = if format.big {
+        (
+            8..16,
+            if format.big_endian {
+                directory.to_be_bytes().to_vec()
+            } else {
+                directory.to_le_bytes().to_vec()
+            },
+        )
+    } else {
+        let directory = u32::try_from(directory)
+            .map_err(|_| ExtractionError::parse_failed("TIFF directory out of range"))?;
+        (
+            4..8,
+            if format.big_endian {
+                directory.to_be_bytes().to_vec()
+            } else {
+                directory.to_le_bytes().to_vec()
+            },
+        )
+    };
+    let original = bytes[field.clone()].to_vec();
+    bytes[field.clone()].copy_from_slice(&pointer);
+    let decoded = ImageReader::with_format(Cursor::new(&bytes[..]), ImageFormat::Tiff)
+        .into_decoder()
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))
+        .and_then(|decoder| decode_oriented(decoder, limits));
+    bytes[field].copy_from_slice(&original);
+    decoded
 }
 
 /// Decodes an image file the right way up and no larger than a rendered page
@@ -2006,12 +2167,21 @@ pub fn load_oriented_image(
 ) -> Result<DynamicImage, ExtractionError> {
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
     limits.validate_source_size(metadata.len())?;
-    let mut decoder = ImageReader::open(path)
+    let decoder = ImageReader::open(path)
         .map_err(ExtractionError::io)?
         .with_guessed_format()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
         .into_decoder()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    decode_oriented(decoder, limits)
+}
+
+/// Decodes an image the right way up within the caps a rendered page is held
+/// to: its encoded size and decode buffer first, then the page's pixels.
+fn decode_oriented(
+    mut decoder: impl ImageDecoder,
+    limits: &ResourceLimits,
+) -> Result<DynamicImage, ExtractionError> {
     let (encoded_width, encoded_height) = decoder.dimensions();
     limits.validate_image_file_pixels(encoded_width, encoded_height)?;
     limits.validate_image_file_bytes(decoder.total_bytes())?;

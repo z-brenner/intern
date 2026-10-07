@@ -28,20 +28,61 @@ impl OcrBackend for FakeOcr {
     }
 }
 
-/// The nine tags a minimal uncompressed 2x2 greyscale frame needs, in the
-/// ascending tag order the specification requires.
-fn directory(data_offset: u32, next_directory: u32) -> Vec<u8> {
-    let mut bytes = 9_u16.to_le_bytes().to_vec();
+/// Reads each page as the shade of its first pixel, so a test can tell
+/// which frame became which page.
+struct ShadeOcr;
+
+impl OcrBackend for ShadeOcr {
+    fn recognize(
+        &self,
+        page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        let shade = page.image.to_luma8().get_pixel(0, 0)[0];
+        Ok(OcrResult::new(format!("shade {shade}"), 90.0))
+    }
+}
+
+/// One frame of a fixture TIFF: a 2x2 greyscale image of one shade.
+#[derive(Clone, Copy)]
+struct Frame {
+    compression: u16,
+    /// Marked a reduced-resolution copy of a page (`NewSubfileType` 1).
+    thumbnail: bool,
+    shade: u8,
+}
+
+impl Frame {
+    fn page(shade: u8) -> Self {
+        Self {
+            compression: 1,
+            thumbnail: false,
+            shade,
+        }
+    }
+
+    fn tags(self) -> u32 {
+        if self.thumbnail { 10 } else { 9 }
+    }
+}
+
+/// The tags a minimal 2x2 greyscale frame needs, in the ascending tag order
+/// the specification requires.
+fn directory(frame: Frame, data_offset: u32, next_directory: u32) -> Vec<u8> {
+    let mut bytes = (frame.tags() as u16).to_le_bytes().to_vec();
     let mut entry = |tag: u16, kind: u16, value: u32| {
         bytes.extend_from_slice(&tag.to_le_bytes());
         bytes.extend_from_slice(&kind.to_le_bytes());
         bytes.extend_from_slice(&1_u32.to_le_bytes());
         bytes.extend_from_slice(&value.to_le_bytes());
     };
+    if frame.thumbnail {
+        entry(0x00FE, 4, 1); // NewSubfileType: reduced resolution
+    }
     entry(0x0100, 3, 2); // ImageWidth
     entry(0x0101, 3, 2); // ImageLength
     entry(0x0102, 3, 8); // BitsPerSample
-    entry(0x0103, 3, 1); // Compression: none
+    entry(0x0103, 3, u32::from(frame.compression)); // Compression
     entry(0x0106, 3, 1); // PhotometricInterpretation: black is zero
     entry(0x0111, 4, data_offset); // StripOffsets
     entry(0x0115, 3, 1); // SamplesPerPixel
@@ -51,38 +92,53 @@ fn directory(data_offset: u32, next_directory: u32) -> Vec<u8> {
     bytes
 }
 
-/// A little-endian TIFF of `frames` frames, each its own directory followed
+/// A little-endian TIFF of these frames, each its own directory followed
 /// by its four pixels.
-fn tiff(frames: u32) -> Vec<u8> {
-    const DIRECTORY_BYTES: u32 = 2 + 9 * 12 + 4;
-    const FRAME_BYTES: u32 = DIRECTORY_BYTES + 4;
+fn tiff_of(frames: &[Frame]) -> Vec<u8> {
     let mut bytes = b"II".to_vec();
     bytes.extend_from_slice(&42_u16.to_le_bytes());
     bytes.extend_from_slice(&8_u32.to_le_bytes());
-    for frame in 0..frames {
-        let start = 8 + frame * FRAME_BYTES;
-        let next = if frame + 1 == frames {
-            0
-        } else {
-            start + FRAME_BYTES
-        };
-        bytes.extend_from_slice(&directory(start + DIRECTORY_BYTES, next));
-        bytes.extend_from_slice(&[0x20, 0x40, 0x60, 0x80]);
+    let mut start = 8;
+    for (index, frame) in frames.iter().enumerate() {
+        let directory_bytes = 2 + frame.tags() * 12 + 4;
+        let end = start + directory_bytes + 4;
+        let next = if index + 1 == frames.len() { 0 } else { end };
+        bytes.extend_from_slice(&directory(*frame, start + directory_bytes, next));
+        bytes.extend_from_slice(&[frame.shade; 4]);
+        start = end;
     }
     bytes
 }
 
-fn extract(frames: u32) -> intern_worker::extract::ExtractedDocument {
+/// `frames` frames, the first of shade 32, each 32 darker than the last.
+fn tiff(frames: u32) -> Vec<u8> {
+    let frames = (1..=frames)
+        .map(|frame| Frame::page(frame as u8 * 32))
+        .collect::<Vec<_>>();
+    tiff_of(&frames)
+}
+
+fn extract_with(
+    bytes: &[u8],
+    ocr: &dyn OcrBackend,
+    limits: &ResourceLimits,
+) -> intern_worker::extract::ExtractedDocument {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("fax.tiff");
-    std::fs::write(&path, tiff(frames)).unwrap();
-    extract_image(
-        &path,
-        &FakeOcr,
-        &ResourceLimits::default(),
-        &CancellationToken::new(),
-    )
-    .unwrap()
+    std::fs::write(&path, bytes).unwrap();
+    extract_image(&path, ocr, limits, &CancellationToken::new()).unwrap()
+}
+
+fn extract(frames: u32) -> intern_worker::extract::ExtractedDocument {
+    extract_with(&tiff(frames), &FakeOcr, &ResourceLimits::default())
+}
+
+fn texts(document: &intern_worker::extract::ExtractedDocument) -> Vec<&str> {
+    document
+        .pages
+        .iter()
+        .map(|page| page.text.as_str())
+        .collect()
 }
 
 #[test]
@@ -99,20 +155,94 @@ fn a_single_frame_tiff_is_one_complete_page() {
     );
 }
 
-/// Only the first frame is read - neither this decoder nor the CCITT
-/// compression these files use supports the rest - so what matters is that
-/// the pages that were not read are reported instead of vanishing.
+/// A fax or batch scan is one file with a page per frame, and every frame
+/// is read, in order, as a page of its own.
 #[test]
-fn a_multi_page_tiff_reports_the_frames_it_did_not_read() {
-    let document = extract(3);
+fn every_frame_of_a_multi_page_tiff_is_a_page() {
+    let document = extract_with(&tiff(3), &ShadeOcr, &ResourceLimits::default());
 
-    assert_eq!(document.pages.len(), 1);
+    assert_eq!(texts(&document), ["shade 32", "shade 64", "shade 96"]);
+    assert_eq!(
+        document
+            .pages
+            .iter()
+            .map(|page| page.page_number)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert!(
+        document
+            .pages
+            .iter()
+            .all(|page| page.source == PageSource::Ocr)
+    );
+    let layout = document.pages[2].layout.as_ref().unwrap();
+    assert_eq!(layout.blocks[0].id, "p3.b1");
+    assert!(!document.truncated);
+    assert!(
+        !document
+            .warnings
+            .contains(&ExtractionWarning::TextTruncated)
+    );
+    // Only the first page brings the page image with it.
+    assert!(document.optional_image.is_some());
+    assert!(document.pages[0].vision_escalated);
+    assert!(!document.pages[1].vision_escalated);
+}
+
+/// Frames past the document's page limit are not read, and the document
+/// says it is not whole.
+#[test]
+fn frames_past_the_page_limit_are_reported_unread() {
+    let limits = ResourceLimits {
+        max_page_count: 2,
+        ..ResourceLimits::default()
+    };
+    let document = extract_with(&tiff(3), &ShadeOcr, &limits);
+
+    assert_eq!(texts(&document), ["shade 32", "shade 64"]);
     assert!(document.truncated);
     assert!(
         document
             .warnings
             .contains(&ExtractionWarning::TextTruncated)
     );
+}
+
+/// A frame this decoder cannot read - CCITT Group 3 here - ends the reading
+/// there: the pages before it are kept, and the document is not whole.
+#[test]
+fn a_frame_the_decoder_cannot_read_ends_the_reading_there() {
+    let unreadable = Frame {
+        compression: 3,
+        ..Frame::page(64)
+    };
+    let document = extract_with(
+        &tiff_of(&[Frame::page(32), unreadable, Frame::page(96)]),
+        &ShadeOcr,
+        &ResourceLimits::default(),
+    );
+
+    assert_eq!(texts(&document), ["shade 32"]);
+    assert!(document.truncated);
+}
+
+/// A reduced-resolution copy of a page, as some scanners store a preview,
+/// is not a page of its own.
+#[test]
+fn a_reduced_resolution_copy_is_not_a_page() {
+    let preview = Frame {
+        thumbnail: true,
+        ..Frame::page(200)
+    };
+    let document = extract_with(
+        &tiff_of(&[Frame::page(32), preview, Frame::page(96)]),
+        &ShadeOcr,
+        &ResourceLimits::default(),
+    );
+
+    assert_eq!(texts(&document), ["shade 32", "shade 96"]);
+    assert!(!document.truncated);
 }
 
 #[test]

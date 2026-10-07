@@ -83,7 +83,7 @@ distillation, and a cell's text at 1,000 characters. That window is a design
 choice, marked where it applies, so it is reported as `CONTENT_ELIDED`, which
 the host treats as a note rather than a reason for review: a ledger whose
 facts sit in its first rows can be Ready however long it runs. Text that was
-actually lost — a page cut at the size cap, unread TIFF frames — is still
+actually lost — a page cut at the size cap, TIFF frames it could not read — is still
 `TEXT_TRUNCATED` and still forces review. A `.xlsx` is streamed cell by cell;
 calamine reads a binary `.xls` whole as it opens it, so its record stream is
 first surveyed for what that would allocate (dense ranges spanning a sheet's
@@ -124,8 +124,10 @@ documents where dates go missing; the scanned lease's evidence for its date
 was its whole page.
 
 A standalone image is OCR'd as one page; a TIFF holding a frame per page — a
-fax, a batch scan — yields its first frame and reports the rest as truncated
-rather than dropping them silently. `.eml` emails and Outlook `.msg` messages
+fax, a batch scan — yields a page per frame, in order, up to the page limit.
+A reduced-resolution preview is not a page. Frames past the limit, or from a
+frame the decoder cannot read on (CCITT Group 3), are reported as truncated
+rather than dropped silently. `.eml` emails and Outlook `.msg` messages
 emit a fixed-order header block followed by the body and a listing (never an
 extraction) of attachments. The `Date:` line is the message's own `Date`
 header, verbatim — for a `.msg`, the one in the transport headers it
