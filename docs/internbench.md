@@ -282,6 +282,8 @@ worse while the work makes it better.
 
 ## Working with it
 
+Reports of record, the baseline first, are in [`bench/reports/`](../bench/reports/).
+
 The recording and baseline of record are `bench/recording.json` and
 `bench/baseline.json`. A live run writes them (`--record`,
 `--write-baseline`), and they are committed with the change that produced

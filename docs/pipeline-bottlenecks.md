@@ -53,7 +53,9 @@ What the code says, before measurement:
    **before** the fixed instructions, so whenever consecutive documents
    differ in that respect, the whole instruction block is prefilled again.
    (`prompt.rs` `build_prompt`.) InternBench records `cached_tokens` per
-   document, which shows how often this happens.
+   document, which shows how often this happens. The measurement below shows
+   that on the pinned model the cache is rarely reused at all, for a reason
+   reordering would not fix.
 3. **OCR pays process and encoding overhead on every pass.** Each Tesseract
    pass is a new process that reloads its language model and decodes a PNG
    the worker has just encoded. A full-page 300-DPI grey PNG is about 8 MP to
@@ -78,7 +80,66 @@ What the code says, before measurement:
    copied by the snapshot. Distillation, validation and naming are
    milliseconds.
 
-<!-- MEASURED-LATENCY -->
+### Measured: the InternBench baseline
+
+The baseline in [`bench/reports/`](../bench/reports/) is one live run of all
+52 InternBench documents. It used the pinned model through llama.cpp at 4
+threads with an 8,192-token context, on an otherwise idle 4-core Xeon
+(2.8 GHz, AVX-512) with 16 GB. This machine is slower than the laptop in
+[`model-bakeoff.md`](model-bakeoff.md): about 59 prompt tokens per second
+and 12 generated tokens per second, against 157 and 17.5. Read the shares
+below; the absolute seconds will differ on other hardware.
+
+| Where the time went (51 completed documents, 2,970 s) | Share |
+| --- | ---: |
+| Prefill (reading the prompt) | 74.8% |
+| Generation (writing the reply) | 21.6% |
+| Extraction, all of it | 2.9% |
+| of which OCR | 2.5% |
+| Distillation, validation, naming | < 0.1% |
+
+Per document:
+
+| | p50 | p95 | max |
+| --- | ---: | ---: | ---: |
+| Total | 52.8 s | 115.5 s | 142.5 s |
+| Prefill | 38.6 s | 86.8 s | 105.7 s |
+| Generation | 12.5 s | 17.5 s | 18.8 s |
+| Prompt tokens | 2,210 | 5,051 | 5,783 |
+| Tokens reused from the prompt cache | 46 | 1,166 | 1,219 |
+| Generated tokens | 139 | 207 | 216 |
+
+Four things follow.
+
+1. **The prompt cache does almost nothing for this model.** Only 8 of the 51
+   documents reused more than 800 cached tokens; the median reused 46, which
+   is the system turn. The pinned model is a hybrid with recurrent layers.
+   llama.cpp cannot rewind recurrent state to an arbitrary prefix. It can only
+   restore a saved checkpoint, and the server log shows one about 512 tokens
+   before the end of the previous prompt. Once a prompt is longer than about
+   1,500 tokens, that checkpoint lies past the fixed instructions. The next
+   document then prefills the whole ~1,000-token instruction block again:
+   about 17 s per document on this machine and 6 s on the laptop. Reordering
+   the prompt cannot fix that; a shorter fixed block can.
+2. **The document itself is the rest of the prefill.** A median prompt of
+   2,210 tokens is about 1,200 tokens of document under 1,000 of
+   instructions. Long documents send up to 14,000 characters of digest, and
+   that is where p95 comes from.
+3. **Generation is a floor of 10–18 s on every document,** a one-page
+   receipt included. The reply copies three evidence quotes before the facts.
+   Its median is 139 tokens, 216 at most. One reply, on the 10-page data
+   processing addendum, ran to the 1,024-token limit and failed as
+   `MODEL_REPLY_TRUNCATED`.
+4. **OCR is cheap by comparison.** Even the 25-page scan spent 38 s on OCR
+   against 82 s of prefill. A more accurate OCR engine that is slower per
+   page costs little end to end. Keeping easy text documents on the fast
+   path matters more than shaving seconds from OCR.
+
+Memory: the parser worker peaked at 121 MB, on the noisy scan. The model
+server ran at 3.6 GB typical and 5.5 GB at its peak, well above the
+1.28 GB model file. The excess is the server's own context and prompt-cache
+state, not Intern's. It deserves its own look before Intern raises the
+context size.
 
 ## Accuracy: where facts are lost
 
@@ -113,6 +174,133 @@ What the code says, before measurement:
    goes to review rather than being re-asked with a narrower question. This
    is safe, but on long and complex documents the review rate is the cost.
 
-<!-- MEASURED-ACCURACY -->
+### Measured: where Intern is right and wrong
 
-<!-- ANALYSIS -->
+| | Result |
+| --- | ---: |
+| Whole filename right | 14/52 (27%) |
+| Document type | 38/52 (73%) |
+| Defining date | 43/52 (83%) |
+| Parties | 37/52 (71%) |
+| Joining word right, where parties were named | 19/51 (37%) |
+| Routing (ready vs review) agrees with the reviewed answer | 28/40 (70%) |
+| Description states every listed fact | 8/52 (15%), 57% of facts on average |
+| Description states nothing the document does not | 47/51 (92%); 4 of 167 checkable claims unsupported |
+| Gold evidence present in the digest / in the prompt sent | 100% / 100% |
+| **Filed without review under a wrong name** | **20/52** |
+| Filed under a date the corpus marks as a trap | 7/52 |
+
+The safety line is the one to read first. 20 documents would have been
+renamed without anyone looking, under a name the reviewed answer disagrees
+with. 6 of those sprang a trap:
+
+* the master agreement's date on a statement of work issued under it;
+* the start date on an offer letter;
+* a design-freeze date on a launch plan;
+* the first entry's date on a maintenance record;
+* a patient's date of birth on an intake form;
+* the bill-to customer named as a party to an invoice.
+
+The other 14 are names that are close but not right. Most often the joining
+word is missing; sometimes the title is shortened ("Minutes" for "Board
+Meeting Minutes"). These are not dangerous one at a time, but they are
+exactly what a person has to fix by hand.
+
+Where the misses come from:
+
+* **The joining word.** The model answered `none` for 21 of the 51 documents
+  that should name a relation, so the filename reads `- Party`. It almost
+  never chose `for` or `from` unprompted. The vocabulary is offered and not
+  used.
+* **Who the parties are.** A notice was named for the landlord who sent it
+  instead of the tenant it is about. A prior authorization was named for the
+  health plan instead of the patient. An insurance declarations page was
+  named for the agency, an upside-down purchase order for the supplier. Each
+  time the model found a real name and gave it the wrong role.
+* **Types.** 14 types were unsupported, generic or wrong:
+  * "Document";
+  * "Approval of Minutes" for a written consent;
+  * the delivery line "via Email and Certified Mail, Return Receipt
+    Requested" taken as the type of a demand letter.
+  The fallback that takes the type from the title then picked the wrong
+  heading.
+* **Dates.** Every miss was a reading error, not a retrieval error: the right
+  date was in the digest every time. The 100-page report, dated only on page
+  41, was dated correctly.
+* **Scans.** OCR fidelity explains two misses outright. The skewed notice
+  lost three paragraphs (64.6% CER), and the noisy statement read at 38% CER
+  with the issuer's name destroyed. The other scans read at 0–2.5% CER and
+  failed for the same reasons digital documents do.
+
+On this corpus, digest recall and prompt recall are 100%. Distillation is
+**not** losing the facts. Long documents miss because of how the facts are
+read and labelled, not because they never reach the model.
+
+The existing corpus in `fixtures/`, run live on the same machine the same
+evening, scored what its committed baseline says:
+* 11/18 filenames, 14/18 dates and 0 trap dates;
+* 18/18 types, 16/19 parties and 11/16 relations;
+* 18/19 routing, with a 42% review rate.
+
+Its documents are shorter, and its median document took 20.3 s end to end.
+Every miss on that corpus is one InternBench also shows: a joining word, a
+party seen through OCR, or a date a scan does not state legibly.
+
+## The highest-value changes
+
+Ranked by what the measurements say they are worth.
+
+### Complex document understanding
+
+1. **Ask for roles, derive the joining word.** The model reliably finds
+   names and unreliably labels them. Capture each party's role (issuer,
+   customer, landlord, tenant, employer, employee, …) and compose `from`,
+   `for`, `to`, `with` or `between` deterministically. On the baseline, 32 of
+   51 joining words are wrong and most of them are `none`.
+2. **Give the model the layout it lost.** Multi-column reading order (the
+   interleaved declarations page), labelled values (`Bill To` blocks, form
+   fields) and table rows decide who is who. A structured representation with
+   block identifiers lets the prompt say what is a heading, a table cell or a
+   key-value pair.
+3. **Constrain the type to the document's own titles and labels.** The
+   fallback picked delivery lines and agenda items. Rank title candidates
+   structurally (first heading, largest font, a type noun) rather than taking
+   the first heading.
+
+### OCR
+
+1. **A modern recognizer.** PP-OCRv5 through ONNX Runtime, measured on the
+   same 13 InternBench scans, cut character errors from 2.5% to 0.5%. It
+   raised date accuracy from 0.90 to 0.97 and identifier accuracy from 0.80
+   to 0.93. It costs more per page, but OCR is 2.5% of the time.
+2. **Deskew and orientation that do not drop text.** The 3° skewed page lost
+   three paragraphs.
+3. **Second readings only where it matters.** Re-read a low-confidence line
+   only when it carries a date, an amount, an identifier or a name, instead
+   of re-reading whole pages.
+4. **Keep the native layer when it is trustworthy, and only then.** The
+   invisible, OCR-corrupted text layer was trusted and the date could not be
+   confirmed.
+
+### Long documents
+
+1. **Retrieve by field, not by one global score.** Recall is already 100%,
+   so the gain is in size. One global compressor sends up to 14,000
+   characters to make sure everything survives. Field-specific retrieval
+   (type, date, parties, subject, identifiers), each with its own small
+   budget, sends the evidence for each question and little else.
+2. **Never let a reply run away.** Evidence by block identifier, and bounded
+   strings, would have saved the one long document that failed on a
+   truncated reply.
+
+### Latency
+
+1. **Shrink the fixed instructions.** They cannot be cached on this model,
+   so every token of them costs prefill on every document: about 17 s here
+   and 6 s on the laptop.
+2. **Cite evidence by identifier instead of copying it.** Generation is
+   10–18 s, mostly quotes; identifiers are a few tokens each.
+3. **Send less document.** Field retrieval with budgets, sized to the
+   document.
+4. **Keep OCR off the critical path** with bounded page-level parallelism.
+   Leave easy text documents on the fast native path.
