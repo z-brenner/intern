@@ -74,7 +74,10 @@ fi
 
 if [ -z "${INTERN_BENCH:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-bench)
-  INTERN_BENCH="${CARGO_TARGET_DIR:-$REPO/target}/release/intern-bench"
+  # Cargo resolves a relative target directory from where it ran: here.
+  TARGET="${CARGO_TARGET_DIR:-target}"
+  case "$TARGET" in /*) ;; *) TARGET="$REPO/$TARGET" ;; esac
+  INTERN_BENCH="$TARGET/release/intern-bench"
 fi
 # Regenerate when any file differs from the committed manifest, not only
 # when the generated manifest does: a file edited by hand leaves that
