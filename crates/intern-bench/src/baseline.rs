@@ -294,11 +294,21 @@ pub fn compare(
                 "{}: was {}, now {}",
                 record.id, expected.status, record.status
             );
-            if expected.status == COMPLETED && is_failure(&record.status) {
-                stopped_completing.push(line.clone());
+            // A document that failed in the baseline and completes now has
+            // recovered. Its scores are still held to the baseline's below:
+            // a failed record's misses cannot regress, but a trap it did not
+            // spring then can be sprung now.
+            if record.status == COMPLETED
+                && matches!(expected.status.as_str(), EXTRACTION_FAILED | MODEL_FAILED)
+            {
+                comparison.document_improvements.push(line);
+            } else {
+                if expected.status == COMPLETED && is_failure(&record.status) {
+                    stopped_completing.push(line.clone());
+                }
+                comparison.document_regressions.push(line);
+                continue;
             }
-            comparison.document_regressions.push(line);
-            continue;
         }
         for (key, was) in &expected.scores {
             if key == "ready" {
@@ -661,6 +671,62 @@ mod tests {
         assert!(comparison.passed, "{:?}", comparison.failures);
     }
 
+    /// A document that failed in the baseline and completes now is an
+    /// improvement, not a status regression; a trap it springs now is
+    /// still a regression.
+    #[test]
+    fn a_failed_document_that_recovers_is_an_improvement() {
+        let mut records = (0..9)
+            .map(|index| {
+                record(
+                    &format!("doc-{index}"),
+                    "completed",
+                    json!({"filename_correct": true, "date_forbidden": false, "ready": true}),
+                    1_000.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        records.push(record(
+            "doc-9",
+            MODEL_FAILED,
+            json!({"filename_correct": false, "date_forbidden": false}),
+            1_000.0,
+        ));
+        let baseline = Baseline::from_report(&report("replay", records.clone()));
+
+        records[9] = record(
+            "doc-9",
+            COMPLETED,
+            json!({"filename_correct": true, "date_forbidden": false, "ready": true}),
+            1_000.0,
+        );
+        for mode in ["replay", "live"] {
+            let comparison = compare(&report(mode, records.clone()), &baseline, None);
+            assert!(comparison.passed, "{mode}: {:?}", comparison.failures);
+            assert!(comparison.document_regressions.is_empty(), "{mode}");
+            assert!(
+                comparison
+                    .document_improvements
+                    .contains(&"doc-9: was model_failed, now completed".to_owned()),
+                "{mode}: {:?}",
+                comparison.document_improvements
+            );
+        }
+
+        records[9] = record(
+            "doc-9",
+            COMPLETED,
+            json!({"filename_correct": false, "date_forbidden": true, "ready": true}),
+            1_000.0,
+        );
+        let comparison = compare(&report("replay", records), &baseline, None);
+        assert!(!comparison.passed);
+        assert_eq!(
+            comparison.failures,
+            vec!["doc-9: date_forbidden was false, now true".to_owned()]
+        );
+    }
+
     /// Turning a baselined document back to pending would take it out of
     /// every gate; only a document the baseline never held may be pending.
     #[test]
@@ -976,11 +1042,19 @@ mod tests {
             "{:?}",
             comparison.failures
         );
+        // Completing is the improvement; the trap it springs is the
+        // regression, reported per document and gated in aggregate.
+        assert!(
+            comparison
+                .document_improvements
+                .contains(&"doc-9: was model_failed, now completed".to_owned())
+        );
         assert!(
             comparison
                 .document_regressions
-                .contains(&"doc-9: was model_failed, now completed".to_owned()),
-            "reported, not gated on its own"
+                .contains(&"doc-9: date_forbidden was false, now true".to_owned()),
+            "{:?}",
+            comparison.document_regressions
         );
         assert!(
             !comparison

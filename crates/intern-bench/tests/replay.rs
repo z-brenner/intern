@@ -10,7 +10,7 @@ use intern_bench::{
     markdown,
     recording::{
         Exchange, RECORDING_SCHEMA_VERSION, RecordedDocument, RecordedExtraction, RecordedReply,
-        Recording,
+        Recording, sha256_hex,
     },
     report::Report,
     run::{EXIT_REGRESSED, Mode, RunOptions, run},
@@ -577,39 +577,56 @@ fn a_recording_made_under_another_file_name_is_stale() {
 }
 
 #[test]
-fn a_live_run_refuses_documents_the_manifest_disagrees_with() {
+fn a_live_run_refuses_documents_the_manifest_disagrees_with_or_lacks() {
     let bench = Bench::new();
     std::fs::create_dir_all(bench.path("generated")).unwrap();
     std::fs::write(bench.path("generated/invoice-alpha.pdf"), b"edited by hand").unwrap();
-    std::fs::write(
-        bench.path("manifest.json"),
+    std::fs::write(bench.path("generated/notice-beta.pdf"), b"never generated").unwrap();
+    let live = |manifest: Value, only: &[&str]| {
+        std::fs::write(bench.path("manifest.json"), manifest.to_string()).unwrap();
+        let mut options = bench.options("live.json");
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = only.iter().map(|id| (*id).to_owned()).collect();
+        // Nothing here could answer: the run has to stop before the first
+        // document reaches the worker.
+        options.mode = Mode::Live {
+            options: LiveOptions {
+                worker: bench.path("no-such-worker"),
+                endpoint: "http://127.0.0.1:9/v1/chat/completions".into(),
+                api_key: "unused".into(),
+                model_id: "intern-local".into(),
+                model_path: None,
+                warm_up: false,
+                server_pid: None,
+            },
+            record: Some(bench.path("live-recording.json")),
+            note: String::new(),
+        };
+        run(options).unwrap_err()
+    };
+
+    // Bytes that are not the ones the manifest lists.
+    let error = live(
         json!({"schema_version": 1, "files": [
             {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
-        ]})
-        .to_string(),
-    )
-    .unwrap();
-    let mut options = bench.options("live.json");
-    options.manifest = Some(bench.path("manifest.json"));
-    options.only = vec!["invoice-alpha".into()];
-    // Nothing here could answer: the run has to stop before the first
-    // document reaches the worker.
-    options.mode = Mode::Live {
-        options: LiveOptions {
-            worker: bench.path("no-such-worker"),
-            endpoint: "http://127.0.0.1:9/v1/chat/completions".into(),
-            api_key: "unused".into(),
-            model_id: "intern-local".into(),
-            model_path: None,
-            warm_up: false,
-            server_pid: None,
-        },
-        record: Some(bench.path("live-recording.json")),
-        note: String::new(),
-    };
-    let error = run(options).unwrap_err();
+        ]}),
+        &["invoice-alpha"],
+    );
     assert!(
         error.contains("differ from the manifest") && error.contains("invoice-alpha.pdf"),
+        "{error}"
+    );
+
+    // A document the manifest does not list, beside one it vouches for.
+    let error = live(
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": sha256_hex(b"edited by hand")}
+        ]}),
+        &["invoice-alpha", "notice-beta"],
+    );
+    assert!(error.contains("1 document(s)"), "{error}");
+    assert!(
+        error.contains("notice-beta.pdf") && !error.contains("invoice-alpha.pdf"),
         "{error}"
     );
     assert!(!bench.path("live-recording.json").exists());
