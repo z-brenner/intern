@@ -11,7 +11,9 @@
 //! * [`score`] scores one outcome against them; [`claims`] checks what a
 //!   description asserts; [`ocr`] measures OCR against what was drawn.
 //! * [`live`] runs the worker and the model; [`replay`] scores a
-//!   [`recording`] again without either.
+//!   [`recording`] again without either; [`extract`] runs the worker alone
+//!   and scores what extraction decides: OCR, and the [`structure`] of the
+//!   text read.
 //! * [`report`] summarises the records, [`markdown`] renders them for a
 //!   person, [`compare`] diffs two reports, and [`baseline`] gates a run.
 //! * [`merge`] replaces or adds documents in a recording, so a few can be
@@ -22,6 +24,7 @@
 pub mod baseline;
 pub mod claims;
 pub mod compare;
+pub mod extract;
 pub mod gold;
 pub mod live;
 pub mod machine;
@@ -36,4 +39,5 @@ pub mod report;
 pub mod run;
 pub mod score;
 pub mod stats;
+pub mod structure;
 pub mod timing;

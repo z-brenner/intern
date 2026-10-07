@@ -149,7 +149,7 @@ jobs:
       - name: Stage parser worker and placeholder sidecars for desktop compile checks
         run: |
           cargo build --locked -p intern-worker
-          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars
+          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/ocr-models
           cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
@@ -157,6 +157,7 @@ jobs:
           touch src-tauri/resources/tessdata/compile-placeholder.traineddata
           touch src-tauri/resources/native/pdfium/compile-placeholder.dll
           touch src-tauri/resources/native/sidecars/compile-placeholder.dll
+          touch src-tauri/resources/ocr-models/compile-placeholder.onnx
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
 
@@ -233,10 +234,12 @@ jobs:
           New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # The default feature set never compiles the PDFium and Tesseract code, so
@@ -259,6 +262,7 @@ jobs:
           Remove-Item src-tauri\resources\tessdata\compile-placeholder.traineddata -Force
           Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
           Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
+          Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
           ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       # A complete fetch is saved under the key the restore step looked for.
       # Skipped on an exact hit, where that key already exists.

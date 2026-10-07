@@ -67,13 +67,7 @@ pub fn extract_delimited(
     };
     let (text, elided) = render_sheet(None, &sheet);
     Ok(elided_document(
-        vec![ExtractedPage {
-            page_number: 1,
-            text,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        vec![ExtractedPage::of_text(1, text, PageSource::AnyDoc)],
         elided,
     ))
 }

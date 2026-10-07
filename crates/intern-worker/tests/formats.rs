@@ -363,3 +363,62 @@ fn each_open_document_sheet_is_a_named_page() {
     assert_eq!(document.pages[1].page_number, 2);
     assert!(document.warnings.is_empty());
 }
+
+/// Every page of every reader carries blocks, ids and all, built from its
+/// text: a reader that knows no geometry still says which lines are a
+/// heading, which a table, and which a labelled value. A sheet's rendered
+/// table is a table block whose header is the sheet's first row.
+#[test]
+fn every_format_s_pages_carry_blocks_built_from_their_text() {
+    use intern_worker::layout::{BlockKind, PageRoute};
+
+    for name in [
+        "letter.doc",
+        "letter.docm",
+        "letter.rtf",
+        "letter.odt",
+        "deck.ppt",
+        "deck.odp",
+        "ledger.xls",
+        "ledger.xlsm",
+        "ledger.ods",
+        "ledger.csv",
+    ] {
+        let document = read(name).unwrap_or_else(|error| panic!("{name}: {error}"));
+        for page in &document.pages {
+            let layout = page
+                .layout
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} page {} has no layout", page.page_number));
+            assert_eq!(layout.route, PageRoute::Fast, "{name}");
+            assert!(!layout.blocks.is_empty(), "{name}");
+            assert_eq!(
+                layout.blocks[0].id,
+                format!("p{}.b1", page.page_number),
+                "{name}"
+            );
+            // Each block's text is the stretch of the page text it came
+            // from, in order.
+            let mut from = 0;
+            for block in &layout.blocks {
+                let at = page.text[from..]
+                    .find(&block.text)
+                    .unwrap_or_else(|| panic!("{name}: {block:?} is not in the page text"));
+                from += at + block.text.len();
+                assert_eq!(block.bbox, None, "{name}: no geometry to give");
+            }
+        }
+        if name.starts_with("ledger") {
+            let table = document
+                .pages
+                .iter()
+                .flat_map(|page| &page.layout.as_ref().unwrap().blocks)
+                .find(|block| block.kind == BlockKind::Table)
+                .unwrap_or_else(|| panic!("{name} has no table block"));
+            let rows = &table.table.as_ref().unwrap().rows;
+            assert!(rows.len() >= 2, "{name}");
+            assert!(rows[0].cells.iter().all(|cell| cell.header), "{name}");
+            assert_eq!(rows[1].cells[0].id, format!("{}.r2.c1", table.id));
+        }
+    }
+}

@@ -58,6 +58,9 @@ describe('setup and queue controls', () => {
       vi.setSystemTime(0);
       render(<App bridge={bridge} />);
       expect(await screen.findByText('363 MiB of 1.19 GiB · 29%')).toBeVisible();
+      // The first state can show before the screen has subscribed to the
+      // ones after it; on a busy runner that left `listener` unset.
+      await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
 
       // Three megabytes a second, by the samples, with 828 MiB still to come.
       for (const [at, mib] of [[5_000, 378], [10_000, 393]] as const) {

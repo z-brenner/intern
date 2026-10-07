@@ -75,13 +75,7 @@ pub fn extract_eml(
     cancel.check()?;
     let text = render_email(&mail);
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text,
-            source: PageSource::Text,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(1, text, PageSource::Text)],
         warnings: vec![],
         truncated: false,
         optional_image: None,
@@ -124,13 +118,11 @@ pub fn extract_msg_in_zone(
         };
     cancel.check()?;
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: render_outlook(&message, &recovered, zone),
-            source: PageSource::Text,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(
+            1,
+            render_outlook(&message, &recovered, zone),
+            PageSource::Text,
+        )],
         warnings: vec![],
         truncated: false,
         optional_image: None,

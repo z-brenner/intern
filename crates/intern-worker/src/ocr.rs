@@ -13,13 +13,21 @@ use image::DynamicImage;
 #[cfg(feature = "native-tesseract")]
 use image::ImageFormat;
 
-use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, RenderedPage};
+use crate::extract::{
+    CancellationToken, ExtractionError, OcrBackend, OcrLine, OcrResult, RenderedPage,
+};
 #[cfg(feature = "native-tesseract")]
 use crate::extract::{OrientationPasses, apply_detected_rotation, read_upright};
 #[cfg(feature = "native-tesseract")]
 use crate::limits::ResourceLimits;
 #[cfg(feature = "native-tesseract")]
 use crate::temp::TempWorkspace;
+
+/// The most words of a reading whose boxes are kept for its lines. The
+/// layout analysis takes on at most `MAX_RUNS` (4,000) lines, a dense page
+/// is a few thousand words, and a noisy image read as hundreds of thousands
+/// of them would otherwise hold a box for each.
+pub const MAX_TSV_WORDS: usize = 20_000;
 
 /// Rebuilds a page's text from Tesseract's TSV output, keeping the layout
 /// Tesseract found.
@@ -34,16 +42,46 @@ use crate::temp::TempWorkspace;
 ///
 /// The mean confidence is over every word Tesseract scored; rows with no
 /// word, and the -1 Tesseract gives a word it did not score, do not count.
+///
+/// The reading also carries its lines, with their boxes and confidences,
+/// for the page's layout. A line is Tesseract's line split wherever a gap
+/// wider than the line is tall runs through it: Tesseract keeps a table row
+/// whose cells it did not put in blocks of their own as one line, and the
+/// cells are what the layout needs to see. The text is the same either way.
+///
+/// Tesseract reads a page lying on its side without being asked to, as
+/// vertical text, and reports its words' boxes where they lie. Such a
+/// reading's boxes are turned upright - the page the lines describe is the
+/// image turned a quarter - and the reading says so in its rotation, so
+/// the layout is built on the page as it reads.
+///
+/// A reading of more than [`MAX_TSV_WORDS`] words keeps its text and
+/// confidence but no lines: its words' boxes are let go once there are more
+/// than a page's layout could be analysed from, and its layout is built
+/// from its text.
 pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
     let tsv = std::str::from_utf8(bytes)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let mut text = String::new();
-    let mut confidences = Vec::new();
+    let (mut confidence_sum, mut confidence_count) = (0.0_f32, 0_usize);
+    let mut too_many_words = false;
+    // The image Tesseract read, from its page row.
+    let mut image = (0_u32, 0_u32);
+    // Each word: whether it starts a line, the word, its box, its score.
+    let mut words: Vec<(bool, &str, [u32; 4], f32)> = Vec::new();
     // (page, block, paragraph, line) of the word last written.
     let mut previous: Option<[&str; 4]> = None;
     for row in tsv.lines().skip(1) {
         let columns: Vec<&str> = row.splitn(12, '\t').collect();
-        if columns.len() != 12 || columns[0] != "5" {
+        if columns.len() != 12 {
+            continue;
+        }
+        let number = |index: usize| columns[index].trim().parse::<u32>().unwrap_or(0);
+        if columns[0] == "1" {
+            image = (number(8), number(9));
+            continue;
+        }
+        if columns[0] != "5" {
             continue;
         }
         let word = columns[11].trim();
@@ -51,6 +89,7 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
             continue;
         }
         let position = [columns[1], columns[2], columns[3], columns[4]];
+        let new_line = previous.is_none_or(|previous| previous != position);
         match previous {
             None => {}
             Some(previous) if previous[..3] != position[..3] => text.push_str("\n\n"),
@@ -61,15 +100,161 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
         previous = Some(position);
         let confidence = columns[10].parse::<f32>().unwrap_or(-1.0);
         if confidence >= 0.0 {
-            confidences.push(confidence);
+            confidence_sum += confidence;
+            confidence_count += 1;
         }
+        if too_many_words {
+            continue;
+        }
+        if words.len() == MAX_TSV_WORDS {
+            too_many_words = true;
+            words = Vec::new();
+            continue;
+        }
+        let (left, top) = (number(6), number(7));
+        words.push((
+            new_line,
+            word,
+            [left, top, left + number(8), top + number(9)],
+            confidence,
+        ));
     }
-    let mean_confidence = if confidences.is_empty() {
+    let mean_confidence = if confidence_count == 0 {
         0.0
     } else {
-        confidences.iter().sum::<f32>() / confidences.len() as f32
+        confidence_sum / confidence_count as f32
     };
-    Ok(OcrResult::new(text, mean_confidence))
+    let turn = sideways(&words);
+    let mut lines = LineBuilder::default();
+    for (new_line, word, bbox, confidence) in words {
+        lines.push(new_line, word, upright(bbox, turn, image), confidence);
+    }
+    Ok(OcrResult::new(text, mean_confidence)
+        .with_lines(lines.finish())
+        .with_rotation(turn))
+}
+
+/// The clockwise turn that stands a reading's page upright: 0 for a page
+/// read the right way up, 270 for one whose lines run down the image (the
+/// page lies turned clockwise), 90 for one whose lines run up it. Decided
+/// by the way the words of each line follow one another: across the image,
+/// or - for at least three steps in five - down or up it.
+fn sideways(words: &[(bool, &str, [u32; 4], f32)]) -> u16 {
+    let center = |bbox: &[u32; 4]| (i64::from(bbox[0] + bbox[2]), i64::from(bbox[1] + bbox[3]));
+    let mut steps = 0_usize;
+    let mut vertical = 0_usize;
+    let mut down = 0_i64;
+    for pair in words.windows(2) {
+        let (_, _, before, _) = pair[0];
+        let (starts_line, _, after, _) = pair[1];
+        if starts_line {
+            continue;
+        }
+        let (from, to) = (center(&before), center(&after));
+        let (across, along) = (to.0 - from.0, to.1 - from.1);
+        steps += 1;
+        if along.abs() > across.abs() {
+            vertical += 1;
+            down += along.signum();
+        }
+    }
+    if steps < 3 || vertical * 5 < steps * 3 {
+        return 0;
+    }
+    match down.cmp(&0) {
+        std::cmp::Ordering::Greater => 270,
+        std::cmp::Ordering::Less => 90,
+        std::cmp::Ordering::Equal => 0,
+    }
+}
+
+/// A box in the image Tesseract read (`image` is its width and height),
+/// turned clockwise by `turn` with the image.
+fn upright(bbox: [u32; 4], turn: u16, image: (u32, u32)) -> [u32; 4] {
+    let (width, height) = image;
+    let [x0, y0, x1, y1] = bbox;
+    match turn {
+        // A quarter turn clockwise: the left edge becomes the top.
+        90 => [height.saturating_sub(y1), x0, height.saturating_sub(y0), x1],
+        // A quarter turn the other way: the right edge becomes the top.
+        270 => [y0, width.saturating_sub(x1), y1, width.saturating_sub(x0)],
+        _ => bbox,
+    }
+}
+
+/// Tesseract's words gathered into [`OcrLine`]s.
+#[derive(Default)]
+struct LineBuilder {
+    lines: Vec<OcrLine>,
+    /// The words of the line being built: text, box, confidence.
+    words: Vec<(String, [u32; 4], f32)>,
+}
+
+impl LineBuilder {
+    fn push(&mut self, new_line: bool, word: &str, bbox: [u32; 4], confidence: f32) {
+        if new_line {
+            self.flush();
+        }
+        self.words.push((word.to_owned(), bbox, confidence));
+    }
+
+    fn flush(&mut self) {
+        let words = std::mem::take(&mut self.words);
+        let Some(height) = words.iter().map(|(_, bbox, _)| bbox[3] - bbox[1]).max() else {
+            return;
+        };
+        let mut start = 0;
+        for index in 1..=words.len() {
+            let breaks =
+                index == words.len() || words[index].1[0] > words[index - 1].1[2] + height.max(1);
+            if breaks {
+                self.lines.push(line_of(&words[start..index]));
+                start = index;
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<OcrLine> {
+        self.flush();
+        self.lines
+    }
+}
+
+fn line_of(words: &[(String, [u32; 4], f32)]) -> OcrLine {
+    let text = words
+        .iter()
+        .map(|(word, _, _)| word.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let bbox = words
+        .iter()
+        .map(|(_, bbox, _)| *bbox)
+        .reduce(|left, right| {
+            [
+                left[0].min(right[0]),
+                left[1].min(right[1]),
+                left[2].max(right[2]),
+                left[3].max(right[3]),
+            ]
+        })
+        .unwrap_or_default();
+    let scored = words
+        .iter()
+        .map(|(_, _, confidence)| *confidence)
+        .filter(|confidence| *confidence >= 0.0)
+        .collect::<Vec<_>>();
+    let confidence = if scored.is_empty() {
+        0
+    } else {
+        (scored.iter().sum::<f32>() / scored.len() as f32)
+            .round()
+            .clamp(0.0, 100.0) as u8
+    };
+    OcrLine {
+        text,
+        bbox,
+        confidence,
+    }
 }
 
 /// The page as Tesseract is given it to read: grey.
@@ -106,6 +291,17 @@ pub fn orientation_image(page: &DynamicImage) -> DynamicImage {
 /// package.
 #[cfg(feature = "native-tesseract")]
 const TSV_RENDERER: [&str; 2] = ["-c", "tessedit_create_tsv=1"];
+
+/// The environment every Tesseract process is started with: one OpenMP
+/// thread. Scanned pages are read side by side, a process each, and a
+/// Tesseract built with OpenMP otherwise starts a thread per core in every
+/// one of them. On four cores, two pages at once then took 128 s instead of
+/// 1.5 s: the threads spin waiting for each other while the others hold the
+/// cores. One thread reads a page exactly as several do (the same TSV,
+/// byte for byte) and on its own is no slower (0.75 s against 0.82 s for an
+/// upright letter). A build without OpenMP ignores it.
+#[cfg(feature = "native-tesseract")]
+const ONE_THREAD: (&str, &str) = ("OMP_THREAD_LIMIT", "1");
 
 /// Page segmentation for the recognition pass: automatic, **without** orientation
 /// detection.
@@ -272,6 +468,7 @@ impl TesseractOcr {
             |timings| &mut timings.ocr_engine_micros,
             || {
                 let child = Command::new(&self.executable)
+                    .env(ONE_THREAD.0, ONE_THREAD.1)
                     .arg(input)
                     .arg(&output_base)
                     .arg("-l")
@@ -302,7 +499,10 @@ impl TesseractOcr {
                 output_path.display()
             ))
         })?;
-        Ok(parse_tsv(&output)?.with_rotation(rotation))
+        // Tesseract may have turned the page further itself.
+        let reading = parse_tsv(&output)?;
+        let turned = (rotation + reading.rotation_degrees) % 360;
+        Ok(reading.with_rotation(turned))
     }
 
     /// The clockwise rotation Tesseract's orientation detection says the page
@@ -334,6 +534,7 @@ impl TesseractOcr {
             |timings| &mut timings.ocr_engine_micros,
             || {
                 let osd_child = Command::new(&self.executable)
+                    .env(ONE_THREAD.0, ONE_THREAD.1)
                     .arg(&input)
                     .arg(&osd_base)
                     .arg("-l")
@@ -549,6 +750,37 @@ mod tsv_tests {
 
     /// Only the layout changed. The confidence is still the mean over the
     /// words Tesseract scored, a 0 among them counting as a 0.
+    /// A reading of more words than a page's lines are kept for keeps all
+    /// of its text and its confidence, and no lines: its layout is built
+    /// from its text.
+    #[test]
+    fn a_reading_of_more_words_than_are_kept_keeps_its_text_but_no_lines() {
+        let mut tsv = String::from(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n\
+             1\t1\t0\t0\t0\t0\t0\t0\t4000\t4000\t-1\t\n",
+        );
+        let words = super::MAX_TSV_WORDS + 1;
+        for word in 0..words {
+            let (line, column) = (word / 10, word % 10);
+            tsv.push_str(&format!(
+                "5\t1\t1\t1\t{line}\t{column}\t{}\t{}\t8\t8\t50\tw\n",
+                column * 10,
+                line * 10
+            ));
+        }
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert!(reading.lines.is_empty());
+        assert_eq!(reading.text.matches('w').count(), words);
+        assert_eq!(reading.mean_confidence, 50.0);
+
+        // One word fewer, and the lines are kept.
+        let kept = tsv.rsplit_once("5\t1").unwrap().0;
+        let reading = parse_tsv(kept.as_bytes()).unwrap();
+        assert_eq!(reading.lines.len(), super::MAX_TSV_WORDS / 10);
+    }
+
     #[test]
     fn parse_tsv_confidence_unchanged() {
         // The eleven word scores in the capture, as Tesseract wrote them.
@@ -573,6 +805,90 @@ mod tsv_tests {
         assert_eq!(reading.mean_confidence, expected);
         assert_eq!(reading.text.split_whitespace().count(), scores.len());
         assert_eq!(reading.rotation_degrees, 0);
+    }
+
+    /// Each line comes with its box and its words' mean confidence; a gap
+    /// wider than the line is tall splits it, as it does a table row whose
+    /// cells Tesseract kept on one line. The text is unchanged.
+    #[test]
+    fn parse_tsv_reports_lines_with_boxes_and_confidence() {
+        let reading = parse_tsv(PACKING_SLIP.as_bytes()).unwrap();
+
+        assert_eq!(reading.lines.len(), 3, "{:?}", reading.lines);
+        assert_eq!(reading.lines[0].text, "PACKING SLIP PS-311");
+        assert_eq!(reading.lines[2].text, "QUARTZ MEADOW RETAIL LLC");
+        let joined = reading
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(joined, reading.text);
+        assert!(reading.lines[0].bbox[1] < reading.lines[1].bbox[1]);
+        assert!(reading.lines.iter().all(|line| line.confidence > 0));
+
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let rows = [
+            "5\t1\t1\t1\t1\t1\t10\t10\t80\t20\t96\tInvoice",
+            "5\t1\t1\t1\t1\t2\t95\t10\t60\t20\t90\tdate",
+            "5\t1\t1\t1\t1\t3\t400\t10\t120\t20\t80\tMarch",
+            "5\t1\t1\t1\t1\t4\t525\t10\t30\t20\t-1\t4",
+        ];
+        let tsv = std::iter::once(header)
+            .chain(rows)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(reading.text, "Invoice date March 4");
+        assert_eq!(reading.lines.len(), 2);
+        assert_eq!(reading.lines[0].text, "Invoice date");
+        assert_eq!(reading.lines[0].bbox, [10, 10, 155, 30]);
+        assert_eq!(reading.lines[0].confidence, 93);
+        assert_eq!(reading.lines[1].text, "March 4");
+        assert_eq!(
+            reading.lines[1].confidence, 80,
+            "an unscored word does not count"
+        );
+    }
+
+    /// A page lying on its side, turned clockwise, that Tesseract read as
+    /// vertical text: its lines run down the image, right to left. The text
+    /// is as Tesseract wrote it; the lines' boxes are turned upright, and
+    /// the reading says it is the image turned a quarter back.
+    #[test]
+    fn a_page_read_as_vertical_text_has_its_lines_turned_upright() {
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let rows = [
+            "1\t1\t0\t0\t0\t0\t0\t0\t300\t500\t-1\t",
+            "5\t1\t1\t1\t1\t1\t250\t20\t20\t100\t95\tINVOICE",
+            "5\t1\t1\t1\t1\t2\t250\t130\t20\t90\t93\tNUMBER",
+            "5\t1\t1\t1\t1\t3\t250\t230\t20\t50\t92\t4471",
+            "5\t1\t1\t1\t2\t1\t200\t20\t20\t60\t91\tTotal",
+            "5\t1\t1\t1\t2\t2\t200\t90\t20\t40\t90\tdue:",
+        ];
+        let tsv = std::iter::once(header)
+            .chain(rows)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(reading.text, "INVOICE NUMBER 4471\nTotal due:");
+        assert_eq!(reading.rotation_degrees, 270);
+        assert_eq!(reading.lines.len(), 2);
+        assert_eq!(reading.lines[0].text, "INVOICE NUMBER 4471");
+        // Upright, the page is 500 wide and 300 tall; the first line is at
+        // the top, read left to right.
+        assert_eq!(reading.lines[0].bbox, [20, 30, 280, 50]);
+        assert_eq!(reading.lines[1].bbox, [20, 80, 130, 100]);
+
+        // An upright page is left as it is.
+        assert_eq!(
+            parse_tsv(PACKING_SLIP.as_bytes()).unwrap().rotation_degrees,
+            0
+        );
     }
 
     #[test]

@@ -1,9 +1,11 @@
 //! How close OCR came to what was drawn on a scanned page.
 //!
 //! Distances are Levenshtein edit distances, page by page, over the text
-//! with whitespace collapsed - line breaks and spacing are layout, not
-//! reading. A corpus figure is the sum of the distances over the sum of the
-//! truth lengths, never a mean of per-page rates, so one short page cannot
+//! with whitespace collapsed, table rules set aside and typographic quotes
+//! made straight - line breaks, spacing, the `|` around a table row and a
+//! quote's glyph style are layout, not reading (see [`comparable`]). A
+//! corpus figure is the sum of the distances over the sum of the truth
+//! lengths, never a mean of per-page rates, so one short page cannot
 //! outweigh a long one. Every comparison is per page with a two-row table:
 //! a 100-page scan compared as one string would cost the square of its
 //! whole length.
@@ -45,15 +47,45 @@ pub fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Text as recognition is judged on, the same on both sides: the cell
+/// rules a layout writes around a table row it read (`| a | b |`) set
+/// aside, typographic quotes and apostrophes (`‘ ’ ‚ ‛ “ ” „ ‟`) folded to
+/// `'` and `"`, then whitespace collapsed.
+///
+/// A rule is never text a page prints in a sentence, so a page whose text
+/// is its blocks is not charged for its tables' rules. A curly quote and a
+/// straight one are one mark in two glyph styles, and carry no filing
+/// information; PP-OCR's recognition dictionary has no curly quotes, so it
+/// reads every one as `"` or `'`, and unfolded each would count as a
+/// misread. Nothing else is folded: a letter, a digit or a mark read as
+/// another (`0ccurrence`, `Date;`) is a miss. A colon is text, and is
+/// kept: one the page printed and the reading dropped is a miss, and the
+/// colon a layout writes after a label (`Label: value`) where the page
+/// printed none costs a character - the reading says something the page
+/// does not.
+pub fn comparable(text: &str) -> String {
+    let folded = text
+        .chars()
+        .map(|character| match character {
+            '|' => ' ',
+            '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' => '\'',
+            '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' => '"',
+            other => other,
+        })
+        .collect::<String>();
+    collapse_whitespace(&folded)
+}
+
 /// Character edit distance and the truth's length in characters.
 pub fn char_distance(truth: &str, read: &str) -> (usize, usize) {
-    let truth = collapse_whitespace(truth).chars().collect::<Vec<_>>();
-    let read = collapse_whitespace(read).chars().collect::<Vec<_>>();
+    let truth = comparable(truth).chars().collect::<Vec<_>>();
+    let read = comparable(read).chars().collect::<Vec<_>>();
     (levenshtein(&truth, &read), truth.len())
 }
 
 /// Word edit distance and the truth's length in words.
 pub fn word_distance(truth: &str, read: &str) -> (usize, usize) {
+    let (truth, read) = (comparable(truth), comparable(read));
     let truth = truth.split_whitespace().collect::<Vec<_>>();
     let read = read.split_whitespace().collect::<Vec<_>>();
     (levenshtein(&truth, &read), truth.len())
@@ -274,6 +306,45 @@ mod tests {
 
     fn chars(value: &str) -> Vec<char> {
         value.chars().collect()
+    }
+
+    /// A page read as its blocks writes table rows between rules, which are
+    /// set aside on both sides; a colon is text, so a dropped one is a miss
+    /// and one the layout added after a label costs a character.
+    #[test]
+    fn table_rules_are_set_aside_but_colons_are_read() {
+        let drawn = "Full legal name Date of birth\nIone Kowalczyk 11/23/1990\nHome address\n52 Umber Street";
+        let read = "| Full legal name | Date of birth |\n| Ione Kowalczyk | 11/23/1990 |\n\nHome address: 52 Umber Street";
+        // The rules cost nothing; the colon the layout wrote after "Home
+        // address" costs a character, and makes "address:" another word.
+        assert_eq!(char_distance(drawn, read).0, 1);
+        assert_eq!(word_distance(drawn, read).0, 1);
+        assert_eq!(
+            char_distance("Date 11/23/1990", "| Date | 11/23/1990 |").0,
+            0
+        );
+        // A colon the page printed and the reading dropped is a miss.
+        assert_eq!(char_distance("Date: 11/23/1990", "Date 11/23/1990").0, 1);
+        // So is one read wrongly.
+        assert_eq!(char_distance("Date: 11/23/1990", "Date; 11/23/1990").0, 1);
+    }
+
+    /// PP-OCR reads every typographic quote as a straight one: the glyph
+    /// style is folded on both sides, and nothing else is.
+    #[test]
+    fn typographic_quotes_are_one_glyph_style_but_misreads_still_count() {
+        let drawn = "the Tenant\u{2019}s \u{201c}Premises\u{201d} at \u{2018}Unit 4\u{2019}";
+        let read = "the Tenant's \"Premises\" at 'Unit 4'";
+        assert_eq!(char_distance(drawn, read).0, 0);
+        assert_eq!(word_distance(drawn, read).0, 0);
+        // A letter read as a digit is still a miss.
+        assert_eq!(char_distance("first occurrence", "first 0ccurrence").0, 1);
+        assert_eq!(word_distance("first occurrence", "first 0ccurrence").0, 1);
+        // So is a quote read as another mark.
+        assert_eq!(
+            char_distance("\u{201c}Premises\u{201d}", "*Premises\"").0,
+            1
+        );
     }
 
     /// Confidence is pooled by page, like the error rates: a one-page scan

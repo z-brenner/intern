@@ -42,6 +42,7 @@ mod process;
 pub mod prompt;
 pub mod server;
 pub mod setup;
+pub mod structure;
 #[cfg(test)]
 mod test_support;
 pub mod text;
@@ -59,6 +60,7 @@ pub use manifest::{ModelFile, ModelManifest, ModelRole};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
 pub use server::{LlamaServer, ServerOptions};
+pub use structure::{StructuredDocument, StructuredPage, structured};
 pub use validate::validate;
 pub use worker::{
     DocumentExtractor, ExtractFailure, ExtractProgress, ExtractionTimings, SupervisedWorker,

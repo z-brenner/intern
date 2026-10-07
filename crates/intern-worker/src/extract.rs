@@ -15,9 +15,11 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
 use crate::limits::{
-    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI,
-    ResourceLimits, VISION_GRID,
+    MAX_DOCUMENT_CHARS, MAX_DOCUMENT_LAYOUT_PARTS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS,
+    MAX_PAGE_LAYOUT_PARTS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
+    VISION_GRID,
 };
 use crate::temp::TempWorkspace;
 use crate::timing::{ExtractionTimings, micros_since};
@@ -237,13 +239,22 @@ impl CancellationToken {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PdfPageInspection {
     pub page_index: usize,
     pub native_text: String,
     pub image_coverage: f32,
     pub width_pixels: u32,
     pub height_pixels: u32,
+    /// What the backend measured about the page's geometry for the router
+    /// and the layout analysis. None from a backend that measures nothing,
+    /// whose pages are routed on their text and image coverage alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativePage>,
+    /// The router's signals, when the backend took them while it had the
+    /// page open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<RouteSignals>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,8 +273,27 @@ impl RenderedPage {
 pub struct OcrResult {
     pub text: String,
     pub mean_confidence: f32,
-    /// Clockwise non-EXIF rotation applied before OCR.
+    /// Clockwise non-EXIF rotation that stands the image read upright: the
+    /// turn applied before OCR, plus any the engine made itself (Tesseract
+    /// reads a page lying on its side as vertical text).
     pub rotation_degrees: u16,
+    /// The reading line by line, where the engine reports lines. Empty when
+    /// it does not, and then `text` is all there is.
+    #[serde(default)]
+    pub lines: Vec<OcrLine>,
+}
+
+/// One line of an OCR reading: what it says, where it sits, and how sure
+/// the engine was of it.
+///
+/// `bbox` is `[x0, y0, x1, y1]` in pixels of the image the engine read,
+/// turned by `rotation_degrees`, so it is in the page's upright orientation
+/// with the origin at the top left. `confidence` is 0-100.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OcrLine {
+    pub text: String,
+    pub bbox: [u32; 4],
+    pub confidence: u8,
 }
 
 impl OcrResult {
@@ -272,11 +302,17 @@ impl OcrResult {
             text: text.into(),
             mean_confidence,
             rotation_degrees: 0,
+            lines: Vec::new(),
         }
     }
 
     pub fn with_rotation(mut self, rotation_degrees: u16) -> Self {
         self.rotation_degrees = rotation_degrees;
+        self
+    }
+
+    pub fn with_lines(mut self, lines: Vec<OcrLine>) -> Self {
+        self.lines = lines;
         self
     }
 }
@@ -440,6 +476,22 @@ pub trait PdfBackend {
     ) -> Result<RenderedPage, ExtractionError> {
         self.render_within(path, page_index, u64::MAX, cancel)
     }
+
+    /// The page's text as runs ([`crate::layout::TextRun`]), for a page
+    /// routed to read its geometry whose inspection carries none - one past
+    /// the runs a document reads ahead
+    /// ([`crate::layout::router::bounds::MAX_DOCUMENT_RUNS`]). `native` is
+    /// what inspection measured of it. Asked for one page at a time, as
+    /// each is read. A backend with no characters to give returns none.
+    fn page_runs(
+        &self,
+        _path: &Path,
+        _page_index: usize,
+        _native: &NativePage,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<crate::layout::TextRun>, ExtractionError> {
+        Ok(Vec::new())
+    }
 }
 
 pub trait OcrBackend {
@@ -448,6 +500,20 @@ pub trait OcrBackend {
         page: &RenderedPage,
         cancel: &CancellationToken,
     ) -> Result<OcrResult, ExtractionError>;
+
+    /// How many pages the engine can usefully read at once. A PDF's scanned
+    /// pages are rendered one at a time - PDFium is not thread-safe - and
+    /// handed to this many OCR workers. One unless the engine says more.
+    fn concurrency(&self) -> usize {
+        1
+    }
+
+    /// Lets go of what the engine keeps between pages once a document has
+    /// been read, so a worker that outlives every document does not hold a
+    /// document's working memory while it waits for the next. The next page
+    /// builds what it needs again. Nothing to let go of unless the engine
+    /// says so.
+    fn release(&self) {}
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -464,8 +530,15 @@ pub struct ExtractedPage {
     pub page_number: usize,
     pub text: String,
     pub source: PageSource,
+    /// How sure OCR was of the page: its mean for a page read by OCR, and
+    /// for native text with OCR'd regions merged in, the least of theirs.
+    /// None for a page with no OCR'd text in it.
     pub ocr_confidence: Option<f32>,
     pub vision_escalated: bool,
+    /// The page as blocks in reading order (see [`crate::layout`]). Every
+    /// reader's pages carry one by the time the protocol sends them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<PageLayout>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -473,9 +546,9 @@ pub struct ExtractedPage {
 pub enum ExtractionWarning {
     LowOcrConfidence,
     NativeTextCorrupt,
-    /// Text that was lost: a page cut at the size cap, frames of a TIFF that
-    /// were never read. What was dropped is unknown, so it may be the fact
-    /// that names the document.
+    /// Text that was lost: a page cut at the size cap, frames of a TIFF past
+    /// the page limit or that could not be decoded. What was dropped is
+    /// unknown, so it may be the fact that names the document.
     TextTruncated,
     /// Content deliberately left out by design and marked where it was left
     /// out - the rows and columns past a spreadsheet's rendered window. The
@@ -574,70 +647,234 @@ fn page_needs_vision(page: &PdfPageInspection) -> bool {
     meaningful < 100 && page.image_coverage >= 0.65 && !word_structured
 }
 
-pub fn extract_pdf(
+/// The most OCR workers a PDF is read with, whatever the engine offers.
+const MAX_OCR_WORKERS: usize = 8;
+
+/// What becomes of one page while a PDF is read: finished already, or
+/// waiting for OCR.
+enum PagePlan {
+    Done {
+        page: NativeRead,
+        /// The page image this page would become, if it is the first page
+        /// that wants one.
+        vision: Option<VisionImage>,
+    },
+    /// A scan: OCR's reading is the page.
+    Scan {
+        page_number: usize,
+        /// Its text layer held replacement glyphs.
+        corrupt: bool,
+        signals: RouteSignals,
+        /// Tenths of a point per rendered pixel.
+        scale: f64,
+    },
+    /// A text layer that is a bad prior OCR, read again. The fresh reading
+    /// replaces it only if it is better.
+    Reread {
+        inspection: PdfPageInspection,
+        signals: RouteSignals,
+        vision: Option<VisionImage>,
+    },
+    /// Native text, with images that may hold text of their own. Its
+    /// characters are read once OCR's readings of those images are back.
+    Regions {
+        inspection: PdfPageInspection,
+        signals: RouteSignals,
+        /// Each region's box in the rendered page, in pixels.
+        crops: Vec<[u32; 4]>,
+        /// Tenths of a point per rendered pixel.
+        scale: f64,
+        vision: Option<VisionImage>,
+    },
+}
+
+impl PagePlan {
+    /// Whether the page brings the page image with it for certain. A page
+    /// read again does not: if the fresh reading wins, the image made from
+    /// its text layer goes with the layer, and a later page that wants one
+    /// has to have been rendered for it.
+    fn has_page_image(&self) -> bool {
+        match self {
+            PagePlan::Done { vision, .. } | PagePlan::Regions { vision, .. } => vision.is_some(),
+            PagePlan::Reread { .. } | PagePlan::Scan { .. } => false,
+        }
+    }
+}
+
+/// Whether an error ends the whole document rather than an optional reading
+/// it was for: the person canceled, or the time ran out.
+fn ends_the_document(error: &ExtractionError) -> bool {
+    matches!(
+        error.kind,
+        ExtractionErrorKind::Canceled | ExtractionErrorKind::ResourceLimit
+    )
+}
+
+/// Reads a PDF.
+///
+/// Every page is routed ([`crate::layout::route_page`]) on what inspection
+/// measured. Pages read from their text are finished in the loop. Pages
+/// that need OCR are rendered one at a time - PDFium is not thread-safe, and
+/// the backend that inspected the document is the one that renders it -
+/// and handed through a bounded queue to a pool of OCR workers, as many as
+/// the engine says it can use ([`OcrBackend::concurrency`]). The pages are
+/// put back in order at the end, and every decision that depends on order -
+/// which page becomes the page image, the order of warnings, which error is
+/// reported - is made then, exactly as reading the pages one after another
+/// would make it.
+pub fn extract_pdf<O>(
     path: &Path,
     pdf: &dyn PdfBackend,
-    ocr: &dyn OcrBackend,
+    ocr: &O,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
-) -> Result<ExtractedDocument, ExtractionError> {
+) -> Result<ExtractedDocument, ExtractionError>
+where
+    O: OcrBackend + Sync + ?Sized,
+{
     let started = Instant::now();
     timed_check(cancel, started, limits)?;
     let inspections = pdf.inspect(path, cancel)?;
     limits.validate_page_count(inspections.len())?;
     let page_count = inspections.len();
-    let mut pages = Vec::with_capacity(page_count);
-    let mut warnings = Vec::new();
-    let mut vision_candidate: Option<VisionImage> = None;
-
-    for inspection in inspections {
-        timed_check(cancel, started, limits)?;
-        let page_number = inspection.page_index + 1;
-        cancel.report_progress("reading", inspection.page_index, Some(page_count));
-        // The render cap belongs to rendering. A large-format sheet - an A1
-        // drawing, a plan set - is over it at 300 DPI while carrying a
-        // perfectly good text layer, and failing the whole document over a
-        // page nobody was going to rasterise loses the document. A page that
-        // is too large to render also cannot be escalated to vision, but it
-        // keeps its text: the page image is the optional part.
-        let renderable = limits
-            .validate_page_pixels(inspection.width_pixels, inspection.height_pixels)
-            .is_ok();
-        let needs_ocr = cancel.timed(
-            |timings| &mut timings.analysis_micros,
-            || page_needs_ocr(&inspection),
-        );
-        if !needs_ocr {
-            let vision_escalated =
-                renderable && page_needs_vision(&inspection) && vision_candidate.is_none();
-            if vision_escalated {
-                let rendered = cancel.timed(
-                    |timings| &mut timings.render_micros,
-                    || pdf.render(path, inspection.page_index, cancel),
-                )?;
-                let (render_width, render_height) = rendered.image.dimensions();
-                record_rendered(cancel, render_width, render_height);
-                limits.validate_page_pixels(render_width, render_height)?;
-                vision_candidate = Some(cancel.timed(
-                    |timings| &mut timings.vision_micros,
-                    || normalize_vision_image(inspection.page_index, rendered.image),
-                )?);
+    let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
+    let queue = limits.max_queued_rendered_pages.max(1);
+    let (plans, outcomes, failure) = std::thread::scope(|scope| {
+        let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
+        let mut plans = Vec::with_capacity(page_count);
+        let mut failure: Option<(usize, ExtractionError)> = None;
+        // Whether a page already planned brings the page image with it, so
+        // no later page needs to be rendered for one. A scan's reading may
+        // still turn out to want it, and an earlier page's claim wins when
+        // the pages are put back in order.
+        let mut vision_taken = false;
+        // The characters of the pages read as their text so far, in page
+        // order: a page past the document's is not read for its geometry.
+        // And the geometry layouts built so far, which are held until the
+        // pages are put back in order: one past what a document's layouts
+        // may hold is not kept, and its page is read as its text.
+        let mut planned = TextBudget::document();
+        for inspection in inspections {
+            let page_index = inspection.page_index;
+            if let Err(error) = timed_check(cancel, started, limits) {
+                failure = Some((page_index, error));
+                break;
             }
-            pages.push(ExtractedPage {
-                page_number,
-                text: inspection.native_text,
-                source: PageSource::Native,
-                ocr_confidence: None,
-                vision_escalated,
-            });
-            continue;
+            // A scan that could not be read ends the document; there is
+            // no point rendering the pages after it.
+            if pool.failed() {
+                break;
+            }
+            pool.collect_ready();
+            cancel.report_progress("reading", page_index, Some(page_count));
+            match plan_page(
+                inspection,
+                pdf,
+                path,
+                limits,
+                cancel,
+                started,
+                &mut pool,
+                vision_taken,
+                &mut planned,
+            ) {
+                Ok(plan) => {
+                    if matches!(plan, PagePlan::Done { .. }) {
+                        pool.finished += 1;
+                    }
+                    vision_taken |= plan.has_page_image();
+                    plans.push(plan);
+                }
+                Err(error) => {
+                    failure = Some((page_index, error));
+                    break;
+                }
+            }
         }
+        let outcomes = pool.finish();
+        (plans, outcomes, failure)
+    });
 
-        if inspection.native_text.contains('\u{fffd}')
-            && !warnings.contains(&ExtractionWarning::NativeTextCorrupt)
-        {
-            warnings.push(ExtractionWarning::NativeTextCorrupt);
-        }
+    // The error reading the pages in order would have met first: a scan
+    // OCR could not read, or anything that ends the document. A reading
+    // skipped as canceled is not one: the workers skip what is left once a
+    // scan has failed - even a region of an earlier page, still queued - and
+    // that scan's own error is the one to report. A request that really was
+    // canceled is reported by the check below.
+    let ocr_failure = outcomes.iter().find_map(|outcome| {
+        let scan = matches!(plans.get(outcome.page_index), Some(PagePlan::Scan { .. }));
+        outcome.readings.iter().find_map(|reading| match reading {
+            Err(error)
+                if error.kind != ExtractionErrorKind::Canceled
+                    && (scan || ends_the_document(error)) =>
+            {
+                Some((outcome.page_index, error.clone()))
+            }
+            _ => None,
+        })
+    });
+    let first_failure = match (failure, ocr_failure) {
+        (Some(main), Some(ocr)) => Some(if ocr.0 <= main.0 { ocr } else { main }),
+        (main, ocr) => main.or(ocr),
+    };
+    if let Some((_, error)) = first_failure {
+        return Err(error);
+    }
+    // A request canceled while its last pages were being read is canceled,
+    // even if every page it was waiting for came back.
+    cancel.check()?;
+    let stop = || halted(cancel, started, limits);
+    let runs =
+        |inspection: &mut PdfPageInspection, route| read_runs(inspection, route, pdf, path, cancel);
+    let document = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || assemble(plans, outcomes, &runs, &stop),
+    )?;
+    // A layout the time ran out on was left unbuilt; the document is not
+    // returned half-read as if it were whole.
+    timed_check(cancel, started, limits)?;
+    Ok(document)
+}
+
+/// Whether the request was canceled or its time is up - the token's own
+/// deadline, or the extraction's: what the layout analysis asks between
+/// the regions of a page.
+fn halted(cancel: &CancellationToken, started: Instant, limits: &ResourceLimits) -> bool {
+    cancel.check().is_err() || started.elapsed() > limits.max_duration
+}
+
+/// Decides how one page is read, finishes it if it needs no OCR, and hands
+/// it to the OCR workers if it does.
+#[allow(clippy::too_many_arguments)]
+fn plan_page<O: OcrBackend + Sync + ?Sized>(
+    mut inspection: PdfPageInspection,
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+    started: Instant,
+    pool: &mut OcrPool<'_, '_, O>,
+    vision_taken: bool,
+    planned: &mut TextBudget,
+) -> Result<PagePlan, ExtractionError> {
+    let page_index = inspection.page_index;
+    let page_number = page_index + 1;
+    // The render cap belongs to rendering. A large-format sheet - an A1
+    // drawing, a plan set - is over it at 300 DPI while carrying a
+    // perfectly good text layer, and failing the whole document over a
+    // page nobody was going to rasterise loses the document. A page that
+    // is too large to render also cannot be escalated to vision, but it
+    // keeps its text: the page image is the optional part.
+    let renderable = limits
+        .validate_page_pixels(inspection.width_pixels, inspection.height_pixels)
+        .is_ok();
+    let (needs_ocr, signals) = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || (page_needs_ocr(&inspection), signals_of(&inspection)),
+    );
+    let route = route_page(&signals, needs_ocr);
+
+    if needs_ocr {
         // This page has no text worth keeping, so it has to be rendered to be
         // read at all. A page too large to render at 300 DPI within the cap -
         // a phone photo some tool turned into a PDF at 72 DPI, an A2 scan -
@@ -650,44 +887,509 @@ pub fn extract_pdf(
                 "page is too large to read within 25 megapixels at 50 DPI",
             ));
         }
+        let rendered = render_for_ocr(pdf, path, page_index, limits, cancel)?;
+        let scale = display_width(&inspection) / f64::from(rendered.image.width().max(1));
+        pool.submit(OcrJob {
+            page_index,
+            pieces: vec![rendered],
+            whole_page: true,
+            scan: true,
+        });
+        return Ok(PagePlan::Scan {
+            page_number,
+            corrupt: inspection.native_text.contains('\u{fffd}'),
+            signals,
+            scale,
+        });
+    }
+
+    // Native text from here on. Whatever OCR adds is optional: a page that
+    // cannot be rendered or read again keeps the text it has. The page image
+    // is the first page's that wants one; once an earlier page has brought
+    // it, this one is not rendered for it.
+    let vision = if renderable && !vision_taken && page_needs_vision(&inspection) {
         let rendered = cancel.timed(
             |timings| &mut timings.render_micros,
-            || pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel),
+            || pdf.render(path, page_index, cancel),
         )?;
-        // The backend sized the render; this is what holds it to that.
         let (render_width, render_height) = rendered.image.dimensions();
         record_rendered(cancel, render_width, render_height);
         limits.validate_page_pixels(render_width, render_height)?;
-        timed_check(cancel, started, limits)?;
-        cancel.report_progress("ocr", inspection.page_index, Some(page_count));
-        let result = recognize_timed(ocr, &rendered, cancel)?;
-        let vision_escalated =
-            vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
-        if result.mean_confidence < CONFIDENT_READING
+        Some(cancel.timed(
+            |timings| &mut timings.vision_micros,
+            || page_image(page_index, &rendered.image, 0),
+        )?)
+    } else {
+        None
+    };
+    let rerenderable =
+        renderable && ocr_render_dpi(&inspection, limits.max_page_pixels) >= MIN_OCR_DPI;
+
+    if route == PageRoute::Ocr && rerenderable {
+        match render_for_ocr(pdf, path, page_index, limits, cancel) {
+            Ok(rendered) => {
+                pool.submit(OcrJob {
+                    page_index,
+                    pieces: vec![rendered],
+                    whole_page: true,
+                    scan: false,
+                });
+                return Ok(PagePlan::Reread {
+                    inspection,
+                    signals,
+                    vision,
+                });
+            }
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    if route == PageRoute::OcrRegions
+        && rerenderable
+        && let Some(native) = &inspection.native
+    {
+        match render_for_ocr(pdf, path, page_index, limits, cancel) {
+            Ok(rendered) => {
+                let (width, height) = rendered.image.dimensions();
+                let scale = f64::from(native.display_size().0) / f64::from(width.max(1));
+                let crops = crate::layout::text_regions(native)
+                    .into_iter()
+                    .filter_map(|region| {
+                        let display = native.to_display(region);
+                        let [x0, y0, x1, y1] =
+                            display.map(|value| (f64::from(value) / scale).round() as u32);
+                        let (x0, x1) = (x0.min(width), x1.min(width));
+                        let (y0, y1) = (y0.min(height), y1.min(height));
+                        (x1 > x0 + 8 && y1 > y0 + 8).then_some([x0, y0, x1, y1])
+                    })
+                    .collect::<Vec<_>>();
+                if !crops.is_empty() {
+                    let pieces = crops
+                        .iter()
+                        .map(|crop| {
+                            RenderedPage::new(
+                                page_index,
+                                rendered.image.crop_imm(
+                                    crop[0],
+                                    crop[1],
+                                    crop[2] - crop[0],
+                                    crop[3] - crop[1],
+                                ),
+                            )
+                        })
+                        .collect();
+                    pool.submit(OcrJob {
+                        page_index,
+                        pieces,
+                        whole_page: false,
+                        scan: false,
+                    });
+                    return Ok(PagePlan::Regions {
+                        inspection,
+                        signals,
+                        crops,
+                        scale,
+                        vision,
+                    });
+                }
+            }
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    // Counted with the pages read as their text before it, a page past the
+    // document's characters is cut on the way out whatever the scans among
+    // them read, so it is not read for its geometry: no layout is built
+    // for it and held until the pages are put in order, only to be dropped.
+    // What the layouts held while planning repeat is bounded by the
+    // document's characters and a page.
+    let route = if goes_out_whole(&inspection.native_text, &mut planned.characters) {
+        route
+    } else {
+        PageRoute::Fast
+    };
+    cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || read_runs(&mut inspection, route, pdf, path, cancel),
+    )?;
+    let route = native_route(route, &signals);
+    let stop = || halted(cancel, started, limits);
+    let page = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || native_page(page_number, inspection, signals, route, &stop, planned),
+    );
+    Ok(PagePlan::Done { page, vision })
+}
+
+/// Reads a page's characters into runs if `route` reads its geometry and
+/// inspection did not: a page past the runs a document reads ahead.
+///
+/// They are read when the page is - once it is planned, or for a page
+/// whose image regions OCR reads, once those readings are back - so past
+/// that budget no more than one page's characters are held at a time. A
+/// page whose characters cannot be read keeps its text.
+fn read_runs(
+    inspection: &mut PdfPageInspection,
+    route: PageRoute,
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    cancel: &CancellationToken,
+) -> Result<(), ExtractionError> {
+    let page_index = inspection.page_index;
+    if crate::layout::router::needs_runs(route)
+        && fits_a_page(&inspection.native_text)
+        && let Some(native) = inspection.native.as_mut()
+        && native.runs.is_empty()
+    {
+        match pdf.page_runs(path, page_index, native, cancel) {
+            Ok(runs) => native.runs = runs,
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// The router's signals for a page: what the backend measured while it had
+/// the page open, or, from a backend that measures nothing, the image
+/// coverage alone.
+fn signals_of(inspection: &PdfPageInspection) -> RouteSignals {
+    inspection
+        .signals
+        .unwrap_or_else(|| match &inspection.native {
+            Some(native) => {
+                measure_signals(native, &inspection.native_text, inspection.image_coverage)
+            }
+            None => RouteSignals {
+                image_coverage: (inspection.image_coverage.clamp(0.0, 1.0) * 1000.0).round() as u16,
+                ..RouteSignals::default()
+            },
+        })
+}
+
+/// A page's displayed width in tenths of a point: what the backend
+/// measured, or the width inspection gives in pixels at 300 DPI.
+fn display_width(inspection: &PdfPageInspection) -> f64 {
+    match &inspection.native {
+        Some(native) => f64::from(native.display_size().0),
+        None => {
+            f64::from(inspection.width_pixels) * 72.0 / RENDER_DPI * crate::layout::UNITS_PER_POINT
+        }
+    }
+}
+
+/// The route a page read from its own text takes: the one it was given,
+/// unless OCR was what it wanted and could not have, in which case its text
+/// routes it as if it had no image to read.
+fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
+    match route {
+        PageRoute::Fast | PageRoute::Layout => route,
+        PageRoute::Ocr | PageRoute::OcrRegions => route_page(
+            &RouteSignals {
+                image_region: 0,
+                garbage: 0,
+                ..*signals
+            },
+            false,
+        ),
+    }
+}
+
+/// Renders a page for OCR within the pixel budget, counting what was
+/// rendered and holding the render to the budget it was sized for.
+fn render_for_ocr(
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    page_index: usize,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<RenderedPage, ExtractionError> {
+    let rendered = cancel.timed(
+        |timings| &mut timings.render_micros,
+        || pdf.render_within(path, page_index, limits.max_page_pixels, cancel),
+    )?;
+    // The backend sized the render; this is what holds it to that.
+    let (render_width, render_height) = rendered.image.dimensions();
+    record_rendered(cancel, render_width, render_height);
+    limits.validate_page_pixels(render_width, render_height)?;
+    Ok(rendered)
+}
+
+/// A page read from its native text: exactly as PDFium read it on the fast
+/// route, or the linearization of its blocks on the layout route - unless
+/// the page is past what the analysis takes on, or `stop` says the request
+/// is canceled or out of time, when it is read as on the fast route.
+///
+/// A page read as its text has its layout built only when the pages are
+/// put in order (see [`NativeRead::finish`]), and only if the worker will
+/// send that text whole.
+fn native_page(
+    page_number: usize,
+    inspection: PdfPageInspection,
+    signals: RouteSignals,
+    route: PageRoute,
+    stop: &dyn Fn() -> bool,
+    held: &mut TextBudget,
+) -> NativeRead {
+    // A page past the analysis's bounds, or one the time ran out on, is
+    // read as its text, and so is one whose layout is more than what is
+    // left of `held`.
+    let geometry = inspection
+        .native
+        .as_ref()
+        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty())
+        .and_then(|native| crate::layout::geometry_layout(native, Vec::new(), signals, route, stop))
+        .filter(|layout| held.keeps(layout));
+    let (text, layout, fast) = match geometry {
+        Some(mut layout) => {
+            // The page's text is written from this layout, which the bounds
+            // on the analysis already keep small.
+            crate::layout::number_blocks(page_number, &mut layout.blocks);
+            (crate::layout::linearize(&layout.blocks), Some(layout), None)
+        }
+        None => (
+            inspection.native_text,
+            None,
+            Some(FastLayout {
+                // A fast layout reads only the page's size, its turn and its
+                // segments. Its runs - as many as the analysis takes on, and
+                // read for nothing when the geometry layout was not kept -
+                // and its images and rules go here, not when the pages are
+                // put in order.
+                native: inspection.native.map(|native| NativePage {
+                    runs: Vec::new(),
+                    images: Vec::new(),
+                    rulings: Vec::new(),
+                    ..native
+                }),
+                signals,
+            }),
+        ),
+    };
+    NativeRead {
+        page: ExtractedPage {
+            page_number,
+            text,
+            source: PageSource::Native,
+            ocr_confidence: None,
+            vision_escalated: false,
+            layout,
+        },
+        fast,
+    }
+}
+
+/// What a fast layout is built from, kept until the pages are in order.
+struct FastLayout {
+    native: Option<NativePage>,
+    signals: RouteSignals,
+}
+
+/// A page read from its own text: with the layout its text was written
+/// from, or, read as its text, with what its fast layout would be built
+/// from.
+struct NativeRead {
+    page: ExtractedPage,
+    fast: Option<FastLayout>,
+}
+
+impl NativeRead {
+    /// The page, counted against the document's characters in page order
+    /// as the worker will count them (see [`goes_out_whole`]): a page read
+    /// as its text gets its fast layout only if it goes out whole - a
+    /// layout repeats its text several times over - and its lines and
+    /// cells fit what is left (see [`TextBudget`]), and a page whose text
+    /// was written from its layout lets that layout go if it does not.
+    fn finish(self, budget: &mut TextBudget) -> ExtractedPage {
+        let Self { mut page, fast } = self;
+        match fast {
+            Some(FastLayout { native, signals }) => {
+                if budget.admits(&page.text) {
+                    let mut layout =
+                        crate::layout::fast_layout(&page.text, native.as_ref(), signals);
+                    crate::layout::number_blocks(page.page_number, &mut layout.blocks);
+                    page.layout = Some(layout).filter(|layout| budget.keeps(layout));
+                }
+                page
+            }
+            None => counted(page, budget),
+        }
+    }
+}
+
+/// Whether a fresh OCR reading of a page whose text layer looked like bad
+/// OCR is better than that layer: confident, or with fewer of the errors
+/// that sent the page to be read again.
+fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
+    !reading.text.trim().is_empty()
+        && (reading.mean_confidence >= CONFIDENT_READING
+            || crate::layout::router::garbage_score(&reading.text) < signals.garbage)
+}
+
+/// Puts the pages back in order and makes every decision that depends on
+/// it: the page image is the first page that wants one, and warnings are
+/// raised in the order the pages raise them.
+fn assemble(
+    plans: Vec<PagePlan>,
+    outcomes: Vec<OcrOutcome>,
+    runs: &dyn Fn(&mut PdfPageInspection, PageRoute) -> Result<(), ExtractionError>,
+    stop: &dyn Fn() -> bool,
+) -> Result<ExtractedDocument, ExtractionError> {
+    // The document's characters, counted down in page order as the worker
+    // will count them when it sends the pages: a page it will cut has no
+    // layout built, or keeps none. Fast layouts also count their lines and
+    // cells against it.
+    let mut budget = TextBudget::document();
+    // A page read as its text here, when reading it again or its regions
+    // came to nothing, is counted as it is put in order, not as it is read.
+    let mut unheld = TextBudget {
+        characters: usize::MAX,
+        layout_parts: usize::MAX,
+    };
+    let mut outcomes = outcomes
+        .into_iter()
+        .map(|outcome| (outcome.page_index, outcome))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut pages = Vec::with_capacity(plans.len());
+    let mut warnings: Vec<ExtractionWarning> = Vec::new();
+    let mut vision_candidate: Option<VisionImage> = None;
+    for (page_index, plan) in plans.into_iter().enumerate() {
+        let outcome = outcomes.remove(&page_index);
+        let (mut page, vision) = match plan {
+            PagePlan::Done { page, vision } => (page.finish(&mut budget), vision),
+            PagePlan::Scan {
+                page_number,
+                corrupt,
+                signals,
+                scale,
+            } => {
+                if corrupt && !warnings.contains(&ExtractionWarning::NativeTextCorrupt) {
+                    warnings.push(ExtractionWarning::NativeTextCorrupt);
+                }
+                let unread = || ExtractionError::parse_failed("a scanned page was never read");
+                let OcrOutcome {
+                    readings,
+                    sizes,
+                    vision,
+                    ..
+                } = outcome.ok_or_else(unread)?;
+                let reading = readings.into_iter().next().ok_or_else(unread)??;
+                let size = sizes.first().copied().ok_or_else(unread)?;
+                let vision = vision.transpose()?;
+                (
+                    counted(
+                        crate::layout::ocr_page(
+                            page_number,
+                            reading,
+                            size,
+                            Some(scale),
+                            signals,
+                            stop,
+                        ),
+                        &mut budget,
+                    ),
+                    vision,
+                )
+            }
+            PagePlan::Reread {
+                inspection,
+                signals,
+                vision,
+            } => {
+                let page_number = inspection.page_index + 1;
+                let fresh = outcome.and_then(|outcome| {
+                    let size = *outcome.sizes.first()?;
+                    let page_vision = outcome.vision.and_then(Result::ok);
+                    let reading = outcome.readings.into_iter().next()?.ok()?;
+                    Some((reading, size, page_vision))
+                });
+                match fresh {
+                    Some((reading, size, page_vision)) if reread_is_better(&reading, &signals) => {
+                        let scale = display_width(&inspection) / f64::from(size.0.max(1));
+                        (
+                            counted(
+                                crate::layout::ocr_page(
+                                    page_number,
+                                    reading,
+                                    size,
+                                    Some(scale),
+                                    signals,
+                                    stop,
+                                ),
+                                &mut budget,
+                            ),
+                            page_vision,
+                        )
+                    }
+                    fresh => {
+                        // The layer stays, but a reading that came back
+                        // unsure says the page is hard to read either way:
+                        // the image it was rendered with goes with the
+                        // layer's text, as it would with a scan's.
+                        let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
+                        let route = native_route(PageRoute::Ocr, &signals);
+                        (
+                            native_page(page_number, inspection, signals, route, stop, &mut unheld)
+                                .finish(&mut budget),
+                            vision.or(reread_vision),
+                        )
+                    }
+                }
+            }
+            PagePlan::Regions {
+                mut inspection,
+                signals,
+                crops,
+                scale,
+                vision,
+            } => {
+                let page_number = inspection.page_index + 1;
+                runs(&mut inspection, PageRoute::OcrRegions)?;
+                let readings = outcome
+                    .map(|outcome| {
+                        outcome
+                            .readings
+                            .into_iter()
+                            .zip(crops)
+                            .filter_map(|(reading, crop)| Some((reading.ok()?, crop)))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let page = crate::layout::regions_page(
+                    page_number,
+                    &inspection,
+                    signals,
+                    &readings,
+                    scale,
+                    stop,
+                )
+                .map(|page| counted(page, &mut budget))
+                .unwrap_or_else(|| {
+                    let route = native_route(PageRoute::OcrRegions, &signals);
+                    native_page(page_number, inspection, signals, route, stop, &mut unheld)
+                        .finish(&mut budget)
+                });
+                (page, vision)
+            }
+        };
+        // A page read by OCR, or native text with OCR'd regions merged in,
+        // is only as sure as its least sure reading.
+        if page
+            .ocr_confidence
+            .is_some_and(|confidence| confidence < CONFIDENT_READING)
             && !warnings.contains(&ExtractionWarning::LowOcrConfidence)
         {
             warnings.push(ExtractionWarning::LowOcrConfidence);
         }
-        if vision_escalated {
-            vision_candidate = Some(cancel.timed(
-                |timings| &mut timings.vision_micros,
-                || {
-                    normalize_vision_image(
-                        inspection.page_index,
-                        apply_detected_rotation(rendered.image, result.rotation_degrees)?,
-                    )
-                },
-            )?);
+        page.vision_escalated = vision.is_some() && vision_candidate.is_none();
+        if page.vision_escalated {
+            vision_candidate = vision;
         }
-        pages.push(ExtractedPage {
-            page_number,
-            text: result.text,
-            source: PageSource::Ocr,
-            ocr_confidence: Some(result.mean_confidence),
-            vision_escalated,
-        });
+        pages.push(page);
     }
-
+    link_sections(&mut pages);
     Ok(ExtractedDocument {
         pages,
         warnings,
@@ -695,6 +1397,373 @@ pub fn extract_pdf(
         optional_image: vision_candidate,
         timings: None,
     })
+}
+
+/// Marks every page's running header and footer, and links every block on
+/// every page to the heading it falls under, across pages.
+pub fn link_sections(pages: &mut [ExtractedPage]) {
+    let mut layouts = pages
+        .iter_mut()
+        .filter_map(|page| page.layout.as_mut())
+        .collect::<Vec<_>>();
+    crate::layout::mark_running_blocks(&mut layouts);
+    crate::layout::assign_sections(layouts);
+}
+
+impl ExtractedPage {
+    /// A page from a reader that knows no geometry, with the blocks of its
+    /// text if it fits what the worker sends (see
+    /// [`ExtractedPage::of_text_within`]).
+    pub fn of_text(page_number: usize, text: String, source: PageSource) -> Self {
+        Self::of_text_within(page_number, text, source, &mut TextBudget::document())
+    }
+
+    /// A page from a reader that knows no geometry, with the blocks of its
+    /// text while the text fits what the worker sends. The worker cuts a
+    /// page past [`MAX_PAGE_CHARS`], and every page past a document's first
+    /// [`MAX_DOCUMENT_CHARS`], on the way out, and a page it cuts loses its
+    /// layout there; a layout repeats its text several times over, so for
+    /// such a page none is built. Nor is one for a page whose lines and
+    /// cells are more than a layout may hold (see [`TextBudget`]). `budget`
+    /// is what is left of the document's, counted down here as the worker
+    /// will count it.
+    pub fn of_text_within(
+        page_number: usize,
+        text: String,
+        source: PageSource,
+        budget: &mut TextBudget,
+    ) -> Self {
+        let layout = budget
+            .admits(&text)
+            .then(|| {
+                let mut layout = PageLayout::of_text(page_number, &text);
+                crate::layout::assign_sections([&mut layout]);
+                layout
+            })
+            .filter(|layout| budget.keeps(layout));
+        Self {
+            page_number,
+            text,
+            source,
+            ocr_confidence: None,
+            vision_escalated: false,
+            layout,
+        }
+    }
+}
+
+/// What is left of a document's allowance for the pages it sends: its
+/// characters, as the worker counts them on the way out (see
+/// [`goes_out_whole`]), and the lines, table cells and labelled values its
+/// layouts may hold (see [`PageLayout::parts`]).
+///
+/// A layout holds an object for every line, cell and value, and the
+/// character caps alone do not bound how many: two million characters can
+/// be hundreds of thousands of one-letter lines, or of pipes, and a page of
+/// one-character runs is a line for every character. So every layout a
+/// document keeps is counted in page order against
+/// [`MAX_DOCUMENT_LAYOUT_PARTS`], whatever route its page took, and one
+/// past what is left is let go; the page keeps its text. A layout built
+/// from text is not built at all when the text alone shows it would hold
+/// more than [`MAX_PAGE_LAYOUT_PARTS`] or than the document has left.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextBudget {
+    pub characters: usize,
+    pub layout_parts: usize,
+}
+
+impl TextBudget {
+    /// A whole document's.
+    pub const fn document() -> Self {
+        Self {
+            characters: MAX_DOCUMENT_CHARS,
+            layout_parts: MAX_DOCUMENT_LAYOUT_PARTS,
+        }
+    }
+
+    /// Counts the characters of a page built from `text` against the
+    /// budget, and whether its layout is worth building: the page goes out
+    /// whole, and its text has no more lines and pipes than a page's layout
+    /// may hold or the document has left. The layout, once built, is
+    /// counted by [`TextBudget::keeps`].
+    fn admits(&mut self, text: &str) -> bool {
+        if !goes_out_whole(text, &mut self.characters) {
+            return false;
+        }
+        let parts = layout_parts(text);
+        parts <= MAX_PAGE_LAYOUT_PARTS && parts <= self.layout_parts
+    }
+
+    /// Counts a layout against what the document's layouts may hold, and
+    /// whether it fits: one that does not is let go, and its page keeps its
+    /// text.
+    fn keeps(&mut self, layout: &PageLayout) -> bool {
+        let parts = layout.parts();
+        if parts > self.layout_parts {
+            return false;
+        }
+        self.layout_parts -= parts;
+        true
+    }
+}
+
+/// How many lines and table cells a layout built from `text` can hold at
+/// most: one for each line, and one for each pipe, which is as many cells
+/// as a table row can split into.
+pub fn layout_parts(text: &str) -> usize {
+    1 + text
+        .bytes()
+        .filter(|byte| matches!(byte, b'\n' | b'|'))
+        .count()
+}
+
+/// Whether a page's text is short enough to be read for its geometry. A
+/// page longer than [`MAX_PAGE_CHARS`] is cut on the way out and loses its
+/// layout there, so its characters are never read into runs - a run holds
+/// its text a second time, and the analysis copies it again - and it is
+/// read as its text.
+pub fn fits_a_page(text: &str) -> bool {
+    text.char_indices().nth(MAX_PAGE_CHARS).is_none()
+}
+
+/// Whether a page of `text` leaves the worker whole, counting it against
+/// `budget` - what is left of the document's [`MAX_DOCUMENT_CHARS`] - as the
+/// worker will on the way out: a page keeps at most [`MAX_PAGE_CHARS`], and
+/// no more than the document has left. A page that does not is cut there
+/// and loses its layout, so none is worth building for it.
+fn goes_out_whole(text: &str, budget: &mut usize) -> bool {
+    let allowed = MAX_PAGE_CHARS.min(*budget);
+    match text.char_indices().nth(allowed) {
+        Some(_) => {
+            *budget -= allowed;
+            false
+        }
+        None => {
+            *budget -= text.chars().count();
+            true
+        }
+    }
+}
+
+/// A page whose text was written from its layout - read by OCR, or from
+/// its geometry - counted against the document's characters as the worker
+/// will count them (see [`goes_out_whole`]), and its layout against what
+/// the document's layouts may hold (see [`TextBudget`]). The layout is
+/// built either way; a page the worker will cut, or one whose layout does
+/// not fit, lets it go here, as the page is read, instead of holding it
+/// until the whole document has been. The page keeps its text.
+fn counted(mut page: ExtractedPage, budget: &mut TextBudget) -> ExtractedPage {
+    if !goes_out_whole(&page.text, &mut budget.characters) {
+        page.layout = None;
+    } else if let Some(layout) = &page.layout
+        && !budget.keeps(layout)
+    {
+        page.layout = None;
+    }
+    page
+}
+
+/// One page handed to an OCR worker: the whole page, or the regions of it
+/// worth reading.
+struct OcrJob {
+    page_index: usize,
+    pieces: Vec<RenderedPage>,
+    /// The whole page, which becomes the page image if it reads badly.
+    whole_page: bool,
+    /// A scan: if it cannot be read, neither can the document, and the
+    /// pages queued after it are not worth reading.
+    scan: bool,
+}
+
+/// What an OCR worker made of one job.
+struct OcrOutcome {
+    page_index: usize,
+    readings: Vec<Result<OcrResult, ExtractionError>>,
+    /// Each piece's size in pixels, as it was rendered.
+    sizes: Vec<(u32, u32)>,
+    /// The page image, when the whole page read unconvincingly.
+    vision: Option<Result<VisionImage, ExtractionError>>,
+}
+
+/// The OCR workers for one document, started the first time a page needs
+/// one: a text PDF never starts a thread.
+///
+/// Rendered pages wait in a queue that holds at most `queue` of them
+/// ([`crate::limits::MAX_QUEUED_RENDERED_PAGES`]), so a document's renders
+/// run at most that far ahead of its OCR: memory holds the page being
+/// rendered, at most `queue` waiting, and one being read by each of the
+/// `workers`.
+struct OcrPool<'scope, 'env, O: OcrBackend + Sync + ?Sized> {
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    ocr: &'env O,
+    cancel: &'env CancellationToken,
+    workers: usize,
+    queue: usize,
+    jobs: Option<std::sync::mpsc::SyncSender<OcrJob>>,
+    results: Option<std::sync::mpsc::Receiver<OcrOutcome>>,
+    /// Set by a worker when a scan could not be read.
+    failed: std::sync::Arc<AtomicBool>,
+    outcomes: Vec<OcrOutcome>,
+    submitted: usize,
+    /// Pages finished so far, read or not, for progress.
+    finished: usize,
+    page_count: usize,
+}
+
+impl<'scope, 'env, O: OcrBackend + Sync + ?Sized> OcrPool<'scope, 'env, O> {
+    fn new(
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        ocr: &'env O,
+        cancel: &'env CancellationToken,
+        workers: usize,
+        queue: usize,
+        page_count: usize,
+    ) -> Self {
+        Self {
+            scope,
+            ocr,
+            cancel,
+            workers,
+            queue,
+            jobs: None,
+            results: None,
+            failed: std::sync::Arc::new(AtomicBool::new(false)),
+            outcomes: Vec::new(),
+            submitted: 0,
+            finished: 0,
+            page_count,
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
+    }
+
+    fn start(&mut self) {
+        let (jobs, queued) = std::sync::mpsc::sync_channel::<OcrJob>(self.queue);
+        let (done, results) = std::sync::mpsc::channel::<OcrOutcome>();
+        let queued = std::sync::Arc::new(Mutex::new(queued));
+        for _ in 0..self.workers {
+            let queued = std::sync::Arc::clone(&queued);
+            let done = done.clone();
+            let failed = std::sync::Arc::clone(&self.failed);
+            let ocr = self.ocr;
+            let cancel = self.cancel;
+            self.scope.spawn(move || {
+                loop {
+                    // Only waiting for a job holds the lock; reading one
+                    // does not.
+                    let job = queued.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    let outcome = read_job(job, ocr, cancel, &failed);
+                    if done.send(outcome).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        self.jobs = Some(jobs);
+        self.results = Some(results);
+    }
+
+    /// Hands a page to the workers, waiting while the queue is full.
+    fn submit(&mut self, job: OcrJob) {
+        if self.jobs.is_none() {
+            self.start();
+        }
+        self.cancel
+            .report_progress("ocr", self.finished, Some(self.page_count));
+        // Every worker gone means every worker panicked; the scope reports
+        // that when it ends.
+        if self.jobs.as_ref().expect("started above").send(job).is_ok() {
+            self.submitted += 1;
+        }
+    }
+
+    /// Takes in whatever the workers have finished, without waiting.
+    fn collect_ready(&mut self) {
+        let Some(results) = &self.results else {
+            return;
+        };
+        while let Ok(outcome) = results.try_recv() {
+            self.finished += 1;
+            self.outcomes.push(outcome);
+        }
+    }
+
+    /// Lets the workers finish what they were given and returns every
+    /// outcome, in page order.
+    fn finish(mut self) -> Vec<OcrOutcome> {
+        let page_count = self.page_count;
+        drop(self.jobs.take());
+        if let Some(results) = self.results.take() {
+            while self.outcomes.len() < self.submitted {
+                let Ok(outcome) = results.recv() else {
+                    break;
+                };
+                self.finished += 1;
+                // The document is not finished until its pages are put back
+                // together, so the count stops one short of the total.
+                self.cancel.report_progress(
+                    "ocr",
+                    self.finished.min(page_count.saturating_sub(1)),
+                    Some(page_count),
+                );
+                self.outcomes.push(outcome);
+            }
+        }
+        let mut outcomes = std::mem::take(&mut self.outcomes);
+        outcomes.sort_by_key(|outcome| outcome.page_index);
+        outcomes
+    }
+}
+
+/// Reads one job's pieces, and makes the page image when a whole page reads
+/// unconvincingly. Once a scan has failed, or the request is canceled, the
+/// rest of the queue is not read.
+fn read_job<O: OcrBackend + ?Sized>(
+    job: OcrJob,
+    ocr: &O,
+    cancel: &CancellationToken,
+    failed: &AtomicBool,
+) -> OcrOutcome {
+    let sizes = job
+        .pieces
+        .iter()
+        .map(|piece| piece.image.dimensions())
+        .collect::<Vec<_>>();
+    let mut readings = Vec::with_capacity(job.pieces.len());
+    for piece in &job.pieces {
+        let reading = if failed.load(Ordering::SeqCst) || cancel.is_canceled() {
+            Err(ExtractionError::canceled())
+        } else {
+            recognize_timed(ocr, piece, cancel)
+        };
+        if job.scan && reading.is_err() {
+            failed.store(true, Ordering::SeqCst);
+        }
+        readings.push(reading);
+    }
+    let vision = match (job.whole_page, readings.first()) {
+        (true, Some(Ok(reading))) if reading.mean_confidence < CONFIDENT_READING => {
+            let rotation = reading.rotation_degrees;
+            job.pieces.first().map(|piece| {
+                cancel.timed(
+                    |timings| &mut timings.vision_micros,
+                    || page_image(job.page_index, &piece.image, rotation),
+                )
+            })
+        }
+        _ => None,
+    };
+    OcrOutcome {
+        page_index: job.page_index,
+        readings,
+        sizes,
+        vision,
+    }
 }
 
 /// Counts a page PDFium rendered towards the request's timings.
@@ -708,8 +1777,12 @@ fn record_rendered(cancel: &CancellationToken, width: u32, height: u32) {
 
 /// Reads one page with OCR, counting the page and the time it took. The
 /// passes inside it are the OCR backend's to count.
-fn recognize_timed(
-    ocr: &dyn OcrBackend,
+///
+/// Pages read in parallel each add their own time, so with more than one
+/// OCR worker `ocr_micros` is OCR work done, which can be more than the
+/// time the document took.
+fn recognize_timed<O: OcrBackend + ?Sized>(
+    ocr: &O,
     page: &RenderedPage,
     cancel: &CancellationToken,
 ) -> Result<OcrResult, ExtractionError> {
@@ -718,6 +1791,45 @@ fn recognize_timed(
         |timings| &mut timings.ocr_micros,
         || ocr.recognize(page, cancel),
     )
+}
+
+/// The long edge of the page image, in pixels.
+///
+/// Nothing reads the page image's pixels: its presence is what tells the
+/// engine a page could not be read. So it is a thumbnail - averaged down
+/// before it is turned or encoded, grey, and small enough that making it
+/// costs a few milliseconds instead of a full-page resample and encode.
+pub const PAGE_IMAGE_LONG_EDGE: u32 = 256;
+
+/// The page image for page `page_index`: a grey PNG thumbnail of the page,
+/// turned clockwise by `rotation_degrees`.
+pub fn page_image(
+    page_index: usize,
+    image: &DynamicImage,
+    rotation_degrees: u16,
+) -> Result<VisionImage, ExtractionError> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return Err(ExtractionError::parse_failed("image has zero dimensions"));
+    }
+    let scale = (f64::from(PAGE_IMAGE_LONG_EDGE) / f64::from(width.max(height))).min(1.0);
+    let thumbnail_width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let thumbnail_height = (f64::from(height) * scale).round().max(1.0) as u32;
+    let thumbnail = DynamicImage::ImageLuma8(
+        image
+            .thumbnail_exact(thumbnail_width, thumbnail_height)
+            .to_luma8(),
+    );
+    let upright = apply_detected_rotation(thumbnail, rotation_degrees)?;
+    let mut bytes = Vec::new();
+    upright
+        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    Ok(VisionImage {
+        page_number: page_index + 1,
+        mime_type: "image/png".to_owned(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
 }
 
 /// The resolution a page that has to be OCR'd is rendered at: 300 DPI, or as
@@ -772,13 +1884,7 @@ pub fn extract_anydoc(
     let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(office_error)?;
     cancel.check()?;
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: markdown,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(1, markdown, PageSource::AnyDoc)],
         warnings: vec![],
         truncated: false,
         optional_image: None,
@@ -1004,13 +2110,7 @@ pub fn extract_text(
         warnings.push(ExtractionWarning::TextTruncated);
     }
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text,
-            source: PageSource::Text,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(1, text, PageSource::Text)],
         warnings,
         truncated,
         optional_image: None,
@@ -1099,10 +2199,11 @@ fn holds_utf8_text(bytes: &[u8]) -> bool {
 /// layer to prefer, so the page is OCR'd and kept as the page image.
 ///
 /// A TIFF can hold a page per frame - a fax or a batch scan usually does -
-/// and only the first frame is read here, because neither this decoder nor
-/// the CCITT-compressed files these arrive in support the rest. What the
-/// caller must not do is believe it received the whole document, so unread
-/// frames are reported as truncation.
+/// and every frame is a page, read in order up to the document's page
+/// limit. A frame this decoder cannot read (CCITT Group 3 compression, say)
+/// ends the reading there, and so does the limit: what the caller must not
+/// do is believe it received the whole document, so the frames that were
+/// not read are reported as truncation.
 pub fn extract_image(
     path: &Path,
     ocr: &dyn OcrBackend,
@@ -1110,38 +2211,89 @@ pub fn extract_image(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     cancel.check()?;
+    let frames = later_frames(path, limits.max_page_count.saturating_sub(1), cancel)?;
+    // A TIFF that opens with a thumbnail has its first page further on.
     let image = cancel.timed(
         |timings| &mut timings.image_decode_micros,
-        || load_oriented_image(path, limits),
+        || match frames.first {
+            Some(directory) => decode_tiff_frame(path, directory, limits),
+            None => load_oriented_image(path, limits),
+        },
     )?;
+    let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
-    cancel.report_progress("ocr", 0, Some(1));
+    cancel.report_progress("ocr", 0, Some(page_count));
     let result = recognize_timed(ocr, &rendered, cancel)?;
+    let mut low_confidence = result.mean_confidence < CONFIDENT_READING;
+    let optional_image = Some(cancel.timed(
+        |timings| &mut timings.vision_micros,
+        || page_image(0, &rendered.image, result.rotation_degrees),
+    )?);
+    let size = rendered.image.dimensions();
+    drop(rendered);
+    // An image file has no physical size to go by; its pixels are taken to
+    // be 300 DPI, which is what scanners write.
+    // The document's characters, counted down frame by frame as the worker
+    // will count them when it sends them, and its layouts (see
+    // [`counted`]).
+    let mut budget = TextBudget::document();
+    let mut page = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || {
+            crate::layout::ocr_page(1, result, size, None, RouteSignals::default(), &|| {
+                cancel.check().is_err()
+            })
+        },
+    );
+    page = counted(page, &mut budget);
+    page.vision_escalated = true;
+    let mut pages = vec![page];
+
+    let mut truncated = frames.beyond_limit;
+    // Each frame is held to the same pixel and decode caps as the first, and
+    // read from the file as it is decoded: a batch scan near the source cap
+    // is never held in memory whole.
+    for (index, directory) in frames.directories.iter().enumerate() {
+        cancel.check()?;
+        cancel.report_progress("ocr", index + 1, Some(page_count));
+        let decoded = cancel.timed(
+            |timings| &mut timings.image_decode_micros,
+            || decode_tiff_frame(path, *directory, limits),
+        );
+        let Ok(image) = decoded else {
+            truncated = true;
+            break;
+        };
+        let rendered = RenderedPage::new(index + 1, image);
+        let result = recognize_timed(ocr, &rendered, cancel)?;
+        low_confidence |= result.mean_confidence < CONFIDENT_READING;
+        let size = rendered.image.dimensions();
+        drop(rendered);
+        let page = cancel.timed(
+            |timings| &mut timings.analysis_micros,
+            || {
+                crate::layout::ocr_page(
+                    index + 2,
+                    result,
+                    size,
+                    None,
+                    RouteSignals::default(),
+                    &|| cancel.check().is_err(),
+                )
+            },
+        );
+        pages.push(counted(page, &mut budget));
+    }
     let mut warnings = Vec::new();
-    if result.mean_confidence < CONFIDENT_READING {
+    if low_confidence {
         warnings.push(ExtractionWarning::LowOcrConfidence);
     }
-    let truncated = has_unread_frames(path);
     if truncated {
         warnings.push(ExtractionWarning::TextTruncated);
     }
-    let optional_image = Some(cancel.timed(
-        |timings| &mut timings.vision_micros,
-        || {
-            normalize_vision_image(
-                0,
-                apply_detected_rotation(rendered.image, result.rotation_degrees)?,
-            )
-        },
-    )?);
+    link_sections(&mut pages);
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: result.text,
-            source: PageSource::Ocr,
-            ocr_confidence: Some(result.mean_confidence),
-            vision_escalated: true,
-        }],
+        pages,
         warnings,
         truncated,
         optional_image,
@@ -1149,17 +2301,122 @@ pub fn extract_image(
     })
 }
 
-/// Whether an image file holds frames after the one that was read.
+/// The frames of an image file after its first: where each one's image file
+/// directory is, and whether there were more than the limit allowed. And,
+/// when the file's first directory is a reduced-resolution copy, where the
+/// first page's own directory is: that page is read in its place.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LaterFrames {
+    first: Option<u64>,
+    directories: Vec<u64>,
+    beyond_limit: bool,
+}
+
+/// The frames after the first, up to `limit` of them, following the TIFF's
+/// chain of image file directories without decoding anything.
 ///
-/// A TIFF is a chain of image file directories; the first one's link to the
-/// next is all this needs, and it is read rather than decoded so a
-/// twelve-frame fax costs one seek. Anything that does not read as a TIFF
-/// holds one image by construction, and a file whose chain cannot be
-/// followed is reported as single-framed rather than as an error: the frame
-/// that was read is still the document's first page.
-fn has_unread_frames(path: &Path) -> bool {
-    fn next_directory(path: &Path) -> Option<u64> {
-        let mut file = File::open(path).ok()?;
+/// A reduced-resolution copy of a page (`NewSubfileType` bit 0) is not a
+/// page of its own and is passed over, the file's first directory included:
+/// a file that opens with a thumbnail has its first page where the first
+/// full-resolution directory is. Anything that does not read as a
+/// TIFF holds one image by construction, and a chain that cannot be
+/// followed, or that loops, ends where it stops making sense: the frames
+/// read up to there are still the document's pages.
+///
+/// The walk reads at most [`MAX_TIFF_ENTRIES`] directory entries in all, and
+/// stops when the request is canceled: a chain of directories each with a
+/// table of tens of thousands of entries reads as truncated where it stops.
+fn later_frames(
+    path: &Path,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<LaterFrames, ExtractionError> {
+    let mut frames = LaterFrames::default();
+    let Ok(file) = File::open(path) else {
+        return Ok(frames);
+    };
+    let mut file = BufReader::new(file);
+    let Some(format) = TiffFormat::read(&mut file) else {
+        return Ok(frames);
+    };
+    let mut entries_left = MAX_TIFF_ENTRIES;
+    let mut seen = std::collections::HashSet::new();
+    let mut next = format.first;
+    let mut first_page_found = false;
+    // A chain can be no longer than the file has room for directories.
+    while next != 0 && seen.insert(next) {
+        if seen.len() > MAX_TIFF_DIRECTORIES {
+            // The chain goes on past what any document this reads could
+            // need: whatever its rest holds goes unread, so say so.
+            frames.beyond_limit = true;
+            break;
+        }
+        cancel.check()?;
+        let directory = match format.directory(&mut file, next, &mut entries_left) {
+            DirectoryRead::Read(directory) => directory,
+            // The chain says there is more and it cannot be read: whatever
+            // was there is lost, and the document says so.
+            DirectoryRead::Unreadable | DirectoryRead::PastBudget => {
+                frames.beyond_limit = true;
+                break;
+            }
+        };
+        if !directory.reduced_resolution {
+            if !first_page_found {
+                first_page_found = true;
+                if next != format.first {
+                    frames.first = Some(next);
+                }
+            } else {
+                if frames.directories.len() == limit {
+                    frames.beyond_limit = true;
+                    break;
+                }
+                frames.directories.push(next);
+            }
+        }
+        next = directory.next;
+    }
+    Ok(frames)
+}
+
+/// More directories than any document this reads could be pages of: the
+/// page limit, and then some for reduced-resolution copies.
+const MAX_TIFF_DIRECTORIES: usize = 4_096;
+
+/// The most directory entries a TIFF's walk reads in all. A directory
+/// has a few dozen; a table may say it has 65,535, and every directory of
+/// a chain may say so.
+const MAX_TIFF_ENTRIES: u64 = 262_144;
+
+/// What reading one image file directory came to.
+enum DirectoryRead {
+    Read(TiffDirectory),
+    /// Not a directory this can read: the chain ends there, with more
+    /// than was read.
+    Unreadable,
+    /// More entries than the walk has left to read.
+    PastBudget,
+}
+
+/// How a TIFF counts: its byte order, classic or BigTIFF, and where its
+/// first image file directory is.
+struct TiffFormat {
+    big_endian: bool,
+    big: bool,
+    first: u64,
+}
+
+/// What a frame's directory says that matters here.
+struct TiffDirectory {
+    reduced_resolution: bool,
+    next: u64,
+}
+
+const NEW_SUBFILE_TYPE: u16 = 254;
+
+impl TiffFormat {
+    fn read(file: &mut (impl Read + Seek)) -> Option<Self> {
         let mut header = [0_u8; 8];
         file.read_exact(&mut header).ok()?;
         let big_endian = match &header[..2] {
@@ -1167,67 +2424,206 @@ fn has_unread_frames(path: &Path) -> bool {
             b"MM" => true,
             _ => return None,
         };
-        let word = |bytes: [u8; 2]| {
-            if big_endian {
-                u16::from_be_bytes(bytes)
-            } else {
-                u16::from_le_bytes(bytes)
-            }
-        };
-        let long = |bytes: [u8; 4]| {
-            if big_endian {
-                u32::from_be_bytes(bytes)
-            } else {
-                u32::from_le_bytes(bytes)
-            }
-        };
-        let quad = |bytes: [u8; 8]| {
-            if big_endian {
-                u64::from_be_bytes(bytes)
-            } else {
-                u64::from_le_bytes(bytes)
-            }
+        let mut format = Self {
+            big_endian,
+            big: false,
+            first: 0,
         };
         // Classic TIFF marks itself 42 and counts in 32-bit words; BigTIFF
         // marks itself 43 and counts in 64-bit ones, with wider entries.
-        let (first, entry_bytes, big) = match word([header[2], header[3]]) {
-            42 => (
-                u64::from(long([header[4], header[5], header[6], header[7]])),
-                12_u64,
-                false,
-            ),
+        match format.word([header[2], header[3]]) {
+            42 => format.first = u64::from(format.long(header[4..8].try_into().ok()?)),
             43 => {
+                format.big = true;
                 let mut offset = [0_u8; 8];
                 file.read_exact(&mut offset).ok()?;
-                (quad(offset), 20_u64, true)
+                format.first = format.quad(offset);
             }
             _ => return None,
+        }
+        Some(format)
+    }
+
+    fn word(&self, bytes: [u8; 2]) -> u16 {
+        if self.big_endian {
+            u16::from_be_bytes(bytes)
+        } else {
+            u16::from_le_bytes(bytes)
+        }
+    }
+
+    fn long(&self, bytes: [u8; 4]) -> u32 {
+        if self.big_endian {
+            u32::from_be_bytes(bytes)
+        } else {
+            u32::from_le_bytes(bytes)
+        }
+    }
+
+    fn quad(&self, bytes: [u8; 8]) -> u64 {
+        if self.big_endian {
+            u64::from_be_bytes(bytes)
+        } else {
+            u64::from_le_bytes(bytes)
+        }
+    }
+
+    /// Reads the directory at `offset`, counting its entries against
+    /// `entries_left`.
+    fn directory(
+        &self,
+        file: &mut (impl Read + Seek),
+        offset: u64,
+        entries_left: &mut u64,
+    ) -> DirectoryRead {
+        let Some(entries) = self.entry_count(file, offset) else {
+            return DirectoryRead::Unreadable;
         };
-        file.seek(SeekFrom::Start(first)).ok()?;
-        let entries = if big {
+        if entries > *entries_left {
+            return DirectoryRead::PastBudget;
+        }
+        *entries_left -= entries;
+        match self.entries(file, entries) {
+            Some(directory) => DirectoryRead::Read(directory),
+            None => DirectoryRead::Unreadable,
+        }
+    }
+
+    /// How many entries the directory at `offset` says it has: up to 65,535
+    /// in a classic TIFF, and as many as an eight-byte count says in a
+    /// BigTIFF, which the walk's budget, not this, bounds.
+    fn entry_count(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<u64> {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        if self.big {
             let mut count = [0_u8; 8];
             file.read_exact(&mut count).ok()?;
-            quad(count)
+            Some(self.quad(count))
         } else {
             let mut count = [0_u8; 2];
             file.read_exact(&mut count).ok()?;
-            u64::from(word(count))
-        };
-        file.seek(SeekFrom::Current(
-            i64::try_from(entries.checked_mul(entry_bytes)?).ok()?,
-        ))
-        .ok()?;
-        if big {
+            Some(u64::from(self.word(count)))
+        }
+    }
+
+    /// A directory's `entries` entries and the offset after them, read from
+    /// where its count ends.
+    fn entries(&self, file: &mut impl Read, entries: u64) -> Option<TiffDirectory> {
+        let entry_bytes = if self.big { 20 } else { 12 };
+        let value_at = if self.big { 12 } else { 8 };
+        let mut reduced_resolution = false;
+        let mut entry = [0_u8; 20];
+        for _ in 0..entries {
+            file.read_exact(&mut entry[..entry_bytes]).ok()?;
+            if self.word([entry[0], entry[1]]) != NEW_SUBFILE_TYPE {
+                continue;
+            }
+            // A LONG by the specification; a SHORT from some writers. Either
+            // sits at the start of the entry's value field.
+            let value = match self.word([entry[2], entry[3]]) {
+                3 => u32::from(self.word([entry[value_at], entry[value_at + 1]])),
+                _ => self.long(entry[value_at..value_at + 4].try_into().ok()?),
+            };
+            reduced_resolution = value & 1 == 1;
+        }
+        let next = if self.big {
             let mut next = [0_u8; 8];
             file.read_exact(&mut next).ok()?;
-            Some(quad(next))
+            self.quad(next)
         } else {
             let mut next = [0_u8; 4];
             file.read_exact(&mut next).ok()?;
-            Some(u64::from(long(next)))
-        }
+            u64::from(self.long(next))
+        };
+        Some(TiffDirectory {
+            reduced_resolution,
+            next,
+        })
     }
-    next_directory(path).is_some_and(|next| next != 0)
+}
+
+/// Decodes the TIFF frame whose image file directory is at `directory`.
+///
+/// Every offset in a TIFF is from the start of the file, so pointing the
+/// header at another directory makes that frame the file's first image,
+/// and the decoder reads it exactly as it reads a first frame - colour,
+/// bit depth, compression and orientation included. The header is pointed
+/// there as the file is read, never on disk.
+fn decode_tiff_frame(
+    path: &Path,
+    directory: u64,
+    limits: &ResourceLimits,
+) -> Result<DynamicImage, ExtractionError> {
+    let mut file = File::open(path).map_err(ExtractionError::io)?;
+    let format =
+        TiffFormat::read(&mut file).ok_or_else(|| ExtractionError::parse_failed("not a TIFF"))?;
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    let mut header = [0_u8; 16];
+    let length = if format.big { 16 } else { 8 };
+    file.read_exact(&mut header[..length])
+        .map_err(ExtractionError::io)?;
+    let (start, pointer) = if format.big {
+        (
+            8,
+            if format.big_endian {
+                directory.to_be_bytes().to_vec()
+            } else {
+                directory.to_le_bytes().to_vec()
+            },
+        )
+    } else {
+        let directory = u32::try_from(directory)
+            .map_err(|_| ExtractionError::parse_failed("TIFF directory out of range"))?;
+        (
+            4,
+            if format.big_endian {
+                directory.to_be_bytes().to_vec()
+            } else {
+                directory.to_le_bytes().to_vec()
+            },
+        )
+    };
+    header[start..start + pointer.len()].copy_from_slice(&pointer);
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    let reader = PatchedHeader {
+        file,
+        header,
+        length: length as u64,
+        position: 0,
+    };
+    ImageReader::with_format(BufReader::new(reader), ImageFormat::Tiff)
+        .into_decoder()
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))
+        .and_then(|decoder| decode_oriented(decoder, limits))
+}
+
+/// A file read with its first `length` bytes replaced by `header`.
+struct PatchedHeader {
+    file: File,
+    header: [u8; 16],
+    length: u64,
+    position: u64,
+}
+
+impl Read for PatchedHeader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.file.read(buffer)?;
+        for (offset, byte) in buffer[..read].iter_mut().enumerate() {
+            let at = self.position + offset as u64;
+            if at >= self.length {
+                break;
+            }
+            *byte = self.header[at as usize];
+        }
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
+impl Seek for PatchedHeader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.position = self.file.seek(position)?;
+        Ok(self.position)
+    }
 }
 
 /// Decodes an image file the right way up and no larger than a rendered page
@@ -1250,12 +2646,21 @@ pub fn load_oriented_image(
 ) -> Result<DynamicImage, ExtractionError> {
     let metadata = std::fs::metadata(path).map_err(ExtractionError::io)?;
     limits.validate_source_size(metadata.len())?;
-    let mut decoder = ImageReader::open(path)
+    let decoder = ImageReader::open(path)
         .map_err(ExtractionError::io)?
         .with_guessed_format()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?
         .into_decoder()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    decode_oriented(decoder, limits)
+}
+
+/// Decodes an image the right way up within the caps a rendered page is held
+/// to: its encoded size and decode buffer first, then the page's pixels.
+fn decode_oriented(
+    mut decoder: impl ImageDecoder,
+    limits: &ResourceLimits,
+) -> Result<DynamicImage, ExtractionError> {
     let (encoded_width, encoded_height) = decoder.dimensions();
     limits.validate_image_file_pixels(encoded_width, encoded_height)?;
     limits.validate_image_file_bytes(decoder.total_bytes())?;
@@ -1369,5 +2774,343 @@ mod snapshot_tests {
 
         assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"original");
         assert_eq!(std::fs::read(source).unwrap(), b"replacement");
+    }
+}
+
+#[cfg(test)]
+mod tiff_chains {
+    use super::*;
+
+    /// A little-endian TIFF of image file directories only, each saying
+    /// whether it is a reduced-resolution copy, chained in order; the last
+    /// points at `last_next` (0 ends the chain).
+    fn chain(reduced: &[bool], last_next: Option<usize>) -> tempfile::NamedTempFile {
+        const DIRECTORY: usize = 2 + 12 + 4;
+        let at = |index: usize| (8 + index * DIRECTORY) as u32;
+        let mut bytes = b"II".to_vec();
+        bytes.extend(42_u16.to_le_bytes());
+        bytes.extend(at(0).to_le_bytes());
+        for (index, copy) in reduced.iter().enumerate() {
+            bytes.extend(1_u16.to_le_bytes());
+            bytes.extend(NEW_SUBFILE_TYPE.to_le_bytes());
+            bytes.extend(4_u16.to_le_bytes());
+            bytes.extend(1_u32.to_le_bytes());
+            bytes.extend(u32::from(*copy).to_le_bytes());
+            let next = if index + 1 < reduced.len() {
+                at(index + 1)
+            } else {
+                last_next.map_or(0, at)
+            };
+            bytes.extend(next.to_le_bytes());
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_chain_cut_short_by_the_directory_bound_is_marked_as_going_on() {
+        // A page, then more reduced-resolution copies than the bound
+        // allows, then a page the walk never reaches.
+        let mut reduced = vec![false];
+        reduced.extend(std::iter::repeat_n(true, MAX_TIFF_DIRECTORIES + 10));
+        reduced.push(false);
+        let file = chain(&reduced, None);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
+        assert!(frames.directories.is_empty());
+        assert!(frames.beyond_limit, "pages may lie past the bound");
+    }
+
+    /// A file that opens with a thumbnail of its first page: the thumbnail
+    /// is passed over, the page after it is read in its place, and is not
+    /// read again as a later page.
+    #[test]
+    fn a_thumbnail_first_is_passed_over_for_the_page_after_it() {
+        const DIRECTORY: u64 = 2 + 12 + 4;
+        let file = chain(&[true, false, false], None);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, Some(8 + DIRECTORY));
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        let plain = chain(&[false, true, false], None);
+        let frames = later_frames(plain.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, None, "the first directory is the first page");
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        // Thumbnails only: the first directory is still read, as before.
+        let thumbnails = chain(&[true, true], None);
+        let frames = later_frames(thumbnails.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.first, None);
+        assert!(frames.directories.is_empty());
+    }
+
+    /// A chain of directories whose tables say they have more entries than
+    /// the walk reads in all stops where the budget runs out, and reads as
+    /// going on.
+    #[test]
+    fn a_chain_of_huge_entry_tables_stops_at_the_entry_budget() {
+        // A page, then directories that each claim the most entries a
+        // table may, all pointing at the same table.
+        let mut bytes = b"II".to_vec();
+        bytes.extend(42_u16.to_le_bytes());
+        bytes.extend(8_u32.to_le_bytes());
+        let directory = |bytes: &mut Vec<u8>, count: u16, next: u32| {
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, 12 * usize::from(count)));
+            bytes.extend(next.to_le_bytes());
+        };
+        let huge_at = (8 + 2 + 4) as u32;
+        directory(&mut bytes, 0, huge_at);
+        let huge_end = huge_at as usize + 2 + 12 * usize::from(u16::MAX);
+        let after = (huge_end + 4) as u32;
+        directory(&mut bytes, u16::MAX, after);
+        // Each next directory a fresh table, so the chain does not loop.
+        for _ in 0..8 {
+            let next = bytes.len() as u32 + 2 + 12 * u32::from(u16::MAX) + 4;
+            directory(&mut bytes, u16::MAX, next);
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+
+        let frames = later_frames(file.path(), 100, &CancellationToken::new()).unwrap();
+        assert!(frames.beyond_limit, "pages may lie past the budget");
+
+        let canceled = CancellationToken::new();
+        canceled.cancel();
+        assert!(later_frames(file.path(), 100, &canceled).is_err());
+    }
+
+    /// A BigTIFF directory counts its entries in eight bytes: more than a
+    /// classic table holds is read within the walk's budget, and past it
+    /// the document reads as going on rather than as complete.
+    #[test]
+    fn a_bigtiff_directory_of_many_entries_is_read_within_the_budget() {
+        let bigtiff = |entries: u64, entry_bytes: u64| {
+            let mut bytes = b"II".to_vec();
+            bytes.extend(43_u16.to_le_bytes());
+            bytes.extend(8_u16.to_le_bytes());
+            bytes.extend(0_u16.to_le_bytes());
+            bytes.extend(16_u64.to_le_bytes());
+            // The first page: no entries, then the next directory.
+            let second = 16 + 8 + 8;
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend((second as u64).to_le_bytes());
+            // A page with `entries` entries, of which `entry_bytes` are
+            // written, then the third page.
+            bytes.extend(entries.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, (20 * entry_bytes) as usize));
+            let third = bytes.len() as u64 + 8;
+            bytes.extend(third.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            bytes.extend(0_u64.to_le_bytes());
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), bytes).unwrap();
+            file
+        };
+        let cancel = CancellationToken::new();
+
+        let wide = bigtiff(70_000, 70_000);
+        let frames = later_frames(wide.path(), 10, &cancel).unwrap();
+        assert_eq!(frames.directories.len(), 2);
+        assert!(!frames.beyond_limit);
+
+        let huge = bigtiff(1 << 40, 0);
+        let frames = later_frames(huge.path(), 10, &cancel).unwrap();
+        assert!(frames.directories.is_empty());
+        assert!(frames.beyond_limit, "pages may lie past the budget");
+    }
+
+    /// A chain whose next directory lies past the end of the file says
+    /// there is more than could be read: the document reads as going on.
+    #[test]
+    fn a_chain_pointing_past_the_file_is_marked_as_going_on() {
+        let pages = chain(&[false, false], Some(1_000));
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.directories.len(), 1);
+        assert!(frames.beyond_limit);
+    }
+
+    #[test]
+    fn a_whole_chain_or_a_looping_one_is_not_marked_as_going_on() {
+        let pages = chain(&[false, false, true, false], None);
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.directories.len(), 2);
+        assert!(!frames.beyond_limit);
+
+        let looping = chain(&[false, false, false], Some(0));
+        let frames = later_frames(looping.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.directories.len(), 2);
+        assert!(
+            !frames.beyond_limit,
+            "a loop ends the chain; nothing is past it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_page_layouts {
+    use super::*;
+
+    #[test]
+    fn a_page_the_worker_will_cut_gets_no_layout() {
+        let short = ExtractedPage::of_text(1, "Notice of Termination".into(), PageSource::Text);
+        assert!(short.layout.is_some());
+
+        let long = "word ".repeat(MAX_PAGE_CHARS / 5 + 1);
+        let page = ExtractedPage::of_text(1, long, PageSource::Text);
+        assert!(page.layout.is_none(), "the text is cut on the way out");
+    }
+
+    #[test]
+    fn pages_past_the_documents_characters_get_no_layout() {
+        let mut budget = TextBudget::document();
+        let sheet = "cell ".repeat(MAX_PAGE_CHARS / 5);
+        let pages = (1..=6)
+            .map(|number| {
+                ExtractedPage::of_text_within(
+                    number,
+                    sheet.clone(),
+                    PageSource::AnyDoc,
+                    &mut budget,
+                )
+            })
+            .collect::<Vec<_>>();
+        let with_layouts = pages.iter().filter(|page| page.layout.is_some()).count();
+        assert_eq!(with_layouts, MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS);
+        assert_eq!(budget.characters, 0);
+    }
+
+    /// A page of one-letter lines is well inside the characters, but its
+    /// layout would hold an object for every line: past what a page's
+    /// layout may hold, it goes without one, its text whole.
+    #[test]
+    fn a_page_of_more_lines_than_a_layout_may_hold_gets_no_layout() {
+        let lines = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let page = ExtractedPage::of_text(1, lines.clone(), PageSource::Text);
+        assert!(page.layout.is_none());
+        assert_eq!(page.text, lines);
+
+        let pipes = "|".repeat(MAX_PAGE_LAYOUT_PARTS);
+        let page = ExtractedPage::of_text(1, pipes, PageSource::Text);
+        assert!(page.layout.is_none(), "every pipe could be a cell");
+
+        let fits = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        assert!(
+            ExtractedPage::of_text(1, fits, PageSource::Text)
+                .layout
+                .is_some()
+        );
+    }
+
+    /// A page whose geometry layout is not kept - the document's layouts
+    /// are full - is read as its text, and holds none of its runs while it
+    /// waits for its fast layout.
+    #[test]
+    fn a_page_read_as_its_text_holds_no_runs_while_it_waits() {
+        use crate::layout::TextRun;
+
+        let runs = (0..40)
+            .map(|line| TextRun {
+                text: format!("Line {line}"),
+                bbox: [540, 600 + line * 120, 1800, 690 + line * 120],
+                bold: false,
+                confidence: None,
+            })
+            .collect::<Vec<_>>();
+        let inspection = PdfPageInspection {
+            page_index: 0,
+            native_text: "Line 0".to_owned(),
+            native: Some(NativePage {
+                width: 6120,
+                height: 7920,
+                segments: runs.iter().map(|run| run.bbox).collect(),
+                runs,
+                ..NativePage::default()
+            }),
+            ..PdfPageInspection::default()
+        };
+        let mut full = TextBudget {
+            characters: MAX_DOCUMENT_CHARS,
+            layout_parts: 0,
+        };
+
+        let read = native_page(
+            1,
+            inspection,
+            RouteSignals::default(),
+            PageRoute::Layout,
+            &|| false,
+            &mut full,
+        );
+
+        assert!(read.page.layout.is_none());
+        let native = read.fast.unwrap().native.unwrap();
+        assert!(native.runs.is_empty());
+        assert_eq!(native.segments.len(), 40, "the fast layout's line boxes");
+        assert_eq!((native.width, native.height), (6120, 7920));
+    }
+
+    /// An OCR reading whose lines were not analysed, with more lines of
+    /// text than a page's layout may hold, goes without a layout and keeps
+    /// its text.
+    #[test]
+    fn an_ocr_reading_too_dense_for_a_layout_keeps_its_text_and_no_layout() {
+        let dense = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new(dense.clone(), 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_none());
+        assert_eq!(page.text, dense);
+
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new("RECEIPT\nTotal 4.00", 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_some());
+    }
+
+    /// Lines and cells are counted across the document in page order: once
+    /// the pages before have taken what the document may hold, a page that
+    /// would fit on its own goes without a layout, and its characters are
+    /// still counted.
+    #[test]
+    fn pages_past_the_documents_lines_and_cells_get_no_layout() {
+        let mut budget = TextBudget::document();
+        let page_text = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS - 1);
+        let per_page = layout_parts(&page_text);
+        assert!(per_page <= MAX_PAGE_LAYOUT_PARTS);
+        let pages = (1..=MAX_DOCUMENT_LAYOUT_PARTS / per_page + 2)
+            .map(|number| {
+                ExtractedPage::of_text_within(
+                    number,
+                    page_text.clone(),
+                    PageSource::Text,
+                    &mut budget,
+                )
+            })
+            .collect::<Vec<_>>();
+        let with_layouts = pages
+            .iter()
+            .take_while(|page| page.layout.is_some())
+            .count();
+        assert_eq!(with_layouts, MAX_DOCUMENT_LAYOUT_PARTS / per_page);
+        assert!(
+            pages[with_layouts..]
+                .iter()
+                .all(|page| page.layout.is_none())
+        );
+        assert_eq!(
+            budget.characters,
+            MAX_DOCUMENT_CHARS - pages.len() * page_text.chars().count()
+        );
     }
 }

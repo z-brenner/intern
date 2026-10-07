@@ -264,6 +264,425 @@ fn photo_pdf(width: u32, height: u32) -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A landscape page stored as a portrait sheet turned a quarter, with text
+/// drawn on both sides of where the displayed width would cut it.
+#[cfg(feature = "native-pdfium")]
+fn turned_landscape_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate 90 ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "",
+            b"BT /F1 12 Tf 300 100 Td (CARRIER RATE CONFIRMATION) Tj ET \
+              BT /F1 12 Tf 300 700 Td (Confirmed June 8, 2026) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A letter page a tool wrapped whole in one form XObject - iText's
+/// imported pages, pdfpages, macOS - with the sender's logo drawn inside
+/// the form beside its text, placed through the form's own map.
+#[cfg(feature = "native-pdfium")]
+fn wrapped_page_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            concat!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Matrix [1 0 0 1 10 0] ",
+                "/Resources << /Font << /F1 6 0 R >> /XObject << /Im0 7 0 R >> >>"
+            ),
+            b"q 72 0 0 36 54 700 cm /Im0 Do Q \
+              BT /F1 14 Tf 140 712 Td (WEXCOMBE MILLWORK CO.) Tj ET \
+              BT /F1 10 Tf 54 650 Td (Invoice WMC-11047 for stair treads delivered to Lot 17.) Tj ET \
+              BT /F1 10 Tf 54 636 Td (Payment is due within thirty days of the invoice date.) Tj ET \
+              BT /F1 10 Tf 54 622 Td (Questions go to the billing office at the address above.) Tj ET",
+        ),
+        stream("", b"q 0.9 0 0 0.9 21 40 cm /Fm0 Do Q"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8",
+            &[0, 255],
+        ),
+    ];
+    pdf(&objects)
+}
+
+/// A page wrapped in a form with a logo inside is a text page: its text
+/// objects are its segments, its logo an image the size of the logo, and
+/// nothing on it is read twice. It used to be taken for a page-sized image
+/// no text overlapped, OCR'd whole, and every line merged in a second time.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_wrapped_in_a_form_with_a_logo_reads_its_text_once() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::PageRoute;
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page wrapped in a form was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("wrapped.pdf");
+    std::fs::write(&path, wrapped_page_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+    let native = pages[0].native.as_ref().unwrap();
+    assert!(native.segments.len() >= 4, "{:?}", native.segments);
+    assert_eq!(native.images.len(), 1);
+    // The logo, 72 x 36 points at nine tenths: about 0.4% of the page.
+    assert!(
+        pages[0].image_coverage < 0.01,
+        "{}",
+        pages[0].image_coverage
+    );
+    // Placed through the form's own matrix and the page's where it draws
+    // the form - PDFium applies the first to a form's children and keeps
+    // the second on the form: the title's box starts at
+    // 21 + 0.9 x (10 + 140) = 156 points from the left.
+    assert!(
+        native
+            .segments
+            .iter()
+            .any(|segment| segment[0].abs_diff(1560) <= 20),
+        "{:?}",
+        native.segments
+    );
+
+    let document = extract_pdf(
+        &path,
+        &backend,
+        &NoOcr,
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let page = &document.pages[0];
+    let route = page.layout.as_ref().unwrap().route;
+    assert!(
+        matches!(route, PageRoute::Fast | PageRoute::Layout),
+        "{route:?}"
+    );
+    for line in [
+        "WEXCOMBE MILLWORK CO.",
+        "Invoice WMC-11047 for stair treads delivered to Lot 17.",
+        "Payment is due within thirty days of the invoice date.",
+    ] {
+        assert_eq!(
+            page.text.matches(line).count(),
+            1,
+            "{line}: {:?}",
+            page.text
+        );
+    }
+}
+
+/// A rule drawn inside a form XObject that is drawn 400 points lower than
+/// the form's own space puts it: 300 by the form's matrix, 100 by the
+/// page's where it draws the form.
+#[cfg(feature = "native-pdfium")]
+fn ruled_form_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Matrix [1 0 0 1 0 -300]",
+            b"1 w 54 700 m 558 700 l S",
+        ),
+        stream("", b"q 1 0 0 1 0 -100 cm /Fm0 Do Q"),
+    ];
+    pdf(&objects)
+}
+
+/// Rules inside a form are where the page draws them: 300 points from the
+/// bottom, 492 from the top - not where the form's own space would put
+/// them, 92 from the top, over whatever the page has there.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_rule_inside_a_form_is_where_the_form_is_drawn() {
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("ruled-form.pdf");
+    std::fs::write(&path, ruled_form_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+
+    let rulings = &pages[0].native.as_ref().unwrap().rulings;
+    assert_eq!(rulings.len(), 1, "{rulings:?}");
+    let [x0, y0, x1, y1] = rulings[0];
+    assert!(
+        x0.abs_diff(540) <= 10 && x1.abs_diff(5580) <= 10,
+        "{rulings:?}"
+    );
+    assert!(
+        y0.abs_diff(4920) <= 15 && y1.abs_diff(4920) <= 15,
+        "{rulings:?}"
+    );
+}
+
+/// Two columns of capitals set apart, 28 to a line on 144 lines: some
+/// eight thousand runs, twice what the layout analysis takes on, on a page
+/// the router sends to it.
+#[cfg(feature = "native-pdfium")]
+fn crowded_columns_pdf() -> Vec<u8> {
+    let letters = ["(X)"; 28].join(" -1500 ");
+    let mut contents = String::new();
+    for line in 0..144 {
+        let y = 760 - line * 5;
+        for x in [54, 330] {
+            contents.push_str(&format!("BT /F1 4 Tf {x} {y} Td [{letters}] TJ ET\n"));
+        }
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A page with more runs than the layout analysis takes on is read as its
+/// text: its characters stop being read once there are more, and the page
+/// the router sent to the layout route is read on the fast one.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_of_more_runs_than_the_analysis_takes_on_keeps_its_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::{PageRoute, route_page};
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("crowded.pdf");
+    std::fs::write(&path, crowded_columns_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    let signals = pages[0].signals.unwrap();
+    assert_eq!(
+        route_page(&signals, false),
+        PageRoute::Layout,
+        "{signals:?}"
+    );
+    let native = pages[0].native.as_ref().unwrap();
+    assert!(
+        backend
+            .page_runs(&path, 0, native, &cancel)
+            .unwrap()
+            .is_empty(),
+        "a page past the bound has no runs"
+    );
+
+    let document =
+        extract_pdf(&path, &backend, &NoOcr, &ResourceLimits::default(), &cancel).unwrap();
+    let page = &document.pages[0];
+    assert_eq!(page.text, pages[0].native_text);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
+}
+
+/// A tall page of lines of type set so small - a twentieth of a point - that
+/// each glyph rounds to no width at all: thousands more runs than the layout
+/// analysis takes on, none of which it would read.
+#[cfg(feature = "native-pdfium")]
+fn zero_width_lines_pdf() -> Vec<u8> {
+    let mut contents = String::new();
+    for line in 0..7_500 {
+        let y = 1_450.0 - f64::from(line) * 0.18;
+        contents.push_str(&format!("BT /F1 0.05 Tf 54 {y:.2} Td (A) Tj ET\n"));
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 1500] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// Runs with no width are never read by the analysis, but each one kept
+/// still counts: a page of more of them than the analysis takes on keeps
+/// none, rather than a run for every line.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_of_runs_with_no_width_keeps_no_more_than_the_bound() {
+    use intern_worker::layout::router::bounds::MAX_RUNS;
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("zero-width.pdf");
+    std::fs::write(&path, zero_width_lines_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(
+        pages[0].native_text.lines().count() > MAX_RUNS,
+        "{} lines",
+        pages[0].native_text.lines().count()
+    );
+    let native = pages[0].native.as_ref().unwrap();
+    let runs = backend.page_runs(&path, 0, native, &cancel).unwrap();
+    assert!(runs.len() <= MAX_RUNS, "{} runs kept", runs.len());
+}
+
+/// Two pages of a few lines each.
+#[cfg(feature = "native-pdfium")]
+fn two_page_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 7 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "",
+            b"BT /F1 11 Tf 72 700 Td (Hollowmere Freight Co.) Tj ET \
+              BT /F1 11 Tf 72 680 Td (Delivery receipt for pallet 7) Tj ET",
+        ),
+        stream(
+            "",
+            b"BT /F1 11 Tf 72 700 Td (Received in good order) Tj ET \
+              BT /F1 11 Tf 72 680 Td (Signed at the Brackenridge dock) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// Inspection reads a document's characters ahead only within its budget;
+/// a page past it has none, and its characters are read when it is.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_document_s_characters_are_read_ahead_only_within_its_budget() {
+    use intern_worker::layout::PageRoute;
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("two-pages.pdf");
+    std::fs::write(&path, two_page_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+    let geometry = |_: &intern_worker::layout::RouteSignals, _: bool| PageRoute::Layout;
+
+    let every = backend
+        .inspect_routed(&path, &cancel, geometry, usize::MAX)
+        .unwrap();
+    let budgeted = backend.inspect_routed(&path, &cancel, geometry, 1).unwrap();
+
+    let runs = |pages: &[intern_worker::extract::PdfPageInspection], index: usize| {
+        pages[index].native.as_ref().unwrap().runs.clone()
+    };
+    assert!(!runs(&every, 1).is_empty());
+    assert_eq!(runs(&budgeted, 0), runs(&every, 0));
+    assert!(runs(&budgeted, 1).is_empty(), "past the budget");
+    let native = budgeted[1].native.as_ref().unwrap();
+    assert_eq!(
+        backend.page_runs(&path, 1, native, &cancel).unwrap(),
+        runs(&every, 1)
+    );
+}
+
+/// Text on a quarter-turned page is all read: drawn past the displayed
+/// width, it used to be dropped.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_quarter_turned_page_keeps_all_its_text() {
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("turned.pdf");
+    std::fs::write(&path, turned_landscape_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+
+    let text = &pages[0].native_text;
+    assert!(text.contains("CARRIER RATE CONFIRMATION"), "{text:?}");
+    assert!(text.contains("Confirmed June 8, 2026"), "{text:?}");
+}
+
 #[cfg(feature = "native-pdfium")]
 #[test]
 fn form_xobject_nested_image_contributes_rendered_coverage() {
@@ -386,5 +805,255 @@ fn scanned_lease_ocr_text_has_multiple_lines() {
         !lines[0].contains("PROPERTIES"),
         "the parties ran into the title: {:?}",
         page.text
+    );
+}
+
+/// Every block of every page the generated fixtures read is a stretch of
+/// that page's text, found in it in order - on the fast route, where the
+/// text is PDFium's with its `\r\n` line ends, and on every other: a block
+/// can always be cited from the page it came from.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn every_block_of_the_fixtures_is_found_in_its_page_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::limits::ResourceLimits;
+
+    struct CannedOcr;
+    impl OcrBackend for CannedOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            Ok(OcrResult::new("SCANNED PAGE\r\nRead by a stand-in.", 90.0))
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/generated");
+    let Ok(entries) = std::fs::read_dir(&fixtures) else {
+        return;
+    };
+    let mut pdfs = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "pdf"))
+        .collect::<Vec<_>>();
+    pdfs.sort();
+    let _turn = pdfium_turn();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    // Scans rendered small: what OCR makes of them is canned anyway.
+    let limits = ResourceLimits {
+        max_page_pixels: 2_000_000,
+        ..ResourceLimits::default()
+    };
+
+    let mut checked = 0;
+    for path in &pdfs {
+        // The encrypted and malformed fixtures have no pages to check.
+        let Ok(document) = extract_pdf(
+            path,
+            &backend,
+            &CannedOcr,
+            &limits,
+            &CancellationToken::new(),
+        ) else {
+            continue;
+        };
+        for page in &document.pages {
+            let Some(layout) = &page.layout else {
+                continue;
+            };
+            let mut from = 0;
+            for block in &layout.blocks {
+                let at = page.text[from..].find(&block.text).unwrap_or_else(|| {
+                    panic!(
+                        "{} page {}: {:?} is not in the page text after byte {from}",
+                        path.display(),
+                        page.page_number,
+                        block.text
+                    )
+                });
+                from += at + block.text.len();
+            }
+            checked += 1;
+        }
+    }
+    assert!(
+        pdfs.is_empty() || checked > 0,
+        "no fixture page was checked"
+    );
+}
+
+/// A page of more objects than the survey visits, every one a rule.
+#[cfg(feature = "native-pdfium")]
+fn many_objects_pdf() -> Vec<u8> {
+    let mut contents = String::from(
+        "BT /F1 12 Tf 54 740 Td (A page drawn with far more objects than any document needs.) Tj ET\n",
+    );
+    for index in 0..(intern_worker::layout::router::bounds::MAX_SURVEY_OBJECTS + 500) {
+        let y = 100 + (index % 600);
+        contents.push_str(&format!("54 {y} m 300 {y} l S\n"));
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A page whose first objects are invisible text - somebody's OCR layer -
+/// and whose visible text is drawn only after more objects than the survey
+/// visits.
+#[cfg(feature = "native-pdfium")]
+fn hidden_layer_then_many_objects_pdf() -> Vec<u8> {
+    let mut contents = String::new();
+    for line in 0..10 {
+        let y = 700 - line * 14;
+        contents.push_str(&format!(
+            "BT 3 Tr /F1 12 Tf 54 {y} Td (Hidden layer line {line}.) Tj ET\n"
+        ));
+    }
+    for index in 0..(intern_worker::layout::router::bounds::MAX_SURVEY_OBJECTS + 500) {
+        let y = 100 + (index % 400);
+        contents.push_str(&format!("54 {y} m 300 {y} l S\n"));
+    }
+    contents.push_str("BT 0 Tr /F1 12 Tf 54 60 Td (The visible text of the page.) Tj ET\n");
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A page whose only text is drawn in forms nested `depth` deep.
+#[cfg(feature = "native-pdfium")]
+fn nested_forms_pdf(depth: usize) -> Vec<u8> {
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm 6 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", b"/Fm Do"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    // Forms 6 .. 6 + depth - 1, each drawing the next; the last draws text.
+    for level in 0..depth {
+        let number = 6 + level;
+        if level + 1 < depth {
+            objects.push(stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << /Fm {} 0 R >> >>",
+                    number + 1
+                ),
+                b"/Fm Do",
+            ));
+        } else {
+            objects.push(stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 12 Tf 54 740 Td (Text drawn in the innermost form.) Tj ET",
+            ));
+        }
+    }
+    pdf(&objects)
+}
+
+/// A page with more objects than the survey visits, or forms nested past
+/// its depth, is not measured: it keeps its text and is read on the fast
+/// route, and the walk over it stops at the bound.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_past_the_survey_bounds_is_read_as_its_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::PageRoute;
+    use intern_worker::layout::router::bounds::MAX_FORM_DEPTH;
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+    for (name, bytes, text) in [
+        ("many.pdf", many_objects_pdf(), "far more objects"),
+        (
+            "deep.pdf",
+            nested_forms_pdf(MAX_FORM_DEPTH + 4),
+            "innermost form",
+        ),
+    ] {
+        let path = directory.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let pages = backend.inspect(&path, &cancel).unwrap();
+        assert!(
+            pages[0].native.is_none(),
+            "{name}: the page is not measured"
+        );
+        let document =
+            extract_pdf(&path, &backend, &NoOcr, &ResourceLimits::default(), &cancel).unwrap();
+        let page = &document.pages[0];
+        assert!(page.text.contains(text), "{name}: {:?}", page.text);
+        assert_eq!(
+            page.layout.as_ref().unwrap().route,
+            PageRoute::Fast,
+            "{name}"
+        );
+    }
+
+    // What the walk counted before it stopped is part of the page, not a
+    // share of it: an invisible layer among the first objects says nothing
+    // about the page, which is routed on its text.
+    let path = directory.path().join("hidden.pdf");
+    std::fs::write(&path, hidden_layer_then_many_objects_pdf()).unwrap();
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(pages[0].native.is_none());
+    let signals = pages[0].signals.unwrap();
+    assert_eq!((signals.invisible, signals.segments), (0, 0), "{signals:?}");
+
+    // Forms nested within the bound are followed as before.
+    let path = directory.path().join("shallow.pdf");
+    std::fs::write(&path, nested_forms_pdf(3)).unwrap();
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(
+        pages[0]
+            .native
+            .as_ref()
+            .is_some_and(|native| !native.segments.is_empty())
     );
 }

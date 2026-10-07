@@ -9,11 +9,20 @@ license.workspace = true
 name = "intern-worker"
 path = "src/main.rs"
 
+# Calibrates the PDF page router; it reads PDFs, so it needs PDFium.
+[[example]]
+name = "route_calibration"
+required-features = ["native-pdfium"]
+
 [features]
 default = []
 native-pdfium = ["dep:pdfium-render"]
 native-tesseract = []
-windows-native = ["native-pdfium", "native-tesseract"]
+# PP-OCR through ONNX Runtime, loaded at run time from the runtime directory.
+# Nothing is linked or downloaded at build time, so a build without the
+# runtime beside it falls back to Tesseract exactly as before.
+onnx-ocr = ["dep:ort"]
+windows-native = ["native-pdfium", "native-tesseract", "onnx-ocr"]
 
 [dependencies]
 anydoc = "=0.1.8"
@@ -32,8 +41,12 @@ serde_json = "=1.0.145"
 thiserror = "=2.0.17"
 zip = { version = "=4.6.1", default-features = false, features = ["deflate"] }
 msg_parser = "=0.3.6"
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "load-dynamic"] }
 
 [dev-dependencies]
 intern-core = { path = "../intern-core" }
+# The host's side of the protocol, so a test can hold the two to the same
+# layouts: the engine mirrors the worker's types rather than sharing them.
+intern-engine = { path = "../intern-engine" }
 intern-intake = { path = "../intern-intake" }
 tempfile = "=3.23.0"

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, ProgressSink,
 };
+use crate::layout::PageLayout;
 use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 use crate::timing::{ExtractionTimings, micros_since};
 
@@ -243,6 +244,13 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
 /// reader, including ones added later, and the document still arrives -
 /// marked truncated - rather than failing. Pages past the document cap stay,
 /// empty, so page numbers still mean what they meant.
+///
+/// A page's layout repeats its text - in its blocks, again in their lines,
+/// again in table cells - and adds a box and an id to each, so it has a
+/// budget of its own, in the bytes it is written as: a page whose text was
+/// cut loses its layout, which no longer describes it, and a page whose
+/// layout would take the document's layouts past [`layout_budget`] goes
+/// without one. The host builds those pages' blocks from their text.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
     let mut remaining = MAX_DOCUMENT_CHARS;
@@ -252,6 +260,7 @@ fn bound_page_text(document: &mut ExtractedDocument) {
             Some((end, _)) => {
                 page.text.truncate(end);
                 truncated = true;
+                page.layout = None;
                 allowed
             }
             None => page.text.chars().count(),
@@ -266,6 +275,72 @@ fn bound_page_text(document: &mut ExtractedDocument) {
         {
             document.warnings.push(ExtractionWarning::TextTruncated);
         }
+    }
+    let layouts: Vec<Option<PageLayout>> = document
+        .pages
+        .iter_mut()
+        .map(|page| page.layout.take())
+        .collect();
+    let mut layout_remaining = layout_budget(serialized_len(&*document));
+    for (page, layout) in document.pages.iter_mut().zip(layouts) {
+        let Some(layout) = layout else { continue };
+        let bytes = serialized_len(&layout).saturating_add(LAYOUT_FIELD_BYTES);
+        if bytes <= layout_remaining {
+            layout_remaining -= bytes;
+            page.layout = Some(layout);
+        }
+    }
+}
+
+/// The most bytes every page's layout together may be written as. A dense
+/// hundred-page report's layouts are a few megabytes.
+pub const MAX_LAYOUT_BYTES: usize = 16 * 1024 * 1024;
+
+/// The longest response line the host reads from the worker: the host's
+/// `MAX_RESPONSE_LINE_BYTES`, and the two ship together.
+pub const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+
+/// What a parsed response adds around its document: the request id, which
+/// came in on a request line and is written back no longer than it came,
+/// and the event's own fields.
+const RESPONSE_ENVELOPE_BYTES: usize = MAX_PROTOCOL_LINE_BYTES + 64 * 1024;
+
+/// What one page's layout field adds besides the layout: its key and comma.
+const LAYOUT_FIELD_BYTES: usize = 16;
+
+/// The bytes the layouts of a document may take, given how many bytes the
+/// rest of it is written as.
+///
+/// Capped text is not a fixed share of the line: eight million characters
+/// are eight megabytes of plain text but 48 of control characters, each
+/// written as a six-byte escape, and an image document carries its page
+/// image beside them. So the layouts get [`MAX_LAYOUT_BYTES`] or what the
+/// rest of the document leaves of the host's line, whichever is less, and a
+/// document that leaves none goes without layouts rather than as a reply the
+/// host refuses.
+pub fn layout_budget(document_bytes: usize) -> usize {
+    MAX_LAYOUT_BYTES.min(
+        MAX_RESPONSE_BYTES.saturating_sub(document_bytes.saturating_add(RESPONSE_ENVELOPE_BYTES)),
+    )
+}
+
+/// How many bytes a value is written as, without writing it anywhere.
+fn serialized_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => counter.0,
+        // A value that cannot be written is never sent.
+        Err(_) => usize::MAX,
     }
 }
 

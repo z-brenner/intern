@@ -2,8 +2,8 @@
 /// written row by row into the content stream, so a reader that follows the
 /// stream interleaves them; and an eight-page annual report excerpt with a
 /// cover, running headers and footers, footnotes, tables, and sidebars.
-import { Flow, Page } from '../lib/layout.mjs';
-import { gold } from '../lib/gold.mjs';
+import { Flow, Page, pageText } from '../lib/layout.mjs';
+import { gold, structure } from '../lib/gold.mjs';
 import { amount, decimal, grouped, longDate, money, numericDate, percent } from '../lib/format.mjs';
 import { digitalPdf, result } from './common.mjs';
 
@@ -119,6 +119,18 @@ export function declarationsInterleaved() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['multi_column', 'complex_pdf', 'competing_dates', 'layout_parties'],
+    // Page 1 as it is read: the left column, then the right, then the rest.
+    structureText: (() => {
+      const column = (rows) => rows.map((row) => row.filter(Boolean).join(' ')).filter(Boolean);
+      const rest = pageText(page).split('\n');
+      return [[...rest.slice(0, 3), ...column(left), ...column(right), ...rest.slice(rest.findIndex((line) => line.startsWith('TOTAL ADVANCE PREMIUM')))].join('\n'), text[1]];
+    })(),
+    structure: structure({
+      readingOrder: ['POLICY NUMBER', `${insured} 2214 Kingsfold Avenue Westharrow, MI 49103`, 'Retail bicycle sales, repair, and rental', 'AGENT / PRODUCER', `Producer: ${producer} Agent code 00-4417`, 'DATE ISSUED', 'TOTAL ADVANCE PREMIUM', 'LOCATION SCHEDULE'],
+      tables: [[['COVERAGE PARTS', 'PREMIUM'], ...premiums.map(([part, value]) => [part, `$${amount(value)}`])]],
+      keyValues: [['POLICY NUMBER', policy], ['NAMED INSURED', insured], ['FORM OF BUSINESS', 'Cooperative corporation'], ['DATE ISSUED', numericDate(issued)], ['PRIOR POLICY', 'CPP-4471-197322'], ['TOTAL ADVANCE PREMIUM', money(total)]],
+      routes: { 1: 'layout', 2: 'layout' },
+    }),
     notes: `The declarations page is two columns drawn row by row, so the text layer puts each left line beside the right line at the same height: the policy period's From/To dates share a line with the agency name, its 12:01 A.M. continuation shares one with the producer, and the named insured shares one with the agency's street address. The policy period starts ${numericDate(start)} (the gold, as the policy's effective date) and ends ${numericDate(end)}; the issue date (${numericDate(issued)}) is accepted as the date the declarations were issued. The insured is the party; the insurer is accepted as the issuer; the agency and producer are traps.`,
     gold: gold({
       type: 'Commercial Package Policy Declarations',

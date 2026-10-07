@@ -67,6 +67,13 @@ mod platform {
             Self { stop, handle }
         }
 
+        /// Samples the worker and this process only, for a run with no
+        /// model server: process id 0 is never listed in `/proc`, so no
+        /// server is found.
+        pub fn worker_only() -> Self {
+            Self::start(Some(0))
+        }
+
         pub fn finish(mut self) -> MemoryPeaks {
             self.stop.store(true, Ordering::SeqCst);
             self.handle
@@ -188,6 +195,10 @@ mod platform {
 
     impl MemorySampler {
         pub fn start(_server_pid: Option<u32>) -> Self {
+            Self
+        }
+
+        pub fn worker_only() -> Self {
             Self
         }
 

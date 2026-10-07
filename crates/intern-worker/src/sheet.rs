@@ -23,7 +23,7 @@ use calamine::{Data, DataRef, Range, Reader, Xls, XlsError, XlsOptions, Xlsx};
 
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractedPage, ExtractionError, ExtractionWarning,
-    OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit,
+    OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit, link_sections,
     reject_encrypted_ole,
 };
 use crate::limits::ResourceLimits;
@@ -797,19 +797,19 @@ fn workbook_document(
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut pages = Vec::new();
     let mut elided = false;
+    let mut budget = crate::extract::TextBudget::document();
     for (name, sheet) in sheets {
         let Some(sheet) = sheet else {
             continue;
         };
         let (text, sheet_elided) = render_sheet(name.as_deref(), &sheet);
         elided |= sheet_elided;
-        pages.push(ExtractedPage {
-            page_number: pages.len() + 1,
+        pages.push(ExtractedPage::of_text_within(
+            pages.len() + 1,
             text,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        });
+            PageSource::AnyDoc,
+            &mut budget,
+        ));
     }
     if pages.is_empty() {
         return Err(ExtractionError::unsupported(
@@ -823,7 +823,8 @@ fn workbook_document(
 /// window. That is not truncation: the reader chose to leave them out and
 /// marked where it did, so the document is still whole as far as anything
 /// downstream can tell, and `truncated` stays false.
-pub(crate) fn elided_document(pages: Vec<ExtractedPage>, elided: bool) -> ExtractedDocument {
+pub(crate) fn elided_document(mut pages: Vec<ExtractedPage>, elided: bool) -> ExtractedDocument {
+    link_sections(&mut pages);
     ExtractedDocument {
         pages,
         warnings: if elided {
@@ -965,18 +966,15 @@ fn cell_text(data: &Data) -> String {
 }
 
 /// Keeps a value on one table line: newlines become spaces and pipes are
-/// escaped so a cell cannot break the row it sits in, and a value past
+/// escaped (see [`crate::layout::escape_cell`]) so a cell cannot break
+/// the row it sits in, and a value past
 /// [`MAX_CELL_CHARS`] is cut with an ellipsis.
 pub(crate) fn sanitize_cell(value: &str) -> String {
     let value = match value.char_indices().nth(MAX_CELL_CHARS) {
         Some((end, _)) => format!("{}…", &value[..end]),
         None => value.to_owned(),
     };
-    value
-        .replace(['\r', '\n'], " ")
-        .replace('|', "\\|")
-        .trim()
-        .to_owned()
+    crate::layout::escape_cell(value.replace(['\r', '\n'], " ").trim())
 }
 
 #[cfg(test)]

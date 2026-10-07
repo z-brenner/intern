@@ -97,7 +97,8 @@ function contentStream(page, imageNames) {
 }
 
 /// Serialises pages to PDF bytes. Each page is `{ width, height, rotate,
-/// items }` as built by layout.mjs.
+/// items }` as built by layout.mjs; `storeTurned` writes a landscape page
+/// as a portrait sheet with /Rotate 90 (see below).
 export function buildPdf(pages, { title = null } = {}) {
   const objects = [];
   const reserve = () => {
@@ -142,9 +143,18 @@ export function buildPdf(pages, { title = null } = {}) {
         deflateSync(data, { level: 9 }),
       ));
     }
-    set(contentId, stream('/Filter /FlateDecode', deflateSync(Buffer.from(contentStream(page, imageNames), 'latin1'), { level: 9 })));
+    // A page stored turned: the model is drawn as the page is displayed
+    // (landscape), the sheet is stored portrait with /Rotate 90, and the
+    // content is turned a quarter counter-clockwise into it, so a viewer
+    // that applies /Rotate shows it upright - the way a landscape page
+    // printed from a portrait template is written.
+    const turned = page.storeTurned === true;
+    if (turned && page.rotate !== 90) throw new Error('a stored-turned page carries /Rotate 90');
+    const content = turned ? `q 0 1 -1 0 ${num(page.height)} 0 cm\n${contentStream(page, imageNames)}\nQ` : contentStream(page, imageNames);
+    set(contentId, stream('/Filter /FlateDecode', deflateSync(Buffer.from(content, 'latin1'), { level: 9 })));
     const resources = `<< /Font << ${fontResources} >>${imageRefs.length ? ` /XObject << ${imageRefs.join(' ')} >>` : ''} >>`;
-    set(pageId, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}]${page.rotate ? ` /Rotate ${page.rotate}` : ''} /Resources ${resources} /Contents ${contentId} 0 R >>`);
+    const [boxWidth, boxHeight] = turned ? [page.height, page.width] : [page.width, page.height];
+    set(pageId, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(boxWidth)} ${num(boxHeight)}]${page.rotate ? ` /Rotate ${page.rotate}` : ''} /Resources ${resources} /Contents ${contentId} 0 R >>`);
   }
   set(catalogId, `<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
   set(pagesId, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] /Count ${pageIds.length} >>`);

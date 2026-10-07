@@ -33,6 +33,24 @@
 //!   run look faster (it fails the run instead). A stage whose baseline p95
 //!   is under a millisecond is too small to time and is not gated.
 //!
+//! * **Extract-only** runs (`--extract-only`) are their own mode: their
+//!   baseline (`"mode": "extract"`) also keeps every document's fractional
+//!   scores, and a run is held to it document by document, as replay is.
+//!   Extraction is deterministic for one worker build on one machine (two
+//!   runs over the corpus give the same report), so a score that falls is a
+//!   real change. Every structure score, OCR's date, name and identifier
+//!   accuracy and `digest_recall` count whole items (a snippet, a row, a
+//!   cell, a value, a page, a date), so any fall fails. OCR's error rates
+//!   are held as the edit distances they are made of: a document's
+//!   character edit distance (`ocr_char_distance`, and `ocr_char_distance_ci`
+//!   ignoring case) may rise by up to three characters and its word edit
+//!   distance (`ocr_word_distance`) by one word (see [`value_tolerance`]);
+//!   the rates themselves, and `ocr_mean_confidence`, a diagnostic, are not
+//!   gated. A status that changes fails as in
+//!   replay; latency is gated only with `--latency-gate`, as live is. An
+//!   extract-only run is never held to a live or replay baseline, nor a
+//!   live or replay run to an extract-only one.
+//!
 //! There are no absolute thresholds: a baseline records what the code
 //! achieved, and accepting a new state of the world is writing a new one.
 
@@ -42,9 +60,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    extract::EXTRACTION_SCORES,
     record::{COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, PENDING, is_unscorable},
-    report::Report,
-    score::bad_when_true,
+    report::{EXTRACT, Report},
+    score::{OCR_EDIT_COUNTS, bad_when_true, lower_is_better},
     stats::{Distribution, round},
     timing::{self, Unit, unit},
 };
@@ -78,6 +97,92 @@ pub struct BaselineDocument {
     /// a baseline written before it was kept.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub timings: BTreeMap<String, f64>,
+    /// An extract-only baseline's gated values (see [`extract_values`]),
+    /// each held to within [`value_tolerance`]. Empty in a live or replay
+    /// baseline.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, f64>,
+}
+
+/// How far an extract-only value may move the wrong way before the
+/// document regresses, or `None` for one that is not gated (one extraction
+/// does not decide it, an OCR error rate, or OCR's mean confidence).
+///
+/// Extraction is deterministic for one worker build on one machine, so the
+/// tolerance is not for noise. A score that counts whole items - a snippet,
+/// a row, a cell, a labelled value, a page's route, a date, a name, an
+/// identifier, a piece of evidence in the digest - moves by a whole item or
+/// not at all, and any fall is a real loss: no tolerance.
+///
+/// OCR's errors are held as counts, not rates. A rate's tolerance is a
+/// share of the page, so it would let a long scan lose many times the
+/// characters a short one may: 0.005 of a 6,000-character page is thirty
+/// characters, a lost line. A document's character edit distance (and its
+/// case-insensitive one) may instead rise by three characters, and its word
+/// edit distance by one word, whatever its length: room for a page read
+/// again by another Tesseract build to misread a character or two - one
+/// word - never for a line lost. The targeted date, name and identifier
+/// accuracies still catch any critical field misread. The rates are
+/// reported, and compared run to run, but their counts are what is gated.
+/// Mean OCR confidence is the engine's opinion of itself, not a measure of
+/// what was read, and is reported but never gated.
+pub fn value_tolerance(key: &str) -> Option<f64> {
+    match key {
+        "ocr_char_distance" | "ocr_char_distance_ci" => Some(3.0),
+        "ocr_word_distance" => Some(1.0),
+        "ocr_mean_confidence" | "ocr_cer" | "ocr_cer_ci" | "ocr_wer" => None,
+        key if EXTRACTION_SCORES.contains(&key) => Some(0.0),
+        _ => None,
+    }
+}
+
+/// Every value the extract-only gate holds for a document: each fractional
+/// score [`value_tolerance`] gates, and - for a scan - OCR's edit distances
+/// as counts (`ocr_char_distance`, `ocr_char_distance_ci`,
+/// `ocr_word_distance`).
+pub fn extract_values(record: &DocumentRecord) -> BTreeMap<String, f64> {
+    let mut values = record
+        .scores
+        .iter()
+        .filter(|(key, _)| value_tolerance(key).is_some())
+        .filter_map(|(key, value)| {
+            value
+                .is_f64()
+                .then(|| value.as_f64())
+                .flatten()
+                .map(|value| (key.clone(), value))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(ocr) = &record.ocr {
+        for (key, count) in
+            OCR_EDIT_COUNTS
+                .iter()
+                .zip([ocr.char_distance, ocr.char_distance_ci, ocr.word_distance])
+        {
+            values.insert((*key).to_owned(), count as f64);
+        }
+    }
+    values
+}
+
+/// Whether a gated value moved past its tolerance: `Some(true)` for
+/// better, `Some(false)` for worse, `None` within it or for a value that is
+/// not gated.
+pub fn value_moved(key: &str, was: f64, now: f64) -> Option<bool> {
+    let tolerance = value_tolerance(key)?;
+    // Positive is better.
+    let gain = if lower_is_better(key) {
+        was - now
+    } else {
+        now - was
+    };
+    if gain < -tolerance - 1e-9 {
+        Some(false)
+    } else if gain > tolerance + 1e-9 {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -91,6 +196,7 @@ impl Baseline {
     /// left out: once recorded it arrives as new, not as a regression from
     /// "pending".
     pub fn from_report(report: &Report) -> Self {
+        let extract = report.mode == EXTRACT;
         let documents = report
             .records
             .iter()
@@ -102,6 +208,11 @@ impl Baseline {
                         status: record.status.clone(),
                         scores: bool_scores(record),
                         timings: stage_times(record),
+                        values: if extract {
+                            extract_values(record)
+                        } else {
+                            BTreeMap::new()
+                        },
                     },
                 )
             })
@@ -113,13 +224,14 @@ impl Baseline {
             .filter(|(key, _)| key.as_str() != "ready")
             .map(|(key, rate)| (key.clone(), rate.rate))
             .collect::<BTreeMap<_, _>>();
-        for (name, key) in COUNTS {
+        // Extraction springs no traps: there is no name to count them in.
+        for (name, key) in COUNTS.iter().filter(|_| !extract) {
             let count = report
                 .records
                 .iter()
                 .filter(|record| record.bool_score(key) == Some(true))
                 .count();
-            aggregate.insert(name.to_owned(), count as f64);
+            aggregate.insert((*name).to_owned(), count as f64);
         }
         let latency = report
             .latency
@@ -258,6 +370,9 @@ pub fn compare(
     latency_gate: Option<f64>,
 ) -> BaselineComparison {
     let live = report.mode == "live";
+    let extract = report.mode == EXTRACT;
+    // The modes whose timings were measured by the run itself.
+    let measured = live || extract;
     let mut comparison = BaselineComparison {
         baseline_mode: baseline.mode.clone(),
         ..BaselineComparison::default()
@@ -265,8 +380,20 @@ pub fn compare(
     comparison
         .gates
         .push(if live { "aggregate" } else { "documents" }.to_owned());
-    if live && latency_gate.is_some() {
+    if measured && latency_gate.is_some() {
         comparison.gates.push("latency".to_owned());
+    }
+    // An extract-only run scores none of what a live or replay baseline
+    // holds, and the other way round: every score would read as lost.
+    if extract != (baseline.mode == EXTRACT) {
+        comparison.failures.push(format!(
+            "the baseline was written by a{} {} run and this is a{} {} run: an extract-only run is held only to an extract-only baseline (write one with --extract-only --write-baseline), and a live or replay run never to one",
+            if baseline.mode == EXTRACT { "n" } else { "" },
+            baseline.mode,
+            if extract { "n" } else { "" },
+            report.mode
+        ));
+        return comparison;
     }
 
     let mut shared = Vec::new();
@@ -324,6 +451,27 @@ pub fn compare(
                 comparison.document_improvements.push(line);
             }
         }
+        let current = extract_values(record);
+        for (key, was) in &expected.values {
+            let Some(tolerance) = value_tolerance(key) else {
+                continue;
+            };
+            let Some(now) = current.get(key).copied() else {
+                comparison
+                    .document_regressions
+                    .push(format!("{}: {key} was {was}, now absent", record.id));
+                continue;
+            };
+            let line = format!("{}: {key} was {was}, now {now}", record.id);
+            match value_moved(key, *was, now) {
+                Some(false) if tolerance > 0.0 => comparison
+                    .document_regressions
+                    .push(format!("{line} (tolerance {tolerance})")),
+                Some(false) => comparison.document_regressions.push(line),
+                Some(true) => comparison.document_improvements.push(line),
+                None => {}
+            }
+        }
     }
     let run = report
         .records
@@ -340,7 +488,7 @@ pub fn compare(
 
     comparison.aggregate = aggregate_checks(&shared);
     let mut latency_refused = None;
-    if live && let Some(ratio) = latency_gate {
+    if measured && let Some(ratio) = latency_gate {
         match latency_checks(report, baseline, ratio) {
             Ok(checks) => comparison.latency = checks,
             Err(reason) => latency_refused = Some(format!("latency: {reason}")),
@@ -365,25 +513,18 @@ pub fn compare(
                     )
                 }),
         );
-        comparison.failures.extend(
-            comparison
-                .latency
-                .iter()
-                .filter(|check| check.regressed)
-                .map(|check| {
-                    format!(
-                        "{} p95: {} ms against a baseline of {} ms (limit {} ms, {} documents)",
-                        check.metric,
-                        check.current_p95,
-                        check.baseline_p95,
-                        check.limit,
-                        check.documents
-                    )
-                }),
-        );
+        comparison
+            .failures
+            .extend(latency_failures(&comparison.latency));
         comparison.failures.extend(latency_refused);
     } else {
         comparison.failures = comparison.document_regressions.clone();
+        if extract {
+            comparison
+                .failures
+                .extend(latency_failures(&comparison.latency));
+            comparison.failures.extend(latency_refused);
+        }
     }
     // A full run that no longer scores a document the baseline holds has
     // dropped its coverage - a gold entry deleted by accident reads exactly
@@ -404,6 +545,20 @@ pub fn compare(
         }));
     comparison.passed = comparison.failures.is_empty();
     comparison
+}
+
+/// One line per stage whose p95 went over its limit.
+fn latency_failures(checks: &[LatencyCheck]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|check| check.regressed)
+        .map(|check| {
+            format!(
+                "{} p95: {} ms against a baseline of {} ms (limit {} ms, {} documents)",
+                check.metric, check.current_p95, check.baseline_p95, check.limit, check.documents
+            )
+        })
+        .collect()
 }
 
 fn is_good(key: &str, value: bool) -> bool {
@@ -630,7 +785,8 @@ fn latency_check(
 mod tests {
     use super::*;
     use crate::{
-        report::{RunInfo, build},
+        ocr::OcrMeasure,
+        report::{EXTRACT, RunInfo, build},
         timing,
     };
     use serde_json::json;
@@ -1149,6 +1305,200 @@ mod tests {
             .timings
             .insert("total_ms".into(), json!(16_000.0));
         assert!(!compare(&subset, &baseline, Some(1.5)).passed);
+    }
+
+    fn extracted(id: &str, scores: Value, worker_ms: f64) -> DocumentRecord {
+        let mut record = record(id, COMPLETED, scores, 0.0);
+        record.timings.insert("total_ms".into(), Value::Null);
+        record
+            .timings
+            .insert("worker_total_ms".into(), json!(worker_ms));
+        record
+    }
+
+    /// A scan's record with OCR's counts: `chars` and `words` edit distance
+    /// over 600 characters and 100 words drawn.
+    fn scanned(scores: Value, chars: usize, words: usize, worker_ms: f64) -> DocumentRecord {
+        let mut record = extracted("scan", scores, worker_ms);
+        record.ocr = Some(OcrMeasure {
+            pages_compared: 1,
+            char_distance: chars,
+            char_distance_ci: chars,
+            truth_chars: 600,
+            word_distance: words,
+            truth_words: 100,
+            ..OcrMeasure::default()
+        });
+        record
+    }
+
+    fn extract_baseline() -> Baseline {
+        Baseline::from_report(&report(
+            EXTRACT,
+            vec![
+                scanned(
+                    json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 91.0}),
+                    24,
+                    10,
+                    900.0,
+                ),
+                extracted(
+                    "lease",
+                    json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
+                    5.0,
+                ),
+            ],
+        ))
+    }
+
+    #[test]
+    fn an_extract_baseline_keeps_every_gated_fraction_and_no_trap_counts() {
+        let baseline = extract_baseline();
+        assert_eq!(baseline.mode, EXTRACT);
+        let scan = &baseline.documents["scan"];
+        assert_eq!(scan.values["ocr_char_distance"], 24.0);
+        assert_eq!(scan.values["ocr_char_distance_ci"], 24.0);
+        assert_eq!(scan.values["ocr_word_distance"], 10.0);
+        assert_eq!(scan.values["ocr_date_accuracy"], 1.0);
+        assert!(
+            !scan.values.contains_key("ocr_cer") && !scan.values.contains_key("ocr_wer"),
+            "a rate is held by its counts"
+        );
+        assert!(
+            !scan.values.contains_key("ocr_mean_confidence"),
+            "a diagnostic is not held"
+        );
+        assert!(scan.scores.is_empty());
+        assert_eq!(scan.timings["worker_total_ms"], 900.0);
+        assert!(baseline.aggregate.is_empty(), "{:?}", baseline.aggregate);
+        let reparsed = Baseline::parse(baseline.to_json().as_bytes()).unwrap();
+        assert_eq!(
+            reparsed.documents["lease"].values["table_row_accuracy"],
+            0.5
+        );
+
+        // A replay baseline is written exactly as before: no values.
+        let replay = before();
+        assert!(
+            replay
+                .documents
+                .values()
+                .all(|document| document.values.is_empty())
+        );
+        assert!(!replay.to_json().contains("\"values\""));
+    }
+
+    #[test]
+    fn extract_runs_are_held_per_document_with_tolerance_only_on_ocr_edit_counts() {
+        let baseline = extract_baseline();
+        let run = |scan: DocumentRecord, lease: Value| {
+            report(EXTRACT, vec![scan, extracted("lease", lease, 5.0)])
+        };
+        let lease = || json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0});
+        // The same scores, OCR three characters and a word worse and less
+        // sure of itself: within tolerance.
+        let jitter = run(
+            scanned(
+                json!({"ocr_cer": 0.045, "ocr_wer": 0.11, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 60.0}),
+                27,
+                11,
+                900.0,
+            ),
+            lease(),
+        );
+        let comparison = compare(&jitter, &baseline, None);
+        assert_eq!(comparison.gates, vec!["documents"]);
+        assert!(comparison.passed, "{:?}", comparison.failures);
+
+        // One row lost, one snippet gained, OCR four characters and two
+        // words worse, a date misread.
+        let moved = run(
+            scanned(
+                json!({"ocr_cer": 0.0467, "ocr_wer": 0.12, "ocr_date_accuracy": 0.5}),
+                28,
+                12,
+                900.0,
+            ),
+            json!({"reading_order_accuracy": 1.0, "table_row_accuracy": 0.25, "route_correct": 1.0}),
+        );
+        let comparison = compare(&moved, &baseline, None);
+        assert!(!comparison.passed);
+        assert_eq!(
+            comparison.failures,
+            vec![
+                "scan: ocr_char_distance was 24, now 28 (tolerance 3)",
+                "scan: ocr_char_distance_ci was 24, now 28 (tolerance 3)",
+                "scan: ocr_date_accuracy was 1, now 0.5",
+                "scan: ocr_word_distance was 10, now 12 (tolerance 1)",
+                "lease: table_row_accuracy was 0.5, now 0.25",
+            ]
+        );
+        assert_eq!(
+            comparison.document_improvements,
+            vec!["lease: reading_order_accuracy was 0.75, now 1"]
+        );
+
+        // The tolerance does not grow with the page: twenty characters
+        // more on a 6,000-character scan is a rate up only 0.0033, but
+        // twenty characters lost.
+        let long = |chars: usize| {
+            let mut record = extracted("ledger", json!({}), 900.0);
+            record.ocr = Some(OcrMeasure {
+                char_distance: chars,
+                char_distance_ci: chars,
+                truth_chars: 6_000,
+                word_distance: 40,
+                truth_words: 1_000,
+                ..OcrMeasure::default()
+            });
+            report(EXTRACT, vec![record])
+        };
+        let comparison = compare(&long(320), &Baseline::from_report(&long(300)), None);
+        assert_eq!(
+            comparison.failures,
+            vec![
+                "ledger: ocr_char_distance was 300, now 320 (tolerance 3)",
+                "ledger: ocr_char_distance_ci was 300, now 320 (tolerance 3)",
+            ]
+        );
+
+        // Latency only when asked, over the worker's stages.
+        let slow = run(
+            scanned(
+                json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0}),
+                24,
+                10,
+                2_000.0,
+            ),
+            lease(),
+        );
+        assert!(compare(&slow, &baseline, None).passed);
+        let gated = compare(&slow, &baseline, Some(1.5));
+        assert_eq!(gated.gates, vec!["documents", "latency"]);
+        assert_eq!(
+            gated.failures,
+            vec![
+                "worker_total_ms p95: 2000 ms against a baseline of 900 ms (limit 1350 ms, 2 documents)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_extract_run_and_a_replay_baseline_are_never_held_to_each_other() {
+        let extract = report(EXTRACT, vec![extracted("doc-0", json!({}), 1.0)]);
+        let comparison = compare(&extract, &before(), None);
+        assert!(!comparison.passed);
+        assert_eq!(comparison.failures.len(), 1);
+        assert!(
+            comparison.failures[0]
+                .starts_with("the baseline was written by a replay run and this is an extract run"),
+            "{:?}",
+            comparison.failures
+        );
+        let replay = report("replay", after(&[], 1_000.0));
+        let comparison = compare(&replay, &extract_baseline(), None);
+        assert!(!comparison.passed);
+        assert!(comparison.failures[0].contains("an extract run and this is a replay run"));
     }
 
     /// A stage the baseline measured and this run did not - a worker that

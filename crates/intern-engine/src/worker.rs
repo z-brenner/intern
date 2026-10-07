@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::domain::{DocumentSource, PageImage, PageOrigin, ParserWarning, SourcePage};
+use crate::structure::PageLayout;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const EXTRACTION_TIMEOUT_SECONDS: u64 = 30 * 60;
@@ -33,6 +34,9 @@ const LOW_OCR_CONFIDENCE: f32 = 75.0;
 ///
 /// The worker caps a document at eight million characters, so an honest
 /// reply - JSON escaping and a page image included - stays well inside this.
+/// The worker gives page layouts only what the rest of its reply leaves of
+/// this line, through its own copy of it (`protocol::MAX_RESPONSE_BYTES`),
+/// so the two change together.
 /// A longer line is a worker gone wrong, and reading it whole would put an
 /// unbounded allocation in the app's own process rather than the worker's.
 const MAX_RESPONSE_LINE_BYTES: usize = 64 * 1024 * 1024;
@@ -222,6 +226,9 @@ struct WorkerPage {
     source: WorkerPageSource,
     ocr_confidence: Option<f32>,
     vision_escalated: bool,
+    /// Absent from a worker that predates layouts.
+    #[serde(default)]
+    layout: Option<PageLayout>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -290,11 +297,11 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
             ParserWarning::new(code, field_affecting)
         })
         .collect::<Vec<_>>();
+    // A page of OCR, or of native text with OCR'd regions merged in, says
+    // how sure the OCR was; a native page says nothing.
     let low_confidence = document.pages.iter().any(|page| {
-        page.source == WorkerPageSource::Ocr
-            && page
-                .ocr_confidence
-                .is_some_and(|confidence| confidence < LOW_OCR_CONFIDENCE)
+        page.ocr_confidence
+            .is_some_and(|confidence| confidence < LOW_OCR_CONFIDENCE)
     });
     if low_confidence
         && !parser_warnings
@@ -339,6 +346,7 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
                 ocr_confidence: page
                     .ocr_confidence
                     .map(|confidence| confidence.round().clamp(0.0, 100.0) as u32),
+                layout: page.layout,
             })
             .collect(),
         parser_warnings,
@@ -851,6 +859,35 @@ mod tests {
         assert_eq!(source.pages[1].page_number, 2);
         assert_eq!(source.pages[0].origin, PageOrigin::Native);
         assert!(source.parser_warnings.is_empty());
+    }
+
+    /// A page's layout comes through beside its text; a page without one,
+    /// from a worker that predates layouts, comes through as it always did.
+    #[test]
+    fn a_page_layout_survives_the_protocol() {
+        let source = parsed(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"parsed","document":{
+                "pages":[
+                  {"page_number":1,"text":"INVOICE\n\nInvoice date: May 1, 2026","source":"native","ocr_confidence":null,"vision_escalated":false,
+                   "layout":{"width":6120,"height":7920,"route":"fast","signals":{"chars":30},"blocks":[
+                     {"id":"p1.b1","kind":"heading","text":"INVOICE","bbox":null,"source":"native","lines":[{"text":"INVOICE"}]},
+                     {"id":"p1.b2","kind":"key_value","text":"Invoice date: May 1, 2026","bbox":null,"section":"p1.b1","source":"native",
+                      "lines":[{"text":"Invoice date: May 1, 2026"}],
+                      "fields":[{"id":"p1.b2.f1","key":"Invoice date","value":"May 1, 2026"}]}]}},
+                  {"page_number":2,"text":"Second page.","source":"native","ocr_confidence":null,"vision_escalated":false}
+                ],"warnings":[],"truncated":false,"optional_image":null}}}"#,
+        )
+        .unwrap();
+
+        let layout = source.pages[0].layout.as_ref().unwrap();
+        assert_eq!(layout.blocks[1].fields[0].value, "May 1, 2026");
+        assert_eq!(source.pages[1].layout, None);
+        let document = crate::structure::structured(&source);
+        assert_eq!(
+            document.block("p1.b2").unwrap().section.as_deref(),
+            Some("p1.b1")
+        );
+        assert_eq!(document.block("p2.b1").unwrap().text, "Second page.");
     }
 
     #[test]

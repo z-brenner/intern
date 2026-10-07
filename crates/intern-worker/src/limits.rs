@@ -21,6 +21,21 @@ pub const MAX_PAGE_CHARS: usize = 2_000_000;
 /// on one line, read whole into the app's own memory. Four full pages is
 /// still a hundred times what distillation reads.
 pub const MAX_DOCUMENT_CHARS: usize = 8_000_000;
+/// Lines and table cells one page's layout may hold when it is built from
+/// the page's text.
+///
+/// A layout holds an object for every line and every cell, and the
+/// character caps alone do not bound how many there are: a page of `A` and
+/// blank lines, or of nothing but pipes, is hundreds of thousands of them
+/// inside two million characters. The densest page InternBench and the
+/// fixtures hold has under 700. A page past this goes without a layout, and
+/// the host segments it from its text.
+pub const MAX_PAGE_LAYOUT_PARTS: usize = 50_000;
+/// Lines, table cells and labelled values every layout a document keeps may
+/// hold together, whatever route each page took, counted in page order. The
+/// densest document InternBench and the fixtures hold has about ten
+/// thousand.
+pub const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
 pub const MAX_PAGE_MEGAPIXELS: u64 = 25;
 pub const MAX_PAGE_PIXELS: u64 = MAX_PAGE_MEGAPIXELS * 1_000_000;
 /// The largest image file that is decoded at all.
@@ -56,7 +71,14 @@ pub const RENDER_DPI: f64 = 300.0;
 /// degenerate file, not a scan.
 pub const MIN_OCR_DPI: f64 = 50.0;
 pub const MAX_EXTRACTION_DURATION: Duration = Duration::from_secs(30 * 60);
-pub const MAX_RESIDENT_RENDERED_PAGES: usize = 1;
+/// Rendered pages that may wait for an OCR worker.
+///
+/// This is what the pages a PDF is rendered into for OCR are held to: the
+/// pages waiting, one per OCR worker being read, and the one being
+/// rendered. With Tesseract on an eight-core machine - four workers - that
+/// is at most six pages, about 450 MB at the 25-megapixel cap; with one
+/// worker, three. Renders never run further ahead of OCR than this.
+pub const MAX_QUEUED_RENDERED_PAGES: usize = 1;
 pub const MAX_VISION_LONG_EDGE: u32 = 1_344;
 pub const VISION_GRID: u32 = 28;
 
@@ -69,7 +91,8 @@ pub struct ResourceLimits {
     pub max_page_pixels: u64,
     pub max_image_file_pixels: u64,
     pub max_duration: Duration,
-    pub max_resident_rendered_pages: usize,
+    /// See [`MAX_QUEUED_RENDERED_PAGES`].
+    pub max_queued_rendered_pages: usize,
 }
 
 impl Default for ResourceLimits {
@@ -82,7 +105,7 @@ impl Default for ResourceLimits {
             max_page_pixels: MAX_PAGE_PIXELS,
             max_image_file_pixels: MAX_IMAGE_FILE_PIXELS,
             max_duration: MAX_EXTRACTION_DURATION,
-            max_resident_rendered_pages: MAX_RESIDENT_RENDERED_PAGES,
+            max_queued_rendered_pages: MAX_QUEUED_RENDERED_PAGES,
         }
     }
 }

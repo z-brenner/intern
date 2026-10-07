@@ -35,6 +35,19 @@ impl GoldFile {
             if !seen.insert(document.id.as_str()) {
                 return Err(format!("gold lists document {} twice", document.id));
             }
+            for (page, route) in document
+                .structure
+                .iter()
+                .flat_map(|structure| &structure.expected_routes)
+            {
+                if !ROUTES.contains(&route.as_str()) {
+                    return Err(format!(
+                        "{}: page {page} expects the route {route}, which is not one of {}",
+                        document.id,
+                        ROUTES.join(", ")
+                    ));
+                }
+            }
         }
         Ok(gold)
     }
@@ -78,6 +91,11 @@ pub struct GoldDocument {
     /// `"pending"` for a document added before anyone could record it.
     #[serde(default)]
     pub recording: Option<String>,
+    /// What the page's layout says, where it plainly says something: the
+    /// reading order, the tables, the labelled values, and the route each
+    /// page should take. Scored over the text the engine receives.
+    #[serde(default)]
+    pub structure: Option<StructureTruth>,
 }
 
 impl GoldDocument {
@@ -246,6 +264,50 @@ pub struct OcrTruthPage {
     pub text: String,
 }
 
+/// A document's layout as a careful reader sees it. Every string is printed
+/// on the page exactly as given (whitespace aside), and each part is
+/// optional: a document gives only what is unambiguous about it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct StructureTruth {
+    /// Distinctive phrases in the order a person reads them, each printed
+    /// once. Most span a line break - the last words of one line and the
+    /// first of the next - so a reading that puts anything between those
+    /// two lines does not hold them; the break itself, like any whitespace,
+    /// is compared as one space.
+    #[serde(default)]
+    pub reading_order: Vec<String>,
+    /// Each table's rows. In a check-box group the first column is the
+    /// mark, `X` or blank: a blank leading cell is a box left empty.
+    #[serde(default)]
+    pub tables: Vec<TableTruth>,
+    #[serde(default)]
+    pub key_values: Vec<KeyValueTruth>,
+    /// The route a page should take, by page number, for the pages where
+    /// that is not a judgement call: `fast`, `layout`, `ocr` or
+    /// `ocr_regions`.
+    #[serde(default)]
+    pub expected_routes: BTreeMap<usize, String>,
+}
+
+/// A table's rows, the header first, each a list of cells; an empty cell is
+/// one the page leaves blank, and is scored as such (see
+/// [`crate::structure`]).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct TableTruth {
+    pub rows: Vec<Vec<String>>,
+}
+
+/// A labelled value: the label as printed, without its colon, and the
+/// value.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct KeyValueTruth {
+    pub key: String,
+    pub value: String,
+}
+
+/// The routes a page can take, as the worker names them.
+pub const ROUTES: [&str; 4] = ["fast", "layout", "ocr", "ocr_regions"];
+
 /// The page-count bucket a document is grouped and timed under.
 pub fn page_bucket(pages: u32) -> &'static str {
     match pages {
@@ -317,6 +379,34 @@ mod tests {
         assert!(GoldFile::parse(duplicate).unwrap_err().contains("twice"));
         let future = br#"{"schema_version": 2, "documents": []}"#;
         assert!(GoldFile::parse(future).is_err());
+    }
+
+    #[test]
+    fn a_structure_block_parses_with_routes_keyed_by_page() {
+        let gold = GoldFile::parse(
+            br#"{"schema_version": 1, "documents": [{"id": "a", "file": "a.pdf", "recording": "pending",
+                "structure": {
+                  "reading_order": ["Our new warehouse", "Board elections"],
+                  "tables": [{"rows": [["Item", "Qty"], ["Gloves", "4"]]}],
+                  "key_values": [{"key": "Invoice Date", "value": "03/04/2026"}],
+                  "expected_routes": {"1": "layout", "3": "ocr_regions"}
+                }}]}"#,
+        )
+        .unwrap();
+        let document = &gold.documents[0];
+        assert!(document.is_pending());
+        let structure = document.structure.as_ref().unwrap();
+        assert_eq!(structure.tables[0].rows[1], vec!["Gloves", "4"]);
+        assert_eq!(structure.key_values[0].value, "03/04/2026");
+        assert_eq!(structure.expected_routes[&3], "ocr_regions");
+
+        let unknown = br#"{"schema_version": 1, "documents": [{"id": "a", "file": "a.pdf",
+            "structure": {"expected_routes": {"1": "vision"}}}]}"#;
+        assert!(
+            GoldFile::parse(unknown)
+                .unwrap_err()
+                .contains("expects the route vision")
+        );
     }
 
     #[test]

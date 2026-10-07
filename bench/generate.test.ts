@@ -14,6 +14,7 @@ import { Rng } from './lib/rng.mjs';
 import { textWidth, unsupportedCharacters } from './lib/fonts.mjs';
 import { wrap } from './lib/layout.mjs';
 import { addDays, fromDays, isRealDate, toDays } from './lib/format.mjs';
+import { result } from './docs/common.mjs';
 
 const BENCH = dirname(fileURLToPath(import.meta.url));
 
@@ -25,7 +26,11 @@ const REQUIRED_CATEGORIES = [
   'mixed_scan', 'rotated_scan', 'low_resolution_scan', 'noisy_scan', 'ocr_corrupted', 'pages_5', 'pages_10', 'pages_25',
   'pages_50', 'pages_100', 'middle_fact', 'competing_dates', 'referenced_agreement', 'irrelevant_names', 'date_in_table',
   'layout_parties', 'unusual', 'information_dense', 'email', 'docx', 'pptx', 'xlsx', 'csv', 'tiff', 'png',
+  // Added with the structure measurements.
+  'key_value', 'stream_order', 'rotated_page', 'image_region', 'ocr_critical_fields',
 ];
+
+const ROUTES = ['fast', 'layout', 'ocr', 'ocr_regions'];
 
 const DOCUMENT_KEYS = ['id', 'file', 'title', 'kind', 'format', 'text_layer', 'pages', 'categories', 'notes', 'gold', 'ocr_truth'];
 const GOLD_KEYS = [
@@ -54,6 +59,12 @@ type Gold = {
   evidence: Evidence;
 };
 type OcrTruth = { pages: { page: number; text: string }[]; dates: string[]; names: string[]; identifiers: string[] };
+type Structure = {
+  reading_order?: string[];
+  tables?: { rows: string[][] }[];
+  key_values?: { key: string; value: string }[];
+  expected_routes?: Record<string, string>;
+};
 type BenchDocument = {
   id: string;
   file: string;
@@ -65,6 +76,8 @@ type BenchDocument = {
   gold: Gold;
   ocr_truth: OcrTruth | null;
   clean_text?: string;
+  structure?: Structure;
+  recording?: string;
 };
 type Manifest = { files: { file: string; size: number; sha256: string }[] };
 type Generated = { gold: { documents: BenchDocument[] }; manifest: Manifest; texts: Record<string, string[]> };
@@ -261,7 +274,8 @@ describe('InternBench corpus generator', () => {
       const where = document.id;
       const keys = Object.keys(document);
       expect(keys.slice(0, DOCUMENT_KEYS.length), where).toEqual(DOCUMENT_KEYS);
-      expect(keys.slice(DOCUMENT_KEYS.length).every((key) => key === 'clean_text'), where).toBe(true);
+      const optional = keys.slice(DOCUMENT_KEYS.length);
+      expect(optional, where).toEqual(['clean_text', 'structure', 'recording'].filter((key) => optional.includes(key)));
       expect(Object.keys(document.gold), where).toEqual(GOLD_KEYS);
       expect(document.file, where).toBe(`${document.id}.${document.format}`);
       expect(document.notes.length, where).toBeGreaterThan(40);
@@ -294,12 +308,24 @@ describe('InternBench corpus generator', () => {
   it('only cites evidence the document actually carries', () => {
     for (const document of documents) {
       const where = document.id;
-      const text = carried(document, generated.texts);
+      // An OCR-corrupted document is read either way: from its text layer,
+      // or again from the image as the printed text. Each evidence form is
+      // carried by one of the two, and each reading carries a form of every
+      // item, so either reading can be credited.
+      const readings = [carried(document, generated.texts)];
+      if (document.clean_text !== undefined) readings.push(printed(document, generated.texts));
+      const carries = (form: string) => readings.some((text) => text.includes(normalise(form)));
       const { gold } = document;
-      for (const form of gold.evidence.date_text) expect(text.includes(normalise(form)), `${where}: date evidence "${form}"`).toBe(true);
+      for (const form of gold.evidence.date_text) expect(carries(form), `${where}: date evidence "${form}"`).toBe(true);
       for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
-        for (const form of forms) expect(text.includes(normalise(form)), `${where}: party evidence "${form}" for ${party}`).toBe(true);
+        for (const form of forms) expect(carries(form), `${where}: party evidence "${form}" for ${party}`).toBe(true);
       }
+      readings.forEach((text, reading) => {
+        if (gold.evidence.date_text.length > 0) expect(gold.evidence.date_text.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no date evidence`).toBe(true);
+        for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
+          expect(forms.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no evidence for ${party}`).toBe(true);
+        }
+      });
       if (document.ocr_truth) {
         const truth = normalise(document.ocr_truth.pages.map((page) => page.text).join('\n'));
         for (const value of [...document.ocr_truth.dates, ...document.ocr_truth.names, ...document.ocr_truth.identifiers]) {
@@ -424,6 +450,157 @@ describe('InternBench corpus generator', () => {
         for (const [name, entry] of entries) expect(entry.valid, `${document.id}: ${name}`).toBe(true);
       }
     }
+  });
+});
+
+/// Every content stream of a PDF, inflated, in file order.
+function contentStreams(bytes: Buffer) {
+  const text = bytes.toString('latin1');
+  const streams: string[] = [];
+  const pattern = /<< ([^>]*?)\/Length (\d+) >>\nstream\n/g;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const start = match.index + match[0].length;
+    const data = bytes.subarray(start, start + Number(match[2]));
+    if (match[1].includes('/Subtype /Image')) continue;
+    streams.push(inflateSync(data).toString('latin1'));
+  }
+  return streams;
+}
+
+/// The text-showing operators of a content stream, in stream order.
+function shown(stream: string) {
+  return stream.split('\n').filter((line) => line.endsWith(' Tj'));
+}
+
+function normalisedText(text: string) {
+  return normalise(text).replace(/[‐-—]/g, '-');
+}
+
+/// The documents added with the structure gold. They were pending a
+/// recording until the phase 2 live run recorded them.
+const ADDED_FOR_STRUCTURE = [
+  'newsletter-three-column', 'agreement-two-column-footnotes', 'meeting-notice-columns', 'meeting-notice-interleaved',
+  'meeting-notice-reversed', 'rate-confirmation-rotated', 'inspection-log-ruled-2p', 'price-list-unruled',
+  'invoice-label-above', 'invoice-right-aligned', 'invoice-boxed-grid', 'benefits-change-checkbox-form',
+  'loss-notice-boxed-fields', 'scan-rotated-page-in-pdf', 'scan-cancellation-notice-150dpi', 'scan-remittance-advice-120dpi',
+  'scan-mixed-middle-page', 'mixed-signature-region', 'scan-certificate-of-insurance', 'scan-bill-of-lading',
+];
+
+describe('InternBench structure gold and the documents added for it', () => {
+  const added = () => documents.filter((document) => ADDED_FOR_STRUCTURE.includes(document.id));
+
+  it('adds twenty documents with full gold and a structure block, every one now recorded', () => {
+    expect(added().length).toBe(20);
+    expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([]);
+    for (const document of added()) {
+      expect(document.structure, document.id).toBeDefined();
+      expect(document.gold.document_date, document.id).not.toBeNull();
+      expect(document.gold.forbidden_dates.length, `${document.id}: traps`).toBeGreaterThan(0);
+      expect(document.gold.parties.length, document.id).toBeGreaterThan(0);
+      if (['scan', 'mixed'].includes(document.text_layer)) expect(document.ocr_truth, document.id).not.toBeNull();
+    }
+    // The recordings of record never hold a pending document.
+    expect(documents.filter((document) => document.recording !== undefined && document.recording !== 'pending')).toEqual([]);
+  });
+
+  it('gives structure only in the documented shape, every string printed and every snippet once', () => {
+    const withStructure = documents.filter((document) => document.structure);
+    expect(withStructure.length).toBeGreaterThanOrEqual(28);
+    for (const document of withStructure) {
+      const where = document.id;
+      const layout = document.structure!;
+      expect(Object.keys(layout).every((key) => ['reading_order', 'tables', 'key_values', 'expected_routes'].includes(key)), where).toBe(true);
+      for (const [page, route] of Object.entries(layout.expected_routes ?? {})) {
+        expect(ROUTES, `${where}: page ${page}`).toContain(route);
+        expect(Number(page) >= 1 && Number(page) <= document.pages, `${where}: page ${page}`).toBe(true);
+      }
+      if (layout.reading_order) expect(layout.reading_order.length, where).toBeGreaterThanOrEqual(2);
+      const text = normalisedText([...generated.texts[document.id], ...(document.ocr_truth?.pages.map((page) => page.text) ?? [])].join('\n'));
+      for (const pair of layout.key_values ?? []) {
+        expect(text.includes(normalisedText(pair.key)), `${where}: label ${pair.key}`).toBe(true);
+        expect(text.includes(normalisedText(pair.value)), `${where}: value ${pair.value}`).toBe(true);
+      }
+      for (const table of layout.tables ?? []) {
+        expect(table.rows.length, where).toBeGreaterThanOrEqual(2);
+        for (const cell of table.rows.flat().filter(Boolean)) {
+          for (const word of normalisedText(cell).split(' ')) expect(text.includes(word), `${where}: cell ${cell}`).toBe(true);
+        }
+      }
+    }
+    // A scanned page is routed to OCR wherever the gold says anything.
+    for (const document of withStructure.filter((entry) => entry.text_layer === 'scan')) {
+      for (const route of Object.values(document.structure!.expected_routes ?? {})) expect(route, document.id).toBe('ocr');
+    }
+  });
+
+  it('refuses a labelled value printed under two occurrences of its label', () => {
+    // A change order's DATE box and the architect's signature DATE box,
+    // both dated the same day: the scorer could credit either.
+    const text = ['CONTRACT DATE\n01/15/2025\nDATE\n05/07/2026\nARCHITECT\nDATE\n05/07/2026'];
+    const structure = { key_values: [{ key: 'DATE', value: '05/07/2026' }] };
+    expect(() => result({ id: 'twice', files: [], text, structure })).toThrow('the value "05/07/2026" is printed under 2 occurrences of the label "DATE"');
+    const changeOrder = documents.find((document) => document.id === 'change-order-form')!;
+    expect((changeOrder.structure!.key_values ?? []).map((pair) => pair.key)).not.toContain('DATE');
+  });
+
+  it('writes one meeting notice three ways: the same runs, in three content-stream orders', async () => {
+    const variants = await Promise.all(['meeting-notice-columns', 'meeting-notice-interleaved', 'meeting-notice-reversed'].map(async (id) => shown(contentStreams(await readFile(join(first, `${id}.pdf`)))[0])));
+    const [columns, rows, reverse] = variants;
+    expect(columns.length).toBeGreaterThan(40);
+    for (const variant of [rows, reverse]) {
+      expect([...variant].sort()).toEqual([...columns].sort());
+      expect(variant).not.toEqual(columns);
+    }
+    expect(reverse).toEqual([...columns].reverse());
+    const gold = (id: string) => documents.find((document) => document.id === id)!;
+    expect(gold('meeting-notice-reversed').gold).toEqual(gold('meeting-notice-columns').gold);
+    expect(gold('meeting-notice-interleaved').structure).toEqual(gold('meeting-notice-columns').structure);
+  });
+
+  it('stores the rate confirmation\'s landscape page portrait, turned, with /Rotate 90', async () => {
+    const bytes = await readFile(join(first, 'rate-confirmation-rotated.pdf'));
+    const text = bytes.toString('latin1');
+    expect(text).toContain('/MediaBox [0 0 612 792] /Rotate 90');
+    expect(contentStreams(bytes)[0].startsWith('q 0 1 -1 0 612 0 cm\n')).toBe(true);
+    expect(contentStreams(bytes)[1].startsWith('q 0 1 -1 0')).toBe(false);
+  });
+
+  it('prints the amendment\'s signature dates only inside the pasted scan, a sixth of the page or more', async () => {
+    const bytes = await readFile(join(first, 'mixed-signature-region.pdf'));
+    const streams = contentStreams(bytes);
+    expect(streams.join('\n')).not.toContain('August 21, 2026');
+    const placed = /q ([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm \/Im0 Do Q/.exec(streams[1]);
+    expect(placed).not.toBeNull();
+    expect((Number(placed![1]) * Number(placed![2])) / (612 * 792)).toBeGreaterThanOrEqual(0.15);
+    const document = documents.find((entry) => entry.id === 'mixed-signature-region')!;
+    expect(document.ocr_truth!.dates).toContain('August 21, 2026');
+    expect(document.structure!.expected_routes).toEqual({ 1: 'fast', 2: 'ocr_regions' });
+  });
+
+  it('scans the low-resolution documents at 150 and 120 DPI', async () => {
+    const notice = (await readFile(join(first, 'scan-cancellation-notice-150dpi.pdf'))).toString('latin1');
+    expect(notice).toContain('/Width 1275 /Height 1650');
+    const receipt = inspectPng(await readFile(join(first, 'scan-remittance-advice-120dpi.png')));
+    expect([receipt.width, receipt.height]).toEqual([1020, 1320]);
+  });
+
+  it('puts the mixed lease\'s scan between two pages of text, and the claim\'s sideways page in an upright PDF', async () => {
+    const lease = contentStreams(await readFile(join(first, 'scan-mixed-middle-page.pdf')));
+    expect(lease.map((stream) => shown(stream).length > 0)).toEqual([true, false, true]);
+    const claim = (await readFile(join(first, 'scan-rotated-page-in-pdf.pdf'))).toString('latin1');
+    expect(claim.match(/\/Width 2550 \/Height 3300/g)?.length).toBe(2);
+    const truth = documents.find((entry) => entry.id === 'scan-rotated-page-in-pdf')!.ocr_truth!;
+    expect(truth.pages[1].text.startsWith('SCHEDULE OF DAMAGED AND MISSING ITEMS')).toBe(true);
+  });
+
+  it('splits the inspection log\'s table across its two pages', () => {
+    const document = documents.find((entry) => entry.id === 'inspection-log-ruled-2p')!;
+    const rows = document.structure!.tables![0].rows;
+    const [one, two] = generated.texts[document.id];
+    expect(one).toContain(rows[1][0]);
+    expect(two).toContain(rows[rows.length - 1][0]);
+    expect(one).not.toContain(rows[rows.length - 1][0]);
   });
 });
 

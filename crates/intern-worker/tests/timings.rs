@@ -30,6 +30,7 @@ impl PdfBackend for MixedPdf {
             image_coverage: 1.0,
             width_pixels: SCAN_WIDTH,
             height_pixels: SCAN_HEIGHT,
+            ..PdfPageInspection::default()
         };
         Ok(vec![
             scan(0),
@@ -41,6 +42,7 @@ impl PdfBackend for MixedPdf {
                 image_coverage: 0.0,
                 width_pixels: SCAN_WIDTH,
                 height_pixels: SCAN_HEIGHT,
+                ..PdfPageInspection::default()
             },
             scan(2),
         ])

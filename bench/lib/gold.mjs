@@ -19,7 +19,10 @@ export const CATEGORIES = [
   'mixed_scan', 'rotated_scan', 'low_resolution_scan', 'noisy_scan', 'ocr_corrupted', 'pages_5', 'pages_10', 'pages_25',
   'pages_50', 'pages_100', 'middle_fact', 'competing_dates', 'referenced_agreement', 'irrelevant_names', 'date_in_table',
   'layout_parties', 'unusual', 'information_dense', 'email', 'docx', 'pptx', 'xlsx', 'csv', 'tiff', 'png',
+  'key_value', 'stream_order', 'rotated_page', 'image_region', 'ocr_critical_fields',
 ];
+/// The routes the worker reads a PDF page by.
+export const ROUTES = ['fast', 'layout', 'ocr', 'ocr_regions'];
 
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -94,10 +97,38 @@ export function gold({
   };
 }
 
+/// The `structure` block: what the page's layout plainly says, for scoring
+/// extraction. `readingOrder` is distinctive phrases in the order a person
+/// reads them, each printed once; `tables` lists each table's rows (header
+/// first; '' for a blank cell); `keyValues` is [label, value] pairs, the
+/// label as printed without its colon; `routes` maps a page number to the
+/// route it should take, given only where that is not a judgement call.
+/// Parts left empty are left out.
+export function structure({ readingOrder = [], tables = [], keyValues = [], routes = {} }) {
+  check(readingOrder.length !== 1, 'a reading order needs at least two snippets');
+  check(new Set(readingOrder).size === readingOrder.length, 'a reading order repeats a snippet');
+  for (const rows of tables) {
+    check(Array.isArray(rows) && rows.length >= 2, 'a table needs a header and a row');
+    for (const row of rows) check(row.every((cell) => typeof cell === 'string') && row.some(Boolean), 'a table row is strings, not all blank');
+  }
+  for (const [key, value] of keyValues) check(key && value && !key.endsWith(':'), `key value ${key}: label without its colon, and a value`);
+  for (const [page, route] of Object.entries(routes)) {
+    check(Number.isInteger(Number(page)) && Number(page) > 0, `route for page ${page}`);
+    check(ROUTES.includes(route), `unknown route ${route}`);
+  }
+  const block = {};
+  if (readingOrder.length) block.reading_order = readingOrder;
+  if (tables.length) block.tables = tables.map((rows) => ({ rows }));
+  if (keyValues.length) block.key_values = keyValues.map(([key, value]) => ({ key, value }));
+  if (Object.keys(routes).length) block.expected_routes = routes;
+  return block;
+}
+
 /// A complete document entry. `text` is the generated text model (one string
 /// per page); it is returned beside the entry for tests and never written to
-/// gold.json.
-export function entry({ id, extension, title, kind, textLayer, pages, categories, notes, gold: goldEntry, ocrTruth = null, cleanText = undefined }) {
+/// gold.json. `recording: 'pending'` marks a document added before anyone
+/// recorded it live; replay leaves it unscored until then.
+export function entry({ id, extension, title, kind, textLayer, pages, categories, notes, gold: goldEntry, ocrTruth = null, cleanText = undefined, structure: layout = null, recording = null }) {
   check(/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id), `id ${id} is not kebab-case`);
   check(TEXT_LAYERS.includes(textLayer), `unknown text_layer ${textLayer}`);
   categories.forEach((category) => check(CATEGORIES.includes(category), `${id}: unknown category ${category}`));
@@ -121,5 +152,13 @@ export function entry({ id, extension, title, kind, textLayer, pages, categories
     ocr_truth: ocrTruth,
   };
   if (cleanText !== undefined) document.clean_text = cleanText;
+  if (layout) {
+    for (const page of Object.keys(layout.expected_routes ?? {})) check(Number(page) <= pages, `${id}: a route for page ${page} of ${pages}`);
+    document.structure = layout;
+  }
+  if (recording !== null) {
+    check(recording === 'pending', `${id}: recording is 'pending' or absent`);
+    document.recording = recording;
+  }
   return document;
 }

@@ -249,9 +249,108 @@ Its documents are shorter, and its median document took 20.3 s end to end.
 Every miss on that corpus is one InternBench also shows: a joining word, a
 party seen through OCR, or a date a scan does not state legibly.
 
+## Phase 2: measured
+
+Phase 2 changed the reader:
+* document routing with page layouts as blocks (`docs/document-routing.md`);
+* PP-OCR through ONNX Runtime with Tesseract as the fallback (`docs/ocr.md`);
+* every frame of a TIFF;
+* re-reading only the image regions that need it.
+
+It did not change the model, the prompt or validation. All 72 InternBench documents were recorded live with
+the reader before and after, on the same idle 4-core machine, and both
+recordings were scored by the same scorer and gold
+(`bench/reports/2026-10-07-phase2-*`).
+
+What the reader gives the engine is much better:
+
+| Score | Before | After |
+| --- | ---: | ---: |
+| Reading order (snippets in order) | 64.9% | 100.0% |
+| Table rows read whole | 65.1% | 96.8% |
+| Table cells | 91.5% | 99.4% |
+| Key-value pairs | 57.6% | 99.0% |
+| OCR character error rate | 19.1% | 5.0% |
+| OCR word error rate | 23.8% | 5.4% |
+| OCR dates / identifiers / names | 87.2% / 90.6% / 94.4% | 100% / 100% / 100% |
+| Facts reaching the prompt | 98.2% | 100.0% |
+
+The character error rate left is mostly layout, not misreading. Two forms
+read their right-hand field column after the left-hand address column where
+the truth interleaves them line by line, and tables are written as `| a | b |`
+rows. The order-sensitive edit distance counts both.
+
+End to end:
+
+| | Before | After |
+| --- | ---: | ---: |
+| Filename right | 19/72 | 24/72 |
+| Date right | 57/72 | 61/72 |
+| Parties right | 47/72 | 50/72 |
+| Joining word right | 28/70 | 33/70 |
+| Ready/review routing right | 32/52 | 35/52 |
+| Description states nothing false | 66/71 | 70/71 |
+| Unsupported description claims | 5 of 223 | 1 of 240 |
+| Sent to review | 38.0% | 32.4% |
+| Filed without review under a wrong name | 26 | 29 |
+| Trap date chosen | 11 | 11 |
+| Forbidden party named | 7 | 8 |
+
+**The safety counts split cleanly by document.**
+* On the 52 documents recorded before phase 2, every safety count fell:
+  * filed under a wrong name 20 → 19;
+  * trap dates 7 → 5;
+  * forbidden parties 3 → 2.
+
+  Filenames rose 14 → 20 on those documents.
+* The 20 documents phase 2 added for hard layouts carry the whole rise:
+  wrong names filed without review 6 → 10.
+
+Every document newly filed under a wrong name had gone to review before for
+one reason only: the old reader garbled it, so a check failed. The checks were
+`TYPE_UNSUPPORTED`, `PARTY_UNSUPPORTED`, `DATE_AMBIGUOUS`, `DATE_MISSING`,
+`DATE_UNSUPPORTED` and `DESCRIPTION_UNSUPPORTED`. With the text read right,
+those checks pass, and what is left is the model choosing a wrong fact that
+the document does state:
+* the insurer instead of the named insured;
+* the signatories of an amendment once its signature region is read at all;
+* a statement's period start instead of its statement date;
+* "Invoice" for a rate confirmation.
+
+Verbatim validation cannot catch a wrong fact that is present. Semantic party
+roles, date roles and cited evidence are the next phase's work for that reason.
+Until that phase lands, a release cut from this state files three more of
+these 72 under a wrong name than the release before it.
+
+Two documents moved without their text changing in any way that matters, and
+show the model's own variance:
+* `capital-call-notice`: only blank lines differ, and the type became
+  "CAPITAL CALL NOTICE No";
+* `scan-bill-of-lading`: only one inserted colon was removed, and it went from
+  a right name to "between" its shipper and consignee.
+
+Latency, from the two live runs:
+
+| Documents | Total p50 before → after | Reading p50 before → after | Prompt tokens p50 |
+| --- | ---: | ---: | ---: |
+| Native PDF (41) | 36.1 s → 37.3 s | 4.1 ms → 5.0 ms | 2,082 → 2,163 |
+| Office and text (11) | 42.4 s → 43.0 s | 2.0 ms → 2.6 ms | 2,599 → 2,599 |
+| Scans and mixed (19) | 34.5 s → 30.5 s | 1.18 s → 2.25 s | 1,552 → 1,624 |
+
+* **Native PDFs** read about 1 ms slower.
+* The **+3% end to end** on native PDFs is the prompt: written-out tables and
+  fields add about 80 tokens. The office documents' prompts are identical and
+  still moved 1.5%, which is the noise between two runs.
+* **Scans** spend about a second more in OCR but finish 4 s sooner: the model
+  gets text it can use.
+* Over all 71 documents both completed, the total is +4.7% at the median and
+  −1.3% at the 95th percentile.
+
 ## The highest-value changes
 
-Ranked by what the measurements say they are worth.
+Ranked by what the measurements say they are worth, as the baseline showed
+them. Phase 2 (above) did every OCR item and the second complex-document item:
+the layout as blocks with identifiers. The rest is phase 3's.
 
 ### Complex document understanding
 
