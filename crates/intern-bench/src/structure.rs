@@ -393,10 +393,25 @@ fn only_separators(rest: &str) -> bool {
 }
 
 /// The cells of a line linearised as a table row (`| a | b |`), or none
-/// for any other line.
+/// for any other line. An escaped pipe is part of its cell, as the worker
+/// and the engine read a row.
 fn table_cells(line: &str) -> Option<Vec<&str>> {
     let inner = line.strip_prefix('|')?.strip_suffix('|')?;
-    Some(inner.split('|').map(str::trim).collect())
+    let mut cells = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (index, character) in inner.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '|' {
+            cells.push(inner[start..index].trim());
+            start = index + 1;
+        }
+    }
+    cells.push(inner[start..].trim());
+    Some(cells)
 }
 
 /// Whether a table row holds the label as one whole cell (a colon after it
@@ -1186,6 +1201,13 @@ mod tests {
             &source(&["| CHANGE ORDER NUMBER | DATE: |\n| 006 | 05/07/2026 |"]),
         );
         assert_eq!(own.key_values_found, 1);
+        // An escaped pipe in a cell is not a column: the value is still the
+        // one under its label.
+        let escaped = measure(
+            &truth,
+            &source(&["| NOTE | DATE |\n| net 30 \\| net 45 | 05/07/2026 |"]),
+        );
+        assert_eq!(escaped.key_values_found, 1, "{:?}", escaped.misses);
     }
 
     #[test]

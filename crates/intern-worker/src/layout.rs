@@ -601,6 +601,10 @@ pub fn ocr_page(
 ) -> ExtractedPage {
     let (mut layout, analysed) = ocr_layout_of(&reading, size, scale, signals, stop);
     number_blocks(page_number, &mut layout.blocks);
+    // A reading whose lines were not analysed, and whose text has more lines
+    // than a page's layout may hold, goes without a layout, as a text page
+    // that dense does, and keeps its text.
+    let dense = !analysed && too_dense(&reading.text);
     let text = if !analysed || layout.blocks.is_empty() {
         reading.text
     } else {
@@ -612,7 +616,7 @@ pub fn ocr_page(
         source: PageSource::Ocr,
         ocr_confidence: Some(reading.mean_confidence),
         vision_escalated: false,
-        layout: Some(layout),
+        layout: (!dense).then_some(layout),
     }
 }
 
@@ -664,6 +668,9 @@ fn ocr_layout_of(
     };
     let from_lines = analysed.is_some();
     let blocks = analysed.unwrap_or_else(|| {
+        if too_dense(&reading.text) {
+            return Vec::new();
+        }
         let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
         let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
         for block in &mut blocks {
@@ -679,6 +686,12 @@ fn ocr_layout_of(
         blocks,
     };
     (layout, from_lines)
+}
+
+/// Whether blocks built from `text` would hold more lines and cells than a
+/// page's layout may (see [`crate::extract::TextBudget`]).
+fn too_dense(text: &str) -> bool {
+    crate::extract::layout_parts(text) > crate::limits::MAX_PAGE_LAYOUT_PARTS
 }
 
 /// Images on a page that may hold text of their own: large, and with no

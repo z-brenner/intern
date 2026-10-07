@@ -2807,6 +2807,34 @@ mod text_page_layouts {
         );
     }
 
+    /// An OCR reading whose lines were not analysed, with more lines of
+    /// text than a page's layout may hold, goes without a layout and keeps
+    /// its text.
+    #[test]
+    fn an_ocr_reading_too_dense_for_a_layout_keeps_its_text_and_no_layout() {
+        let dense = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new(dense.clone(), 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_none());
+        assert_eq!(page.text, dense);
+
+        let page = crate::layout::ocr_page(
+            1,
+            OcrResult::new("RECEIPT\nTotal 4.00", 90.0),
+            (100, 100),
+            None,
+            RouteSignals::default(),
+            &|| false,
+        );
+        assert!(page.layout.is_some());
+    }
+
     /// Lines and cells are counted across the document in page order: once
     /// the pages before have taken what the document may hold, a page that
     /// would fit on its own goes without a layout, and its characters are
