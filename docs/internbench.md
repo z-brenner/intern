@@ -54,8 +54,10 @@ replaces the files the directory's earlier `manifest.json` lists and removes
 nothing else, and the generator refuses a directory that is not empty and
 holds no InternBench manifest. `scripts/run-internbench.sh` generates the
 default corpus again whenever a file in it differs from the committed
-`bench/manifest.json`. A live run given `--manifest` refuses to start when
-any selected document's bytes disagree with it or it does not list one.
+`bench/manifest.json`, and checks the documents against that manifest; for
+a corpus of your own (`CORPUS=…`) it checks against `MANIFEST` if you set
+one, and nothing otherwise. A live run given `--manifest` refuses to start
+when any selected document's bytes disagree with it or it does not list one.
 
 | Group | Documents |
 | --- | --- |

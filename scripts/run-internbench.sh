@@ -18,10 +18,12 @@
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
-#                       the default corpus is generated again unless its manifest.json
-#                       is the committed bench/manifest.json, so a missing, partial
+#                       the default corpus is generated again unless every file in it
+#                       matches the committed bench/manifest.json, so a missing, partial
 #                       (--only) or out-of-date corpus is never run)
-#   MANIFEST            the generator's manifest (default: bench/manifest.json when present)
+#   MANIFEST            the manifest the documents are checked against (default:
+#                       bench/manifest.json for the default corpus, none for another;
+#                       set it empty to check nothing)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
 #
@@ -46,7 +48,9 @@ WORKER="${INTERN_WORKER:-$REPO/target/release/intern-worker}"
 PORT="${PORT:-18090}"
 CORPUS="${CORPUS:-$REPO/bench/generated}"
 GOLD="${GOLD:-$REPO/bench/gold.json}"
-if [ -z "${MANIFEST:-}" ] && [ -f "$REPO/bench/manifest.json" ]; then
+# The committed manifest vouches for the default corpus only; a corpus of
+# your own brings its own, or none.
+if [ -z "${MANIFEST+set}" ] && [ "$CORPUS" = "$REPO/bench/generated" ] && [ -f "$REPO/bench/manifest.json" ]; then
   MANIFEST="$REPO/bench/manifest.json"
 fi
 if [ -z "${THREADS:-}" ]; then
