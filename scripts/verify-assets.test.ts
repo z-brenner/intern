@@ -97,6 +97,33 @@ describe('runtime asset verification', () => {
       .resolves.toMatchObject({ verifiedFiles: 1 });
   });
 
+  it('refuses a bundled OCR runtime file that is not its pinned download', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'intern-assets-ocr-pin-'));
+    const bytes = Buffer.from('some other onnxruntime build');
+    await writeFile(join(root, 'onnxruntime.dll'), bytes);
+    const manifest = {
+      schema_version: 1,
+      downloads: [{
+        id: 'onnxruntime', size: 1, sha256: 'a'.repeat(64),
+        extract: { path: 'runtimes/win-x64/native/onnxruntime.dll', size: 1, sha256: 'b'.repeat(64) },
+      }],
+      bundled_files: [{
+        path: 'onnxruntime.dll',
+        install_path: 'onnxruntime.dll',
+        packages: [{ name: 'onnxruntime', version: '1.30.0' }],
+        size: bytes.length,
+        // The staged bytes' own digest: true of the file, not of the pin.
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      }],
+      license_files: [],
+    };
+    const manifestPath = join(root, 'runtime-assets.json');
+    await writeFile(manifestPath, JSON.stringify(manifest));
+
+    await expect(verifyRuntimeAssets(manifestPath, { root }))
+      .rejects.toThrow(/not the pinned download/);
+  });
+
   it('rejects manifest paths that escape the verification root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'intern-assets-path-'));
     const manifestPath = join(root, 'runtime-assets.json');

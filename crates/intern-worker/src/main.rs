@@ -49,13 +49,21 @@ fn select_ocr_backend(
     runtime: &Path,
     report: impl FnOnce(&str),
 ) -> Result<SharedOcr, ExtractionError> {
-    if intern_worker::paddle::PaddleAssets::in_directory(runtime).present() {
+    let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime);
+    if assets.present() {
         match paddle_backend(runtime) {
             Ok(engine) => return Ok(engine),
             Err(error) => report(&format!(
                 "PP-OCR did not load; reading scans with Tesseract: {error}"
             )),
         }
+    } else if let Some(missing) = assets.partly_missing() {
+        // Some of it is installed: something removed the rest - an antivirus
+        // quarantine, a damaged update. That is worth the log's line.
+        report(&format!(
+            "PP-OCR is incomplete ({} missing); reading scans with Tesseract",
+            missing.display()
+        ));
     }
     Ok(Box::new(ParallelTesseract(TesseractOcr::new(
         runtime.join("tesseract.exe"),

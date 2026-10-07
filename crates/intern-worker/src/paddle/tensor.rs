@@ -132,19 +132,31 @@ pub struct LineCrop {
 /// text at 300 DPI is about a third of it.
 pub const MAX_LINE_WIDTH: u32 = 3_200;
 
-pub fn crop_line(page: &RgbImage, quad: &Quad, height: u32) -> LineCrop {
+/// Where a line's crop starts, the direction its rows and its columns run,
+/// and its long and short sides in page pixels.
+fn line_frame(quad: &Quad) -> (Point, Point, Point, f32, f32) {
     let [a, b, c, d] = quad.0;
     let along = |p: Point, q: Point| ((q.x - p.x).powi(2) + (q.y - p.y).powi(2)).sqrt();
     let source_width = along(a, b).max(along(d, c)).max(1.0);
     let source_height = along(a, d).max(along(b, c)).max(1.0);
-    // Corner the crop starts from, the direction its rows run, and the
-    // direction its columns run, in page pixels per crop pixel.
-    let (origin, row_end, column_end, long, short) = if source_height >= source_width * 1.5 {
+    if source_height >= source_width * 1.5 {
         (b, c, a, source_height, source_width)
     } else {
         (a, b, d, source_width, source_height)
-    };
-    let width = ((height as f32 * long / short).ceil() as u32).clamp(1, MAX_LINE_WIDTH);
+    }
+}
+
+/// How wide [`crop_line`] cuts a line at `height`, without cutting it.
+pub fn line_width(quad: &Quad, height: u32) -> u32 {
+    let (_, _, _, long, short) = line_frame(quad);
+    ((height as f32 * long / short).ceil() as u32).clamp(1, MAX_LINE_WIDTH)
+}
+
+pub fn crop_line(page: &RgbImage, quad: &Quad, height: u32) -> LineCrop {
+    // Corner the crop starts from, the direction its rows run, and the
+    // direction its columns run, in page pixels per crop pixel.
+    let (origin, row_end, column_end, long, short) = line_frame(quad);
+    let width = line_width(quad, height);
     let step_x = Point::new(
         (row_end.x - origin.x) / width as f32,
         (row_end.y - origin.y) / width as f32,
@@ -214,6 +226,10 @@ pub fn recognition_batch(crops: &[&LineCrop], min_width: u32) -> (Vec<f32>, u32)
     (batch, width)
 }
 
+/// How many times longer than wide a page may be before only its central
+/// square is shrunk for the orientation classifier.
+const MAX_ORIENTATION_ASPECT: u32 = 8;
+
 /// The square the orientation classifier looks at: the page shrunk so its
 /// shorter side is 256, by area averaging, then its centre 224 x 224, RGB,
 /// ImageNet-normalized, `3 x 224 x 224`.
@@ -221,6 +237,23 @@ pub fn orientation_input(page: &RgbImage) -> Vec<f32> {
     const SHORT: u32 = 256;
     const CROP: u32 = 224;
     let (width, height) = page.dimensions();
+    // A page many times longer than it is wide - a till roll, or a crafted
+    // strip of one pixel by a million - would be shrunk to a thumbnail as
+    // long as itself: 196 GB for that strip. Only its centre reaches the
+    // classifier, so only its central square is shrunk. Every page of an
+    // ordinary shape is read exactly as before.
+    let short = width.min(height);
+    if short > 0 && width.max(height) / short > MAX_ORIENTATION_ASPECT {
+        let square = image::imageops::crop_imm(
+            page,
+            (width - short) / 2,
+            (height - short) / 2,
+            short,
+            short,
+        )
+        .to_image();
+        return orientation_input(&square);
+    }
     let scale = SHORT as f32 / width.min(height) as f32;
     let (resized_width, resized_height) = (
         ((width as f32 * scale).round() as u32).max(CROP),
@@ -356,6 +389,19 @@ pub fn rotate_page(page: &RgbImage, degrees: f32) -> RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A strip a pixel wide and a hundred thousand long reads as its central
+    /// square: the classifier's input is the usual size, and the thumbnail
+    /// is never as long as the strip.
+    #[test]
+    fn a_very_long_strip_is_classified_by_its_centre() {
+        let strip = RgbImage::from_pixel(1, 100_000, image::Rgb([255, 255, 255]));
+        let input = orientation_input(&strip);
+        assert_eq!(input.len(), 3 * 224 * 224);
+        // A page of an ordinary shape is read as it always was.
+        let page = RgbImage::from_pixel(850, 1100, image::Rgb([200, 200, 200]));
+        assert_eq!(orientation_input(&page).len(), 3 * 224 * 224);
+    }
     use image::Rgb;
 
     #[test]

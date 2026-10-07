@@ -1895,31 +1895,29 @@ pub fn extract_image(
     let mut pages = vec![page];
 
     let mut truncated = frames.beyond_limit;
-    if !frames.directories.is_empty() {
-        // The file was already held to the source size, and each frame is
-        // held to the same pixel and decode caps as the first.
-        let mut bytes = std::fs::read(path).map_err(ExtractionError::io)?;
-        for (index, directory) in frames.directories.iter().enumerate() {
-            cancel.check()?;
-            cancel.report_progress("ocr", index + 1, Some(page_count));
-            let decoded = cancel.timed(
-                |timings| &mut timings.image_decode_micros,
-                || decode_tiff_frame(&mut bytes, *directory, limits),
-            );
-            let Ok(image) = decoded else {
-                truncated = true;
-                break;
-            };
-            let rendered = RenderedPage::new(index + 1, image);
-            let result = recognize_timed(ocr, &rendered, cancel)?;
-            low_confidence |= result.mean_confidence < CONFIDENT_READING;
-            let size = rendered.image.dimensions();
-            drop(rendered);
-            pages.push(cancel.timed(
-                |timings| &mut timings.analysis_micros,
-                || crate::layout::ocr_page(index + 2, result, size, None, RouteSignals::default()),
-            ));
-        }
+    // Each frame is held to the same pixel and decode caps as the first, and
+    // read from the file as it is decoded: a batch scan near the source cap
+    // is never held in memory whole.
+    for (index, directory) in frames.directories.iter().enumerate() {
+        cancel.check()?;
+        cancel.report_progress("ocr", index + 1, Some(page_count));
+        let decoded = cancel.timed(
+            |timings| &mut timings.image_decode_micros,
+            || decode_tiff_frame(path, *directory, limits),
+        );
+        let Ok(image) = decoded else {
+            truncated = true;
+            break;
+        };
+        let rendered = RenderedPage::new(index + 1, image);
+        let result = recognize_timed(ocr, &rendered, cancel)?;
+        low_confidence |= result.mean_confidence < CONFIDENT_READING;
+        let size = rendered.image.dimensions();
+        drop(rendered);
+        pages.push(cancel.timed(
+            |timings| &mut timings.analysis_micros,
+            || crate::layout::ocr_page(index + 2, result, size, None, RouteSignals::default()),
+        ));
     }
     let mut warnings = Vec::new();
     if low_confidence {
@@ -2110,17 +2108,23 @@ impl TiffFormat {
 /// header at another directory makes that frame the file's first image,
 /// and the decoder reads it exactly as it reads a first frame - colour,
 /// bit depth, compression and orientation included. The header is pointed
-/// back before this returns.
+/// there as the file is read, never on disk.
 fn decode_tiff_frame(
-    bytes: &mut [u8],
+    path: &Path,
     directory: u64,
     limits: &ResourceLimits,
 ) -> Result<DynamicImage, ExtractionError> {
-    let format = TiffFormat::read(&mut Cursor::new(&bytes[..]))
-        .ok_or_else(|| ExtractionError::parse_failed("not a TIFF"))?;
-    let (field, pointer) = if format.big {
+    let mut file = File::open(path).map_err(ExtractionError::io)?;
+    let format =
+        TiffFormat::read(&mut file).ok_or_else(|| ExtractionError::parse_failed("not a TIFF"))?;
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    let mut header = [0_u8; 16];
+    let length = if format.big { 16 } else { 8 };
+    file.read_exact(&mut header[..length])
+        .map_err(ExtractionError::io)?;
+    let (start, pointer) = if format.big {
         (
-            8..16,
+            8,
             if format.big_endian {
                 directory.to_be_bytes().to_vec()
             } else {
@@ -2131,7 +2135,7 @@ fn decode_tiff_frame(
         let directory = u32::try_from(directory)
             .map_err(|_| ExtractionError::parse_failed("TIFF directory out of range"))?;
         (
-            4..8,
+            4,
             if format.big_endian {
                 directory.to_be_bytes().to_vec()
             } else {
@@ -2139,14 +2143,48 @@ fn decode_tiff_frame(
             },
         )
     };
-    let original = bytes[field.clone()].to_vec();
-    bytes[field.clone()].copy_from_slice(&pointer);
-    let decoded = ImageReader::with_format(Cursor::new(&bytes[..]), ImageFormat::Tiff)
+    header[start..start + pointer.len()].copy_from_slice(&pointer);
+    file.seek(SeekFrom::Start(0)).map_err(ExtractionError::io)?;
+    let reader = PatchedHeader {
+        file,
+        header,
+        length: length as u64,
+        position: 0,
+    };
+    ImageReader::with_format(BufReader::new(reader), ImageFormat::Tiff)
         .into_decoder()
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))
-        .and_then(|decoder| decode_oriented(decoder, limits));
-    bytes[field].copy_from_slice(&original);
-    decoded
+        .and_then(|decoder| decode_oriented(decoder, limits))
+}
+
+/// A file read with its first `length` bytes replaced by `header`.
+struct PatchedHeader {
+    file: File,
+    header: [u8; 16],
+    length: u64,
+    position: u64,
+}
+
+impl Read for PatchedHeader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.file.read(buffer)?;
+        for (offset, byte) in buffer[..read].iter_mut().enumerate() {
+            let at = self.position + offset as u64;
+            if at >= self.length {
+                break;
+            }
+            *byte = self.header[at as usize];
+        }
+        self.position += read as u64;
+        Ok(read)
+    }
+}
+
+impl Seek for PatchedHeader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+        self.position = self.file.seek(position)?;
+        Ok(self.position)
+    }
 }
 
 /// Decodes an image file the right way up and no larger than a rendered page

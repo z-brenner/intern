@@ -22,7 +22,7 @@ use super::reocr::{Reading, best_reading, lines_to_reread};
 use super::skew::estimate_skew;
 use super::tensor::{
     LineCrop, RECOGNITION_HEIGHT, binarize, crop_line, detection_input, detection_input_size,
-    orientation_input, recognition_batch, rotate_page, stretch_contrast,
+    line_width, orientation_input, recognition_batch, rotate_page, stretch_contrast,
 };
 use super::{
     OrientationStrategy, PaddleAssets, PaddleConfig, PlacedLine, RECOGNITION_DICTIONARY,
@@ -76,8 +76,8 @@ struct Sessions {
     orientation: Option<Session>,
 }
 
-struct PoolState {
-    idle: Vec<Sessions>,
+struct PoolState<T> {
+    idle: Vec<T>,
     created: usize,
 }
 
@@ -86,13 +86,13 @@ struct PoolState {
 /// A page that arrives while every set is busy waits for one, so however
 /// many pages a caller reads at once, the threads OCR uses stay within
 /// the budget.
-struct SessionPool {
-    state: Mutex<PoolState>,
+struct SessionPool<T = Sessions> {
+    state: Mutex<PoolState<T>>,
     returned: Condvar,
     limit: usize,
 }
 
-impl SessionPool {
+impl<T> SessionPool<T> {
     fn new(limit: usize) -> Self {
         Self {
             state: Mutex::new(PoolState {
@@ -104,15 +104,16 @@ impl SessionPool {
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, PoolState> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, PoolState<T>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn acquire(
         &self,
-        build: impl Fn() -> Result<Sessions, ExtractionError>,
+        build: impl Fn() -> Result<T, ExtractionError>,
         cancel: &CancellationToken,
-    ) -> Result<Lease<'_>, ExtractionError> {
+    ) -> Result<Lease<'_, T>, ExtractionError> {
+        let mut may_build = true;
         let mut state = self.lock();
         loop {
             if let Some(sessions) = state.idle.pop() {
@@ -121,20 +122,30 @@ impl SessionPool {
                     sessions: Some(sessions),
                 });
             }
-            if state.created < self.limit {
+            if may_build && state.created < self.limit {
                 state.created += 1;
                 drop(state);
-                return match build() {
-                    Ok(sessions) => Ok(Lease {
-                        pool: self,
-                        sessions: Some(sessions),
-                    }),
-                    Err(error) => {
-                        self.lock().created -= 1;
-                        self.returned.notify_one();
-                        Err(error)
+                match build() {
+                    Ok(sessions) => {
+                        return Ok(Lease {
+                            pool: self,
+                            sessions: Some(sessions),
+                        });
                     }
-                };
+                    Err(error) => {
+                        state = self.lock();
+                        state.created -= 1;
+                        self.returned.notify_one();
+                        // A second set that will not build - memory is
+                        // short - is no reason to fail the page while
+                        // another set will come back: wait for it.
+                        if state.created == 0 {
+                            return Err(error);
+                        }
+                        may_build = false;
+                        continue;
+                    }
+                }
             }
             state = self
                 .returned
@@ -145,27 +156,27 @@ impl SessionPool {
         }
     }
 
-    fn give_back(&self, sessions: Sessions) {
+    fn give_back(&self, sessions: T) {
         self.lock().idle.push(sessions);
         self.returned.notify_one();
     }
 }
 
 /// A set of sessions out of the pool, returned when dropped.
-struct Lease<'a> {
-    pool: &'a SessionPool,
-    sessions: Option<Sessions>,
+struct Lease<'a, T = Sessions> {
+    pool: &'a SessionPool<T>,
+    sessions: Option<T>,
 }
 
-impl Lease<'_> {
-    fn sessions(&mut self) -> &mut Sessions {
+impl<T> Lease<'_, T> {
+    fn sessions(&mut self) -> &mut T {
         self.sessions
             .as_mut()
             .expect("a lease holds its sessions until dropped")
     }
 }
 
-impl Drop for Lease<'_> {
+impl<T> Drop for Lease<'_, T> {
     fn drop(&mut self) {
         if let Some(sessions) = self.sessions.take() {
             self.pool.give_back(sessions);
@@ -200,8 +211,12 @@ fn model_error(path: &Path, error: impl Display) -> ExtractionError {
     ))
 }
 
+/// A run that fails on networks that loaded - out of memory, almost always -
+/// says nothing about the document, so the document may be tried again.
 fn run_error(error: impl Display) -> ExtractionError {
-    ExtractionError::parse_failed(format!("OCR inference failed: {error}"))
+    ExtractionError::io(std::io::Error::other(format!(
+        "OCR inference failed: {error}"
+    )))
 }
 
 fn session(path: &Path, threads: usize) -> Result<Session, ExtractionError> {
@@ -220,6 +235,12 @@ fn session(path: &Path, threads: usize) -> Result<Session, ExtractionError> {
         .with_intra_op_spinning(false)
         .map_err(|e| error(&e))?
         .with_inter_op_spinning(false)
+        .map_err(|e| error(&e))?
+        // The default arena keeps the largest page's buffers for the life
+        // of the process, and the worker outlives every document: half a
+        // gigabyte held, idle, beside the model server. Without it each run
+        // hands its memory back.
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
         .map_err(|e| error(&e))?
         .commit_from_file(path)
         .map_err(|e| error(&e))
@@ -362,22 +383,46 @@ impl PaddleOcr {
         crops: &[LineCrop],
         cancel: &CancellationToken,
     ) -> Result<Vec<DecodedLine>, ExtractionError> {
-        let mut decoded = vec![DecodedLine::default(); crops.len()];
+        let widths: Vec<u32> = crops.iter().map(|crop| crop.width).collect();
+        self.recognize_lines(
+            sessions,
+            &widths,
+            |index| Cow::Borrowed(&crops[index]),
+            cancel,
+        )
+    }
+
+    /// Reads lines `0..widths.len()`, cutting each one's crop only when its
+    /// batch comes up: a page's lines are never all held at once, and a
+    /// page of a thousand long lines costs one batch of crops, not a
+    /// thousand.
+    fn recognize_lines<'c>(
+        &self,
+        sessions: &mut Sessions,
+        widths: &[u32],
+        crop: impl Fn(usize) -> Cow<'c, LineCrop>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<DecodedLine>, ExtractionError> {
+        let mut decoded = vec![DecodedLine::default(); widths.len()];
         // Lines of similar length share a batch, so little of it is padding.
-        let mut order: Vec<usize> = (0..crops.len()).collect();
-        order.sort_by_key(|&index| (crops[index].width, index));
+        let mut order: Vec<usize> = (0..widths.len()).collect();
+        order.sort_by_key(|&index| (widths[index], index));
         for chunk in order.chunks(self.config.recognition_batch.max(1)) {
             cancel.check()?;
-            let batch: Vec<&LineCrop> = chunk.iter().map(|&index| &crops[index]).collect();
             let (input, width) = cancel.timed(
                 |timings| &mut timings.ocr_encode_micros,
-                || recognition_batch(&batch, MIN_RECOGNITION_WIDTH),
+                || {
+                    let crops: Vec<Cow<'c, LineCrop>> =
+                        chunk.iter().map(|&index| crop(index)).collect();
+                    let batch: Vec<&LineCrop> = crops.iter().map(AsRef::as_ref).collect();
+                    recognition_batch(&batch, MIN_RECOGNITION_WIDTH)
+                },
             );
             let lines = cancel.timed(
                 |timings| &mut timings.ocr_engine_micros,
                 || -> Result<Vec<DecodedLine>, ExtractionError> {
                     let tensor = TensorRef::from_array_view((
-                        [batch.len(), 3, RECOGNITION_HEIGHT as usize, width as usize],
+                        [chunk.len(), 3, RECOGNITION_HEIGHT as usize, width as usize],
                         input.as_slice(),
                     ))
                     .map_err(run_error)?;
@@ -399,7 +444,7 @@ impl PaddleOcr {
                             self.dictionary.classes()
                         )));
                     }
-                    Ok((0..batch.len())
+                    Ok((0..chunk.len())
                         .map(|item| {
                             let rows = &probabilities
                                 [item * steps * classes..(item + 1) * steps * classes];
@@ -526,16 +571,16 @@ impl PaddleOcr {
                 }
             })
             .collect();
-        let crops: Vec<LineCrop> = cancel.timed(
-            |timings| &mut timings.ocr_encode_micros,
-            || {
-                quads
-                    .iter()
-                    .map(|quad| crop_line(&frame, quad, RECOGNITION_HEIGHT))
-                    .collect()
-            },
-        );
-        let mut decoded = self.recognize_crops(sessions, &crops, cancel)?;
+        let widths: Vec<u32> = quads
+            .iter()
+            .map(|quad| line_width(quad, RECOGNITION_HEIGHT))
+            .collect();
+        let mut decoded = self.recognize_lines(
+            sessions,
+            &widths,
+            |index| Cow::Owned(crop_line(&frame, &quads[index], RECOGNITION_HEIGHT)),
+            cancel,
+        )?;
         if let Some(settings) = &self.config.reread {
             self.reread(sessions, &frame, &quads, &mut decoded, settings, cancel)?;
         }
@@ -741,5 +786,44 @@ impl OcrBackend for PaddleOcr {
     /// only wait for one.
     fn concurrency(&self) -> usize {
         self.config.workers.max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A second set of sessions that will not build - memory is short -
+    /// makes a page wait for the set another page holds, not fail; only a
+    /// pool with no set at all reports the error.
+    #[test]
+    fn a_set_that_will_not_build_waits_for_one_that_did() {
+        let pool = SessionPool::<u32>::new(2);
+        let cancel = CancellationToken::new();
+        let first = pool.acquire(|| Ok(1), &cancel).unwrap();
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                let mut lease = pool
+                    .acquire(
+                        || Err(ExtractionError::resource_limit("no memory")),
+                        &cancel,
+                    )
+                    .expect("waits for the first set instead of failing");
+                *lease.sessions()
+            });
+            std::thread::sleep(Duration::from_millis(250));
+            drop(first);
+            assert_eq!(waiting.join().unwrap(), 1);
+        });
+
+        let empty = SessionPool::<u32>::new(2);
+        assert!(
+            empty
+                .acquire(
+                    || Err(ExtractionError::resource_limit("no memory")),
+                    &cancel
+                )
+                .is_err()
+        );
     }
 }

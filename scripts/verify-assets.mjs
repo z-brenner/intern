@@ -35,6 +35,18 @@ const OCR_RUNTIME_INSTALL_PATHS = Object.freeze([
   'ocr-models/page-orientation.onnx',
 ]);
 
+// The pinned digest each OCR runtime file must have when it is bundled: the
+// DLL as extracted from its package, each model as downloaded.
+function pinnedOcrDigests(downloads) {
+  const download = (id) => downloads.find((entry) => entry.id === id);
+  return new Map([
+    ['onnxruntime.dll', download('onnxruntime')?.extract?.sha256],
+    ['ocr-models/text-detection.onnx', download('ocr-text-detection')?.sha256],
+    ['ocr-models/text-recognition.onnx', download('ocr-text-recognition')?.sha256],
+    ['ocr-models/page-orientation.onnx', download('ocr-page-orientation')?.sha256],
+  ]);
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -141,6 +153,15 @@ export async function verifyRuntimeAssets(manifestPath = DEFAULT_MANIFEST, optio
     assert(metadata.size === file.size, `runtime asset size mismatch: ${file.path}`);
     assert(await sha256(path) === file.sha256, `runtime asset SHA-256 mismatch: ${file.path}`);
     verifiedFiles += 1;
+  }
+  // What ships must be what was pinned, not only what staging wrote down: a
+  // bundled OCR file whose digest is not its download's pin is refused.
+  const pinnedOcr = pinnedOcrDigests(manifest.downloads);
+  for (const file of manifest.bundled_files) {
+    if (!pinnedOcr.has(file.install_path)) continue;
+    const pinned = pinnedOcr.get(file.install_path);
+    assert(pinned !== undefined, `no pinned download for bundled ${file.install_path}`);
+    assert(file.sha256 === pinned, `bundled ${file.install_path} is not the pinned download: ${file.sha256} != ${pinned}`);
   }
   const stagedOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
   const missingOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));

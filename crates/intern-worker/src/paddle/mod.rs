@@ -94,6 +94,23 @@ impl PaddleAssets {
         .iter()
         .all(|path| path.is_file())
     }
+
+    /// The first of PP-OCR's files that is missing when some of them are
+    /// installed - something removed the rest - or nothing when they are all
+    /// there or none is, as on a development machine.
+    pub fn partly_missing(&self) -> Option<&Path> {
+        let files = [
+            &self.runtime_library,
+            &self.detection_model,
+            &self.recognition_model,
+            &self.orientation_model,
+        ];
+        let missing = files.iter().find(|path| !path.is_file())?;
+        files
+            .iter()
+            .any(|path| path.is_file())
+            .then_some(missing.as_path())
+    }
 }
 
 /// How a page's orientation is found.
@@ -381,6 +398,29 @@ pub fn page_confidence(lines: &[PlacedLine]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Some of PP-OCR's files without the rest is reported, naming the first
+    /// one missing; none of them, a development machine, is not.
+    #[test]
+    fn a_runtime_with_some_files_missing_is_named() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = PaddleAssets::in_directory(directory.path());
+        assert_eq!(assets.partly_missing(), None);
+        std::fs::create_dir(directory.path().join(MODEL_DIRECTORY)).unwrap();
+        std::fs::write(&assets.detection_model, b"model").unwrap();
+        assert_eq!(
+            assets.partly_missing(),
+            Some(assets.runtime_library.as_path())
+        );
+        for path in [
+            &assets.runtime_library,
+            &assets.recognition_model,
+            &assets.orientation_model,
+        ] {
+            std::fs::write(path, b"file").unwrap();
+        }
+        assert_eq!(assets.partly_missing(), None);
+    }
 
     fn placed(text: &str, bounds: [f32; 4], probability: f32) -> PlacedLine {
         PlacedLine {

@@ -92,7 +92,16 @@ machine with eight or more logical cores a second page can be read at the
 same time, with its own sessions, so OCR never uses more than half the
 cores and never more than two pages' worth of memory - about 570 MB each
 at their peak. A page that arrives while every set of sessions is busy
-waits for one. Sessions are made once per worker process and kept.
+waits for one. Sessions are made once per worker process and kept, but
+not their working memory: ONNX Runtime's arena would hold the largest
+page's buffers for the life of the worker, which outlives every document,
+so it is off and each run hands its memory back. A second set of sessions
+that cannot be built - memory is short - makes the page wait for the first
+instead of failing it, and a run that fails on networks that loaded is
+reported as worth trying again. Lines are cut into crops one batch at a
+time, so a page of a thousand long lines never holds them all, and a page
+many times longer than wide shows the orientation classifier only its
+central square.
 Spinning threads are off: between these networks' short layers they would
 burn a core the user is working on.
 
@@ -362,9 +371,13 @@ SHA-256, and `scripts/fetch-windows-assets.ps1` fetches and verifies each:
   model repositories carry no license file of their own), go into
   `licenses/`; `THIRD_PARTY_NOTICES.md` lists all four files.
 
-`scripts/verify-assets.mjs` holds the pins, including the DLL's, and
-refuses an inventory that carries part of the OCR runtime without the rest;
-the release inventory must carry all of it. The installer smoke requires
+`scripts/verify-assets.mjs` holds the pins, including the DLL's, refuses a
+bundled OCR file whose digest is not its download's pin, and refuses an
+inventory that carries part of the OCR runtime without the rest; the release
+inventory must carry all of it. A worker that finds part of the runtime
+installed - an antivirus quarantine, a damaged update - logs
+`OCR_ENGINE_FALLBACK` naming the missing file before it reads with
+Tesseract. The installer smoke requires
 the four files, the worker smoke fails if a runtime that carries them
 falls back to Tesseract, and QA and release run the engine's own tests
 against the staged runtime with `INTERN_REQUIRE_PP_OCR` set.
