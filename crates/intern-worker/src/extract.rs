@@ -1209,7 +1209,17 @@ fn assemble(
                 let size = sizes.first().copied().ok_or_else(unread)?;
                 let vision = vision.transpose()?;
                 (
-                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals, stop),
+                    counted_in(
+                        crate::layout::ocr_page(
+                            page_number,
+                            reading,
+                            size,
+                            Some(scale),
+                            signals,
+                            stop,
+                        ),
+                        characters,
+                    ),
                     vision,
                 )
             }
@@ -1229,13 +1239,16 @@ fn assemble(
                     Some((reading, size, page_vision)) if reread_is_better(&reading, &signals) => {
                         let scale = display_width(&inspection) / f64::from(size.0.max(1));
                         (
-                            crate::layout::ocr_page(
-                                page_number,
-                                reading,
-                                size,
-                                Some(scale),
-                                signals,
-                                stop,
+                            counted_in(
+                                crate::layout::ocr_page(
+                                    page_number,
+                                    reading,
+                                    size,
+                                    Some(scale),
+                                    signals,
+                                    stop,
+                                ),
+                                characters,
                             ),
                             page_vision,
                         )
@@ -1276,6 +1289,7 @@ fn assemble(
                     scale,
                     stop,
                 )
+                .map(|page| counted_in(page, characters))
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
                     native_page(page_number, inspection, signals, route, stop, characters)
@@ -1373,6 +1387,27 @@ fn goes_out_whole(text: &str, budget: &mut usize) -> bool {
             true
         }
     }
+}
+
+/// A page read by OCR, counted against the document's characters as the
+/// worker will count them (see [`goes_out_whole`]). Its text is written
+/// from its layout, so the layout is built either way; a page the worker
+/// will cut lets it go here, as the page is read, instead of holding it
+/// until the whole document has been.
+fn counted(mut page: ExtractedPage, characters: &mut usize) -> ExtractedPage {
+    if !goes_out_whole(&page.text, characters) {
+        page.layout = None;
+    }
+    page
+}
+
+/// [`counted`], against a document's characters shared between the stages
+/// that read its pages.
+fn counted_in(page: ExtractedPage, characters: &Cell<usize>) -> ExtractedPage {
+    let mut remaining = characters.get();
+    let page = counted(page, &mut remaining);
+    characters.set(remaining);
+    page
 }
 
 /// One page handed to an OCR worker: the whole page, or the regions of it
@@ -2041,6 +2076,9 @@ pub fn extract_image(
     drop(rendered);
     // An image file has no physical size to go by; its pixels are taken to
     // be 300 DPI, which is what scanners write.
+    // The document's characters, counted down frame by frame as the worker
+    // will count them when it sends them (see [`counted`]).
+    let mut characters = MAX_DOCUMENT_CHARS;
     let mut page = cancel.timed(
         |timings| &mut timings.analysis_micros,
         || {
@@ -2049,6 +2087,7 @@ pub fn extract_image(
             })
         },
     );
+    page = counted(page, &mut characters);
     page.vision_escalated = true;
     let mut pages = vec![page];
 
@@ -2072,7 +2111,7 @@ pub fn extract_image(
         low_confidence |= result.mean_confidence < CONFIDENT_READING;
         let size = rendered.image.dimensions();
         drop(rendered);
-        pages.push(cancel.timed(
+        let page = cancel.timed(
             |timings| &mut timings.analysis_micros,
             || {
                 crate::layout::ocr_page(
@@ -2084,7 +2123,8 @@ pub fn extract_image(
                     &|| cancel.check().is_err(),
                 )
             },
-        ));
+        );
+        pages.push(counted(page, &mut characters));
     }
     let mut warnings = Vec::new();
     if low_confidence {

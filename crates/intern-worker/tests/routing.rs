@@ -572,3 +572,34 @@ fn pages_the_worker_will_cut_have_no_layout_built() {
     assert_eq!(MAX_DOCUMENT_CHARS, 4 * MAX_PAGE_CHARS);
     assert_eq!(built, [false, true, true, true, false, false]);
 }
+
+/// Scanned pages count against the document's characters too: a page the
+/// worker will cut keeps its text for the cut but lets its layout go.
+#[test]
+fn scanned_pages_past_the_documents_characters_keep_no_layout() {
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    let line = "word ".repeat(16);
+    let full = format!("{line}\n").repeat(MAX_PAGE_CHARS / (line.len() + 1));
+    let pages = (0..5)
+        .map(|index| PdfPageInspection {
+            page_index: index,
+            ..page("", 1.0)
+        })
+        .collect();
+    let readings = (0..5).map(|_| OcrResult::new(full.clone(), 91.0)).collect();
+    let (document, renders) = route(pages, readings);
+    assert_eq!(renders, 5);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(built, [true, true, true, true, false]);
+    assert!(
+        document
+            .pages
+            .iter()
+            .all(|page| page.source == PageSource::Ocr)
+    );
+}
