@@ -272,7 +272,9 @@ impl RenderedPage {
 pub struct OcrResult {
     pub text: String,
     pub mean_confidence: f32,
-    /// Clockwise non-EXIF rotation applied before OCR.
+    /// Clockwise non-EXIF rotation that stands the image read upright: the
+    /// turn applied before OCR, plus any the engine made itself (Tesseract
+    /// reads a page lying on its side as vertical text).
     pub rotation_degrees: u16,
     /// The reading line by line, where the engine reports lines. Empty when
     /// it does not, and then `text` is all there is.
@@ -656,6 +658,18 @@ enum PagePlan {
     },
 }
 
+impl PagePlan {
+    /// Whether the page brings the page image with it already.
+    fn has_page_image(&self) -> bool {
+        match self {
+            PagePlan::Done { vision, .. }
+            | PagePlan::Reread { vision, .. }
+            | PagePlan::Regions { vision, .. } => vision.is_some(),
+            PagePlan::Scan { .. } => false,
+        }
+    }
+}
+
 /// Whether an error ends the whole document rather than an optional reading
 /// it was for: the person canceled, or the time ran out.
 fn ends_the_document(error: &ExtractionError) -> bool {
@@ -699,6 +713,11 @@ where
         let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
         let mut plans = Vec::with_capacity(page_count);
         let mut failure: Option<(usize, ExtractionError)> = None;
+        // Whether a page already planned brings the page image with it, so
+        // no later page needs to be rendered for one. A scan's reading may
+        // still turn out to want it, and an earlier page's claim wins when
+        // the pages are put back in order.
+        let mut vision_taken = false;
         for inspection in inspections {
             let page_index = inspection.page_index;
             if let Err(error) = timed_check(cancel, started, limits) {
@@ -712,11 +731,20 @@ where
             }
             pool.collect_ready();
             cancel.report_progress("reading", page_index, Some(page_count));
-            match plan_page(inspection, pdf, path, limits, cancel, &mut pool) {
+            match plan_page(
+                inspection,
+                pdf,
+                path,
+                limits,
+                cancel,
+                &mut pool,
+                vision_taken,
+            ) {
                 Ok(plan) => {
                     if matches!(plan, PagePlan::Done { .. }) {
                         pool.finished += 1;
                     }
+                    vision_taken |= plan.has_page_image();
                     plans.push(plan);
                 }
                 Err(error) => {
@@ -765,6 +793,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     limits: &ResourceLimits,
     cancel: &CancellationToken,
     pool: &mut OcrPool<'_, '_, O>,
+    vision_taken: bool,
 ) -> Result<PagePlan, ExtractionError> {
     let page_index = inspection.page_index;
     let page_number = page_index + 1;
@@ -813,8 +842,10 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     }
 
     // Native text from here on. Whatever OCR adds is optional: a page that
-    // cannot be rendered or read again keeps the text it has.
-    let vision = if renderable && page_needs_vision(&inspection) {
+    // cannot be rendered or read again keeps the text it has. The page image
+    // is the first page's that wants one; once an earlier page has brought
+    // it, this one is not rendered for it.
+    let vision = if renderable && !vision_taken && page_needs_vision(&inspection) {
         let rendered = cancel.timed(
             |timings| &mut timings.render_micros,
             || pdf.render(path, page_index, cancel),

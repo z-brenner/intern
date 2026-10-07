@@ -237,6 +237,30 @@ fn large_non_text_page_under_one_hundred_characters_routes_first_page_to_vision(
     assert_eq!(document.optional_image.as_ref().unwrap().page_number, 1);
 }
 
+/// Only the first page that wants the page image is rendered for it: a
+/// later one would only be thrown away.
+#[test]
+fn pages_after_the_one_that_brings_the_page_image_are_not_rendered_for_it() {
+    let pages = (0..3)
+        .map(|index| {
+            let mut page = page(&"a".repeat(99), 0.65);
+            page.page_index = index;
+            page
+        })
+        .collect::<Vec<_>>();
+    let (document, renders) = route(pages, vec![OcrResult::new("unused", 99.0)]);
+
+    assert_eq!(renders, 1);
+    assert_eq!(document.optional_image.as_ref().unwrap().page_number, 1);
+    let escalated = document
+        .pages
+        .iter()
+        .filter(|page| page.vision_escalated)
+        .map(|page| page.page_number)
+        .collect::<Vec<_>>();
+    assert_eq!(escalated, [1]);
+}
+
 #[test]
 fn exactly_seventy_five_confidence_does_not_escalate_but_below_does() {
     let replacement_text = "abcdefghijklmnopqrst��";
