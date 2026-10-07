@@ -430,7 +430,6 @@ export function masterServicesAgreement12() {
       readingOrder: readingSnippets(lines, 6),
       keyValues: [['Effective Date', longDate(effective)]],
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Master Services Agreement',
       acceptableTypes: ['Services Agreement'],

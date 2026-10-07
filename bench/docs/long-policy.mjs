@@ -332,7 +332,6 @@ export function propertyPolicy60() {
       readingOrder: readingSnippets(lines, 8),
       keyValues: [['Policy Number', POLICY_NUMBER], ['Named Insured', INSURED]],
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Commercial Property Policy',
       acceptableTypes: ['Commercial Property Insurance Policy', 'Property Insurance Policy', 'Insurance Policy', 'Commercial Property Policy Declarations'],

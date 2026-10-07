@@ -352,7 +352,6 @@ export function termLoan40() {
       readingOrder: readingSnippets(lines, 8),
       keyValues: [['Maturity Date', longDate(maturity)]],
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Term Loan Agreement',
       acceptableTypes: ['Loan Agreement'],

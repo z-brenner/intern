@@ -368,7 +368,6 @@ export function industrialLease25() {
       readingOrder: readingSnippets(lines, 8),
       keyValues: [['Date of this Lease', longDate(dated)], ['Commencement Date', longDate(commencement)], ['Expiration Date', longDate(expiration)]],
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Industrial Lease',
       acceptableTypes: ['Lease', 'Lease Agreement', 'Industrial Lease Agreement'],

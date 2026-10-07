@@ -503,7 +503,7 @@ const ADDED_FOR_STRUCTURE = [
   'scan-mixed-middle-page', 'mixed-signature-region', 'scan-certificate-of-insurance', 'scan-bill-of-lading',
 ];
 
-/// The long documents added for phase 3, pending a recording.
+/// The long documents added for phase 3, recorded by its live run.
 const ADDED_FOR_RETRIEVAL = [
   'msa-effective-date-in-definitions-12p', 'industrial-lease-dated-in-schedule-25p', 'term-loan-parties-apart-40p',
   'property-policy-declarations-mid-60p', 'watershed-monitoring-report-100p',
@@ -514,8 +514,8 @@ describe('InternBench structure gold and the documents added for it', () => {
 
   it('adds twenty documents with full gold and a structure block, every one now recorded', () => {
     expect(added().length).toBe(20);
-    // Only the documents added since the phase 2 run wait for a recording.
-    expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([...ADDED_FOR_RETRIEVAL]);
+    // Every document has been recorded: none waits for a recording.
+    expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([]);
     for (const document of added()) {
       expect(document.structure, document.id).toBeDefined();
       expect(document.gold.document_date, document.id).not.toBeNull();
@@ -571,7 +571,7 @@ describe('InternBench structure gold and the documents added for it', () => {
     for (const [id, [pages, datePage]] of Object.entries(expected)) {
       const document = documents.find((entry) => entry.id === id)!;
       expect(document.pages, id).toBe(pages);
-      expect(document.recording, id).toBe('pending');
+      expect(document.recording, id).toBeUndefined();
       expect(document.structure, id).toBeDefined();
       expect(document.gold.forbidden_dates.length, `${id}: traps`).toBeGreaterThan(0);
       expect(document.gold.forbidden_parties.length, `${id}: names that are not parties`).toBeGreaterThan(0);

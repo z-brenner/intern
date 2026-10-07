@@ -284,7 +284,6 @@ export function watershedMonitoringReport100() {
     structure: structure({
       readingOrder: readingSnippets(lines, 10),
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Watershed Monitoring Report',
       acceptableTypes: ['Annual Watershed Monitoring Report', 'Water Quality Monitoring Report', 'Monitoring Report', 'Annual Monitoring Report'],
