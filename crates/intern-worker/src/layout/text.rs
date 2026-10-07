@@ -158,6 +158,11 @@ impl Geometry {
     /// Whether the space between two consecutive lines is a paragraph
     /// break: wider than the page's usual line gap by half a line, or a
     /// line set noticeably larger or smaller.
+    ///
+    /// The boxes a fast-route page's lines get are its text objects', which
+    /// fit the glyphs tightly: a line with no descenders - `2026.`, a label
+    /// in capitals - is a fifth shorter than the line above it in the same
+    /// type. Only a difference of more than a third is a change of size.
     fn breaks_between(&self, lines: &[LayoutLine], above: usize, below: usize) -> bool {
         let (Some(upper), Some(lower)) = (lines[above].bbox, lines[below].bbox) else {
             return false;
@@ -172,7 +177,7 @@ impl Geometry {
         }
         let upper_height = f64::from(upper[3].saturating_sub(upper[1]));
         let lower_height = f64::from(lower[3].saturating_sub(lower[1]));
-        space > gap + height * 0.5 || (upper_height - lower_height).abs() > height * 0.2
+        space > gap + height * 0.5 || (upper_height - lower_height).abs() > height * 0.35
     }
 
     /// Whether a line is set noticeably larger than the page's text.

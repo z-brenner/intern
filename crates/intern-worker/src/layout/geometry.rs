@@ -1665,7 +1665,13 @@ fn text_at(
             let same_style = (line.height() - first.height()).abs() <= first.height() * 0.1
                 && line.all_bold(items) == first.all_bold(items)
                 && heading_level(items, line, &text, stats) == Some(level);
-            if !same_style || line.y0 - lines[end - 1].y1 > stats.line_gap + stats.body_height * 0.5
+            // A bold row of cells under a bold heading is the header of
+            // the table the heading introduces.
+            let starts_table = line.cells.len() >= 2
+                && table_at(items, lines, end, stats, &[], TextSource::Native).is_some();
+            if !same_style
+                || starts_table
+                || line.y0 - lines[end - 1].y1 > stats.line_gap + stats.body_height * 0.5
             {
                 break;
             }
