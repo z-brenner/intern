@@ -20,6 +20,7 @@
 //!                  [--gold bench/gold.json] [--only id,id] [--note TEXT]
 //! intern-bench retrieval --recording bench/recording.json[,more.json] --gold bench/gold.json
 //!                  [--fixtures fixtures/corpus-recording.json --expected fixtures/expected.json]
+//!                  [--corpus bench/generated --worker PATH]
 //!                  [--config a.json,b.json] [--sweep] [--only id,id]
 //!                  [--output sweep.json] [--markdown sweep.md] [--dump DIR]
 //! ```
@@ -53,6 +54,7 @@ const USAGE: &str = "usage:
                    [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]
   intern-bench retrieval --recording A.json[,B.json] --gold GOLD.json
                    [--fixtures RECORDING.json --expected EXPECTED.json]
+                   [--corpus DIR --worker PATH]
                    [--config C.json[,D.json]] [--sweep] [--only id,id]
                    [--output SWEEP.json] [--markdown SWEEP.md] [--dump DIR]";
 
@@ -143,6 +145,8 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                     "gold",
                     "fixtures",
                     "expected",
+                    "corpus",
+                    "worker",
                     "config",
                     "sweep",
                     "only",
@@ -164,8 +168,17 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                 (None, None) => None,
                 _ => return Err("--fixtures and --expected go together".to_owned()),
             };
-            if !values.contains_key("recording") && fixtures.is_none() {
-                return Err(format!("missing --recording or --fixtures\n{USAGE}"));
+            let extract = match (values.get("corpus"), values.get("worker")) {
+                (Some(corpus), Some(worker)) => {
+                    Some((PathBuf::from(corpus), PathBuf::from(worker)))
+                }
+                (None, None) => None,
+                _ => return Err("--corpus and --worker go together".to_owned()),
+            };
+            if !values.contains_key("recording") && fixtures.is_none() && extract.is_none() {
+                return Err(format!(
+                    "missing --recording, --fixtures or --corpus\n{USAGE}"
+                ));
             }
             intern_bench::context::retrieval_command(&intern_bench::context::RetrievalOptions {
                 recordings: paths("recording"),
@@ -173,6 +186,7 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                     .get("gold")
                     .map_or_else(|| PathBuf::from("bench/gold.json"), PathBuf::from),
                 fixtures,
+                extract,
                 configs: paths("config"),
                 sweep: values.contains_key("sweep"),
                 only: id_list(values.get("only")),

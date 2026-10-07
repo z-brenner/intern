@@ -881,6 +881,13 @@ fn components(
                                 "scope",
                                 "regarding",
                                 "services",
+                                // What a lease, a policy or a sale is of.
+                                "premises",
+                                "property",
+                                "permitted use",
+                                "location",
+                                "goods",
+                                "facility",
                             ],
                         ),
                         50,
@@ -1526,6 +1533,55 @@ mod tests {
             );
             assert!(!context.text.contains("Credit Agreement - Page 7"));
         }
+    }
+
+    /// A 25-page lease whose particulars - the date, and what is let - sit
+    /// in a schedule on page 23, as InternBench's industrial lease has them.
+    #[test]
+    fn a_lease_brings_what_it_lets_from_a_schedule_deep_inside() {
+        let filler = "Tenant will comply with the rules of the Park as Landlord reasonably \
+                      amends them from time to time on notice, and will keep the Premises \
+                      clean, orderly and free of pests throughout the Term. ";
+        let mut pages = Vec::new();
+        for number in 1..=25 {
+            let mut body = String::new();
+            match number {
+                1 => body.push_str("INDUSTRIAL LEASE\n\nTHIS INDUSTRIAL LEASE is dated as of the date stated in Schedule 1 and is made between Ardent Quay Industrial Properties LP (\"Landlord\") and Moss & Lanyard Distribution Inc. (\"Tenant\").\n\n"),
+                23 => body.push_str("SCHEDULE 1 - LEASE PARTICULARS\n\n| Item | Particulars |\n| --- | --- |\n| Date of this Lease | April 14, 2026 |\n| Landlord | Ardent Quay Industrial Properties LP |\n| Tenant | Moss & Lanyard Distribution Inc. |\n| Premises | Building 7, approximately 312,480 square feet of warehouse space with 24 dock doors |\n| Security Deposit | $312,480.00 |\n\n"),
+                _ => {}
+            }
+            for _ in 0..14 {
+                body.push_str(filler);
+                body.push('\n');
+            }
+            pages.push(page(number, &body));
+        }
+        let source = DocumentSource::from_pages(pages);
+        let config = RetrievalConfig::default();
+        let index = EvidenceIndex::build_with(&source, config.index_options());
+        let context = retrieve(&index, &config, 100);
+        assert_ne!(context.tier, Tier::Whole);
+        for wanted in [
+            "| Date of this Lease | April 14, 2026 |",
+            "312,480 square feet of warehouse space",
+            "Moss & Lanyard Distribution Inc.",
+        ] {
+            assert!(
+                holds(&context, &index, wanted),
+                "lost {wanted}:\n{}",
+                context.text
+            );
+        }
+        let premises = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("| Premises |"))
+            .unwrap();
+        assert!(
+            context
+                .chosen_for(Field::Subject)
+                .contains(&premises.ordinal)
+        );
     }
 
     #[test]

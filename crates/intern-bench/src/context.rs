@@ -1067,6 +1067,10 @@ pub struct RetrievalOptions {
     pub gold: PathBuf,
     /// The fixture corpus: its recording and its expected answers.
     pub fixtures: Option<(PathBuf, PathBuf)>,
+    /// Documents to extract now rather than read from a recording: the
+    /// corpus directory and the worker to read it with. For documents no
+    /// recording holds yet - the gold's `pending` ones.
+    pub extract: Option<(PathBuf, PathBuf)>,
     /// Configurations from files, by name.
     pub configs: Vec<PathBuf>,
     /// Run the built-in sweep as well.
@@ -1107,6 +1111,34 @@ pub fn load_bench_corpus(
             source: source.clone(),
         });
     }
+    Ok(documents)
+}
+
+/// Reads the gold's documents (those `only` names, or all) from `corpus`
+/// with `worker`, as a live run would, and keeps what it extracts.
+pub fn extract_corpus(
+    corpus: &Path,
+    worker: &Path,
+    gold: &GoldFile,
+    only: &[String],
+) -> Result<Vec<CorpusDocument>, String> {
+    let worker = intern_engine::SupervisedWorker::new(worker);
+    let mut documents = Vec::new();
+    for document in &gold.documents {
+        if !only.is_empty() && !only.contains(&document.id) {
+            continue;
+        }
+        let path = corpus.join(&document.file);
+        eprintln!("extracting {}", document.id);
+        match crate::live::extract(&worker, &format!("retrieval-{}", document.id), &path).0 {
+            Ok(source) => documents.push(CorpusDocument {
+                gold: document.clone(),
+                source,
+            }),
+            Err(failure) => eprintln!("{}: extraction failed: {}", document.id, failure.code),
+        }
+    }
+    worker.stop();
     Ok(documents)
 }
 
@@ -1216,6 +1248,11 @@ pub fn retrieval_command(options: &RetrievalOptions) -> Result<i32, String> {
     if let Some((recording, expected)) = &options.fixtures {
         for document in load_fixture_corpus(recording, expected, &options.only)? {
             corpus.push(("fixtures".to_owned(), document));
+        }
+    }
+    if let Some((directory, worker)) = &options.extract {
+        for document in extract_corpus(directory, worker, &gold, &options.only)? {
+            corpus.push(("extracted".to_owned(), document));
         }
     }
     if corpus.is_empty() {
