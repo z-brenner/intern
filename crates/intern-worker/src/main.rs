@@ -54,6 +54,20 @@ impl OcrBackend for LazyOcr {
             Err(error) => Err(error.clone()),
         }
     }
+
+    /// Tesseract reads a page in a process of its own, so pages can be read
+    /// side by side; how many is [`ocr_workers`].
+    fn concurrency(&self) -> usize {
+        ocr_workers()
+    }
+}
+
+/// How many pages are read by OCR at once: half the machine's logical
+/// cores, so the app and the model server keep the rest, and never more
+/// than four.
+fn ocr_workers() -> usize {
+    let cores = std::thread::available_parallelism().map_or(2, std::num::NonZero::get);
+    (cores / 2).clamp(1, 4)
 }
 
 /// The reader a file is handed to.

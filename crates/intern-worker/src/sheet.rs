@@ -23,7 +23,7 @@ use calamine::{Data, DataRef, Range, Reader, Xls, XlsError, XlsOptions, Xlsx};
 
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractedPage, ExtractionError, ExtractionWarning,
-    OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit,
+    OLE_MAGIC, PageSource, anydoc_document, enforce_office_decompressed_limit, link_sections,
     reject_encrypted_ole,
 };
 use crate::limits::ResourceLimits;
@@ -803,13 +803,11 @@ fn workbook_document(
         };
         let (text, sheet_elided) = render_sheet(name.as_deref(), &sheet);
         elided |= sheet_elided;
-        pages.push(ExtractedPage {
-            page_number: pages.len() + 1,
+        pages.push(ExtractedPage::of_text(
+            pages.len() + 1,
             text,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        });
+            PageSource::AnyDoc,
+        ));
     }
     if pages.is_empty() {
         return Err(ExtractionError::unsupported(
@@ -823,7 +821,8 @@ fn workbook_document(
 /// window. That is not truncation: the reader chose to leave them out and
 /// marked where it did, so the document is still whole as far as anything
 /// downstream can tell, and `truncated` stays false.
-pub(crate) fn elided_document(pages: Vec<ExtractedPage>, elided: bool) -> ExtractedDocument {
+pub(crate) fn elided_document(mut pages: Vec<ExtractedPage>, elided: bool) -> ExtractedDocument {
+    link_sections(&mut pages);
     ExtractedDocument {
         pages,
         warnings: if elided {

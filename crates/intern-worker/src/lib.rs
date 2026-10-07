@@ -1,6 +1,7 @@
 pub mod delimited;
 pub mod email;
 pub mod extract;
+pub mod layout;
 pub mod limits;
 pub mod ocr;
 pub mod panic_hook;

@@ -1,10 +1,14 @@
 use std::path::Path;
 #[cfg(feature = "native-pdfium")]
+use std::path::PathBuf;
+#[cfg(feature = "native-pdfium")]
 use std::time::Instant;
 
 use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
+#[cfg(feature = "native-pdfium")]
+use crate::layout::{NativePage, TextRun, measure_signals, route_page, router::needs_runs};
 #[cfg(feature = "native-pdfium")]
 use crate::limits::{MAX_PAGE_COUNT, render_size_within};
 #[cfg(feature = "native-pdfium")]
@@ -21,9 +25,22 @@ use pdfium_render::prelude::*;
 static PDFIUM: std::sync::OnceLock<Result<Pdfium, String>> = std::sync::OnceLock::new();
 
 /// Only [`PdfiumBackend::new`] makes one, so holding one means PDFium bound.
+///
+/// A backend keeps the last document it opened, so inspecting a document and
+/// rendering its scanned pages share one open: the PDF is parsed once per
+/// extraction, not once more for every page that goes to OCR. PDFium is not
+/// thread-safe, and the cell makes that a compile-time fact: a backend
+/// cannot be shared between threads, so every render happens on the thread
+/// that inspected the document.
 #[cfg(feature = "native-pdfium")]
 pub struct PdfiumBackend {
-    _bound: (),
+    open: std::cell::RefCell<Option<OpenDocument>>,
+}
+
+#[cfg(feature = "native-pdfium")]
+struct OpenDocument {
+    path: PathBuf,
+    document: PdfDocument<'static>,
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -41,7 +58,9 @@ impl PdfiumBackend {
                 .map(Pdfium::new)
                 .map_err(|error| format!("PDFium did not load: {error:?}"))
         }) {
-            Ok(_) => Ok(Self { _bound: () }),
+            Ok(_) => Ok(Self {
+                open: std::cell::RefCell::new(None),
+            }),
             Err(message) => Err(ExtractionError::native_assets_missing(message.clone())),
         }
     }
@@ -54,6 +73,29 @@ impl PdfiumBackend {
                 "PDFium was not initialised",
             )),
         }
+    }
+
+    /// Runs `work` on the document at `path`, opening it only if it is not
+    /// the one already open.
+    fn with_document<T>(
+        &self,
+        path: &Path,
+        work: impl FnOnce(&PdfDocument<'static>) -> Result<T, ExtractionError>,
+    ) -> Result<T, ExtractionError> {
+        let mut open = self.open.borrow_mut();
+        if open.as_ref().is_none_or(|open| open.path != path) {
+            // The previous document is closed before the next is opened.
+            *open = None;
+            let document = self
+                .pdfium()?
+                .load_pdf_from_file(path, None)
+                .map_err(load_error)?;
+            *open = Some(OpenDocument {
+                path: path.to_path_buf(),
+                document,
+            });
+        }
+        work(&open.as_ref().expect("opened above").document)
     }
 }
 
@@ -96,18 +138,463 @@ fn contains_rendered_image(object: &PdfPageObject<'_>) -> bool {
     false
 }
 
+/// A page's own frame: the box its content is drawn in, before `/Rotate`.
+/// Converts PDF user space (points, origin bottom left) into tenths of a
+/// point with the origin at the frame's top left.
 #[cfg(feature = "native-pdfium")]
-fn rendered_image_area(object: &PdfPageObject<'_>) -> f32 {
-    if !contains_rendered_image(object) {
-        return 0.0;
+#[derive(Clone, Copy, Debug)]
+struct Frame {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+}
+
+#[cfg(feature = "native-pdfium")]
+impl Frame {
+    fn of(page: &PdfPage<'_>, rotation: u16) -> Self {
+        let bounds = page
+            .boundaries()
+            .bounding()
+            .map(|boundary| boundary.bounds)
+            .ok()
+            .filter(|bounds| bounds.width().value > 0.0 && bounds.height().value > 0.0);
+        match bounds {
+            Some(bounds) => Self {
+                left: bounds.left().value,
+                top: bounds.top().value,
+                width: bounds.width().value,
+                height: bounds.height().value,
+            },
+            None => {
+                // The displayed size, turned back into the frame's.
+                let (width, height) = if rotation % 180 == 90 {
+                    (page.height().value, page.width().value)
+                } else {
+                    (page.width().value, page.height().value)
+                };
+                Self {
+                    left: 0.0,
+                    top: height,
+                    width,
+                    height,
+                }
+            }
+        }
     }
-    // For a Form XObject, its own transformed bounds describe the stamped area
-    // on the containing page. This is conservative for mixed-content forms and
-    // avoids incorrectly treating nested child coordinates as page coordinates.
-    object
-        .bounds()
-        .map(|bounds| bounds.width().value.abs() * bounds.height().value.abs())
-        .unwrap_or(0.0)
+
+    fn units(value: f32) -> u32 {
+        (f64::from(value) * crate::layout::UNITS_PER_POINT)
+            .round()
+            .max(0.0) as u32
+    }
+
+    fn rect(&self, rect: &PdfRect) -> [u32; 4] {
+        self.points(
+            rect.left().value,
+            rect.bottom().value,
+            rect.right().value,
+            rect.top().value,
+        )
+    }
+
+    /// `left, bottom, right, top` in user space as a frame box.
+    fn points(&self, left: f32, bottom: f32, right: f32, top: f32) -> [u32; 4] {
+        let clamp_x = |value: f32| (value - self.left).clamp(0.0, self.width);
+        let clamp_y = |value: f32| (self.top - value).clamp(0.0, self.height);
+        let (x0, x1) = (clamp_x(left.min(right)), clamp_x(left.max(right)));
+        let (y0, y1) = (clamp_y(top.max(bottom)), clamp_y(top.min(bottom)));
+        [
+            Self::units(x0),
+            Self::units(y0),
+            Self::units(x1),
+            Self::units(y1),
+        ]
+    }
+}
+
+/// What walking a page's objects finds: the area its images cover, their
+/// boxes, how many text objects it has and how many are invisible, and its
+/// rules.
+#[cfg(feature = "native-pdfium")]
+#[derive(Default)]
+struct ObjectSurvey {
+    image_area: f32,
+    images: Vec<[u32; 4]>,
+    text_objects: u32,
+    invisible_text_objects: u32,
+    /// The box of each text object, in content-stream order: the runs of
+    /// text the producer placed, one style each.
+    text_boxes: Vec<[u32; 4]>,
+    rulings: Vec<[u32; 4]>,
+}
+
+/// A path this thin is a rule, not a shape.
+#[cfg(feature = "native-pdfium")]
+const RULE_THICKNESS: f32 = 2.0;
+/// ...and this long.
+#[cfg(feature = "native-pdfium")]
+const RULE_LENGTH: f32 = 10.0;
+
+#[cfg(feature = "native-pdfium")]
+fn survey_object(object: &PdfPageObject<'_>, frame: &Frame, survey: &mut ObjectSurvey) {
+    let bounds = object.bounds().map(|bounds| bounds.to_rect()).ok();
+    if let Some(text) = object.as_text_object() {
+        survey.text_objects += 1;
+        if text.render_mode() == PdfPageTextRenderMode::Invisible {
+            survey.invisible_text_objects += 1;
+        }
+        if let Some(bounds) = bounds {
+            let bbox = frame.rect(&bounds);
+            if bbox[2] > bbox[0] && bbox[3] > bbox[1] {
+                survey.text_boxes.push(bbox);
+            }
+        }
+        return;
+    }
+    if contains_rendered_image(object) {
+        // For a Form XObject, its own transformed bounds describe the
+        // stamped area on the containing page. This is conservative for
+        // mixed-content forms and avoids incorrectly treating nested child
+        // coordinates as page coordinates.
+        if let Some(bounds) = bounds {
+            survey.image_area += bounds.width().value.abs() * bounds.height().value.abs();
+            survey.images.push(frame.rect(&bounds));
+        }
+        if let Some(form) = object.as_x_object_form_object() {
+            // Text inside a stamped form still counts towards the page's.
+            for index in form.as_range() {
+                if let Ok(child) = form.get(index)
+                    && let Some(text) = child.as_text_object()
+                {
+                    survey.text_objects += 1;
+                    if text.render_mode() == PdfPageTextRenderMode::Invisible {
+                        survey.invisible_text_objects += 1;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    if let Some(form) = object.as_x_object_form_object() {
+        // A form's children are placed in the form's own space; its text is
+        // counted, and placed where the form is.
+        let text_before = survey.text_objects;
+        let boxes_before = survey.text_boxes.len();
+        for index in form.as_range() {
+            if let Ok(child) = form.get(index) {
+                survey_object(&child, frame, survey);
+            }
+        }
+        survey.text_boxes.truncate(boxes_before);
+        if survey.text_objects > text_before
+            && let Some(bounds) = bounds
+        {
+            survey.text_boxes.push(frame.rect(&bounds));
+        }
+        return;
+    }
+    if let (Some(path), Some(bounds)) = (object.as_path_object(), bounds) {
+        let width = bounds.width().value.abs();
+        let height = bounds.height().value.abs();
+        let thin_across = height <= RULE_THICKNESS && width >= RULE_LENGTH;
+        let thin_down = width <= RULE_THICKNESS && height >= RULE_LENGTH;
+        if thin_across || thin_down {
+            survey.rulings.push(frame.rect(&bounds));
+        } else if path.is_stroked().unwrap_or(false)
+            && path
+                .fill_mode()
+                .is_ok_and(|mode| mode == PdfPathFillMode::None)
+            && width >= RULE_LENGTH
+            && height >= RULE_LENGTH
+        {
+            // An outlined box: its four sides are rules.
+            let (left, bottom, right, top) = (
+                bounds.left().value,
+                bounds.bottom().value,
+                bounds.right().value,
+                bounds.top().value,
+            );
+            survey
+                .rulings
+                .push(frame.points(left, top - 0.5, right, top));
+            survey
+                .rulings
+                .push(frame.points(left, bottom, right, bottom + 0.5));
+            survey
+                .rulings
+                .push(frame.points(left, bottom, left + 0.5, top));
+            survey
+                .rulings
+                .push(frame.points(right - 0.5, bottom, right, top));
+        }
+    }
+}
+
+/// The page's text as runs: characters on one baseline with no gap wider
+/// than most of their height between them.
+///
+/// Each character is asked for its box, its value, whether PDFium generated
+/// it, and its weight - four calls - which is why only pages routed to a
+/// geometry route are read this way.
+#[cfg(feature = "native-pdfium")]
+fn text_runs(text: &PdfPageText<'_>, frame: &Frame, segments: &[[u32; 4]]) -> Vec<TextRun> {
+    struct Building {
+        text: String,
+        bbox: [f64; 4],
+        /// The run's first character and, if it has more, its last.
+        first: usize,
+        last: Option<usize>,
+    }
+    // A run is bold when both its ends are set in a bold face: a label set
+    // in bold, not a paragraph that opens with a bold clause number.
+    // PDFium's weight is unreliable for the standard fonts, whose names say
+    // it instead, and a face's name costs two calls and an allocation, so
+    // it is asked of a run's ends rather than of every character.
+    fn finish(building: Option<Building>, chars: &PdfPageTextChars<'_>, runs: &mut Vec<TextRun>) {
+        let Some(building) = building else {
+            return;
+        };
+        let text = building.text.trim_end().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        let bold_at = |index: usize| chars.get(index).is_ok_and(|character| is_bold(&character));
+        let bold = bold_at(building.first) && building.last.is_none_or(bold_at);
+        runs.push(TextRun {
+            text,
+            bbox: building.bbox.map(|value| value.round().max(0.0) as u32),
+            bold,
+            confidence: None,
+        });
+    }
+    let mut runs = Vec::new();
+    let mut current: Option<Building> = None;
+    let mut pending_space = false;
+    let mut segment = 0_usize;
+    let chars = text.chars();
+    for character in chars.iter() {
+        let index = character.index();
+        let Some(value) = character.unicode_char() else {
+            continue;
+        };
+        if value == '\r' || value == '\n' {
+            finish(current.take(), &chars, &mut runs);
+            pending_space = false;
+            continue;
+        }
+        if value.is_whitespace() {
+            pending_space = true;
+            continue;
+        }
+        if character.is_generated().unwrap_or(false) {
+            continue;
+        }
+        let Ok(bounds) = character.loose_bounds() else {
+            continue;
+        };
+        let bbox = frame.rect(&bounds).map(f64::from);
+        if bbox[3] <= bbox[1] {
+            continue;
+        }
+        let height = bbox[3] - bbox[1];
+        // Segments are PDFium's text objects in the order their characters
+        // come, so a character outside the current one and inside the next
+        // starts the next: a piece of text the producer placed on its own.
+        let center = ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
+        let inside = |segment: &[u32; 4]| {
+            center.0 >= f64::from(segment[0]) - 10.0
+                && center.0 <= f64::from(segment[2]) + 10.0
+                && center.1 >= f64::from(segment[1]) - 10.0
+                && center.1 <= f64::from(segment[3]) + 10.0
+        };
+        let mut new_object = false;
+        if segments
+            .get(segment)
+            .is_some_and(|current| !inside(current))
+            && segments.get(segment + 1).is_some_and(inside)
+        {
+            segment += 1;
+            new_object = true;
+        }
+        let joins = current.as_ref().is_some_and(|run| {
+            let run_height = run.bbox[3] - run.bbox[1];
+            let middle = (bbox[1] + bbox[3]) / 2.0;
+            let run_middle = (run.bbox[1] + run.bbox[3]) / 2.0;
+            let same_line = (middle - run_middle).abs() <= height.min(run_height) * 0.4;
+            let gap = bbox[0] - run.bbox[2];
+            // Words of one text object run together across ordinary
+            // spaces; separate objects only across a space or less. Two
+            // objects further apart than that are two cells, however
+            // narrow the gap - a date that overflows its column into the
+            // next one's value.
+            let widest = if new_object { 0.25 } else { 0.8 };
+            same_line
+                && gap >= -height.max(run_height) * 0.3
+                && gap <= height.max(run_height) * widest
+        });
+        if joins {
+            let run = current.as_mut().expect("checked above");
+            let gap = bbox[0] - run.bbox[2];
+            if pending_space || gap > (run.bbox[3] - run.bbox[1]) * 0.15 {
+                run.text.push(' ');
+            }
+            run.text.push(value);
+            run.bbox = [
+                run.bbox[0].min(bbox[0]),
+                run.bbox[1].min(bbox[1]),
+                run.bbox[2].max(bbox[2]),
+                run.bbox[3].max(bbox[3]),
+            ];
+            run.last = Some(index);
+        } else {
+            finish(current.take(), &chars, &mut runs);
+            current = Some(Building {
+                text: value.to_string(),
+                bbox,
+                first: index,
+                last: None,
+            });
+        }
+        pending_space = false;
+    }
+    finish(current.take(), &chars, &mut runs);
+    runs
+}
+
+/// Whether a character is set in a bold face, by its weight or, for the
+/// fonts whose weight PDFium does not know, by the face's name.
+#[cfg(feature = "native-pdfium")]
+fn is_bold(character: &PdfPageTextChar<'_>) -> bool {
+    if character
+        .font_weight()
+        .is_some_and(|weight| font_weight(weight) >= 600)
+    {
+        return true;
+    }
+    let name = character.font_name().to_ascii_lowercase();
+    ["bold", "black", "heavy", "semibold", "demi"]
+        .iter()
+        .any(|marker| name.contains(marker))
+}
+
+#[cfg(feature = "native-pdfium")]
+fn font_weight(weight: PdfFontWeight) -> u32 {
+    match weight {
+        PdfFontWeight::Weight100 => 100,
+        PdfFontWeight::Weight200 => 200,
+        PdfFontWeight::Weight300 => 300,
+        PdfFontWeight::Weight400Normal => 400,
+        PdfFontWeight::Weight500 => 500,
+        PdfFontWeight::Weight600 => 600,
+        PdfFontWeight::Weight700Bold => 700,
+        PdfFontWeight::Weight800 => 800,
+        PdfFontWeight::Weight900 => 900,
+        PdfFontWeight::Custom(value) => value,
+    }
+}
+
+#[cfg(feature = "native-pdfium")]
+fn rotation_degrees(page: &PdfPage<'_>) -> u16 {
+    match page.rotation() {
+        Ok(PdfPageRenderRotation::Degrees90) => 90,
+        Ok(PdfPageRenderRotation::Degrees180) => 180,
+        Ok(PdfPageRenderRotation::Degrees270) => 270,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "native-pdfium")]
+impl PdfiumBackend {
+    /// [`PdfBackend::inspect`] with the router supplied: `router` decides
+    /// from each page's signals, and whether the scan rule sends it to OCR,
+    /// which pages have their characters read into runs. Inspection always
+    /// routes with [`route_page`]; the routing calibration in
+    /// `examples/route_calibration.rs` reads every page's runs to see what
+    /// the router passed over.
+    pub fn inspect_routed(
+        &self,
+        path: &Path,
+        cancel: &CancellationToken,
+        router: impl Fn(&crate::layout::RouteSignals, bool) -> crate::layout::PageRoute,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        cancel.check()?;
+        // Loading the document, each page, and its text is reading the
+        // format; walking a page's objects and measuring its text for the
+        // router is deciding how to read it. The second is timed on its own
+        // and the first is what is left, so the page loads PDFium does
+        // lazily are counted too.
+        let started = Instant::now();
+        let mut analysis_micros = 0_u64;
+        let inspections = self.with_document(path, |document| {
+            if document.pages().len() as usize > MAX_PAGE_COUNT {
+                return Err(ExtractionError::resource_limit(
+                    "document exceeds 500 pages",
+                ));
+            }
+            let mut inspections = Vec::with_capacity(document.pages().len() as usize);
+            for (page_index, page) in document.pages().iter().enumerate() {
+                cancel.check()?;
+                let text = page.text().map_err(|error| one_line(&error))?;
+                let native_text = text.all();
+                // The size at full resolution, unbudgeted: whether a page fits
+                // the render cap is the caller's question to ask of it.
+                let size = render_size_within(page.width().value, page.height().value, u64::MAX);
+                let (width_pixels, height_pixels) = (size.width, size.height);
+                let analysis_started = Instant::now();
+                let rotation = rotation_degrees(&page);
+                let frame = Frame::of(&page, rotation);
+                let mut survey = ObjectSurvey::default();
+                for object in page.objects().iter() {
+                    survey_object(&object, &frame, &mut survey);
+                }
+                let page_area = page.width().value.abs() * page.height().value.abs();
+                let image_coverage = if page_area <= f32::EPSILON {
+                    0.0
+                } else {
+                    (survey.image_area / page_area).clamp(0.0, 1.0)
+                };
+                // PDFium's own text segments are the same boxes, but each one
+                // asked for recounts them all: a page's text objects are its
+                // segments at the cost of the walk above.
+                let mut native = NativePage {
+                    width: Frame::units(frame.width),
+                    height: Frame::units(frame.height),
+                    rotation,
+                    segments: survey.text_boxes,
+                    text_objects: survey.text_objects,
+                    invisible_text_objects: survey.invisible_text_objects,
+                    images: survey.images,
+                    rulings: survey.rulings,
+                    runs: Vec::new(),
+                };
+                let signals = measure_signals(&native, &native_text, image_coverage);
+                let mut inspection = PdfPageInspection {
+                    page_index,
+                    native_text,
+                    image_coverage,
+                    width_pixels,
+                    height_pixels,
+                    native: None,
+                    signals: Some(signals),
+                };
+                let route = router(&signals, crate::extract::page_needs_ocr(&inspection));
+                if needs_runs(route) {
+                    native.runs = text_runs(&text, &frame, &native.segments);
+                }
+                inspection.native = Some(native);
+                analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
+                inspections.push(inspection);
+            }
+            Ok(inspections)
+        })?;
+        let parse_micros = micros_since(started).saturating_sub(analysis_micros);
+        cancel.record(|timings| {
+            timings.parse_micros = timings.parse_micros.saturating_add(parse_micros);
+            timings.analysis_micros = timings.analysis_micros.saturating_add(analysis_micros);
+        });
+        Ok(inspections)
+    }
 }
 
 #[cfg(feature = "native-pdfium")]
@@ -117,55 +604,7 @@ impl PdfBackend for PdfiumBackend {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
-        cancel.check()?;
-        // Loading the document, each page, and its text is reading the
-        // format; walking a page's objects for images is deciding whether it
-        // is a scan. The second is timed on its own and the first is what
-        // is left, so the page loads PDFium does lazily are counted too.
-        let started = Instant::now();
-        let mut analysis_micros = 0_u64;
-        let pdfium = self.pdfium()?;
-        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
-        if document.pages().len() as usize > MAX_PAGE_COUNT {
-            return Err(ExtractionError::resource_limit(
-                "document exceeds 500 pages",
-            ));
-        }
-        let mut inspections = Vec::with_capacity(document.pages().len() as usize);
-        for (page_index, page) in document.pages().iter().enumerate() {
-            cancel.check()?;
-            let native_text = page.text().map_err(|error| one_line(&error))?.all();
-            // The size at full resolution, unbudgeted: whether a page fits
-            // the render cap is the caller's question to ask of it.
-            let size = render_size_within(page.width().value, page.height().value, u64::MAX);
-            let (width_pixels, height_pixels) = (size.width, size.height);
-            let analysis_started = Instant::now();
-            let page_area = page.width().value.abs() * page.height().value.abs();
-            let image_area = page
-                .objects()
-                .iter()
-                .map(|object| rendered_image_area(&object))
-                .sum::<f32>();
-            let image_coverage = if page_area <= f32::EPSILON {
-                0.0
-            } else {
-                (image_area / page_area).clamp(0.0, 1.0)
-            };
-            analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
-            inspections.push(PdfPageInspection {
-                page_index,
-                native_text,
-                image_coverage,
-                width_pixels,
-                height_pixels,
-            });
-        }
-        let parse_micros = micros_since(started).saturating_sub(analysis_micros);
-        cancel.record(|timings| {
-            timings.parse_micros = timings.parse_micros.saturating_add(parse_micros);
-            timings.analysis_micros = timings.analysis_micros.saturating_add(analysis_micros);
-        });
-        Ok(inspections)
+        self.inspect_routed(path, cancel, route_page)
     }
 
     fn render_within(
@@ -176,25 +615,25 @@ impl PdfBackend for PdfiumBackend {
         cancel: &CancellationToken,
     ) -> Result<RenderedPage, ExtractionError> {
         cancel.check()?;
-        let pdfium = self.pdfium()?;
-        let document = pdfium.load_pdf_from_file(path, None).map_err(load_error)?;
-        let page = document
-            .pages()
-            .get(page_index as i32)
-            .map_err(|error| one_line(&error))?;
-        let size = render_size_within(page.width().value, page.height().value, max_pixels);
-        // PDFium scales to the target width and then, if the height that
-        // gives passes the maximum, scales down to that instead, so the
-        // bitmap it allocates is never larger than the size computed here.
-        let config = PdfRenderConfig::new()
-            .set_target_width(size.width as i32)
-            .set_maximum_height(size.height as i32);
-        let image = page
-            .render_with_config(&config)
-            .map_err(|error| one_line(&error))?
-            .as_image()
-            .map_err(|error| one_line(&error))?
-            .into_rgb8();
+        let image = self.with_document(path, |document| {
+            let page = document
+                .pages()
+                .get(page_index as i32)
+                .map_err(|error| one_line(&error))?;
+            let size = render_size_within(page.width().value, page.height().value, max_pixels);
+            // PDFium scales to the target width and then, if the height that
+            // gives passes the maximum, scales down to that instead, so the
+            // bitmap it allocates is never larger than the size computed here.
+            let config = PdfRenderConfig::new()
+                .set_target_width(size.width as i32)
+                .set_maximum_height(size.height as i32);
+            Ok(page
+                .render_with_config(&config)
+                .map_err(|error| one_line(&error))?
+                .as_image()
+                .map_err(|error| one_line(&error))?
+                .into_rgb8())
+        })?;
         cancel.check()?;
         Ok(RenderedPage::new(page_index, image.into()))
     }

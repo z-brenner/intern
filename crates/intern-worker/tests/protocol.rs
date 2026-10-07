@@ -418,13 +418,21 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
 
     run_concurrent_worker(reader, captured.clone(), Vec::new(), |_path, _cancel| {
         Ok(ExtractedDocument {
-            pages: vec![intern_worker::extract::ExtractedPage {
-                page_number: 1,
-                text: "é".repeat(MAX_PAGE_CHARS + 1_000),
-                source: intern_worker::extract::PageSource::Text,
-                ocr_confidence: None,
-                vision_escalated: false,
-            }],
+            pages: vec![
+                intern_worker::extract::ExtractedPage {
+                    page_number: 1,
+                    text: "é".repeat(MAX_PAGE_CHARS + 1_000),
+                    source: intern_worker::extract::PageSource::Text,
+                    ocr_confidence: None,
+                    vision_escalated: false,
+                    layout: Some(intern_worker::layout::PageLayout::of_text(1, "é")),
+                },
+                intern_worker::extract::ExtractedPage::of_text(
+                    2,
+                    "Second page.".to_owned(),
+                    intern_worker::extract::PageSource::Text,
+                ),
+            ],
             warnings: vec![],
             truncated: false,
             optional_image: None,
@@ -452,6 +460,11 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
     );
     assert_eq!(parsed["event"]["document"]["truncated"], true);
     assert_eq!(parsed["event"]["document"]["warnings"][0], "TEXT_TRUNCATED");
+    // A layout no longer describes a page whose text was cut, so the cut
+    // page goes without one; the page after it keeps its own.
+    let pages = &parsed["event"]["document"]["pages"];
+    assert!(pages[0].get("layout").is_none(), "{}", pages[0]["layout"]);
+    assert_eq!(pages[1]["layout"]["blocks"][0]["id"], "p2.b1");
 }
 
 /// A parsed document says where its extraction's time went: what the
@@ -527,6 +540,7 @@ fn page(number: usize, text: String) -> intern_worker::extract::ExtractedPage {
         source: intern_worker::extract::PageSource::AnyDoc,
         ocr_confidence: None,
         vision_escalated: false,
+        layout: None,
     }
 }
 
@@ -681,6 +695,7 @@ impl PdfBackend for ScannedPdf {
                 image_coverage: 1.0,
                 width_pixels: 10,
                 height_pixels: 10,
+                ..PdfPageInspection::default()
             })
             .collect())
     }

@@ -105,6 +105,7 @@ fn page(text: &str, coverage: f32) -> PdfPageInspection {
         image_coverage: coverage,
         width_pixels: 100,
         height_pixels: 100,
+        ..PdfPageInspection::default()
     }
 }
 

@@ -15,6 +15,7 @@ use image::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
 use crate::limits::{
     MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI,
     ResourceLimits, VISION_GRID,
@@ -237,13 +238,22 @@ impl CancellationToken {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PdfPageInspection {
     pub page_index: usize,
     pub native_text: String,
     pub image_coverage: f32,
     pub width_pixels: u32,
     pub height_pixels: u32,
+    /// What the backend measured about the page's geometry for the router
+    /// and the layout analysis. None from a backend that measures nothing,
+    /// whose pages are routed on their text and image coverage alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativePage>,
+    /// The router's signals, when the backend took them while it had the
+    /// page open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signals: Option<RouteSignals>,
 }
 
 #[derive(Clone, Debug)]
@@ -471,6 +481,13 @@ pub trait OcrBackend {
         page: &RenderedPage,
         cancel: &CancellationToken,
     ) -> Result<OcrResult, ExtractionError>;
+
+    /// How many pages the engine can usefully read at once. A PDF's scanned
+    /// pages are rendered one at a time - PDFium is not thread-safe - and
+    /// handed to this many OCR workers. One unless the engine says more.
+    fn concurrency(&self) -> usize {
+        1
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,6 +506,10 @@ pub struct ExtractedPage {
     pub source: PageSource,
     pub ocr_confidence: Option<f32>,
     pub vision_escalated: bool,
+    /// The page as blocks in reading order (see [`crate::layout`]). Every
+    /// reader's pages carry one by the time the protocol sends them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<PageLayout>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -595,70 +616,174 @@ fn page_needs_vision(page: &PdfPageInspection) -> bool {
     meaningful < 100 && page.image_coverage >= 0.65 && !word_structured
 }
 
-pub fn extract_pdf(
+/// The most OCR workers a PDF is read with, whatever the engine offers.
+const MAX_OCR_WORKERS: usize = 8;
+
+/// What becomes of one page while a PDF is read: finished already, or
+/// waiting for OCR.
+enum PagePlan {
+    Done {
+        page: ExtractedPage,
+        /// The page image this page would become, if it is the first page
+        /// that wants one.
+        vision: Option<VisionImage>,
+    },
+    /// A scan: OCR's reading is the page.
+    Scan {
+        page_number: usize,
+        /// Its text layer held replacement glyphs.
+        corrupt: bool,
+        signals: RouteSignals,
+        /// Tenths of a point per rendered pixel.
+        scale: f64,
+    },
+    /// A text layer that is a bad prior OCR, read again. The fresh reading
+    /// replaces it only if it is better.
+    Reread {
+        inspection: PdfPageInspection,
+        signals: RouteSignals,
+        vision: Option<VisionImage>,
+    },
+    /// Native text, with images that may hold text of their own.
+    Regions {
+        inspection: PdfPageInspection,
+        signals: RouteSignals,
+        /// Each region's box in the rendered page, in pixels.
+        crops: Vec<[u32; 4]>,
+        /// Tenths of a point per rendered pixel.
+        scale: f64,
+        vision: Option<VisionImage>,
+    },
+}
+
+/// Whether an error ends the whole document rather than an optional reading
+/// it was for: the person canceled, or the time ran out.
+fn ends_the_document(error: &ExtractionError) -> bool {
+    matches!(
+        error.kind,
+        ExtractionErrorKind::Canceled | ExtractionErrorKind::ResourceLimit
+    )
+}
+
+/// Reads a PDF.
+///
+/// Every page is routed ([`crate::layout::route_page`]) on what inspection
+/// measured. Pages read from their text are finished in the loop. Pages
+/// that need OCR are rendered one at a time - PDFium is not thread-safe, and
+/// the backend that inspected the document is the one that renders it -
+/// and handed through a bounded queue to a pool of OCR workers, as many as
+/// the engine says it can use ([`OcrBackend::concurrency`]). The pages are
+/// put back in order at the end, and every decision that depends on order -
+/// which page becomes the page image, the order of warnings, which error is
+/// reported - is made then, exactly as reading the pages one after another
+/// would make it.
+pub fn extract_pdf<O>(
     path: &Path,
     pdf: &dyn PdfBackend,
-    ocr: &dyn OcrBackend,
+    ocr: &O,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
-) -> Result<ExtractedDocument, ExtractionError> {
+) -> Result<ExtractedDocument, ExtractionError>
+where
+    O: OcrBackend + Sync + ?Sized,
+{
     let started = Instant::now();
     timed_check(cancel, started, limits)?;
     let inspections = pdf.inspect(path, cancel)?;
     limits.validate_page_count(inspections.len())?;
     let page_count = inspections.len();
-    let mut pages = Vec::with_capacity(page_count);
-    let mut warnings = Vec::new();
-    let mut vision_candidate: Option<VisionImage> = None;
+    let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
+    let queue = limits.max_resident_rendered_pages.max(1);
 
-    for inspection in inspections {
-        timed_check(cancel, started, limits)?;
-        let page_number = inspection.page_index + 1;
-        cancel.report_progress("reading", inspection.page_index, Some(page_count));
-        // The render cap belongs to rendering. A large-format sheet - an A1
-        // drawing, a plan set - is over it at 300 DPI while carrying a
-        // perfectly good text layer, and failing the whole document over a
-        // page nobody was going to rasterise loses the document. A page that
-        // is too large to render also cannot be escalated to vision, but it
-        // keeps its text: the page image is the optional part.
-        let renderable = limits
-            .validate_page_pixels(inspection.width_pixels, inspection.height_pixels)
-            .is_ok();
-        let needs_ocr = cancel.timed(
-            |timings| &mut timings.analysis_micros,
-            || page_needs_ocr(&inspection),
-        );
-        if !needs_ocr {
-            let vision_escalated =
-                renderable && page_needs_vision(&inspection) && vision_candidate.is_none();
-            if vision_escalated {
-                let rendered = cancel.timed(
-                    |timings| &mut timings.render_micros,
-                    || pdf.render(path, inspection.page_index, cancel),
-                )?;
-                let (render_width, render_height) = rendered.image.dimensions();
-                record_rendered(cancel, render_width, render_height);
-                limits.validate_page_pixels(render_width, render_height)?;
-                vision_candidate = Some(cancel.timed(
-                    |timings| &mut timings.vision_micros,
-                    || normalize_vision_image(inspection.page_index, rendered.image),
-                )?);
+    let (plans, outcomes, failure) = std::thread::scope(|scope| {
+        let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
+        let mut plans = Vec::with_capacity(page_count);
+        let mut failure: Option<(usize, ExtractionError)> = None;
+        for inspection in inspections {
+            let page_index = inspection.page_index;
+            if let Err(error) = timed_check(cancel, started, limits) {
+                failure = Some((page_index, error));
+                break;
             }
-            pages.push(ExtractedPage {
-                page_number,
-                text: inspection.native_text,
-                source: PageSource::Native,
-                ocr_confidence: None,
-                vision_escalated,
-            });
-            continue;
+            // A scan that could not be read ends the document; there is
+            // no point rendering the pages after it.
+            if pool.failed() {
+                break;
+            }
+            pool.collect_ready();
+            cancel.report_progress("reading", page_index, Some(page_count));
+            match plan_page(inspection, pdf, path, limits, cancel, &mut pool) {
+                Ok(plan) => {
+                    if matches!(plan, PagePlan::Done { .. }) {
+                        pool.finished += 1;
+                    }
+                    plans.push(plan);
+                }
+                Err(error) => {
+                    failure = Some((page_index, error));
+                    break;
+                }
+            }
         }
+        let outcomes = pool.finish();
+        (plans, outcomes, failure)
+    });
 
-        if inspection.native_text.contains('\u{fffd}')
-            && !warnings.contains(&ExtractionWarning::NativeTextCorrupt)
-        {
-            warnings.push(ExtractionWarning::NativeTextCorrupt);
-        }
+    // The error reading the pages in order would have met first: a scan
+    // OCR could not read, or anything that ends the document.
+    let ocr_failure = outcomes.iter().find_map(|outcome| {
+        let scan = matches!(plans.get(outcome.page_index), Some(PagePlan::Scan { .. }));
+        outcome.readings.iter().find_map(|reading| match reading {
+            Err(error) if scan || ends_the_document(error) => {
+                Some((outcome.page_index, error.clone()))
+            }
+            _ => None,
+        })
+    });
+    let first_failure = match (failure, ocr_failure) {
+        (Some(main), Some(ocr)) => Some(if ocr.0 <= main.0 { ocr } else { main }),
+        (main, ocr) => main.or(ocr),
+    };
+    if let Some((_, error)) = first_failure {
+        return Err(error);
+    }
+    // A request canceled while its last pages were being read is canceled,
+    // even if every page it was waiting for came back.
+    cancel.check()?;
+    cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || assemble(plans, outcomes),
+    )
+}
+
+/// Decides how one page is read, finishes it if it needs no OCR, and hands
+/// it to the OCR workers if it does.
+fn plan_page<O: OcrBackend + Sync + ?Sized>(
+    inspection: PdfPageInspection,
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+    pool: &mut OcrPool<'_, '_, O>,
+) -> Result<PagePlan, ExtractionError> {
+    let page_index = inspection.page_index;
+    let page_number = page_index + 1;
+    // The render cap belongs to rendering. A large-format sheet - an A1
+    // drawing, a plan set - is over it at 300 DPI while carrying a
+    // perfectly good text layer, and failing the whole document over a
+    // page nobody was going to rasterise loses the document. A page that
+    // is too large to render also cannot be escalated to vision, but it
+    // keeps its text: the page image is the optional part.
+    let renderable = limits
+        .validate_page_pixels(inspection.width_pixels, inspection.height_pixels)
+        .is_ok();
+    let (needs_ocr, signals) = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || (page_needs_ocr(&inspection), signals_of(&inspection)),
+    );
+    let route = route_page(&signals, needs_ocr);
+
+    if needs_ocr {
         // This page has no text worth keeping, so it has to be rendered to be
         // read at all. A page too large to render at 300 DPI within the cap -
         // a phone photo some tool turned into a PDF at 72 DPI, an A2 scan -
@@ -671,44 +796,356 @@ pub fn extract_pdf(
                 "page is too large to read within 25 megapixels at 50 DPI",
             ));
         }
+        let rendered = render_for_ocr(pdf, path, page_index, limits, cancel)?;
+        let scale = display_width(&inspection) / f64::from(rendered.image.width().max(1));
+        pool.submit(OcrJob {
+            page_index,
+            pieces: vec![rendered],
+            whole_page: true,
+            scan: true,
+        });
+        return Ok(PagePlan::Scan {
+            page_number,
+            corrupt: inspection.native_text.contains('\u{fffd}'),
+            signals,
+            scale,
+        });
+    }
+
+    // Native text from here on. Whatever OCR adds is optional: a page that
+    // cannot be rendered or read again keeps the text it has.
+    let vision = if renderable && page_needs_vision(&inspection) {
         let rendered = cancel.timed(
             |timings| &mut timings.render_micros,
-            || pdf.render_within(path, inspection.page_index, limits.max_page_pixels, cancel),
+            || pdf.render(path, page_index, cancel),
         )?;
-        // The backend sized the render; this is what holds it to that.
         let (render_width, render_height) = rendered.image.dimensions();
         record_rendered(cancel, render_width, render_height);
         limits.validate_page_pixels(render_width, render_height)?;
-        timed_check(cancel, started, limits)?;
-        cancel.report_progress("ocr", inspection.page_index, Some(page_count));
-        let result = recognize_timed(ocr, &rendered, cancel)?;
-        let vision_escalated =
-            vision_candidate.is_none() && result.mean_confidence < CONFIDENT_READING;
-        if result.mean_confidence < CONFIDENT_READING
+        Some(cancel.timed(
+            |timings| &mut timings.vision_micros,
+            || page_image(page_index, &rendered.image, 0),
+        )?)
+    } else {
+        None
+    };
+    let rerenderable =
+        renderable && ocr_render_dpi(&inspection, limits.max_page_pixels) >= MIN_OCR_DPI;
+
+    if route == PageRoute::Ocr && rerenderable {
+        match render_for_ocr(pdf, path, page_index, limits, cancel) {
+            Ok(rendered) => {
+                pool.submit(OcrJob {
+                    page_index,
+                    pieces: vec![rendered],
+                    whole_page: true,
+                    scan: false,
+                });
+                return Ok(PagePlan::Reread {
+                    inspection,
+                    signals,
+                    vision,
+                });
+            }
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    if route == PageRoute::OcrRegions
+        && rerenderable
+        && let Some(native) = &inspection.native
+    {
+        match render_for_ocr(pdf, path, page_index, limits, cancel) {
+            Ok(rendered) => {
+                let (width, height) = rendered.image.dimensions();
+                let scale = f64::from(native.display_size().0) / f64::from(width.max(1));
+                let crops = crate::layout::text_regions(native)
+                    .into_iter()
+                    .filter_map(|region| {
+                        let display = native.to_display(region);
+                        let [x0, y0, x1, y1] =
+                            display.map(|value| (f64::from(value) / scale).round() as u32);
+                        let (x0, x1) = (x0.min(width), x1.min(width));
+                        let (y0, y1) = (y0.min(height), y1.min(height));
+                        (x1 > x0 + 8 && y1 > y0 + 8).then_some([x0, y0, x1, y1])
+                    })
+                    .collect::<Vec<_>>();
+                if !crops.is_empty() {
+                    let pieces = crops
+                        .iter()
+                        .map(|crop| {
+                            RenderedPage::new(
+                                page_index,
+                                rendered.image.crop_imm(
+                                    crop[0],
+                                    crop[1],
+                                    crop[2] - crop[0],
+                                    crop[3] - crop[1],
+                                ),
+                            )
+                        })
+                        .collect();
+                    pool.submit(OcrJob {
+                        page_index,
+                        pieces,
+                        whole_page: false,
+                        scan: false,
+                    });
+                    return Ok(PagePlan::Regions {
+                        inspection,
+                        signals,
+                        crops,
+                        scale,
+                        vision,
+                    });
+                }
+            }
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+
+    let route = native_route(route, &signals);
+    let page = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || native_page(page_number, inspection, signals, route),
+    );
+    Ok(PagePlan::Done { page, vision })
+}
+
+/// The router's signals for a page: what the backend measured while it had
+/// the page open, or, from a backend that measures nothing, the image
+/// coverage alone.
+fn signals_of(inspection: &PdfPageInspection) -> RouteSignals {
+    inspection
+        .signals
+        .unwrap_or_else(|| match &inspection.native {
+            Some(native) => {
+                measure_signals(native, &inspection.native_text, inspection.image_coverage)
+            }
+            None => RouteSignals {
+                image_coverage: (inspection.image_coverage.clamp(0.0, 1.0) * 1000.0).round() as u16,
+                ..RouteSignals::default()
+            },
+        })
+}
+
+/// A page's displayed width in tenths of a point: what the backend
+/// measured, or the width inspection gives in pixels at 300 DPI.
+fn display_width(inspection: &PdfPageInspection) -> f64 {
+    match &inspection.native {
+        Some(native) => f64::from(native.display_size().0),
+        None => {
+            f64::from(inspection.width_pixels) * 72.0 / RENDER_DPI * crate::layout::UNITS_PER_POINT
+        }
+    }
+}
+
+/// The route a page read from its own text takes: the one it was given,
+/// unless OCR was what it wanted and could not have, in which case its text
+/// routes it as if it had no image to read.
+fn native_route(route: PageRoute, signals: &RouteSignals) -> PageRoute {
+    match route {
+        PageRoute::Fast | PageRoute::Layout => route,
+        PageRoute::Ocr | PageRoute::OcrRegions => route_page(
+            &RouteSignals {
+                image_region: 0,
+                garbage: 0,
+                ..*signals
+            },
+            false,
+        ),
+    }
+}
+
+/// Renders a page for OCR within the pixel budget, counting what was
+/// rendered and holding the render to the budget it was sized for.
+fn render_for_ocr(
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    page_index: usize,
+    limits: &ResourceLimits,
+    cancel: &CancellationToken,
+) -> Result<RenderedPage, ExtractionError> {
+    let rendered = cancel.timed(
+        |timings| &mut timings.render_micros,
+        || pdf.render_within(path, page_index, limits.max_page_pixels, cancel),
+    )?;
+    // The backend sized the render; this is what holds it to that.
+    let (render_width, render_height) = rendered.image.dimensions();
+    record_rendered(cancel, render_width, render_height);
+    limits.validate_page_pixels(render_width, render_height)?;
+    Ok(rendered)
+}
+
+/// A page read from its native text: exactly as PDFium read it on the fast
+/// route, or the linearization of its blocks on the layout route.
+fn native_page(
+    page_number: usize,
+    inspection: PdfPageInspection,
+    signals: RouteSignals,
+    route: PageRoute,
+) -> ExtractedPage {
+    let geometry = inspection
+        .native
+        .as_ref()
+        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty());
+    let (text, mut layout) = match geometry {
+        Some(native) => {
+            let layout = crate::layout::geometry_layout(native, Vec::new(), signals, route);
+            (crate::layout::linearize(&layout.blocks), layout)
+        }
+        None => {
+            let layout = crate::layout::fast_layout(
+                &inspection.native_text,
+                inspection.native.as_ref(),
+                signals,
+            );
+            (inspection.native_text, layout)
+        }
+    };
+    crate::layout::number_blocks(page_number, &mut layout.blocks);
+    ExtractedPage {
+        page_number,
+        text,
+        source: PageSource::Native,
+        ocr_confidence: None,
+        vision_escalated: false,
+        layout: Some(layout),
+    }
+}
+
+/// Whether a fresh OCR reading of a page whose text layer looked like bad
+/// OCR is better than that layer: confident, or with fewer of the errors
+/// that sent the page to be read again.
+fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
+    !reading.text.trim().is_empty()
+        && (reading.mean_confidence >= CONFIDENT_READING
+            || crate::layout::router::garbage_score(&reading.text) < signals.garbage)
+}
+
+/// Puts the pages back in order and makes every decision that depends on
+/// it: the page image is the first page that wants one, and warnings are
+/// raised in the order the pages raise them.
+fn assemble(
+    plans: Vec<PagePlan>,
+    outcomes: Vec<OcrOutcome>,
+) -> Result<ExtractedDocument, ExtractionError> {
+    let mut outcomes = outcomes
+        .into_iter()
+        .map(|outcome| (outcome.page_index, outcome))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut pages = Vec::with_capacity(plans.len());
+    let mut warnings: Vec<ExtractionWarning> = Vec::new();
+    let mut vision_candidate: Option<VisionImage> = None;
+    for (page_index, plan) in plans.into_iter().enumerate() {
+        let outcome = outcomes.remove(&page_index);
+        let (mut page, vision) = match plan {
+            PagePlan::Done { page, vision } => (page, vision),
+            PagePlan::Scan {
+                page_number,
+                corrupt,
+                signals,
+                scale,
+            } => {
+                if corrupt && !warnings.contains(&ExtractionWarning::NativeTextCorrupt) {
+                    warnings.push(ExtractionWarning::NativeTextCorrupt);
+                }
+                let unread = || ExtractionError::parse_failed("a scanned page was never read");
+                let OcrOutcome {
+                    readings,
+                    sizes,
+                    vision,
+                    ..
+                } = outcome.ok_or_else(unread)?;
+                let reading = readings.into_iter().next().ok_or_else(unread)??;
+                let size = sizes.first().copied().ok_or_else(unread)?;
+                let vision = vision.transpose()?;
+                (
+                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals),
+                    vision,
+                )
+            }
+            PagePlan::Reread {
+                inspection,
+                signals,
+                vision,
+            } => {
+                let page_number = inspection.page_index + 1;
+                let fresh = outcome.and_then(|outcome| {
+                    let size = *outcome.sizes.first()?;
+                    let page_vision = outcome.vision.and_then(Result::ok);
+                    let reading = outcome.readings.into_iter().next()?.ok()?;
+                    Some((reading, size, page_vision))
+                });
+                match fresh {
+                    Some((reading, size, page_vision)) if reread_is_better(&reading, &signals) => {
+                        let scale = display_width(&inspection) / f64::from(size.0.max(1));
+                        (
+                            crate::layout::ocr_page(
+                                page_number,
+                                reading,
+                                size,
+                                Some(scale),
+                                signals,
+                            ),
+                            page_vision,
+                        )
+                    }
+                    _ => {
+                        let route = native_route(PageRoute::Ocr, &signals);
+                        (native_page(page_number, inspection, signals, route), vision)
+                    }
+                }
+            }
+            PagePlan::Regions {
+                inspection,
+                signals,
+                crops,
+                scale,
+                vision,
+            } => {
+                let page_number = inspection.page_index + 1;
+                let readings = outcome
+                    .map(|outcome| {
+                        outcome
+                            .readings
+                            .into_iter()
+                            .zip(crops)
+                            .filter_map(|(reading, crop)| Some((reading.ok()?, crop)))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let page = crate::layout::regions_page(
+                    page_number,
+                    &inspection,
+                    signals,
+                    &readings,
+                    scale,
+                )
+                .unwrap_or_else(|| {
+                    let route = native_route(PageRoute::OcrRegions, &signals);
+                    native_page(page_number, inspection, signals, route)
+                });
+                (page, vision)
+            }
+        };
+        if page.source == PageSource::Ocr
+            && page
+                .ocr_confidence
+                .is_some_and(|confidence| confidence < CONFIDENT_READING)
             && !warnings.contains(&ExtractionWarning::LowOcrConfidence)
         {
             warnings.push(ExtractionWarning::LowOcrConfidence);
         }
-        if vision_escalated {
-            vision_candidate = Some(cancel.timed(
-                |timings| &mut timings.vision_micros,
-                || {
-                    normalize_vision_image(
-                        inspection.page_index,
-                        apply_detected_rotation(rendered.image, result.rotation_degrees)?,
-                    )
-                },
-            )?);
+        page.vision_escalated = vision.is_some() && vision_candidate.is_none();
+        if page.vision_escalated {
+            vision_candidate = vision;
         }
-        pages.push(ExtractedPage {
-            page_number,
-            text: result.text,
-            source: PageSource::Ocr,
-            ocr_confidence: Some(result.mean_confidence),
-            vision_escalated,
-        });
+        pages.push(page);
     }
-
+    link_sections(&mut pages);
     Ok(ExtractedDocument {
         pages,
         warnings,
@@ -716,6 +1153,230 @@ pub fn extract_pdf(
         optional_image: vision_candidate,
         timings: None,
     })
+}
+
+/// Links every block on every page to the heading it falls under, across
+/// pages.
+pub fn link_sections(pages: &mut [ExtractedPage]) {
+    crate::layout::assign_sections(pages.iter_mut().filter_map(|page| page.layout.as_mut()));
+}
+
+impl ExtractedPage {
+    /// A page from a reader that knows no geometry, with the blocks of its
+    /// text.
+    pub fn of_text(page_number: usize, text: String, source: PageSource) -> Self {
+        let mut layout = PageLayout::of_text(page_number, &text);
+        crate::layout::assign_sections([&mut layout]);
+        Self {
+            page_number,
+            text,
+            source,
+            ocr_confidence: None,
+            vision_escalated: false,
+            layout: Some(layout),
+        }
+    }
+}
+
+/// One page handed to an OCR worker: the whole page, or the regions of it
+/// worth reading.
+struct OcrJob {
+    page_index: usize,
+    pieces: Vec<RenderedPage>,
+    /// The whole page, which becomes the page image if it reads badly.
+    whole_page: bool,
+    /// A scan: if it cannot be read, neither can the document, and the
+    /// pages queued after it are not worth reading.
+    scan: bool,
+}
+
+/// What an OCR worker made of one job.
+struct OcrOutcome {
+    page_index: usize,
+    readings: Vec<Result<OcrResult, ExtractionError>>,
+    /// Each piece's size in pixels, as it was rendered.
+    sizes: Vec<(u32, u32)>,
+    /// The page image, when the whole page read unconvincingly.
+    vision: Option<Result<VisionImage, ExtractionError>>,
+}
+
+/// The OCR workers for one document, started the first time a page needs
+/// one: a text PDF never starts a thread.
+///
+/// Rendered pages wait in a queue that holds at most `queue` of them, so a
+/// document's renders run at most that far ahead of its OCR, and memory
+/// holds the pages being read plus that many waiting.
+struct OcrPool<'scope, 'env, O: OcrBackend + Sync + ?Sized> {
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    ocr: &'env O,
+    cancel: &'env CancellationToken,
+    workers: usize,
+    queue: usize,
+    jobs: Option<std::sync::mpsc::SyncSender<OcrJob>>,
+    results: Option<std::sync::mpsc::Receiver<OcrOutcome>>,
+    /// Set by a worker when a scan could not be read.
+    failed: std::sync::Arc<AtomicBool>,
+    outcomes: Vec<OcrOutcome>,
+    submitted: usize,
+    /// Pages finished so far, read or not, for progress.
+    finished: usize,
+    page_count: usize,
+}
+
+impl<'scope, 'env, O: OcrBackend + Sync + ?Sized> OcrPool<'scope, 'env, O> {
+    fn new(
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        ocr: &'env O,
+        cancel: &'env CancellationToken,
+        workers: usize,
+        queue: usize,
+        page_count: usize,
+    ) -> Self {
+        Self {
+            scope,
+            ocr,
+            cancel,
+            workers,
+            queue,
+            jobs: None,
+            results: None,
+            failed: std::sync::Arc::new(AtomicBool::new(false)),
+            outcomes: Vec::new(),
+            submitted: 0,
+            finished: 0,
+            page_count,
+        }
+    }
+
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::SeqCst)
+    }
+
+    fn start(&mut self) {
+        let (jobs, queued) = std::sync::mpsc::sync_channel::<OcrJob>(self.queue);
+        let (done, results) = std::sync::mpsc::channel::<OcrOutcome>();
+        let queued = std::sync::Arc::new(Mutex::new(queued));
+        for _ in 0..self.workers {
+            let queued = std::sync::Arc::clone(&queued);
+            let done = done.clone();
+            let failed = std::sync::Arc::clone(&self.failed);
+            let ocr = self.ocr;
+            let cancel = self.cancel;
+            self.scope.spawn(move || {
+                loop {
+                    // Only waiting for a job holds the lock; reading one
+                    // does not.
+                    let job = queued.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    let outcome = read_job(job, ocr, cancel, &failed);
+                    if done.send(outcome).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        self.jobs = Some(jobs);
+        self.results = Some(results);
+    }
+
+    /// Hands a page to the workers, waiting while the queue is full.
+    fn submit(&mut self, job: OcrJob) {
+        if self.jobs.is_none() {
+            self.start();
+        }
+        self.cancel
+            .report_progress("ocr", self.finished, Some(self.page_count));
+        // Every worker gone means every worker panicked; the scope reports
+        // that when it ends.
+        if self.jobs.as_ref().expect("started above").send(job).is_ok() {
+            self.submitted += 1;
+        }
+    }
+
+    /// Takes in whatever the workers have finished, without waiting.
+    fn collect_ready(&mut self) {
+        let Some(results) = &self.results else {
+            return;
+        };
+        while let Ok(outcome) = results.try_recv() {
+            self.finished += 1;
+            self.outcomes.push(outcome);
+        }
+    }
+
+    /// Lets the workers finish what they were given and returns every
+    /// outcome, in page order.
+    fn finish(mut self) -> Vec<OcrOutcome> {
+        let page_count = self.page_count;
+        drop(self.jobs.take());
+        if let Some(results) = self.results.take() {
+            while self.outcomes.len() < self.submitted {
+                let Ok(outcome) = results.recv() else {
+                    break;
+                };
+                self.finished += 1;
+                // The document is not finished until its pages are put back
+                // together, so the count stops one short of the total.
+                self.cancel.report_progress(
+                    "ocr",
+                    self.finished.min(page_count.saturating_sub(1)),
+                    Some(page_count),
+                );
+                self.outcomes.push(outcome);
+            }
+        }
+        let mut outcomes = std::mem::take(&mut self.outcomes);
+        outcomes.sort_by_key(|outcome| outcome.page_index);
+        outcomes
+    }
+}
+
+/// Reads one job's pieces, and makes the page image when a whole page reads
+/// unconvincingly. Once a scan has failed, or the request is canceled, the
+/// rest of the queue is not read.
+fn read_job<O: OcrBackend + ?Sized>(
+    job: OcrJob,
+    ocr: &O,
+    cancel: &CancellationToken,
+    failed: &AtomicBool,
+) -> OcrOutcome {
+    let sizes = job
+        .pieces
+        .iter()
+        .map(|piece| piece.image.dimensions())
+        .collect::<Vec<_>>();
+    let mut readings = Vec::with_capacity(job.pieces.len());
+    for piece in &job.pieces {
+        let reading = if failed.load(Ordering::SeqCst) || cancel.is_canceled() {
+            Err(ExtractionError::canceled())
+        } else {
+            recognize_timed(ocr, piece, cancel)
+        };
+        if job.scan && reading.is_err() {
+            failed.store(true, Ordering::SeqCst);
+        }
+        readings.push(reading);
+    }
+    let vision = match (job.whole_page, readings.first()) {
+        (true, Some(Ok(reading))) if reading.mean_confidence < CONFIDENT_READING => {
+            let rotation = reading.rotation_degrees;
+            job.pieces.first().map(|piece| {
+                cancel.timed(
+                    |timings| &mut timings.vision_micros,
+                    || page_image(job.page_index, &piece.image, rotation),
+                )
+            })
+        }
+        _ => None,
+    };
+    OcrOutcome {
+        page_index: job.page_index,
+        readings,
+        sizes,
+        vision,
+    }
 }
 
 /// Counts a page PDFium rendered towards the request's timings.
@@ -729,8 +1390,12 @@ fn record_rendered(cancel: &CancellationToken, width: u32, height: u32) {
 
 /// Reads one page with OCR, counting the page and the time it took. The
 /// passes inside it are the OCR backend's to count.
-fn recognize_timed(
-    ocr: &dyn OcrBackend,
+///
+/// Pages read in parallel each add their own time, so with more than one
+/// OCR worker `ocr_micros` is OCR work done, which can be more than the
+/// time the document took.
+fn recognize_timed<O: OcrBackend + ?Sized>(
+    ocr: &O,
     page: &RenderedPage,
     cancel: &CancellationToken,
 ) -> Result<OcrResult, ExtractionError> {
@@ -739,6 +1404,45 @@ fn recognize_timed(
         |timings| &mut timings.ocr_micros,
         || ocr.recognize(page, cancel),
     )
+}
+
+/// The long edge of the page image, in pixels.
+///
+/// Nothing reads the page image's pixels: its presence is what tells the
+/// engine a page could not be read. So it is a thumbnail - averaged down
+/// before it is turned or encoded, grey, and small enough that making it
+/// costs a few milliseconds instead of a full-page resample and encode.
+pub const PAGE_IMAGE_LONG_EDGE: u32 = 256;
+
+/// The page image for page `page_index`: a grey PNG thumbnail of the page,
+/// turned clockwise by `rotation_degrees`.
+pub fn page_image(
+    page_index: usize,
+    image: &DynamicImage,
+    rotation_degrees: u16,
+) -> Result<VisionImage, ExtractionError> {
+    let (width, height) = image.dimensions();
+    if width == 0 || height == 0 {
+        return Err(ExtractionError::parse_failed("image has zero dimensions"));
+    }
+    let scale = (f64::from(PAGE_IMAGE_LONG_EDGE) / f64::from(width.max(height))).min(1.0);
+    let thumbnail_width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let thumbnail_height = (f64::from(height) * scale).round().max(1.0) as u32;
+    let thumbnail = DynamicImage::ImageLuma8(
+        image
+            .thumbnail_exact(thumbnail_width, thumbnail_height)
+            .to_luma8(),
+    );
+    let upright = apply_detected_rotation(thumbnail, rotation_degrees)?;
+    let mut bytes = Vec::new();
+    upright
+        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+        .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
+    Ok(VisionImage {
+        page_number: page_index + 1,
+        mime_type: "image/png".to_owned(),
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    })
 }
 
 /// The resolution a page that has to be OCR'd is rendered at: 300 DPI, or as
@@ -793,13 +1497,7 @@ pub fn extract_anydoc(
     let markdown = anydoc::to_markdown_bytes(&bytes, format).map_err(office_error)?;
     cancel.check()?;
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: markdown,
-            source: PageSource::AnyDoc,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(1, markdown, PageSource::AnyDoc)],
         warnings: vec![],
         truncated: false,
         optional_image: None,
@@ -1025,13 +1723,7 @@ pub fn extract_text(
         warnings.push(ExtractionWarning::TextTruncated);
     }
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text,
-            source: PageSource::Text,
-            ocr_confidence: None,
-            vision_escalated: false,
-        }],
+        pages: vec![ExtractedPage::of_text(1, text, PageSource::Text)],
         warnings,
         truncated,
         optional_image: None,
@@ -1148,21 +1840,21 @@ pub fn extract_image(
     }
     let optional_image = Some(cancel.timed(
         |timings| &mut timings.vision_micros,
-        || {
-            normalize_vision_image(
-                0,
-                apply_detected_rotation(rendered.image, result.rotation_degrees)?,
-            )
-        },
+        || page_image(0, &rendered.image, result.rotation_degrees),
     )?);
+    let size = rendered.image.dimensions();
+    drop(rendered);
+    // An image file has no physical size to go by; its pixels are taken to
+    // be 300 DPI, which is what scanners write.
+    let mut page = cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || crate::layout::ocr_page(1, result, size, None, RouteSignals::default()),
+    );
+    page.vision_escalated = true;
+    let mut pages = vec![page];
+    link_sections(&mut pages);
     Ok(ExtractedDocument {
-        pages: vec![ExtractedPage {
-            page_number: 1,
-            text: result.text,
-            source: PageSource::Ocr,
-            ocr_confidence: Some(result.mean_confidence),
-            vision_escalated: true,
-        }],
+        pages,
         warnings,
         truncated,
         optional_image,

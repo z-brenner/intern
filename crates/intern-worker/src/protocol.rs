@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::extract::{
     CancellationToken, ExtractedDocument, ExtractionError, ExtractionWarning, ProgressSink,
 };
+use crate::layout::PageLayout;
 use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
 use crate::timing::{ExtractionTimings, micros_since};
 
@@ -243,20 +244,37 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
 /// reader, including ones added later, and the document still arrives -
 /// marked truncated - rather than failing. Pages past the document cap stay,
 /// empty, so page numbers still mean what they meant.
+///
+/// A page's layout repeats its text - in its blocks, again in their lines,
+/// again in table cells - so it has a budget of its own: a page whose text
+/// was cut loses its layout, which no longer describes it, and once the
+/// document's layouts have used [`MAX_LAYOUT_CHARS`] the pages after that
+/// go without one. The host builds those pages' blocks from their text.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
     let mut remaining = MAX_DOCUMENT_CHARS;
+    let mut layout_remaining = MAX_LAYOUT_CHARS;
     for page in &mut document.pages {
         let allowed = MAX_PAGE_CHARS.min(remaining);
         let kept = match page.text.char_indices().nth(allowed) {
             Some((end, _)) => {
                 page.text.truncate(end);
                 truncated = true;
+                page.layout = None;
                 allowed
             }
             None => page.text.chars().count(),
         };
         remaining -= kept;
+        if let Some(layout) = &page.layout {
+            let characters = layout_characters(layout);
+            if characters > layout_remaining {
+                page.layout = None;
+                layout_remaining = 0;
+            } else {
+                layout_remaining -= characters;
+            }
+        }
     }
     if truncated {
         document.truncated = true;
@@ -267,6 +285,39 @@ fn bound_page_text(document: &mut ExtractedDocument) {
             document.warnings.push(ExtractionWarning::TextTruncated);
         }
     }
+}
+
+/// The most characters every page's layout together may carry: as much
+/// again as the document's text.
+pub const MAX_LAYOUT_CHARS: usize = MAX_DOCUMENT_CHARS;
+
+/// Characters a layout carries, counting each place it repeats its text.
+fn layout_characters(layout: &PageLayout) -> usize {
+    layout
+        .blocks
+        .iter()
+        .map(|block| {
+            block.text.len()
+                + block
+                    .lines
+                    .iter()
+                    .map(|line| line.text.len())
+                    .sum::<usize>()
+                + block.table.as_ref().map_or(0, |table| {
+                    table
+                        .rows
+                        .iter()
+                        .flat_map(|row| &row.cells)
+                        .map(|cell| cell.text.len())
+                        .sum()
+                })
+                + block
+                    .fields
+                    .iter()
+                    .map(|field| field.key.len() + field.value.len())
+                    .sum::<usize>()
+        })
+        .sum()
 }
 
 #[allow(clippy::result_large_err)]

@@ -13,7 +13,9 @@ use image::DynamicImage;
 #[cfg(feature = "native-tesseract")]
 use image::ImageFormat;
 
-use crate::extract::{CancellationToken, ExtractionError, OcrBackend, OcrResult, RenderedPage};
+use crate::extract::{
+    CancellationToken, ExtractionError, OcrBackend, OcrLine, OcrResult, RenderedPage,
+};
 #[cfg(feature = "native-tesseract")]
 use crate::extract::{OrientationPasses, apply_detected_rotation, read_upright};
 #[cfg(feature = "native-tesseract")]
@@ -34,11 +36,18 @@ use crate::temp::TempWorkspace;
 ///
 /// The mean confidence is over every word Tesseract scored; rows with no
 /// word, and the -1 Tesseract gives a word it did not score, do not count.
+///
+/// The reading also carries its lines, with their boxes and confidences,
+/// for the page's layout. A line is Tesseract's line split wherever a gap
+/// wider than the line is tall runs through it: Tesseract keeps a table row
+/// whose cells it did not put in blocks of their own as one line, and the
+/// cells are what the layout needs to see. The text is the same either way.
 pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
     let tsv = std::str::from_utf8(bytes)
         .map_err(|error| ExtractionError::parse_failed(error.to_string()))?;
     let mut text = String::new();
     let mut confidences = Vec::new();
+    let mut lines = LineBuilder::default();
     // (page, block, paragraph, line) of the word last written.
     let mut previous: Option<[&str; 4]> = None;
     for row in tsv.lines().skip(1) {
@@ -51,6 +60,7 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
             continue;
         }
         let position = [columns[1], columns[2], columns[3], columns[4]];
+        let new_line = previous.is_none_or(|previous| previous != position);
         match previous {
             None => {}
             Some(previous) if previous[..3] != position[..3] => text.push_str("\n\n"),
@@ -63,13 +73,96 @@ pub fn parse_tsv(bytes: &[u8]) -> Result<OcrResult, ExtractionError> {
         if confidence >= 0.0 {
             confidences.push(confidence);
         }
+        let number = |index: usize| columns[index].trim().parse::<u32>().unwrap_or(0);
+        let (left, top) = (number(6), number(7));
+        lines.push(
+            new_line,
+            word,
+            [left, top, left + number(8), top + number(9)],
+            confidence,
+        );
     }
     let mean_confidence = if confidences.is_empty() {
         0.0
     } else {
         confidences.iter().sum::<f32>() / confidences.len() as f32
     };
-    Ok(OcrResult::new(text, mean_confidence))
+    Ok(OcrResult::new(text, mean_confidence).with_lines(lines.finish()))
+}
+
+/// Tesseract's words gathered into [`OcrLine`]s.
+#[derive(Default)]
+struct LineBuilder {
+    lines: Vec<OcrLine>,
+    /// The words of the line being built: text, box, confidence.
+    words: Vec<(String, [u32; 4], f32)>,
+}
+
+impl LineBuilder {
+    fn push(&mut self, new_line: bool, word: &str, bbox: [u32; 4], confidence: f32) {
+        if new_line {
+            self.flush();
+        }
+        self.words.push((word.to_owned(), bbox, confidence));
+    }
+
+    fn flush(&mut self) {
+        let words = std::mem::take(&mut self.words);
+        let Some(height) = words.iter().map(|(_, bbox, _)| bbox[3] - bbox[1]).max() else {
+            return;
+        };
+        let mut start = 0;
+        for index in 1..=words.len() {
+            let breaks =
+                index == words.len() || words[index].1[0] > words[index - 1].1[2] + height.max(1);
+            if breaks {
+                self.lines.push(line_of(&words[start..index]));
+                start = index;
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<OcrLine> {
+        self.flush();
+        self.lines
+    }
+}
+
+fn line_of(words: &[(String, [u32; 4], f32)]) -> OcrLine {
+    let text = words
+        .iter()
+        .map(|(word, _, _)| word.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let bbox = words
+        .iter()
+        .map(|(_, bbox, _)| *bbox)
+        .reduce(|left, right| {
+            [
+                left[0].min(right[0]),
+                left[1].min(right[1]),
+                left[2].max(right[2]),
+                left[3].max(right[3]),
+            ]
+        })
+        .unwrap_or_default();
+    let scored = words
+        .iter()
+        .map(|(_, _, confidence)| *confidence)
+        .filter(|confidence| *confidence >= 0.0)
+        .collect::<Vec<_>>();
+    let confidence = if scored.is_empty() {
+        0
+    } else {
+        (scored.iter().sum::<f32>() / scored.len() as f32)
+            .round()
+            .clamp(0.0, 100.0) as u8
+    };
+    OcrLine {
+        text,
+        bbox,
+        confidence,
+    }
 }
 
 /// The page as Tesseract is given it to read: grey.
@@ -573,6 +666,52 @@ mod tsv_tests {
         assert_eq!(reading.mean_confidence, expected);
         assert_eq!(reading.text.split_whitespace().count(), scores.len());
         assert_eq!(reading.rotation_degrees, 0);
+    }
+
+    /// Each line comes with its box and its words' mean confidence; a gap
+    /// wider than the line is tall splits it, as it does a table row whose
+    /// cells Tesseract kept on one line. The text is unchanged.
+    #[test]
+    fn parse_tsv_reports_lines_with_boxes_and_confidence() {
+        let reading = parse_tsv(PACKING_SLIP.as_bytes()).unwrap();
+
+        assert_eq!(reading.lines.len(), 3, "{:?}", reading.lines);
+        assert_eq!(reading.lines[0].text, "PACKING SLIP PS-311");
+        assert_eq!(reading.lines[2].text, "QUARTZ MEADOW RETAIL LLC");
+        let joined = reading
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(joined, reading.text);
+        assert!(reading.lines[0].bbox[1] < reading.lines[1].bbox[1]);
+        assert!(reading.lines.iter().all(|line| line.confidence > 0));
+
+        let header = PACKING_SLIP.lines().next().unwrap();
+        let rows = [
+            "5\t1\t1\t1\t1\t1\t10\t10\t80\t20\t96\tInvoice",
+            "5\t1\t1\t1\t1\t2\t95\t10\t60\t20\t90\tdate",
+            "5\t1\t1\t1\t1\t3\t400\t10\t120\t20\t80\tMarch",
+            "5\t1\t1\t1\t1\t4\t525\t10\t30\t20\t-1\t4",
+        ];
+        let tsv = std::iter::once(header)
+            .chain(rows)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let reading = parse_tsv(tsv.as_bytes()).unwrap();
+
+        assert_eq!(reading.text, "Invoice date March 4");
+        assert_eq!(reading.lines.len(), 2);
+        assert_eq!(reading.lines[0].text, "Invoice date");
+        assert_eq!(reading.lines[0].bbox, [10, 10, 155, 30]);
+        assert_eq!(reading.lines[0].confidence, 93);
+        assert_eq!(reading.lines[1].text, "March 4");
+        assert_eq!(
+            reading.lines[1].confidence, 80,
+            "an unscored word does not count"
+        );
     }
 
     #[test]

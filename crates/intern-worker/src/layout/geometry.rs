@@ -1,0 +1,1840 @@
+//! Blocks from where text sits on a page: reading order from the page's
+//! columns, tables from rows whose cells line up, labelled values paired
+//! with their labels, headings from type size and weight.
+//!
+//! The input is runs: text on one line with no wide gap inside it, each
+//! with its box. A PDF page's runs are built from PDFium's characters; an
+//! OCR page's are the engine's lines. Everything after that is the same
+//! for both.
+//!
+//! Reading order is a recursive cut of the page. A region is split into
+//! columns where a vertical band of whitespace runs through it and the two
+//! sides read as separate flows - prose on both sides, a column of labels
+//! on both sides, or lines that do not share baselines. A band that only
+//! separates the columns of a table is not a column break: the table's rows
+//! stay whole. A line that crosses the band (a title, a full-width table)
+//! splits the region into the parts above and below it instead. Failing a
+//! column cut, a region is split at wide horizontal gaps, and a region with
+//! neither is read row by row.
+
+use serde::{Deserialize, Serialize};
+
+use super::text::{is_heading_line, is_label, median, split_key_value};
+use super::{
+    BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, TextSource,
+    mean_confidence, union,
+};
+
+/// A run of text on one line with no wide gap inside it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextRun {
+    pub text: String,
+    /// `[x0, y0, x1, y1]` in tenths of a point, top-left origin, in the
+    /// frame the text is read in.
+    pub bbox: [u32; 4],
+    /// Set in a bold face.
+    #[serde(default)]
+    pub bold: bool,
+    /// OCR confidence, 0-100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct Item {
+    text: String,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    bold: bool,
+    confidence: Option<u8>,
+}
+
+impl Item {
+    fn height(&self) -> f64 {
+        (self.y1 - self.y0).max(1.0)
+    }
+
+    fn center_y(&self) -> f64 {
+        (self.y0 + self.y1) / 2.0
+    }
+
+    fn bbox(&self) -> [u32; 4] {
+        [
+            self.x0.max(0.0).round() as u32,
+            self.y0.max(0.0).round() as u32,
+            self.x1.max(0.0).round() as u32,
+            self.y1.max(0.0).round() as u32,
+        ]
+    }
+
+    fn words(&self) -> usize {
+        self.text.split_whitespace().count()
+    }
+}
+
+/// What holds for the whole page: the usual height of its text and the
+/// usual gap between one line and the next.
+#[derive(Clone, Copy, Debug)]
+struct PageStats {
+    body_height: f64,
+    line_gap: f64,
+    page_width: f64,
+    page_height: f64,
+}
+
+/// Blocks in reading order from a page's runs. Boxes are in the runs'
+/// frame; ids are left for [`super::number_blocks`].
+pub fn analyze_runs(
+    runs: &[TextRun],
+    width: u32,
+    height: u32,
+    rulings: &[[u32; 4]],
+    source: TextSource,
+) -> Vec<LayoutBlock> {
+    let items = runs
+        .iter()
+        .filter(|run| !run.text.trim().is_empty() && run.bbox[2] > run.bbox[0])
+        .map(|run| Item {
+            text: run.text.trim().to_owned(),
+            x0: f64::from(run.bbox[0]),
+            y0: f64::from(run.bbox[1]),
+            x1: f64::from(run.bbox[2]),
+            y1: f64::from(run.bbox[3].max(run.bbox[1] + 1)),
+            bold: run.bold,
+            confidence: run.confidence,
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let stats = page_stats(&items, f64::from(width.max(1)), f64::from(height.max(1)));
+    let mut leaves = Vec::new();
+    cut_region(
+        &items,
+        (0..items.len()).collect(),
+        f64::from(width.max(1)),
+        0,
+        &mut leaves,
+    );
+    let rulings = rulings
+        .iter()
+        .map(|ruling| ruling.map(f64::from))
+        .collect::<Vec<_>>();
+    let mut blocks = Vec::new();
+    for leaf in leaves {
+        blocks.extend(leaf_blocks(&items, leaf, &stats, &rulings, source));
+    }
+    mark_running_lines(&mut blocks, &stats);
+    // A page's running header is read before it and its footer after it,
+    // wherever the cut put them.
+    blocks.sort_by_key(|block| match block.kind {
+        BlockKind::PageHeader => 0,
+        BlockKind::PageFooter => 2,
+        _ => 1,
+    });
+    blocks
+}
+
+/// The body text height is the height most of the page's characters are set
+/// in; the line gap is the usual space between a line and the one below it.
+fn page_stats(items: &[Item], page_width: f64, page_height: f64) -> PageStats {
+    let mut weighted = items
+        .iter()
+        .map(|item| (item.height(), item.text.chars().count().max(1)))
+        .collect::<Vec<_>>();
+    weighted.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let total = weighted.iter().map(|(_, count)| count).sum::<usize>();
+    let mut seen = 0;
+    let mut body_height = weighted[0].0;
+    for (height, count) in &weighted {
+        seen += count;
+        if seen * 2 >= total {
+            body_height = *height;
+            break;
+        }
+    }
+    let rows = rows_of(items, &(0..items.len()).collect::<Vec<_>>());
+    let mut gaps = rows
+        .windows(2)
+        .filter_map(|pair| {
+            let gap = pair[1].y0 - pair[0].y1;
+            (gap >= 0.0 && gap < body_height * 3.0).then_some(gap)
+        })
+        .collect::<Vec<_>>();
+    let line_gap = median(&mut gaps).unwrap_or(body_height * 0.3);
+    PageStats {
+        body_height,
+        line_gap,
+        page_width,
+        page_height,
+    }
+}
+
+/// One visual line of a region: its runs left to right.
+#[derive(Clone, Debug)]
+struct Row {
+    members: Vec<usize>,
+    y0: f64,
+    y1: f64,
+}
+
+impl Row {
+    fn height(&self) -> f64 {
+        (self.y1 - self.y0).max(1.0)
+    }
+}
+
+/// Groups runs into rows: a run joins a row when its middle is within the
+/// row's band and the row's middle within its own, so text on one baseline
+/// joins whatever its size and two lines half a line apart do not.
+fn rows_of(items: &[Item], ids: &[usize]) -> Vec<Row> {
+    let mut sorted = ids.to_vec();
+    sorted.sort_by(|left, right| {
+        items[*left]
+            .center_y()
+            .total_cmp(&items[*right].center_y())
+            .then(items[*left].x0.total_cmp(&items[*right].x0))
+            .then(left.cmp(right))
+    });
+    let mut rows: Vec<Row> = Vec::new();
+    for id in sorted {
+        let item = &items[id];
+        let joins = rows.last().is_some_and(|row| {
+            let row_center = (row.y0 + row.y1) / 2.0;
+            let item_center = item.center_y();
+            item_center >= row.y0
+                && item_center <= row.y1
+                && row_center >= item.y0
+                && row_center <= item.y1
+                // A run that would overlap another on the row is a line
+                // of its own, however near its baseline.
+                && row.members.iter().all(|member| {
+                    let other = &items[*member];
+                    other.x1 <= item.x0 + 1.0 || item.x1 <= other.x0 + 1.0
+                })
+        });
+        if joins {
+            let row = rows.last_mut().expect("checked above");
+            row.members.push(id);
+            row.y0 = row.y0.min(item.y0);
+            row.y1 = row.y1.max(item.y1);
+        } else {
+            rows.push(Row {
+                members: vec![id],
+                y0: item.y0,
+                y1: item.y1,
+            });
+        }
+    }
+    for row in &mut rows {
+        row.members.sort_by(|left, right| {
+            items[*left]
+                .x0
+                .total_cmp(&items[*right].x0)
+                .then(left.cmp(right))
+        });
+    }
+    rows
+}
+
+fn median_height(items: &[Item], ids: &[usize]) -> f64 {
+    let mut heights = ids.iter().map(|id| items[*id].height()).collect::<Vec<_>>();
+    median(&mut heights).unwrap_or(100.0)
+}
+
+/// How a region divides.
+enum Cut {
+    /// Read the left side, then the right.
+    Columns(Vec<usize>, Vec<usize>),
+    /// Read these parts top to bottom.
+    Bands(Vec<Vec<usize>>),
+}
+
+/// The deepest a region is cut: far more than any page needs, and a bound
+/// on a page built to make the recursion pathological.
+const MAX_DEPTH: usize = 32;
+
+fn cut_region(
+    items: &[Item],
+    ids: Vec<usize>,
+    page_width: f64,
+    depth: usize,
+    leaves: &mut Vec<Vec<usize>>,
+) {
+    if ids.len() < 2 || depth >= MAX_DEPTH {
+        leaves.push(ids);
+        return;
+    }
+    let cut = column_cut(items, &ids, page_width).or_else(|| horizontal_cut(items, &ids));
+    match cut {
+        Some(Cut::Columns(left, right)) => {
+            cut_region(items, left, page_width, depth + 1, leaves);
+            cut_region(items, right, page_width, depth + 1, leaves);
+        }
+        Some(Cut::Bands(bands)) => {
+            for band in bands {
+                cut_region(items, band, page_width, depth + 1, leaves);
+            }
+        }
+        None => leaves.push(ids),
+    }
+}
+
+/// Splits a region at horizontal gaps of more than a line and a quarter of
+/// its usual text height. A region with no such gap is not split.
+fn horizontal_cut(items: &[Item], ids: &[usize]) -> Option<Cut> {
+    let height = median_height(items, ids);
+    let rows = rows_of(items, ids);
+    let mut bands: Vec<Vec<usize>> = Vec::new();
+    let mut bottom = f64::NEG_INFINITY;
+    for row in rows {
+        if bands.is_empty() || row.y0 - bottom > height * 1.25 {
+            bands.push(Vec::new());
+        }
+        bottom = bottom.max(row.y1);
+        bands
+            .last_mut()
+            .expect("pushed above")
+            .extend(row.members.iter().copied());
+    }
+    (bands.len() > 1).then_some(Cut::Bands(bands))
+}
+
+/// A gutter: a vertical band of whitespace, `[start, end]`, through the
+/// consecutive rows `first..=last` of a region.
+#[derive(Clone, Copy, Debug)]
+struct Gutter {
+    start: f64,
+    end: f64,
+    first: usize,
+    last: usize,
+}
+
+/// How a run that crosses a gutter relates to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Crossing {
+    /// Clear of the gutter on the left or right.
+    Left,
+    Right,
+    /// Over it, but mostly on one side: a long value running a little into
+    /// the gutter belongs to the side it starts on.
+    SpillsLeft,
+    SpillsRight,
+    /// Across it: a title, a full-width line, a table row.
+    Spans,
+}
+
+fn crossing(item: &Item, start: f64, end: f64, left_edge: f64, right_edge: f64) -> Crossing {
+    if item.x1 <= start + 5.0 {
+        return Crossing::Left;
+    }
+    if item.x0 >= end - 5.0 {
+        return Crossing::Right;
+    }
+    let on_left = (start - item.x0.max(left_edge)).max(0.0) / (start - left_edge).max(1.0);
+    let on_right = (item.x1.min(right_edge) - end).max(0.0) / (right_edge - end).max(1.0);
+    let middle = (item.x0 + item.x1) / 2.0;
+    if (on_left >= 0.3 && on_right >= 0.3) || (middle > start && middle < end) {
+        Crossing::Spans
+    } else if middle <= start {
+        Crossing::SpillsLeft
+    } else {
+        Crossing::SpillsRight
+    }
+}
+
+/// The free stretches of one row between `left_edge` and `right_edge`.
+fn free_intervals(items: &[Item], row: &Row, left_edge: f64, right_edge: f64) -> Vec<(f64, f64)> {
+    let mut free = Vec::new();
+    let mut cursor = left_edge;
+    for member in &row.members {
+        let item = &items[*member];
+        if item.x0 > cursor {
+            free.push((cursor, item.x0));
+        }
+        cursor = cursor.max(item.x1);
+    }
+    if right_edge > cursor {
+        free.push((cursor, right_edge));
+    }
+    free
+}
+
+fn intersect(these: &[(f64, f64)], those: &[(f64, f64)], minimum: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    for (a0, a1) in these {
+        for (b0, b1) in those {
+            let start = a0.max(*b0);
+            let end = a1.min(*b1);
+            if end - start >= minimum {
+                out.push((start, end));
+            }
+        }
+    }
+    out
+}
+
+/// The column cut through a region, if it has one.
+///
+/// A gutter is found where three consecutive rows leave the same band of
+/// whitespace free. It is then followed up and down the region, through
+/// rows that leave it free, and through rows whose text runs a little into
+/// it from one side when they sit at the region's usual line spacing; a
+/// row that spans it ends it. The gutter with the most rows that have text
+/// on both sides, and whose two sides read as separate flows, cuts the
+/// region: into columns where it runs the region's whole height, and into
+/// the parts above, alongside, and below it where it does not.
+fn column_cut(items: &[Item], ids: &[usize], page_width: f64) -> Option<Cut> {
+    if ids.len() < 4 {
+        return None;
+    }
+    let height = median_height(items, ids);
+    let rows = rows_of(items, ids);
+    if rows.len() < 3 {
+        return None;
+    }
+    let left_edge = ids
+        .iter()
+        .map(|id| items[*id].x0)
+        .fold(f64::INFINITY, f64::min);
+    let right_edge = ids
+        .iter()
+        .map(|id| items[*id].x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let minimum = (height * 0.9).max(60.0);
+    let free = rows
+        .iter()
+        .map(|row| free_intervals(items, row, left_edge, right_edge))
+        .collect::<Vec<_>>();
+    let mut candidates: Vec<(f64, f64)> = Vec::new();
+    for window in free.windows(3) {
+        for (start, end) in intersect(
+            &intersect(&window[0], &window[1], minimum),
+            &window[2],
+            minimum,
+        ) {
+            // A band at the region's edge is a margin, not a gutter.
+            if start <= left_edge + 1.0 || end >= right_edge - 1.0 {
+                continue;
+            }
+            if !candidates
+                .iter()
+                .any(|(other_start, other_end)| start < *other_end && end > *other_start)
+            {
+                candidates.push((start, end));
+            }
+        }
+    }
+    let mut gutters = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            follow_gutter(
+                items, &rows, &free, candidate, minimum, left_edge, right_edge, height,
+            )
+        })
+        .collect::<Vec<_>>();
+    // Most rows with text on both sides first; then the widest.
+    gutters.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then((right.1.end - right.1.start).total_cmp(&(left.1.end - left.1.start)))
+            .then(left.1.start.total_cmp(&right.1.start))
+    });
+    for (_, gutter) in gutters {
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for row in &rows[gutter.first..=gutter.last] {
+            for member in &row.members {
+                match crossing(
+                    &items[*member],
+                    gutter.start,
+                    gutter.end,
+                    left_edge,
+                    right_edge,
+                ) {
+                    Crossing::Left | Crossing::SpillsLeft => left.push(*member),
+                    Crossing::Right | Crossing::SpillsRight => right.push(*member),
+                    Crossing::Spans => {}
+                }
+            }
+        }
+        let left_rows = rows_of(items, &left);
+        let right_rows = rows_of(items, &right);
+        if !separate_flows(items, &left_rows, &right_rows, page_width) {
+            continue;
+        }
+        if gutter.first == 0 && gutter.last == rows.len() - 1 {
+            return Some(Cut::Columns(left, right));
+        }
+        let band = |range: std::ops::Range<usize>| {
+            rows[range]
+                .iter()
+                .flat_map(|row| row.members.iter().copied())
+                .collect::<Vec<_>>()
+        };
+        let bands = [
+            band(0..gutter.first),
+            band(gutter.first..gutter.last + 1),
+            band(gutter.last + 1..rows.len()),
+        ]
+        .into_iter()
+        .filter(|band| !band.is_empty())
+        .collect::<Vec<_>>();
+        return Some(Cut::Bands(bands));
+    }
+    None
+}
+
+/// Follows a gutter seen in three rows up and down the region. Returns how
+/// many of its rows have text on both sides, and the gutter, narrowed to
+/// what every row leaves free.
+#[allow(clippy::too_many_arguments)]
+fn follow_gutter(
+    items: &[Item],
+    rows: &[Row],
+    free: &[Vec<(f64, f64)>],
+    (start, end): (f64, f64),
+    minimum: f64,
+    left_edge: f64,
+    right_edge: f64,
+    height: f64,
+) -> Option<(usize, Gutter)> {
+    let seed = (0..rows.len().saturating_sub(2)).find(|index| {
+        (0..3).all(|offset| {
+            free[index + offset]
+                .iter()
+                .any(|(free_start, free_end)| *free_start <= start + 0.5 && *free_end >= end - 0.5)
+        })
+    })?;
+    let mut gutter = Gutter {
+        start,
+        end,
+        first: seed,
+        last: seed + 2,
+    };
+    // Whether a row can join the gutter, and the gutter it leaves. A gap of
+    // a line and a half ends a gutter whatever the row: that is a new
+    // section of the page, and its columns, if it has any, are its own.
+    let joins = |gutter: &Gutter, index: usize, neighbour: usize| -> Option<(f64, f64)> {
+        let gap = {
+            let (row, other) = (&rows[index], &rows[neighbour]);
+            if index < neighbour {
+                other.y0 - row.y1
+            } else {
+                row.y0 - other.y1
+            }
+        };
+        if gap > height * 1.5 {
+            return None;
+        }
+        let narrowed = free[index]
+            .iter()
+            .map(|(free_start, free_end)| (free_start.max(gutter.start), free_end.min(gutter.end)))
+            .filter(|(narrow_start, narrow_end)| narrow_end - narrow_start >= minimum)
+            .max_by(|left, right| (left.1 - left.0).total_cmp(&(right.1 - right.0)));
+        if narrowed.is_some() {
+            return narrowed;
+        }
+        // Text running into the gutter from one side, on a row at the
+        // region's line spacing.
+        let row = &rows[index];
+        let close = gap <= height * 0.6;
+        let spills = row.members.iter().all(|member| {
+            crossing(
+                &items[*member],
+                gutter.start,
+                gutter.end,
+                left_edge,
+                right_edge,
+            ) != Crossing::Spans
+        });
+        (close && spills).then_some((gutter.start, gutter.end))
+    };
+    while gutter.first > 0 {
+        match joins(&gutter, gutter.first - 1, gutter.first) {
+            Some((narrow_start, narrow_end)) => {
+                gutter.start = narrow_start;
+                gutter.end = narrow_end;
+                gutter.first -= 1;
+            }
+            None => break,
+        }
+    }
+    while gutter.last + 1 < rows.len() {
+        match joins(&gutter, gutter.last + 1, gutter.last) {
+            Some((narrow_start, narrow_end)) => {
+                gutter.start = narrow_start;
+                gutter.end = narrow_end;
+                gutter.last += 1;
+            }
+            None => break,
+        }
+    }
+    let both = rows[gutter.first..=gutter.last]
+        .iter()
+        .filter(|row| {
+            let sides = row
+                .members
+                .iter()
+                .map(|member| {
+                    crossing(
+                        &items[*member],
+                        gutter.start,
+                        gutter.end,
+                        left_edge,
+                        right_edge,
+                    )
+                })
+                .collect::<Vec<_>>();
+            sides
+                .iter()
+                .any(|side| matches!(side, Crossing::Left | Crossing::SpillsLeft))
+                && sides
+                    .iter()
+                    .any(|side| matches!(side, Crossing::Right | Crossing::SpillsRight))
+        })
+        .count();
+    (both >= 2).then_some((both, gutter))
+}
+
+/// Whether two sides of a gutter are separate flows rather than the columns
+/// of one table: prose on both sides, labels down both sides, or lines that
+/// mostly do not share a baseline.
+fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) -> bool {
+    if left.len() < 2 || right.len() < 2 {
+        return false;
+    }
+    let prose = |rows: &[Row]| {
+        let total = rows
+            .iter()
+            .flat_map(|row| &row.members)
+            .map(|member| items[*member].text.chars().count())
+            .sum::<usize>()
+            .max(1);
+        let prose = rows
+            .iter()
+            .flat_map(|row| &row.members)
+            .map(|member| &items[*member])
+            .filter(|item| item.words() >= 5 && item.x1 - item.x0 >= page_width * 0.2)
+            .map(|item| item.text.chars().count())
+            .sum::<usize>();
+        prose * 2 >= total
+    };
+    // Lines of a column follow one another at the line spacing, with the
+    // odd paragraph gap. A table column whose neighbour wraps has a line,
+    // then a gap where the neighbour's next lines are.
+    let dense = |rows: &[Row]| {
+        let gaps = rows
+            .windows(2)
+            .filter(|pair| pair[1].y0 - pair[0].y1 > pair[0].height())
+            .count();
+        gaps * 2 < rows.len()
+    };
+    if left.len() >= 3
+        && right.len() >= 3
+        && prose(left)
+        && prose(right)
+        && dense(left)
+        && dense(right)
+    {
+        return true;
+    }
+    let labelled = |rows: &[Row]| {
+        rows.iter()
+            .filter(|row| {
+                let first = &items[row.members[0]];
+                (first.text.ends_with(':') && is_label(&first.text))
+                    || split_key_value(&first.text).is_some()
+            })
+            .count()
+    };
+    // Rows whose label and value are both on this side.
+    let self_contained = |rows: &[Row]| {
+        rows.iter()
+            .filter(|row| {
+                let first = &items[row.members[0]];
+                (first.text.ends_with(':') && is_label(&first.text) && row.members.len() >= 2)
+                    || split_key_value(&first.text).is_some()
+            })
+            .count()
+    };
+    let (left_labels, right_labels) = (labelled(left), labelled(right));
+    // Labels down both sides, or a grid of labelled values beside a block
+    // with none: an address beside a statement's date and account number.
+    if (left_labels >= 2 && right_labels >= 2)
+        || (left_labels == 0 && self_contained(right) >= 3)
+        || (right_labels == 0 && self_contained(left) >= 3)
+    {
+        return true;
+    }
+    // Independent baselines: the two sides were set separately.
+    let shared = |these: &[Row], those: &[Row]| {
+        let matched = these
+            .iter()
+            .filter(|row| {
+                those.iter().any(|other| {
+                    (row.y1 - other.y1).abs() <= row.height().min(other.height()) * 0.3
+                })
+            })
+            .count();
+        matched as f64 / these.len().max(1) as f64
+    };
+    left.len() >= 3 && right.len() >= 3 && shared(left, right).max(shared(right, left)) < 0.5
+}
+
+/// What one row of a leaf is.
+#[derive(Clone, Debug)]
+struct Line {
+    cells: Vec<usize>,
+    y0: f64,
+    y1: f64,
+    x0: f64,
+    x1: f64,
+}
+
+impl Line {
+    fn height(&self) -> f64 {
+        (self.y1 - self.y0).max(1.0)
+    }
+
+    fn text(&self, items: &[Item]) -> String {
+        self.cells
+            .iter()
+            .map(|cell| items[*cell].text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn bbox(&self) -> [u32; 4] {
+        [
+            self.x0.max(0.0).round() as u32,
+            self.y0.max(0.0).round() as u32,
+            self.x1.max(0.0).round() as u32,
+            self.y1.max(0.0).round() as u32,
+        ]
+    }
+
+    fn confidence(&self, items: &[Item]) -> Option<u8> {
+        mean_confidence(self.cells.iter().map(|cell| items[*cell].confidence))
+    }
+
+    fn layout_line(&self, items: &[Item]) -> LayoutLine {
+        LayoutLine {
+            text: self.text(items),
+            bbox: Some(self.bbox()),
+            confidence: self.confidence(items),
+        }
+    }
+
+    fn all_bold(&self, items: &[Item]) -> bool {
+        self.cells.iter().all(|cell| items[*cell].bold)
+    }
+}
+
+fn lines_of(items: &[Item], ids: &[usize]) -> Vec<Line> {
+    rows_of(items, ids)
+        .into_iter()
+        .map(|row| {
+            let x0 = row
+                .members
+                .iter()
+                .map(|member| items[*member].x0)
+                .fold(f64::INFINITY, f64::min);
+            let x1 = row
+                .members
+                .iter()
+                .map(|member| items[*member].x1)
+                .fold(f64::NEG_INFINITY, f64::max);
+            Line {
+                cells: row.members,
+                y0: row.y0,
+                y1: row.y1,
+                x0,
+                x1,
+            }
+        })
+        .collect()
+}
+
+/// How far apart two edges may be and still line up.
+fn tolerance(height: f64) -> f64 {
+    (height * 0.8).max(30.0)
+}
+
+/// Whether a cell lines up with a column: the same left edge, or - for a
+/// short cell, a number set flush right or a centred heading - the same
+/// right edge or centre. Lines of prose end where they happen to, so a long
+/// cell lines up by its left edge alone.
+fn aligned(item: &Item, column: &Column, tolerance: f64) -> bool {
+    (item.x0 - column.x0).abs() <= tolerance
+        || (item.words() <= 3
+            && ((item.x1 - column.x1).abs() <= tolerance
+                || ((item.x0 + item.x1) / 2.0 - (column.x0 + column.x1) / 2.0).abs() <= tolerance))
+}
+
+/// Two cells or more of prose side by side - several words each, set at
+/// the body size and filling a good part of the page - are columns of text,
+/// not a row. A form's long labels are set smaller and narrower.
+fn prose_pair(items: &[Item], cells: &[usize], stats: &PageStats) -> bool {
+    cells
+        .iter()
+        .map(|cell| &items[*cell])
+        .filter(|item| {
+            item.words() >= 6
+                && item.x1 - item.x0 >= stats.page_width * 0.3
+                && item.height() >= stats.body_height * 0.85
+        })
+        .count()
+        >= 2
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Column {
+    x0: f64,
+    x1: f64,
+}
+
+/// Blocks of one region that is read row by row.
+fn leaf_blocks(
+    items: &[Item],
+    ids: Vec<usize>,
+    stats: &PageStats,
+    rulings: &[[f64; 4]],
+    source: TextSource,
+) -> Vec<LayoutBlock> {
+    let lines = lines_of(items, &ids);
+    let mut blocks = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if let Some((end, block)) = table_at(items, &lines, index, stats, rulings, source) {
+            blocks.push(block);
+            index = end;
+            continue;
+        }
+        if let Some((end, block)) = key_values_at(items, &lines, index, stats, source) {
+            blocks.push(block);
+            index = end;
+            continue;
+        }
+        if let Some((end, block)) = labels_over_values_at(items, &lines, index, stats, source) {
+            blocks.push(block);
+            index = end;
+            continue;
+        }
+        let (end, block) = text_at(items, &lines, index, stats, source);
+        blocks.push(block);
+        index = end;
+    }
+    blocks
+}
+
+/// The table that starts at `start`, if one does: at least two rows of two
+/// or more cells that line up with each other, with the one-cell rows
+/// between them that continue a cell or label a group.
+fn table_at(
+    items: &[Item],
+    lines: &[Line],
+    start: usize,
+    stats: &PageStats,
+    rulings: &[[f64; 4]],
+    source: TextSource,
+) -> Option<(usize, LayoutBlock)> {
+    let first = &lines[start];
+    if first.cells.len() < 2
+        || is_key_value_line(items, first)
+        || prose_pair(items, &first.cells, stats)
+    {
+        return None;
+    }
+    let tolerance = tolerance(stats.body_height);
+    let mut columns = first
+        .cells
+        .iter()
+        .map(|cell| Column {
+            x0: items[*cell].x0,
+            x1: items[*cell].x1,
+        })
+        .collect::<Vec<_>>();
+    // Rows of cells; a continuation line's cells are folded into the row
+    // above, each into the cell it sits under.
+    let mut rows: Vec<Vec<Vec<usize>>> = vec![first.cells.iter().map(|cell| vec![*cell]).collect()];
+    let mut row_lines: Vec<Vec<usize>> = vec![vec![start]];
+    let mut multi_cell_rows = 1;
+    let mut end = start + 1;
+    while end < lines.len() {
+        let line = &lines[end];
+        let above = &lines[end - 1];
+        if line.y0 - above.y1 > stats.body_height.max(stats.line_gap * 2.0) * 1.6 {
+            break;
+        }
+        let matched = line
+            .cells
+            .iter()
+            .filter(|cell| {
+                columns
+                    .iter()
+                    .any(|column| aligned(&items[**cell], column, tolerance))
+            })
+            .count();
+        if line.cells.len() >= 2 {
+            // Wrapped cells: nothing in the first column, close under the row
+            // above, and every cell under one of that row's cells.
+            let close = line.y0 - above.y1 <= stats.line_gap + stats.body_height * 0.5;
+            let first_column = columns
+                .iter()
+                .map(|column| column.x0)
+                .fold(f64::INFINITY, f64::min);
+            let previous = rows.last_mut().expect("a table has a row");
+            let positions = line
+                .cells
+                .iter()
+                .map(|cell| {
+                    previous.iter().position(|above_cell| {
+                        (items[above_cell[0]].x0 - items[*cell].x0).abs() <= tolerance
+                    })
+                })
+                .collect::<Option<Vec<_>>>();
+            let starts_first_column = line
+                .cells
+                .iter()
+                .any(|cell| (items[*cell].x0 - first_column).abs() <= tolerance);
+            if close
+                && !starts_first_column
+                && let Some(positions) = positions
+                && positions.windows(2).all(|pair| pair[0] < pair[1])
+            {
+                for (cell, position) in line.cells.iter().zip(positions) {
+                    previous[position].push(*cell);
+                }
+                row_lines.last_mut().expect("a table has a row").push(end);
+                end += 1;
+                continue;
+            }
+            if is_key_value_line(items, line)
+                || prose_pair(items, &line.cells, stats)
+                || matched * 2 < line.cells.len()
+                || matched < 2
+                || new_header(items, lines, end)
+            {
+                break;
+            }
+            for cell in &line.cells {
+                let item = &items[*cell];
+                match columns
+                    .iter_mut()
+                    .find(|column| aligned(item, column, tolerance))
+                {
+                    Some(column) => {
+                        column.x0 = column.x0.min(item.x0);
+                        column.x1 = column.x1.max(item.x1);
+                    }
+                    None => columns.push(Column {
+                        x0: item.x0,
+                        x1: item.x1,
+                    }),
+                }
+            }
+            rows.push(line.cells.iter().map(|cell| vec![*cell]).collect());
+            row_lines.push(vec![end]);
+            multi_cell_rows += 1;
+            end += 1;
+            continue;
+        }
+        // One cell. Under a column other than the first and close to the
+        // row above, it continues that row's cell; flush with the first
+        // column and followed by more table rows, it is a row of its own.
+        let item = &items[line.cells[0]];
+        let close = line.y0 - above.y1 <= stats.line_gap + stats.body_height * 0.5;
+        let previous = rows.last_mut().expect("a table has a row");
+        let under = previous
+            .iter()
+            .position(|cell| {
+                let cell_x0 = items[cell[0]].x0;
+                (item.x0 - cell_x0).abs() <= tolerance
+            })
+            .filter(|position| *position > 0 || previous.len() == 1);
+        if close && let Some(position) = under {
+            previous[position].push(line.cells[0]);
+            row_lines.last_mut().expect("a table has a row").push(end);
+            end += 1;
+            continue;
+        }
+        let first_column = columns
+            .iter()
+            .map(|column| column.x0)
+            .fold(f64::INFINITY, f64::min);
+        let next_is_row = lines.get(end + 1).is_some_and(|next| {
+            next.cells.len() >= 2
+                && next
+                    .cells
+                    .iter()
+                    .filter(|cell| {
+                        columns
+                            .iter()
+                            .any(|column| aligned(&items[**cell], column, tolerance))
+                    })
+                    .count()
+                    >= 2
+        });
+        // A line ending in a period or a colon is prose, or the caption of
+        // what follows: it ends the table rather than labelling a group.
+        if (item.x0 - first_column).abs() <= tolerance
+            && next_is_row
+            && !item.text.ends_with(['.', ':'])
+        {
+            rows.push(vec![vec![line.cells[0]]]);
+            row_lines.push(vec![end]);
+            end += 1;
+            continue;
+        }
+        break;
+    }
+    if multi_cell_rows < 2 {
+        return None;
+    }
+    let header = header_row(items, lines, &rows, &row_lines, rulings, stats);
+    let rows = in_columns(items, rows, tolerance);
+    let mut block_lines = Vec::new();
+    let mut table_rows = Vec::new();
+    for (row_index, (row, members)) in rows.iter().zip(&row_lines).enumerate() {
+        let cells = row
+            .iter()
+            .map(|cell| {
+                let text = cell
+                    .iter()
+                    .map(|id| items[*id].text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                LayoutCell {
+                    id: String::new(),
+                    text,
+                    bbox: union(cell.iter().map(|id| items[*id].bbox())),
+                    header: header && row_index == 0,
+                }
+            })
+            .collect::<Vec<_>>();
+        let text = format!(
+            "| {} |",
+            cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        let confidence = mean_confidence(row.iter().flatten().map(|id| items[*id].confidence));
+        block_lines.push(LayoutLine {
+            text,
+            bbox: union(members.iter().map(|line| lines[*line].bbox())),
+            confidence,
+        });
+        table_rows.push(LayoutRow {
+            id: String::new(),
+            cells,
+        });
+    }
+    let mut block = block_of(BlockKind::Table, block_lines, source);
+    // A header over a single row of values is a set of labelled values -
+    // the invoice number, date, and terms across the top of an invoice. Two
+    // columns could as well be a letterhead beside a title, so it takes
+    // three, or labels set smaller than what is filled in under them.
+    let labels = header
+        && rows.len() == 2
+        && rows[0]
+            .iter()
+            .flatten()
+            .all(|id| !numeric(&items[*id].text))
+        && (rows[0].len() >= 3 || smaller_than(items, &rows[0], &rows[1]));
+    if labels {
+        block.fields = table_rows[0]
+            .cells
+            .iter()
+            .zip(&table_rows[1].cells)
+            .filter(|(key, value)| !key.text.is_empty() && !value.text.is_empty())
+            .map(|(key, value)| KeyValue {
+                id: String::new(),
+                key: key.text.trim_end_matches(':').trim().to_owned(),
+                value: value.text.clone(),
+                key_bbox: key.bbox,
+                value_bbox: value.bbox,
+            })
+            .collect();
+    }
+    block.table = Some(LayoutTable { rows: table_rows });
+    Some((end, block))
+}
+
+/// The rows with every cell in its column: a row with a cell missing - a
+/// transaction with a credit and no debit - gets an empty cell where the
+/// missing one would be, so the figures stay under their headings. The
+/// columns are the cells of the row with the most of them; a row whose cells
+/// do not fall one to a column, left to right, is kept as it is, and so is
+/// a row of one cell, which labels a group or spans the table.
+fn in_columns(items: &[Item], rows: Vec<Vec<Vec<usize>>>, tolerance: f64) -> Vec<Vec<Vec<usize>>> {
+    let span = |cell: &[usize]| {
+        cell.iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(x0, x1), id| {
+                (x0.min(items[*id].x0), x1.max(items[*id].x1))
+            })
+    };
+    let Some(widest) = rows.iter().max_by_key(|row| row.len()) else {
+        return rows;
+    };
+    let columns = widest.iter().map(|cell| span(cell)).collect::<Vec<_>>();
+    if columns.len() < 3 {
+        return rows;
+    }
+    rows.into_iter()
+        .map(|row| {
+            if row.len() < 2 || row.len() == columns.len() {
+                return row;
+            }
+            let places = row
+                .iter()
+                .map(|cell| {
+                    let (x0, x1) = span(cell);
+                    columns
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (left, right))| {
+                            let overlap = x1.min(*right) - x0.max(*left);
+                            let distance = ((x0 + x1) / 2.0 - (left + right) / 2.0).abs();
+                            (index, overlap, distance)
+                        })
+                        .max_by(|a, b| a.1.total_cmp(&b.1).then(b.2.total_cmp(&a.2)))
+                        .map(|(index, _, _)| index)
+                        .unwrap_or(0)
+                })
+                .collect::<Vec<_>>();
+            // Each cell has to sit in its column - flush with its left edge
+            // or its right - not merely overlap it.
+            let sits = row.iter().zip(&places).all(|(cell, place)| {
+                let (x0, x1) = span(cell);
+                let (left, right) = columns[*place];
+                (x0 - left).abs() <= tolerance || (x1 - right).abs() <= tolerance
+            });
+            if !sits || !places.windows(2).all(|pair| pair[0] < pair[1]) {
+                return row;
+            }
+            let mut padded = vec![Vec::new(); columns.len()];
+            for (cell, place) in row.into_iter().zip(places) {
+                padded[place] = cell;
+            }
+            padded
+        })
+        .collect()
+}
+
+/// Whether line `index` heads a new table: set in bold, with no figures in
+/// it, under a line that is not bold, and over one that is not bold either.
+/// A total set in bold carries its figure, so it stays in its table.
+fn new_header(items: &[Item], lines: &[Line], index: usize) -> bool {
+    let line = &lines[index];
+    let bold = |line: &Line| line.all_bold(items);
+    index > 0
+        && bold(line)
+        && !bold(&lines[index - 1])
+        && line.cells.iter().all(|cell| !numeric(&items[*cell].text))
+        && lines
+            .get(index + 1)
+            .is_some_and(|next| next.cells.len() >= 2 && !bold(next))
+}
+
+/// Whether a table's first row is its header: set in bold, ruled off from
+/// the rows under it, or words over columns that hold numbers below.
+fn header_row(
+    items: &[Item],
+    lines: &[Line],
+    rows: &[Vec<Vec<usize>>],
+    row_lines: &[Vec<usize>],
+    rulings: &[[f64; 4]],
+    stats: &PageStats,
+) -> bool {
+    if rows.len() < 2 {
+        return false;
+    }
+    let first = &rows[0];
+    if first.iter().flatten().all(|id| items[*id].bold) {
+        let rest_bold = rows[1..]
+            .iter()
+            .all(|row| row.iter().flatten().all(|id| items[*id].bold));
+        if !rest_bold {
+            return true;
+        }
+    }
+    let first_line = &lines[*row_lines[0].last().expect("a row has a line")];
+    let second_line = &lines[row_lines[1][0]];
+    let width = first_line.x1.max(second_line.x1) - first_line.x0.min(second_line.x0);
+    let ruled = rulings.iter().any(|ruling| {
+        let horizontal = ruling[3] - ruling[1] <= 30.0;
+        let between = ruling[1] >= first_line.y1 - stats.body_height * 0.3
+            && ruling[3] <= second_line.y0 + stats.body_height * 0.3;
+        horizontal && between && ruling[2] - ruling[0] >= width * 0.5
+    });
+    if ruled || smaller_than(items, first, &rows[1]) {
+        return true;
+    }
+    // Words over columns of figures.
+    first.iter().flatten().all(|id| !numeric(&items[*id].text))
+        && rows[1..]
+            .iter()
+            .any(|row| row.iter().flatten().any(|id| numeric(&items[*id].text)))
+}
+
+/// Mostly digits: a figure, a date, an amount.
+fn numeric(text: &str) -> bool {
+    let digits = text.chars().filter(char::is_ascii_digit).count();
+    digits > 0
+        && digits * 3
+            >= text
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .count()
+}
+
+/// Whether every cell of one row is set noticeably smaller than every cell
+/// of another: a form's labels over the values filled in under them.
+fn smaller_than(items: &[Item], labels: &[Vec<usize>], values: &[Vec<usize>]) -> bool {
+    let largest_label = labels
+        .iter()
+        .flatten()
+        .map(|id| items[*id].height())
+        .fold(0.0, f64::max);
+    let smallest_value = values
+        .iter()
+        .flatten()
+        .map(|id| items[*id].height())
+        .fold(f64::INFINITY, f64::min);
+    largest_label > 0.0 && largest_label <= smallest_value * 0.85
+}
+
+/// A line of labelled values: a label cell ending in a colon, or a single
+/// `Label: value`.
+fn is_key_value_line(items: &[Item], line: &Line) -> bool {
+    let first = &items[line.cells[0]];
+    (first.text.ends_with(':') && is_label(&first.text))
+        || (line.cells.len() == 1 && split_key_value(&first.text).is_some())
+}
+
+/// The labelled values that start at `start`, if any do: label cells with
+/// the value beside them, `Label: value` lines, and a label on a line of
+/// its own with its value on the lines under it.
+fn key_values_at(
+    items: &[Item],
+    lines: &[Line],
+    start: usize,
+    stats: &PageStats,
+    source: TextSource,
+) -> Option<(usize, LayoutBlock)> {
+    if !is_key_value_line(items, &lines[start]) {
+        return None;
+    }
+    struct Pair {
+        key: String,
+        key_bbox: [u32; 4],
+        value: Vec<String>,
+        value_boxes: Vec<[u32; 4]>,
+        value_x0: Option<f64>,
+        value_x1: Option<f64>,
+        /// The value is a cell of its own, set apart from its label, so a
+        /// line under it continues it if it ends where it ends.
+        set_apart: bool,
+        label_x0: f64,
+        confidence: Vec<Option<u8>>,
+        lines: Vec<usize>,
+    }
+    let mut pairs: Vec<Pair> = Vec::new();
+    let mut end = start;
+    while end < lines.len() {
+        let line = &lines[end];
+        if end > start {
+            let above = &lines[end - 1];
+            if line.y0 - above.y1 > stats.line_gap + stats.body_height * 0.6 {
+                break;
+            }
+        }
+        if is_key_value_line(items, line) {
+            let mut cells = line.cells.iter().peekable();
+            while let Some(cell) = cells.next() {
+                let item = &items[*cell];
+                if item.text.ends_with(':') && is_label(&item.text) {
+                    let mut pair = Pair {
+                        key: item.text.trim_end_matches(':').trim().to_owned(),
+                        key_bbox: item.bbox(),
+                        value: Vec::new(),
+                        value_boxes: Vec::new(),
+                        value_x0: None,
+                        value_x1: None,
+                        set_apart: true,
+                        label_x0: item.x0,
+                        confidence: vec![item.confidence],
+                        lines: vec![end],
+                    };
+                    if let Some(next) = cells.next_if(|next| {
+                        let text = &items[**next].text;
+                        !(text.ends_with(':') && is_label(text))
+                    }) {
+                        let value = &items[*next];
+                        pair.value.push(value.text.clone());
+                        pair.value_boxes.push(value.bbox());
+                        pair.value_x0 = Some(value.x0);
+                        pair.value_x1 = Some(value.x1);
+                        pair.confidence.push(value.confidence);
+                    }
+                    pairs.push(pair);
+                } else if let Some((key, value)) = split_key_value(&item.text) {
+                    pairs.push(Pair {
+                        key: key.to_owned(),
+                        key_bbox: item.bbox(),
+                        value: vec![value.to_owned()],
+                        value_boxes: vec![item.bbox()],
+                        value_x0: Some(item.x0),
+                        value_x1: Some(item.x1),
+                        set_apart: false,
+                        label_x0: item.x0,
+                        confidence: vec![item.confidence],
+                        lines: vec![end],
+                    });
+                } else if let Some(pair) = pairs.last_mut() {
+                    pair.value.push(item.text.clone());
+                    pair.value_boxes.push(item.bbox());
+                    pair.confidence.push(item.confidence);
+                    if !pair.lines.contains(&end) {
+                        pair.lines.push(end);
+                    }
+                }
+            }
+            end += 1;
+            continue;
+        }
+        // A line under a label continues its value when it sits where the
+        // value does - or anywhere right of the label, if the label has no
+        // value yet.
+        let Some(pair) = pairs.last_mut() else {
+            break;
+        };
+        let tolerance = tolerance(stats.body_height);
+        let first = &items[line.cells[0]];
+        // Only a single line of text continues a value: a row of cells is
+        // a table starting.
+        let continues = line.cells.len() == 1
+            && match (pair.value_x0, pair.value_x1) {
+                (Some(x0), Some(x1)) => {
+                    (first.x0 - x0).abs() <= tolerance
+                        || (pair.set_apart && (line.x1 - x1).abs() <= tolerance)
+                }
+                _ => first.x0 > pair.label_x0 + stats.body_height * 0.5,
+            };
+        if !continues || (is_heading_line(&line.text(items)) && pair.value_x0.is_some()) {
+            break;
+        }
+        pair.value.push(line.text(items));
+        pair.value_boxes.push(line.bbox());
+        pair.value_x0.get_or_insert(first.x0);
+        pair.value_x1.get_or_insert(line.x1);
+        pair.confidence.push(line.confidence(items));
+        pair.lines.push(end);
+        end += 1;
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    let mut block_lines = Vec::new();
+    let mut fields = Vec::new();
+    for pair in pairs {
+        let value = pair.value.join(" ");
+        let text = if value.is_empty() {
+            format!("{}:", pair.key)
+        } else {
+            format!("{}: {value}", pair.key)
+        };
+        let value_bbox = union(pair.value_boxes.iter().copied());
+        block_lines.push(LayoutLine {
+            text,
+            bbox: union(std::iter::once(pair.key_bbox).chain(pair.value_boxes.iter().copied())),
+            confidence: mean_confidence(pair.confidence.iter().copied()),
+        });
+        if !value.is_empty() {
+            fields.push(KeyValue {
+                id: String::new(),
+                key: pair.key,
+                value,
+                key_bbox: Some(pair.key_bbox),
+                value_bbox,
+            });
+        }
+    }
+    let mut block = block_of(BlockKind::KeyValue, block_lines, source);
+    block.fields = fields;
+    Some((end.max(start + 1), block))
+}
+
+/// A form's fields set as a small label over the value filled in under it,
+/// one after another: `1. Legal business name` over `Emberglow Coatings
+/// Ltd.`. Each label is a line of one cell, set smaller than the line
+/// right under it, which starts where the label starts.
+fn labels_over_values_at(
+    items: &[Item],
+    lines: &[Line],
+    start: usize,
+    stats: &PageStats,
+    source: TextSource,
+) -> Option<(usize, LayoutBlock)> {
+    let tolerance = tolerance(stats.body_height);
+    let pair_at = |index: usize| -> bool {
+        let (Some(label), Some(value)) = (lines.get(index), lines.get(index + 1)) else {
+            return false;
+        };
+        label.cells.len() == 1
+            && value.cells.len() == 1
+            && items[label.cells[0]].words() <= 14
+            && (items[value.cells[0]].x0 - items[label.cells[0]].x0).abs() <= tolerance
+            && value.y0 - label.y1 <= stats.line_gap + stats.body_height * 0.6
+            && smaller_than(items, &[label.cells.clone()], &[value.cells.clone()])
+            && !is_heading_line(&items[value.cells[0]].text)
+    };
+    if !pair_at(start) {
+        return None;
+    }
+    let mut end = start;
+    let mut block_lines = Vec::new();
+    let mut fields = Vec::new();
+    while pair_at(end) {
+        let label = &items[lines[end].cells[0]];
+        let value = &items[lines[end + 1].cells[0]];
+        let key = label.text.trim_end_matches(':').trim().to_owned();
+        block_lines.push(LayoutLine {
+            text: format!("{key}: {}", value.text),
+            bbox: union([label.bbox(), value.bbox()]),
+            confidence: mean_confidence([label.confidence, value.confidence]),
+        });
+        fields.push(KeyValue {
+            id: String::new(),
+            key,
+            value: value.text.clone(),
+            key_bbox: Some(label.bbox()),
+            value_bbox: Some(value.bbox()),
+        });
+        end += 2;
+    }
+    let mut block = block_of(BlockKind::KeyValue, block_lines, source);
+    block.fields = fields;
+    Some((end, block))
+}
+
+/// Text from `start`: a heading, a list item and the lines that hang under
+/// it, or a paragraph that runs until the spacing, the type, or the kind of
+/// line changes.
+fn text_at(
+    items: &[Item],
+    lines: &[Line],
+    start: usize,
+    stats: &PageStats,
+    source: TextSource,
+) -> (usize, LayoutBlock) {
+    let first = &lines[start];
+    let first_text = first.text(items);
+    if let Some(level) = heading_level(items, first, &first_text, stats) {
+        // A title set over two lines is one heading.
+        let mut end = start + 1;
+        while end < lines.len() {
+            let line = &lines[end];
+            let text = line.text(items);
+            let same_style = (line.height() - first.height()).abs() <= first.height() * 0.1
+                && line.all_bold(items) == first.all_bold(items)
+                && heading_level(items, line, &text, stats) == Some(level);
+            if !same_style || line.y0 - lines[end - 1].y1 > stats.line_gap + stats.body_height * 0.5
+            {
+                break;
+            }
+            end += 1;
+        }
+        let mut block = block_of(
+            BlockKind::Heading,
+            lines[start..end]
+                .iter()
+                .map(|line| line.layout_line(items))
+                .collect(),
+            source,
+        );
+        block.level = Some(level);
+        return (end, block);
+    }
+    let list = super::text::is_list_item_text(&first_text);
+    let mut end = start + 1;
+    while end < lines.len() {
+        let line = &lines[end];
+        let above = &lines[end - 1];
+        let text = line.text(items);
+        let gap = line.y0 - above.y1;
+        let breaks = gap > stats.line_gap + stats.body_height * 0.4
+            || gap < -stats.body_height * 0.5
+            || (line.height() - above.height()).abs() > stats.body_height * 0.2
+            || heading_level(items, line, &text, stats).is_some()
+            || super::text::is_list_item_text(&text)
+            || is_key_value_line(items, line)
+            || (line.cells.len() >= 2 && table_at(items, lines, end, stats, &[], source).is_some())
+            || (list && line.x0 < first.x0 - tolerance(stats.body_height))
+            || end - start >= 40;
+        if breaks {
+            break;
+        }
+        end += 1;
+    }
+    let kind = if list {
+        BlockKind::ListItem
+    } else {
+        BlockKind::Paragraph
+    };
+    let block = block_of(
+        kind,
+        lines[start..end]
+            .iter()
+            .map(|line| line.layout_line(items))
+            .collect(),
+        source,
+    );
+    (end, block)
+}
+
+/// A line's heading level, if it is a heading: set larger than the body
+/// text (1 for the largest), or at body size in bold or capitals and short.
+fn heading_level(items: &[Item], line: &Line, text: &str, stats: &PageStats) -> Option<u8> {
+    let words = text.split_whitespace().count();
+    if words == 0 || text.chars().count() > 120 || text.ends_with(':') {
+        return None;
+    }
+    // The size the line's text is mostly set in: a tick mark or a symbol
+    // set large does not make a line of options a heading.
+    let dominant = line
+        .cells
+        .iter()
+        .map(|cell| &items[*cell])
+        .max_by_key(|item| item.text.chars().count())
+        .map_or(line.height(), Item::height);
+    let ratio = dominant / stats.body_height;
+    let letters = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    if letters < 2 {
+        return None;
+    }
+    if ratio >= 1.18 && words <= 20 {
+        return Some(if ratio >= 1.6 {
+            1
+        } else if ratio >= 1.3 {
+            2
+        } else {
+            3
+        });
+    }
+    let sentence = text.ends_with('.') && words > 6;
+    if !sentence && words <= 14 && (line.all_bold(items) || is_heading_line(text)) {
+        return Some(4);
+    }
+    None
+}
+
+/// A block of lines. Lines that all carry an OCR confidence came from OCR,
+/// whatever the page's own text is.
+fn block_of(kind: BlockKind, lines: Vec<LayoutLine>, source: TextSource) -> LayoutBlock {
+    let source = if !lines.is_empty() && lines.iter().all(|line| line.confidence.is_some()) {
+        TextSource::Ocr
+    } else {
+        source
+    };
+    let text = lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut block = LayoutBlock::new(kind, text, source);
+    block.bbox = union(lines.iter().filter_map(|line| line.bbox));
+    block.confidence = mean_confidence(lines.iter().map(|line| line.confidence));
+    block.lines = lines;
+    block
+}
+
+/// Small lines at the very top and bottom of a page are its running header
+/// and footer: a page number, a document title repeated on every page.
+fn mark_running_lines(blocks: &mut [LayoutBlock], stats: &PageStats) {
+    let margin = stats.page_height * 0.06;
+    for block in blocks.iter_mut() {
+        let Some(bbox) = block.bbox else {
+            continue;
+        };
+        if block.kind == BlockKind::Table
+            || block.text.split_whitespace().count() > 20
+            || block.lines.len() > 2
+        {
+            continue;
+        }
+        let small = block.lines.iter().all(|line| {
+            line.bbox
+                .is_some_and(|bbox| f64::from(bbox[3] - bbox[1]) <= stats.body_height * 1.2)
+        });
+        if !small {
+            continue;
+        }
+        if f64::from(bbox[3]) <= margin {
+            block.kind = BlockKind::PageHeader;
+            block.level = None;
+        } else if f64::from(bbox[1]) >= stats.page_height - margin {
+            block.kind = BlockKind::PageFooter;
+            block.level = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A run at `x`, `y` (points, top of the line) of `size` points.
+    fn run(x: f64, y: f64, text: &str, size: f64) -> TextRun {
+        let width = text.chars().count() as f64 * size * 0.5;
+        TextRun {
+            text: text.to_owned(),
+            bbox: [
+                (x * 10.0) as u32,
+                (y * 10.0) as u32,
+                ((x + width) * 10.0) as u32,
+                ((y + size) * 10.0) as u32,
+            ],
+            bold: false,
+            confidence: None,
+        }
+    }
+
+    fn bold(mut run: TextRun) -> TextRun {
+        run.bold = true;
+        run
+    }
+
+    fn analyze(runs: &[TextRun]) -> Vec<LayoutBlock> {
+        analyze_runs(runs, 6120, 7920, &[], TextSource::Native)
+    }
+
+    fn texts(blocks: &[LayoutBlock]) -> Vec<&str> {
+        blocks.iter().map(|block| block.text.as_str()).collect()
+    }
+
+    #[test]
+    fn two_columns_written_row_by_row_read_column_by_column() {
+        let left = [
+            "The tenant leases the premises for",
+            "the term and pays the base rent in",
+            "monthly installments when they fall",
+            "due under this lease agreement now.",
+        ];
+        let right = [
+            "The landlord keeps the common areas",
+            "in good repair and insures building",
+            "at full replacement cost each year",
+            "as the lease requires of the owner.",
+        ];
+        let mut runs = Vec::new();
+        for (row, (l, r)) in left.iter().zip(right).enumerate() {
+            let y = 100.0 + row as f64 * 12.0;
+            runs.push(run(54.0, y, l, 9.0));
+            runs.push(run(320.0, y, r, 9.0));
+        }
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(texts(&blocks), [left.join("\n"), right.join("\n")]);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.kind == BlockKind::Paragraph)
+        );
+    }
+
+    #[test]
+    fn a_table_keeps_its_rows_and_its_header() {
+        let mut runs = vec![
+            bold(run(54.0, 100.0, "Item", 9.0)),
+            bold(run(300.0, 100.0, "Qty", 9.0)),
+            bold(run(450.0, 100.0, "Amount", 9.0)),
+        ];
+        for (row, (item, quantity, amount)) in [
+            ("Bicycle tune-up", "2", "$180.00"),
+            ("Brake cables", "4", "$36.00"),
+            ("Labour", "3", "$255.00"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 114.0 + row as f64 * 14.0;
+            runs.push(run(54.0, y, item, 9.0));
+            runs.push(run(300.0, y, quantity, 9.0));
+            runs.push(run(450.0, y, amount, 9.0));
+        }
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks.len(), 1, "{blocks:#?}");
+        assert_eq!(blocks[0].kind, BlockKind::Table);
+        assert_eq!(
+            blocks[0].text,
+            "| Item | Qty | Amount |\n| Bicycle tune-up | 2 | $180.00 |\n\
+             | Brake cables | 4 | $36.00 |\n| Labour | 3 | $255.00 |"
+        );
+        let table = blocks[0].table.as_ref().unwrap();
+        assert!(table.rows[0].cells.iter().all(|cell| cell.header));
+        assert!(!table.rows[1].cells[0].header);
+    }
+
+    #[test]
+    fn a_wrapped_cell_continues_its_row() {
+        let runs = vec![
+            bold(run(54.0, 100.0, "Term", 9.0)),
+            bold(run(180.0, 100.0, "Provision", 9.0)),
+            run(54.0, 114.0, "Premises", 9.0),
+            run(180.0, 114.0, "Suite 108, about 2,140 square feet,", 9.0),
+            run(180.0, 125.0, "Oakhaven Commons", 9.0),
+            run(54.0, 139.0, "Expiration Date", 9.0),
+            run(180.0, 139.0, "June 30, 2031", 9.0),
+        ];
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks.len(), 1, "{blocks:#?}");
+        assert_eq!(
+            blocks[0].text,
+            "| Term | Provision |\n\
+             | Premises | Suite 108, about 2,140 square feet, Oakhaven Commons |\n\
+             | Expiration Date | June 30, 2031 |"
+        );
+    }
+
+    #[test]
+    fn labelled_values_in_two_columns_pair_with_their_labels() {
+        let rows = [
+            ("POLICY NUMBER:", "CPP-4471-208815", "AGENT / PRODUCER:", ""),
+            (
+                "POLICY PERIOD:",
+                "From 07/01/2026 To 07/01/2027",
+                "",
+                "Kingsfold Insurance Agency, Inc.",
+            ),
+            (
+                "",
+                "12:01 A.M. standard time at the address",
+                "",
+                "Agent code 00-4417",
+            ),
+            ("NAMED INSURED:", "", "DATE ISSUED:", "06/18/2026"),
+            ("", "Wexcombe Bicycle Cooperative", "", ""),
+            ("PRIOR POLICY:", "CPP-4471-197322", "", ""),
+        ];
+        let mut runs = Vec::new();
+        for (row, (left_label, left_value, right_label, right_value)) in rows.iter().enumerate() {
+            let y = 132.0 + row as f64 * 15.0;
+            if !left_label.is_empty() {
+                runs.push(bold(run(54.0, y, left_label, 8.5)));
+            }
+            if !left_value.is_empty() {
+                runs.push(run(150.0, y, left_value, 9.0));
+            }
+            if !right_label.is_empty() {
+                runs.push(bold(run(340.0, y, right_label, 8.5)));
+            }
+            if !right_value.is_empty() {
+                let width = right_value.chars().count() as f64 * 4.5;
+                runs.push(run(558.0 - width, y, right_value, 9.0));
+            }
+        }
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(
+            texts(&blocks),
+            [
+                "POLICY NUMBER: CPP-4471-208815\n\
+                 POLICY PERIOD: From 07/01/2026 To 07/01/2027 12:01 A.M. standard time at the address\n\
+                 NAMED INSURED: Wexcombe Bicycle Cooperative\n\
+                 PRIOR POLICY: CPP-4471-197322",
+                "AGENT / PRODUCER: Kingsfold Insurance Agency, Inc. Agent code 00-4417\n\
+                 DATE ISSUED: 06/18/2026",
+            ],
+            "{blocks:#?}"
+        );
+        let fields = &blocks[0].fields;
+        assert_eq!(fields[2].key, "NAMED INSURED");
+        assert_eq!(fields[2].value, "Wexcombe Bicycle Cooperative");
+        assert_eq!(blocks[1].fields[1].value, "06/18/2026");
+    }
+
+    #[test]
+    fn a_title_over_two_columns_is_read_first_and_a_footer_last() {
+        let mut runs = vec![bold(run(200.0, 60.0, "RETAIL LEASE AGREEMENT", 16.0))];
+        for row in 0..6 {
+            let y = 100.0 + row as f64 * 12.0;
+            runs.push(run(
+                54.0,
+                y,
+                &format!("left column line {row} of the lease"),
+                9.0,
+            ));
+            runs.push(run(
+                320.0,
+                y,
+                &format!("right column line {row} of the lease"),
+                9.0,
+            ));
+        }
+        runs.push(run(54.0, 760.0, "Page 1 of 3", 7.0));
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks[0].kind, BlockKind::Heading);
+        assert_eq!(blocks[0].level, Some(1));
+        assert!(blocks[1].text.starts_with("left column line 0"));
+        assert!(blocks[1].text.ends_with("line 5 of the lease"));
+        assert!(blocks[2].text.starts_with("right column line 0"));
+        assert_eq!(blocks.last().unwrap().kind, BlockKind::PageFooter);
+    }
+
+    #[test]
+    fn a_header_over_one_row_of_values_is_also_labelled_values() {
+        let runs = vec![
+            run(54.0, 100.0, "Invoice Date", 8.0),
+            run(200.0, 100.0, "Invoice No.", 8.0),
+            run(350.0, 100.0, "Terms", 8.0),
+            run(54.0, 112.0, "March 4, 2026", 9.0),
+            run(200.0, 112.0, "INV-20417", 9.0),
+            run(350.0, 112.0, "Net 30", 9.0),
+        ];
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, BlockKind::Table);
+        let fields = &blocks[0].fields;
+        assert_eq!(fields.len(), 3);
+        assert_eq!(
+            (fields[0].key.as_str(), fields[0].value.as_str()),
+            ("Invoice Date", "March 4, 2026")
+        );
+    }
+
+    #[test]
+    fn analysis_is_deterministic() {
+        let runs = (0..30)
+            .map(|index| {
+                run(
+                    54.0 + (index % 3) as f64 * 160.0,
+                    100.0 + (index / 3) as f64 * 12.0,
+                    &format!("cell {index}"),
+                    9.0,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(analyze(&runs), analyze(&runs));
+    }
+}
