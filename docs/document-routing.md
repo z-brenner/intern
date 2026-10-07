@@ -413,7 +413,12 @@ its pages are put back in order, not as they are first read. A page read
 by OCR has its text written from its layout, so that layout is built, but
 a page the worker will cut lets it go there. A page whose text alone is
 longer than a page may carry is never read for its geometry: its
-characters are not read into runs, and it is read as its text.
+characters are not read into runs, and it is read as its text. Nor is a
+page past the document's characters, counting the pages read as their
+text before it - the worker cuts it whatever the scans among them read -
+and inspection reads runs ahead only while the pages read so far stay
+within the document's characters, so the layouts and runs held while a
+document is planned repeat at most its characters and a page.
 
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the

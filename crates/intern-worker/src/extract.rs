@@ -744,6 +744,9 @@ where
         // still turn out to want it, and an earlier page's claim wins when
         // the pages are put back in order.
         let mut vision_taken = false;
+        // The characters of the pages read as their text so far, in page
+        // order: a page past the document's is not read for its geometry.
+        let mut planned = MAX_DOCUMENT_CHARS;
         for inspection in inspections {
             let page_index = inspection.page_index;
             if let Err(error) = timed_check(cancel, started, limits) {
@@ -766,6 +769,7 @@ where
                 started,
                 &mut pool,
                 vision_taken,
+                &mut planned,
             ) {
                 Ok(plan) => {
                     if matches!(plan, PagePlan::Done { .. }) {
@@ -844,6 +848,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
+    planned: &mut usize,
 ) -> Result<PagePlan, ExtractionError> {
     let page_index = inspection.page_index;
     let page_number = page_index + 1;
@@ -987,6 +992,17 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         }
     }
 
+    // Counted with the pages read as their text before it, a page past the
+    // document's characters is cut on the way out whatever the scans among
+    // them read, so it is not read for its geometry: no layout is built
+    // for it and held until the pages are put in order, only to be dropped.
+    // What the layouts held while planning repeat is bounded by the
+    // document's characters and a page.
+    let route = if goes_out_whole(&inspection.native_text, planned) {
+        route
+    } else {
+        PageRoute::Fast
+    };
     cancel.timed(
         |timings| &mut timings.analysis_micros,
         || read_runs(&mut inspection, route, pdf, path, cancel),

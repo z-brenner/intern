@@ -695,3 +695,82 @@ fn a_page_longer_than_a_page_may_carry_is_not_read_for_its_geometry() {
     assert_eq!(page.text, text);
     assert!(page.layout.is_none());
 }
+
+/// Pages routed to be read for their geometry past what the document's
+/// characters carry - counting the pages read as their text before them -
+/// are not read into runs while the document is planned: the worker would
+/// cut them, and a layout built for each would be held until then.
+#[test]
+fn pages_past_the_documents_characters_are_not_read_for_their_geometry() {
+    use intern_worker::layout::{NativePage, RouteSignals, TextRun};
+    use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+
+    struct CountsRuns {
+        pages: Vec<PdfPageInspection>,
+        asked: AtomicUsize,
+    }
+    impl PdfBackend for CountsRuns {
+        fn inspect(
+            &self,
+            _path: &Path,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+            Ok(self.pages.clone())
+        }
+
+        fn render_within(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _max_pixels: u64,
+            _cancel: &CancellationToken,
+        ) -> Result<RenderedPage, ExtractionError> {
+            panic!("a text page was rendered")
+        }
+
+        fn page_runs(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _native: &NativePage,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<TextRun>, ExtractionError> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+
+    let text = "word ".repeat(MAX_PAGE_CHARS / 5);
+    let pages = (0..6)
+        .map(|index| PdfPageInspection {
+            page_index: index,
+            native: Some(NativePage::default()),
+            signals: Some(RouteSignals {
+                chars: 1_000,
+                columns: 2,
+                ..RouteSignals::default()
+            }),
+            ..page(&text, 0.0)
+        })
+        .collect();
+    let backend = CountsRuns {
+        pages,
+        asked: AtomicUsize::new(0),
+    };
+    let document = extract_pdf(
+        Path::new("long.pdf"),
+        &backend,
+        &FakeOcr {
+            results: Vec::new(),
+        },
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(document.pages.len(), 6);
+    assert_eq!(
+        backend.asked.load(Ordering::SeqCst),
+        MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS,
+        "only the pages within the document's characters are read for their geometry"
+    );
+}

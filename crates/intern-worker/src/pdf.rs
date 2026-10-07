@@ -15,7 +15,7 @@ use crate::layout::router::bounds::{
 #[cfg(feature = "native-pdfium")]
 use crate::layout::{NativePage, TextRun, measure_signals, router::needs_runs};
 #[cfg(feature = "native-pdfium")]
-use crate::limits::{MAX_PAGE_COUNT, render_size_within};
+use crate::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_COUNT, render_size_within};
 #[cfg(feature = "native-pdfium")]
 use crate::timing::micros_since;
 
@@ -720,6 +720,9 @@ impl PdfiumBackend {
         let started = Instant::now();
         let mut analysis_micros = 0_u64;
         let mut runs_held = 0_usize;
+        // The characters of the pages read ahead into runs: bounded too, as
+        // a run holds its text however few runs there are.
+        let mut characters_held = 0_usize;
         let inspections = self.with_document(path, |document| {
             if document.pages().len() as usize > MAX_PAGE_COUNT {
                 return Err(ExtractionError::resource_limit(
@@ -789,10 +792,13 @@ impl PdfiumBackend {
                 if measured
                     && needs_runs(route)
                     && runs_held < run_budget
+                    && characters_held < MAX_DOCUMENT_CHARS
                     && crate::extract::fits_a_page(&inspection.native_text)
                 {
                     native.runs = text_runs(&text, &frame, &native);
                     runs_held = runs_held.saturating_add(native.runs.len());
+                    characters_held =
+                        characters_held.saturating_add(inspection.native_text.chars().count());
                 }
                 inspection.native = measured.then_some(native);
                 analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
