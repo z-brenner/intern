@@ -68,7 +68,8 @@ pub fn render(report: &Report) -> String {
     let _ = writeln!(
         out,
         "Keep this run's JSON, make the change, run again, then:\n\n```text\nintern-bench compare --before before.json --after after.json --markdown diff.md\n```\n\n\
-         It lists every rate's change in points, each document whose score flipped, and the change in p50/p95 of every stage. \
+         It recomputes every rate and count over the documents both runs scored, lists each document whose score flipped, \
+         and gives the change in p50/p95 of every stage over the documents both completed - between two live runs only, since a replay's timings are its recording's. \
          `intern-bench report --input report.json --markdown report.md` re-renders this page from the JSON."
     );
     out
