@@ -342,11 +342,12 @@ pub fn mark_running_blocks(layouts: &mut [&mut PageLayout]) {
             .collect::<Vec<_>>()
             .join(" ")
     };
+    // A page of few blocks is split between its ends, the top taking the
+    // odd one: body text over a page number has its number at the bottom.
     let ends = |layout: &PageLayout| {
         let count = layout.blocks.len();
-        let top = (0..count.min(REACH)).collect::<Vec<_>>();
-        let bottom =
-            (count.saturating_sub(REACH).max(top.len().min(count))..count).collect::<Vec<_>>();
+        let top = (0..count.div_ceil(2).min(REACH)).collect::<Vec<_>>();
+        let bottom = (count.saturating_sub(REACH).max(top.len())..count).collect::<Vec<_>>();
         (top, bottom)
     };
     let pages = layouts.len();
@@ -1010,6 +1011,12 @@ mod tests {
             assert_eq!(layout.blocks[2].kind, BlockKind::Paragraph);
             assert_eq!(layout.blocks[3].kind, BlockKind::PageFooter);
         }
+        // A page of two blocks has one at each end: its page number is at
+        // the bottom.
+        let mut sparse = PageLayout::of_text(4, "Margins held through the year.\n\n4");
+        mark_running_blocks(&mut [&mut sparse]);
+        assert_eq!(sparse.blocks[0].kind, BlockKind::Paragraph);
+        assert_eq!(sparse.blocks[1].kind, BlockKind::PageFooter);
         assert!(!is_page_number("2026"), "a year alone");
         assert!(is_page_number("- 17 -") && is_page_number("Page 4 of 12"));
         assert!(!is_page_number("Section 4"));

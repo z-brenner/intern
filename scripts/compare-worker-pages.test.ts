@@ -29,6 +29,13 @@ function page(text: string, route?: string): Page {
 }
 
 describe('compareDocuments', () => {
+  it('does not hold a page that came without a layout to the fast route', () => {
+    const result = compareDocuments('a.pdf', parsed([page('INVOICE\r\nTotal: $5')]), parsed([page('INVOICE\nTotal: $5')]));
+    expect(result.problems).toEqual([]);
+    expect(result.routes).toEqual({ unknown: 1 });
+    expect(result.identical).toBe(0);
+  });
+
   it('accepts a fast-route page that is byte-for-byte what it was', () => {
     const result = compareDocuments('a.pdf', parsed([page('INVOICE\r\nTotal: $5')]), parsed([page('INVOICE\r\nTotal: $5', 'fast')]));
 

@@ -38,7 +38,9 @@ export function compareDocuments(name, before, after) {
     return { problems, routes, identical };
   }
   for (const [index, page] of now.pages.entries()) {
-    const route = page.layout?.route ?? 'fast';
+    // A page past the worker's layout budget goes without its layout, and
+    // with it the route it took: not known, so not held to the fast route.
+    const route = page.layout?.route ?? 'unknown';
     routes[route] = (routes[route] ?? 0) + 1;
     if (route !== 'fast') continue;
     const was = old.pages[index];
