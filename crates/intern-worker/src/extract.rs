@@ -1016,6 +1016,7 @@ fn read_runs(
 ) -> Result<(), ExtractionError> {
     let page_index = inspection.page_index;
     if crate::layout::router::needs_runs(route)
+        && fits_a_page(&inspection.native_text)
         && let Some(native) = inspection.native.as_mut()
         && native.runs.is_empty()
     {
@@ -1397,6 +1398,15 @@ impl ExtractedPage {
             layout,
         }
     }
+}
+
+/// Whether a page's text is short enough to be read for its geometry. A
+/// page longer than [`MAX_PAGE_CHARS`] is cut on the way out and loses its
+/// layout there, so its characters are never read into runs - a run holds
+/// its text a second time, and the analysis copies it again - and it is
+/// read as its text.
+pub fn fits_a_page(text: &str) -> bool {
+    text.char_indices().nth(MAX_PAGE_CHARS).is_none()
 }
 
 /// Whether a page of `text` leaves the worker whole, counting it against

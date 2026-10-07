@@ -630,3 +630,68 @@ fn a_mixed_documents_characters_are_counted_in_page_order() {
         .collect::<Vec<_>>();
     assert_eq!(built, [true, true, true, true, false]);
 }
+
+/// A page routed to be read for its geometry whose text is longer than a
+/// page may carry is never read into runs: the worker would cut it and its
+/// layout on the way out. It is read as its text, without a layout.
+#[test]
+fn a_page_longer_than_a_page_may_carry_is_not_read_for_its_geometry() {
+    use intern_worker::layout::{NativePage, RouteSignals, TextRun};
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    struct RefusesRuns(PdfPageInspection);
+    impl PdfBackend for RefusesRuns {
+        fn inspect(
+            &self,
+            _path: &Path,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+            Ok(vec![self.0.clone()])
+        }
+
+        fn render_within(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _max_pixels: u64,
+            _cancel: &CancellationToken,
+        ) -> Result<RenderedPage, ExtractionError> {
+            panic!("a text page was rendered")
+        }
+
+        fn page_runs(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _native: &NativePage,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<TextRun>, ExtractionError> {
+            panic!("the characters of a page the worker will cut were read")
+        }
+    }
+
+    let text = "word ".repeat(MAX_PAGE_CHARS / 5 + 1);
+    let inspection = PdfPageInspection {
+        native: Some(NativePage::default()),
+        // Two columns: the router sends it to be read for its geometry.
+        signals: Some(RouteSignals {
+            chars: 1_000,
+            columns: 2,
+            ..RouteSignals::default()
+        }),
+        ..page(&text, 0.0)
+    };
+    let document = extract_pdf(
+        Path::new("long.pdf"),
+        &RefusesRuns(inspection),
+        &FakeOcr {
+            results: Vec::new(),
+        },
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let page = &document.pages[0];
+    assert_eq!(page.text, text);
+    assert!(page.layout.is_none());
+}

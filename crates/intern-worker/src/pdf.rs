@@ -786,7 +786,11 @@ impl PdfiumBackend {
                     signals: Some(signals),
                 };
                 let route = router(&signals, crate::extract::page_needs_ocr(&inspection));
-                if measured && needs_runs(route) && runs_held < run_budget {
+                if measured
+                    && needs_runs(route)
+                    && runs_held < run_budget
+                    && crate::extract::fits_a_page(&inspection.native_text)
+                {
                     native.runs = text_runs(&text, &frame, &native);
                     runs_held = runs_held.saturating_add(native.runs.len());
                 }

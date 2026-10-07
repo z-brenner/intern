@@ -411,7 +411,9 @@ document's characters the way the worker does when it sends them, in page
 order whatever route each page took: a PDF's fast layouts are built when
 its pages are put back in order, not as they are first read. A page read
 by OCR has its text written from its layout, so that layout is built, but
-a page the worker will cut lets it go there.
+a page the worker will cut lets it go there. A page whose text alone is
+longer than a page may carry is never read for its geometry: its
+characters are not read into runs, and it is read as its text.
 
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the
