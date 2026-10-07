@@ -210,6 +210,70 @@ fn columns_written_row_by_row_are_read_column_by_column() {
     assert_eq!(page.source, PageSource::Native);
 }
 
+/// Geometry layouts are built while the pages are planned and held until
+/// they are put back in order, and one-character runs are a line each, far
+/// inside the characters a document may carry. Every layout a document
+/// keeps counts against what its layouts may hold together: once the pages
+/// before have taken it, a page is read as its text.
+#[test]
+fn geometry_layouts_past_what_a_documents_layouts_may_hold_are_not_kept() {
+    use intern_worker::layout::RouteSignals;
+    use intern_worker::limits::MAX_DOCUMENT_LAYOUT_PARTS;
+
+    const RUNS: usize = 3_000;
+    let lines = (0..RUNS).map(|line| format!("w{line}")).collect::<Vec<_>>();
+    // PDFium's text runs the lines together; the geometry puts them a line
+    // each.
+    let text = lines.join(" ");
+    let page = |page_index: usize| {
+        let runs = lines
+            .iter()
+            .enumerate()
+            .map(|(line, word)| run(54, 10 + line as u32 * 2, word, 1))
+            .collect();
+        let mut page = native_page(page_index, &text, runs);
+        let native = page.native.as_mut().unwrap();
+        native.height = 10 * (20 + 2 * RUNS as u32);
+        // Two columns, so the page is rebuilt from its geometry.
+        page.signals = Some(RouteSignals {
+            chars: 1_000,
+            columns: 2,
+            ..RouteSignals::default()
+        });
+        page
+    };
+    let first = read(&StandInPdf::new(vec![page(0)]), &NoOcr);
+    let layout = first.pages[0].layout.as_ref().unwrap();
+    assert_eq!(layout.route, PageRoute::Layout);
+    let per_page = layout.parts();
+    assert!(per_page >= RUNS, "a line for every run: {per_page}");
+    let fitting = MAX_DOCUMENT_LAYOUT_PARTS / per_page;
+
+    let pages = (0..fitting + 3).map(page).collect();
+    let document = read(&StandInPdf::new(pages), &NoOcr);
+
+    let kept = document
+        .pages
+        .iter()
+        .map(|page| page.layout.as_ref().map(|layout| layout.route))
+        .collect::<Vec<_>>();
+    // The pages past what the layouts may hold are not rebuilt from their
+    // geometry while they are planned: they are read as their text, whose
+    // one line is a layout small enough to keep.
+    let mut expected = vec![Some(PageRoute::Layout); fitting];
+    expected.extend([Some(PageRoute::Fast); 3]);
+    assert_eq!(kept, expected);
+    let held = document
+        .pages
+        .iter()
+        .filter_map(|page| page.layout.as_ref())
+        .map(|layout| layout.parts())
+        .sum::<usize>();
+    assert!(held <= MAX_DOCUMENT_LAYOUT_PARTS);
+    assert_eq!(document.pages[fitting].text, text);
+    assert_ne!(document.pages[0].text, text, "rebuilt a line a run");
+}
+
 /// A PDF whose inspection carries no characters: the runs of a page are
 /// handed over only when the page asks for them, and the asking counted.
 struct RunsOnRequest {

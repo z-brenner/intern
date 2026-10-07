@@ -200,6 +200,24 @@ impl LayoutBlock {
 }
 
 impl PageLayout {
+    /// How many lines, table cells and labelled values the layout holds:
+    /// the objects it has one of for every few characters, which the
+    /// character caps alone do not bound (see
+    /// [`crate::extract::TextBudget`]). Its blocks are never more than
+    /// these.
+    pub fn parts(&self) -> usize {
+        self.blocks
+            .iter()
+            .map(|block| {
+                block.lines.len()
+                    + block.fields.len()
+                    + block.table.as_ref().map_or(0, |table| {
+                        table.rows.iter().map(|row| row.cells.len()).sum()
+                    })
+            })
+            .sum()
+    }
+
     /// A page read by a reader that knows no geometry: the blocks of its
     /// text, on the fast route.
     pub fn of_text(page_number: usize, text: &str) -> Self {
