@@ -1,13 +1,16 @@
 //! The document-understanding engine: one call in, one structured result out.
 //!
 //! ```text
-//! DocumentSource ─▶ distill ─▶ prompt ─▶ one inference ─▶ validate ─▶ name
+//! DocumentSource ─▶ index ─▶ retrieve ─▶ prompt ─▶ one inference ─▶ validate facts ─▶ compose
 //! ```
 //!
-//! [`Pipeline::Evidence`] reads a document another way: an evidence index
-//! and the units retrieval chooses from it, a reply of facts that cite those
-//! units by id, and a filename and description composed from the facts that
-//! validation accepts. It is opt-in until it is measured live.
+//! [`Pipeline::Evidence`], the default, reads a document as an evidence
+//! index and the units retrieval chooses from it, asks for a reply of facts
+//! that cite those units by id, and composes the filename and description
+//! from the facts validation accepts. [`Pipeline::Digest`] reads a distilled
+//! digest of the whole document instead and has the model write the
+//! description; a hosted model still reads that way (see
+//! [`crate::hosted`]), and `--pipeline digest` measures it.
 //!
 //! Everything above this line (extraction, OCR) and everything below it (the
 //! queue, the file operations, the UI) is somebody else's problem. That is what
@@ -65,11 +68,13 @@ const MAX_REDISTILLATIONS: usize = 2;
 #[serde(rename_all = "snake_case")]
 pub enum Pipeline {
     /// A distilled digest of the whole document; a reply that quotes its
-    /// evidence and writes the description.
-    #[default]
+    /// evidence and writes the description. What a hosted model reads, and
+    /// what `--pipeline digest` measures.
     Digest,
     /// Retrieved evidence units; a reply of facts that cite them by id, and
-    /// a filename and description composed from the validated facts.
+    /// a filename and description composed from the validated facts. The
+    /// default: what the local model reads.
+    #[default]
     Evidence,
 }
 
@@ -134,7 +139,7 @@ impl Engine {
         }
     }
 
-    /// Reads documents with `pipeline`. [`Pipeline::Digest`] by default.
+    /// Reads documents with `pipeline`. [`Pipeline::Evidence`] by default.
     pub fn with_pipeline(mut self, pipeline: Pipeline) -> Self {
         self.pipeline = pipeline;
         self
@@ -767,8 +772,12 @@ mod tests {
     /// changes nothing about readiness unless a threshold was set.
     #[test]
     fn token_confidence_is_reported_without_changing_readiness_by_default() {
-        let unscored = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
-        let scored = analyze_with(Engine::with_proposer(Box::new(Scored(Some(LOW)))));
+        let unscored = analyze_with(
+            Engine::with_proposer(Box::new(Scored(None))).with_pipeline(Pipeline::Digest),
+        );
+        let scored = analyze_with(
+            Engine::with_proposer(Box::new(Scored(Some(LOW)))).with_pipeline(Pipeline::Digest),
+        );
         assert_eq!(unscored.status, ProposalStatus::Ready, "{unscored:?}");
         assert_eq!(scored.status, unscored.status);
         assert_eq!(scored.review_reasons, unscored.review_reasons);
@@ -779,18 +788,24 @@ mod tests {
     #[test]
     fn a_set_threshold_routes_a_low_token_confidence_to_review() {
         let gated = analyze_with(
-            Engine::with_proposer(Box::new(Scored(Some(LOW)))).with_min_token_confidence(0.5),
+            Engine::with_proposer(Box::new(Scored(Some(LOW))))
+                .with_pipeline(Pipeline::Digest)
+                .with_min_token_confidence(0.5),
         );
         assert_eq!(gated.status, ProposalStatus::NeedsReview);
         assert!(gated.review_reasons.contains(&ReviewReason::LowConfidence));
 
         // Above the threshold, or with nothing to measure, the gate is silent.
         let passed = analyze_with(
-            Engine::with_proposer(Box::new(Scored(Some(LOW)))).with_min_token_confidence(0.1),
+            Engine::with_proposer(Box::new(Scored(Some(LOW))))
+                .with_pipeline(Pipeline::Digest)
+                .with_min_token_confidence(0.1),
         );
         assert_eq!(passed.status, ProposalStatus::Ready);
         let unmeasured = analyze_with(
-            Engine::with_proposer(Box::new(Scored(None))).with_min_token_confidence(0.5),
+            Engine::with_proposer(Box::new(Scored(None)))
+                .with_pipeline(Pipeline::Digest)
+                .with_min_token_confidence(0.5),
         );
         assert_eq!(unmeasured.status, ProposalStatus::Ready);
     }
@@ -879,7 +894,8 @@ mod tests {
     #[test]
     fn a_prompt_that_fits_is_sent_unchanged() {
         let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)))
+            .with_pipeline(Pipeline::Digest);
         let source = source_from_text(
             "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
              It is made between Acme Corporation and the consultant for advisory services.",
@@ -903,7 +919,8 @@ mod tests {
         );
 
         let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)))
+            .with_pipeline(Pipeline::Digest);
         let analysis = engine.analyze(&source, "pdf", &[]).unwrap();
 
         let prompts = recording.prompts();
@@ -929,7 +946,8 @@ mod tests {
         assert!(estimated_tokens(&whole.prompt) + 1_024 > 8_000);
 
         let hosted = std::sync::Arc::new(Recording::hosted(vec![Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&hosted)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&hosted)))
+            .with_pipeline(Pipeline::Digest);
         engine.analyze(&source, "pdf", &[]).unwrap();
         assert_eq!(hosted.prompts(), vec![whole.prompt]);
 
@@ -958,7 +976,8 @@ mod tests {
         let source = source_from_text(long);
 
         let recovering = std::sync::Arc::new(Recording::new(vec![Err(ModelInputTooLarge), Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recovering)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recovering)))
+            .with_pipeline(Pipeline::Digest);
         engine.analyze(&source, "pdf", &[]).unwrap();
         let prompts = recovering.prompts();
         assert_eq!(prompts.len(), 2);
@@ -975,7 +994,8 @@ mod tests {
         );
 
         let refusing = std::sync::Arc::new(Recording::new(vec![Err(ModelInputTooLarge)]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refusing)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refusing)))
+            .with_pipeline(Pipeline::Digest);
         let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
         assert_eq!(error.code(), ModelInputTooLarge);
         assert_eq!(refusing.prompts().len(), 2, "one smaller retry, no more");
@@ -984,7 +1004,8 @@ mod tests {
         let failing = std::sync::Arc::new(Recording::new(vec![Err(
             crate::error::EngineErrorCode::ModelRequestFailed,
         )]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&failing)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&failing)))
+            .with_pipeline(Pipeline::Digest);
         let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
         assert_eq!(
             error.code(),
@@ -1014,7 +1035,8 @@ mod tests {
             overflow.clone(),
             completion_reply("stop", VALID_REPLY),
         ]);
-        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap());
+        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap())
+            .with_pipeline(Pipeline::Digest);
         engine
             .analyze(&source, "pdf", &[])
             .expect("the smaller retry is answered");
@@ -1023,7 +1045,8 @@ mod tests {
         assert!(bodies[1].len() < bodies[0].len());
 
         let server = scripted_server(vec![overflow]);
-        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap());
+        let engine = Engine::new(ModelClient::new(&endpoint(&server), "k", "m").unwrap())
+            .with_pipeline(Pipeline::Digest);
         let error = engine.analyze(&source, "pdf", &[]).unwrap_err();
         assert_eq!(
             error.code(),
@@ -1051,9 +1074,12 @@ mod tests {
         assert!(!error.to_string().contains("convention"));
 
         // Work that does not panic passes straight through.
-        let analysis =
-            guard_analysis(|| analyze_with(Engine::with_proposer(Box::new(Scored(None)))))
-                .expect("no panic, no error");
+        let analysis = guard_analysis(|| {
+            analyze_with(
+                Engine::with_proposer(Box::new(Scored(None))).with_pipeline(Pipeline::Digest),
+            )
+        })
+        .expect("no panic, no error");
         assert_eq!(analysis.status, ProposalStatus::Ready);
     }
 
@@ -1087,8 +1113,11 @@ mod tests {
     /// answer.
     #[test]
     fn the_analysis_reports_what_each_stage_cost() {
-        let measured = analyze_with(Engine::with_proposer(Box::new(Measured)));
-        let unmeasured = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
+        let measured =
+            analyze_with(Engine::with_proposer(Box::new(Measured)).with_pipeline(Pipeline::Digest));
+        let unmeasured = analyze_with(
+            Engine::with_proposer(Box::new(Scored(None))).with_pipeline(Pipeline::Digest),
+        );
 
         let source = source_from_text(
             "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
@@ -1124,7 +1153,8 @@ mod tests {
         use crate::error::EngineErrorCode::ModelInputTooLarge;
 
         let fitted = std::sync::Arc::new(Recording::new(vec![Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&fitted)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&fitted)))
+            .with_pipeline(Pipeline::Digest);
         let analysis = engine
             .analyze(&digit_dense_statement(), "pdf", &[])
             .unwrap();
@@ -1138,14 +1168,17 @@ mod tests {
         // is the retry after it said the prompt was too large.
         let refitted =
             std::sync::Arc::new(Recording::hosted(vec![Err(ModelInputTooLarge), Ok(())]));
-        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refitted)));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&refitted)))
+            .with_pipeline(Pipeline::Digest);
         let analysis = engine
             .analyze(&digit_dense_statement(), "pdf", &[])
             .unwrap();
         assert_eq!(refitted.prompts().len(), 2);
         assert_eq!(analysis.telemetry.redistillations, 1);
 
-        let plain = analyze_with(Engine::with_proposer(Box::new(Scored(None))));
+        let plain = analyze_with(
+            Engine::with_proposer(Box::new(Scored(None))).with_pipeline(Pipeline::Digest),
+        );
         assert_eq!(plain.telemetry.redistillations, 0);
     }
 
@@ -1196,8 +1229,26 @@ mod tests {
         )
     }
 
-    /// The setup probe a hosted model is checked with passes on the
-    /// evidence pipeline too, whichever way the prompt names its lines.
+    fn misread_calibration_reply(lines: &[(String, String)]) -> String {
+        calibration_reply(lines).replace(
+            "Northstar Calibration Holdings LLC",
+            "Somebody Else Entirely",
+        )
+    }
+
+    /// A model that names someone the calibration notice never does fails
+    /// the probe, whatever validation reads from the notice itself.
+    #[test]
+    fn the_semantic_probe_fails_a_model_that_misreads_the_notice() {
+        let engine = Engine::with_proposer(Box::new(Reader(misread_calibration_reply)));
+        for probe in crate::setup::semantic_probes().unwrap() {
+            let analysis = engine.analyze(&probe.document, "pdf", &[]).unwrap();
+            assert!(crate::setup::validate_semantic_probe(&probe, &analysis).is_err());
+        }
+    }
+
+    /// The setup probe passes on the evidence pipeline, whichever way the
+    /// prompt names its lines.
     #[test]
     fn the_semantic_probe_passes_on_the_evidence_pipeline() {
         for style in [
@@ -1248,10 +1299,10 @@ mod tests {
         }
     }
 
-    /// The default pipeline is the digest's: an engine nobody configured
-    /// sends the digest prompt under the fixed grammar.
+    /// The digest pipeline, asked for, sends the digest prompt under the
+    /// fixed grammar.
     #[test]
-    fn the_digest_pipeline_is_the_default() {
+    fn the_digest_pipeline_sends_the_digest_prompt() {
         struct Plain;
         impl Proposer for Plain {
             fn propose(
@@ -1265,8 +1316,11 @@ mod tests {
                     .map_err(|_| EngineError::new(EngineErrorCode::ModelResponseInvalid, "x"))
             }
         }
-        let engine = Engine::with_proposer(Box::new(Plain));
-        assert_eq!(engine.pipeline(), Pipeline::Digest);
+        assert_eq!(
+            Engine::with_proposer(Box::new(Plain)).pipeline(),
+            Pipeline::Evidence
+        );
+        let engine = Engine::with_proposer(Box::new(Plain)).with_pipeline(Pipeline::Digest);
         let analysis = analyze_with(engine);
         assert_eq!(analysis.facts, None);
         assert_eq!(analysis.telemetry.context_tier, None);

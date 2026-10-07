@@ -4,7 +4,7 @@
 //! header, and checked against it when the recording is replayed.
 //!
 //! ```text
-//! --pipeline digest|evidence      the engine's pipeline (digest by default)
+//! --pipeline evidence|digest      the engine's pipeline (evidence by default)
 //! --id-style stable|ordinal       how the evidence lines are named
 //! --retrieval-tier auto|whole|small|normal|dense
 //! --reply-form compact|facts
@@ -57,7 +57,7 @@ pub struct EngineSettings {
 impl Default for EngineSettings {
     fn default() -> Self {
         Self {
-            pipeline: Pipeline::Digest,
+            pipeline: Pipeline::Evidence,
             retrieval: RetrievalConfig::default(),
             shape: ReplyShape::default(),
             context_tokens: None,
@@ -325,10 +325,12 @@ mod tests {
     /// read exactly as before.
     #[test]
     fn only_the_evidence_pipeline_writes_a_header() {
-        assert_eq!(
-            EngineSettings::default().header(),
-            PipelineHeader::default()
-        );
+        let digest = EngineSettings {
+            pipeline: Pipeline::Digest,
+            ..EngineSettings::default()
+        };
+        assert_eq!(digest.header(), PipelineHeader::default());
+        assert_eq!(EngineSettings::default().pipeline, Pipeline::Evidence);
         assert_eq!(
             serde_json::to_string(&PipelineHeader::default()).unwrap(),
             "{}"
@@ -425,15 +427,13 @@ mod tests {
     /// retrieval or prompt is said, as a changed budget is.
     #[test]
     fn replay_refuses_the_other_pipeline_and_names_a_changed_configuration() {
-        let evidence = EngineSettings {
-            pipeline: Pipeline::Evidence,
+        let evidence = EngineSettings::default();
+        let digest = EngineSettings {
+            pipeline: Pipeline::Digest,
             ..EngineSettings::default()
         };
         let digest_recording = recording(&PipelineHeader::default());
-        assert_eq!(
-            configuration_change(&digest_recording, &EngineSettings::default()),
-            Ok(None)
-        );
+        assert_eq!(configuration_change(&digest_recording, &digest), Ok(None));
         let refused = configuration_change(&digest_recording, &evidence).unwrap_err();
         assert!(refused.contains("--pipeline digest"), "{refused}");
 
@@ -442,7 +442,8 @@ mod tests {
             configuration_change(&evidence_recording, &evidence),
             Ok(None)
         );
-        assert!(configuration_change(&evidence_recording, &EngineSettings::default()).is_err());
+        let refused = configuration_change(&evidence_recording, &digest).unwrap_err();
+        assert!(refused.contains("--pipeline evidence"), "{refused}");
         let ordinal = EngineSettings {
             retrieval: RetrievalConfig {
                 id_style: IdStyle::Ordinal,

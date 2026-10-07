@@ -1,8 +1,12 @@
 //! A hosted model behind an API key, standing in for the local one.
 //!
-//! Everything about how Intern understands a document is unchanged: the same
-//! distillation of the whole file, the same prompt, the same evidence checks
-//! on the reply, the same naming. What changes is where the prompt goes. The
+//! A hosted model reads documents through the digest pipeline
+//! ([`HostedClient::engine`]): the distillation of the whole file, the
+//! digest prompt, the same evidence checks on the reply, the same naming.
+//! The evidence pipeline the local model reads by default was measured and
+//! tuned on the local model alone. The reply reader already accepts an
+//! evidence reply from a hosted model, without a grammar, for the day one
+//! is measured. What changes is where the prompt goes. The
 //! local server never leaves `127.0.0.1`; this client sends the distilled
 //! text of every document to whoever runs the endpoint, and that is the whole
 //! reason it is off unless a person turns it on, supplies a key, and is told
@@ -26,7 +30,7 @@ use crate::client::{
     is_context_overflow, proposal_from_text, read_capped, read_error_body,
 };
 use crate::domain::{DocumentAnalysis, ModelProposal};
-use crate::engine::Engine;
+use crate::engine::{Engine, Pipeline};
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::setup::{semantic_probes, validate_semantic_probe};
 
@@ -299,7 +303,7 @@ impl HostedClient {
     /// Sends the calibration document the local model is checked with, so a
     /// wrong key, model name, or address is found before a real document is.
     pub fn probe(&self) -> EngineResult<DocumentAnalysis> {
-        let engine = Engine::with_proposer(Box::new(self.clone()));
+        let engine = self.engine();
         let mut last = None;
         for probe in semantic_probes()? {
             let analysis = engine.analyze(&probe.document, "pdf", &[])?;
@@ -312,6 +316,14 @@ impl HostedClient {
                 "no calibration document to probe with",
             )
         })
+    }
+
+    /// The engine a hosted model reads documents through: the digest
+    /// pipeline. The evidence pipeline, the local model's default, was
+    /// measured and tuned on the local model alone; a hosted model keeps
+    /// the pipeline it was checked against until it is measured too.
+    pub fn engine(&self) -> Engine {
+        Engine::with_proposer(Box::new(self.clone())).with_pipeline(Pipeline::Digest)
     }
 
     /// The request body for one document, in the provider's shape.

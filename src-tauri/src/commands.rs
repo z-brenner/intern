@@ -6016,8 +6016,9 @@ mod runtime_tests {
 
     use intern_engine::{
         DateRole, DocumentSource, Engine, EngineError, EngineErrorCode, EngineResult, Evidence,
-        ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyRelation, Proposer,
-        download::CancellationToken, setup::ExistingModelSelection,
+        ModelFacts, ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyFact,
+        PartyRelation, PartyRole, Proposer, download::CancellationToken,
+        setup::ExistingModelSelection,
     };
     use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
 
@@ -6169,12 +6170,15 @@ mod runtime_tests {
     }
 
     impl Proposer for FakeProposer {
-        fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
             self.rig.proposals.fetch_add(1, Ordering::SeqCst);
             let reply = *self.rig.reply.lock().unwrap();
             match reply {
-                Reply::Calibration => Ok(calibration_reply("Northstar Calibration Holdings LLC")),
-                Reply::Wrong => Ok(calibration_reply("Somebody Else Entirely")),
+                Reply::Calibration => Ok(calibration_reply(
+                    request,
+                    "Northstar Calibration Holdings LLC",
+                )),
+                Reply::Wrong => Ok(calibration_reply(request, "Somebody Else Entirely")),
                 Reply::Fail(code) => Err(EngineError::new(code, "scripted failure")),
                 Reply::HangUntilStopped => {
                     {
@@ -6222,7 +6226,37 @@ mod runtime_tests {
         }
     }
 
-    fn calibration_reply(party: &str) -> ModelProposal {
+    /// The id the prompt shows for the line that holds `needle`.
+    fn line_id(request: &ModelRequest, needle: &str) -> String {
+        request
+            .prompt
+            .lines()
+            .find(|line| line.contains(needle))
+            .and_then(|line| line.trim_start().strip_prefix('['))
+            .and_then(|rest| rest.split_once(']'))
+            .map(|(id, _)| id.to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The reply a model gives the calibration notice: the facts with the
+    /// ids of their lines for the evidence pipeline the local model reads,
+    /// a quoted reply for the digest pipeline.
+    fn calibration_reply(request: &ModelRequest, party: &str) -> ModelProposal {
+        let facts = request.evidence.as_ref().map(|_| {
+            Box::new(ModelFacts {
+                document_type: Some("Notice of Calibration".into()),
+                type_evidence: vec![line_id(request, "NOTICE OF CALIBRATION")],
+                document_date: Some("2024-01-02".into()),
+                date_role: Some(DateRole::Notice),
+                date_evidence: vec![line_id(request, "January 2, 2024")],
+                parties: vec![PartyFact {
+                    name: party.to_owned(),
+                    role: Some(PartyRole::Addressee),
+                    evidence: vec![line_id(request, "To:")],
+                }],
+                ..ModelFacts::default()
+            })
+        });
         ModelProposal {
             document_type: Some("Notice of Calibration".into()),
             document_date: Some("2024-01-02".into()),
@@ -6239,7 +6273,7 @@ mod runtime_tests {
                 document_type: Some("NOTICE OF CALIBRATION".into()),
                 parties: vec![format!("To: {party}")],
             },
-            facts: None,
+            facts,
         }
     }
 

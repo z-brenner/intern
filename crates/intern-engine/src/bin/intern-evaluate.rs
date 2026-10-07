@@ -43,9 +43,10 @@
 //! the identical corpus, which is how the redesign is shown to be an
 //! improvement rather than asserted to be one. Legacy runs are live only.
 //!
-//! `--pipeline evidence` runs the evidence pipeline ([`Pipeline::Evidence`]),
-//! live or from a recording made with it; `--pipeline digest` (or `new`, the
-//! default) the digest pipeline. For the evidence pipeline `--id-style
+//! `--pipeline evidence` (the default) runs the evidence pipeline
+//! ([`Pipeline::Evidence`]), live or from a recording made with it;
+//! `--pipeline digest` (or `new`) the digest pipeline, which a hosted model
+//! still reads through. For the evidence pipeline `--id-style
 //! stable|ordinal` and `--retrieval-tier auto|whole|small|normal|dense` say
 //! how its evidence is chosen and named, `--reply-form compact|facts`,
 //! `--field-order fact-first|evidence-first` and `--string-limits
@@ -113,7 +114,7 @@ fn run() -> Result<i32, String> {
     let pipeline = arguments
         .get("pipeline")
         .map(String::as_str)
-        .unwrap_or("new")
+        .unwrap_or("evidence")
         .to_owned();
     let budget = arguments
         .get("budget")

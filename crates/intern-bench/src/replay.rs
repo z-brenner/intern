@@ -305,7 +305,7 @@ mod tests {
             model: Default::default(),
             context_tokens: current_context(),
             budget_characters: current_budget().max_characters,
-            engine: Default::default(),
+            engine: EngineSettings::default().header(),
             machine: Default::default(),
             git_commit: None,
             worker: None,

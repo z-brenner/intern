@@ -8,6 +8,7 @@ use intern_bench::{
     live::LiveOptions,
     machine::{MachineInfo, ModelInfo},
     markdown,
+    pipeline::EngineSettings,
     recording::{
         Exchange, RECORDING_SCHEMA_VERSION, RecordedDocument, RecordedExtraction, RecordedReply,
         Recording, sha256_hex,
@@ -18,7 +19,7 @@ use intern_bench::{
 };
 use intern_engine::{
     DateRole, DigestBudget, DocumentSource, Evidence, ModelProposal, ModelRequest, ModelTimings,
-    PageOrigin, PartyRelation, SourcePage, distill, source_from_text,
+    PageOrigin, PartyRelation, Pipeline, SourcePage, distill, source_from_text,
 };
 use serde_json::{Value, json};
 
@@ -306,7 +307,11 @@ impl Bench {
                 recording: self.path("recording.json"),
                 allow_stale: false,
             },
-            engine: Default::default(),
+            // The recording here is the digest pipeline's.
+            engine: EngineSettings {
+                pipeline: Pipeline::Digest,
+                ..EngineSettings::default()
+            },
         }
     }
 }
