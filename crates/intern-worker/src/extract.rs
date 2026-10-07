@@ -2340,8 +2340,9 @@ fn later_frames(
         cancel.check()?;
         let directory = match format.directory(&mut file, next, &mut entries_left) {
             DirectoryRead::Read(directory) => directory,
-            DirectoryRead::Unreadable => break,
-            DirectoryRead::PastBudget => {
+            // The chain says there is more and it cannot be read: whatever
+            // was there is lost, and the document says so.
+            DirectoryRead::Unreadable | DirectoryRead::PastBudget => {
                 frames.beyond_limit = true;
                 break;
             }
@@ -2377,7 +2378,8 @@ const MAX_TIFF_ENTRIES: u64 = 262_144;
 /// What reading one image file directory came to.
 enum DirectoryRead {
     Read(TiffDirectory),
-    /// Not a directory this can read: the chain ends there.
+    /// Not a directory this can read: the chain ends there, with more
+    /// than was read.
     Unreadable,
     /// More entries than the walk has left to read.
     PastBudget,
@@ -2902,6 +2904,16 @@ mod tiff_chains {
         let frames = later_frames(huge.path(), 10, &cancel).unwrap();
         assert!(frames.directories.is_empty());
         assert!(frames.beyond_limit, "pages may lie past the budget");
+    }
+
+    /// A chain whose next directory lies past the end of the file says
+    /// there is more than could be read: the document reads as going on.
+    #[test]
+    fn a_chain_pointing_past_the_file_is_marked_as_going_on() {
+        let pages = chain(&[false, false], Some(1_000));
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
+        assert_eq!(frames.directories.len(), 1);
+        assert!(frames.beyond_limit);
     }
 
     #[test]
