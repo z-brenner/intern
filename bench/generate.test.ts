@@ -493,12 +493,30 @@ function normalisedText(text: string) {
   return normalise(text).replace(/[‐-—]/g, '-');
 }
 
-describe('InternBench structure gold and the documents added for it', () => {
-  const pending = () => documents.filter((document) => document.recording === 'pending');
+/// The documents added with the structure gold. They were pending a
+/// recording until the phase 2 live run recorded them.
+const ADDED_FOR_STRUCTURE = [
+  'newsletter-three-column', 'agreement-two-column-footnotes', 'meeting-notice-columns', 'meeting-notice-interleaved',
+  'meeting-notice-reversed', 'rate-confirmation-rotated', 'inspection-log-ruled-2p', 'price-list-unruled',
+  'invoice-label-above', 'invoice-right-aligned', 'invoice-boxed-grid', 'benefits-change-checkbox-form',
+  'loss-notice-boxed-fields', 'scan-rotated-page-in-pdf', 'scan-cancellation-notice-150dpi', 'scan-remittance-advice-120dpi',
+  'scan-mixed-middle-page', 'mixed-signature-region', 'scan-certificate-of-insurance', 'scan-bill-of-lading',
+];
 
-  it('adds twenty-five documents, each pending a recording, with full gold and a structure block', () => {
-    expect(pending().length).toBe(25);
-    for (const document of pending()) {
+/// The long documents added for phase 3, pending a recording.
+const ADDED_FOR_RETRIEVAL = [
+  'msa-effective-date-in-definitions-12p', 'industrial-lease-dated-in-schedule-25p', 'term-loan-parties-apart-40p',
+  'property-policy-declarations-mid-60p', 'watershed-monitoring-report-100p',
+] as const;
+
+describe('InternBench structure gold and the documents added for it', () => {
+  const added = () => documents.filter((document) => ADDED_FOR_STRUCTURE.includes(document.id));
+
+  it('adds twenty documents with full gold and a structure block, every one now recorded', () => {
+    expect(added().length).toBe(20);
+    // Only the documents added since the phase 2 run wait for a recording.
+    expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([...ADDED_FOR_RETRIEVAL]);
+    for (const document of added()) {
       expect(document.structure, document.id).toBeDefined();
       expect(document.gold.document_date, document.id).not.toBeNull();
       expect(document.gold.forbidden_dates.length, `${document.id}: traps`).toBeGreaterThan(0);
@@ -542,7 +560,7 @@ describe('InternBench structure gold and the documents added for it', () => {
   it('adds five long documents whose deciding evidence sits deep inside', () => {
     const pagesWith = (document: BenchDocument, needle: string) => generated.texts[document.id].flatMap((page, index) => (normalise(page).includes(normalise(needle)) ? [index + 1] : []));
     // Each document's page count, and the one page its date is printed on.
-    const expected: Record<string, [number, number]> = {
+    const expected: Record<(typeof ADDED_FOR_RETRIEVAL)[number], [number, number]> = {
       'msa-effective-date-in-definitions-12p': [12, 9],
       'industrial-lease-dated-in-schedule-25p': [25, 23],
       'term-loan-parties-apart-40p': [40, 1],
@@ -554,6 +572,9 @@ describe('InternBench structure gold and the documents added for it', () => {
       const document = documents.find((entry) => entry.id === id)!;
       expect(document.pages, id).toBe(pages);
       expect(document.recording, id).toBe('pending');
+      expect(document.structure, id).toBeDefined();
+      expect(document.gold.forbidden_dates.length, `${id}: traps`).toBeGreaterThan(0);
+      expect(document.gold.forbidden_parties.length, `${id}: names that are not parties`).toBeGreaterThan(0);
       expect(pagesWith(document, document.gold.evidence.date_text[0]), id).toEqual([datePage]);
       for (const party of document.gold.parties) {
         expect(document.gold.party_roles.some((entry) => entry.name === party && phase3Roles.has(entry.role)), `${id}: ${party} has a role from the phase 3 list`).toBe(true);

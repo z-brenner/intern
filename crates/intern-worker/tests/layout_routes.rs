@@ -3,8 +3,8 @@
 //! and the OCR pool that reads scanned pages side by side.
 
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use image::{DynamicImage, RgbImage};
@@ -100,6 +100,10 @@ fn scanned_page(page_index: usize) -> PdfPageInspection {
 }
 
 fn read(pdf: &StandInPdf, ocr: &(impl OcrBackend + Sync)) -> ExtractedDocument {
+    read_with(pdf, ocr)
+}
+
+fn read_with(pdf: &dyn PdfBackend, ocr: &(impl OcrBackend + Sync)) -> ExtractedDocument {
     extract_pdf(
         Path::new("document.pdf"),
         pdf,
@@ -206,6 +210,88 @@ fn columns_written_row_by_row_are_read_column_by_column() {
     assert_eq!(page.source, PageSource::Native);
 }
 
+/// A PDF whose inspection carries no characters: the runs of a page are
+/// handed over only when the page asks for them, and the asking counted.
+struct RunsOnRequest {
+    pages: Vec<PdfPageInspection>,
+    runs: Vec<Vec<TextRun>>,
+    asked: Mutex<Vec<usize>>,
+}
+
+impl RunsOnRequest {
+    fn new(mut pages: Vec<PdfPageInspection>) -> Self {
+        let runs = pages
+            .iter_mut()
+            .map(|page| std::mem::take(&mut page.native.as_mut().unwrap().runs))
+            .collect();
+        Self {
+            pages,
+            runs,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl PdfBackend for RunsOnRequest {
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        Ok(self.pages.clone())
+    }
+
+    fn render_within(
+        &self,
+        _path: &Path,
+        _page_index: usize,
+        _max_pixels: u64,
+        _cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        panic!("a text page was rendered")
+    }
+
+    fn page_runs(
+        &self,
+        _path: &Path,
+        page_index: usize,
+        _native: &NativePage,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<TextRun>, ExtractionError> {
+        self.asked.lock().unwrap().push(page_index);
+        Ok(self.runs[page_index].clone())
+    }
+}
+
+/// A page's characters are read when the page is, and only for a page
+/// whose geometry is read: inspection holds none of them.
+#[test]
+fn a_page_s_characters_are_read_when_the_page_is_and_only_if_it_needs_them() {
+    let plain = native_page(
+        1,
+        "Plain text page.\r\nSecond line.",
+        vec![
+            run(54, 60, "Plain text page.", 9),
+            run(54, 72, "Second line.", 9),
+        ],
+    );
+    let pdf = RunsOnRequest::new(vec![interleaved_columns(), plain]);
+
+    let document = read_with(&pdf, &NoOcr);
+
+    assert_eq!(*pdf.asked.lock().unwrap(), [0], "only the layout page");
+    let layout = document.pages[0].layout.as_ref().unwrap();
+    assert_eq!(layout.route, PageRoute::Layout);
+    assert!(
+        document.pages[0]
+            .text
+            .starts_with("The tenant leases the premises for\nthe term"),
+        "{}",
+        document.pages[0].text
+    );
+    assert_eq!(document.pages[1].text, "Plain text page.\r\nSecond line.");
+}
+
 /// OCR that takes longer on early pages than late ones, so that with
 /// several workers the readings come back out of order.
 struct UnevenOcr {
@@ -309,6 +395,84 @@ fn scanned_pages_are_read_side_by_side_and_put_back_in_order() {
     assert_eq!(sequential, document);
 }
 
+/// A scanned PDF whose renders and readings are counted together, so the
+/// pages held at once - rendered and not yet read - can be seen.
+struct CountedScans {
+    pages: Vec<PdfPageInspection>,
+    rendered: Arc<AtomicUsize>,
+    read: Arc<AtomicUsize>,
+    most_held: AtomicUsize,
+}
+
+impl PdfBackend for CountedScans {
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        Ok(self.pages.clone())
+    }
+
+    fn render_within(
+        &self,
+        _path: &Path,
+        page_index: usize,
+        _max_pixels: u64,
+        _cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        let rendered = self.rendered.fetch_add(1, Ordering::SeqCst) + 1;
+        let held = rendered - self.read.load(Ordering::SeqCst);
+        self.most_held.fetch_max(held, Ordering::SeqCst);
+        let page = &self.pages[page_index];
+        Ok(RenderedPage::new(
+            page_index,
+            DynamicImage::ImageRgb8(RgbImage::new(page.width_pixels, page.height_pixels)),
+        ))
+    }
+}
+
+/// Slow OCR on three workers that counts the pages it has finished.
+struct CountingSlowOcr(Arc<AtomicUsize>);
+
+impl OcrBackend for CountingSlowOcr {
+    fn recognize(
+        &self,
+        _page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        std::thread::sleep(Duration::from_millis(30));
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(OcrResult::new("PAGE", 95.0))
+    }
+
+    fn concurrency(&self) -> usize {
+        3
+    }
+}
+
+/// However slow OCR is, renders run no further ahead of it than the queue
+/// allows: the pages held at once are the one being rendered, those
+/// waiting, and one per worker.
+#[test]
+fn rendered_pages_held_at_once_are_bounded_by_the_workers_and_the_queue() {
+    let finished = Arc::new(AtomicUsize::new(0));
+    let pdf = CountedScans {
+        pages: (0..12).map(scanned_page).collect(),
+        rendered: Arc::new(AtomicUsize::new(0)),
+        read: Arc::clone(&finished),
+        most_held: AtomicUsize::new(0),
+    };
+
+    let document = read_with(&pdf, &CountingSlowOcr(finished));
+
+    assert_eq!(document.pages.len(), 12);
+    let limits = ResourceLimits::default();
+    let bound = 1 + limits.max_queued_rendered_pages + 3;
+    let most_held = pdf.most_held.load(Ordering::SeqCst);
+    assert!(most_held <= bound, "{most_held} pages held, bound {bound}");
+    assert!(most_held >= 2, "pages were read side by side");
+}
+
 /// OCR that cannot run at all.
 struct MissingOcr;
 
@@ -408,6 +572,41 @@ fn a_bad_prior_ocr_layer_is_read_again_and_replaced_only_when_the_reading_is_bet
     let unread = read(&StandInPdf::new(vec![bad_prior_ocr()]), &MissingOcr);
     assert_eq!(unread.pages[0].text, bad_prior_ocr().native_text);
     assert!(unread.warnings.is_empty());
+}
+
+/// A page whose text layer is one bad-OCR token over an image covering
+/// just under nine tenths of it: read again, and - with so little text -
+/// also a page that wants the page image.
+fn bad_layer_that_wants_the_page_image() -> PdfPageInspection {
+    let text = "INV0ICE2O26Ca1derT0TALWexcornbeMi11work";
+    let mut page = native_page(0, text, vec![run(54, 60, text, 9)]);
+    page.image_coverage = 0.8996;
+    let native = page.native.as_mut().unwrap();
+    native.text_objects = 10;
+    native.invisible_text_objects = 10;
+    page
+}
+
+/// A page read again does not take the page image for certain: when the
+/// fresh reading wins, the image made from its text layer goes, and the
+/// next page that wants one must have been rendered for it.
+#[test]
+fn a_page_read_again_does_not_keep_later_pages_from_the_page_image() {
+    let mut second = native_page(1, &"a".repeat(99), vec![run(54, 60, "aaaa", 9)]);
+    second.image_coverage = 0.65;
+    let pdf = StandInPdf::new(vec![bad_layer_that_wants_the_page_image(), second]);
+
+    let document = read(&pdf, &CleanReading(91.0));
+
+    assert_eq!(document.pages[0].source, PageSource::Ocr, "read again");
+    assert_eq!(
+        document
+            .optional_image
+            .as_ref()
+            .map(|image| image.page_number),
+        Some(2)
+    );
+    assert!(document.pages[1].vision_escalated);
 }
 
 /// A page of native text with a pasted image across its lower half, which
@@ -510,7 +709,10 @@ fn a_backend_that_measures_nothing_still_gets_text_blocks() {
     assert_eq!(page.text, "Plain text page.\r\nSecond line.");
     let layout = page.layout.as_ref().unwrap();
     assert_eq!(layout.blocks.len(), 1);
-    assert_eq!(layout.blocks[0].text, "Plain text page.\nSecond line.");
+    // The block is the stretch of the page text it came from, line ending
+    // and all; its lines are the lines.
+    assert_eq!(layout.blocks[0].text, "Plain text page.\r\nSecond line.");
+    assert_eq!(layout.blocks[0].lines[1].text, "Second line.");
     assert_eq!(layout.blocks[0].bbox, None);
 }
 

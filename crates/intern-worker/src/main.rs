@@ -117,6 +117,13 @@ impl OcrBackend for LazyOcr {
             _ => planned_ocr_workers(),
         }
     }
+
+    /// The engine lets go of what it holds; one never loaded holds nothing.
+    fn release(&self) {
+        if let Some(Ok(engine)) = self.engine.get() {
+            engine.release();
+        }
+    }
 }
 
 /// How many pages the engine [`select_ocr_backend`] would choose reads at
@@ -244,6 +251,9 @@ fn extract_path(
     };
     let reading = Instant::now();
     let document = read_with(reader, path, &limits, &cancel);
+    // The worker waits for the next document beside the model server, which
+    // is reading this one: OCR keeps none of this document's memory.
+    LAZY_OCR.release();
     // PDFium's reader times binding the library and loading the format
     // apart from analysing pages; every other reader reads in one call, so
     // its time less the stages it reported is its parse.

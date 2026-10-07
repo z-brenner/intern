@@ -20,17 +20,58 @@ use super::{
 const MAX_PARAGRAPH_LINES: usize = 12;
 
 /// Blocks from text with no geometry. Ids are left for
-/// [`super::number_blocks`].
+/// [`super::number_blocks`]. Each block's text is the stretch of `text` its
+/// lines span, byte for byte - line endings, `\r\n` included, and all.
 pub fn blocks_from_text(text: &str, source: TextSource) -> Vec<LayoutBlock> {
-    let lines = text
-        .lines()
-        .map(|line| LayoutLine {
-            text: line.trim_end().to_owned(),
+    let spans = line_spans(text);
+    let lines = spans
+        .iter()
+        .map(|(start, end)| LayoutLine {
+            text: text[*start..*end].to_owned(),
             bbox: None,
             confidence: None,
         })
         .collect::<Vec<_>>();
-    blocks_from_lines(&lines, source)
+    blocks_from_page_lines(text, &spans, &lines, source)
+}
+
+/// Where each line of `text` is, as [`str::lines`] finds the lines: its
+/// first byte, and the end of what it says - before its trailing whitespace
+/// and its line ending.
+pub(crate) fn line_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (newline, _) in text.match_indices('\n') {
+        spans.push((start, newline));
+        start = newline + 1;
+    }
+    if start < text.len() {
+        spans.push((start, text.len()));
+    }
+    for span in &mut spans {
+        span.1 = span.0 + text[span.0..span.1].trim_end().len();
+    }
+    spans
+}
+
+/// Blocks from a page's text and its lines - one line for each of
+/// [`line_spans`], carrying its box where it has one - with each block's
+/// text the exact stretch of the page text from the start of its first
+/// line to the end of its last. A block can then always be found in the
+/// page's text, and cited from it, whatever the text's line endings.
+pub(crate) fn blocks_from_page_lines(
+    text: &str,
+    spans: &[(usize, usize)],
+    lines: &[LayoutLine],
+    source: TextSource,
+) -> Vec<LayoutBlock> {
+    segmented(lines, source)
+        .into_iter()
+        .map(|(range, mut block)| {
+            block.text = text[spans[range.start].0..spans[range.end - 1].1].to_owned();
+            block
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +89,17 @@ enum LineKind {
 /// Blocks from lines in reading order. A line's text is kept exactly, less
 /// trailing whitespace; a block's text is its lines joined with newlines.
 pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<LayoutBlock> {
+    segmented(lines, source)
+        .into_iter()
+        .map(|(_, block)| block)
+        .collect()
+}
+
+/// The blocks of `lines`, each with the lines it was built from.
+fn segmented(
+    lines: &[LayoutLine],
+    source: TextSource,
+) -> Vec<(std::ops::Range<usize>, LayoutBlock)> {
     let kinds = lines
         .iter()
         .map(|line| classify(&line.text))
@@ -67,7 +119,7 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 index += 1;
                 let mut block = block_of(BlockKind::Heading, &lines[start..index], source);
                 block.level = Some(level);
-                blocks.push(block);
+                blocks.push((start..index, block));
             }
             LineKind::TableRow | LineKind::TableSeparator => {
                 while index < lines.len()
@@ -75,10 +127,9 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 {
                     index += 1;
                 }
-                blocks.push(table_block(
-                    &lines[start..index],
-                    &kinds[start..index],
-                    source,
+                blocks.push((
+                    start..index,
+                    table_block(&lines[start..index], &kinds[start..index], source),
                 ));
             }
             LineKind::KeyValue => {
@@ -89,11 +140,14 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 {
                     index += 1;
                 }
-                blocks.push(key_value_block(&lines[start..index], source));
+                blocks.push((start..index, key_value_block(&lines[start..index], source)));
             }
             LineKind::Heading => {
                 index += 1;
-                blocks.push(block_of(BlockKind::Heading, &lines[start..index], source));
+                blocks.push((
+                    start..index,
+                    block_of(BlockKind::Heading, &lines[start..index], source),
+                ));
             }
             LineKind::ListItem | LineKind::Text => {
                 index += 1;
@@ -112,7 +166,10 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 } else {
                     BlockKind::Paragraph
                 };
-                blocks.push(block_of(block_kind, &lines[start..index], source));
+                blocks.push((
+                    start..index,
+                    block_of(block_kind, &lines[start..index], source),
+                ));
             }
         }
     }
@@ -302,6 +359,255 @@ fn is_list_item(line: &str) -> bool {
             || core
                 .chars()
                 .all(|character| matches!(character, 'i' | 'v' | 'x')))
+}
+
+/// Words that name a field: what a form's label is made of, and what a
+/// person's, firm's or title's name is not.
+const FIELD_WORDS: &[&str] = &[
+    "account",
+    "acct",
+    "address",
+    "agency",
+    "agent",
+    "allergies",
+    "amount",
+    "attention",
+    "attn",
+    "balance",
+    "bank",
+    "beneficiary",
+    "bill",
+    "birth",
+    "buyer",
+    "carrier",
+    "case",
+    "certificate",
+    "city",
+    "claim",
+    "client",
+    "code",
+    "contact",
+    "contract",
+    "copay",
+    "country",
+    "county",
+    "coverage",
+    "customer",
+    "date",
+    "deductible",
+    "description",
+    "dob",
+    "due",
+    "effective",
+    "email",
+    "employee",
+    "employer",
+    "expiration",
+    "fax",
+    "from",
+    "gender",
+    "group",
+    "hours",
+    "id",
+    "insured",
+    "insurer",
+    "invoice",
+    "issued",
+    "item",
+    "language",
+    "license",
+    "location",
+    "member",
+    "mobile",
+    "model",
+    "name",
+    "no",
+    "number",
+    "occupation",
+    "order",
+    "owner",
+    "page",
+    "payment",
+    "period",
+    "phone",
+    "physician",
+    "plan",
+    "po",
+    "policy",
+    "premium",
+    "price",
+    "producer",
+    "project",
+    "qty",
+    "quantity",
+    "rate",
+    "reason",
+    "ref",
+    "reference",
+    "registration",
+    "relationship",
+    "representative",
+    "seal",
+    "serial",
+    "sex",
+    "ship",
+    "signature",
+    "signed",
+    "sold",
+    "state",
+    "status",
+    "subject",
+    "subscriber",
+    "supplier",
+    "tax",
+    "tel",
+    "telephone",
+    "tenant",
+    "terms",
+    "time",
+    "title",
+    "to",
+    "total",
+    "trailer",
+    "type",
+    "unit",
+    "vendor",
+    "via",
+    "zip",
+];
+
+/// The last words of a firm's name.
+const FIRM_SUFFIXES: &[&str] = &[
+    "co",
+    "company",
+    "corp",
+    "corporation",
+    "gmbh",
+    "inc",
+    "incorporated",
+    "limited",
+    "llc",
+    "llp",
+    "lp",
+    "ltd",
+    "partners",
+    "plc",
+];
+
+/// Whether a line read by OCR, with no colon to say so, reads as a field's
+/// label - `Full legal name`, `Member ID`, `PRODUCER` - rather than a name
+/// set over an address, a firm over its signature line, or a title.
+///
+/// OCR measures a line's height by its letters, so a line of capitals or
+/// one without descenders looks smaller than the line under it whatever
+/// its type size; what a label is has to be read from its words. A label
+/// holds no figures and does not end a sentence; a firm's name ends in its
+/// suffix; and a line whose every word is capitalised is a name - a
+/// person's, a firm's, a document's title - unless one of its words names a
+/// field. Capitals alone are a label when short, or when a word of them
+/// names a field: `POST DRIVER HEAVY DUTY` is an item on a receipt.
+pub(crate) fn reads_as_label(key: &str) -> bool {
+    let key = key.trim();
+    if !is_label(key) || key.chars().any(|character| character.is_ascii_digit()) {
+        return false;
+    }
+    let bare = |word: &str| {
+        word.trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase()
+    };
+    let words = key.split_whitespace().collect::<Vec<_>>();
+    let last = words.last().map(|word| bare(word)).unwrap_or_default();
+    if FIRM_SUFFIXES.contains(&last.as_str()) {
+        return false;
+    }
+    if key.ends_with('.') && last.chars().count() > 3 {
+        return false;
+    }
+    let names_a_field = words.iter().any(|word| {
+        let word = bare(word);
+        FIELD_WORDS.contains(&word.as_str())
+            || word
+                .strip_suffix('s')
+                .is_some_and(|singular| FIELD_WORDS.contains(&singular))
+    });
+    let letters = key.chars().filter(|character| character.is_alphabetic());
+    if letters.clone().all(char::is_uppercase) {
+        return words.len() <= 3 || names_a_field;
+    }
+    let every_word_capitalised = words.len() >= 2
+        && words
+            .iter()
+            .all(|word| word.chars().next().is_some_and(char::is_uppercase));
+    !every_word_capitalised || names_a_field
+}
+
+/// Whether a line opens a part of a document - `ARTICLE 4 - RENT`,
+/// `EXHIBIT C - WORK LETTER`, `Schedule 2` - rather than labelling a value.
+pub(crate) fn is_part_heading(line: &str) -> bool {
+    let mut words = line.split_whitespace();
+    let (Some(first), Some(second)) = (words.next(), words.next()) else {
+        return false;
+    };
+    // `ARTICLE 4`, `EXHIBIT C`, `Section 3.2`, `ARTICLE IV` - not `Part
+    // number`, a field.
+    let designator = second.trim_end_matches(['.', ':', ',']);
+    let designates = !designator.is_empty()
+        && (designator
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.')
+            || (designator.chars().count() <= 2
+                && designator
+                    .chars()
+                    .all(|character| character.is_ascii_uppercase()))
+            || designator
+                .chars()
+                .all(|character| matches!(character, 'I' | 'V' | 'X' | 'L')));
+    designates
+        && matches!(
+            first.to_lowercase().as_str(),
+            "article"
+                | "section"
+                | "exhibit"
+                | "schedule"
+                | "annex"
+                | "appendix"
+                | "attachment"
+                | "addendum"
+                | "rider"
+                | "part"
+                | "chapter"
+        )
+}
+
+/// Whether a line opens a numbered clause of prose: `4.1 Beginning with`,
+/// `2. Tenant is in possession`, `(f) costs reimbursed`.
+pub(crate) fn opens_a_clause(line: &str) -> bool {
+    let line = line.trim();
+    let Some((marker, rest)) = line.split_once(' ') else {
+        return false;
+    };
+    let marker = marker.trim_start_matches('(').trim_end_matches(')');
+    let numbered = !marker.is_empty()
+        && marker
+            .split('.')
+            .filter(|part| !part.is_empty())
+            .all(|part| part.chars().all(|character| character.is_ascii_digit()))
+        && marker.chars().any(|character| character.is_ascii_digit())
+        && (line
+            .split_once(' ')
+            .is_some_and(|(raw, _)| raw.ends_with('.') || raw.ends_with(')'))
+            || marker.contains('.'));
+    let lettered = line.starts_with('(')
+        && marker.chars().count() <= 3
+        && marker
+            .chars()
+            .all(|character| character.is_ascii_lowercase());
+    (numbered || lettered)
+        && rest
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_alphabetic())
+        && rest.split_whitespace().count() >= 3
 }
 
 /// A short line that is nearly all capitals: the rule distillation uses.
@@ -581,6 +887,109 @@ mod tests {
         );
         assert_eq!(blocks[1].lines.len(), 3);
         assert_eq!(blocks[1].bbox, Some([540, 700, 3000, 1020]));
+    }
+
+    #[test]
+    fn labels_read_by_ocr_are_told_from_names_and_titles() {
+        for label in [
+            "Full legal name",
+            "Date of birth",
+            "Sex",
+            "Member ID",
+            "PRODUCER",
+            "CERTIFICATE NUMBER",
+            "DESCRIPTION OF OPERATIONS / LOCATIONS",
+            "AUTHORIZED REPRESENTATIVE",
+            "Pro no.",
+            "Invoice Date",
+        ] {
+            assert!(reads_as_label(label), "{label}");
+        }
+        for name in [
+            "Mireille Saltonstall",
+            "Palisade Tower Partners LLC",
+            "Basalt Ridge Optics Inc.",
+            "Corriveau Millwork Supply Co.",
+            "300 Bell Tower Road, Suite 5",
+            "Dr. Rufus Pemberton, Practice Owner",
+            "Basic Lease Information",
+            "POST DRIVER HEAVY DUTY",
+            "Lease and each amendment is attached.",
+            "Building.",
+        ] {
+            assert!(!reads_as_label(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn parts_and_clauses_are_told_from_fields() {
+        for heading in [
+            "ARTICLE 4 - OPERATING EXPENSES AND TAXES",
+            "EXHIBIT C - WORK LETTER",
+            "Section 3.2 Rent",
+            "ARTICLE IV",
+        ] {
+            assert!(is_part_heading(heading), "{heading}");
+        }
+        for field in ["Part number", "Section", "Schedule of values"] {
+            assert!(!is_part_heading(field), "{field}");
+        }
+        for clause in [
+            "4.1 Beginning with the second calendar year of the Term",
+            "2. Tenant is in possession of the Premises",
+            "(f) costs reimbursed by insurance",
+        ] {
+            assert!(opens_a_clause(clause), "{clause}");
+        }
+        for value in [
+            "84-0293157",
+            "(970) 555-0151",
+            "6,204.3 hrs",
+            "1 @ 44.95 44.95",
+            "17 Ovenstone Street, Hollis Bend, NH 03049",
+            "11/03/2014",
+        ] {
+            assert!(!opens_a_clause(value), "{value}");
+        }
+    }
+
+    /// A block's text is always the stretch of the page text its lines
+    /// span: PDFium ends its lines with `\r\n`, and a line can end in spaces.
+    #[test]
+    fn block_text_is_an_exact_stretch_of_the_page_text() {
+        let text = "NOTICE OF TERMINATION\r\n\r\nThe agreement ends on   \r\n\
+                    May 1, 2026, by notice.\r\nDate: April 2, 2026\r\nTime: 10:00\r\n\
+                    | Item | Amount |  \r\n| Rent | $5 |";
+
+        let blocks = blocks_from_text(text, TextSource::Native);
+
+        let mut from = 0;
+        for block in &blocks {
+            let at = text[from..]
+                .find(&block.text)
+                .unwrap_or_else(|| panic!("{:?} is not in the text after {from}", block.text));
+            from += at + block.text.len();
+        }
+        assert_eq!(
+            blocks[1].text,
+            "The agreement ends on   \r\nMay 1, 2026, by notice."
+        );
+        assert_eq!(blocks[1].lines[0].text, "The agreement ends on");
+        assert_eq!(blocks[2].fields[1].value, "10:00");
+        assert_eq!(
+            blocks[3].table.as_ref().unwrap().rows[1].cells[1].text,
+            "$5"
+        );
+        // Text that ends its lines with `\n` is cut the same way.
+        let plain = text.replace("\r\n", "\n");
+        let joined = blocks_from_text(&plain, TextSource::Native)
+            .iter()
+            .map(|block| block.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            joined[1],
+            "The agreement ends on   \nMay 1, 2026, by notice."
+        );
     }
 
     #[test]
