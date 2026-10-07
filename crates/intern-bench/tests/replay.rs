@@ -694,6 +694,18 @@ fn a_replay_that_cannot_score_everything_never_writes_the_baseline() {
 }
 
 #[test]
+fn a_run_in_which_nothing_completed_never_writes_the_baseline() {
+    let bench = Bench::new();
+    let (exit, report) = bench.replay("failed.json", |options| {
+        options.only = vec!["broken-epsilon".into()];
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.summary.completed, 0);
+    assert!(!bench.path("baseline.json").exists());
+}
+
+#[test]
 fn a_baseline_holds_replay_to_every_document_and_compare_names_the_flip() {
     let bench = Bench::new();
     let scorable = |options: &mut RunOptions| {

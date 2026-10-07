@@ -275,7 +275,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
             }
             LineKind::MarkdownHeading(level) => {
                 index += 1;
-                let mut heading = block(BlockKind::Heading, &lines[start..index], source);
+                let mut heading = block(BlockKind::Heading, text, &lines[start..index], source);
                 heading.level = Some(level);
                 blocks.push(heading);
             }
@@ -285,7 +285,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
                 {
                     index += 1;
                 }
-                let mut table = block(BlockKind::Table, &lines[start..index], source);
+                let mut table = block(BlockKind::Table, text, &lines[start..index], source);
                 table.table = Some(table_rows(&lines[start..index], &kinds[start..index]));
                 blocks.push(table);
             }
@@ -294,7 +294,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
                 while index < lines.len() && kinds[index] == LineKind::KeyValue {
                     index += 1;
                 }
-                let mut labelled = block(BlockKind::KeyValue, &lines[start..index], source);
+                let mut labelled = block(BlockKind::KeyValue, text, &lines[start..index], source);
                 labelled.fields = lines[start..index]
                     .iter()
                     .filter_map(|line| {
@@ -312,7 +312,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
             }
             LineKind::Heading => {
                 index += 1;
-                blocks.push(block(BlockKind::Heading, &lines[start..index], source));
+                blocks.push(block(BlockKind::Heading, text, &lines[start..index], source));
             }
             LineKind::ListItem | LineKind::Text => {
                 index += 1;
@@ -327,7 +327,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
                 } else {
                     BlockKind::Paragraph
                 };
-                blocks.push(block(block_kind, &lines[start..index], source));
+                blocks.push(block(block_kind, text, &lines[start..index], source));
             }
         }
     }
@@ -379,11 +379,20 @@ fn ends_sentence(line: &str) -> bool {
     line.trim_end().ends_with(['.', ':', ';', '!', '?'])
 }
 
-fn block(kind: BlockKind, lines: &[&str], source: TextSource) -> LayoutBlock {
+/// A block of `lines`, each a stretch of the page's `text`. Its text is the
+/// stretch from its first line to its last, byte for byte, as the worker
+/// keeps it, so the block can be found in the page's text whatever its line
+/// endings.
+fn block(kind: BlockKind, text: &str, lines: &[&str], source: TextSource) -> LayoutBlock {
+    let offset = |line: &str| line.as_ptr() as usize - text.as_ptr() as usize;
+    let stretch = match (lines.first(), lines.last()) {
+        (Some(first), Some(last)) => &text[offset(first)..offset(last) + last.len()],
+        _ => "",
+    };
     LayoutBlock {
         id: String::new(),
         kind,
-        text: lines.join("\n"),
+        text: stretch.to_owned(),
         bbox: None,
         level: None,
         section: None,
@@ -722,6 +731,32 @@ mod tests {
         assert_eq!(page.blocks[1].section.as_deref(), Some("p2.b1"));
         assert_eq!(document.block("p2.b3").unwrap().kind, BlockKind::Table);
         assert_eq!(document.blocks().count(), 7);
+    }
+
+    /// A segmented block is the stretch of the page text it came from,
+    /// whatever ends the page's lines.
+    #[test]
+    fn a_segmented_block_is_an_exact_stretch_of_the_page_text() {
+        let text = "ARTICLE 2. RENT\r\nTenant pays rent monthly.  \r\nIn advance.\r\n\r\n| Year | Rent |\r\n| 1 | $34.00 |";
+        let document = structured(&DocumentSource::from_pages(vec![SourcePage::new(
+            1,
+            text,
+            PageOrigin::Native,
+        )]));
+
+        let mut from = 0;
+        for block in document.blocks() {
+            let at = text[from..].find(&block.text).unwrap();
+            from += at + block.text.len();
+        }
+        assert_eq!(
+            document.block("p1.b2").unwrap().text,
+            "Tenant pays rent monthly.  \r\nIn advance."
+        );
+        assert_eq!(
+            document.block("p1.b2").unwrap().lines[0].text,
+            "Tenant pays rent monthly."
+        );
     }
 
     #[test]

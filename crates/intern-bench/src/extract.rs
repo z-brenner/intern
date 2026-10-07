@@ -351,13 +351,14 @@ mod tests {
             "table_row_accuracy",
             "table_cell_recall",
             "kv_accuracy",
-            "route_correct",
             "ocr_date_accuracy",
             "ocr_name_accuracy",
             "digest_recall",
         ] {
             assert_eq!(fraction(&record, key), Some(0.0), "{key}");
         }
+        // Nothing was read, so nothing was routed.
+        assert_eq!(fraction(&record, "route_correct"), None);
         assert_eq!(fraction(&record, "ocr_cer"), Some(1.0));
         assert_eq!(
             fraction(&record, "ocr_identifier_accuracy"),

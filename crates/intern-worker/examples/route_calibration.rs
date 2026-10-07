@@ -11,7 +11,9 @@
 //! geometry analysis finds when it reads the page's characters anyway -
 //! tables of two rows or more, labelled values not on their label's line, a
 //! reading order that jumps back up the page (side-by-side flows) - whether
-//! that makes the page one the layout route should have taken, and the
+//! that makes the page one the layout route should have taken, how many
+//! runs the analysis reads and the most of them on one line (what the
+//! bounds in `layout::router::bounds` are measured against), and the
 //! microseconds each step costs. `docs/document-routing.md` is built from
 //! this output.
 
@@ -20,7 +22,8 @@ use std::time::Instant;
 
 use intern_worker::extract::{CancellationToken, PdfBackend, page_needs_ocr};
 use intern_worker::layout::{
-    BlockKind, PageLayout, PageRoute, fast_layout, geometry_layout, measure_signals, route_page,
+    BlockKind, PageLayout, PageRoute, crowding, fast_layout, geometry_layout, measure_signals,
+    route_page, router::needs_runs,
 };
 use intern_worker::pdf::PdfiumBackend;
 
@@ -102,15 +105,17 @@ fn main() {
     println!(
         "document\tpage\troute\tchars\tsegments\timage_coverage\tinvisible\tgarbage\tcolumns\t\
          interleave\taligned_rows\tkey_values\tkey_value_grid\toverlap\tfont_sizes\trulings\timage_region\t\
-         tables\tset_apart_fields\tcolumn_jumps\tneeds_layout\tsignals_us\tfast_blocks_us\t\
-         geometry_us\tinspect_us\tinspect_analysis_us\tinspect_all_runs_analysis_us"
+         tables\tset_apart_fields\tcolumn_jumps\tneeds_layout\timages\truns\tmost_runs_on_a_line\t\
+         analysed\tsignals_us\tfast_blocks_us\tgeometry_us\tpage_runs_us\tinspect_us\t\
+         inspect_analysis_us\tinspect_all_runs_analysis_us"
     );
     for argument in std::env::args().skip(1) {
         let path = Path::new(&argument);
         let name = path
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        // As inspection routes: runs only where the router asks for them.
+        // As inspection reads a document: the characters of the pages the
+        // router sends down a geometry route, within the document's budget.
         let routed_cancel = CancellationToken::new();
         let started = Instant::now();
         let Ok(routed) = backend.inspect(path, &routed_cancel) else {
@@ -122,13 +127,18 @@ fn main() {
         // Every page read into runs, whatever the router says.
         let all_cancel = CancellationToken::new();
         let everything = backend
-            .inspect_routed(path, &all_cancel, |_, needs_ocr| {
-                if needs_ocr {
-                    PageRoute::Ocr
-                } else {
-                    PageRoute::Layout
-                }
-            })
+            .inspect_routed(
+                path,
+                &all_cancel,
+                |_, needs_ocr| {
+                    if needs_ocr {
+                        PageRoute::Ocr
+                    } else {
+                        PageRoute::Layout
+                    }
+                },
+                usize::MAX,
+            )
             .expect("readable the second time");
         let all_analysis = all_cancel.timings().analysis_micros;
         let pages = routed.len().max(1) as f64;
@@ -142,14 +152,29 @@ fn main() {
             let signals_us =
                 micros(|| measure_signals(native, &page.native_text, page.image_coverage));
             let fast_us = micros(|| fast_layout(&page.native_text, Some(native), signals));
-            let geometry_us =
-                micros(|| geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout));
-            let layout = geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout);
+            let never = || false;
+            let geometry_us = micros(|| {
+                geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout, &never)
+            });
+            // A page past the analysis's bounds is read on the fast route.
+            let analysed =
+                geometry_layout(full_native, Vec::new(), signals, PageRoute::Layout, &never);
+            let analysed_at_all = analysed.is_some();
+            let layout =
+                analysed.unwrap_or_else(|| fast_layout(&page.native_text, Some(native), signals));
             let found = found(&layout);
+            let (runs, most_on_a_line) = crowding(&full_native.runs);
+            // What reading a page's characters costs when the route asks.
+            let page_runs_us = if needs_runs(route) {
+                let cancel = CancellationToken::new();
+                micros(|| backend.page_runs(path, page.page_index, native, &cancel))
+            } else {
+                0.0
+            };
             let needs = route != PageRoute::Ocr
                 && (found.tables > 0 || found.set_apart >= 2 || found.jumps > 0);
             println!(
-                "{name}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}",
+                "{name}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}",
                 page.page_index + 1,
                 route_name(route),
                 signals.chars,
@@ -170,9 +195,14 @@ fn main() {
                 found.set_apart,
                 found.jumps,
                 needs,
+                native.images.len(),
+                runs,
+                most_on_a_line,
+                analysed_at_all,
                 signals_us,
                 fast_us,
                 geometry_us,
+                page_runs_us,
                 inspect_us / pages,
                 routed_analysis as f64 / pages,
                 all_analysis as f64 / pages,

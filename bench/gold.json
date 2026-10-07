@@ -2925,10 +2925,6 @@
             "value": "006"
           },
           {
-            "key": "DATE",
-            "value": "05/07/2026"
-          },
-          {
             "key": "CONTRACT DATE",
             "value": "01/15/2025"
           },
@@ -6430,7 +6426,7 @@
         "ocr_corrupted",
         "invoice"
       ],
-      "notes": "The page image is a clean scan of an invoice dated 03/10/2026 from Wexcombe Millwork Co., but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads \"O3/lO/2O26\", the letterhead \"Wexcornbe Mi11work Co.\"). The worker trusts a text layer of this length, so the engine sees only the corrupted text: the date cannot be read with confidence, and the right outcome is review. Gold facts come from the image (the issuer's name survives intact only in the payment line); evidence strings are as the text layer states them; clean_text is the text actually printed.",
+      "notes": "The page image is a clean scan of an invoice dated 03/10/2026 from Wexcombe Millwork Co., but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads \"O3/lO/2O26\", the letterhead \"Wexcornbe Mi11work Co.\"). The routing worker sees an invisible layer over a full-page image and reads the page again, so the engine gets the printed text and the right outcome is the correct name. A reader that trusts the layer gets only the corrupted text, where the date cannot be read with confidence, so review stays acceptable: readiness is either, and a ready name that is wrong is still unsafe. Gold facts come from the image (in the text layer the issuer's name survives intact only in the payment line); evidence strings are given in both spellings, the text layer's and the printed one, so either reading is credited for what it carries; clean_text is the text actually printed.",
       "gold": {
         "document_type": "Invoice",
         "acceptable_types": [],
@@ -6481,14 +6477,16 @@
           "stair treads",
           "invoice"
         ],
-        "expected_readiness": "needs_review",
+        "expected_readiness": "either",
         "evidence": {
           "date_text": [
-            "O3/lO/2O26"
+            "O3/lO/2O26",
+            "03/10/2026"
           ],
           "party_text": {
             "Wexcombe Millwork Co.": [
-              "Wexcornbe Mi11work Co."
+              "Wexcornbe Mi11work Co.",
+              "Wexcombe Millwork Co."
             ]
           }
         }
@@ -6908,8 +6906,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "agreement-two-column-footnotes",
@@ -7029,8 +7026,7 @@
           "1": "layout",
           "2": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-columns",
@@ -7145,8 +7141,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-interleaved",
@@ -7262,8 +7257,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-reversed",
@@ -7379,8 +7373,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "rate-confirmation-rotated",
@@ -7566,8 +7559,7 @@
           "1": "layout",
           "2": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "inspection-log-ruled-2p",
@@ -8105,8 +8097,7 @@
           "1": "layout",
           "2": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "price-list-unruled",
@@ -8364,8 +8355,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-label-above",
@@ -8488,8 +8478,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-right-aligned",
@@ -8669,8 +8658,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-boxed-grid",
@@ -8851,8 +8839,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "benefits-change-checkbox-form",
@@ -9094,8 +9081,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "loss-notice-boxed-fields",
@@ -9287,8 +9273,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-rotated-page-in-pdf",
@@ -9505,8 +9490,7 @@
           "1": "ocr",
           "2": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-cancellation-notice-150dpi",
@@ -9676,8 +9660,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-remittance-advice-120dpi",
@@ -9917,8 +9900,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-mixed-middle-page",
@@ -10082,8 +10064,7 @@
           "2": "ocr",
           "3": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "mixed-signature-region",
@@ -10216,8 +10197,7 @@
           "1": "fast",
           "2": "ocr_regions"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-certificate-of-insurance",
@@ -10459,8 +10439,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-bill-of-lading",
@@ -10704,8 +10683,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     }
   ]
 }

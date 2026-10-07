@@ -67,7 +67,6 @@ export function inspectionLogTwoPages() {
       keyValues: fields,
       routes: { 1: 'layout', 2: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Fire Extinguisher Inspection Report',
       acceptableTypes: ['Inspection Report', 'Fire Extinguisher Inspection'],
@@ -136,7 +135,6 @@ export function priceListUnruled() {
       tables: [[columns.map((column) => column.header), ...rows]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Price List',
       acceptableTypes: ['Wholesale Price List', 'Availability and Price List'],
@@ -251,7 +249,6 @@ export function invoiceLabelAbove() {
       keyValues: [...header, ['BILL TO', customer], ['INSTALLATION DATE', numericDate(installed)], ['TOTAL DUE', money(priced.total)]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       date: invoiceDate,
@@ -313,7 +310,6 @@ export function invoiceRightAligned() {
       keyValues: [...header, ...totals],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       date: invoiceDate,
@@ -412,7 +408,6 @@ export function invoiceBoxedGrid() {
       tables: [[['Work performed', 'Qty', 'Rate', 'Amount'], ...priced.rows.map((row) => [row.description, String(row.quantity), amount(row.unit), amount(row.total)])]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       acceptableTypes: ['Service Invoice'],
@@ -502,12 +497,12 @@ export function benefitsChangeForm() {
     notes: `Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. It is a fillable form flattened after it was completed: the content stream holds the whole blank form, then every entry and every X, so only the geometry puts an X beside its option. Dated by the signature box (${numericDate(signed)}); the event date (${numericDate(event)}), the requested effective date (${numericDate(effective)}), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.`,
     structure: structure({
       // Each group of boxes is a table of two columns, the mark and the
-      // option: a chosen option keeps its X on its line.
+      // option: a chosen option keeps its X on its line, and an empty box
+      // is a blank mark, so an X read beside it is wrong.
       tables: groups.map(([, options]) => options.map(([caption, checked]) => [checked ? 'X' : '', caption])),
       keyValues: boxes,
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Benefits Enrollment Change Form',
       acceptableTypes: ['Benefits Change Form', 'Benefits Enrollment Form'],
@@ -579,7 +574,6 @@ export function lossNoticeBoxedFields() {
       keyValues: rows.flat().map(([label, value]) => [label, value]),
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Property Loss Notice',
       acceptableTypes: ['Notice of Loss', 'Loss Notice'],

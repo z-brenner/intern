@@ -89,7 +89,6 @@ export function newsletterThreeColumn() {
       readingOrder: readingSnippets(lines.slice(2, -1), 9),
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Newsletter',
       acceptableTypes: ['Homeowners Association Newsletter', 'Association Newsletter'],
@@ -169,7 +168,6 @@ export function agreementTwoColumnFootnotes() {
       readingOrder: ['SEED PRODUCTION AND SUPPLY AGREEMENT', ...snippets, 'supersedes the letter of intent'],
       routes: { 1: 'layout', 2: 'fast' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Seed Production and Supply Agreement',
       acceptableTypes: ['Seed Supply Agreement', 'Supply Agreement', 'Seed Production Agreement'],
@@ -258,7 +256,6 @@ function meetingNotice(id, order) {
       readingOrder: ['NOTICE OF SPECIAL MEETING OF MEMBERS', ...readingSnippets(lines.slice(4, -2), 9), 'By order of the Board of Directors'],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Notice of Special Meeting of Members',
       acceptableTypes: ['Notice of Special Meeting', 'Special Meeting Notice'],
@@ -366,7 +363,6 @@ export function rateConfirmationRotated() {
       keyValues: [...fields, ['Total rate', money(total)]],
       routes: { 1: 'layout', 2: 'fast' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Carrier Rate Confirmation',
       acceptableTypes: ['Rate Confirmation', 'Load Confirmation'],

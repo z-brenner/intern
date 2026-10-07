@@ -821,7 +821,7 @@ export function ocrCorruptedInvoice() {
     textLayer: 'ocr_corrupted',
     pages: 1,
     categories: ['ocr_corrupted', 'invoice'],
-    notes: `The page image is a clean scan of an invoice dated ${numericDate(invoiceDate)} from ${issuer}, but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads "${corruptedDate}", the letterhead "${misreadIssuer}"). The worker trusts a text layer of this length, so the engine sees only the corrupted text: the date cannot be read with confidence, and the right outcome is review. Gold facts come from the image (the issuer's name survives intact only in the payment line); evidence strings are as the text layer states them; clean_text is the text actually printed.`,
+    notes: `The page image is a clean scan of an invoice dated ${numericDate(invoiceDate)} from ${issuer}, but it carries an invisible (render mode 3) text layer from a poor OCR pass: l/1 and O/0 swapped, rn for m, commas dropped, and every date's zeros read as letters (the invoice date reads "${corruptedDate}", the letterhead "${misreadIssuer}"). The routing worker sees an invisible layer over a full-page image and reads the page again, so the engine gets the printed text and the right outcome is the correct name. A reader that trusts the layer gets only the corrupted text, where the date cannot be read with confidence, so review stays acceptable: readiness is either, and a ready name that is wrong is still unsafe. Gold facts come from the image (in the text layer the issuer's name survives intact only in the payment line); evidence strings are given in both spellings, the text layer's and the printed one, so either reading is credited for what it carries; clean_text is the text actually printed.`,
     gold: gold({
       type: 'Invoice',
       date: invoiceDate,
@@ -833,9 +833,11 @@ export function ocrCorruptedInvoice() {
       forbiddenParties: [[customer, 'bill-to customer']],
       facts: [[money(subtotal + tax), amount(subtotal + tax), money(subtotal + tax).replace(',', '')], ['stair treads', 'oak']],
       subjectTerms: ['millwork', 'stair treads', 'invoice'],
-      readiness: 'needs_review',
-      dateText: [corruptedDate],
-      partyText: { [issuer]: [misreadIssuer] },
+      // Read from the text layer or read again from the image: either
+      // reading routes it to review or names it, and the name decides.
+      readiness: 'either',
+      dateText: [corruptedDate, numericDate(invoiceDate)],
+      partyText: { [issuer]: [misreadIssuer, issuer] },
     }),
   });
 }

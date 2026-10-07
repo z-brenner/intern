@@ -270,9 +270,14 @@ pub struct OcrTruthPage {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StructureTruth {
     /// Distinctive phrases in the order a person reads them, each printed
-    /// once, each on one line of the page.
+    /// once. Most span a line break - the last words of one line and the
+    /// first of the next - so a reading that puts anything between those
+    /// two lines does not hold them; the break itself, like any whitespace,
+    /// is compared as one space.
     #[serde(default)]
     pub reading_order: Vec<String>,
+    /// Each table's rows. In a check-box group the first column is the
+    /// mark, `X` or blank: a blank leading cell is a box left empty.
     #[serde(default)]
     pub tables: Vec<TableTruth>,
     #[serde(default)]
@@ -285,7 +290,8 @@ pub struct StructureTruth {
 }
 
 /// A table's rows, the header first, each a list of cells; an empty cell is
-/// one the page leaves blank.
+/// one the page leaves blank, and is scored as such (see
+/// [`crate::structure`]).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TableTruth {
     pub rows: Vec<Vec<String>>,

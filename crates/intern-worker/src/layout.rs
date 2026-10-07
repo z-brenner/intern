@@ -29,9 +29,10 @@ mod geometry;
 pub mod router;
 mod text;
 
-pub use geometry::{TextRun, analyze_runs};
+pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
 pub use text::{blocks_from_lines, blocks_from_text};
+use text::{blocks_from_page_lines, line_spans};
 
 /// Tenths of a point in one PDF point.
 pub const UNITS_PER_POINT: f64 = 10.0;
@@ -101,8 +102,12 @@ pub struct LayoutBlock {
     /// `p{page}.b{n}`, `n` counting from 1 in reading order on the page.
     pub id: String,
     pub kind: BlockKind,
-    /// The block's text exactly as the page's text carries it. A table is
-    /// its rows as `| a | b |` lines; a key-value block its pairs as
+    /// The block's text exactly as the page's text carries it: a stretch of
+    /// the page text, byte for byte, line endings included. On a page read
+    /// as it always was - the fast route, and every reader that is not a
+    /// PDF - that is the stretch its lines span; on a page rebuilt from its
+    /// geometry or read by OCR, whose text is its blocks in order, a table
+    /// is its rows as `| a | b |` lines and a key-value block its pairs as
     /// `Key: value` lines.
     pub text: String,
     /// `[x0, y0, x1, y1]`, or none for a reader that knows no geometry.
@@ -214,7 +219,9 @@ impl PageLayout {
 /// a blank line between blocks.
 ///
 /// Deterministic, and the inverse the ids rely on: each block's text occurs
-/// in the page text exactly, in order.
+/// in the page text exactly, in order. A page whose text is kept as its
+/// reader gave it has the same promise from [`blocks_from_text`] and
+/// [`fast_layout`], which take each block's text from it.
 pub fn linearize(blocks: &[LayoutBlock]) -> String {
     let mut text = String::new();
     for block in blocks {
@@ -401,10 +408,11 @@ fn is_page_number(text: &str) -> bool {
 /// text, exactly as PDFium read it, with each line's box where the page's
 /// segments say where its lines are.
 pub fn fast_layout(text: &str, native: Option<&NativePage>, signals: RouteSignals) -> PageLayout {
-    let mut lines = text
-        .lines()
-        .map(|line| LayoutLine {
-            text: line.trim_end().to_owned(),
+    let spans = line_spans(text);
+    let mut lines = spans
+        .iter()
+        .map(|(start, end)| LayoutLine {
+            text: text[*start..*end].to_owned(),
             bbox: None,
             confidence: None,
         })
@@ -425,7 +433,7 @@ pub fn fast_layout(text: &str, native: Option<&NativePage>, signals: RouteSignal
             }
         }
     }
-    let mut blocks = blocks_from_lines(&lines, TextSource::Native);
+    let mut blocks = blocks_from_page_lines(text, &spans, &lines, TextSource::Native);
     let (width, height) = match native {
         Some(native) => {
             to_display_blocks(&mut blocks, native);
@@ -472,13 +480,16 @@ fn segment_lines(segments: &[[u32; 4]]) -> Vec<[u32; 4]> {
 }
 
 /// The layout of a page rebuilt from its geometry: its own runs, and any
-/// runs OCR read from images on it (already in the page's frame).
+/// runs OCR read from images on it (already in the page's frame). None
+/// for a page past the analysis's bounds ([`router::bounds`]), or when
+/// `stop` says to stop; the page is then read as its text.
 pub fn geometry_layout(
     native: &NativePage,
     extra_runs: Vec<TextRun>,
     signals: RouteSignals,
     route: PageRoute,
-) -> PageLayout {
+    stop: &dyn Fn() -> bool,
+) -> Option<PageLayout> {
     // The page is analysed as it is displayed, which is how it reads: a
     // page turned by `/Rotate` has its runs and rules turned first. Its
     // blocks are then already in the displayed frame.
@@ -506,14 +517,14 @@ pub fn geometry_layout(
         .map(|ruling| turn(*ruling))
         .collect::<Vec<_>>();
     let (width, height) = native.display_size();
-    let blocks = analyze_runs(&runs, width, height, &rulings, TextSource::Native);
-    PageLayout {
+    let blocks = analyze_runs_within(&runs, width, height, &rulings, TextSource::Native, stop)?;
+    Some(PageLayout {
         width,
         height,
         route,
         signals,
         blocks,
-    }
+    })
 }
 
 /// Every box in a page's blocks, turned from the page's frame to the page
@@ -554,8 +565,9 @@ pub const NOMINAL_UNITS_PER_PIXEL: f64 = UNITS_PER_POINT * 72.0 / 300.0;
 /// runs an unruled table down its columns or across a row of boxes, and
 /// pairs no label with its value; on InternBench's scans, reading the
 /// blocks instead took labelled values from 90% to 99% with every table
-/// row and reading order kept. A reading with no lines keeps the engine's
-/// text.
+/// row and reading order kept. A reading with no lines, or one past what
+/// the analysis takes on ([`router::bounds`]) or stopped by `stop`, keeps
+/// the engine's text.
 ///
 /// `size` is the image read, in pixels, before the engine turned it;
 /// `scale` is tenths of a point per pixel, [`NOMINAL_UNITS_PER_PIXEL`] when
@@ -567,10 +579,11 @@ pub fn ocr_page(
     size: (u32, u32),
     scale: Option<f64>,
     signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
 ) -> ExtractedPage {
-    let mut layout = ocr_layout(&reading, size, scale, signals);
+    let (mut layout, analysed) = ocr_layout_of(&reading, size, scale, signals, stop);
     number_blocks(page_number, &mut layout.blocks);
-    let text = if reading.lines.is_empty() || layout.blocks.is_empty() {
+    let text = if !analysed || layout.blocks.is_empty() {
         reading.text
     } else {
         linearize(&layout.blocks)
@@ -593,7 +606,21 @@ pub fn ocr_layout(
     size: (u32, u32),
     scale: Option<f64>,
     signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
 ) -> PageLayout {
+    ocr_layout_of(reading, size, scale, signals, stop).0
+}
+
+/// [`ocr_layout`], and whether its blocks were built from the reading's
+/// lines. A reading with no lines, or one past the analysis's bounds, has
+/// blocks built from its text instead.
+fn ocr_layout_of(
+    reading: &OcrResult,
+    size: (u32, u32),
+    scale: Option<f64>,
+    signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
+) -> (PageLayout, bool) {
     let scale = scale.unwrap_or(NOMINAL_UNITS_PER_PIXEL);
     let (width, height) = if reading.rotation_degrees % 180 == 90 {
         (size.1, size.0)
@@ -602,13 +629,8 @@ pub fn ocr_layout(
     };
     let to_units = |pixels: u32| (f64::from(pixels) * scale).round().max(0.0) as u32;
     let (width, height) = (to_units(width), to_units(height));
-    let blocks = if reading.lines.is_empty() {
-        let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
-        let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
-        for block in &mut blocks {
-            block.confidence = confidence;
-        }
-        blocks
+    let analysed = if reading.lines.is_empty() {
+        None
     } else {
         let runs = reading
             .lines
@@ -620,33 +642,70 @@ pub fn ocr_layout(
                 confidence: Some(line.confidence),
             })
             .collect::<Vec<_>>();
-        analyze_runs(&runs, width, height, &[], TextSource::Ocr)
+        analyze_runs_within(&runs, width, height, &[], TextSource::Ocr, stop)
     };
-    PageLayout {
+    let from_lines = analysed.is_some();
+    let blocks = analysed.unwrap_or_else(|| {
+        let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
+        let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
+        for block in &mut blocks {
+            block.confidence = confidence;
+        }
+        blocks
+    });
+    let layout = PageLayout {
         width,
         height,
         route: PageRoute::Ocr,
         signals,
         blocks,
-    }
+    };
+    (layout, from_lines)
 }
 
 /// Images on a page that may hold text of their own: large, and with no
 /// native text over them. In the page's frame, largest first.
+///
+/// An image a quarter or more of which lies under a larger one already
+/// kept is left out: what lies under both would be read twice and merged
+/// into the page twice - a scan drawn with its own copy over it, a soft
+/// mask, a thumbnail on its full-size image. A quarter of the smallest
+/// region the router asks for is still several lines of text; images that
+/// merely touch, or a stamp over a corner of a scan, overlap far less, and
+/// both are read.
 pub fn text_regions(native: &NativePage) -> Vec<[u32; 4]> {
     const MAX_REGIONS: usize = 4;
     let page = f64::from(native.width) * f64::from(native.height);
-    let mut regions = native
+    let area = |image: &[u32; 4]| {
+        u64::from(image[2].saturating_sub(image[0])) * u64::from(image[3].saturating_sub(image[1]))
+    };
+    let mut candidates = native
         .images
         .iter()
         .copied()
         .filter(|image| router::is_text_region(native, image, page))
         .collect::<Vec<_>>();
-    regions.sort_by_key(|image| {
-        std::cmp::Reverse(u64::from(image[2] - image[0]) * u64::from(image[3] - image[1]))
-    });
-    regions.dedup();
-    regions.truncate(MAX_REGIONS);
+    candidates.sort_by_key(|image| std::cmp::Reverse(area(image)));
+    let mut regions: Vec<[u32; 4]> = Vec::new();
+    for candidate in candidates {
+        let read_already = regions.iter().any(|kept| {
+            let overlap = [
+                kept[0].max(candidate[0]),
+                kept[1].max(candidate[1]),
+                kept[2].min(candidate[2]),
+                kept[3].min(candidate[3]),
+            ];
+            overlap[2] > overlap[0]
+                && overlap[3] > overlap[1]
+                && area(&overlap) * 4 >= area(&candidate)
+        });
+        if !read_already {
+            regions.push(candidate);
+        }
+        if regions.len() == MAX_REGIONS {
+            break;
+        }
+    }
     regions
 }
 
@@ -667,6 +726,7 @@ pub fn regions_page(
     signals: RouteSignals,
     readings: &[(OcrResult, [u32; 4])],
     scale: f64,
+    stop: &dyn Fn() -> bool,
 ) -> Option<ExtractedPage> {
     let native = inspection.native.as_ref()?;
     if native.runs.is_empty() {
@@ -720,7 +780,7 @@ pub fn regions_page(
     if extra.is_empty() {
         return None;
     }
-    let mut layout = geometry_layout(native, extra, signals, PageRoute::OcrRegions);
+    let mut layout = geometry_layout(native, extra, signals, PageRoute::OcrRegions, stop)?;
     number_blocks(page_number, &mut layout.blocks);
     Some(ExtractedPage {
         page_number,
@@ -730,6 +790,39 @@ pub fn regions_page(
         vision_escalated: false,
         layout: Some(layout),
     })
+}
+
+/// How many text objects past the current one a character is looked for
+/// in. An object that holds no characters - an empty string, a run of
+/// spaces, text drawn off the page - comes between two that do, and
+/// looking only at the very next one stalled on it for the rest of the
+/// page. Four is more such objects in a row than the corpus has anywhere,
+/// and few enough that a character is not matched to a box far ahead in
+/// the stream by chance.
+const SEGMENT_LOOKAHEAD: usize = 4;
+
+/// The text object a character centred at `center` belongs to, when it is
+/// not the current one: the first of the next [`SEGMENT_LOOKAHEAD`] objects
+/// whose box (with a point to spare) holds it. None while the current one
+/// holds it, or when none of those does.
+#[cfg_attr(not(feature = "native-pdfium"), allow(dead_code))]
+pub(crate) fn next_segment(
+    segments: &[[u32; 4]],
+    current: usize,
+    center: (f64, f64),
+) -> Option<usize> {
+    let inside = |segment: &[u32; 4]| {
+        center.0 >= f64::from(segment[0]) - 10.0
+            && center.0 <= f64::from(segment[2]) + 10.0
+            && center.1 >= f64::from(segment[1]) - 10.0
+            && center.1 <= f64::from(segment[3]) + 10.0
+    };
+    // Still inside the current object, or past the last one.
+    if segments.get(current).is_none_or(inside) {
+        return None;
+    }
+    let end = segments.len().min(current + 1 + SEGMENT_LOOKAHEAD);
+    (current + 1..end).find(|index| inside(&segments[*index]))
 }
 
 /// The union of boxes, if there are any.
@@ -902,6 +995,64 @@ mod tests {
         assert!(value["blocks"][0].get("fields").is_none());
         let back: PageLayout = serde_json::from_value(value).unwrap();
         assert_eq!(back, layout);
+    }
+
+    /// A text object with no characters between two that have them no
+    /// longer stalls the tracker: the next character is found two objects
+    /// on, and starts a cell of its own.
+    #[test]
+    fn the_character_tracker_looks_past_an_object_with_no_characters() {
+        let segments = [
+            [540, 1000, 1500, 1100],
+            // Nothing is drawn from this one.
+            [4000, 7000, 4100, 7100],
+            [1700, 1000, 2600, 1100],
+        ];
+
+        // Inside the current object: no change.
+        assert_eq!(next_segment(&segments, 0, (1000.0, 1050.0)), None);
+        // Past the empty object to the one that holds it.
+        assert_eq!(next_segment(&segments, 0, (2000.0, 1050.0)), Some(2));
+        // Nowhere near: left where it was.
+        assert_eq!(next_segment(&segments, 0, (3000.0, 5000.0)), None);
+        // Past the last object there is nothing to move to.
+        assert_eq!(next_segment(&segments, 2, (100.0, 100.0)), None);
+        // No further than the lookahead.
+        let mut far = vec![[540, 1000, 1500, 1100]];
+        far.extend(std::iter::repeat_n(
+            [4000, 7000, 4100, 7100],
+            SEGMENT_LOOKAHEAD,
+        ));
+        far.push([1700, 1000, 2600, 1100]);
+        assert_eq!(next_segment(&far, 0, (2000.0, 1050.0)), None);
+    }
+
+    /// Overlapping images are read once; images apart, or barely touching,
+    /// are each read.
+    #[test]
+    fn an_image_mostly_under_another_is_not_read_again() {
+        let page = |images: Vec<[u32; 4]>| NativePage {
+            width: 6120,
+            height: 7920,
+            segments: vec![[540, 400, 5580, 500]],
+            images,
+            ..NativePage::default()
+        };
+        let scan = [540, 4000, 5580, 7000];
+
+        // The same scan drawn twice, and a copy a little smaller over it.
+        assert_eq!(text_regions(&page(vec![scan, scan])), [scan]);
+        assert_eq!(
+            text_regions(&page(vec![[600, 4100, 5500, 6900], scan])),
+            [scan]
+        );
+        // Two scans side by side, sharing an edge strip.
+        let left = [540, 4000, 3100, 7000];
+        let right = [3000, 4000, 5580, 7000];
+        assert_eq!(text_regions(&page(vec![left, right])).len(), 2);
+        // Most of the smaller one under the larger: read once.
+        let lower = [540, 5500, 5580, 7400];
+        assert_eq!(text_regions(&page(vec![scan, lower])), [scan]);
     }
 
     #[test]
