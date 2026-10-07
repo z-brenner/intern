@@ -1,7 +1,7 @@
 # InternBench comparison
 
 - **Before:** replay run 2026-10-07T07:58:32Z at `9e1f5270cad525dd03165a515fe8ac7460c35730-dirty` (72 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `1366aa8f4354`, made 2026-10-07T04:54:20Z), not measured
-- **After:** replay run 2026-10-07T07:58:35Z at `9e1f5270cad525dd03165a515fe8ac7460c35730-dirty` (72 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `7c0c092cd90c`, made 2026-10-07T05:45:28Z), not measured
+- **After:** replay run 2026-10-07T09:09:44Z at `7278aac9e07d1f003797304393456e6bf251496b-dirty` (72 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `8f84a28c15e2`, made 2026-10-07T05:45:28Z), not measured
 - **Compared:** every score, rate and count over the 72 documents both runs scored (completed, or failed and scored as a miss), each score over the documents that have it in both runs; latency over the 71 both completed.
 
 ## Scores

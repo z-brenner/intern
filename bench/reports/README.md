@@ -16,9 +16,11 @@ Both were recorded live one after the other on the same otherwise idle
 4-core Xeon, with the pinned model at 4 threads and an 8,192-token context.
 "Before" used a reader built from the code before routing, with the
 Tesseract runtime; "after" the routing reader with the PP-OCR runtime. Eight
-scans were recorded again after a layout fix that stopped OCR pages from
-pairing headings, names and addresses as labels, and merged into the "after"
-recording; the other 64 documents' page text is byte-identical under that fix.
+scans were recorded again with the reader as it ships, after a layout fix that
+stopped OCR pages from pairing headings, names and addresses as labels and a
+change that keeps OCR's memory arena while a document is read, and merged
+into the "after" recording. The other 64 documents' page text is
+byte-identical under both changes.
 Both reports were then replayed with the same scorer and gold, so every score
 is computed the same way. `docs/pipeline-bottlenecks.md` (Phase 2: measured)
 reads them.

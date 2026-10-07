@@ -335,15 +335,15 @@ Latency, from the two live runs:
 | --- | ---: | ---: | ---: |
 | Native PDF (41) | 36.1 s → 37.3 s | 4.1 ms → 5.0 ms | 2,082 → 2,163 |
 | Office and text (11) | 42.4 s → 43.0 s | 2.0 ms → 2.6 ms | 2,599 → 2,599 |
-| Scans and mixed (19) | 34.5 s → 31.5 s | 1.18 s → 2.25 s | 1,552 → 1,624 |
+| Scans and mixed (19) | 34.5 s → 30.5 s | 1.18 s → 2.25 s | 1,552 → 1,624 |
 
 * **Native PDFs** read about 1 ms slower.
 * The **+3% end to end** on native PDFs is the prompt: written-out tables and
   fields add about 80 tokens. The office documents' prompts are identical and
   still moved 1.5%, which is the noise between two runs.
-* **Scans** spend about a second more in OCR but finish 3 s sooner: the model
+* **Scans** spend about a second more in OCR but finish 4 s sooner: the model
   gets text it can use.
-* Over all 71 documents both completed, the total is +4.9% at the median and
+* Over all 71 documents both completed, the total is +4.7% at the median and
   −1.3% at the 95th percentile.
 
 ## The highest-value changes

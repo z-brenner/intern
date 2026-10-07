@@ -1,10 +1,10 @@
 # InternBench: replay run
 
-- **Run:** 2026-10-07T07:58:35Z · commit `9e1f5270ca-dirty`
+- **Run:** 2026-10-07T09:09:44Z · commit `7278aac9e0-dirty`
 - **Machine:** Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS)
 - **Model:** `intern-local` · 1.28 GB · sha256 `aaf42c8b7c3c`
 - **Corpus:** 72 documents · 72 completed · gold `6b4e051c7c`
-- **Recording:** made 2026-10-07T05:45:28Z at commit `bd48e987d5` · sha256 `7c0c092cd9`
+- **Recording:** made 2026-10-07T05:45:28Z at commit `bd48e987d5` · sha256 `8f84a28c15`
 
 > Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run.
 
@@ -48,11 +48,11 @@
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | amendment | 3 | 1/3 | 2/3 | 2/3 | 1/1 | 0.0% | 38.94 s | 47.04 s |
 | annual_report | 2 | 0/2 | 2/2 | 2/2 | 2/2 | 0.0% | 65.09 s | 102.78 s |
-| bill_of_lading | 1 | 0/1 | 1/1 | 0/1 | – | 0.0% | 46.93 s | 46.93 s |
-| certificate | 1 | 0/1 | 1/1 | 1/1 | – | 0.0% | 47.72 s | 47.72 s |
-| claim | 1 | 0/1 | 1/1 | 0/1 | – | 100.0% | 24.80 s | 24.80 s |
+| bill_of_lading | 1 | 0/1 | 1/1 | 0/1 | – | 0.0% | 42.12 s | 42.12 s |
+| certificate | 1 | 0/1 | 1/1 | 1/1 | – | 0.0% | 43.43 s | 43.43 s |
+| claim | 1 | 0/1 | 1/1 | 0/1 | – | 100.0% | 23.70 s | 23.70 s |
 | condition_report | 1 | 0/1 | 1/1 | 1/1 | – | 0.0% | 32.98 s | 32.98 s |
-| contract | 13 | 13/13 | 13/13 | 13/13 | 8/9 | 7.7% | 59.47 s | 160.61 s |
+| contract | 13 | 13/13 | 13/13 | 13/13 | 8/9 | 7.7% | 59.47 s | 142.34 s |
 | email | 1 | 0/1 | 1/1 | 0/1 | 0/1 | 100.0% | 37.39 s | 37.39 s |
 | form | 5 | 1/5 | 4/5 | 3/5 | 4/4 | 20.0% | 32.55 s | 36.36 s |
 | inspection_report | 1 | 0/1 | 1/1 | 0/1 | 1/1 | 0.0% | 63.24 s | 63.24 s |
@@ -70,7 +70,7 @@
 | purchase_order | 2 | 1/2 | 2/2 | 2/2 | 1/1 | 0.0% | 23.98 s | 39.44 s |
 | quotation | 1 | 1/1 | 1/1 | 1/1 | 0/1 | 0.0% | 22.15 s | 22.15 s |
 | rate_confirmation | 1 | 0/1 | 1/1 | 1/1 | 1/1 | 0.0% | 41.32 s | 41.32 s |
-| receipt | 1 | 0/1 | 1/1 | 0/1 | 1/1 | 100.0% | 33.96 s | 33.96 s |
+| receipt | 1 | 0/1 | 1/1 | 0/1 | 1/1 | 100.0% | 30.26 s | 30.26 s |
 | remittance_advice | 1 | 0/1 | 0/1 | 1/1 | 0/1 | 0.0% | 28.32 s | 28.32 s |
 | report | 1 | 0/1 | 1/1 | 0/1 | 0/1 | 100.0% | 44.27 s | 44.27 s |
 | resolution | 1 | 0/1 | 1/1 | 0/1 | 0/1 | 100.0% | 44.99 s | 44.99 s |
@@ -86,7 +86,7 @@
 | native | 42 | 13/42 | 34/42 | 29/42 | 28/39 | 26.2% | 37.31 s | 76.67 s |
 | ocr_corrupted | 1 | 1/1 | 1/1 | 1/1 | – | 100.0% | 31.90 s | 31.90 s |
 | office | 5 | 2/5 | 4/5 | 3/5 | 3/5 | 40.0% | 42.04 s | 44.99 s |
-| scan | 16 | 6/16 | 15/16 | 12/16 | 2/4 | 43.8% | 30.25 s | 160.61 s |
+| scan | 16 | 6/16 | 15/16 | 12/16 | 2/4 | 43.8% | 28.32 s | 142.34 s |
 | sheet | 3 | 0/3 | 3/3 | 2/3 | 1/2 | 33.3% | 53.87 s | 72.22 s |
 | text | 1 | 0/1 | 1/1 | 1/1 | 1/1 | 0.0% | 43.09 s | 43.09 s |
 
@@ -94,11 +94,11 @@
 
 | Pages | Docs | Filename | Date | Parties | Routing | Review | p50 total | p95 total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 37 | 9/37 | 31/37 | 22/37 | 14/26 | 48.6% | 33.96 s | 46.93 s |
+| 1 | 37 | 9/37 | 31/37 | 22/37 | 14/26 | 48.6% | 33.25 s | 44.27 s |
 | 2-4 | 24 | 8/24 | 21/24 | 18/24 | 13/17 | 16.7% | 38.94 s | 63.28 s |
 | 5-9 | 4 | 1/4 | 2/4 | 3/4 | 4/4 | 0.0% | 59.47 s | 67.28 s |
-| 10-24 | 3 | 3/3 | 3/3 | 3/3 | 2/2 | 0.0% | 76.67 s | 127.20 s |
-| 25-49 | 2 | 2/2 | 2/2 | 2/2 | 1/1 | 0.0% | 77.69 s | 160.61 s |
+| 10-24 | 3 | 3/3 | 3/3 | 3/3 | 2/2 | 0.0% | 76.67 s | 90.10 s |
+| 25-49 | 2 | 2/2 | 2/2 | 2/2 | 1/1 | 0.0% | 77.69 s | 142.34 s |
 | 50-99 | 1 | 1/1 | 1/1 | 1/1 | 0/1 | 100.0% | 72.61 s | 72.61 s |
 | 100+ | 1 | 0/1 | 1/1 | 1/1 | 1/1 | 0.0% | 102.78 s | 102.78 s |
 
@@ -160,25 +160,25 @@
 
 | Document | Layer | Pages | CER | CER (any case) | WER | Dates | Names | IDs | Confidence | OCR time |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| scan-clean-lease-2p | scan | 2 | 0.4% | 0.4% | 0.5% | 100.0% | 100.0% | 100.0% | 96 | 6.38 s |
+| scan-clean-lease-2p | scan | 2 | 0.4% | 0.4% | 0.5% | 100.0% | 100.0% | 100.0% | 96 | 4.26 s |
 | scan-mixed-amendment | mixed | 1 | 2.3% | 2.3% | 2.9% | 100.0% | 100.0% | – | 97 | 1.35 s |
 | scan-rotated-90-invoice | scan | 1 | 0.0% | 0.0% | 0.0% | 100.0% | 100.0% | 100.0% | 98 | 1.58 s |
 | scan-upside-down-po | scan | 1 | 0.1% | 0.1% | 0.7% | 100.0% | 100.0% | 100.0% | 99 | 2.16 s |
 | scan-skewed-notice | scan | 1 | 0.0% | 0.0% | 0.0% | 100.0% | 100.0% | 100.0% | 98 | 2.11 s |
-| scan-low-res-receipt | scan | 1 | 12.5% | 12.5% | 3.0% | 100.0% | 100.0% | 100.0% | 98 | 1.46 s |
+| scan-low-res-receipt | scan | 1 | 12.5% | 12.5% | 3.0% | 100.0% | 100.0% | 100.0% | 98 | 1.26 s |
 | scan-noisy-statement | scan | 1 | 1.0% | 1.0% | 9.2% | 100.0% | 100.0% | 100.0% | 95 | 1.91 s |
-| scan-faint-letter | scan | 1 | 0.4% | 0.4% | 0.5% | 100.0% | 100.0% | – | 98 | 2.19 s |
-| scan-agreement-10p | scan | 10 | 0.1% | 0.1% | 0.1% | 100.0% | 100.0% | 100.0% | 98 | 35.52 s |
-| scan-lease-25p | scan | 25 | 0.0% | 0.0% | 0.1% | 100.0% | 100.0% | 100.0% | 99 | 71.83 s |
+| scan-faint-letter | scan | 1 | 0.4% | 0.4% | 0.5% | 100.0% | 100.0% | – | 98 | 1.92 s |
+| scan-agreement-10p | scan | 10 | 0.1% | 0.1% | 0.1% | 100.0% | 100.0% | 100.0% | 98 | 25.31 s |
+| scan-lease-25p | scan | 25 | 0.0% | 0.0% | 0.1% | 100.0% | 100.0% | 100.0% | 99 | 57.95 s |
 | scan-fax-two-frames | scan | 2 | 2.6% | 2.6% | 1.4% | 100.0% | 100.0% | 100.0% | 99 | 2.76 s |
 | scan-patient-intake-form | scan | 1 | 0.4% | 0.4% | 1.8% | 100.0% | 100.0% | 100.0% | 96 | 2.15 s |
-| scan-rotated-page-in-pdf | scan | 2 | 0.1% | 0.1% | 0.5% | 100.0% | 100.0% | 100.0% | 98 | 3.72 s |
+| scan-rotated-page-in-pdf | scan | 2 | 0.1% | 0.1% | 0.5% | 100.0% | 100.0% | 100.0% | 98 | 3.82 s |
 | scan-cancellation-notice-150dpi | scan | 1 | 0.0% | 0.0% | 0.0% | 100.0% | 100.0% | 100.0% | 97 | 2.04 s |
 | scan-remittance-advice-120dpi | scan | 1 | 10.1% | 10.0% | 12.7% | 100.0% | 100.0% | 100.0% | 98 | 2.33 s |
 | scan-mixed-middle-page | mixed | 1 | 4.0% | 4.0% | 4.0% | – | – | 100.0% | 96 | 1.32 s |
 | mixed-signature-region | mixed | 1 | 0.2% | 0.2% | 1.0% | 100.0% | 100.0% | – | – | 747.9 ms |
-| scan-certificate-of-insurance | scan | 1 | 28.8% | 28.0% | 33.3% | 100.0% | 100.0% | 100.0% | 98 | 5.24 s |
-| scan-bill-of-lading | scan | 1 | 32.5% | 31.7% | 30.2% | 100.0% | 100.0% | 100.0% | 98 | 4.75 s |
+| scan-certificate-of-insurance | scan | 1 | 28.8% | 28.0% | 33.3% | 100.0% | 100.0% | 100.0% | 98 | 3.27 s |
+| scan-bill-of-lading | scan | 1 | 32.5% | 31.7% | 30.2% | 100.0% | 100.0% | 100.0% | 98 | 3.19 s |
 | **All scanned pages** |  | 55 | 1.8% | 1.8% | 1.9% | 100.0% | 100.0% | 100.0% | 98 | – |
 
 Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the read pages that survive OCR. A page the reader does not return (a TIFF frame it does not read, shown as unread) counts as read empty, as does every page of a scan whose extraction failed: every character and value on it missed.
@@ -238,31 +238,31 @@ Pages the gold gives a route for, by the route they should take and the one they
 
 | Stage | Docs | p50 | p95 | Max |
 | --- | ---: | ---: | ---: | ---: |
-| `total_ms` | 72 | 37.31 s | 77.69 s | 160.61 s |
-| `extraction_wall_ms` | 72 | 6.0 ms | 5.36 s | 72.00 s |
-| `worker_total_ms` | 72 | 4.8 ms | 5.36 s | 72.00 s |
-| `worker_snapshot_ms` | 72 | 0.21 ms | 0.53 ms | 1.3 ms |
-| `worker_parse_ms` | 72 | 2.1 ms | 15.2 ms | 64.0 ms |
+| `total_ms` | 72 | 37.31 s | 77.69 s | 142.34 s |
+| `extraction_wall_ms` | 72 | 6.0 ms | 3.99 s | 58.19 s |
+| `worker_total_ms` | 72 | 4.8 ms | 3.99 s | 58.19 s |
+| `worker_snapshot_ms` | 72 | 0.21 ms | 0.54 ms | 1.3 ms |
+| `worker_parse_ms` | 72 | 2.1 ms | 19.9 ms | 64.0 ms |
 | `worker_analysis_ms` | 72 | 0.60 ms | 5.5 ms | 47.4 ms |
-| `worker_render_ms` | 72 | 0.00 ms | 239.6 ms | 3.34 s |
+| `worker_render_ms` | 72 | 0.00 ms | 242.2 ms | 3.61 s |
 | `worker_image_decode_ms` | 72 | 0.00 ms | 68.4 ms | 101.0 ms |
-| `worker_ocr_ms` | 72 | 0.00 ms | 5.24 s | 71.83 s |
-| `worker_ocr_encode_ms` | 72 | 0.00 ms | 307.2 ms | 5.68 s |
-| `worker_ocr_engine_ms` | 72 | 0.00 ms | 5.09 s | 66.14 s |
-| `worker_vision_ms` | 72 | 0.00 ms | 6.6 ms | 14.5 ms |
-| `analyze_wall_ms` | 72 | 37.30 s | 77.65 s | 102.64 s |
-| `distill_ms` | 72 | 0.88 ms | 12.2 ms | 64.0 ms |
-| `prompt_ms` | 72 | 0.00 ms | 0.00 ms | 0.01 ms |
-| `inference_ms` | 72 | 37.29 s | 77.59 s | 102.50 s |
-| `prefill_ms` | 72 | 25.62 s | 65.35 s | 92.86 s |
-| `generation_ms` | 72 | 10.81 s | 17.31 s | 26.08 s |
-| `validation_ms` | 72 | 12.2 ms | 44.0 ms | 74.3 ms |
-| `naming_ms` | 72 | 0.99 ms | 4.5 ms | 8.6 ms |
+| `worker_ocr_ms` | 72 | 0.00 ms | 3.82 s | 57.95 s |
+| `worker_ocr_encode_ms` | 72 | 0.00 ms | 358.8 ms | 5.80 s |
+| `worker_ocr_engine_ms` | 72 | 0.00 ms | 3.31 s | 51.97 s |
+| `worker_vision_ms` | 72 | 0.00 ms | 9.1 ms | 14.5 ms |
+| `analyze_wall_ms` | 72 | 37.30 s | 76.65 s | 102.64 s |
+| `distill_ms` | 72 | 0.88 ms | 13.8 ms | 64.0 ms |
+| `prompt_ms` | 72 | 0.00 ms | 0.00 ms | 0.00 ms |
+| `inference_ms` | 72 | 37.29 s | 76.60 s | 102.50 s |
+| `prefill_ms` | 72 | 25.60 s | 62.14 s | 92.86 s |
+| `generation_ms` | 72 | 10.69 s | 16.18 s | 24.08 s |
+| `validation_ms` | 72 | 12.2 ms | 40.3 ms | 74.3 ms |
+| `naming_ms` | 72 | 0.99 ms | 3.4 ms | 8.6 ms |
 
 | Measure | Docs | p50 | p95 | Max |
 | --- | ---: | ---: | ---: | ---: |
-| `prefill_tok_per_s` | 72 | 80.9 tok/s | 89.0 tok/s | 91.6 tok/s |
-| `generation_tok_per_s` | 72 | 13.1 tok/s | 14.3 tok/s | 14.6 tok/s |
+| `prefill_tok_per_s` | 72 | 81.9 tok/s | 89.0 tok/s | 91.6 tok/s |
+| `generation_tok_per_s` | 72 | 13.2 tok/s | 14.3 tok/s | 14.6 tok/s |
 | `prompt_tokens` | 72 | 2125 | 5040 | 7188 |
 | `cached_tokens` | 72 | 46 | 1199 | 1881 |
 | `generated_tokens` | 72 | 140 | 204 | 302 |
