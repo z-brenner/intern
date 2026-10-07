@@ -52,7 +52,8 @@ written is the signal.
 
 **Live result** (this machine: Ryzen 7 PRO 8840U, llama.cpp b10361 Windows CPU,
 8 threads, 8,192 context, packaged runtime). Recorded with `--token-confidence`
-to `fixtures/corpus-recording-confidence.json`.
+to `fixtures/corpus-recording-confidence.json`, through the digest pipeline,
+the default then: replay it with `--pipeline digest`.
 
 | Fixture | `min` | Date | Parties | Routed |
 | --- | ---: | :---: | :---: | --- |
@@ -95,16 +96,16 @@ cargo build --locked -p intern-engine --bin intern-evaluate
 $env:INTERN_RUNTIME_DIR = "$env:LOCALAPPDATA\Intern"
 target\debug\intern-evaluate.exe --fixtures fixtures\generated --expected fixtures\expected.json `
   --worker target\release\intern-worker.exe --endpoint http://127.0.0.1:8090/v1/chat/completions `
-  --api-key KEY --model-id intern-local --token-confidence `
+  --api-key KEY --model-id intern-local --pipeline digest --token-confidence `
   --record fixtures\corpus-recording-confidence.json --output report-confidence.json
 # Calibrate offline, no model needed:
 target\debug\intern-evaluate.exe --fixtures fixtures\generated --expected fixtures\expected.json `
-  --replay fixtures\corpus-recording-confidence.json --min-token-confidence 0.5
+  --pipeline digest --replay fixtures\corpus-recording-confidence.json --min-token-confidence 0.5
 ```
 
 The confidence recording is not the recording of record. Use it to calibrate the
 threshold, not as the baseline gate. Replayed against
-`fixtures/corpus-baseline.json`, which was earned by the Linux recording, it
+`fixtures/corpus-baseline-digest.json`, which was earned by the Linux recording, it
 differs on three scores (nda description facts, ambiguous-note description
 specificity, board-deck parties) and improves one (document-image.png parties).
 Those differences come from a different machine and OCR build, not from logprobs.
@@ -151,7 +152,7 @@ span, so it passes the verbatim check by construction.
 **Measure it offline first.** The model alone can be scored for *candidate
 recall* without touching the LLM. For every text fixture, run GLiNER2 over the
 digest that `intern_engine::distill` produces from the recorded extraction in
-`fixtures/corpus-recording.json`. Then count how often every reviewed party and
+`fixtures/corpus-recording-digest.json`. Then count how often every reviewed party and
 the reviewed date in `fixtures/expected.json` appear among the top-k candidates.
 If recall is below 100% on the text fixtures, the pre-extractor would cap
 accuracy, and there is no point wiring it in.

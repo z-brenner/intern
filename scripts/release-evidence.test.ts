@@ -36,7 +36,7 @@ async function evidenceFixture() {
   };
   await writeFile(join(root, files.model), JSON.stringify({
     schema_version: 3,
-    pipeline: 'new',
+    pipeline: 'evidence',
     status: 'completed',
     commit,
     release_inputs_sha256: 'c'.repeat(64),

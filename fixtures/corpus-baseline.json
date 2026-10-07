@@ -4,7 +4,7 @@
     "ambiguous-note.pdf": {
       "status": "completed",
       "scores": {
-        "description_specific": true,
+        "description_specific": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
@@ -22,7 +22,7 @@
         "description_covers_facts": true,
         "description_specific": true,
         "filename_correct": false,
-        "parties_correct": true,
+        "parties_correct": false,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": true,
@@ -59,7 +59,7 @@
         "date_forbidden": false,
         "date_present": true,
         "date_role_correct": true,
-        "description_covers_facts": false,
+        "description_covers_facts": true,
         "description_specific": true,
         "filename_correct": true,
         "parties_correct": true,
@@ -85,7 +85,7 @@
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
-        "relation_correct": false,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -97,16 +97,16 @@
         "date_exact": false,
         "date_forbidden": false,
         "date_present": false,
-        "description_covers_facts": true,
-        "description_specific": true,
+        "description_covers_facts": false,
+        "description_specific": false,
         "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
-        "relation_correct": false,
-        "type_correct": true,
-        "type_present": true
+        "relation_correct": true,
+        "type_correct": false,
+        "type_present": false
       }
     },
     "employment-agreement.pdf": {
@@ -148,8 +148,8 @@
         "filename_correct": false,
         "parties_correct": true,
         "party_forbidden": false,
-        "readiness_match": false,
-        "ready": false,
+        "readiness_match": true,
+        "ready": true,
         "type_correct": true,
         "type_present": true
       }
@@ -192,8 +192,8 @@
         "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
-        "readiness_match": true,
-        "ready": false,
+        "readiness_match": false,
+        "ready": true,
         "relation_correct": true,
         "type_correct": true,
         "type_present": true
@@ -212,8 +212,8 @@
         "filename_correct": true,
         "parties_correct": true,
         "party_forbidden": false,
-        "readiness_match": true,
-        "ready": true,
+        "readiness_match": false,
+        "ready": false,
         "relation_correct": true,
         "type_correct": true,
         "type_present": true
@@ -262,18 +262,19 @@
     "rotated-low-resolution-scan.png": {
       "status": "completed",
       "scores": {
-        "date_correct": false,
-        "date_exact": false,
+        "date_correct": true,
+        "date_exact": true,
         "date_forbidden": false,
-        "date_present": false,
+        "date_present": true,
+        "date_role_correct": false,
         "description_covers_facts": true,
         "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": false,
+        "filename_correct": true,
+        "parties_correct": true,
         "party_forbidden": false,
         "readiness_match": true,
         "ready": false,
-        "relation_correct": false,
+        "relation_correct": true,
         "type_correct": true,
         "type_present": true
       }
@@ -281,17 +282,18 @@
     "scanned-lease.pdf": {
       "status": "completed",
       "scores": {
-        "date_correct": false,
-        "date_exact": false,
+        "date_correct": true,
+        "date_exact": true,
         "date_forbidden": false,
-        "date_present": false,
+        "date_present": true,
+        "date_role_correct": true,
         "description_covers_facts": true,
         "description_specific": true,
-        "filename_correct": false,
-        "parties_correct": false,
+        "filename_correct": true,
+        "parties_correct": true,
         "party_forbidden": false,
-        "readiness_match": true,
-        "ready": false,
+        "readiness_match": false,
+        "ready": true,
         "relation_correct": true,
         "type_correct": true,
         "type_present": true
@@ -305,7 +307,7 @@
         "date_forbidden": false,
         "date_present": true,
         "date_role_correct": true,
-        "description_covers_facts": false,
+        "description_covers_facts": true,
         "description_specific": true,
         "filename_correct": true,
         "parties_correct": true,

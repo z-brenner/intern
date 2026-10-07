@@ -250,7 +250,7 @@ impl HostedModel {
             return Ok(Arc::clone(engine));
         }
         let client = HostedClient::new(config.clone())?;
-        let engine = Arc::new(Engine::with_proposer(Box::new(client)));
+        let engine = Arc::new(client.engine());
         *cached = Some((config, Arc::clone(&engine)));
         Ok(engine)
     }
@@ -458,8 +458,10 @@ mod tests {
                 confidence: 0.8,
                 needs_review: false,
                 evidence: Evidence::default(),
+                facts: None,
             }),
             stated_dates: Vec::new(),
+            facts: None,
         }
     }
 

@@ -6016,8 +6016,9 @@ mod runtime_tests {
 
     use intern_engine::{
         DateRole, DocumentSource, Engine, EngineError, EngineErrorCode, EngineResult, Evidence,
-        ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyRelation, Proposer,
-        download::CancellationToken, setup::ExistingModelSelection,
+        ModelFacts, ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyFact,
+        PartyRelation, PartyRole, Proposer, download::CancellationToken,
+        setup::ExistingModelSelection,
     };
     use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
 
@@ -6169,12 +6170,15 @@ mod runtime_tests {
     }
 
     impl Proposer for FakeProposer {
-        fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
+        fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
             self.rig.proposals.fetch_add(1, Ordering::SeqCst);
             let reply = *self.rig.reply.lock().unwrap();
             match reply {
-                Reply::Calibration => Ok(calibration_reply("Northstar Calibration Holdings LLC")),
-                Reply::Wrong => Ok(calibration_reply("Somebody Else Entirely")),
+                Reply::Calibration => Ok(calibration_reply(
+                    request,
+                    "Northstar Calibration Holdings LLC",
+                )),
+                Reply::Wrong => Ok(calibration_reply(request, "Somebody Else Entirely")),
                 Reply::Fail(code) => Err(EngineError::new(code, "scripted failure")),
                 Reply::HangUntilStopped => {
                     {
@@ -6222,7 +6226,37 @@ mod runtime_tests {
         }
     }
 
-    fn calibration_reply(party: &str) -> ModelProposal {
+    /// The id the prompt shows for the line that holds `needle`.
+    fn line_id(request: &ModelRequest, needle: &str) -> String {
+        request
+            .prompt
+            .lines()
+            .find(|line| line.contains(needle))
+            .and_then(|line| line.trim_start().strip_prefix('['))
+            .and_then(|rest| rest.split_once(']'))
+            .map(|(id, _)| id.to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The reply a model gives the calibration notice: the facts with the
+    /// ids of their lines for the evidence pipeline the local model reads,
+    /// a quoted reply for the digest pipeline.
+    fn calibration_reply(request: &ModelRequest, party: &str) -> ModelProposal {
+        let facts = request.evidence.as_ref().map(|_| {
+            Box::new(ModelFacts {
+                document_type: Some("Notice of Calibration".into()),
+                type_evidence: vec![line_id(request, "NOTICE OF CALIBRATION")],
+                document_date: Some("2024-01-02".into()),
+                date_role: Some(DateRole::Notice),
+                date_evidence: vec![line_id(request, "January 2, 2024")],
+                parties: vec![PartyFact {
+                    name: party.to_owned(),
+                    role: Some(PartyRole::Addressee),
+                    evidence: vec![line_id(request, "To:")],
+                }],
+                ..ModelFacts::default()
+            })
+        });
         ModelProposal {
             document_type: Some("Notice of Calibration".into()),
             document_date: Some("2024-01-02".into()),
@@ -6239,6 +6273,7 @@ mod runtime_tests {
                 document_type: Some("NOTICE OF CALIBRATION".into()),
                 parties: vec![format!("To: {party}")],
             },
+            facts,
         }
     }
 
@@ -7751,6 +7786,81 @@ mod approval_dto_tests {
             proposal: Some(proposal),
             ..super::document_path_tests::item(status, None)
         }
+    }
+
+    /// An evidence-pipeline proposal, stored as the queue stores it: its
+    /// facts, support and telemetry are additions the window reads past,
+    /// and the evidence it shows is the document's own lines, dereferenced
+    /// by the engine.
+    #[test]
+    fn an_evidence_pipeline_proposal_reads_and_shows_the_documents_lines() {
+        let proposal: ProposalRecord = serde_json::from_value(serde_json::json!({
+            "analysis": {
+                "filename": "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf",
+                "description": "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc. for display shelving.",
+                "status": "ready",
+                "reviewReasons": [],
+                "proposal": {
+                    "document_type": "Invoice",
+                    "document_date": "2025-05-01",
+                    "date_role": "invoice",
+                    "parties": ["Halvorsen Fixture Works LLC"],
+                    "party_relation": "from",
+                    "description": "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc. for display shelving.",
+                    "confidence": 0.9,
+                    "evidence": {
+                        "date": "Invoice Date: May 1, 2025",
+                        "document_type": "INVOICE",
+                        "parties": ["Halvorsen Fixture Works LLC"]
+                    }
+                },
+                "telemetry": {
+                    "sourceCharacters": 300, "digestCharacters": 300, "compressionRatio": 1.0,
+                    "distillMicros": 40, "inferenceMillis": 9000, "indexMicros": 30,
+                    "retrievalMicros": 10, "indexUnits": 9, "contextUnits": 9,
+                    "contextTier": "whole"
+                },
+                "modelProposal": {
+                    "document_type": "Invoice", "document_date": "2025-05-01",
+                    "date_role": "invoice", "parties": ["Halvorsen Fixture Works LLC"],
+                    "party_relation": "from", "description": "", "confidence": 0.9,
+                    "needs_review": false,
+                    "evidence": {"date": "Invoice Date: May 1, 2025", "document_type": "INVOICE", "parties": []},
+                    "facts": {
+                        "document_type": "Invoice", "type_evidence": ["p1.b2"],
+                        "document_date": "2025-05-01", "date_role": "invoice",
+                        "date_evidence": ["p1.b4.f1"],
+                        "parties": [{"name": "Halvorsen Fixture Works LLC", "role": "issuer", "evidence": ["p1.b1"]}]
+                    }
+                },
+                "facts": {
+                    "parties": [{"name": "Halvorsen Fixture Works LLC", "role": "issuer",
+                        "role_support": "cited", "support": "cited", "evidence": ["p1.b1"]}],
+                    "document_class": "issued",
+                    "relation_basis": "issued: the issuer",
+                    "support": {"document_type": "cited", "document_date": "cited",
+                        "parties": ["cited"], "unknown_ids": 0},
+                    "evidence": [{"id": "p1.b4.f1", "page": 1, "text": "Invoice Date: May 1, 2025"}],
+                    "some_later_field": true
+                }
+            },
+            "status": "ready",
+            "filename": "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf",
+            "description": "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc. for display shelving.",
+            "reasons": [],
+            "revision": 1,
+            "approved": false
+        }))
+        .unwrap();
+        assert!(proposal.analysis.facts.is_some());
+        let item = PipelineItem {
+            proposal: Some(proposal),
+            ..super::document_path_tests::item(QueueStatus::Ready, None)
+        };
+        let json = serde_json::to_value(queue_item_dto(item).unwrap()).unwrap();
+        assert_eq!(json["evidence"]["date"], "Invoice Date: May 1, 2025");
+        assert_eq!(json["evidence"]["type"], "INVOICE");
+        assert_eq!(json["evidence"]["parties"], "Halvorsen Fixture Works LLC");
     }
 
     // The queue was busy with another document, so the approved name waits

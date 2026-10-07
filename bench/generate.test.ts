@@ -39,7 +39,13 @@ const GOLD_KEYS = [
   'subject_terms', 'expected_readiness', 'evidence',
 ];
 
-type Evidence = { date_text: string[]; party_text: Record<string, string[]> };
+type Evidence = {
+  date_text: string[];
+  party_text: Record<string, string[]>;
+  date_anchor?: string;
+  type_text?: string[];
+  identifier_text?: string[];
+};
 type Gold = {
   document_type: string;
   acceptable_types: string[];
@@ -320,6 +326,13 @@ describe('InternBench corpus generator', () => {
       for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
         for (const form of forms) expect(carries(form), `${where}: party evidence "${form}" for ${party}`).toBe(true);
       }
+      for (const form of [...(gold.evidence.type_text ?? []), ...(gold.evidence.identifier_text ?? [])]) expect(carries(form), `${where}: evidence "${form}"`).toBe(true);
+      // The words that define the date are printed on the same page as it.
+      const anchor = gold.evidence.date_anchor;
+      if (anchor) {
+        const pages = generated.texts[document.id].map(normalise);
+        expect(pages.some((page) => page.includes(normalise(anchor)) && gold.evidence.date_text.some((form) => page.includes(normalise(form)))), `${where}: date anchor "${anchor}" is not on a page with the date`).toBe(true);
+      }
       readings.forEach((text, reading) => {
         if (gold.evidence.date_text.length > 0) expect(gold.evidence.date_text.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no date evidence`).toBe(true);
         for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
@@ -410,8 +423,11 @@ describe('InternBench corpus generator', () => {
   it('makes long documents genuinely information-dense', () => {
     const long = documents.filter((document) => document.categories.some((category) => /^pages_\d+$/.test(category)));
     expect(long.map((document) => document.pages).sort((a, b) => a - b)).toEqual(expect.arrayContaining([5, 10, 25, 50, 100]));
+    // A pages_N category is the bucket the page count falls in: 5, 10, 25,
+    // 50 or 100 pages and up to the next.
+    const bucket = (pages: number) => [100, 50, 25, 10, 5].find((floor) => pages >= floor);
     for (const document of long) {
-      expect(document.categories, document.id).toContain(`pages_${document.pages}`);
+      expect(document.categories, document.id).toContain(`pages_${bucket(document.pages)}`);
       const pages = generated.texts[document.id];
       expect(pages.length, document.id).toBe(document.pages);
       const content = withoutRunningLines(pages);
@@ -487,11 +503,18 @@ const ADDED_FOR_STRUCTURE = [
   'scan-mixed-middle-page', 'mixed-signature-region', 'scan-certificate-of-insurance', 'scan-bill-of-lading',
 ];
 
+/// The long documents added for phase 3, recorded by its live run.
+const ADDED_FOR_RETRIEVAL = [
+  'msa-effective-date-in-definitions-12p', 'industrial-lease-dated-in-schedule-25p', 'term-loan-parties-apart-40p',
+  'property-policy-declarations-mid-60p', 'watershed-monitoring-report-100p',
+] as const;
+
 describe('InternBench structure gold and the documents added for it', () => {
   const added = () => documents.filter((document) => ADDED_FOR_STRUCTURE.includes(document.id));
 
   it('adds twenty documents with full gold and a structure block, every one now recorded', () => {
     expect(added().length).toBe(20);
+    // Every document has been recorded: none waits for a recording.
     expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([]);
     for (const document of added()) {
       expect(document.structure, document.id).toBeDefined();
@@ -532,6 +555,34 @@ describe('InternBench structure gold and the documents added for it', () => {
     for (const document of withStructure.filter((entry) => entry.text_layer === 'scan')) {
       for (const route of Object.values(document.structure!.expected_routes ?? {})) expect(route, document.id).toBe('ocr');
     }
+  });
+
+  it('adds five long documents whose deciding evidence sits deep inside', () => {
+    const pagesWith = (document: BenchDocument, needle: string) => generated.texts[document.id].flatMap((page, index) => (normalise(page).includes(normalise(needle)) ? [index + 1] : []));
+    // Each document's page count, and the one page its date is printed on.
+    const expected: Record<(typeof ADDED_FOR_RETRIEVAL)[number], [number, number]> = {
+      'msa-effective-date-in-definitions-12p': [12, 9],
+      'industrial-lease-dated-in-schedule-25p': [25, 23],
+      'term-loan-parties-apart-40p': [40, 1],
+      'property-policy-declarations-mid-60p': [60, 30],
+      'watershed-monitoring-report-100p': [100, 88],
+    };
+    const phase3Roles = new Set(['client', 'contractor', 'employer', 'employee', 'buyer', 'seller', 'landlord', 'tenant', 'issuer', 'recipient', 'vendor', 'customer', 'borrower', 'lender', 'licensor', 'licensee', 'sender', 'addressee', 'other']);
+    for (const [id, [pages, datePage]] of Object.entries(expected)) {
+      const document = documents.find((entry) => entry.id === id)!;
+      expect(document.pages, id).toBe(pages);
+      expect(document.recording, id).toBeUndefined();
+      expect(document.structure, id).toBeDefined();
+      expect(document.gold.forbidden_dates.length, `${id}: traps`).toBeGreaterThan(0);
+      expect(document.gold.forbidden_parties.length, `${id}: names that are not parties`).toBeGreaterThan(0);
+      expect(pagesWith(document, document.gold.evidence.date_text[0]), id).toEqual([datePage]);
+      for (const party of document.gold.parties) {
+        expect(document.gold.party_roles.some((entry) => entry.name === party && phase3Roles.has(entry.role)), `${id}: ${party} has a role from the phase 3 list`).toBe(true);
+      }
+    }
+    // The loan's parties are printed thirty-nine pages apart, and nowhere between.
+    const loan = documents.find((entry) => entry.id === 'term-loan-parties-apart-40p')!;
+    for (const party of loan.gold.parties) expect(pagesWith(loan, party), party).toEqual([1, 40]);
   });
 
   it('refuses a labelled value printed under two occurrences of its label', () => {

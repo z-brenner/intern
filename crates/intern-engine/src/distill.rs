@@ -21,6 +21,9 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cues::{
+    BOILERPLATE_CUES, DATE_ROLE_CUES, PARTY_CUES, SIGNATURE_CUES, SUBJECT_CUES, TYPE_CUES,
+};
 use crate::domain::{DocumentSource, PageOrigin, ParserWarning};
 use crate::text::{
     contains_identifier, contains_money, count_cues, date_signal_count, digit_masked,
@@ -49,172 +52,6 @@ const MAX_OUTLINE_HEADINGS: usize = 40;
 /// outline most of the prompt and pushed it past the context window.
 const MAX_OUTLINE_CHARACTERS: usize = 1_500;
 const OUTLINE_CUT: &str = " | …";
-
-/// Cues that identify what kind of document this is.
-const TYPE_CUES: &[&str] = &[
-    "agreement",
-    "amendment",
-    "addendum",
-    "assignment",
-    "certificate",
-    "complaint",
-    "consent",
-    "contract",
-    "deed",
-    "engagement letter",
-    "invoice",
-    "lease",
-    "letter of intent",
-    "memorandum",
-    "motion",
-    "notice of",
-    "order form",
-    "packing slip",
-    "policy",
-    "purchase order",
-    "quote",
-    "receipt",
-    "release",
-    "resolution",
-    "settlement",
-    "statement of work",
-    "subpoena",
-    "term sheet",
-    "termination",
-    "waiver",
-    "work order",
-];
-
-/// Cues that identify who the document is between.
-const PARTY_CUES: &[&str] = &[
-    "by and between",
-    "by and among",
-    "between",
-    "among",
-    "this agreement is",
-    "the parties",
-    "attn:",
-    "attention:",
-    "to:",
-    "from:",
-    "client:",
-    "customer:",
-    "vendor:",
-    "supplier:",
-    "contractor:",
-    "employer:",
-    "employee:",
-    "landlord:",
-    "tenant:",
-    "bill to:",
-    "sold to:",
-    "remit to:",
-    "d/b/a",
-    " inc",
-    " llc",
-    " l.l.c",
-    " ltd",
-    " llp",
-    " plc",
-    " corporation",
-    " corp",
-    " company",
-    " gmbh",
-    " co.",
-];
-
-/// Cues that mark the block where a date's meaning is stated.
-const DATE_ROLE_CUES: &[&str] = &[
-    "effective date",
-    "effective as of",
-    "dated as of",
-    "made as of",
-    "entered into as of",
-    "commencement date",
-    "start date",
-    "end date",
-    "expiration date",
-    "termination date",
-    "terminates on",
-    "notice date",
-    "date of this notice",
-    "invoice date",
-    "issue date",
-    "issued on",
-    "date of issuance",
-    "filed on",
-    "filing date",
-    "executed on",
-    "signed on",
-    "date signed",
-    "as of the",
-    "amendment date",
-    "amended as of",
-];
-
-/// Cues that mark the subject or matter of the document.
-const SUBJECT_CUES: &[&str] = &[
-    "re:",
-    "subject:",
-    "matter:",
-    "project:",
-    "regarding",
-    "invoice no",
-    "invoice #",
-    "sow no",
-    "sow #",
-    "order no",
-    "case no",
-    "matter no",
-    "reference:",
-    "purpose",
-    "scope of work",
-    "services to be provided",
-    "deliverables",
-];
-
-/// Cues that mark a signature block.
-const SIGNATURE_CUES: &[&str] = &[
-    "in witness whereof",
-    "signature",
-    "signed:",
-    "by: ",
-    "name: ",
-    "title: ",
-    "printed name",
-    "authorized representative",
-    "/s/",
-];
-
-/// Clause headings whose bodies are near-identical across every contract and
-/// therefore carry almost no identifying information.
-const BOILERPLATE_CUES: &[&str] = &[
-    "governing law",
-    "severability",
-    "entire agreement",
-    "counterparts",
-    "force majeure",
-    "no waiver",
-    "waiver of",
-    "assignment and",
-    "successors and assigns",
-    "third-party beneficiaries",
-    "third party beneficiaries",
-    "headings",
-    "survival",
-    "notices shall be",
-    "dispute resolution",
-    "arbitration",
-    "limitation of liability",
-    "indemnification",
-    "compliance with law",
-    "further assurances",
-    "relationship of the parties",
-    "independent contractor status",
-    "no partnership",
-    "interpretation",
-    "construction",
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BlockKind {
@@ -445,7 +282,7 @@ pub(crate) fn is_heading_line(line: &str) -> bool {
     uppercase * 10 >= letter_count * 8
 }
 
-fn normalize_heading(value: &str) -> String {
+pub(crate) fn normalize_heading(value: &str) -> String {
     value
         .trim()
         .trim_start_matches('#')
@@ -648,6 +485,21 @@ fn duplicate_shapes(kind: BlockKind, body: &str) -> (String, Option<String>) {
     let tail = (kind == BlockKind::Body && length >= TAIL_MINIMUM)
         .then(|| masked.chars().skip(length - WINDOW).collect::<String>());
     (head, tail)
+}
+
+/// The keys selection deduplicates a block's text under: the exact text
+/// (clause number stripped, whitespace collapsed) and its digit-masked
+/// shapes ([`duplicate_shapes`]), the tail only for body text. The evidence
+/// retriever drops repeats by the same keys the digest does.
+pub(crate) fn duplicate_keys(text: &str, body: bool) -> (String, String, Option<String>) {
+    let stripped = strip_enumerators(text.trim());
+    let kind = if body {
+        BlockKind::Body
+    } else {
+        BlockKind::Table
+    };
+    let (head, tail) = duplicate_shapes(kind, stripped);
+    (collapse_whitespace(stripped), head, tail)
 }
 
 /// Lowercased with runs of whitespace collapsed, so a clause re-flowed onto

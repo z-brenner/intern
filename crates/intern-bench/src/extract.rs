@@ -19,10 +19,11 @@ use std::{
     time::Instant,
 };
 
-use intern_engine::{DigestBudget, DocumentSource, SupervisedWorker};
+use intern_engine::{DigestBudget, DocumentSource, SupervisedWorker, retrieve::RetrievalConfig};
 use serde_json::json;
 
 use crate::{
+    context::context_scores,
     gold::GoldDocument,
     live::{extract, micros_since, warm_up_worker},
     memory::{MemoryPeaks, MemorySampler},
@@ -60,6 +61,12 @@ pub const EXTRACTION_SCORES: &[&str] = &[
     "ocr_identifier_accuracy",
     "ocr_mean_confidence",
     "digest_recall",
+    "context_type_recall",
+    "context_date_recall",
+    "context_party_recall",
+    "context_recall",
+    "context_fact_recall",
+    "context_subject_recall",
 ];
 
 /// One document's record from what its extraction produced: the source the
@@ -69,6 +76,24 @@ pub fn extraction_record(
     extracted: Result<&DocumentSource, &str>,
     timings: Timings,
     memory: MemoryPeaks,
+) -> DocumentRecord {
+    extraction_record_with(
+        document,
+        extracted,
+        timings,
+        memory,
+        &RetrievalConfig::default(),
+    )
+}
+
+/// [`extraction_record`], with the `context_*` scores measured for
+/// `retrieval`.
+pub fn extraction_record_with(
+    document: &GoldDocument,
+    extracted: Result<&DocumentSource, &str>,
+    timings: Timings,
+    memory: MemoryPeaks,
+    retrieval: &RetrievalConfig,
 ) -> DocumentRecord {
     let (status, source, error) = match extracted {
         Ok(source) => (COMPLETED, Some(source), None),
@@ -85,6 +110,9 @@ pub fn extraction_record(
             .scores
             .insert("digest_recall".into(), json!(round(recall, 4)));
     }
+    let context = context_scores(document, source, retrieval);
+    record.scores.extend(context.scores);
+    record.timings.extend(context.timings);
     record.ocr = extraction.ocr;
     record.structure = extraction.structure;
     if let Some(source) = source {
@@ -97,6 +125,7 @@ pub fn run(
     documents: &[GoldDocument],
     corpus: &Path,
     options: &ExtractOptions,
+    retrieval: &RetrievalConfig,
 ) -> Result<ExtractRun, String> {
     let started = Instant::now();
     let worker = SupervisedWorker::new(&options.worker);
@@ -118,11 +147,12 @@ pub fn run(
             worker: worker_timings.as_ref(),
             ..Measured::default()
         });
-        let record = extraction_record(
+        let record = extraction_record_with(
             document,
             extracted.as_ref().map_err(|failure| failure.code.as_str()),
             timings,
             memory,
+            retrieval,
         );
         eprintln!(
             "[{}/{}] {} {} in {:.2} s{}",
@@ -177,6 +207,7 @@ mod tests {
                         "Saltmarsh Boat Club".to_owned(),
                         vec!["SALTMARSH BOAT CLUB".to_owned()],
                     )]),
+                    ..GoldEvidence::default()
                 },
                 ..GoldAnswer::default()
             },

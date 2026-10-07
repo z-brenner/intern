@@ -7,7 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::structure::PageLayout;
+use crate::retrieve::Tier;
+use crate::structure::{PageLayout, TextSource};
 
 /// Where a page's text came from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -149,7 +150,7 @@ impl DateRole {
 }
 
 /// How the defining parties attach to the document type in a filename.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PartyRelation {
     Between,
@@ -157,6 +158,7 @@ pub enum PartyRelation {
     With,
     From,
     To,
+    #[default]
     None,
 }
 
@@ -192,7 +194,15 @@ pub struct Evidence {
 }
 
 /// Raw, unvalidated model output.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+///
+/// A reply in the evidence pipeline ([`crate::engine::Pipeline::Evidence`])
+/// carries its facts and the evidence ids behind them in `facts`, and fills
+/// the fields above it from those facts so everything that reads a stored
+/// proposal keeps working: the type, date, role and party names as replied,
+/// the relation derived from the replied roles, no description (the engine
+/// composes it), and as evidence the text of the first unit each field
+/// cited.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ModelProposal {
     pub document_type: Option<String>,
     pub document_date: Option<String>,
@@ -203,6 +213,386 @@ pub struct ModelProposal {
     pub confidence: f32,
     pub needs_review: bool,
     pub evidence: Evidence,
+    /// The facts and evidence ids of an evidence-pipeline reply. Absent from
+    /// a digest-pipeline reply, and from every proposal stored before the
+    /// evidence pipeline existed.
+    /// Boxed: a proposal is cloned and stored often, and the digest
+    /// pipeline's never has facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Box<ModelFacts>>,
+}
+
+/// A semantic role a party plays in a document.
+///
+/// The model is never made to choose one: a role the evidence does not
+/// state is left out, and [`PartyRole::Other`] is the model saying the
+/// party has none of these. Only a role validation found support for
+/// decides how the parties read in a filename ([`crate::compose`]).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartyRole {
+    Client,
+    Contractor,
+    Employer,
+    Employee,
+    Buyer,
+    Seller,
+    Landlord,
+    Tenant,
+    Issuer,
+    Recipient,
+    Vendor,
+    Customer,
+    Borrower,
+    Lender,
+    Licensor,
+    Licensee,
+    Sender,
+    Addressee,
+    Other,
+}
+
+impl PartyRole {
+    pub const ALL: [Self; 19] = [
+        Self::Client,
+        Self::Contractor,
+        Self::Employer,
+        Self::Employee,
+        Self::Buyer,
+        Self::Seller,
+        Self::Landlord,
+        Self::Tenant,
+        Self::Issuer,
+        Self::Recipient,
+        Self::Vendor,
+        Self::Customer,
+        Self::Borrower,
+        Self::Lender,
+        Self::Licensor,
+        Self::Licensee,
+        Self::Sender,
+        Self::Addressee,
+        Self::Other,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Client => "client",
+            Self::Contractor => "contractor",
+            Self::Employer => "employer",
+            Self::Employee => "employee",
+            Self::Buyer => "buyer",
+            Self::Seller => "seller",
+            Self::Landlord => "landlord",
+            Self::Tenant => "tenant",
+            Self::Issuer => "issuer",
+            Self::Recipient => "recipient",
+            Self::Vendor => "vendor",
+            Self::Customer => "customer",
+            Self::Borrower => "borrower",
+            Self::Lender => "lender",
+            Self::Licensor => "licensor",
+            Self::Licensee => "licensee",
+            Self::Sender => "sender",
+            Self::Addressee => "addressee",
+            Self::Other => "other",
+        }
+    }
+
+    /// The role a reply named, or `None` for a word that is not one: an
+    /// unrecognised role is no role, never [`PartyRole::Other`].
+    pub fn parse(word: &str) -> Option<Self> {
+        let word = word.trim();
+        Self::ALL
+            .into_iter()
+            .find(|role| role.as_str().eq_ignore_ascii_case(word))
+    }
+}
+
+/// One party a reply named, with its role and the evidence ids it cited.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PartyFact {
+    pub name: String,
+    #[serde(default)]
+    pub role: Option<PartyRole>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+/// One key fact a reply named - an amount due, a term - with its evidence.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeyFact {
+    pub fact: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+/// What an evidence-pipeline reply says, each fact with the ids of the
+/// evidence units it cited.
+///
+/// Ids are always the units' stable ids ([`crate::index::EvidenceUnit::id`]),
+/// whatever the prompt showed: a prompt-local handle is mapped back before
+/// anything is stored. An id the prompt did not show is never evidence; it
+/// is kept in `unknown_evidence` for the record and counted.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelFacts {
+    #[serde(default)]
+    pub document_type: Option<String>,
+    #[serde(default)]
+    pub type_evidence: Vec<String>,
+    #[serde(default)]
+    pub document_date: Option<String>,
+    #[serde(default)]
+    pub date_role: Option<DateRole>,
+    #[serde(default)]
+    pub date_evidence: Vec<String>,
+    #[serde(default)]
+    pub parties: Vec<PartyFact>,
+    /// The subject or purpose: the work, goods, premises, loan, project or
+    /// matter, or the transaction the document records.
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub subject_evidence: Vec<String>,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    #[serde(default)]
+    pub identifier_evidence: Vec<String>,
+    #[serde(default)]
+    pub key_facts: Vec<KeyFact>,
+    /// The line a compact reply says states the main amount; the amount
+    /// itself is read from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub amount_evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unknown_evidence: Vec<String>,
+}
+
+impl ModelFacts {
+    /// Every evidence id the reply cited, field by field, in reply order.
+    pub fn cited_ids(&self) -> impl Iterator<Item = &str> {
+        self.type_evidence
+            .iter()
+            .chain(&self.date_evidence)
+            .chain(self.parties.iter().flat_map(|party| &party.evidence))
+            .chain(&self.subject_evidence)
+            .chain(&self.identifier_evidence)
+            .chain(self.key_facts.iter().flat_map(|fact| &fact.evidence))
+            .chain(&self.amount_evidence)
+            .map(String::as_str)
+    }
+}
+
+/// Where validation found a fact.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Support {
+    /// In a unit the reply cited for it.
+    Cited,
+    /// Not in a cited unit, but elsewhere in what the model was shown - the
+    /// support today's digest pipeline accepts.
+    Context,
+    /// Nowhere the model was shown.
+    Unsupported,
+    /// The reply did not state it.
+    #[default]
+    Absent,
+}
+
+impl Support {
+    pub fn is_absent(&self) -> bool {
+        *self == Self::Absent
+    }
+}
+
+/// A line of the document shown to a reviewer as the evidence for a fact:
+/// the text of a unit, dereferenced by the engine, never written by the
+/// model.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EvidenceRef {
+    pub id: String,
+    pub page: usize,
+    pub text: String,
+    #[serde(default)]
+    pub source: TextSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<u8>,
+}
+
+/// A party validation kept, with how its name and its role were supported.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ValidatedParty {
+    pub name: String,
+    /// The role the document supports: the reply's when its `role_support`
+    /// is [`Support::Cited`] or [`Support::Context`], else the
+    /// `document_role`, else none - an unsupported role is never kept.
+    /// Someone the document only copies in is [`PartyRole::Other`].
+    #[serde(default)]
+    pub role: Option<PartyRole>,
+    /// The role the reply gave, supported or not, for the record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_role: Option<PartyRole>,
+    /// How the document supports `proposed_role`.
+    #[serde(default)]
+    pub role_support: Support,
+    /// The role the document's own wording gives the party - `Resident:`
+    /// before the name, `("Tenant")` after it - when the reply gave it no
+    /// role the document supports. It decides the relation in the reply's
+    /// role's place; an unsupported role never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_role: Option<PartyRole>,
+    /// Named only on a "cc:" line: a bystander, never a filename's party.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub copied: bool,
+    /// A person who signs for an organisation that is a party - "Harriet
+    /// Voss, Vice President of People Operations, Northstar Lantern Works
+    /// LLC" - and so is not a party of their own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub signatory: bool,
+    #[serde(default)]
+    pub support: Support,
+    /// The stable ids of the units that state the name.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+}
+
+/// How well each fact of a reply was supported.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FactSupport {
+    #[serde(default)]
+    pub document_type: Support,
+    #[serde(default)]
+    pub document_date: Support,
+    #[serde(default)]
+    pub parties: Vec<Support>,
+    #[serde(default)]
+    pub subject: Support,
+    #[serde(default)]
+    pub identifier: Support,
+    #[serde(default)]
+    pub key_facts: Vec<Support>,
+    /// The amount a compact reply's cited line states.
+    #[serde(default, skip_serializing_if = "Support::is_absent")]
+    pub amount: Support,
+    /// Cited ids the prompt never showed. Never evidence.
+    #[serde(default)]
+    pub unknown_ids: u32,
+    /// Cited ids that were shown but do not state the fact they were cited
+    /// for. Never evidence.
+    #[serde(default)]
+    pub miscited_ids: u32,
+    /// Which view fired a date guard - `"context"`, `"document"` or
+    /// `"both"` - when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_scope: Option<String>,
+}
+
+impl FactSupport {
+    /// Facts the reply stated, and how many of them nothing supported.
+    pub fn proposed_and_unsupported(&self) -> (u32, u32) {
+        let mut proposed = 0;
+        let mut unsupported = 0;
+        let scalars = [
+            self.document_type,
+            self.document_date,
+            self.subject,
+            self.identifier,
+            self.amount,
+        ];
+        for support in scalars.iter().chain(&self.parties).chain(&self.key_facts) {
+            if *support != Support::Absent {
+                proposed += 1;
+            }
+            if *support == Support::Unsupported {
+                unsupported += 1;
+            }
+        }
+        (proposed, unsupported)
+    }
+
+    /// Accepted facts, and how many of them a cited unit supported.
+    pub fn accepted_and_cited(&self) -> (u32, u32) {
+        let mut accepted = 0;
+        let mut cited = 0;
+        let scalars = [
+            self.document_type,
+            self.document_date,
+            self.subject,
+            self.identifier,
+            self.amount,
+        ];
+        for support in scalars.iter().chain(&self.parties).chain(&self.key_facts) {
+            if matches!(support, Support::Cited | Support::Context) {
+                accepted += 1;
+            }
+            if *support == Support::Cited {
+                cited += 1;
+            }
+        }
+        (accepted, cited)
+    }
+}
+
+/// What a document is, for deciding how its parties read in a filename and
+/// how its description is put together ([`crate::compose`]).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentClass {
+    Agreement,
+    Amendment,
+    /// Issued by one party to another: invoices, receipts, orders, quotes,
+    /// statements.
+    Issued,
+    Notice,
+    Letter,
+    Email,
+    Form,
+    Record,
+    #[default]
+    Unknown,
+}
+
+impl DocumentClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Agreement => "agreement",
+            Self::Amendment => "amendment",
+            Self::Issued => "issued",
+            Self::Notice => "notice",
+            Self::Letter => "letter",
+            Self::Email => "email",
+            Self::Form => "form",
+            Self::Record => "record",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// The facts of an evidence-pipeline reply after validation, and the
+/// support each one had.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct ValidatedFacts {
+    /// Every party that was supported, an invoice's customer included;
+    /// [`ValidatedProposal::parties`] holds only the filename's.
+    #[serde(default)]
+    pub parties: Vec<ValidatedParty>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub identifier: Option<String>,
+    #[serde(default)]
+    pub key_facts: Vec<String>,
+    #[serde(default)]
+    pub document_class: DocumentClass,
+    /// Why the filename's parties read the way they do, for a reviewer
+    /// and for tuning: the rule of the relation table that applied.
+    #[serde(default)]
+    pub relation_basis: String,
+    #[serde(default)]
+    pub support: FactSupport,
+    /// The dereferenced lines behind the accepted facts.
+    #[serde(default)]
+    pub evidence: Vec<EvidenceRef>,
 }
 
 /// How probable the model found its own date and party tokens.
@@ -226,7 +616,7 @@ pub struct TokenConfidence {
 }
 
 /// Model output after evidence, format, and calibration checks.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ValidatedProposal {
     pub document_type: Option<String>,
     pub document_date: Option<String>,
@@ -315,6 +705,9 @@ pub struct ValidationOutcome {
     /// validation withheld from `proposal` is still here for a reviewer to
     /// be offered - a date the document did not state verbatim, say.
     pub candidate: ModelProposal,
+    /// The validated facts of an evidence-pipeline reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<ValidatedFacts>,
 }
 
 /// A composed filename and the collision suffix it needed.
@@ -363,6 +756,29 @@ pub struct AnalysisTelemetry {
     /// the local server does, a hosted service does not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelTimings>,
+    /// Building the evidence index (evidence pipeline only; `distill_micros`
+    /// then holds index and retrieval together). Like the three after it,
+    /// written only when it is not zero, so the digest pipeline's analyses
+    /// are written exactly as before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub index_micros: u64,
+    /// Choosing the evidence the prompt carries (evidence pipeline only).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retrieval_micros: u64,
+    /// Units in the evidence index.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub index_units: u32,
+    /// Units the prompt carried.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub context_units: u32,
+    /// How much of the document the prompt carried. Absent for the digest
+    /// pipeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tier: Option<Tier>,
+}
+
+fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 /// How the model server spent one request, in its own words.
@@ -421,6 +837,11 @@ pub struct DocumentAnalysis {
     /// did not ask for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_confidence: Option<TokenConfidence>,
+    /// The validated facts and their support, for an analysis made by the
+    /// evidence pipeline. Absent otherwise, and from analyses stored before
+    /// it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<ValidatedFacts>,
 }
 
 #[cfg(test)]
@@ -475,5 +896,148 @@ mod tests {
             serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),
             measured
         );
+    }
+
+    /// Everything the evidence pipeline added is optional: a proposal, an
+    /// outcome and an analysis stored before it read as they did, and a
+    /// digest-pipeline proposal is written exactly as before.
+    #[test]
+    fn analyses_stored_before_the_evidence_pipeline_still_read() {
+        let proposal: ModelProposal = serde_json::from_str(
+            r#"{"document_type":"Invoice","document_date":"2025-05-01","date_role":"invoice",
+                "parties":["Acme"],"party_relation":"from","description":"An invoice from Acme.",
+                "confidence":0.9,"needs_review":false,
+                "evidence":{"date":"Invoice Date: May 1, 2025","document_type":"INVOICE","parties":["Acme"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(proposal.facts, None);
+        let written = serde_json::to_value(&proposal).unwrap();
+        assert!(written.get("facts").is_none(), "{written}");
+
+        let analysis: DocumentAnalysis = serde_json::from_value(serde_json::json!({
+            "filename": "2025-05-01 Invoice from Acme.pdf",
+            "description": "An invoice from Acme.",
+            "status": "ready",
+            "reviewReasons": [],
+            "proposal": {"document_type": "Invoice", "document_date": "2025-05-01",
+                "date_role": "invoice", "parties": ["Acme"], "party_relation": "from",
+                "description": "An invoice from Acme.", "confidence": 0.9,
+                "evidence": {"date": null, "document_type": null, "parties": []}},
+            "telemetry": {"sourceCharacters": 1200, "digestCharacters": 900,
+                "compressionRatio": 0.75, "distillMicros": 310, "inferenceMillis": 14000},
+            "modelProposal": written,
+        }))
+        .unwrap();
+        assert_eq!(analysis.facts, None);
+        assert_eq!(analysis.telemetry.context_tier, None);
+        assert_eq!(analysis.telemetry.index_units, 0);
+        let rewritten = serde_json::to_value(&analysis).unwrap();
+        assert!(rewritten.get("facts").is_none());
+        for key in [
+            "contextTier",
+            "indexMicros",
+            "retrievalMicros",
+            "indexUnits",
+            "contextUnits",
+        ] {
+            assert!(rewritten["telemetry"].get(key).is_none(), "{key}");
+        }
+
+        let outcome: ValidationOutcome = serde_json::from_value(serde_json::json!({
+            "proposal": analysis.proposal,
+            "status": "ready",
+            "reasons": [],
+            "candidate": proposal,
+        }))
+        .unwrap();
+        assert_eq!(outcome.facts, None);
+    }
+
+    /// An evidence-pipeline analysis round-trips, its facts and support
+    /// included, and a reader that knows only version 1 still reads it.
+    #[test]
+    fn an_evidence_analysis_round_trips() {
+        let facts = ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec!["p1.b2".into()],
+            parties: vec![PartyFact {
+                name: "Acme".into(),
+                role: Some(PartyRole::Issuer),
+                evidence: vec!["p1.b1".into()],
+            }],
+            unknown_evidence: vec!["p9.b9".into()],
+            ..ModelFacts::default()
+        };
+        let proposal = ModelProposal {
+            facts: Some(Box::new(facts.clone())),
+            ..ModelProposal::default()
+        };
+        let read: ModelProposal =
+            serde_json::from_value(serde_json::to_value(&proposal).unwrap()).unwrap();
+        assert_eq!(read, proposal);
+        let validated = ValidatedFacts {
+            parties: vec![ValidatedParty {
+                name: "Acme".into(),
+                role: Some(PartyRole::Issuer),
+                proposed_role: None,
+                role_support: Support::Cited,
+                support: Support::Cited,
+                evidence: vec!["p1.b1".into()],
+                document_role: None,
+                copied: false,
+                signatory: false,
+            }],
+            document_class: DocumentClass::Issued,
+            support: FactSupport {
+                document_type: Support::Context,
+                unknown_ids: 1,
+                ..FactSupport::default()
+            },
+            ..ValidatedFacts::default()
+        };
+        let telemetry = AnalysisTelemetry {
+            index_units: 40,
+            context_units: 12,
+            context_tier: Some(Tier::Normal),
+            ..AnalysisTelemetry::default()
+        };
+        let written = serde_json::to_value(telemetry).unwrap();
+        assert_eq!(written["contextTier"], "normal");
+        assert_eq!(
+            serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),
+            telemetry
+        );
+        let written = serde_json::to_value(&validated).unwrap();
+        assert_eq!(written["support"]["document_type"], "context");
+        assert_eq!(written["parties"][0]["role"], "issuer");
+        assert_eq!(
+            serde_json::from_value::<ValidatedFacts>(written).unwrap(),
+            validated
+        );
+        /// A version-1 reader: the fields it knows, nothing refused.
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct OldProposal {
+            document_type: Option<String>,
+            parties: Vec<String>,
+            confidence: f32,
+        }
+        let old: OldProposal =
+            serde_json::from_value(serde_json::to_value(&proposal).unwrap()).unwrap();
+        assert_eq!(old.document_type, None);
+    }
+
+    #[test]
+    fn a_role_is_read_only_from_its_own_words() {
+        assert_eq!(PartyRole::parse("Tenant"), Some(PartyRole::Tenant));
+        assert_eq!(PartyRole::parse(" other "), Some(PartyRole::Other));
+        assert_eq!(PartyRole::parse("resident"), None);
+        for role in PartyRole::ALL {
+            assert_eq!(PartyRole::parse(role.as_str()), Some(role));
+            assert_eq!(
+                serde_json::to_value(role).unwrap(),
+                serde_json::json!(role.as_str())
+            );
+        }
     }
 }

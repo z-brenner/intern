@@ -18,12 +18,18 @@
 //!   person, [`compare`] diffs two reports, and [`baseline`] gates a run.
 //! * [`merge`] replaces or adds documents in a recording, so a few can be
 //!   recorded again without the whole corpus.
+//! * [`context`] measures whether the gold's evidence reaches the context
+//!   evidence retrieval builds, and sweeps retrieval configurations over
+//!   recorded sources without a model.
+//! * [`pipeline`] configures the engine a run uses - the digest or the
+//!   evidence pipeline - and measures what only the evidence pipeline can.
 
 #![deny(unsafe_code)]
 
 pub mod baseline;
 pub mod claims;
 pub mod compare;
+pub mod context;
 pub mod extract;
 pub mod gold;
 pub mod live;
@@ -32,6 +38,7 @@ pub mod markdown;
 pub mod memory;
 pub mod merge;
 pub mod ocr;
+pub mod pipeline;
 pub mod record;
 pub mod recording;
 pub mod replay;

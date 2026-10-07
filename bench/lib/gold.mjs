@@ -8,10 +8,16 @@ export const TEXT_LAYERS = ['native', 'scan', 'mixed', 'ocr_corrupted', 'office'
 export const DATE_ROLES = ['effective', 'execution', 'invoice', 'notice', 'termination', 'amendment', 'filing', 'issuance', 'other'];
 export const RELATIONS = ['between', 'for', 'with', 'from', 'to', 'none'];
 export const READINESS = ['ready', 'needs_review', 'either'];
+/// The scorer reads `issuer`, `sender`, `subject`, `recipient` and
+/// `counterparty` to judge the connecting word; the others say what a party
+/// is. `contractor`, `vendor` and `addressee` come from the phase 3 role
+/// list, which also has `client`, `employer`, `employee`, `buyer`,
+/// `seller`, `landlord`, `tenant`, `issuer`, `recipient`, `customer`,
+/// `borrower`, `lender`, `licensor`, `licensee`, `sender` and `other`.
 export const PARTY_ROLES = [
   'issuer', 'customer', 'recipient', 'subject', 'sender', 'counterparty', 'buyer', 'seller', 'lender', 'borrower',
   'landlord', 'tenant', 'employer', 'employee', 'patient', 'payer', 'provider', 'client', 'firm', 'fund', 'investor',
-  'licensor', 'licensee', 'assignor', 'assignee', 'other',
+  'licensor', 'licensee', 'assignor', 'assignee', 'other', 'contractor', 'vendor', 'addressee',
 ];
 export const CATEGORIES = [
   'simple_digital', 'complex_pdf', 'multi_column', 'form', 'invoice', 'table', 'statement', 'purchase_order', 'contract',
@@ -51,6 +57,9 @@ export function gold({
   readiness,
   dateText = [],
   partyText = null,
+  dateAnchor = null,
+  typeText = [],
+  identifierText = [],
 }) {
   check(type === null || (typeof type === 'string' && type.length > 0), 'document_type must be a string or null');
   // A trap computed from data (the largest deposit, a milestone) can land on
@@ -77,6 +86,13 @@ export function gold({
   check(date === null || dateText.length > 0, 'a dated document needs date evidence');
   const evidenceParties = partyText ?? Object.fromEntries(parties.map((name) => [name, [name]]));
   for (const name of parties) check(evidenceParties[name]?.length, `no evidence for party ${name}`);
+  check(dateAnchor === null || (date !== null && dateAnchor.length > 0), 'a date anchor needs a dated document');
+  // The optional evidence is written only when given, so a document without
+  // it keeps exactly the gold it had.
+  const evidence = { date_text: dateText, party_text: evidenceParties };
+  if (dateAnchor !== null) evidence.date_anchor = dateAnchor;
+  if (typeText.length) evidence.type_text = typeText;
+  if (identifierText.length) evidence.identifier_text = identifierText;
   return {
     document_type: type,
     acceptable_types: acceptableTypes,
@@ -93,7 +109,7 @@ export function gold({
     description_forbidden: forbiddenFacts,
     subject_terms: subjectTerms,
     expected_readiness: readiness,
-    evidence: { date_text: dateText, party_text: evidenceParties },
+    evidence,
   };
 }
 

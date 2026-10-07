@@ -9,19 +9,35 @@ Everything below runs locally. The engine speaks only to `127.0.0.1`.
 ## The stages
 
 ```text
-DocumentSource ─▶ distill ─▶ prompt ─▶ one local inference ─▶ validate ─▶ compose name
+DocumentSource ─▶ index ─▶ retrieve ─▶ prompt ─▶ one local inference ─▶ validate facts ─▶ compose name
 ```
 
-There are five stages and no decision tree. Each has one job:
+There are six stages and no decision tree. Each has one job:
 
 | Stage | Input | Output | Where |
 | --- | --- | --- | --- |
-| Extract | a file path | pages of text or Markdown | `intern-worker` (separate process) |
-| Distill | pages | a verbatim digest under a character budget | `intern-engine::distill` |
-| Prompt | digest | one user turn plus a GBNF grammar | `intern-engine::prompt` |
-| Infer | prompt | one JSON reply | `intern-engine::client` + llama.cpp |
-| Validate | reply + digest | checked facts and review reasons | `intern-engine::validate` |
-| Name | checked facts | a Windows-safe filename | `intern-engine::naming` |
+| Extract | a file path | pages of text and their layout blocks | `intern-worker` (separate process) |
+| Index | pages and blocks | evidence units with stable ids and features | `intern-engine::index` |
+| Retrieve | units | the units the prompt carries, within the context | `intern-engine::retrieve` |
+| Prompt | units | the evidence lines, fixed instructions in the system turn, a GBNF grammar | `intern-engine::prompt` |
+| Infer | prompt | facts, each with the id of its line | `intern-engine::client` + llama.cpp |
+| Validate | facts + document | supported facts and review reasons | `intern-engine::facts` |
+| Compose | supported facts | a Windows-safe filename and a description | `intern-engine::compose`, `intern-engine::naming` |
+
+This is the evidence pipeline, the default since phase 3. The model writes
+facts and cites the lines that state them; it never writes the filename or
+the description, which are composed from the facts validation accepts.
+[`evidence-retrieval.md`](evidence-retrieval.md) covers the index and
+retrieval, [`evidence-pipeline.md`](evidence-pipeline.md) the reply, its
+validation and composition, and `docs/pipeline-bottlenecks.md` (Phase 3:
+measured) what it changed.
+
+The digest pipeline before it is still in the engine: a hosted model reads
+through it (see [A hosted model](#a-hosted-model)), and `--pipeline digest`
+measures it. It distills the whole document into a verbatim digest under a
+character budget, asks for one reply that quotes its evidence and writes the
+description, and checks that reply against the digest. The sections on
+distillation, the prompt and validation below describe it.
 
 `intern-queue` decides *which* document runs and what happens to the result;
 `intern-core` makes the state and the file operations survive a crash. Neither
@@ -212,6 +228,9 @@ shows that as a whole percentage. A 200-page scan used to sit at 0% until it
 was done.
 
 ## Distillation
+
+This section and the next two describe the digest pipeline, which a hosted
+model reads through.
 
 The model has a context window and a CPU budget; a 30,000-character contract
 has neither. The old pipeline solved this by sending the first 14,000 characters
@@ -784,7 +803,11 @@ The inference is local by default and the local server is the product. The
 same position in the pipeline can be filled by a hosted model behind an API
 key: the engine's `Proposer` is the one seam, the local client and the hosted
 client both implement it, and the distillation, prompt, validation, and naming
-on either side do not know which answered.
+on either side do not know which answered. A hosted model reads through the
+digest pipeline (`HostedClient::engine`): the evidence pipeline the local
+model reads by default was measured and tuned on the local model alone, and
+a hosted model keeps the pipeline it was checked against until it is
+measured too.
 
 The hosted client speaks two wire formats — Anthropic's Messages API, and the
 chat-completions shape OpenAI defined and most providers and local servers
@@ -938,9 +961,20 @@ medians of 12.4, 16.6, 19.6, and 27.7 seconds depending on what else was
 competing for the eight threads, and any single figure from that spread is noise.
 
 Almost all of the time is the model, and on short documents most of that is
-*generation*, not reading: the structured reply is about 240 tokens at 17.5
-tokens per second. The previous pipeline and model took 23.6 s on the median
-document and 115 s on its worst, with 4,215 MB of peak memory.
+*generation*, not reading: the digest pipeline's structured reply was about
+240 tokens at 17.5 tokens per second. The previous pipeline and model took
+23.6 s on the median document and 115 s on its worst, with 4,215 MB of peak
+memory.
+
+The evidence pipeline writes facts only, as short arrays with the id of
+each fact's line: 87 generated tokens on the median InternBench document
+against the digest pipeline's 141, measured on a 4-core Xeon at 4 threads.
+Its fixed instructions are the system turn, the same for every document, so
+llama-server reads them once and reuses them from its cache (477 cached
+tokens a request, against 46 when they opened the user turn). On that
+machine the median document took 19.2 s end to end against 38.9 s, and the
+95th percentile 33.9 s against 96.0 s; `docs/pipeline-bottlenecks.md`
+(Phase 3: measured) has the breakdown.
 
 `docs/qa/model-evaluation.json` records one full-corpus evaluation - all 18
 scorable fixtures, real inference, the pinned model verified by size and digest -

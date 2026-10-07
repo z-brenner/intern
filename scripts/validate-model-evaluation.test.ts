@@ -15,7 +15,7 @@ function metric(rate: number, correct = Math.round(rate * 10), total = 10) {
 function report(overrides: Record<string, unknown> = {}, summaryOverrides: Record<string, unknown> = {}) {
   return {
     schema_version: 3,
-    pipeline: 'new',
+    pipeline: 'evidence',
     model_id: 'intern-local',
     budget_characters: 12_000,
     summary: {
@@ -66,7 +66,7 @@ describe('model evaluation gate', () => {
       report({
         records: [
           { file: 'scanned-lease.pdf', status: 'completed', filename: 'Lease Agreement with Orion Glass Studio Inc.pdf', scores: { ready: false, date_correct: false } },
-          { file: 'statement-of-work.pdf', status: 'completed', filename: '2026-04-01 Statement of Work.pdf', scores: { ready: true, date_correct: true } },
+          { file: 'statement-of-work.pdf', status: 'completed', filename: '2026-04-01 Statement of Work.pdf', scores: { ready: true, date_correct: true, description_specific: true } },
         ],
       }),
     );
@@ -131,8 +131,25 @@ describe('model evaluation gate', () => {
     expect(GATES.descriptionSpecific).toBe(0.9);
   });
 
-  it('refuses evidence produced by the superseded pipeline', () => {
+  it('refuses evidence produced by a pipeline that is not the shipping one', () => {
     expect(() => validateEvaluation(report({ pipeline: 'legacy' }))).toThrow(/shipping pipeline/);
+    expect(() => validateEvaluation(report({ pipeline: 'new' }))).toThrow(/shipping pipeline/);
+  });
+
+  it('holds the descriptions of the documents Intern named to the specificity gate', () => {
+    const named = (file: string, specific: boolean) => ({
+      file, status: 'completed', filename: `${file}.pdf`, scores: { ready: true, date_correct: true, description_specific: specific },
+    });
+    const reviewed = (file: string) => ({
+      file, status: 'completed', filename: `${file}.pdf`, scores: { ready: false, description_specific: false },
+    });
+    // A short, honest description of a document sent to review does not block.
+    const honest = validateEvaluation(report({ records: [named('a', true), reviewed('b')] }));
+    expect(honest.accepted).toBe(true);
+    // A named document described vaguely does.
+    const vague = validateEvaluation(report({ records: [named('a', true), named('c', false)] }));
+    expect(vague.accepted).toBe(false);
+    expect(vague.failures.join(' ')).toContain('description_specific');
   });
 
   it('refuses a proposal that is a path rather than a filename', () => {

@@ -153,13 +153,40 @@ pub fn validate_semantic_probe(
     analysis: &DocumentAnalysis,
 ) -> ModelResult<()> {
     let marker = probe.expected_marker.to_lowercase();
-    let read_the_document = analysis
-        .proposal
-        .parties
-        .iter()
-        .chain(std::iter::once(&analysis.description))
-        .chain(analysis.proposal.evidence.parties.iter())
-        .any(|value| value.to_lowercase().contains(&marker));
+    let names_marker = |values: &mut dyn Iterator<Item = &String>| {
+        let mut found = false;
+        for value in values {
+            found |= value.to_lowercase().contains(&marker);
+        }
+        found
+    };
+    // The model itself must have named what the document says, as a party
+    // or in its description: the evidence pipeline reads an addressee from
+    // the document's "To:" field when a reply names none, and quotes the
+    // lines a reply cites, neither of which proves the model read anything.
+    let the_model_named_it = analysis.model_proposal.as_ref().is_none_or(|reply| {
+        names_marker(
+            &mut reply
+                .parties
+                .iter()
+                .chain(std::iter::once(&reply.description))
+                .chain(
+                    reply
+                        .facts
+                        .iter()
+                        .flat_map(|facts| facts.parties.iter().map(|party| &party.name)),
+                ),
+        )
+    });
+    let read_the_document = the_model_named_it
+        && names_marker(
+            &mut analysis
+                .proposal
+                .parties
+                .iter()
+                .chain(std::iter::once(&analysis.description))
+                .chain(analysis.proposal.evidence.parties.iter()),
+        );
     let found_the_date = analysis.proposal.document_date.as_deref() == Some("2024-01-02");
     if read_the_document && found_the_date {
         Ok(())

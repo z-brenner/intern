@@ -23,23 +23,29 @@
 #![deny(unsafe_code)]
 
 pub mod client;
+pub mod compose;
+pub mod cues;
 pub mod distill;
 pub mod domain;
 pub mod download;
 pub mod engine;
 pub mod error;
 pub mod evidence;
+pub mod facts;
 pub mod fingerprint;
 pub mod hosted;
 pub mod house_style;
+pub mod index;
 pub mod infer;
 pub mod legacy;
 pub mod logs;
 pub mod manifest;
 pub mod naming;
 pub mod own_names;
+pub(crate) mod phrases;
 mod process;
 pub mod prompt;
+pub mod retrieve;
 pub mod server;
 pub mod setup;
 pub mod structure;
@@ -49,10 +55,10 @@ pub mod text;
 pub mod validate;
 pub mod worker;
 
-pub use client::{ModelClient, ModelRequest, Proposer, ProposerReply};
+pub use client::{EvidenceHandles, ModelClient, ModelRequest, Proposer, ProposerReply};
 pub use distill::{DigestBudget, DocumentDigest, distill, source_from_text};
 pub use domain::*;
-pub use engine::{Engine, estimated_prompt_tokens};
+pub use engine::{Engine, Pipeline, PreparedEvidence, estimated_prompt_tokens};
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
@@ -70,4 +76,10 @@ pub use worker::{
 /// Semantic version of the engine's input/output contract.
 ///
 /// Callers that persist [`DocumentAnalysis`] should record this alongside it.
-pub const ENGINE_CONTRACT_VERSION: u32 = 1;
+///
+/// 2 added, without removing anything, the evidence pipeline's facts
+/// ([`ModelProposal::facts`], [`DocumentAnalysis::facts`]) and the index and
+/// retrieval figures in [`AnalysisTelemetry`]. Every addition reads as absent
+/// from an analysis stored under 1, and none refuses a field it does not
+/// know, so a version-1 reader still reads a version-2 analysis.
+pub const ENGINE_CONTRACT_VERSION: u32 = 2;

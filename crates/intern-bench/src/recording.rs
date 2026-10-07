@@ -10,6 +10,7 @@
 //!   "model": {"id", "path", "size_bytes", "sha256"},   // what --model-path named
 //!   "context_tokens": 8192,                              // the proposer's, so replay fits prompts alike
 //!   "budget_characters": 12000,
+//!   "pipeline": "evidence", "retrieval": "...", "prompt_version": "...",  // evidence pipeline only
 //!   "machine": {...}, "git_commit": "...", "worker": "...", "note": "...",
 //!   "documents": [{
 //!     "id", "file",
@@ -73,6 +74,10 @@ pub struct Recording {
     #[serde(default)]
     pub context_tokens: Option<usize>,
     pub budget_characters: usize,
+    /// The engine's pipeline, and for the evidence pipeline its retrieval
+    /// and prompt; nothing for the digest pipeline.
+    #[serde(flatten)]
+    pub engine: crate::pipeline::PipelineHeader,
     #[serde(default)]
     pub machine: MachineInfo,
     #[serde(default)]
@@ -102,7 +107,10 @@ impl Recording {
 
     /// Writes the recording, every parsed source's layouts compacted (see
     /// [`compact_layouts`]), whether the recording was made live or merged
-    /// from older ones.
+    /// from older ones: the header indented, and each document on a line
+    /// of its own. Indenting a document's pages and layouts nearly tripled
+    /// the file - a hundred-page report's blocks are nested six deep - and
+    /// a line per document still shows a review which documents changed.
     pub fn save(&self, path: &Path) -> Result<(), String> {
         let mut compacted = self.clone();
         for document in &mut compacted.documents {
@@ -110,9 +118,8 @@ impl Recording {
                 *source = compact_layouts(std::mem::take(source));
             }
         }
-        let rendered = serde_json::to_string_pretty(&compacted)
-            .map_err(|error| format!("cannot render recording: {error}"))?;
-        std::fs::write(path, rendered + "\n")
+        let rendered = render(&compacted)?;
+        std::fs::write(path, rendered)
             .map_err(|error| format!("cannot write recording {}: {error}", path.display()))
     }
 
@@ -195,6 +202,31 @@ impl RecordedReply {
             Self::Failed { code } => Err(EngineError::new(*code, "recorded failure")),
         }
     }
+}
+
+/// The recording as [`Recording::save`] writes it: the header indented and
+/// each document compact on its own line.
+fn render(recording: &Recording) -> Result<String, String> {
+    let failed = |error: serde_json::Error| format!("cannot render recording: {error}");
+    let header = Recording {
+        documents: Vec::new(),
+        ..recording.clone()
+    };
+    let header = serde_json::to_string_pretty(&header).map_err(failed)?;
+    let Some(opening) = header.strip_suffix("\"documents\": []\n}") else {
+        return Err("cannot render recording: the documents are not its last field".to_owned());
+    };
+    let mut rendered = format!("{opening}\"documents\": [");
+    for (at, document) in recording.documents.iter().enumerate() {
+        rendered.push_str(if at == 0 { "\n    " } else { ",\n    " });
+        rendered.push_str(&serde_json::to_string(document).map_err(failed)?);
+    }
+    rendered.push_str(if recording.documents.is_empty() {
+        "]\n}\n"
+    } else {
+        "\n  ]\n}\n"
+    });
+    Ok(rendered)
 }
 
 /// A rendered page image is a signal that a page could not be read, never an
@@ -462,10 +494,62 @@ mod tests {
     }
 
     #[test]
-    fn the_lookup_answers_recorded_prompts_and_counts_the_rest() {
-        let request = ModelRequest {
-            prompt: "a prompt".into(),
+    fn a_saved_recording_puts_each_document_on_a_line_of_its_own_and_reads_back() {
+        let document = |id: &str| RecordedDocument {
+            id: id.to_owned(),
+            file: format!("{id}.pdf"),
+            sha256: None,
+            extraction: RecordedExtraction::Failed {
+                code: "PDF_ENCRYPTED".into(),
+            },
+            exchanges: Vec::new(),
+            timings: Timings::default(),
+            memory: MemoryPeaks::default(),
         };
+        let recording = Recording {
+            schema_version: RECORDING_SCHEMA_VERSION,
+            suite: "internbench".into(),
+            recorded_at: String::new(),
+            model: ModelInfo::default(),
+            context_tokens: Some(8_192),
+            budget_characters: 12_000,
+            engine: crate::pipeline::EngineSettings::default().header(),
+            machine: MachineInfo::default(),
+            git_commit: Some("abc".into()),
+            worker: None,
+            note: "a note".into(),
+            documents: vec![document("alpha"), document("beta")],
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("recording.json");
+        recording.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines = text.lines().collect::<Vec<_>>();
+        assert!(lines.contains(&"  \"note\": \"a note\","), "{text}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("    {\"id\":"))
+                .count(),
+            2,
+            "{text}"
+        );
+        let (read, _) = Recording::load(&path).unwrap();
+        assert_eq!(read.documents.len(), 2);
+        assert_eq!(read.documents[1].id, "beta");
+        assert_eq!(read.engine, recording.engine);
+        assert_eq!(read.note, "a note");
+        let empty = Recording {
+            documents: Vec::new(),
+            ..recording
+        };
+        empty.save(&path).unwrap();
+        assert!(Recording::load(&path).unwrap().0.documents.is_empty());
+    }
+
+    #[test]
+    fn the_lookup_answers_recorded_prompts_and_counts_the_rest() {
+        let request = ModelRequest::new("a prompt");
         let recorded = Exchange {
             prompt_sha256: request.sha256(),
             prompt_characters: 8,
@@ -483,9 +567,7 @@ mod tests {
             EngineErrorCode::ModelReplyTruncated
         );
         assert!(misses.lock().unwrap().is_empty());
-        let other = ModelRequest {
-            prompt: "another prompt".into(),
-        };
+        let other = ModelRequest::new("another prompt");
         assert!(lookup.propose_measured(&other).is_err());
         assert_eq!(*misses.lock().unwrap(), vec![other.sha256()]);
         assert_eq!(lookup.context_tokens(), Some(8_192));

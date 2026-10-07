@@ -11,10 +11,17 @@
 //!                  [--output report.json] [--markdown report.md]
 //!                  [--baseline bench/baseline.json] [--write-baseline bench/baseline.json]
 //!                  [--latency-gate 1.5]
+//!                  [--pipeline evidence|digest] [--id-style stable|ordinal]
+//!                  [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
 //! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
 //!                  [--gold bench/gold.json] [--only id,id] [--note TEXT]
+//! intern-bench retrieval --recording bench/recording.json[,more.json] --gold bench/gold.json
+//!                  [--fixtures fixtures/corpus-recording.json --expected fixtures/expected.json]
+//!                  [--corpus bench/generated --worker PATH]
+//!                  [--config a.json,b.json] [--sweep] [--only id,id]
+//!                  [--output sweep.json] [--markdown sweep.md] [--dump DIR]
 //! ```
 //!
 //! Exit status: 0 when the run scored; 2 when it regressed against the
@@ -37,13 +44,20 @@ const USAGE: &str = "usage:
                    | --extract-only --worker PATH [--no-warmup])
                    [--only id,id] [--manifest MANIFEST.json] [--output REPORT.json] [--markdown REPORT.md]
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
+                   [--pipeline evidence|digest] [--id-style stable|ordinal]
+                   [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
-                   [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]";
+                   [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]
+  intern-bench retrieval --recording A.json[,B.json] --gold GOLD.json
+                   [--fixtures RECORDING.json --expected EXPECTED.json]
+                   [--corpus DIR --worker PATH]
+                   [--config C.json[,D.json]] [--sweep] [--only id,id]
+                   [--output SWEEP.json] [--markdown SWEEP.md] [--dump DIR]";
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only"];
+const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only", "sweep"];
 
 const RUN_KEYS: &[&str] = &[
     "corpus",
@@ -67,6 +81,10 @@ const RUN_KEYS: &[&str] = &[
     "baseline",
     "write-baseline",
     "latency-gate",
+    "pipeline",
+    "id-style",
+    "retrieval-tier",
+    "context-tokens",
 ];
 
 fn main() {
@@ -115,6 +133,64 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                 values.get("note").map(String::as_str),
             )
         }
+        "retrieval" => {
+            let values = parse(
+                rest,
+                &[
+                    "recording",
+                    "gold",
+                    "fixtures",
+                    "expected",
+                    "corpus",
+                    "worker",
+                    "config",
+                    "sweep",
+                    "only",
+                    "output",
+                    "markdown",
+                    "dump",
+                ],
+            )?;
+            let paths = |key: &str| -> Vec<PathBuf> {
+                id_list(values.get(key))
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect()
+            };
+            let fixtures = match (values.get("fixtures"), values.get("expected")) {
+                (Some(recording), Some(expected)) => {
+                    Some((PathBuf::from(recording), PathBuf::from(expected)))
+                }
+                (None, None) => None,
+                _ => return Err("--fixtures and --expected go together".to_owned()),
+            };
+            let extract = match (values.get("corpus"), values.get("worker")) {
+                (Some(corpus), Some(worker)) => {
+                    Some((PathBuf::from(corpus), PathBuf::from(worker)))
+                }
+                (None, None) => None,
+                _ => return Err("--corpus and --worker go together".to_owned()),
+            };
+            if !values.contains_key("recording") && fixtures.is_none() && extract.is_none() {
+                return Err(format!(
+                    "missing --recording, --fixtures or --corpus\n{USAGE}"
+                ));
+            }
+            intern_bench::context::retrieval_command(&intern_bench::context::RetrievalOptions {
+                recordings: paths("recording"),
+                gold: values
+                    .get("gold")
+                    .map_or_else(|| PathBuf::from("bench/gold.json"), PathBuf::from),
+                fixtures,
+                extract,
+                configs: paths("config"),
+                sweep: values.contains_key("sweep"),
+                only: id_list(values.get("only")),
+                output: values.get("output").map(PathBuf::from),
+                markdown: values.get("markdown").map(PathBuf::from),
+                dump: values.get("dump").map(PathBuf::from),
+            })
+        }
         "--help" | "-h" | "help" => {
             println!("{USAGE}");
             Ok(0)
@@ -160,6 +236,8 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "note",
                 "server-pid",
                 "allow-stale",
+                "pipeline",
+                "context-tokens",
             ],
             "--extract-only",
         )?;
@@ -217,6 +295,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
             })
             .transpose()?,
         mode,
+        engine: intern_bench::pipeline::EngineSettings::parse(values)?,
     })
 }
 

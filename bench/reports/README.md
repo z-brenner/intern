@@ -9,6 +9,50 @@ Each pair is one report: the Markdown is for reading, the JSON for
 | `2026-10-07-phase2-before` | All 72 documents through the reader as it was before document routing and PP-OCR (Tesseract, page text as the PDF gives it), recorded live and replayed against the current gold and scorer. |
 | `2026-10-07-phase2-after` | The same 72 documents through the routing reader with PP-OCR, replayed from today's `bench/recording.json`, the recording of record since. |
 | `2026-10-07-phase2-compare` | `intern-bench compare` of the two: what document routing, layout and PP-OCR changed, document by document. |
+| `2026-10-07-phase3-before` | All 77 documents through the digest pipeline, as Intern read them before phase 3: the phase 2 recording of record plus the five long documents, replayed with `--pipeline digest`. |
+| `2026-10-07-phase3-after` | The same 77 documents through the evidence pipeline, the default since, replayed from today's `bench/recording.json`. |
+| `2026-10-07-phase3-compare` | `intern-bench compare` of the two, with the phase 3 scorecard: what retrieval, the facts reply and validation changed, document by document. |
+
+## The phase 3 runs
+
+"Before" is the digest pipeline's recording: the phase 2 recording of
+record (72 documents, recorded live at `bd48e98`, eight scans again at
+`ad6e661`) and the five long documents added for retrieval, recorded live
+at `22520ea`. "After" is the evidence pipeline's recording of record, all
+77 documents recorded live at `902c7fe` with the stable ids, the compact
+reply and its instructions in the system turn. Every recording was made on
+the same otherwise idle 4-core Xeon, the pinned model at 4 threads with an
+8,192-token context, with the routing reader and PP-OCR. Both were replayed
+at `50bc017` with the same scorer and gold.
+
+The phase 3 scorecard, from the two reports (replayed scores; timings and
+tokens as recorded on that machine, which `compare` does not compare
+between replays):
+
+| Figure | Digest (before) | Evidence (after) |
+| --- | ---: | ---: |
+| Filename, all 77 | 26/77 (33.8%) | 54/77 (70.1%) |
+| Long-document filename accuracy (10+ pages, 12) | 66.7% | 75.0% |
+| Complex-document filename accuracy (56) | 33.9% | 73.2% |
+| Description completeness | 53.5% | 53.7% |
+| Unsupported-fact rate (documents with an `*_UNSUPPORTED` reason) | 27.3% | 11.7% |
+| Unsupported description claims | 1 of 264 | 0 of 290 |
+| Review rate | 32.9% | 15.6% |
+| Unsafe ready / trap dates | 30 / 11 | 15 / 1 |
+| Evidence recall | 51.7% | 66.0% |
+| Total latency p50 / p95 | 38.94 s / 96.03 s | 19.21 s / 33.88 s |
+| Generation latency p50 / p95 | 10.69 s / 16.18 s | 6.53 s / 8.82 s |
+| Generated tokens p50 / p95 | 141 / 204 | 87 / 116 |
+| Prompt tokens p50 | 2,144 | 914 |
+
+Description completeness is the one figure that barely moved, and its
+margin is inside live drift: the same code scored 50.9% and 55.1% on the
+72 documents from two live recordings whose prompts differed only in one
+instruction line, so read it as about ±2 points of drift between live
+runs, not as a measured gain. The digest pipeline's run failed one
+document (`watershed-monitoring-report-100p`, a reply cut off at the token
+cap), counted as a miss. `docs/pipeline-bottlenecks.md` (Phase 3:
+measured) reads these reports.
 
 ## The phase 2 runs
 

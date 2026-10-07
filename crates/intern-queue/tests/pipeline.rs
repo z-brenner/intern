@@ -526,6 +526,7 @@ fn proposal(confidence: f32, needs_review: bool) -> ModelProposal {
             document_type: Some("Employment Agreement".into()),
             parties: vec!["by John Smith and Acme Corporation".into()],
         },
+        facts: None,
     }
 }
 
@@ -3671,6 +3672,7 @@ fn statement_of_work_proposal(
                 "between Contoso Worldwide, Inc. and Ridgeline Cartography LLC".into(),
             ],
         },
+        facts: None,
     }
 }
 

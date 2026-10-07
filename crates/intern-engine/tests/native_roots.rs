@@ -134,9 +134,7 @@ fn reaches_the_private_ca_server() {
     assert_eq!(body, MODEL_BYTES);
 
     let proposal = hosted(port)
-        .propose(&ModelRequest {
-            prompt: "File this.".into(),
-        })
+        .propose(&ModelRequest::new("File this."))
         .expect("the hosted client reaches a server signed by the offered CA");
     assert_eq!(proposal.document_type.as_deref(), Some("Memo"));
 }
@@ -161,9 +159,7 @@ fn cannot_reach_the_private_ca_server() {
     assert_eq!(error.code(), EngineErrorCode::DownloadInterrupted);
 
     let error = hosted(port)
-        .propose(&ModelRequest {
-            prompt: "File this.".into(),
-        })
+        .propose(&ModelRequest::new("File this."))
         .expect_err("a server signed by an unknown CA is refused");
     assert_eq!(error.code(), EngineErrorCode::HostedModelUnreachable);
 }

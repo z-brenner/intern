@@ -8,6 +8,7 @@ use intern_bench::{
     live::LiveOptions,
     machine::{MachineInfo, ModelInfo},
     markdown,
+    pipeline::EngineSettings,
     recording::{
         Exchange, RECORDING_SCHEMA_VERSION, RecordedDocument, RecordedExtraction, RecordedReply,
         Recording, sha256_hex,
@@ -18,7 +19,7 @@ use intern_bench::{
 };
 use intern_engine::{
     DateRole, DigestBudget, DocumentSource, Evidence, ModelProposal, ModelRequest, ModelTimings,
-    PageOrigin, PartyRelation, SourcePage, distill, source_from_text,
+    PageOrigin, PartyRelation, Pipeline, SourcePage, distill, source_from_text,
 };
 use serde_json::{Value, json};
 
@@ -103,6 +104,7 @@ fn invoice_reply() -> ModelProposal {
             document_type: Some("INVOICE".into()),
             parties: vec!["HALVORSEN FIXTURE WORKS, LLC".into()],
         },
+        facts: None,
     }
 }
 
@@ -123,6 +125,7 @@ fn notice_reply() -> ModelProposal {
             document_type: Some("NOTICE OF RENT INCREASE".into()),
             parties: vec!["To: Pell Andersby, Unit 4, 22 Wren Street".into()],
         },
+        facts: None,
     }
 }
 
@@ -193,6 +196,7 @@ fn recording() -> Recording {
         },
         context_tokens: Some(8_192),
         budget_characters: DigestBudget::default().max_characters,
+        engine: Default::default(),
         machine: MachineInfo {
             cpu: Some("Recorded CPU".into()),
             logical_cores: Some(8),
@@ -302,6 +306,11 @@ impl Bench {
             mode: Mode::Replay {
                 recording: self.path("recording.json"),
                 allow_stale: false,
+            },
+            // The recording here is the digest pipeline's.
+            engine: EngineSettings {
+                pipeline: Pipeline::Digest,
+                ..EngineSettings::default()
             },
         }
     }

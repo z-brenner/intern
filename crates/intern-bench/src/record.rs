@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use intern_engine::{DigestBudget, DocumentAnalysis, DocumentSource, domain::ProposalStatus};
+use intern_engine::{
+    DigestBudget, DocumentAnalysis, DocumentSource, domain::ProposalStatus,
+    retrieve::RetrievalConfig,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -165,6 +168,8 @@ pub struct Observation<'a> {
     pub analysis: Option<&'a DocumentAnalysis>,
     pub source: Option<&'a DocumentSource>,
     pub budget: DigestBudget,
+    /// The retrieval the `context_*` scores measure.
+    pub retrieval: &'a RetrievalConfig,
     pub exchanges: &'a [Exchange],
     /// The last prompt sent to the model, in full.
     pub last_prompt: Option<&'a str>,
@@ -254,6 +259,10 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
                         .as_ref()
                         .map_or(&proposal.evidence, |candidate| &candidate.evidence),
                 ),
+                unsupported_reason: analysis
+                    .review_reasons
+                    .iter()
+                    .any(|reason| crate::score::is_unsupported_reason(reason.as_str())),
             }
         }
         None => {
@@ -263,6 +272,20 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     };
     let scored = score(document, &outcome, &texts);
     record.scores = scored.scores;
+    // Beside `digest_recall`: what the evidence context would carry, and
+    // what it costs, measured from the extracted text as an extract run
+    // measures it. A document that could not be read carries nothing, and
+    // still counts.
+    let context =
+        crate::context::context_scores(document, observation.source, observation.retrieval);
+    record.scores.extend(context.scores);
+    record.timings.extend(context.timings);
+    // What only the evidence pipeline measures: nothing for the digest's.
+    if let Some(analysis) = observation.analysis {
+        record
+            .scores
+            .extend(crate::pipeline::evidence_scores(analysis));
+    }
     record.claims = scored.claims;
     record.forbidden_description = scored.forbidden_description;
     record.traps = scored.traps;
@@ -272,4 +295,107 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
         record.set_routes(source);
     }
     record
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gold::GoldAnswer;
+
+    /// A document that could not be read is a miss on the evidence context
+    /// too: its zeroes stay in every `context_*` denominator, so a
+    /// configuration that fails to read documents never looks better for it.
+    #[test]
+    fn a_failed_extraction_scores_zero_context_recall() {
+        let document = GoldDocument {
+            id: "notice".into(),
+            file: "notice.pdf".into(),
+            pages: 1,
+            gold: GoldAnswer {
+                document_type: Some("Notice of Default".into()),
+                document_date: Some("2025-10-14".into()),
+                parties: Some(vec!["Glasswing Ceramics LLC".into()]),
+                ..GoldAnswer::default()
+            },
+            ..GoldDocument::default()
+        };
+        let retrieval = RetrievalConfig::default();
+        let record = scored_record(
+            &document,
+            Observation {
+                status: "extraction_failed",
+                error: Some("PARSER_FAILED".into()),
+                analysis: None,
+                source: None,
+                budget: DigestBudget::default(),
+                retrieval: &retrieval,
+                exchanges: &[],
+                last_prompt: None,
+                timings: Timings::default(),
+                timings_recorded: false,
+                memory: MemoryPeaks::default(),
+                replayed: true,
+                stale: false,
+            },
+        );
+        for key in [
+            "context_type_recall",
+            "context_date_recall",
+            "context_recall",
+        ] {
+            assert_eq!(
+                record.scores.get(key).and_then(Value::as_f64),
+                Some(0.0),
+                "{key}"
+            );
+        }
+    }
+
+    /// A document that was read carries what its evidence context costs
+    /// beside what it holds, as an extract run's record does.
+    #[test]
+    fn a_read_document_carries_its_context_measurements() {
+        let document = GoldDocument {
+            id: "notice".into(),
+            file: "notice.pdf".into(),
+            pages: 1,
+            ..GoldDocument::default()
+        };
+        let source = intern_engine::source_from_text(
+            "NOTICE OF DEFAULT\n\nDate: October 14, 2025\n\nTo: Glasswing Ceramics LLC",
+        );
+        let retrieval = RetrievalConfig::default();
+        let record = scored_record(
+            &document,
+            Observation {
+                status: "model_failed",
+                error: None,
+                analysis: None,
+                source: Some(&source),
+                budget: DigestBudget::default(),
+                retrieval: &retrieval,
+                exchanges: &[],
+                last_prompt: None,
+                timings: timing::empty(),
+                timings_recorded: true,
+                memory: MemoryPeaks::default(),
+                replayed: true,
+                stale: false,
+            },
+        );
+        for key in [
+            "context_tokens",
+            "context_units",
+            "index_units",
+            "index_ms",
+            "retrieval_ms",
+        ] {
+            assert!(
+                timing::get(&record.timings, key).is_some(),
+                "{key}: {:?}",
+                record.timings.get(key)
+            );
+        }
+        assert!(timing::get(&record.timings, "context_units").unwrap() > 0.0);
+    }
 }

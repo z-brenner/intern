@@ -21,11 +21,11 @@
 //! Nothing here invents text: a role comes from a line that states the date,
 //! a type from a heading, an issuer from a party the model already named.
 
-use crate::distill::DocumentDigest;
+use crate::cues::{CUSTOMER_CUES, ISSUER_CUES, NOT_A_TITLE, TYPE_NOUNS};
 use crate::domain::{DateRole, PartyRelation};
 use crate::evidence::{
-    NumericDate, NumericOrder, date_match_positions, extract_stated_dates, is_valid_iso_date,
-    normalize, normalize_loosely, numeric_dates,
+    NumericDate, NumericOrder, Segments, date_match_positions, extract_stated_dates,
+    is_valid_iso_date, normalize, normalize_loosely, numeric_dates,
 };
 use crate::validate::rfind_word;
 
@@ -198,13 +198,13 @@ const CUE_WINDOW: usize = 96;
 /// back to what the document type implies. `None` when the wording says
 /// nothing, in which case the model's own answer stands.
 pub fn infer_date_role(
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     date: &str,
     document_type: Option<&str>,
 ) -> Option<DateRole> {
     let mut found: Vec<DateRole> = Vec::new();
     let mut generic = false;
-    for segment in &digest.segments {
+    for segment in digest.segments() {
         for line in wrapped_lines(segment) {
             let normalized = normalize(&line);
             for position in date_match_positions(date, &normalized) {
@@ -481,7 +481,7 @@ pub(crate) fn dates_stated_on(
     found
 }
 
-fn role_from_wording(window: &str) -> Option<DateRole> {
+pub(crate) fn role_from_wording(window: &str) -> Option<DateRole> {
     let has = |cues: &[&str]| cues.iter().any(|cue| window.contains(cue));
     if has(INVOICE_CUES) {
         return Some(DateRole::Invoice);
@@ -608,7 +608,7 @@ impl TypeKind {
 /// document's title and never a guess.
 pub fn complete_type_from_title(
     document_type: &str,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
     parties: &[String],
 ) -> String {
     let Some(title) = infer_document_type(digest) else {
@@ -652,140 +652,6 @@ pub fn complete_type_from_title(
     }
 }
 
-/// Words that make a heading the name of a kind of document.
-const TYPE_NOUNS: &[&str] = &[
-    "agreement",
-    "amendment",
-    "addendum",
-    "contract",
-    "lease",
-    "invoice",
-    "receipt",
-    "order",
-    "slip",
-    "statement",
-    "notice",
-    "letter",
-    "memorandum",
-    "memo",
-    "minutes",
-    "journal",
-    "report",
-    "certificate",
-    "policy",
-    "proposal",
-    "quote",
-    "quotation",
-    "estimate",
-    "resolution",
-    "agenda",
-    "plan",
-    "checklist",
-    "form",
-    "application",
-    "specification",
-    "review",
-    "assessment",
-    "audit",
-    "license",
-    "licence",
-    "permit",
-    "deed",
-    "affidavit",
-    "declaration",
-    "complaint",
-    "motion",
-    "subpoena",
-    "waiver",
-    "release",
-    "consent",
-    "authorization",
-    "authorisation",
-    "warranty",
-    "guarantee",
-    "bond",
-    "log",
-    "transcript",
-    "brief",
-    "opinion",
-    "ruling",
-    "judgment",
-    "decree",
-    "manual",
-    "guide",
-    "handbook",
-    "protocol",
-    "procedure",
-    "bill",
-    "ticket",
-    "itinerary",
-    "budget",
-    "forecast",
-    "ledger",
-    "roster",
-    "register",
-    "inventory",
-    "newsletter",
-    "bulletin",
-    "announcement",
-    "summary",
-    "evaluation",
-    "questionnaire",
-    "survey",
-    "registration",
-    "renewal",
-    "termination",
-    "offer",
-    "engagement",
-    "confirmation",
-    "acknowledgement",
-    "acknowledgment",
-    // Initialisms that are document kinds in their own right.
-    "nda",
-    "sow",
-    "msa",
-    "mou",
-    "loi",
-    "rfp",
-    "rfq",
-    "sla",
-    "eula",
-    "dpa",
-];
-
-/// Headings that head a part of a document, never the document.
-const NOT_A_TITLE: &[&str] = &[
-    "confidential",
-    "exhibit",
-    "schedule",
-    "appendix",
-    "annex",
-    "attachment",
-    "table of contents",
-    "contents",
-    "page",
-    "draft",
-    "article",
-    "section",
-    "recitals",
-    "whereas",
-    "definitions",
-    "signature",
-    "signatures",
-    "in witness whereof",
-    "background",
-    "introduction",
-    "re:",
-    "subject:",
-    "to:",
-    "from:",
-    "cc:",
-    "date:",
-    "privileged",
-    "sample",
-    "copy",
-];
-
 /// Words kept lowercase inside a title-cased heading.
 const SMALL_WORDS: &[&str] = &[
     "a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with",
@@ -807,9 +673,9 @@ const INITIALISMS: &[&str] = &[
 /// PAGE 1" becomes "Moonlit Archive Project Journal". A heading that names a
 /// part ("EXHIBIT A", "CONFIDENTIAL") is skipped, and a document whose first
 /// headings name nothing gets no type from here.
-pub fn infer_document_type(digest: &DocumentDigest) -> Option<String> {
+pub fn infer_document_type(digest: &impl Segments) -> Option<String> {
     digest
-        .outline
+        .headings()
         .iter()
         .take(2)
         .find_map(|heading| title_type(heading))
@@ -882,7 +748,7 @@ fn rfind_ignoring_ascii_case(haystack: &str, marker: &str) -> Option<usize> {
 
 /// Title case for an all-capitals heading; a mixed-case heading is left as
 /// the document wrote it.
-fn title_case(value: &str) -> String {
+pub(crate) fn title_case(value: &str) -> String {
     let all_capitals = value
         .chars()
         .filter(|character| character.is_alphabetic())
@@ -941,33 +807,6 @@ const ISSUED_TYPES: &[&str] = &[
     "credit note",
     "remittance",
 ];
-const CUSTOMER_CUES: &[&str] = &[
-    "bill to",
-    "billed to",
-    "sold to",
-    "ship to",
-    "invoice to",
-    "customer",
-    "client",
-    "buyer",
-    "purchaser",
-    "attn",
-    "attention",
-    "prepared for",
-    "deliver to",
-    "consignee",
-];
-const ISSUER_CUES: &[&str] = &[
-    "remit to",
-    "remittance",
-    "payable to",
-    "from:",
-    "vendor",
-    "supplier",
-    "seller",
-    "issued by",
-    "prepared by",
-];
 
 /// For an invoice-like document the model gave two parties and "between",
 /// the party that issued it, alone, "from". The bill-to, sold-to, or ship-to
@@ -977,7 +816,7 @@ pub fn repair_issued_relation(
     document_type: Option<&str>,
     parties: Vec<String>,
     relation: PartyRelation,
-    digest: &DocumentDigest,
+    digest: &impl Segments,
 ) -> (Vec<String>, PartyRelation) {
     let issued_type = document_type.is_some_and(|value| {
         let lowered = value.to_lowercase();
@@ -987,7 +826,7 @@ pub fn repair_issued_relation(
         return (parties, relation);
     }
     let lines: Vec<String> = digest
-        .segments
+        .segments()
         .iter()
         .flat_map(|segment| segment.lines())
         .map(normalize_loosely)
@@ -1038,6 +877,7 @@ pub fn repair_issued_relation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::distill::DocumentDigest;
     use crate::distill::{DigestBudget, distill, source_from_text};
 
     fn digest_of(text: &str) -> DocumentDigest {
@@ -1372,6 +1212,7 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
                         confidence: 0.9,
                         needs_review: false,
                         evidence: crate::domain::Evidence::default(),
+                        facts: None,
                     },
                     &digest,
                 );

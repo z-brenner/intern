@@ -19,7 +19,9 @@ param(
     [string]$FixtureDirectory = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "fixtures/generated"),
     [string]$OutputPath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot "..")).Path "docs/qa/model-evaluation.json"),
     [string]$ModelDirectory = (Join-Path $env:TEMP "intern-model-evaluation"),
-    [ValidateSet("new", "legacy")][string]$Pipeline = "new",
+    # The shipping pipeline by default: the release gate accepts nothing else.
+    # `digest` (or its old name `new`) and `legacy` remain for comparison runs.
+    [ValidateSet("evidence", "digest", "new", "legacy")][string]$Pipeline = "evidence",
     [int]$Threads = 0
 )
 

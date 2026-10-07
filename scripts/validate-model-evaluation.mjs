@@ -82,6 +82,24 @@ function dateCorrectWhenNamed(records) {
   return { rate: (named.length - wrong.length) / named.length, named: named.length, wrong };
 }
 
+/**
+ * Description specificity among the documents Intern actually named, gated as
+ * the date is. The evidence pipeline writes a description only of what
+ * validation accepted, so a scan whose OCR supports nothing more than its
+ * sender reads "Document from Harbor Comet Repairs LLC." and goes to review.
+ * Counted over the whole corpus, that honest sentence failed a gate a longer
+ * invented one passed: the digest pipeline described the same scan as "a
+ * notice of termination issued ... on July 15, 2024", a work order of
+ * 2025-07-16. What a user is promised is that a file Intern renamed is
+ * described specifically.
+ */
+function descriptionSpecificWhenNamed(records) {
+  const named = records.filter((record) => record && record.scores && record.scores.ready === true);
+  if (named.length === 0) return { rate: 1, short: [] };
+  const short = named.filter((record) => record.scores.description_specific !== true).map((record) => record.file);
+  return { rate: (named.length - short.length) / named.length, short };
+}
+
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
 }
@@ -99,7 +117,7 @@ function correct(summary, key) {
 export function validateEvaluation(report) {
   requireValue(report && typeof report === 'object', 'model evaluation report must be an object');
   requireValue(report.schema_version === 3, 'model evaluation schema_version must be 3');
-  requireValue(report.pipeline === 'new', 'the release gate only accepts the shipping pipeline');
+  requireValue(report.pipeline === 'evidence', 'the release gate only accepts the shipping pipeline');
   requireValue(typeof report.model_id === 'string' && report.model_id.length > 0, 'model evaluation must record the served model id');
   requireValue(Array.isArray(report.records) && report.records.length > 0, 'model evaluation must contain records');
 
@@ -126,7 +144,12 @@ export function validateEvaluation(report) {
   check('date_correct', GATES.dateCorrect);
   check('type_correct', GATES.typeCorrect);
   check('parties_correct', GATES.partiesCorrect);
-  check('description_specific', GATES.descriptionSpecific);
+  const specific = descriptionSpecificWhenNamed(report.records);
+  if (specific.rate < GATES.descriptionSpecific) {
+    failures.push(
+      `description_specific ${(specific.rate * 100).toFixed(1)}% of the documents Intern named is below the ${(GATES.descriptionSpecific * 100).toFixed(0)}% gate: ${specific.short.join(', ')}`,
+    );
+  }
 
   const named = dateCorrectWhenNamed(report.records);
   if (named.rate < GATES.dateCorrectWhenNamed) {

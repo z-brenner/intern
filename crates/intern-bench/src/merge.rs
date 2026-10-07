@@ -67,6 +67,11 @@ pub fn merge(
             base.budget_characters, add.budget_characters
         ));
     }
+    if base.engine != add.engine {
+        return Err(
+            "the recordings were made with different pipelines, retrieval or prompts".to_owned(),
+        );
+    }
     if base.context_tokens != add.context_tokens {
         let describe = |tokens: Option<usize>| {
             tokens.map_or_else(|| "unstated".to_owned(), |tokens| tokens.to_string())
@@ -272,6 +277,7 @@ mod tests {
             },
             context_tokens: Some(8_192),
             budget_characters: 12_000,
+            engine: Default::default(),
             machine: MachineInfo::default(),
             git_commit: Some("0123456789abcdef".into()),
             worker: None,

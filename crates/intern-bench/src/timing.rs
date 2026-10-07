@@ -68,6 +68,11 @@ pub const METRICS: &[(&str, Unit)] = &[
     ("worker_ocr_passes", Unit::Count),
     ("worker_orientation_passes", Unit::Count),
     ("worker_rendered_pixels", Unit::Count),
+    ("index_ms", Unit::Milliseconds),
+    ("retrieval_ms", Unit::Milliseconds),
+    ("index_units", Unit::Count),
+    ("context_units", Unit::Count),
+    ("context_tokens", Unit::Count),
 ];
 
 pub fn unit(metric: &str) -> Option<Unit> {
@@ -285,6 +290,7 @@ mod tests {
                     confidence: 0.5,
                     needs_review: false,
                     evidence: intern_engine::Evidence::default(),
+                    facts: None,
                 },
                 token_confidence: None,
             },

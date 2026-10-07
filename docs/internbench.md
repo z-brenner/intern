@@ -46,8 +46,8 @@ parser worker.
 
 ## The corpus
 
-`bench/generate.mjs` builds 72 documents into `bench/generated/`
-(gitignored, about 8 MB, about 11 s). The reviewed answers are in
+`bench/generate.mjs` builds 77 documents into `bench/generated/`
+(gitignored, about 9 MB, about 14 s). The reviewed answers are in
 `bench/gold.json`, and a SHA-256 of every file is in `bench/manifest.json`.
 Both are committed. The generator is deterministic: fixed seeds, fixed
 timestamps, a fixed zlib level, and no clock or locale. Run on the pinned
@@ -73,11 +73,15 @@ when any selected document's bytes disagree with it or it does not list one.
 | Office, sheets, mail, text | separation agreement, demand letter, written consent (`.docx`); quarterly business review, launch plan (`.pptx`); payroll register with a date serial cell, harvest log (`.xlsx`); AP aging (`.csv`); approval email quoting an older message (`.eml`); hearing notice (`.txt`) |
 | Scans | clean 2- and 10-page image-only PDFs; a 25-page 200-DPI lease; a mixed PDF whose signature page is scanned; rotated 90° and 180°; 3° skew; 100 DPI; speckle noise and blur; faint uneven light; an invisible OCR text layer full of OCR errors; a two-frame TIFF fax; a scanned intake form |
 | Layout and OCR (added with the structure gold; first recorded in the phase 2 run) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organisations and identifiers |
+| Long documents for retrieval (added for phase 3, first recorded in its live run) | evidence that decides the name, deep inside: a 12-page master services agreement whose Effective Date is stated only in its definitions schedule on page 9; a 25-page industrial lease dated only in its Lease Particulars on page 23, after a letter of intent and an old lease dated on page 1; a 40-page term loan whose lender and borrower are named only on page 1 and on the signature page; a 60-page commercial property policy whose declarations - and policy period - sit on page 30 of its renewal packet; a 100-page watershed monitoring report whose cover dates the review draft and whose final issue date is in the certification on page 88 |
 
 Every document carries category tags (`multi_column`, `date_in_table`,
 `referenced_agreement`, `middle_fact`, `pages_50`, `key_value`,
 `stream_order`, `rotated_page`, `image_region`, `ocr_critical_fields`, ...),
-and every report is also sliced by tag. The tests prove that the corpus
+and every report is also sliced by tag. A `pages_N` tag is the page-count
+bucket the document falls in, from N pages up to the next bucket (5, 10,
+25, 50, 100): the 40-page loan is `pages_25`, the 60-page policy
+`pages_50`. The tests prove that the corpus
 covers the required categories, that every gold string occurs in the text
 the document carries,
 and that the long documents are information-dense rather than padded:
@@ -108,7 +112,22 @@ Each entry in `bench/gold.json` gives the document's `kind`, `format`,
 * `subject_terms`
 * `expected_readiness`: `ready`, `needs_review` or `either`
 * `evidence`: the verbatim forms in which the document states its date and
-  names its parties
+  names its parties; optionally `date_anchor`, the words that define the
+  date where the document defines it by a term or a label rather than
+  stating it plainly (`"Effective Date" means`, `Date of this Lease`,
+  `Policy Period`), printed on the same page as the date; `type_text`, the
+  title as printed; and `identifier_text`, the document's own number. The
+  optional ones appear only where given and are not scored yet: the
+  evidence-retrieval measures read them.
+
+`party_roles` use the scorer's roles (`issuer`, `sender`, `subject`,
+`recipient`, `counterparty`, which decide `party_role_correct`) and roles
+that say what a party is. The second set includes the phase 3 role list -
+`client`, `contractor`, `employer`, `employee`, `buyer`, `seller`,
+`landlord`, `tenant`, `issuer`, `recipient`, `vendor`, `customer`,
+`borrower`, `lender`, `licensor`, `licensee`, `sender`, `addressee`,
+`other` - alongside the older `patient`, `payer`, `provider`, `firm`,
+`fund`, `investor`, `assignor` and `assignee`; a party may hold several.
 
 A scanned document also has `ocr_truth`: the exact text of each scanned page,
 and the dates, names and identifiers on it. A digital page with a pasted
@@ -133,15 +152,17 @@ block, every part optional:
 * `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
   only for the pages where the route is not a judgement call.
 
-Twenty-eight documents have one: the twenty added for it, and the two-column
-lease, the interleaved declarations page, both header-table invoices, the
-purchase order, the vendor registration form, the change order and the
-scanned intake form. Adding or changing a `structure` block changes no
-recorded document's other scores.
+Thirty-three documents have one: the twenty added for it, the five long
+documents added for phase 3, and the two-column lease, the interleaved
+declarations page, both header-table invoices, the purchase order, the
+vendor registration form, the change order and the scanned intake form.
+Adding or changing a `structure` block changes no recorded document's other
+scores.
 
 A document added before anyone recorded it says `"recording": "pending"`.
 Replay leaves it unscored (and a baseline may not hold it); extract-only
-reads it like any other.
+reads it like any other. No document is pending today: the phase 3 live run
+recorded the five long documents with the rest.
 
 To change an answer, edit the builder in `bench/docs/`, review the
 regenerated document, and run
@@ -176,10 +197,14 @@ the worker is started again after a timeout, a cancellation or a crash.
 `--only id,id` runs a subset.
 
 Each document goes the way it goes in the app: `SupervisedWorker` extracts
-it, then `Engine::analyze` distils it, fits the prompt to the context, asks
-the model, validates the reply and composes the name. A recording proposer
+it, then `Engine::analyze` indexes it, retrieves the evidence that fits the
+context, asks the model, validates the facts and composes the name, through
+the evidence pipeline the app reads with. `--pipeline digest` runs the
+digest pipeline a hosted model reads through instead. A recording proposer
 sits in front of the model client and keeps every prompt's SHA-256, the
-reply, and the server's timings.
+reply, and the server's timings. A recording says which pipeline, retrieval
+and prompt made it, and is replayed only through the same pipeline: a
+digest recording with `--pipeline digest`.
 
 ### Replay
 
@@ -190,9 +215,9 @@ cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
   --output report.json --markdown report.md
 ```
 
-Replay re-runs everything after the model (distillation, validation, role
-and type inference, naming, scoring) from what the worker read and what the
-model replied. It needs no worker, model or generated corpus: fixture
+Replay re-runs everything after the model (indexing and retrieval, or
+distillation; validation, role and type inference, naming, scoring) from
+what the worker read and what the model replied. It needs no worker, model or generated corpus: fixture
 staleness is checked against the manifest. Prompts are built as the app
 builds them today, with today's digest budget and context size; when either
 differs from the recording's, the run says so on standard error, in the
@@ -246,17 +271,31 @@ The run refuses a corpus that lacks a selected document or, given
 `--manifest`, holds bytes the manifest does not vouch for. `--only`,
 `--baseline`, `--write-baseline` and `--latency-gate` work as for the other
 modes; an extract-only run writes and is held to an extract-only baseline
-(see [Gates](#gates)). The report gives the run's wall time. Over all 72
-documents on the shared 4-core development container it is about 45 s with
-the routing worker and about 70 s with the one before it, which read a
-PDF's scanned pages one at a time; Tesseract takes nearly all of it (the
-25-page scanned lease alone 14 s), and the 52 documents that are not scans
-take under a second together. It can be run on every change to the worker,
-or with `--only` on the documents a change touches.
+(see [Gates](#gates)). The report gives the run's wall time. Over the 72
+documents of the phase 2 corpus, on the shared 4-core development container
+it is about 45 s with the routing worker and about 70 s with the one before
+it, which read a PDF's scanned pages one at a time; Tesseract takes nearly
+all of it (the 25-page scanned lease alone 14 s), and the 52 documents that
+are not scans take under a second together. It can be run on every change
+to the worker, or with `--only` on the documents a change touches.
 
 The scoring is `extract::extraction_record`, a pure function of the gold,
 what the worker returned and the timings; the worker loop around it only
 feeds it.
+
+### Retrieval sweeps
+
+```sh
+cargo run --release --locked -p intern-bench -- retrieval \
+  --recording RECORDING.json --gold bench/gold.json \
+  --fixtures fixtures/corpus-recording.json --expected fixtures/expected.json \
+  --sweep --output sweep.json --markdown sweep.md [--dump DIR]
+```
+
+Evidence retrieval's configurations over a recording's sources, with no
+worker and no model, on a tuning half and a held-out half of the
+documents. [evidence-retrieval.md](evidence-retrieval.md) describes the
+scores, the sweep and what it found.
 
 ### Comparing two runs
 
@@ -276,8 +315,12 @@ or better. Latency, as the change in p50 and p95 of every stage, is
 compared over the documents both runs completed, and only between two runs
 that measured their timings (live or extract-only): a replay reports its
 recording's timings, so a comparison involving one shows no latency change
-and says why. Each side
-names its machine and, for a replay, its recording. `intern-bench report
+and says why. The comparison opens with the [phase 3
+scorecard](#the-phase-3-scorecard) before and after, and gives each slice
+(`long`, `complex`) its filename, date, parties and routing rates, its
+unsafe-ready count and its total p50 and p95, over the slice's documents
+both runs scored (latency over those both completed). Each side names its
+machine and, for a replay, its recording. `intern-bench report
 --input report.json --markdown report.md` re-renders a report's Markdown.
 
 ## Reading a report
@@ -288,10 +331,13 @@ names its machine and, for a replay, its recording. `intern-bench report
   fractional score as a mean, plus counts of unsafe-ready, trap-date,
   forbidden-party and unsupported-claim outcomes.
 * `groups`: the same summary sliced by `kind`, `text_layer`, `format`, page
-  bucket, route class and category.
+  bucket, route class, category and `slice` (`long` and `complex`, see
+  [the phase 3 scorecard](#the-phase-3-scorecard)).
+* `scorecard`: the phase 3 comparison list, each figure with the documents
+  it is over (absent for an extract-only run, which names nothing).
 * `latency`: p50, p90, p95, max and mean of every timing, overall and by
-  page bucket, kind, text layer and route class, over the documents that
-  completed (a failed document's time is only how long it took to fail). A
+  page bucket, kind, text layer, route class and slice, over the documents
+  that completed (a failed document's time is only how long it took to fail). A
   document's route class is the most expensive route any of its pages took
   - `ocr`, then `ocr_regions`, then `layout`, then `fast` - or `unrouted`
   when the worker sent no layouts (every worker before the router, and every
@@ -313,8 +359,9 @@ names its machine and, for a replay, its recording. `intern-bench report
 
 Keys are sorted and floats rounded, so two runs diff cleanly.
 
-`report.md` is the same report for a person. It opens with a scorecard and a
-safety table, then the per-group tables, OCR, structure and routes, the
+`report.md` is the same report for a person. It opens with a scorecard, the
+phase 3 scorecard and a safety table, then the per-group tables (a slice
+table among them, with generation time), OCR, structure and routes, the
 stage-by-stage latency table with tokens per second, memory, and
 **Misses**. Misses lists every wrong filename with the expected name, the
 trap it sprang and why, and whether it was filed without review. An
@@ -340,7 +387,9 @@ found.
 | `description_specificity` | The mean of three marks: names a party or gold fact; carries a concrete detail; 10–42 words. |
 | `evidence_recall` | The model's quoted evidence contains the date and each party. |
 | `digest_recall`, `prompt_recall` | The gold evidence is in the distilled digest, or in the prompt actually sent. This is deterministic, so a distillation change can be measured in replay without a model. |
+| `context_type_recall`, `context_date_recall`, `context_party_recall`, `context_recall`, `context_fact_recall`, `context_subject_recall` | The gold's type, date, parties (and their mean), description facts and subject terms are in the context evidence retrieval would build from the same text. Deterministic, in every mode; see [evidence-retrieval.md](evidence-retrieval.md). |
 | `readiness_match`, `unsafe_ready`, `needless_review` | Routing against the gold; ready with a wrong name; review although the name was right and the gold says ready. |
+| `unsupported_fact_doc` | Validation sent the document to review because something the model gave is not supported by the document: any review reason ending `_UNSUPPORTED` (`DATE_UNSUPPORTED`, `TYPE_UNSUPPORTED`, `PARTY_UNSUPPORTED`, `DESCRIPTION_UNSUPPORTED` today), whichever fact it was about, so the old and new pipelines are counted alike. Good when false; false for a document that failed, which asserted nothing. Its rate is the scorecard's unsupported-fact rate, by document; `unsupported_fact_rate` in the summary stays the share of description claims. |
 | `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. Whitespace and the `|` rules a layout writes around a table row are set aside on both sides first, so a page whose text is its blocks is not charged for its tables' rules. A colon is text and is kept: one the page printed and the reading dropped is a miss, and the colon a layout writes after a label (`Label: value`) where the page printed none costs a character, and its word. Typographic quotes and apostrophes (`‘ ’ “ ”` and their low forms) are folded to `'` and `"` on both sides: a glyph style that carries no filing information, and PP-OCR, whose recognition dictionary has no curly quotes, emits every one straight. Nothing else is folded, so a misread such as `0ccurrence` still counts. A scanned page the extractor did not return (a TIFF frame it does not read), or every page of a scan whose extraction failed, counts as read empty. |
 
 A score the gold does not define is omitted rather than counted as false,
@@ -349,6 +398,46 @@ it: every document for most scores, and for the date role, the relation word
 and the party's role, the documents whose answer gave them something to
 judge. A document that failed is a miss on every score its reviewed answer
 would be judged on, those three included.
+
+### The phase 3 scorecard
+
+The figures phase 3 (evidence retrieval and fact-only replies) is judged
+by, in the report, its Markdown and `compare`:
+
+| Figure | What it is |
+| --- | --- |
+| Long-document filename accuracy | `filename_correct` over the `long` slice: documents of 10 pages or more. |
+| Complex-document filename accuracy | `filename_correct` over the `complex` slice (below). |
+| Description completeness | The mean of `description_completeness`. |
+| Unsupported-fact rate | The share of documents with `unsupported_fact_doc`. |
+| Review rate | Of the documents that completed and were named, the share sent to review. |
+| Evidence recall | The mean of `evidence_recall`. |
+| Total latency p50, p95 | `total_ms` over the documents that completed. |
+| Generation latency p50, p95 | `generation_ms`, likewise. |
+| Generated tokens p50, p95 | `generated_tokens`, likewise. |
+| Prompt tokens p50 | `prompt_tokens`, likewise. |
+
+A replay's latency and tokens are its recording's, and `compare` shows them
+only between two runs that measured their own.
+
+The `complex` slice is every document with any of these categories:
+`referenced_agreement`, `middle_fact`, `multi_column`, `layout_parties`,
+`irrelevant_names`, `information_dense`, `stream_order`, `date_in_table`,
+`key_value`, `complex_pdf`. Each makes what the document says something to
+find or to reason out: a fact in the middle, a referenced agreement's own
+date and parties, names that are not parties, columns or a content-stream
+order that scramble the reading, a date or labelled value inside a table,
+parties placed only by the layout, a page dense with figures. Three groups
+are left out on purpose. `competing_dates` is on 62 of the 72 documents of
+the corpus as it was when the slice was drawn, so it would make the slice
+the corpus. `table` is on half of them, mostly routine header tables;
+`date_in_table` and `key_value` keep the tables that decide the name. And
+the scan conditions (`rotated_scan`, `noisy_scan`, `low_resolution_scan`
+and the like) measure OCR, which `text_layer` already slices. On that corpus
+the slice holds 51 documents (14 of them by `referenced_agreement` alone)
+and `long` holds 7, 6 of them also complex. The five long documents added
+for phase 3 are in both, so the 77-document corpus has 56 complex and 12
+long; until they are recorded a replay scores 51 and 7 of them.
 
 ### Structure scores
 
@@ -474,9 +563,16 @@ worse while the work makes it better.
 Reports of record, the baseline first, are in [`bench/reports/`](../bench/reports/).
 
 The recording and baseline of record are `bench/recording.json` and
-`bench/baseline.json`. A live run writes them (`--record`,
+`bench/baseline.json`: the evidence pipeline's, all 77 documents recorded
+live from `902c7fe`. A live run writes them (`--record`,
 `--write-baseline`), and they are committed with the change that produced
-them; replay and the gates read them.
+them; replay and the gates read them. A recording keeps its header indented
+and each document compact on a line of its own, its layouts without their
+lines or cell boxes, so the 77 documents fit in 6.5 MB and a review still
+sees which documents a re-recording changed. The digest pipeline's last
+recording of record, of 72 documents, is `bench/recording.json` at
+`79e8bba`; the phase 3 "before" report was made from it with the five long
+documents, recorded live through the digest pipeline, added.
 
 For a change to anything after the model (validation, inference, naming,
 house style), replay against `bench/recording.json`, and check the

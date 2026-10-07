@@ -265,6 +265,7 @@ fn run_case(case: u64) -> bool {
             document_type: Some(substring(&mut rng, &text)),
             parties: vec![substring(&mut rng, &text)],
         },
+        facts: None,
     };
 
     let outcome = validate(candidate, &digest);

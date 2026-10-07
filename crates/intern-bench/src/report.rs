@@ -60,7 +60,8 @@ pub struct Report {
     #[serde(default)]
     pub summary: Summary,
     /// Summaries sliced by `kind`, `text_layer`, `format`, `page_bucket`,
-    /// `route_class` and `category`, each keyed by the group's value.
+    /// `route_class`, `category` and `slice` (`long`, `complex`; see
+    /// [`slices`]), each keyed by the group's value.
     #[serde(default)]
     pub groups: BTreeMap<String, BTreeMap<String, Summary>>,
     #[serde(default)]
@@ -77,6 +78,10 @@ pub struct Report {
     /// its expected routes went unjudged), absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routes: Option<RouteReport>,
+    /// The phase 3 comparison list, one entry per figure (see
+    /// [`SCORECARD`]); empty for an extract-only run, which names nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scorecard: Vec<ScorecardEntry>,
     #[serde(default)]
     pub memory: MemoryReport,
     #[serde(default)]
@@ -256,6 +261,49 @@ pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> S
     summary
 }
 
+/// The page count from which a document is `long`.
+pub const LONG_PAGES: u32 = 10;
+
+/// The categories that make a document `complex`: what it says has to be
+/// found or reasoned out - a fact in the middle, a referenced agreement's
+/// date or parties, names that are not parties, columns or a stream order
+/// that scrambles the reading, a date or labelled value inside a table,
+/// parties placed only by the layout, a dense page. Left out:
+/// `competing_dates`, which nearly every document has; `table`, whose
+/// header tables are routine (`date_in_table` and `key_value` keep the
+/// tables that matter for the name); and the scan conditions, which
+/// measure OCR and are sliced by `text_layer`.
+pub const COMPLEX_CATEGORIES: [&str; 10] = [
+    "referenced_agreement",
+    "middle_fact",
+    "multi_column",
+    "layout_parties",
+    "irrelevant_names",
+    "information_dense",
+    "stream_order",
+    "date_in_table",
+    "key_value",
+    "complex_pdf",
+];
+
+/// The slices a document belongs to: `long` (at least [`LONG_PAGES`]
+/// pages) and `complex` (any of [`COMPLEX_CATEGORIES`]); either, both, or
+/// neither.
+pub fn slices(record: &DocumentRecord) -> Vec<&'static str> {
+    let mut slices = Vec::new();
+    if record.pages >= LONG_PAGES {
+        slices.push("long");
+    }
+    if record
+        .categories
+        .iter()
+        .any(|category| COMPLEX_CATEGORIES.contains(&category.as_str()))
+    {
+        slices.push("complex");
+    }
+    slices
+}
+
 /// The dimensions the corpus is sliced along, each with how a record
 /// names its group or groups.
 pub fn group_keys(record: &DocumentRecord) -> Vec<(&'static str, String)> {
@@ -276,6 +324,11 @@ pub fn group_keys(record: &DocumentRecord) -> Vec<(&'static str, String)> {
             .categories
             .iter()
             .map(|category| ("category", category.clone())),
+    );
+    keys.extend(
+        slices(record)
+            .into_iter()
+            .map(|slice| ("slice", slice.to_owned())),
     );
     keys
 }
@@ -323,6 +376,9 @@ pub struct Latency {
     /// `ocr_regions`, `layout`, `fast`), or `unrouted`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_route_class: BTreeMap<String, BTreeMap<String, Distribution>>,
+    /// By slice (`long`, `complex`); a document may be in both.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_slice: BTreeMap<String, BTreeMap<String, Distribution>>,
 }
 
 /// Records whose timings describe the whole pipeline: the documents that
@@ -354,13 +410,12 @@ pub fn distributions<'a>(
 }
 
 pub fn latency(records: &[DocumentRecord]) -> Latency {
-    let by = |key: fn(&DocumentRecord) -> Option<&str>| {
+    let by = |key: fn(&DocumentRecord) -> Vec<&str>| {
         let mut groups: BTreeMap<String, Vec<&DocumentRecord>> = BTreeMap::new();
         for record in records {
-            let Some(value) = key(record) else {
-                continue;
-            };
-            groups.entry(value.to_owned()).or_default().push(record);
+            for value in key(record) {
+                groups.entry(value.to_owned()).or_default().push(record);
+            }
         }
         groups
             .into_iter()
@@ -370,11 +425,188 @@ pub fn latency(records: &[DocumentRecord]) -> Latency {
     };
     Latency {
         overall: distributions(records.iter()),
-        by_page_bucket: by(|record| Some(&record.page_bucket)),
-        by_kind: by(|record| Some(&record.kind)),
-        by_text_layer: by(|record| Some(&record.text_layer)),
-        by_route_class: by(|record| record.route_class.as_deref()),
+        by_page_bucket: by(|record| vec![record.page_bucket.as_str()]),
+        by_kind: by(|record| vec![record.kind.as_str()]),
+        by_text_layer: by(|record| vec![record.text_layer.as_str()]),
+        by_route_class: by(|record| record.route_class.as_deref().into_iter().collect()),
+        by_slice: by(slices),
     }
+}
+
+/// How a scorecard figure is measured, which says how it reads and which
+/// way is better.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScorecardKind {
+    /// A share of documents, higher better.
+    Rate,
+    /// A share of documents where lower is better.
+    BadRate,
+    /// A share of documents with no better direction (the review rate).
+    NeutralRate,
+    /// A mean of per-document fractions, higher better.
+    Mean,
+    /// A latency percentile in milliseconds, lower better.
+    Milliseconds,
+    /// A token-count percentile, lower better.
+    Tokens,
+}
+
+/// The phase 3 comparison list: key, label, kind. A `_p50` or `_p95`
+/// suffix is that percentile of the timing metric before it, over the
+/// documents that completed.
+pub const SCORECARD: [(&str, &str, ScorecardKind); 13] = [
+    (
+        "long_filename_correct",
+        "Long-document filename accuracy (10+ pages)",
+        ScorecardKind::Rate,
+    ),
+    (
+        "complex_filename_correct",
+        "Complex-document filename accuracy",
+        ScorecardKind::Rate,
+    ),
+    (
+        "description_completeness",
+        "Description completeness",
+        ScorecardKind::Mean,
+    ),
+    (
+        "unsupported_fact_doc",
+        "Unsupported-fact rate (documents)",
+        ScorecardKind::BadRate,
+    ),
+    ("review_rate", "Review rate", ScorecardKind::NeutralRate),
+    ("evidence_recall", "Evidence recall", ScorecardKind::Mean),
+    (
+        "total_ms_p50",
+        "Total latency p50",
+        ScorecardKind::Milliseconds,
+    ),
+    (
+        "total_ms_p95",
+        "Total latency p95",
+        ScorecardKind::Milliseconds,
+    ),
+    (
+        "generation_ms_p50",
+        "Generation latency p50",
+        ScorecardKind::Milliseconds,
+    ),
+    (
+        "generation_ms_p95",
+        "Generation latency p95",
+        ScorecardKind::Milliseconds,
+    ),
+    (
+        "generated_tokens_p50",
+        "Generated tokens p50",
+        ScorecardKind::Tokens,
+    ),
+    (
+        "generated_tokens_p95",
+        "Generated tokens p95",
+        ScorecardKind::Tokens,
+    ),
+    (
+        "prompt_tokens_p50",
+        "Prompt tokens p50",
+        ScorecardKind::Tokens,
+    ),
+];
+
+/// The kind of a scorecard key.
+pub fn scorecard_kind(key: &str) -> Option<ScorecardKind> {
+    SCORECARD
+        .iter()
+        .find(|(entry, _, _)| *entry == key)
+        .map(|(_, _, kind)| *kind)
+}
+
+/// One figure of the phase 3 comparison list.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct ScorecardEntry {
+    pub metric: String,
+    /// None when no document gives it: no long document scored, or no
+    /// timing measured.
+    pub value: Option<f64>,
+    /// The documents it is over.
+    pub documents: usize,
+}
+
+/// A percentile scorecard key's timing metric and percentile.
+pub fn scorecard_percentile(key: &str) -> Option<(&str, &str)> {
+    key.strip_suffix("_p50")
+        .map(|metric| (metric, "p50"))
+        .or_else(|| key.strip_suffix("_p95").map(|metric| (metric, "p95")))
+}
+
+/// The phase 3 comparison list over `scored` (rates and means: every
+/// document that has the score), with `review_rate` as given and the
+/// percentiles from `latency` (each over the documents that completed and
+/// measured the metric).
+pub fn scorecard<'a>(
+    scored: impl IntoIterator<Item = &'a DocumentRecord>,
+    review_rate: Option<f64>,
+    reviewed_over: usize,
+    latency: &BTreeMap<String, Distribution>,
+) -> Vec<ScorecardEntry> {
+    let scored = scored.into_iter().collect::<Vec<_>>();
+    let rate_of = |records: &[&DocumentRecord], key: &str| {
+        let flags = records
+            .iter()
+            .filter_map(|record| record.bool_score(key))
+            .collect::<Vec<_>>();
+        let value = (!flags.is_empty()).then(|| {
+            round(
+                flags.iter().filter(|flag| **flag).count() as f64 / flags.len() as f64,
+                4,
+            )
+        });
+        (value, flags.len())
+    };
+    let in_slice = |slice: &str| {
+        scored
+            .iter()
+            .copied()
+            .filter(|record| slices(record).contains(&slice))
+            .collect::<Vec<_>>()
+    };
+    SCORECARD
+        .iter()
+        .map(|(key, _, _)| {
+            let (value, documents) = match *key {
+                "long_filename_correct" => rate_of(&in_slice("long"), "filename_correct"),
+                "complex_filename_correct" => rate_of(&in_slice("complex"), "filename_correct"),
+                "unsupported_fact_doc" => rate_of(&scored, key),
+                "review_rate" => (review_rate, reviewed_over),
+                "description_completeness" | "evidence_recall" => {
+                    let values = scored
+                        .iter()
+                        .filter_map(|record| record.scores.get(*key).and_then(Value::as_f64))
+                        .collect::<Vec<_>>();
+                    let mean = (!values.is_empty())
+                        .then(|| round(values.iter().sum::<f64>() / values.len() as f64, 4));
+                    (mean, values.len())
+                }
+                _ => scorecard_percentile(key)
+                    .and_then(|(metric, percentile)| {
+                        let distribution = latency.get(metric)?;
+                        let value = if percentile == "p50" {
+                            distribution.p50
+                        } else {
+                            distribution.p95
+                        };
+                        Some((Some(value), distribution.count))
+                    })
+                    .unwrap_or((None, 0)),
+            };
+            ScorecardEntry {
+                metric: (*key).to_owned(),
+                value,
+                documents,
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -661,6 +893,18 @@ pub struct RunInfo {
 }
 
 pub fn build(info: RunInfo, records: Vec<DocumentRecord>) -> Report {
+    let summary = summarize(&records);
+    let latency = latency(&records);
+    // An extract-only run names nothing: none of the list applies.
+    let scorecard = if info.mode == EXTRACT {
+        Vec::new()
+    } else {
+        let routed = records
+            .iter()
+            .filter(|record| record.status == COMPLETED && record.readiness.is_some())
+            .count();
+        scorecard(&records, summary.review_rate, routed, &latency.overall)
+    };
     Report {
         schema_version: REPORT_SCHEMA_VERSION,
         suite: SUITE.to_owned(),
@@ -674,12 +918,13 @@ pub fn build(info: RunInfo, records: Vec<DocumentRecord>) -> Report {
         recording: info.recording,
         corpus: info.corpus,
         wall_ms: info.wall_ms,
-        summary: summarize(&records),
+        summary,
         groups: groups(&records),
-        latency: latency(&records),
+        latency,
         ocr: ocr_report(&records),
         structure: structure_report(&records),
         routes: route_report(&records),
+        scorecard,
         memory: memory_report(&records),
         records,
         baseline: None,
@@ -804,6 +1049,121 @@ mod tests {
             !latency.overall.contains_key("worker_ocr_ms"),
             "never measured"
         );
+    }
+
+    /// A long document and a complex one are sliced out of the corpus, a
+    /// document may be both, and the phase 3 list reads each figure off
+    /// the documents that give it.
+    #[test]
+    fn slices_and_the_phase3_scorecard() {
+        let mut long_complex = record(
+            "a",
+            "contract",
+            12,
+            json!({"filename_correct": true, "unsupported_fact_doc": false, "description_completeness": 1.0, "evidence_recall": 0.5}),
+            1_000.0,
+        );
+        long_complex.categories = vec![
+            "contract".into(),
+            "middle_fact".into(),
+            "competing_dates".into(),
+        ];
+        let mut short = record(
+            "b",
+            "invoice",
+            1,
+            json!({"filename_correct": true, "unsupported_fact_doc": true, "description_completeness": 0.5, "evidence_recall": 1.0}),
+            3_000.0,
+        );
+        // Competing dates alone, and a routine table, do not make it complex.
+        short.categories = vec!["invoice".into(), "competing_dates".into(), "table".into()];
+        short.readiness = Some("needs_review".into());
+        let mut long = record(
+            "c",
+            "lease",
+            25,
+            json!({"filename_correct": false, "unsupported_fact_doc": false}),
+            2_000.0,
+        );
+        long.categories = vec!["contract".into()];
+        let mut records = vec![long_complex, short, long];
+        for (record, (generation, generated, prompt)) in records.iter_mut().zip([
+            (500.0, 120.0, 2_400.0),
+            (900.0, 80.0, 900.0),
+            (700.0, 100.0, 3_100.0),
+        ]) {
+            record
+                .timings
+                .insert("generation_ms".into(), json!(generation));
+            record
+                .timings
+                .insert("generated_tokens".into(), json!(generated));
+            record.timings.insert("prompt_tokens".into(), json!(prompt));
+        }
+        assert_eq!(slices(&records[0]), vec!["long", "complex"]);
+        assert!(slices(&records[1]).is_empty());
+        assert_eq!(slices(&records[2]), vec!["long"]);
+
+        let report = build(
+            RunInfo {
+                mode: "live".into(),
+                ..RunInfo::default()
+            },
+            records,
+        );
+        let sliced = &report.groups["slice"];
+        assert_eq!(
+            (sliced["long"].documents, sliced["complex"].documents),
+            (2, 1)
+        );
+        assert_eq!(sliced["long"].rates["filename_correct"].correct, 1);
+        assert_eq!(report.latency.by_slice["long"]["total_ms"].count, 2);
+        assert!(!report.latency.by_slice.contains_key("short"));
+
+        let figure = |key: &str| {
+            report
+                .scorecard
+                .iter()
+                .find(|entry| entry.metric == key)
+                .map(|entry| (entry.value, entry.documents))
+                .unwrap()
+        };
+        assert_eq!(report.scorecard.len(), SCORECARD.len());
+        assert_eq!(figure("long_filename_correct"), (Some(0.5), 2));
+        assert_eq!(figure("complex_filename_correct"), (Some(1.0), 1));
+        assert_eq!(figure("unsupported_fact_doc"), (Some(0.3333), 3));
+        assert_eq!(figure("review_rate"), (Some(0.3333), 3));
+        assert_eq!(figure("description_completeness"), (Some(0.75), 2));
+        assert_eq!(figure("evidence_recall"), (Some(0.75), 2));
+        let overall = &report.latency.overall;
+        assert_eq!(figure("total_ms_p50"), (Some(overall["total_ms"].p50), 3));
+        assert_eq!(
+            figure("generation_ms_p95"),
+            (Some(overall["generation_ms"].p95), 3)
+        );
+        assert_eq!(
+            figure("prompt_tokens_p50"),
+            (Some(overall["prompt_tokens"].p50), 3)
+        );
+
+        let page = crate::markdown::render(&report);
+        assert!(page.contains("## Phase 3 scorecard"), "{page}");
+        assert!(
+            page.contains("| Long-document filename accuracy (10+ pages) | 50.0% | 2 |"),
+            "{page}"
+        );
+        assert!(page.contains("## By slice"), "{page}");
+        assert!(page.contains("| long | 2 | 1/2 |"), "{page}");
+
+        // An extract-only run names nothing, so there is no list.
+        let extract = build(
+            RunInfo {
+                mode: EXTRACT.into(),
+                ..RunInfo::default()
+            },
+            Vec::new(),
+        );
+        assert!(extract.scorecard.is_empty());
     }
 
     /// A worker that sends no layouts judges no route, but the report still

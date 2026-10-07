@@ -8,16 +8,18 @@
 //!
 //! Prints one JSON object: the proposed filename, the description, the
 //! evidence, the review reasons, and local timings. This is the same code path
-//! the desktop app uses, so a watched folder, a script, or a future connector
-//! gets identical results without linking the UI.
+//! the desktop app uses - the evidence pipeline, by default - so a watched
+//! folder, a script, or a future connector gets identical results without
+//! linking the UI.
 //!
-//! `--pipeline legacy` runs the pre-redesign head/tail window and prompt
-//! instead, which is how the two are compared on one corpus.
+//! `--pipeline digest` (or `new`) runs the digest pipeline a hosted model
+//! reads through, and `--pipeline legacy` the pre-redesign head/tail window
+//! and prompt, which is how they are compared on one corpus.
 
 use std::{collections::HashMap, env, fs, path::Path, process, time::Instant};
 
 use intern_engine::{
-    DigestBudget, DocumentExtractor, DocumentSource, Engine, ModelClient, ModelRequest,
+    DigestBudget, DocumentExtractor, DocumentSource, Engine, ModelClient, ModelRequest, Pipeline,
     SupervisedWorker,
     distill::distill,
     domain::{AnalysisTelemetry, PageOrigin, SourcePage},
@@ -97,7 +99,7 @@ fn run() -> Result<Value, String> {
             model_id,
             extraction_millis,
         ),
-        Some("new") | None => run_current(
+        Some("new" | "digest") => run_current(
             &source,
             &extension,
             endpoint,
@@ -106,7 +108,48 @@ fn run() -> Result<Value, String> {
             budget,
             extraction_millis,
         ),
+        Some("evidence") | None => run_evidence(
+            &source,
+            &extension,
+            endpoint,
+            api_key,
+            model_id,
+            extraction_millis,
+        ),
         Some(other) => Err(format!("unknown --pipeline {other}")),
+    }
+}
+
+fn run_evidence(
+    source: &DocumentSource,
+    extension: &str,
+    endpoint: &str,
+    api_key: &str,
+    model_id: &str,
+    extraction_millis: u64,
+) -> Result<Value, String> {
+    let client = ModelClient::new(endpoint, api_key, model_id)
+        .map_err(|error| format!("model client: {error}"))?;
+    let engine = Engine::new(client).with_pipeline(Pipeline::Evidence);
+    match engine.analyze(source, extension, &[]) {
+        Ok(analysis) => Ok(json!({
+            "pipeline": "evidence",
+            "ok": true,
+            "filename": analysis.filename,
+            "description": analysis.description,
+            "status": analysis.status,
+            "reviewReasons": analysis.review_reasons,
+            "proposal": analysis.proposal,
+            "facts": analysis.facts,
+            "telemetry": analysis.telemetry,
+            "extractionMillis": extraction_millis,
+        })),
+        Err(error) => Ok(json!({
+            "pipeline": "evidence",
+            "ok": false,
+            "error": error.code().as_str(),
+            "extractionMillis": extraction_millis,
+        })),
     }
 }
 
@@ -121,7 +164,9 @@ fn run_current(
 ) -> Result<Value, String> {
     let client = ModelClient::new(endpoint, api_key, model_id)
         .map_err(|error| format!("model client: {error}"))?;
-    let engine = Engine::new(client).with_budget(budget);
+    let engine = Engine::new(client)
+        .with_pipeline(Pipeline::Digest)
+        .with_budget(budget);
     let distill_started = Instant::now();
     let digest = engine.distill(source);
     let distill_micros = u64::try_from(distill_started.elapsed().as_micros()).unwrap_or(u64::MAX);
