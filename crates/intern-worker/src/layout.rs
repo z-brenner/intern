@@ -548,9 +548,14 @@ fn to_display_blocks(blocks: &mut [LayoutBlock], native: &NativePage) {
 /// own: 300 DPI, what scanners write.
 pub const NOMINAL_UNITS_PER_PIXEL: f64 = UNITS_PER_POINT * 72.0 / 300.0;
 
-/// A page read by OCR: its text is the engine's reading, exactly, and its
-/// blocks are built from the engine's lines by the same analysis native
-/// pages get.
+/// A page read by OCR: its blocks are built from the engine's lines by the
+/// same analysis native pages get, and its text is those blocks in reading
+/// order, as a page rebuilt from its geometry reads. An engine's own text
+/// runs an unruled table down its columns or across a row of boxes, and
+/// pairs no label with its value; on InternBench's scans, reading the
+/// blocks instead took labelled values from 90% to 99% with every table
+/// row and reading order kept. A reading with no lines keeps the engine's
+/// text.
 ///
 /// `size` is the image read, in pixels, before the engine turned it;
 /// `scale` is tenths of a point per pixel, [`NOMINAL_UNITS_PER_PIXEL`] when
@@ -565,9 +570,14 @@ pub fn ocr_page(
 ) -> ExtractedPage {
     let mut layout = ocr_layout(&reading, size, scale, signals);
     number_blocks(page_number, &mut layout.blocks);
+    let text = if reading.lines.is_empty() || layout.blocks.is_empty() {
+        reading.text
+    } else {
+        linearize(&layout.blocks)
+    };
     ExtractedPage {
         page_number,
-        text: reading.text,
+        text,
         source: PageSource::Ocr,
         ocr_confidence: Some(reading.mean_confidence),
         vision_escalated: false,

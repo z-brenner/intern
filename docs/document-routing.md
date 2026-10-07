@@ -63,7 +63,13 @@ over while inspection already has the page open:
   full-page image whose words look like a bad prior OCR. That page is read
   again, and the fresh reading replaces the layer only if it is confident
   (mean ≥ 75) or has fewer OCR-error words; otherwise the layer is kept. The
-  page text is the OCR engine's text, exactly as before.
+  engine's lines go through the same analysis as a `layout` page's runs, and
+  the page text is the blocks' linearisation. An engine's own text reads an
+  unruled table down its columns or across a row of boxes and pairs no label
+  with its value; on InternBench's 72 documents, reading the blocks instead
+  took labelled values from 90.5% to 99.3%, with table rows (98.2%), reading
+  order (100%) and every date, name and identifier the same. A reading with
+  no lines keeps the engine's text.
 * **`ocr_regions`** — trustworthy native text with an image of at least 15%
   of the page that no text overlaps (a pasted scan of a signature block, a
   stamped certificate). The page is rendered once, the regions cropped and

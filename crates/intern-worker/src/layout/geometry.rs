@@ -671,8 +671,14 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
             .count()
     };
     let (left_labels, right_labels) = (labelled(left), labelled(right));
+    // A table running across the gutter, its rows level on both sides and
+    // none of them a label: boxes of labelled values over a schedule of
+    // coverage or line items read that way, and cutting there splits every
+    // row of the table in two. The labels above it say nothing then about
+    // two flows side by side.
+    let table_across = spanning_rows(items, left, right) >= 3;
     // Labels down both sides: two forms side by side.
-    if left_labels >= 2 && right_labels >= 2 {
+    if left_labels >= 2 && right_labels >= 2 && !table_across {
         return true;
     }
     if one_table(items, left, right) {
@@ -715,8 +721,9 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
     }
     // A grid of labelled values beside a block with none: an address beside
     // a statement's date and account number.
-    if (left_labels == 0 && self_contained(right) >= 3)
-        || (right_labels == 0 && self_contained(left) >= 3)
+    if !table_across
+        && ((left_labels == 0 && self_contained(right) >= 3)
+            || (right_labels == 0 && self_contained(left) >= 3))
     {
         return true;
     }
@@ -733,6 +740,22 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
         matched as f64 / these.len().max(1) as f64
     };
     left.len() >= 3 && right.len() >= 3 && shared(left, right).max(shared(right, left)) < 0.5
+}
+
+/// Rows on the left level with a row on the right where both are cells -
+/// two or more on each side - and neither opens with a label: a table
+/// running across the gutter. A value wrapped onto a line of its own beside
+/// another is one cell, and two forms side by side have those.
+fn spanning_rows(items: &[Item], left: &[Row], right: &[Row]) -> usize {
+    let cells = |row: &Row| row.members.len() >= 2 && !starts_with_label(items, row);
+    left.iter()
+        .filter(|row| cells(row))
+        .filter(|row| {
+            right.iter().any(|other| {
+                cells(other) && (row.y1 - other.y1).abs() <= row.height().min(other.height()) * 0.3
+            })
+        })
+        .count()
 }
 
 /// Whether a row opens with a label: `Date:`, or `Date: May 1`.

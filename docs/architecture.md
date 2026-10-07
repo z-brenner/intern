@@ -125,15 +125,17 @@ development machine, a Linux CI runner - or when they fail to load, Tesseract
 reads scans exactly as before. [OCR](ocr.md) has the engine, its settings,
 the benchmark behind each one, and what it costs. Either way the reading
 comes back as lines with boxes and confidences, which the layout analysis
-turns into blocks like any other page's.
+turns into blocks like any other page's, and the page's text is those blocks
+in reading order: tables as rows, labelled values as `Label: value` lines.
+An engine's own order read an unruled table down its columns and left a
+form's labels apart from their values ([Document routing](document-routing.md)
+has the measurement).
 
-Tesseract's text keeps the layout Tesseract found. The worker rebuilds it from
-Tesseract's TSV output: words on a line joined with a space, lines with a
-newline, and a new block or paragraph with a blank line, the way Tesseract's
-own text output separates them. It used to be one line per page, which left
-distillation no headings, no labelled lines, and no date lines on exactly the
-documents where dates go missing; the scanned lease's evidence for its date
-was its whole page.
+Tesseract's lines come from its TSV output: words on a line joined with a
+space, lines grouped into Tesseract's blocks and paragraphs. Its text used to
+be one line per page, which left distillation no headings, no labelled lines,
+and no date lines on exactly the documents where dates go missing; the
+scanned lease's evidence for its date was its whole page.
 
 A standalone image is OCR'd as one page; a TIFF holding a frame per page — a
 fax, a batch scan — yields a page per frame, in order, up to the page limit.
