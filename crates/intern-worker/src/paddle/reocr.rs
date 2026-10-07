@@ -138,8 +138,12 @@ fn date_shaped(parts: &[&str]) -> bool {
     )
 }
 
+/// A word's parts between `/`, `-` and `.`, without the punctuation around
+/// it. A full stop at its end ends the sentence, not the date: "due by
+/// 09/30/2026." is a date, not four numbers.
 fn date_parts(word: &str) -> Vec<&str> {
     word.trim_matches(|c: char| matches!(c, ',' | ';' | ':' | '(' | ')'))
+        .trim_end_matches('.')
         .split(['/', '-', '.'])
         .collect()
 }
@@ -220,14 +224,55 @@ fn is_calendar_date(year: u32, month: u32, day: u32) -> bool {
     (1900..=2199).contains(&year) && day >= 1 && day <= days_in_month(year, month)
 }
 
+/// The dates and amounts of money a reading holds - the critical fields a
+/// reading can be checked on without knowing what the page says. `sound`
+/// ones look right; `damaged` ones are shaped like one with something
+/// wrong in it: a day the month does not have, a letter among the digits,
+/// a dollar sign read as an S, a cent missing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FieldTally {
+    pub sound: usize,
+    pub damaged: usize,
+}
+
+impl FieldTally {
+    fn total(self) -> usize {
+        self.sound + self.damaged
+    }
+
+    fn count(&mut self, sound: bool) {
+        if sound {
+            self.sound += 1;
+        } else {
+            self.damaged += 1;
+        }
+    }
+}
+
+/// The checkable critical fields of a line, dates and amounts together.
+pub fn field_tally(text: &str) -> FieldTally {
+    let (dates, amounts) = tally(text);
+    FieldTally {
+        sound: dates.sound + amounts.sound,
+        damaged: dates.damaged + amounts.damaged,
+    }
+}
+
 /// Whether every date the line seems to hold is a real calendar date. A
 /// line with no date in it passes.
+pub fn dates_parse(text: &str) -> bool {
+    tally(text).0.damaged == 0
+}
+
+/// The line's dates, then its amounts.
 ///
 /// A month name followed by a day and a year - "March 4, 2026", "4 March
 /// 2026" - must have a numeric day and a four-digit numeric year that fit
-/// the month: "March 4, 2O26" and "June 31, 2026" fail. A numeric date must
-/// name a real day in some order.
-pub fn dates_parse(text: &str) -> bool {
+/// the month: "March 4, 2O26" and "June 31, 2026" are damaged. A numeric
+/// date must name a real day in some order. An amount with a currency
+/// symbol must be digits in groups of three with two decimals if any, and
+/// one without must not have a letter where a digit belongs.
+fn tally(text: &str) -> (FieldTally, FieldTally) {
     let words: Vec<&str> = text.split_whitespace().collect();
     let trim = |word: &str| word.trim_end_matches([',', '.', ';']).to_owned();
     let day_like = |word: &str| {
@@ -236,6 +281,8 @@ pub fn dates_parse(text: &str) -> bool {
         (1..=2).contains(&word.chars().count()) && has_digit(word)
     };
     let year_like = |word: &str| trim(word).chars().count() >= 3 && has_digit(word);
+    let mut dates = FieldTally::default();
+    let mut amounts = FieldTally::default();
     for (index, word) in words.iter().enumerate() {
         if let Some(month) = month_number(word) {
             let before = index.checked_sub(1).map(|before| words[before]);
@@ -243,10 +290,10 @@ pub fn dates_parse(text: &str) -> bool {
             let fits = match (before, after) {
                 // "4 March 2026"
                 (Some(day), Some(year)) if day_like(day) && year_like(year) => {
-                    day_and_year_fit(month, &trim(day), Some(&trim(year)))
+                    Some(day_and_year_fit(month, &trim(day), Some(&trim(year))))
                 }
                 // "March 4, 2026", "March 4"
-                (_, Some(day)) if day_like(day) => day_and_year_fit(
+                (_, Some(day)) if day_like(day) => Some(day_and_year_fit(
                     month,
                     &trim(day),
                     words
@@ -254,27 +301,94 @@ pub fn dates_parse(text: &str) -> bool {
                         .filter(|year| year_like(year))
                         .map(|year| trim(year))
                         .as_deref(),
-                ),
+                )),
                 // "March 2026"
-                (_, Some(year)) if year_like(year) => trim(year)
-                    .parse::<u32>()
-                    .is_ok_and(|year| (1900..=2199).contains(&year)),
-                _ => true,
+                (_, Some(year)) if year_like(year) => Some(
+                    trim(year)
+                        .parse::<u32>()
+                        .is_ok_and(|year| (1900..=2199).contains(&year)),
+                ),
+                // A month name with no number beside it is a word.
+                _ => None,
             };
-            if !fits {
-                return false;
+            if let Some(fits) = fits {
+                dates.count(fits);
             }
         }
         if let Some((year, month, day)) = numeric_date(word) {
             let swapped = month <= 12 && is_calendar_date(year, day, month);
-            if !is_calendar_date(year, month, day) && !swapped {
-                return false;
-            }
+            dates.count(is_calendar_date(year, month, day) || swapped);
         } else if broken_numeric_date(word) {
-            return false;
+            dates.count(false);
+        } else if let Some(sound) = amount(word) {
+            amounts.count(sound);
         }
     }
-    true
+    (dates, amounts)
+}
+
+/// Digits in groups of three, or not grouped at all, with two decimals if
+/// any: 4,417.20, 12300, 6.85.
+fn money_digits(text: &str) -> bool {
+    let (whole, cents) = match text.split_once('.') {
+        Some((whole, cents)) => (whole, Some(cents)),
+        None => (text, None),
+    };
+    let cents_ok =
+        cents.is_none_or(|cents| cents.len() == 2 && cents.chars().all(|c| c.is_ascii_digit()));
+    let groups: Vec<&str> = whole.split(',').collect();
+    let whole_ok = !whole.is_empty()
+        && groups
+            .iter()
+            .all(|group| !group.is_empty() && group.chars().all(|c| c.is_ascii_digit()))
+        && (groups.len() == 1
+            || (groups[0].len() <= 3 && groups[1..].iter().all(|group| group.len() == 3)));
+    cents_ok && whole_ok
+}
+
+/// Whether a word is an amount of money, and if so whether it reads as
+/// one: `Some(true)` for "$4,417.20" or "12,300.00", `Some(false)` for
+/// "$145.0", "S6.85" or "4,4l7.20", `None` for a word that is no amount.
+fn amount(word: &str) -> Option<bool> {
+    let body = word
+        .trim_start_matches('(')
+        .trim_end_matches([')', ',', ';', ':']);
+    // "$145.00." ends a sentence.
+    let body = match body.strip_suffix('.') {
+        Some(stripped) if stripped.ends_with(|c: char| c.is_ascii_digit()) => stripped,
+        _ => body,
+    };
+    if let Some(rest) = body.strip_prefix(['$', '€', '£']) {
+        return has_digit(rest).then(|| money_digits(rest));
+    }
+    // A dollar sign read as an S, before what is otherwise a sum with cents.
+    if let Some(rest) = body.strip_prefix('S')
+        && rest.contains('.')
+        && money_digits(rest)
+    {
+        return Some(false);
+    }
+    if looks_like_amount(body) {
+        return Some(true);
+    }
+    // A letter where a digit belongs - O for 0, l or I for 1 - in what is
+    // otherwise a grouped or decimal sum.
+    let confusables = body
+        .chars()
+        .filter(|c| matches!(c, 'O' | 'o' | 'l' | 'I'))
+        .count();
+    let digits = body.chars().filter(char::is_ascii_digit).count();
+    let read_as_digits: String = body
+        .chars()
+        .map(|c| match c {
+            'O' | 'o' => '0',
+            'l' | 'I' => '1',
+            other => other,
+        })
+        .collect();
+    let shaped = (read_as_digits.contains(',') || read_as_digits.contains('.'))
+        && money_digits(&read_as_digits);
+    (confusables > 0 && digits >= 2 && shaped).then_some(false)
 }
 
 fn strip_ordinal(word: &str) -> &str {
@@ -310,31 +424,74 @@ pub struct Reading {
     pub mean_probability: f32,
 }
 
-/// Of the readings of one line, the index of the one to keep: a reading
-/// whose dates are all real dates beats one whose are not, and then the
-/// more confident one wins. A tie keeps the earlier reading, so the first
-/// pass stands unless something is better than it.
+/// Of the readings of one line, the index of the one to keep. The first is
+/// the first pass; the rest are second readings of the same line.
+///
+/// A second reading has to read the same line: it may not lose a date or an
+/// amount the line held, nor damage one, and it may not differ from the
+/// first pass by more than a quarter of its characters. One that repairs a
+/// damaged field - "0.7/01/2026" read as "07/01/2026" - wins on that alone.
+/// Otherwise the more confident reading wins, and a tie keeps the earlier,
+/// so the first pass stands unless something is better than it.
+///
+/// A second reading without the guards was measured worse than none: it
+/// replaced a line ending "by 09/30/2026." with four characters of noise
+/// that, holding no date, had no wrong date either, and turned "$6.85"
+/// into "S6.85" and "$145.00" into "$145.0" with a higher mean probability
+/// than the readings they replaced.
 pub fn best_reading(readings: &[Reading]) -> usize {
+    let Some(first) = readings.first() else {
+        return 0;
+    };
     let mut best = 0;
     for (index, reading) in readings.iter().enumerate().skip(1) {
-        let incumbent = &readings[best];
-        let (parses, incumbent_parses) = (dates_parse(&reading.text), dates_parse(&incumbent.text));
-        let better = match (parses, incumbent_parses) {
-            (true, false) => !reading.text.trim().is_empty(),
-            (false, true) => false,
-            _ => reading.mean_probability > incumbent.mean_probability,
-        };
-        if better {
+        if improves_on(&readings[best], reading, &first.text) {
             best = index;
         }
     }
     best
 }
 
+fn improves_on(incumbent: &Reading, challenger: &Reading, first: &str) -> bool {
+    if challenger.text.trim().is_empty() || !reads_the_same_line(first, &challenger.text) {
+        return false;
+    }
+    let (kept, offered) = (field_tally(&incumbent.text), field_tally(&challenger.text));
+    if offered.total() < kept.total() {
+        return false;
+    }
+    if offered.damaged != kept.damaged {
+        return offered.damaged < kept.damaged;
+    }
+    challenger.mean_probability > incumbent.mean_probability
+}
+
+/// Whether two readings differ by at most a quarter of the characters of
+/// the longer one.
+fn reads_the_same_line(first: &str, second: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (first.chars().collect(), second.chars().collect());
+    edit_distance(&a, &b) * 4 <= a.len().max(b.len())
+}
+
+/// Levenshtein distance between two strings of characters.
+fn edit_distance(a: &[char], b: &[char]) -> usize {
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0; b.len() + 1];
+    for (i, &left) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, &right) in b.iter().enumerate() {
+            let substitution = previous[j] + usize::from(left != right);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[b.len()]
+}
+
 /// The lines of a page to re-read, least certain first, at most `limit`,
 /// from each line's text and the probability of its least certain
 /// character: a critical field read with an uncertain character, or a
-/// date that is not a date however sure the recognizer was of it.
+/// date or amount that is damaged however sure the recognizer was of it.
 pub fn lines_to_reread(
     lines: &[(&str, f32)],
     min_char_probability: f32,
@@ -344,7 +501,8 @@ pub fn lines_to_reread(
         .iter()
         .enumerate()
         .filter(|(_, (text, least))| {
-            (*least < min_char_probability && holds_critical_field(text)) || !dates_parse(text)
+            (*least < min_char_probability && holds_critical_field(text))
+                || field_tally(text).damaged > 0
         })
         .map(|(index, _)| index)
         .collect();
@@ -412,6 +570,103 @@ mod tests {
         ] {
             assert!(!dates_parse(line), "{line}");
         }
+    }
+
+    #[test]
+    fn a_full_stop_after_a_date_ends_the_sentence() {
+        assert!(dates_parse("Please pay by 09/30/2026. Remit to"));
+        assert!(dates_parse("Effective 2026-01-31."));
+        assert_eq!(
+            field_tally("Please pay by 09/30/2026."),
+            FieldTally {
+                sound: 1,
+                damaged: 0
+            }
+        );
+    }
+
+    #[test]
+    fn amounts_are_sound_or_damaged() {
+        for (line, sound, damaged) in [
+            ("1200 at $6.85 = $8,220.00", 2, 0),
+            ("Balance (412.75) and 12,300.00", 2, 0),
+            ("$145.00 per year.", 1, 0),
+            ("Rent of $5 a day", 1, 0),
+            ("$145.0 per year", 0, 1),
+            ("1200 at S6.85", 0, 1),
+            ("not less than $25,o00", 0, 1),
+            ("Total 4,4l7.20", 0, 1),
+            // Words, identifiers and phone numbers are none of these.
+            ("SUBTOTAL INV-2O417 (269) 555-0153 1400.Calder 12.5GA", 0, 0),
+        ] {
+            assert_eq!(field_tally(line), FieldTally { sound, damaged }, "{line}");
+        }
+        // A damaged amount is not a damaged date.
+        assert!(dates_parse("$145.0 per year"));
+    }
+
+    #[test]
+    fn a_second_reading_may_not_lose_or_damage_a_field() {
+        let reading = |text: &str, probability| Reading {
+            text: text.into(),
+            mean_probability: probability,
+        };
+        // Noise holds no date, so it holds no wrong date either.
+        assert_eq!(
+            best_reading(&[
+                reading("Please pay by 09/30/2026. Remit to", 0.91),
+                reading("P /2av  aR", 0.99),
+            ]),
+            0
+        );
+        assert_eq!(
+            best_reading(&[
+                reading("which is $145.00 per", 0.90),
+                reading("which is $145.0 per", 0.97),
+            ]),
+            0
+        );
+        assert_eq!(
+            best_reading(&[
+                reading("1200 at $6.85 = $8,220.00", 0.92),
+                reading("1200 at S6.85 = $8,220.00", 0.95),
+            ]),
+            0
+        );
+        // Repairing a damaged field wins even at lower confidence.
+        assert_eq!(
+            best_reading(&[
+                reading("0.7/01/2026 Payment - check.2214", 0.93),
+                reading("07/01/2026 Payment - check 2214", 0.90),
+            ]),
+            1
+        );
+        // A confident reading of a different line does not replace it.
+        assert_eq!(
+            best_reading(&[reading("By: MwNN", 0.60), reading("By: N", 0.95),]),
+            0
+        );
+        assert_eq!(
+            best_reading(&[
+                reading("Balanice forward", 0.88),
+                reading("Balance forward", 0.97),
+            ]),
+            1
+        );
+    }
+
+    #[test]
+    fn edit_distance_counts_insertions_deletions_and_substitutions() {
+        let distance = |a: &str, b: &str| {
+            edit_distance(
+                &a.chars().collect::<Vec<_>>(),
+                &b.chars().collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(distance("kitten", "sitting"), 3);
+        assert_eq!(distance("", "abc"), 3);
+        assert_eq!(distance("Ml 49101", "MI 49101"), 1);
+        assert_eq!(distance("same", "same"), 0);
     }
 
     #[test]
