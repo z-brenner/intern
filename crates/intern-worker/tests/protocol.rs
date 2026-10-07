@@ -532,6 +532,108 @@ fn a_layout_past_the_layout_budget_is_left_out_and_its_page_kept() {
     assert_eq!(parsed["event"]["document"]["truncated"], false);
 }
 
+/// Capped text is not a fixed share of the host's response line: eight
+/// million control characters are written as 48 MB of six-byte escapes, and
+/// an image document carries its page image beside them. The layouts get
+/// what the rest of the response leaves, so the line stays one the host
+/// reads.
+#[test]
+fn layouts_get_only_what_escaped_text_and_the_page_image_leave_of_the_line() {
+    use intern_worker::extract::{ExtractedPage, PageSource, VisionImage};
+    use intern_worker::layout::{BlockKind, LayoutBlock, PageLayout, TextSource};
+    use intern_worker::protocol::{MAX_LAYOUT_BYTES, MAX_RESPONSE_BYTES};
+
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let reader = TerminalGatedReader {
+        chunks: vec![
+            parse_line("escapes", "escapes.txt"),
+            joined_lines([shutdown_line()]),
+        ],
+        next: 0,
+        output,
+        first_terminal: b"\"type\":\"parsed\"",
+    };
+
+    run_concurrent_worker(reader, captured.clone(), Vec::new(), |_path, _cancel| {
+        let layout = |page: usize, bytes: usize| {
+            let mut block =
+                LayoutBlock::new(BlockKind::Paragraph, "x".repeat(bytes), TextSource::Native);
+            block.id = format!("p{page}.b1");
+            Some(PageLayout {
+                blocks: vec![block],
+                ..PageLayout::default()
+            })
+        };
+        let pages = (1..=MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS)
+            .map(|number| ExtractedPage {
+                page_number: number,
+                text: "\u{0}".repeat(MAX_PAGE_CHARS),
+                source: PageSource::Text,
+                ocr_confidence: None,
+                vision_escalated: false,
+                // Alone, every one of these is inside the layouts' own budget.
+                layout: match number {
+                    2 => layout(number, MAX_LAYOUT_BYTES - 64 * 1024),
+                    _ => layout(number, 1_000),
+                },
+            })
+            .collect();
+        Ok(ExtractedDocument {
+            pages,
+            warnings: vec![],
+            truncated: false,
+            optional_image: Some(VisionImage {
+                page_number: 1,
+                mime_type: "image/png".to_owned(),
+                data_base64: "A".repeat(5_000_000),
+            }),
+            timings: None,
+        })
+    })
+    .unwrap();
+
+    let (bytes, _) = &*captured.0;
+    let bytes = bytes.lock().unwrap().clone();
+    let line = bytes
+        .split(|byte| *byte == b'\n')
+        .find(|line| {
+            let parsed = b"\"type\":\"parsed\"";
+            line.windows(parsed.len()).any(|window| window == parsed)
+        })
+        .unwrap();
+    assert!(
+        line.len() <= MAX_RESPONSE_BYTES,
+        "{} bytes is past the host's line",
+        line.len()
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(line).unwrap();
+    let pages = &parsed["event"]["document"]["pages"];
+    assert_eq!(pages[0]["layout"]["blocks"][0]["id"], "p1.b1");
+    assert!(pages[1].get("layout").is_none());
+    assert_eq!(
+        pages[1]["text"].as_str().unwrap().chars().count(),
+        MAX_PAGE_CHARS
+    );
+    assert_eq!(pages[2]["layout"]["blocks"][0]["id"], "p3.b1");
+    assert_eq!(parsed["event"]["document"]["truncated"], false);
+}
+
+#[test]
+fn the_layout_budget_is_what_the_rest_of_the_response_leaves() {
+    use intern_worker::protocol::{MAX_LAYOUT_BYTES, MAX_RESPONSE_BYTES, layout_budget};
+
+    assert_eq!(layout_budget(0), MAX_LAYOUT_BYTES);
+    assert_eq!(layout_budget(8_000_000), MAX_LAYOUT_BYTES);
+    // Eight million escaped control characters and a page image.
+    let written = 48_000_000 + 5_000_000;
+    assert!(layout_budget(written) < MAX_LAYOUT_BYTES);
+    // Room is left for the longest request id a request line carries.
+    assert!(written + layout_budget(written) + MAX_PROTOCOL_LINE_BYTES < MAX_RESPONSE_BYTES);
+    assert_eq!(layout_budget(MAX_RESPONSE_BYTES), 0);
+    assert_eq!(layout_budget(usize::MAX), 0);
+}
+
 /// A parsed document says where its extraction's time went: what the
 /// readers recorded on the request's token, and the wall time of the whole
 /// extraction, which the protocol takes itself.

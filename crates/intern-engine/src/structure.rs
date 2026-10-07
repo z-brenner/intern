@@ -216,6 +216,7 @@ impl StructuredDocument {
 /// has one, otherwise blocks segmented from the page's text with the same
 /// ids, and every block's section linked to the heading above it.
 pub fn structured(source: &DocumentSource) -> StructuredDocument {
+    let mut parts_left = MAX_DOCUMENT_LAYOUT_PARTS;
     let mut pages = source
         .pages
         .iter()
@@ -228,17 +229,98 @@ pub fn structured(source: &DocumentSource) -> StructuredDocument {
                     .then_some([layout.width, layout.height]),
                 blocks: layout.blocks.clone(),
             },
-            None => StructuredPage {
-                page_number: page.page_number,
-                origin: page.origin,
-                route: None,
-                size: None,
-                blocks: segment(page.page_number, &page.text, page.origin),
-            },
+            None => {
+                let parts = layout_parts(&page.text);
+                let blocks = if parts <= MAX_PAGE_LAYOUT_PARTS && parts <= parts_left {
+                    parts_left -= parts;
+                    segment(page.page_number, &page.text, page.origin)
+                } else {
+                    stretches(page.page_number, &page.text, page.origin)
+                };
+                StructuredPage {
+                    page_number: page.page_number,
+                    origin: page.origin,
+                    route: None,
+                    size: None,
+                    blocks,
+                }
+            }
         })
         .collect::<Vec<_>>();
     link_sections(&mut pages);
     StructuredDocument { pages }
+}
+
+/// Lines and table cells the pages segmented here may hold: the worker's
+/// `MAX_PAGE_LAYOUT_PARTS` and `MAX_DOCUMENT_LAYOUT_PARTS`, mirrored. A block
+/// holds an object for each of its lines and cells, and the worker's
+/// character caps alone do not bound how many there are, so a page past
+/// either is cut into [`stretches`] instead: a page of a hundred thousand
+/// one-letter lines is a few dozen blocks, not a hundred thousand.
+const MAX_PAGE_LAYOUT_PARTS: usize = 50_000;
+const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
+
+/// The most bytes of a page's text one of its [`stretches`] holds.
+const STRETCH_BYTES: usize = 4_096;
+
+/// How many lines and table cells blocks segmented from `text` can hold at
+/// most: one for each line, and one for each pipe, as the worker counts
+/// them.
+fn layout_parts(text: &str) -> usize {
+    1 + text
+        .bytes()
+        .filter(|byte| matches!(byte, b'\n' | b'|'))
+        .count()
+}
+
+/// A page too dense to segment, as plain paragraphs of at most
+/// [`STRETCH_BYTES`], each ending at the last line break inside it where
+/// there is one, each the exact stretch of the page's text it covers, and
+/// none of them holding lines or cells.
+fn stretches(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBlock> {
+    let source = source_of(origin);
+    let mut blocks = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        start += text[start..].len() - text[start..].trim_start().len();
+        if start >= text.len() {
+            break;
+        }
+        let mut end = (start + STRETCH_BYTES).min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end < text.len()
+            && let Some(newline) = text[start..end].rfind('\n')
+        {
+            end = start + newline;
+        }
+        let stretch = text[start..end].trim_end();
+        blocks.push(LayoutBlock {
+            id: String::new(),
+            kind: BlockKind::Paragraph,
+            text: stretch.to_owned(),
+            bbox: None,
+            level: None,
+            section: None,
+            source,
+            confidence: None,
+            lines: Vec::new(),
+            table: None,
+            fields: Vec::new(),
+        });
+        start = end;
+    }
+    number_blocks(page_number, &mut blocks);
+    blocks
+}
+
+fn source_of(origin: PageOrigin) -> TextSource {
+    if origin == PageOrigin::Ocr {
+        TextSource::Ocr
+    } else {
+        TextSource::Native
+    }
 }
 
 /// Paragraphs longer than this many lines are split at the next line that
@@ -257,11 +339,7 @@ const MAX_PARAGRAPH_LINES: usize = 12;
 /// like one the worker sends today. The worker's contract test holds the
 /// two to each other.
 fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBlock> {
-    let source = if origin == PageOrigin::Ocr {
-        TextSource::Ocr
-    } else {
-        TextSource::Native
-    };
+    let source = source_of(origin);
     let lines = text.lines().map(str::trim_end).collect::<Vec<_>>();
     let kinds = lines.iter().map(|line| classify(line)).collect::<Vec<_>>();
     let mut blocks = Vec::new();
@@ -762,6 +840,89 @@ mod tests {
             document.block("p1.b2").unwrap().lines[0].text,
             "Tenant pays rent monthly."
         );
+    }
+
+    /// A page of more lines than a page's blocks may hold is cut into plain
+    /// stretches of its text, each found in it, in order; the page after it
+    /// is segmented as usual.
+    #[test]
+    fn a_page_too_dense_to_segment_is_cut_into_stretches_of_its_text() {
+        let dense = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let document = structured(&DocumentSource::from_pages(vec![
+            SourcePage::new(1, &dense, PageOrigin::Native),
+            SourcePage::new(2, "TERMS\nNet 30.", PageOrigin::Native),
+        ]));
+
+        let page = &document.pages[0];
+        assert!(page.blocks.len() <= dense.len() / (STRETCH_BYTES / 2) + 1);
+        assert!(page.blocks.iter().all(|block| {
+            block.kind == BlockKind::Paragraph && block.lines.is_empty() && !block.text.is_empty()
+        }));
+        let mut from = 0;
+        for block in &page.blocks {
+            let at = dense[from..].find(&block.text).unwrap();
+            from += at + block.text.len();
+        }
+        assert_eq!(page.blocks[0].id, "p1.b1");
+        assert_eq!(document.pages[1].blocks[0].kind, BlockKind::Heading);
+    }
+
+    /// Lines and cells are counted across the document in page order: once
+    /// the pages before have taken what a document may hold, a page that
+    /// would fit on its own is cut into stretches.
+    #[test]
+    fn pages_past_the_documents_lines_and_cells_are_cut_into_stretches() {
+        let text = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS - 1);
+        let fitting = MAX_DOCUMENT_LAYOUT_PARTS / layout_parts(&text);
+        let pages = (1..=fitting + 1)
+            .map(|number| SourcePage::new(number, &text, PageOrigin::Native))
+            .collect();
+        let document = structured(&DocumentSource::from_pages(pages));
+
+        for page in &document.pages[..fitting] {
+            assert!(page.blocks.iter().all(|block| !block.lines.is_empty()));
+        }
+        assert!(
+            document.pages[fitting]
+                .blocks
+                .iter()
+                .all(|block| block.lines.is_empty())
+        );
+    }
+
+    /// A stretch never ends inside a character, and a page that is one long
+    /// line is cut where the stretch is full.
+    #[test]
+    fn stretches_cut_a_line_with_no_breaks_on_character_boundaries() {
+        let text = "é".repeat(STRETCH_BYTES);
+        let blocks = stretches(1, &text, PageOrigin::Native);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.text.as_str())
+                .collect::<String>(),
+            text
+        );
+    }
+
+    /// An escaped pipe is part of its cell, as the worker reads it.
+    #[test]
+    fn an_escaped_pipe_in_a_segmented_table_is_part_of_its_cell() {
+        let document = structured(&DocumentSource::from_pages(vec![SourcePage::new(
+            1,
+            "| Clause | Terms |\n| --- | --- |\n| 4 | Net 30 \\| Net 45 |",
+            PageOrigin::Office,
+        )]));
+
+        let table = document.block("p1.b1").unwrap().table.as_ref().unwrap();
+        assert_eq!(table.rows.len(), 2);
+        let cells = table.rows[1]
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(cells, ["4", "Net 30 \\| Net 45"]);
     }
 
     #[test]

@@ -17,8 +17,9 @@ use thiserror::Error;
 
 use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
 use crate::limits::{
-    MAX_DOCUMENT_CHARS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI,
-    RENDER_DPI, ResourceLimits, VISION_GRID,
+    MAX_DOCUMENT_CHARS, MAX_DOCUMENT_LAYOUT_PARTS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS,
+    MAX_PAGE_LAYOUT_PARTS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI, ResourceLimits,
+    VISION_GRID,
 };
 use crate::temp::TempWorkspace;
 use crate::timing::{ExtractionTimings, micros_since};
@@ -1181,13 +1182,14 @@ impl NativeRead {
     /// The page, counted against the document's characters in page order
     /// as the worker will count them (see [`goes_out_whole`]): a page read
     /// as its text gets its fast layout only if it goes out whole - a
-    /// layout repeats its text several times over - and a page whose text
+    /// layout repeats its text several times over - and its lines and
+    /// cells fit what is left (see [`TextBudget`]), and a page whose text
     /// was written from its layout lets that layout go if it does not.
-    fn finish(self, characters: &mut usize) -> ExtractedPage {
+    fn finish(self, budget: &mut TextBudget) -> ExtractedPage {
         let Self { mut page, fast } = self;
         match fast {
             Some(FastLayout { native, signals }) => {
-                if goes_out_whole(&page.text, characters) {
+                if budget.admits(&page.text) {
                     let mut layout =
                         crate::layout::fast_layout(&page.text, native.as_ref(), signals);
                     crate::layout::number_blocks(page.page_number, &mut layout.blocks);
@@ -1195,7 +1197,7 @@ impl NativeRead {
                 }
                 page
             }
-            None => counted(page, characters),
+            None => counted(page, &mut budget.characters),
         }
     }
 }
@@ -1220,8 +1222,9 @@ fn assemble(
 ) -> Result<ExtractedDocument, ExtractionError> {
     // The document's characters, counted down in page order as the worker
     // will count them when it sends the pages: a page it will cut has no
-    // layout built, or keeps none.
-    let mut characters = MAX_DOCUMENT_CHARS;
+    // layout built, or keeps none. Fast layouts also count their lines and
+    // cells against it.
+    let mut budget = TextBudget::document();
     let mut outcomes = outcomes
         .into_iter()
         .map(|outcome| (outcome.page_index, outcome))
@@ -1232,7 +1235,7 @@ fn assemble(
     for (page_index, plan) in plans.into_iter().enumerate() {
         let outcome = outcomes.remove(&page_index);
         let (mut page, vision) = match plan {
-            PagePlan::Done { page, vision } => (page.finish(&mut characters), vision),
+            PagePlan::Done { page, vision } => (page.finish(&mut budget), vision),
             PagePlan::Scan {
                 page_number,
                 corrupt,
@@ -1262,7 +1265,7 @@ fn assemble(
                             signals,
                             stop,
                         ),
-                        &mut characters,
+                        &mut budget.characters,
                     ),
                     vision,
                 )
@@ -1292,17 +1295,22 @@ fn assemble(
                                     signals,
                                     stop,
                                 ),
-                                &mut characters,
+                                &mut budget.characters,
                             ),
                             page_vision,
                         )
                     }
-                    _ => {
+                    fresh => {
+                        // The layer stays, but a reading that came back
+                        // unsure says the page is hard to read either way:
+                        // the image it was rendered with goes with the
+                        // layer's text, as it would with a scan's.
+                        let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
                         let route = native_route(PageRoute::Ocr, &signals);
                         (
                             native_page(page_number, inspection, signals, route, stop)
-                                .finish(&mut characters),
-                            vision,
+                                .finish(&mut budget),
+                            vision.or(reread_vision),
                         )
                     }
                 }
@@ -1334,11 +1342,10 @@ fn assemble(
                     scale,
                     stop,
                 )
-                .map(|page| counted(page, &mut characters))
+                .map(|page| counted(page, &mut budget.characters))
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route, stop)
-                        .finish(&mut characters)
+                    native_page(page_number, inspection, signals, route, stop).finish(&mut budget)
                 });
                 (page, vision)
             }
@@ -1383,7 +1390,7 @@ impl ExtractedPage {
     /// text if it fits what the worker sends (see
     /// [`ExtractedPage::of_text_within`]).
     pub fn of_text(page_number: usize, text: String, source: PageSource) -> Self {
-        Self::of_text_within(page_number, text, source, &mut MAX_DOCUMENT_CHARS.clone())
+        Self::of_text_within(page_number, text, source, &mut TextBudget::document())
     }
 
     /// A page from a reader that knows no geometry, with the blocks of its
@@ -1391,16 +1398,17 @@ impl ExtractedPage {
     /// page past [`MAX_PAGE_CHARS`], and every page past a document's first
     /// [`MAX_DOCUMENT_CHARS`], on the way out, and a page it cuts loses its
     /// layout there; a layout repeats its text several times over, so for
-    /// such a page none is built. `budget` is what is left of the
-    /// document's characters, counted down here as the worker will count
-    /// them.
+    /// such a page none is built. Nor is one for a page whose lines and
+    /// cells are more than a layout may hold (see [`TextBudget`]). `budget`
+    /// is what is left of the document's, counted down here as the worker
+    /// will count it.
     pub fn of_text_within(
         page_number: usize,
         text: String,
         source: PageSource,
-        budget: &mut usize,
+        budget: &mut TextBudget,
     ) -> Self {
-        let layout = goes_out_whole(&text, budget).then(|| {
+        let layout = budget.admits(&text).then(|| {
             let mut layout = PageLayout::of_text(page_number, &text);
             crate::layout::assign_sections([&mut layout]);
             layout
@@ -1414,6 +1422,63 @@ impl ExtractedPage {
             layout,
         }
     }
+}
+
+/// What is left of a document's allowance for pages whose layouts are built
+/// from their text: its characters, as the worker counts them on the way
+/// out (see [`goes_out_whole`]), and the lines and table cells those
+/// layouts may hold.
+///
+/// A layout holds an object for every line and cell, and the character caps
+/// alone do not bound how many: two million characters can be hundreds of
+/// thousands of one-letter lines, or of pipes. So a page built from text
+/// gets a layout only while its lines and cells fit both
+/// [`MAX_PAGE_LAYOUT_PARTS`] and what the document has left of
+/// [`MAX_DOCUMENT_LAYOUT_PARTS`]; otherwise it goes without one, as a page
+/// past the characters does, and the host segments it from its text.
+/// Layouts built from a page's geometry or its OCR are bounded where they
+/// are read, by runs and by what OCR can find on a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextBudget {
+    pub characters: usize,
+    pub layout_parts: usize,
+}
+
+impl TextBudget {
+    /// A whole document's.
+    pub const fn document() -> Self {
+        Self {
+            characters: MAX_DOCUMENT_CHARS,
+            layout_parts: MAX_DOCUMENT_LAYOUT_PARTS,
+        }
+    }
+
+    /// Counts a page built from `text` against the budget, and whether its
+    /// layout may be built: the page goes out whole, and its lines and
+    /// cells fit what a page may hold and what the document has left. Its
+    /// characters are counted either way; its lines and cells only when it
+    /// gets a layout.
+    fn admits(&mut self, text: &str) -> bool {
+        if !goes_out_whole(text, &mut self.characters) {
+            return false;
+        }
+        let parts = layout_parts(text);
+        if parts > MAX_PAGE_LAYOUT_PARTS || parts > self.layout_parts {
+            return false;
+        }
+        self.layout_parts -= parts;
+        true
+    }
+}
+
+/// How many lines and table cells a layout built from `text` can hold at
+/// most: one for each line, and one for each pipe, which is as many cells
+/// as a table row can split into.
+pub fn layout_parts(text: &str) -> usize {
+    1 + text
+        .bytes()
+        .filter(|byte| matches!(byte, b'\n' | b'|'))
+        .count()
 }
 
 /// Whether a page's text is short enough to be read for its geometry. A
@@ -2674,7 +2739,7 @@ mod text_page_layouts {
 
     #[test]
     fn pages_past_the_documents_characters_get_no_layout() {
-        let mut budget = MAX_DOCUMENT_CHARS;
+        let mut budget = TextBudget::document();
         let sheet = "cell ".repeat(MAX_PAGE_CHARS / 5);
         let pages = (1..=6)
             .map(|number| {
@@ -2688,6 +2753,64 @@ mod text_page_layouts {
             .collect::<Vec<_>>();
         let with_layouts = pages.iter().filter(|page| page.layout.is_some()).count();
         assert_eq!(with_layouts, MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS);
-        assert_eq!(budget, 0);
+        assert_eq!(budget.characters, 0);
+    }
+
+    /// A page of one-letter lines is well inside the characters, but its
+    /// layout would hold an object for every line: past what a page's
+    /// layout may hold, it goes without one, its text whole.
+    #[test]
+    fn a_page_of_more_lines_than_a_layout_may_hold_gets_no_layout() {
+        let lines = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        let page = ExtractedPage::of_text(1, lines.clone(), PageSource::Text);
+        assert!(page.layout.is_none());
+        assert_eq!(page.text, lines);
+
+        let pipes = "|".repeat(MAX_PAGE_LAYOUT_PARTS);
+        let page = ExtractedPage::of_text(1, pipes, PageSource::Text);
+        assert!(page.layout.is_none(), "every pipe could be a cell");
+
+        let fits = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+        assert!(
+            ExtractedPage::of_text(1, fits, PageSource::Text)
+                .layout
+                .is_some()
+        );
+    }
+
+    /// Lines and cells are counted across the document in page order: once
+    /// the pages before have taken what the document may hold, a page that
+    /// would fit on its own goes without a layout, and its characters are
+    /// still counted.
+    #[test]
+    fn pages_past_the_documents_lines_and_cells_get_no_layout() {
+        let mut budget = TextBudget::document();
+        let page_text = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS - 1);
+        let per_page = layout_parts(&page_text);
+        assert!(per_page <= MAX_PAGE_LAYOUT_PARTS);
+        let pages = (1..=MAX_DOCUMENT_LAYOUT_PARTS / per_page + 2)
+            .map(|number| {
+                ExtractedPage::of_text_within(
+                    number,
+                    page_text.clone(),
+                    PageSource::Text,
+                    &mut budget,
+                )
+            })
+            .collect::<Vec<_>>();
+        let with_layouts = pages
+            .iter()
+            .take_while(|page| page.layout.is_some())
+            .count();
+        assert_eq!(with_layouts, MAX_DOCUMENT_LAYOUT_PARTS / per_page);
+        assert!(
+            pages[with_layouts..]
+                .iter()
+                .all(|page| page.layout.is_none())
+        );
+        assert_eq!(
+            budget.characters,
+            MAX_DOCUMENT_CHARS - pages.len() * page_text.chars().count()
+        );
     }
 }

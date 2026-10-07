@@ -21,6 +21,20 @@ pub const MAX_PAGE_CHARS: usize = 2_000_000;
 /// on one line, read whole into the app's own memory. Four full pages is
 /// still a hundred times what distillation reads.
 pub const MAX_DOCUMENT_CHARS: usize = 8_000_000;
+/// Lines and table cells one page's layout may hold when it is built from
+/// the page's text.
+///
+/// A layout holds an object for every line and every cell, and the
+/// character caps alone do not bound how many there are: a page of `A` and
+/// blank lines, or of nothing but pipes, is hundreds of thousands of them
+/// inside two million characters. The densest page InternBench and the
+/// fixtures hold has under 700. A page past this goes without a layout, and
+/// the host segments it from its text.
+pub const MAX_PAGE_LAYOUT_PARTS: usize = 50_000;
+/// Lines and table cells every layout built from text may hold together,
+/// counted in page order. The densest document InternBench and the fixtures
+/// hold has about ten thousand.
+pub const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
 pub const MAX_PAGE_MEGAPIXELS: u64 = 25;
 pub const MAX_PAGE_PIXELS: u64 = MAX_PAGE_MEGAPIXELS * 1_000_000;
 /// The largest image file that is decoded at all.
