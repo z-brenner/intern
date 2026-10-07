@@ -5,11 +5,15 @@
 //! keys and a diff shows only the numbers that moved. Times are
 //! milliseconds with microsecond precision; counts are integers.
 //!
-//! The model's figures are summed over every request a document cost - a
-//! prompt the server refused as too large was still read - from what each
-//! request reported; the engine's telemetry, which keeps only the request
-//! that answered, stands in when no request reported (a recording made
-//! against a server that does not say).
+//! The model's figures (prefill, generation, token counts) are the
+//! server's own account of each request it answered, summed over the
+//! document's requests. A request it did not answer reports nothing: a
+//! prompt refused as too large counts toward `model_requests` and adds
+//! nothing else, and the first attempt of a malformed reply the client
+//! retried is not seen at all. Their time shows only in `analyze_wall_ms`
+//! (and, for the retry, in `inference_ms`). The engine's telemetry, which
+//! keeps only the request that answered, stands in when no request reported
+//! (a recording made against a server that does not say).
 
 use std::collections::BTreeMap;
 
@@ -252,15 +256,40 @@ mod tests {
     use crate::recording::RecordedReply;
     use intern_engine::EngineErrorCode;
 
-    fn exchange(timings: Option<ModelTimings>) -> Exchange {
+    /// A prompt the server refused as too large: no reply, so no timings.
+    fn refused() -> Exchange {
         Exchange {
             prompt_sha256: "0".repeat(64),
-            prompt_characters: 4_000,
+            prompt_characters: 9_000,
             reply: RecordedReply::Failed {
                 code: EngineErrorCode::ModelInputTooLarge,
             },
-            model_timings: timings,
+            model_timings: None,
             wall_micros: 1_000,
+        }
+    }
+
+    /// A request the server answered, with its account of it.
+    fn answered(timings: ModelTimings) -> Exchange {
+        Exchange {
+            prompt_sha256: "1".repeat(64),
+            prompt_characters: 4_000,
+            reply: RecordedReply::Proposed {
+                proposal: intern_engine::ModelProposal {
+                    document_type: None,
+                    document_date: None,
+                    date_role: None,
+                    parties: Vec::new(),
+                    party_relation: intern_engine::PartyRelation::None,
+                    description: String::new(),
+                    confidence: 0.5,
+                    needs_review: false,
+                    evidence: intern_engine::Evidence::default(),
+                },
+                token_confidence: None,
+            },
+            model_timings: Some(timings),
+            wall_micros: 3_000_000,
         }
     }
 
@@ -298,21 +327,17 @@ mod tests {
             }),
             ..AnalysisTelemetry::default()
         };
+        // Refused as too large, then condensed and answered: only the
+        // answer carries the server's figures.
         let exchanges = [
-            exchange(Some(ModelTimings {
-                prompt_tokens: 3_000,
-                cached_tokens: 0,
-                prefill_micros: 1_000_000,
-                generated_tokens: 0,
-                generation_micros: 0,
-            })),
-            exchange(Some(ModelTimings {
+            refused(),
+            answered(ModelTimings {
                 prompt_tokens: 1_000,
                 cached_tokens: 600,
                 prefill_micros: 1_000_000,
                 generated_tokens: 100,
                 generation_micros: 2_000_000,
-            })),
+            }),
         ];
         let timings = flatten(&Measured {
             extraction_wall_micros: Some(1_600_000),
@@ -330,13 +355,32 @@ mod tests {
         assert_eq!(timings["prompt_ms"], json!(0.08));
         assert_eq!(
             timings["prompt_tokens"],
-            json!(4_000),
-            "both requests, not the telemetry's"
+            json!(1_000),
+            "the answering request's, not the telemetry's"
         );
         assert_eq!(timings["cached_tokens"], json!(600));
-        assert_eq!(timings["prefill_tok_per_s"], json!(2_000.0));
+        assert_eq!(timings["prefill_ms"], json!(1_000.0));
+        assert_eq!(timings["prefill_tok_per_s"], json!(1_000.0));
         assert_eq!(timings["generation_tok_per_s"], json!(50.0));
-        assert_eq!(timings["model_requests"], json!(2));
+        assert_eq!(timings["model_requests"], json!(2), "the refusal counts");
+
+        // Every answered request is summed.
+        let both = [
+            answered(ModelTimings {
+                prompt_tokens: 3_000,
+                cached_tokens: 0,
+                prefill_micros: 1_000_000,
+                generated_tokens: 50,
+                generation_micros: 1_000_000,
+            }),
+            exchanges[1].clone(),
+        ];
+        let summed = flatten(&Measured {
+            exchanges: &both,
+            ..Measured::default()
+        });
+        assert_eq!(summed["prompt_tokens"], json!(4_000));
+        assert_eq!(summed["generated_tokens"], json!(150));
         assert_eq!(timings["prompt_characters"], json!(7_400));
         assert_eq!(timings["redistillations"], json!(1));
 

@@ -105,6 +105,13 @@ fn header(out: &mut String, report: &Report) {
             let _ = write!(corpus, " · {count} {status}");
         }
     }
+    let stale = report.records.iter().filter(|record| record.stale).count();
+    if stale > 0 {
+        let _ = write!(
+            corpus,
+            " · {stale} scored from stale replies (--allow-stale)"
+        );
+    }
     if !report.corpus.gold_sha256.is_empty() {
         let _ = write!(corpus, " · gold `{}`", short(&report.corpus.gold_sha256));
     }
@@ -126,10 +133,25 @@ fn header(out: &mut String, report: &Report) {
         );
     }
     if report.timings_source == "recorded" {
-        let _ = writeln!(
-            out,
-            "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run."
-        );
+        let stale = report.records.iter().filter(|record| record.stale).count();
+        if stale == 0 {
+            let _ = writeln!(
+                out,
+                "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run."
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "\n> Replay: every score is this code's except those of the {stale} document(s) scored from replies to prompts the engine no longer builds (`--allow-stale`, marked in Misses), which do not measure this code. Timings and memory are the recording's, taken on the machine above - not measured by this run."
+            );
+        }
+    }
+    if let Some(change) = report
+        .recording
+        .as_ref()
+        .and_then(|recording| recording.configuration_change.as_deref())
+    {
+        let _ = writeln!(out, "\n> **Warning:** {change}.");
     }
     let _ = writeln!(out);
 }
@@ -569,8 +591,9 @@ fn misses(out: &mut String, report: &Report) {
             } else {
                 format!(" · trap: {}", record.traps.join("; "))
             };
+            let stale = if record.stale { " · stale reply" } else { "" };
             Some(format!(
-                "- **{}**: expected `{}`, got `{}`{traps}{reasons}",
+                "- **{}**: expected `{}`, got `{}`{traps}{reasons}{stale}",
                 record.id,
                 record
                     .gold_filenames
@@ -583,6 +606,19 @@ fn misses(out: &mut String, report: &Report) {
         .collect::<Vec<_>>();
     let _ = writeln!(out, "## Misses ({})", lines.len());
     let _ = writeln!(out);
+    let stale = report
+        .records
+        .iter()
+        .filter(|record| record.stale)
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    if !stale.is_empty() {
+        let _ = writeln!(
+            out,
+            "Scored from replies to prompts the engine no longer builds (`--allow-stale`): {}.\n",
+            stale.join(", ")
+        );
+    }
     if lines.is_empty() {
         let _ = writeln!(out, "Every scored filename is right.\n");
         return;

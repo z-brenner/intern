@@ -145,7 +145,7 @@ fn exchange(sha: String, reply: RecordedReply) -> Exchange {
     }
 }
 
-fn recorded(
+fn recorded_document(
     id: &str,
     file: &str,
     extraction: RecordedExtraction,
@@ -203,7 +203,7 @@ fn recording() -> Recording {
         worker: Some("intern-worker".into()),
         note: "built by the test".into(),
         documents: vec![
-            recorded(
+            recorded_document(
                 "invoice-alpha",
                 "invoice-alpha.pdf",
                 RecordedExtraction::Parsed {
@@ -219,7 +219,7 @@ fn recording() -> Recording {
                 12_000.0,
             ),
             // Recorded against a prompt the engine does not build.
-            recorded(
+            recorded_document(
                 "notice-beta",
                 "notice-beta.pdf",
                 RecordedExtraction::Parsed { source: notice },
@@ -232,7 +232,7 @@ fn recording() -> Recording {
                 )],
                 8_000.0,
             ),
-            recorded(
+            recorded_document(
                 "scan-delta",
                 "scan-delta.png",
                 RecordedExtraction::Parsed {
@@ -247,7 +247,7 @@ fn recording() -> Recording {
                 )],
                 30_000.0,
             ),
-            recorded(
+            recorded_document(
                 "broken-epsilon",
                 "broken-epsilon.pdf",
                 RecordedExtraction::Failed {
@@ -545,4 +545,142 @@ fn a_baseline_holds_replay_to_every_document_and_compare_names_the_flip() {
         "{before_page}"
     );
     assert!(before_page.contains("## OCR"));
+}
+
+/// A long, information-dense memo: every paragraph distinct, so the
+/// digest budget decides what reaches the prompt.
+fn long_text() -> String {
+    let mut text = String::from("MEMORANDUM OF ANNUAL PLANT REVIEW\n\nDate: May 6, 2026\n\n");
+    for index in 0..60 {
+        text.push_str(&format!(
+            "Section {index}. Line {index} at the Orrin Vale plant ran {} shifts in week {}, \
+             producing {} cases of preserves with a reject rate of {}.{} per cent; the crew lead \
+             for bay {} logged {} maintenance tickets and {} safety observations.\n\n",
+            3 + index % 4,
+            index + 1,
+            1_200 + index * 37,
+            index % 7,
+            index % 10,
+            index % 9 + 1,
+            index % 5,
+            index % 3
+        ));
+    }
+    text
+}
+
+/// A digest budget or context changed in code since the recording: replay
+/// builds prompts as the engine does now, so a document whose prompt that
+/// changes is stale - and the run says why, loudly.
+#[test]
+fn a_budget_changed_since_the_recording_makes_long_documents_stale() {
+    let bench = Bench::new();
+    let mut gold = gold();
+    gold["documents"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "memo-long", "file": "memo-long.txt", "kind": "memo", "format": "txt",
+            "text_layer": "native", "pages": 1, "categories": ["information_dense"],
+            "gold": {"document_type": "Memorandum", "document_date": "2026-05-06", "parties": [], "party_relation": "none"}
+        }));
+    std::fs::write(bench.path("gold.json"), gold.to_string()).unwrap();
+    let long = source_from_text(long_text());
+    // Recorded when the budget let a document this long through whole.
+    let old_budget = DigestBudget {
+        passthrough_characters: 40_000,
+        max_characters: 40_000,
+    };
+    assert_ne!(
+        distill(&long, old_budget).text,
+        distill(&long, DigestBudget::default()).text,
+        "the test needs a document the budget changes"
+    );
+    let mut recorded = recording();
+    recorded.budget_characters = old_budget.max_characters;
+    recorded.documents.push(recorded_document(
+        "memo-long",
+        "memo-long.txt",
+        RecordedExtraction::Parsed {
+            source: long.clone(),
+        },
+        vec![exchange(
+            ModelRequest::from_digest(&distill(&long, old_budget)).sha256(),
+            RecordedReply::Proposed {
+                proposal: notice_reply(),
+                token_confidence: None,
+            },
+        )],
+        20_000.0,
+    ));
+    recorded.save(&bench.path("recording.json")).unwrap();
+
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "memo-long".into()];
+        options.markdown = Some(bench.path("report.md"));
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("memo-long").unwrap().status, "stale_prompt");
+    assert_eq!(
+        report.record("invoice-alpha").unwrap().status,
+        "completed",
+        "a short document's prompt does not depend on the budget"
+    );
+    let change = report
+        .recording
+        .as_ref()
+        .unwrap()
+        .configuration_change
+        .clone()
+        .unwrap();
+    assert!(change.contains("40000 characters"), "{change}");
+    let page = std::fs::read_to_string(bench.path("report.md")).unwrap();
+    assert!(
+        page.contains("> **Warning:** the recording was made with"),
+        "{page}"
+    );
+}
+
+/// `--allow-stale` scores a stale prompt; it cannot rescue a document whose
+/// bytes changed, and the page says which scores came from stale replies.
+#[test]
+fn allowing_staleness_never_passes_a_changed_fixture_and_is_shown() {
+    let bench = Bench::new();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [{"file": "scan-delta.png", "sha256": "regenerated"}]}).to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.mode = Mode::Replay {
+            recording: bench.path("recording.json"),
+            allow_stale: true,
+        };
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec![
+            "invoice-alpha".into(),
+            "notice-beta".into(),
+            "scan-delta".into(),
+        ];
+        options.markdown = Some(bench.path("report.md"));
+    });
+    assert_eq!(
+        exit, EXIT_REGRESSED,
+        "stale_fixture fails whatever is allowed"
+    );
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+    assert!(report.record("notice-beta").unwrap().stale);
+    let page = std::fs::read_to_string(bench.path("report.md")).unwrap();
+    assert!(
+        page.contains("1 scored from stale replies (--allow-stale)"),
+        "{page}"
+    );
+    assert!(
+        page.contains("except those of the 1 document(s) scored from replies to prompts the engine no longer builds"),
+        "{page}"
+    );
+    assert!(
+        page.contains("Scored from replies to prompts the engine no longer builds (`--allow-stale`): notice-beta."),
+        "{page}"
+    );
 }

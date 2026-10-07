@@ -81,6 +81,10 @@ pub struct RecordingInfo {
     pub git_commit: Option<String>,
     #[serde(default)]
     pub note: String,
+    /// How the digest budget or context the recording was made with differs
+    /// from the engine's now; replay uses today's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_change: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

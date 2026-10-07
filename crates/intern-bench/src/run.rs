@@ -104,6 +104,10 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             allow_stale,
         } => {
             let (recorded, bytes) = Recording::load(&recording)?;
+            let configuration_change = replay::configuration_change(&recorded);
+            if let Some(change) = &configuration_change {
+                eprintln!("WARNING: {change}");
+            }
             let records = documents
                 .iter()
                 .map(|document| {
@@ -130,6 +134,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     recorded_at: recorded.recorded_at.clone(),
                     git_commit: recorded.git_commit.clone(),
                     note: recorded.note.clone(),
+                    configuration_change,
                 }),
                 corpus,
             };
@@ -223,7 +228,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             unscored.join(", ")
         );
         eprintln!(
-            "re-record (scripts/run-internbench.sh), or pass --allow-stale to score stale prompts anyway"
+            "re-record (scripts/run-internbench.sh, then `intern-bench merge-recordings` to replace only these documents); --allow-stale scores stale_prompt documents anyway, never stale_fixture or unrecorded ones"
         );
         exit = EXIT_REGRESSED;
     }
