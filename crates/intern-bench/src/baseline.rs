@@ -691,11 +691,22 @@ fn whole_corpus_latency(
                 .to_owned(),
         );
     }
+    // Every document of the run must have measured every stage the
+    // baseline has: a stage measured on fewer would compare a smaller
+    // sample, and the document it lacks may be the slow one.
     let unmeasured = baseline
         .latency
         .keys()
-        .filter(|metric| !report.latency.overall.contains_key(*metric))
-        .map(|metric| format!("every document's {metric}"))
+        .filter_map(|metric| {
+            let measured = report
+                .latency
+                .overall
+                .get(metric)
+                .map_or(0, |distribution| distribution.count);
+            (measured != completed_in_both).then(|| {
+                format!("{metric} (measured on {measured} of {completed_in_both} documents)")
+            })
+        })
         .collect::<Vec<_>>();
     if !unmeasured.is_empty() {
         return Err(unmeasured_error(&unmeasured));
@@ -1437,6 +1448,21 @@ mod tests {
         let whole = compare(&report("live", after(&[], 1_600.0)), &baseline, Some(1.5));
         assert!(!whole.passed);
         assert_eq!(whole.latency[0].documents, 10);
+
+        // A stage one document did not measure would shrink the sample.
+        let mut short = after(&[], 1_000.0);
+        short[4].timings.insert("total_ms".into(), Value::Null);
+        let short = compare(&report("live", short), &baseline, Some(1.5));
+        assert!(!short.passed);
+        assert!(
+            short
+                .failures
+                .iter()
+                .any(|line| line.starts_with("latency:")
+                    && line.contains("total_ms (measured on 9 of 10 documents)")),
+            "{:?}",
+            short.failures
+        );
 
         let mut subset = report("live", after(&[], 1_000.0));
         subset.records.truncate(2);
