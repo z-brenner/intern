@@ -797,16 +797,18 @@ fn workbook_document(
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut pages = Vec::new();
     let mut elided = false;
+    let mut characters = crate::limits::MAX_DOCUMENT_CHARS;
     for (name, sheet) in sheets {
         let Some(sheet) = sheet else {
             continue;
         };
         let (text, sheet_elided) = render_sheet(name.as_deref(), &sheet);
         elided |= sheet_elided;
-        pages.push(ExtractedPage::of_text(
+        pages.push(ExtractedPage::of_text_within(
             pages.len() + 1,
             text,
             PageSource::AnyDoc,
+            &mut characters,
         ));
     }
     if pages.is_empty() {

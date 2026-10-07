@@ -17,8 +17,8 @@ use thiserror::Error;
 
 use crate::layout::{NativePage, PageLayout, PageRoute, RouteSignals, measure_signals, route_page};
 use crate::limits::{
-    MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI, RENDER_DPI,
-    ResourceLimits, VISION_GRID,
+    MAX_DOCUMENT_CHARS, MAX_EXTRACTION_DURATION, MAX_PAGE_CHARS, MAX_VISION_LONG_EDGE, MIN_OCR_DPI,
+    RENDER_DPI, ResourceLimits, VISION_GRID,
 };
 use crate::temp::TempWorkspace;
 use crate::timing::{ExtractionTimings, micros_since};
@@ -1296,17 +1296,46 @@ pub fn link_sections(pages: &mut [ExtractedPage]) {
 
 impl ExtractedPage {
     /// A page from a reader that knows no geometry, with the blocks of its
-    /// text.
+    /// text if it fits what the worker sends (see
+    /// [`ExtractedPage::of_text_within`]).
     pub fn of_text(page_number: usize, text: String, source: PageSource) -> Self {
-        let mut layout = PageLayout::of_text(page_number, &text);
-        crate::layout::assign_sections([&mut layout]);
+        Self::of_text_within(page_number, text, source, &mut MAX_DOCUMENT_CHARS.clone())
+    }
+
+    /// A page from a reader that knows no geometry, with the blocks of its
+    /// text while the text fits what the worker sends. The worker cuts a
+    /// page past [`MAX_PAGE_CHARS`], and every page past a document's first
+    /// [`MAX_DOCUMENT_CHARS`], on the way out, and a page it cuts loses its
+    /// layout there; a layout repeats its text several times over, so for
+    /// such a page none is built. `budget` is what is left of the
+    /// document's characters, counted down here as the worker will count
+    /// them.
+    pub fn of_text_within(
+        page_number: usize,
+        text: String,
+        source: PageSource,
+        budget: &mut usize,
+    ) -> Self {
+        let allowed = MAX_PAGE_CHARS.min(*budget);
+        let layout = match text.char_indices().nth(allowed) {
+            Some(_) => {
+                *budget -= allowed;
+                None
+            }
+            None => {
+                *budget -= text.chars().count();
+                let mut layout = PageLayout::of_text(page_number, &text);
+                crate::layout::assign_sections([&mut layout]);
+                Some(layout)
+            }
+        };
         Self {
             page_number,
             text,
             source,
             ocr_confidence: None,
             vision_escalated: false,
-            layout: Some(layout),
+            layout,
         }
     }
 }
@@ -2068,7 +2097,13 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
     let mut next = format.first;
     let mut first = true;
     // A chain can be no longer than the file has room for directories.
-    while next != 0 && seen.insert(next) && seen.len() <= MAX_TIFF_DIRECTORIES {
+    while next != 0 && seen.insert(next) {
+        if seen.len() > MAX_TIFF_DIRECTORIES {
+            // The chain goes on past what any document this reads could
+            // need: whatever its rest holds goes unread, so say so.
+            frames.beyond_limit = true;
+            break;
+        }
         let Some(directory) = format.directory(&mut file, next) else {
             break;
         };
@@ -2438,5 +2473,100 @@ mod snapshot_tests {
 
         assert_eq!(std::fs::read(snapshot.path()).unwrap(), b"original");
         assert_eq!(std::fs::read(source).unwrap(), b"replacement");
+    }
+}
+
+#[cfg(test)]
+mod tiff_chains {
+    use super::*;
+
+    /// A little-endian TIFF of image file directories only, each saying
+    /// whether it is a reduced-resolution copy, chained in order; the last
+    /// points at `last_next` (0 ends the chain).
+    fn chain(reduced: &[bool], last_next: Option<usize>) -> tempfile::NamedTempFile {
+        const DIRECTORY: usize = 2 + 12 + 4;
+        let at = |index: usize| (8 + index * DIRECTORY) as u32;
+        let mut bytes = b"II".to_vec();
+        bytes.extend(42_u16.to_le_bytes());
+        bytes.extend(at(0).to_le_bytes());
+        for (index, copy) in reduced.iter().enumerate() {
+            bytes.extend(1_u16.to_le_bytes());
+            bytes.extend(NEW_SUBFILE_TYPE.to_le_bytes());
+            bytes.extend(4_u16.to_le_bytes());
+            bytes.extend(1_u32.to_le_bytes());
+            bytes.extend(u32::from(*copy).to_le_bytes());
+            let next = if index + 1 < reduced.len() {
+                at(index + 1)
+            } else {
+                last_next.map_or(0, at)
+            };
+            bytes.extend(next.to_le_bytes());
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_chain_cut_short_by_the_directory_bound_is_marked_as_going_on() {
+        // A page, then more reduced-resolution copies than the bound
+        // allows, then a page the walk never reaches.
+        let mut reduced = vec![false];
+        reduced.extend(std::iter::repeat_n(true, MAX_TIFF_DIRECTORIES + 10));
+        reduced.push(false);
+        let file = chain(&reduced, None);
+        let frames = later_frames(file.path(), 10);
+        assert!(frames.directories.is_empty());
+        assert!(frames.beyond_limit, "pages may lie past the bound");
+    }
+
+    #[test]
+    fn a_whole_chain_or_a_looping_one_is_not_marked_as_going_on() {
+        let pages = chain(&[false, false, true, false], None);
+        let frames = later_frames(pages.path(), 10);
+        assert_eq!(frames.directories.len(), 2);
+        assert!(!frames.beyond_limit);
+
+        let looping = chain(&[false, false, false], Some(0));
+        let frames = later_frames(looping.path(), 10);
+        assert_eq!(frames.directories.len(), 2);
+        assert!(
+            !frames.beyond_limit,
+            "a loop ends the chain; nothing is past it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod text_page_layouts {
+    use super::*;
+
+    #[test]
+    fn a_page_the_worker_will_cut_gets_no_layout() {
+        let short = ExtractedPage::of_text(1, "Notice of Termination".into(), PageSource::Text);
+        assert!(short.layout.is_some());
+
+        let long = "word ".repeat(MAX_PAGE_CHARS / 5 + 1);
+        let page = ExtractedPage::of_text(1, long, PageSource::Text);
+        assert!(page.layout.is_none(), "the text is cut on the way out");
+    }
+
+    #[test]
+    fn pages_past_the_documents_characters_get_no_layout() {
+        let mut budget = MAX_DOCUMENT_CHARS;
+        let sheet = "cell ".repeat(MAX_PAGE_CHARS / 5);
+        let pages = (1..=6)
+            .map(|number| {
+                ExtractedPage::of_text_within(
+                    number,
+                    sheet.clone(),
+                    PageSource::AnyDoc,
+                    &mut budget,
+                )
+            })
+            .collect::<Vec<_>>();
+        let with_layouts = pages.iter().filter(|page| page.layout.is_some()).count();
+        assert_eq!(with_layouts, MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS);
+        assert_eq!(budget, 0);
     }
 }
