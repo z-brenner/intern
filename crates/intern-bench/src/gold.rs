@@ -273,6 +273,8 @@ pub struct StructureTruth {
     /// once, each on one line of the page.
     #[serde(default)]
     pub reading_order: Vec<String>,
+    /// Each table's rows. In a check-box group the first column is the
+    /// mark, `X` or blank: a blank leading cell is a box left empty.
     #[serde(default)]
     pub tables: Vec<TableTruth>,
     #[serde(default)]
@@ -285,7 +287,8 @@ pub struct StructureTruth {
 }
 
 /// A table's rows, the header first, each a list of cells; an empty cell is
-/// one the page leaves blank.
+/// one the page leaves blank, and is scored as such (see
+/// [`crate::structure`]).
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TableTruth {
     pub rows: Vec<Vec<String>>,

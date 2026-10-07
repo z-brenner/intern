@@ -28,14 +28,24 @@
 //!   pairs in order, so a missing snippet breaks both pairs it belongs to.
 //! * `table_row_accuracy`: a gold row is found when one line holds all of
 //!   its non-empty cells in order, each after the end of the one before.
-//!   The score is the share of rows found, over every table.
+//!   A blank cell says something too. When some rows of a table leave the
+//!   leading cell blank and others do not - a check-box group, whose
+//!   chosen options are marked `X` - the values the others hold there are
+//!   the table's *marks*, and a row whose leading cell is blank is not
+//!   found on a line where a mark stands between the cell of another row
+//!   before it (or the line's start) and its first cell: that `X` is
+//!   beside an option the gold leaves unmarked. The score is the share of
+//!   rows found, over every table.
 //! * `table_cell_recall`: the share of the gold's non-empty cells found in
-//!   their table's *region*: the lines from the first one holding any cell
+//!   their table's *region*: the lines from the first one holding a cell
 //!   of the table's first row (the first line, if none does) to the last
-//!   one, from there on, holding any cell of its last row (the last line,
-//!   if none does); a table split over two pages spans the break. Cells are
-//!   counted with their multiplicity: a value the table prints three times
-//!   must be found three times, without overlap.
+//!   one, from there on, holding a cell of its last row (the last line, if
+//!   none does); a table split over two pages spans the break. Only cells
+//!   of two characters or more place the region - a lone `X` or digit is
+//!   printed all over a page, so it neither anchors nor widens it - and a
+//!   first or last row without one gives way to the nearest row with one.
+//!   Cells are counted with their multiplicity: a value the table prints
+//!   three times must be found three times, without overlap.
 //! * `kv_accuracy`: a labelled value is found when a line holds the label
 //!   and, after it, the value; or when a line holds the label and nothing
 //!   else (colons, bars, dashes and full stops aside) and the next line
@@ -52,7 +62,7 @@ use serde::{Deserialize, Serialize};
 
 use intern_engine::{DocumentSource, structure::PageRoute};
 
-use crate::gold::StructureTruth;
+use crate::gold::{StructureTruth, TableTruth};
 
 /// The route's name as the worker writes it.
 pub fn route_name(route: PageRoute) -> &'static str {
@@ -173,18 +183,180 @@ fn count_bounded(haystack: &str, needle: &str) -> usize {
     count
 }
 
-/// Whether `line` holds every one of `cells` in order, each after the end
-/// of the one before. Earliest matches leave the most room, so trying them
-/// first decides it.
-fn holds_in_order(line: &str, cells: &[String]) -> bool {
-    let mut cursor = 0;
-    for cell in cells {
-        match find_bounded(line, cell, cursor) {
-            Some(at) => cursor = at + cell.len(),
-            None => return false,
-        }
+/// Every place `needle` stands on its own in `haystack`, overlapping or
+/// not, in order.
+fn occurrences(haystack: &str, needle: &str) -> Vec<usize> {
+    let step = needle.chars().next().map_or(1, char::len_utf8);
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = find_bounded(haystack, needle, from) {
+        found.push(at);
+        from = at + step;
     }
-    true
+    found
+}
+
+/// Whether one of `values` stands on its own wholly inside
+/// `line[start..end]`. The first occurrence from `start` decides it: a
+/// later one ends later still.
+fn holds_within(line: &str, values: &[&str], start: usize, end: usize) -> bool {
+    values
+        .iter()
+        .any(|value| find_bounded(line, value, start).is_some_and(|at| at + value.len() <= end))
+}
+
+/// Whether a cell may place a table: a single character - a check mark, a
+/// one-digit count - is printed all over a page.
+fn anchors(cell: &str) -> bool {
+    cell.chars().count() > 1
+}
+
+/// A gold row as it is matched: its non-blank cells, in order, and whether
+/// its leading cell is blank.
+struct GoldRow {
+    cells: Vec<String>,
+    blank_lead: bool,
+}
+
+/// A gold table as it is matched: its rows with a non-blank cell, and its
+/// marks - the values the other rows hold in the leading column when some
+/// row leaves it blank, as a check-box group marks the chosen options `X`.
+/// A blank leading cell is an empty box: it is part of what the row says.
+struct GoldTable {
+    rows: Vec<GoldRow>,
+    marks: Vec<String>,
+}
+
+impl GoldTable {
+    fn of(table: &TableTruth) -> Self {
+        let rows = table
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let cells = row.iter().map(|cell| normalise(cell)).collect::<Vec<_>>();
+                let blank_lead = cells.first().is_some_and(String::is_empty);
+                let cells = cells
+                    .into_iter()
+                    .filter(|cell| !cell.is_empty())
+                    .collect::<Vec<_>>();
+                (!cells.is_empty()).then_some(GoldRow { cells, blank_lead })
+            })
+            .collect::<Vec<_>>();
+        let mut marks = Vec::new();
+        if rows.iter().any(|row| row.blank_lead) {
+            for row in rows.iter().filter(|row| !row.blank_lead) {
+                if !marks.contains(&row.cells[0]) {
+                    marks.push(row.cells[0].clone());
+                }
+            }
+        }
+        Self { rows, marks }
+    }
+
+    /// The non-blank cells of every row but `index`, marks left out: what
+    /// may stand before a row on its line without being part of it.
+    fn captions_besides(&self, index: usize) -> Vec<&str> {
+        let mut captions = Vec::new();
+        for (other, row) in self.rows.iter().enumerate() {
+            if other == index {
+                continue;
+            }
+            for cell in &row.cells {
+                if !self.marks.contains(cell) && !captions.contains(&cell.as_str()) {
+                    captions.push(cell.as_str());
+                }
+            }
+        }
+        captions
+    }
+
+    /// The lines the table is looked for in, as `(first, last)`: from the
+    /// first line holding a cell of the first row that has a cell of two
+    /// characters or more, to the last line from there holding one of the
+    /// last such row. Single characters neither place nor widen it.
+    fn region(&self, lines: &[String]) -> (usize, usize) {
+        let anchored = |row: &GoldRow| {
+            row.cells
+                .iter()
+                .filter(|cell| anchors(cell))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let holds_any = |line: &String, cells: &[String]| {
+            cells
+                .iter()
+                .any(|cell| find_bounded(line, cell, 0).is_some())
+        };
+        let first = self
+            .rows
+            .iter()
+            .map(anchored)
+            .find(|cells| !cells.is_empty());
+        let last = self
+            .rows
+            .iter()
+            .rev()
+            .map(anchored)
+            .find(|cells| !cells.is_empty());
+        let start = first
+            .and_then(|cells| lines.iter().position(|line| holds_any(line, &cells)))
+            .unwrap_or(0);
+        let end = last
+            .and_then(|cells| {
+                lines
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .filter(|(_, line)| holds_any(line, &cells))
+                    .map(|(index, _)| index)
+                    .next_back()
+            })
+            .unwrap_or(lines.len().saturating_sub(1));
+        (start, end.max(start))
+    }
+
+    /// Whether `line` holds row `index`: every non-blank cell in order,
+    /// each starting after the end of the one before; and, when its leading
+    /// cell is blank, no mark between the cell of another row before it on
+    /// the line (or the line's start) and its first cell - an `X` there is
+    /// beside this option, which the gold leaves unmarked.
+    fn holds_row(&self, line: &str, index: usize) -> bool {
+        let row = &self.rows[index];
+        let marks = self.marks.iter().map(String::as_str).collect::<Vec<_>>();
+        let captions = self.captions_besides(index);
+        let unmarked = |at: usize| {
+            let since = captions
+                .iter()
+                .flat_map(|caption| {
+                    occurrences(line, caption)
+                        .into_iter()
+                        .map(move |start| start + caption.len())
+                })
+                .filter(|end| *end <= at)
+                .max()
+                .unwrap_or(0);
+            !holds_within(line, &marks, since, at)
+        };
+        // The ends of the cell's occurrences that complete the row so far.
+        let mut ends: Vec<usize> = Vec::new();
+        for (position, cell) in row.cells.iter().enumerate() {
+            ends = occurrences(line, cell)
+                .into_iter()
+                .filter(|at| {
+                    if position == 0 {
+                        !row.blank_lead || unmarked(*at)
+                    } else {
+                        ends.iter().any(|end| end <= at)
+                    }
+                })
+                .map(|at| at + cell.len())
+                .collect();
+            if ends.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Whether a line holds nothing but separators once the label is taken out.
@@ -420,54 +592,28 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
 
     // Tables.
     for (table_index, table) in truth.tables.iter().enumerate() {
-        let rows = table
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|cell| normalise(cell))
-                    .filter(|cell| !cell.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|row| !row.is_empty())
-            .collect::<Vec<_>>();
-        for (row_index, row) in rows.iter().enumerate() {
+        let table = GoldTable::of(table);
+        for (row_index, row) in table.rows.iter().enumerate() {
             measure.rows += 1;
-            if lines.iter().any(|line| holds_in_order(line, row)) {
+            if lines.iter().any(|line| table.holds_row(line, row_index)) {
                 measure.rows_found += 1;
             } else {
                 measure.misses.push(format!(
-                    "table {} row {}: \"{}\" not on one line",
+                    "table {} row {}: \"{}{}\" not on one line",
                     table_index + 1,
                     row_index + 1,
-                    row.join(" | ")
+                    if row.blank_lead { "(blank) | " } else { "" },
+                    row.cells.join(" | ")
                 ));
             }
         }
-        let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        if table.rows.is_empty() {
             continue;
-        };
-        let holds_any = |line: &String, row: &[String]| {
-            row.iter().any(|cell| find_bounded(line, cell, 0).is_some())
-        };
-        let start = lines
-            .iter()
-            .position(|line| holds_any(line, first))
-            .unwrap_or(0);
-        let end = lines
-            .iter()
-            .enumerate()
-            .skip(start)
-            .filter(|(_, line)| holds_any(line, last))
-            .map(|(index, _)| index)
-            .next_back()
-            .unwrap_or(lines.len().saturating_sub(1));
-        let region = lines
-            .get(start..=end.max(start))
-            .unwrap_or_default()
-            .join("\n");
+        }
+        let (start, end) = table.region(&lines);
+        let region = lines.get(start..=end).unwrap_or_default().join("\n");
         let mut wanted: Vec<(&String, usize)> = Vec::new();
-        for cell in rows.iter().flatten() {
+        for cell in table.rows.iter().flat_map(|row| &row.cells) {
             match wanted.iter_mut().find(|(value, _)| *value == cell) {
                 Some((_, count)) => *count += 1,
                 None => wanted.push((cell, 1)),
@@ -695,6 +841,101 @@ mod tests {
         );
         assert_eq!(jumbled.rows_found, 2, "{:?}", jumbled.misses);
         assert_eq!(jumbled.cells_found, 13, "{:?}", jumbled.misses);
+    }
+
+    #[test]
+    fn a_blank_mark_is_part_of_a_check_box_row() {
+        let truth = StructureTruth {
+            tables: vec![rows(&[
+                &["", "Gold PPO"],
+                &["X", "Silver PPO"],
+                &["", "High-deductible HSA"],
+                &["", "Waive coverage"],
+            ])],
+            ..StructureTruth::default()
+        };
+        // Three boxes to a line, the X beside the option chosen.
+        let marked = measure(
+            &truth,
+            &source(&[
+                "SECTION 3 - MEDICAL PLAN\nGold PPO X Silver PPO High-deductible HSA\nWaive coverage",
+            ]),
+        );
+        assert_eq!(
+            (
+                marked.rows,
+                marked.rows_found,
+                marked.cells,
+                marked.cells_found
+            ),
+            (4, 4, 5, 5),
+            "{:?}",
+            marked.misses
+        );
+        // The X beside the wrong option: that option is marked, and the
+        // gold leaves it blank.
+        let wrong = measure(
+            &truth,
+            &source(&["X Gold PPO Silver PPO High-deductible HSA\nWaive coverage"]),
+        );
+        assert_eq!(wrong.rows_found, 3, "{:?}", wrong.misses);
+        assert!(
+            wrong.misses[0].contains("\"(blank) | Gold PPO\" not on one line"),
+            "{:?}",
+            wrong.misses
+        );
+        // A second X marks an option the gold leaves blank.
+        let extra = measure(
+            &truth,
+            &source(&["Gold PPO X Silver PPO X High-deductible HSA\nWaive coverage"]),
+        );
+        assert_eq!(extra.rows_found, 3, "{:?}", extra.misses);
+        // The marks read apart from their options, after the table: the
+        // chosen option's row is not found, and the X is not in the table.
+        let apart = measure(
+            &truth,
+            &source(&["Gold PPO Silver PPO High-deductible HSA\nWaive coverage\nSigned\nX"]),
+        );
+        assert_eq!((apart.rows_found, apart.cells_found), (3, 4));
+    }
+
+    #[test]
+    fn a_lone_character_neither_places_nor_widens_a_table() {
+        let truth = StructureTruth {
+            tables: vec![rows(&[
+                &["", "No change"],
+                &["X", "Dental"],
+                &["X", "Vision"],
+            ])],
+            ..StructureTruth::default()
+        };
+        // Both marks drawn after the options, apart from them: an X is no
+        // place to end the table, and the marks are not in it.
+        let after = measure(&truth, &source(&["No change Dental Vision\nSigned\nX X"]));
+        assert_eq!(
+            (after.cells, after.cells_found),
+            (5, 3),
+            "{:?}",
+            after.misses
+        );
+        // Nor a place to start it.
+        let truth = StructureTruth {
+            tables: vec![rows(&[
+                &["X", "Dental"],
+                &["X", "Vision"],
+                &["", "No change"],
+            ])],
+            ..StructureTruth::default()
+        };
+        let before = measure(&truth, &source(&["X X\nDental Vision No change"]));
+        assert_eq!(before.cells_found, 3, "{:?}", before.misses);
+        let read = measure(&truth, &source(&["X Dental X Vision No change"]));
+        assert_eq!(
+            (read.rows_found, read.cells_found),
+            (3, 5),
+            "{:?}",
+            read.misses
+        );
     }
 
     #[test]

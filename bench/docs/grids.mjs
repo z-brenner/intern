@@ -502,7 +502,8 @@ export function benefitsChangeForm() {
     notes: `Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. It is a fillable form flattened after it was completed: the content stream holds the whole blank form, then every entry and every X, so only the geometry puts an X beside its option. Dated by the signature box (${numericDate(signed)}); the event date (${numericDate(event)}), the requested effective date (${numericDate(effective)}), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.`,
     structure: structure({
       // Each group of boxes is a table of two columns, the mark and the
-      // option: a chosen option keeps its X on its line.
+      // option: a chosen option keeps its X on its line, and an empty box
+      // is a blank mark, so an X read beside it is wrong.
       tables: groups.map(([, options]) => options.map(([caption, checked]) => [checked ? 'X' : '', caption])),
       keyValues: boxes,
       routes: { 1: 'layout' },

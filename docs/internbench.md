@@ -123,7 +123,8 @@ block, every part optional:
   reading that puts anything between those two lines loses the phrase.
 * `tables`: each table's rows, header first, each a list of cells as
   printed (`""` for a blank cell). A check-box group is a table of two
-  columns, the mark (`X` or blank) and the option.
+  columns, the mark (`X` or blank) and the option; a blank mark is scored
+  as an empty box, so an `X` read beside that option is wrong.
 * `key_values`: `{key, value}` pairs, the label as printed without its
   colon.
 * `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
@@ -360,8 +361,8 @@ one line.
 | Score | Exact definition |
 | --- | --- |
 | `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalised). A pair of consecutive gold snippets is in order when both are found and the first starts before the second. The score is the share of the n − 1 pairs in order; a snippet not found breaks both pairs it belongs to. |
-| `table_row_accuracy` | A gold row (its non-empty cells) is found when one line holds every cell in order, each starting after the end of the one before. The share of rows found, over every table of the document. |
-| `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding any cell of the table's first row (or the first line, if none does) to the last one, from there on, holding any cell of its last row (or the last line, if none does). A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
+| `table_row_accuracy` | A gold row (its non-empty cells) is found when one line holds every cell in order, each starting after the end of the one before. A blank leading cell counts too: when some rows of a table leave it blank and others do not (a check-box group, its chosen options marked `X`), the values the others hold there are the table's marks, and a row with a blank leading cell is not found on a line where a mark stands between the cell of another row before it (or the line's start) and its first cell - that `X` is beside an option the gold leaves unmarked. The share of rows found, over every table of the document. |
+| `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding a cell of the table's first row (or the first line, if none does) to the last one, from there on, holding a cell of its last row (or the last line, if none does). Only cells of two characters or more place the region - a lone `X` or digit is printed all over a page, so it neither anchors nor widens a table - and a first or last row without one gives way to the nearest row with one. A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
 | `kv_accuracy` | A labelled value is found when a line holds the label and, after it, the value; or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label in a cell and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
 | `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all. |
 
