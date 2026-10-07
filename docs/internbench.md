@@ -55,7 +55,7 @@ nothing else, and the generator refuses a directory that is not empty and
 holds no InternBench manifest. `scripts/run-internbench.sh` generates the
 default corpus again whenever a file in it differs from the committed
 `bench/manifest.json`. A live run given `--manifest` refuses to start when
-any selected document's bytes disagree with it.
+any selected document's bytes disagree with it or it does not list one.
 
 | Group | Documents |
 | --- | --- |
@@ -272,7 +272,10 @@ scored some from stale replies, never writes a baseline.
 
 * **Replay is gated per document.** A score that was good and is now bad is
   a regression, as in `intern-evaluate`. Trap, forbidden and unsafe scores
-  are good when false. Replay is deterministic, so any flip is real.
+  are good when false. Replay is deterministic, so any flip is real. A
+  change of status is a regression too, except a document that failed in
+  the baseline and completes now: that is an improvement, and its scores
+  are still held to the baseline's.
 * **A full run that drops a baseline document fails**, live or replay: a
   gold entry deleted by accident would otherwise take its coverage with it.
   So does a baseline document whose gold entry says `"recording":

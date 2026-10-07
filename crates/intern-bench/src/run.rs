@@ -197,15 +197,17 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     .filter(|document| {
                         let bytes =
                             std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
+                        // A document the manifest does not list is not
+                        // vouched for either.
                         manifest
                             .sha256(&document.file)
-                            .is_some_and(|expected| expected != sha256_hex(&bytes))
+                            .is_none_or(|expected| expected != sha256_hex(&bytes))
                     })
                     .map(|document| document.file.as_str())
                     .collect::<Vec<_>>();
                 if !differ.is_empty() {
                     return Err(format!(
-                        "{} document(s) in {} differ from the manifest (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
+                        "{} document(s) in {} differ from the manifest or are not in it (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
                         differ.len(),
                         options.corpus.display(),
                         differ.join(", ")
