@@ -45,5 +45,8 @@ ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, fea
 
 [dev-dependencies]
 intern-core = { path = "../intern-core" }
+# The host's side of the protocol, so a test can hold the two to the same
+# layouts: the engine mirrors the worker's types rather than sharing them.
+intern-engine = { path = "../intern-engine" }
 intern-intake = { path = "../intern-intake" }
 tempfile = "=3.23.0"

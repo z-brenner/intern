@@ -2432,6 +2432,7 @@ dependencies = [
  "encoding_rs",
  "image",
  "intern-core",
+ "intern-engine",
  "intern-intake",
  "jiff",
  "mailparse",
