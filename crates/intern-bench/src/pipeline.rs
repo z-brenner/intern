@@ -7,6 +7,7 @@
 //! --pipeline digest|evidence      the engine's pipeline (digest by default)
 //! --id-style stable|ordinal       how the evidence lines are named
 //! --retrieval-tier auto|whole|small|normal|dense
+//! --reply-form compact|facts
 //! --field-order fact-first|evidence-first
 //! --string-limits bounded|unbounded
 //! --context-tokens N              the server's context, when not the app's
@@ -21,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use intern_engine::{
     DocumentAnalysis, Engine, Pipeline,
-    prompt::{FieldOrder, ReplyShape, StringLimits, evidence_prompt_version},
+    prompt::{FieldOrder, ReplyForm, ReplyShape, StringLimits, evidence_prompt_version},
     retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,7 @@ pub const KEYS: &[&str] = &[
     "pipeline",
     "id-style",
     "retrieval-tier",
+    "reply-form",
     "field-order",
     "string-limits",
     "context-tokens",
@@ -78,6 +80,13 @@ impl EngineSettings {
             settings.retrieval = settings.retrieval.clone().with_tier(word).ok_or_else(|| {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
+        }
+        if let Some(word) = values.get("reply-form") {
+            settings.shape.form = ReplyForm::parse(word)
+                .ok_or_else(|| format!("--reply-form is compact or facts, not {word}"))?;
+        }
+        if settings.shape.form == ReplyForm::Compact && values.contains_key("field-order") {
+            return Err("--field-order is for --reply-form facts".to_owned());
         }
         if let Some(word) = values.get("field-order") {
             settings.shape.order = FieldOrder::parse(word).ok_or_else(|| {
@@ -280,11 +289,14 @@ mod tests {
         );
         assert_eq!(settings.context(), Some(16_384));
         let shaped = EngineSettings::parse(&values(&[
+            ("reply-form", "facts"),
             ("field-order", "evidence-first"),
             ("string-limits", "unbounded"),
         ]))
         .unwrap();
+        assert_eq!(shaped.shape.form, ReplyForm::Facts);
         assert_eq!(shaped.shape.order, FieldOrder::EvidenceFirst);
+        assert_eq!(EngineSettings::default().shape.form, ReplyForm::Compact);
         assert_eq!(shaped.shape.limits, StringLimits::Unbounded);
         let whole = EngineSettings::parse(&values(&[("retrieval-tier", "whole")])).unwrap();
         assert_eq!(whole.retrieval.whole_document_tokens, u32::MAX);
@@ -298,6 +310,8 @@ mod tests {
             ("retrieval-tier", "huge"),
             ("context-tokens", "12"),
             ("field-order", "ids-first"),
+            ("field-order", "evidence-first"),
+            ("reply-form", "brief"),
             ("string-limits", "short"),
         ] {
             assert!(
@@ -338,8 +352,17 @@ mod tests {
             ..evidence
         };
         assert_ne!(ordinal.header().retrieval, header.retrieval);
+        let facts = EngineSettings {
+            shape: ReplyShape {
+                form: ReplyForm::Facts,
+                ..ReplyShape::default()
+            },
+            ..ordinal.clone()
+        };
+        assert_ne!(facts.header().prompt_version, header.prompt_version);
         let evidence_first = EngineSettings {
             shape: ReplyShape {
+                form: ReplyForm::Facts,
                 order: FieldOrder::EvidenceFirst,
                 ..ReplyShape::default()
             },
@@ -347,7 +370,7 @@ mod tests {
         };
         assert_ne!(
             evidence_first.header().prompt_version,
-            header.prompt_version
+            facts.header().prompt_version
         );
     }
 

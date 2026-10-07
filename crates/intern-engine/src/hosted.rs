@@ -28,7 +28,6 @@ use crate::client::{
 use crate::domain::{DocumentAnalysis, ModelProposal};
 use crate::engine::Engine;
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
-use crate::prompt::SYSTEM_INSTRUCTION;
 use crate::setup::{semantic_probes, validate_semantic_probe};
 
 /// The Messages API version this client speaks.
@@ -321,13 +320,13 @@ impl HostedClient {
             HostedProvider::Anthropic => json!({
                 "model": self.config.model,
                 "max_tokens": MAX_REPLY_TOKENS,
-                "system": SYSTEM_INSTRUCTION,
+                "system": request.system_turn(),
                 "messages": [{"role": "user", "content": request.prompt}],
             }),
             HostedProvider::OpenAiCompatible => json!({
                 "model": self.config.model,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_INSTRUCTION},
+                    {"role": "system", "content": request.system_turn()},
                     {"role": "user", "content": request.prompt}
                 ],
                 "stream": false,
@@ -620,6 +619,7 @@ const fn unreachable_error() -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prompt::SYSTEM_INSTRUCTION;
 
     fn config(provider: HostedProvider, base_url: &str, model: &str) -> HostedModelConfig {
         HostedModelConfig {

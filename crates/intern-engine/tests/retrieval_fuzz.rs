@@ -32,7 +32,9 @@ use intern_engine::domain::{
 use intern_engine::evidence::{date_match_positions, normalize};
 use intern_engine::facts::{ValidationScope, validate_facts_at};
 use intern_engine::index::EvidenceIndex;
-use intern_engine::prompt::{FieldOrder, ReplyShape, StringLimits, build_evidence_request};
+use intern_engine::prompt::{
+    FieldOrder, ReplyForm, ReplyShape, StringLimits, build_evidence_request,
+};
 use intern_engine::retrieve::{
     IdStyle, RetrievalConfig, Strategy, Tier, prepare_evidence, retrieve,
 };
@@ -365,6 +367,7 @@ fn validate_a_random_reply(
     context: &intern_engine::retrieve::EvidenceContext,
 ) {
     let shape = ReplyShape {
+        form: [ReplyForm::Compact, ReplyForm::Facts][rng.below(2)],
         order: [FieldOrder::FactFirst, FieldOrder::EvidenceFirst][rng.below(2)],
         limits: [StringLimits::Bounded, StringLimits::Unbounded][rng.below(2)],
     };
@@ -458,6 +461,7 @@ fn validate_a_random_reply(
         identifier: rng.chance(40).then(|| reply_text(rng, &shown_texts)),
         identifier_evidence: cite(rng, 2),
         key_facts,
+        amount_evidence: cite(rng, 1),
         unknown_evidence: if rng.chance(20) {
             vec!["p42.b1".into()]
         } else {

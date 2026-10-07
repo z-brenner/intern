@@ -47,9 +47,10 @@
 //! live or from a recording made with it; `--pipeline digest` (or `new`, the
 //! default) the digest pipeline. For the evidence pipeline `--id-style
 //! stable|ordinal` and `--retrieval-tier auto|whole|small|normal|dense` say
-//! how its evidence is chosen and named, `--field-order
-//! fact-first|evidence-first` and `--string-limits bounded|unbounded` how
-//! its reply is shaped, and `--context-tokens N` the
+//! how its evidence is chosen and named, `--reply-form compact|facts`,
+//! `--field-order fact-first|evidence-first` and `--string-limits
+//! bounded|unbounded` how its reply is shaped (`facts` is the form the
+//! first live recordings were made with), and `--context-tokens N` the
 //! server's context when it is not the app's. A recording says which
 //! pipeline, retrieval and prompt made it, and is replayed only through the
 //! same pipeline.
@@ -74,7 +75,10 @@ use intern_engine::{
         legacy_validate,
     },
     naming::windows_name_key,
-    prompt::{FieldOrder, ReplyShape, SYSTEM_INSTRUCTION, StringLimits, evidence_prompt_version},
+    prompt::{
+        FieldOrder, ReplyForm, ReplyShape, SYSTEM_INSTRUCTION, StringLimits,
+        evidence_prompt_version,
+    },
     retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -675,6 +679,10 @@ impl EvidenceSettings {
             })?;
         }
         let mut shape = ReplyShape::default();
+        if let Some(word) = arguments.get("reply-form") {
+            shape.form = ReplyForm::parse(word)
+                .ok_or_else(|| format!("--reply-form is compact or facts, not {word}"))?;
+        }
         if let Some(word) = arguments.get("field-order") {
             shape.order = FieldOrder::parse(word).ok_or_else(|| {
                 format!("--field-order is fact-first or evidence-first, not {word}")
@@ -698,6 +706,7 @@ impl EvidenceSettings {
             && [
                 "id-style",
                 "retrieval-tier",
+                "reply-form",
                 "field-order",
                 "string-limits",
                 "context-tokens",
@@ -706,9 +715,12 @@ impl EvidenceSettings {
             .any(|key| arguments.contains_key(*key))
         {
             return Err(
-                "--id-style, --retrieval-tier, --field-order, --string-limits and --context-tokens are for --pipeline evidence"
+                "--id-style, --retrieval-tier, --reply-form, --field-order, --string-limits and --context-tokens are for --pipeline evidence"
                     .to_owned(),
             );
+        }
+        if shape.form == ReplyForm::Compact && arguments.contains_key("field-order") {
+            return Err("--field-order is for --reply-form facts".to_owned());
         }
         Ok(Self {
             pipeline,

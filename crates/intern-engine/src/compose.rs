@@ -1128,7 +1128,15 @@ pub fn amount_label(fact: &str) -> Option<&'static str> {
         ("principal", "principal"),
         ("commitment", "commitment"),
         ("premium", "premium"),
+        ("base rent", "base rent"),
         ("rent", "rent"),
+        ("base salary", "base salary"),
+        ("salary", "salary"),
+        ("settlement payment", "settlement payment"),
+        ("retainer", "retainer"),
+        ("security deposit", "security deposit"),
+        ("deposit", "deposit"),
+        ("fee", "fee"),
         ("price", "price"),
     ]
     .into_iter()

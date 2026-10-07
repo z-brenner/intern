@@ -391,7 +391,7 @@ impl Engine {
             let ceiling = context_tokens.saturating_sub(TEMPLATE_TOKENS);
             let target = ceiling.saturating_sub(CONDENSING_MARGIN_TOKENS).max(1);
             for _ in 0..MAX_REDISTILLATIONS {
-                let estimate = estimated_tokens(&request.prompt);
+                let estimate = request_tokens(&request);
                 if estimate + MAX_REPLY_TOKENS as usize <= ceiling || scale_pct <= 1 {
                     break;
                 }
@@ -433,8 +433,8 @@ impl Engine {
         existing_names: &[&str],
     ) -> EngineResult<DocumentAnalysis> {
         let request = &prepared.request;
-        let prompt_characters = request.prompt.chars().count();
-        let estimated_prompt_tokens = estimated_tokens(&request.prompt);
+        let prompt_characters = request.input_characters();
+        let estimated_prompt_tokens = request_tokens(request);
         let inference_started = Instant::now();
         let ProposerReply {
             proposal,
@@ -549,6 +549,13 @@ pub fn finish_with_dates(
 /// per CJK, Hangul, or Kana character, which it splits singly, and one per
 /// three and a half characters of anything else. Deliberately on the high
 /// side; underestimating is what costs a request.
+/// The estimated tokens of a request's own text: its user turn, and its
+/// system turn when that is the request's own (the compact evidence reply
+/// carries its instructions there).
+fn request_tokens(request: &ModelRequest) -> usize {
+    estimated_tokens(&request.prompt) + request.system.as_deref().map_or(0, estimated_tokens)
+}
+
 pub(crate) fn estimated_tokens(text: &str) -> usize {
     let mut single = 0_usize;
     let mut other = 0_usize;

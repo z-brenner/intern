@@ -223,6 +223,44 @@ pub const EVIDENCE_FIRST_INSTRUCTIONS: &str = concat!(
     r#"{"type_ids":[id],"type":"..","date_ids":[id],"date":"YYYY-MM-DD","date_role":"..","parties":[{"ids":[id],"name":"..","role":".."}],"subject_ids":[id],"subject":"..","identifier_ids":[id],"identifier":"..","facts":[{"ids":[id],"fact":".."}],"confidence":0.9,"needs_review":false}"#
 );
 
+/// The instructions of a [`ReplyForm::Compact`] reply: its facts as short
+/// arrays, each with the id of the line that states it - a type, a date and
+/// its role, up to three parties and their roles, a subject - and the id of
+/// the line with the main amount. Everything else the description needs is
+/// read from the document itself.
+///
+/// They go in the system turn, after [`SYSTEM_INSTRUCTION`], and the
+/// document in the user turn: llama-server keeps its cache of a hybrid
+/// model only at the start of the last user message, so instructions at
+/// the head of the user turn were prefilled afresh for every document. In
+/// the system turn they are the same prefix for every document and are
+/// read once. 450 tokens with this model's tokenizer.
+pub const COMPACT_INSTRUCTIONS: &str = concat!(
+    r#"Give each fact with the id of the line that states it.
+
+type: what the document is. Use the document's own words for it, whole. Never "Document", "Agreement" or "Letter" alone. Never substitute a label the document does not contain.
+
+date: the ONE date that defines THIS document. Never a due date, deadline, renewal, return-by or end date. A signed-on date loses to a stated effective date. A date this document is "issued under", "pursuant to", "dated as of" or "as amended by" belongs to that OTHER document. Its role:
+  effective -> ONLY a stated effective or start date
+  execution -> a signed-on date, if nothing else
+  notice -> a notice given or taking effect
+  termination -> a termination taking effect
+  amendment -> an amendment's own date
+  invoice -> an invoice's own date
+  filing -> a filing or certificate date
+  issuance -> a report, minutes, email or slip was itself written or put out
+  other -> none of these
+
+parties: at most 3, full names as written: who sent or issued it and who it is to or about (To:, Dear, Bill to). A first name on its own is never a party. Leave out anyone copied (cc), lawyers, signatories who are not parties and people merely mentioned. An invoice, order or slip lists its issuer, named at its top, and its customer.
+role: client, contractor, employer, employee, buyer, seller, landlord, tenant, issuer, recipient, vendor, customer, borrower, lender, licensor, licensee, sender, addressee; other when the lines do not say.
+
+subject: at most 8 words: the work, goods, premises, position or matter.
+amount: the id of the line with its main amount.
+Leave out what the lines do not state. Add "review":true only if the document contradicts itself."#,
+    "\n\n",
+    r#"{"type":["..",id],"date":["YYYY-MM-DD","role",id],"parties":[["name","role",id]],"subject":["..",id],"amount":id}"#
+);
+
 /// The instructions for `order`.
 pub const fn evidence_instructions(order: FieldOrder) -> &'static str {
     match order {
@@ -260,10 +298,41 @@ impl StringLimits {
     }
 }
 
-/// How an evidence-pipeline reply is shaped: the order of its fields and
-/// whether its strings are bounded.
+/// How an evidence-pipeline reply is written.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReplyForm {
+    /// Short arrays of facts and the ids of their lines, after instructions
+    /// in the system turn ([`COMPACT_INSTRUCTIONS`]).
+    #[default]
+    Compact,
+    /// Named fields and id lists, with a subject, an identifier, key facts,
+    /// a confidence and a review flag, after instructions at the head of the
+    /// user turn ([`EVIDENCE_INSTRUCTIONS`]): the form first recorded live.
+    Facts,
+}
+
+impl ReplyForm {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Facts => "facts",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim() {
+            "compact" => Some(Self::Compact),
+            "facts" => Some(Self::Facts),
+            _ => None,
+        }
+    }
+}
+
+/// How an evidence-pipeline reply is shaped: its form, the order of its
+/// fields (in [`ReplyForm::Facts`]) and whether its strings are bounded.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ReplyShape {
+    pub form: ReplyForm,
     pub order: FieldOrder,
     pub limits: StringLimits,
 }
@@ -274,6 +343,8 @@ pub const MAX_NAME_CHARACTERS: usize = 80;
 pub const MAX_SUBJECT_CHARACTERS: usize = 100;
 /// Longest identifier, in characters.
 pub const MAX_IDENTIFIER_CHARACTERS: usize = 40;
+/// Longest subject of a [`ReplyForm::Compact`] reply (about 8 words).
+pub const MAX_COMPACT_SUBJECT_CHARACTERS: usize = 60;
 
 /// Builds the user turn for one document's evidence: the fixed
 /// instructions, one line saying how much of the document follows, and the
@@ -283,6 +354,16 @@ pub fn build_evidence_prompt(
     context: &EvidenceContext,
     order: FieldOrder,
 ) -> String {
+    format!(
+        "{}\n\n{}",
+        evidence_instructions(order),
+        evidence_block(index, context)
+    )
+}
+
+/// One line saying how much of the document follows, and the evidence
+/// lines between delimiters.
+fn evidence_block(index: &EvidenceIndex, context: &EvidenceContext) -> String {
     let pages = index.page_count().max(1);
     let scope = if context.tier == Tier::Whole {
         format!("The whole {pages}-page document follows.")
@@ -290,10 +371,18 @@ pub fn build_evidence_prompt(
         format!("Excerpts from a {pages}-page document follow.")
     };
     format!(
-        "{}\n\n{scope}\n--- BEGIN EVIDENCE ---\n{}\n--- END EVIDENCE ---\n\nJSON only.",
-        evidence_instructions(order),
+        "{scope}\n--- BEGIN EVIDENCE ---\n{}\n--- END EVIDENCE ---\n\nJSON only.",
         context.text
     )
+}
+
+/// The system turn of an evidence-pipeline request: for a
+/// [`ReplyForm::Compact`] reply, the system instruction and the fixed
+/// instructions; `None` for the form that keeps the system instruction
+/// alone.
+pub fn evidence_system(shape: ReplyShape) -> Option<String> {
+    (shape.form == ReplyForm::Compact)
+        .then(|| format!("{SYSTEM_INSTRUCTION}\n\n{COMPACT_INSTRUCTIONS}"))
 }
 
 /// The request for one document's evidence: its prompt, the grammar that
@@ -324,8 +413,13 @@ pub fn build_evidence_request(
         style,
         shape,
     );
+    let prompt = match shape.form {
+        ReplyForm::Compact => evidence_block(index, context),
+        ReplyForm::Facts => build_evidence_prompt(index, context, shape.order),
+    };
     ModelRequest {
-        prompt: build_evidence_prompt(index, context, shape.order),
+        prompt,
+        system: evidence_system(shape),
         grammar: Some(grammar),
         evidence: Some(EvidenceHandles::new(handles)),
     }
@@ -361,6 +455,9 @@ pub fn evidence_grammar<'a>(
         StringLimits::Bounded => format!("{name} ::= \"\\\"\" char{{1,{limit}}} \"\\\"\"\n"),
         StringLimits::Unbounded => format!("{name} ::= \"\\\"\" char+ \"\\\"\"\n"),
     };
+    if shape.form == ReplyForm::Compact {
+        return compact_grammar(&words, &string);
+    }
     let fact_first = shape.order == FieldOrder::FactFirst;
     let mut grammar = String::new();
     if words.is_empty() {
@@ -462,6 +559,76 @@ pub fn evidence_grammar<'a>(
     grammar
 }
 
+/// The grammar of a [`ReplyForm::Compact`] reply: a type and its id, a
+/// date, its role and its id, up to three parties each with a role and an
+/// id, and optionally a subject and its id, the id of the amount's line and
+/// a review request. Each fact is an array with its id last, so a fact is
+/// never stated without the line it stands on; an absent type or date is
+/// `null`. `words` are the ids as the reply writes them.
+fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> String {
+    let mut grammar = String::new();
+    if words.is_empty() {
+        grammar.push_str(concat!(
+            r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]" review? "}""#,
+            "\n",
+        ));
+    } else {
+        grammar.push_str(concat!(
+            r#"root ::= "{" type "," date "," parties subject? amount? review? "}""#,
+            "\n",
+            r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
+            "\n",
+            r#"date ::= "\"date\":" ( "null" | "[" iso "," drole "," id "]" )"#,
+            "\n",
+            r#"parties ::= "\"parties\":[" ( party ( "," party ( "," party )? )? )? "]""#,
+            "\n",
+            r#"party ::= "[" s80 "," prole "," id "]""#,
+            "\n",
+            r#"subject ::= ",\"subject\":[" s60 "," id "]""#,
+            "\n",
+            r#"amount ::= ",\"amount\":" id"#,
+            "\n",
+        ));
+        grammar.push_str("id ::= ");
+        grammar.push_str(&prefix_tree(words.iter().map(String::as_str).collect()));
+        grammar.push('\n');
+        grammar.push_str(ISO_RULE);
+        grammar.push_str(&role_rules());
+        grammar.push_str(&string("s60", MAX_COMPACT_SUBJECT_CHARACTERS));
+        grammar.push_str(&string("s80", MAX_NAME_CHARACTERS));
+        grammar.push_str(CHAR_RULE);
+    }
+    grammar.push_str(concat!(r#"review ::= ",\"review\":true""#, "\n"));
+    grammar
+}
+
+/// The date's shape, tighter than the digest grammar's.
+const ISO_RULE: &str = concat!(
+    r#"iso ::= "\"" [12] [0-9] [0-9] [0-9] "-" ( "0" [1-9] | "1" [0-2] ) "-" ( "0" [1-9] | [12] [0-9] | "3" [01] ) "\"""#,
+    "\n"
+);
+
+/// One character of a JSON string.
+const CHAR_RULE: &str = concat!(
+    r#"char ::= [^"\\\x00-\x1F\x7F] | "\\" ( ["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] )"#,
+    "\n"
+);
+
+/// The date role and party role rules.
+fn role_rules() -> String {
+    let literals = |roles: &mut dyn Iterator<Item = &str>| {
+        roles
+            .map(|role| gbnf_literal(&format!("\"{role}\"")))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    format!(
+        "drole ::= {}\nprole ::= {}\n",
+        literals(&mut DateRole::ALL.iter().map(|role| role.as_str())),
+        literals(&mut PartyRole::ALL.iter().map(|role| role.as_str())),
+    )
+}
+
 /// `words` as one GBNF expression that matches exactly them, written as a
 /// prefix tree: the words that share a beginning share one literal for it,
 /// so the grammar engine never holds more alternatives open than the next
@@ -534,7 +701,10 @@ fn common_prefix<'a>(words: &[&'a str]) -> &'a str {
 pub fn evidence_prompt_version(shape: ReplyShape) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(evidence_instructions(shape.order).as_bytes());
+    match evidence_system(shape) {
+        Some(system) => hasher.update(system.as_bytes()),
+        None => hasher.update(evidence_instructions(shape.order).as_bytes()),
+    }
     for (handles, style) in [
         (["p1.b1", "p1.b2"], IdStyle::Stable),
         (["1", "2"], IdStyle::Ordinal),
@@ -693,6 +863,7 @@ mod tests {
                     &index,
                     &context,
                     ReplyShape {
+                        form: ReplyForm::Facts,
                         order,
                         limits: StringLimits::Bounded,
                     },
@@ -1037,6 +1208,171 @@ mod tests {
                 tokens < crate::client::MAX_REPLY_TOKENS as usize,
                 "{tokens}"
             );
+        }
+
+        fn compact_request_for(
+            source: &DocumentSource,
+            style: IdStyle,
+        ) -> (ModelRequest, Vec<String>) {
+            let config = RetrievalConfig {
+                id_style: style,
+                ..RetrievalConfig::default()
+            };
+            let index = EvidenceIndex::build_with(source, config.index_options());
+            let context = retrieve(&index, &config, 100);
+            let handles = context
+                .handles
+                .iter()
+                .map(|(handle, _)| handle.clone())
+                .collect();
+            (
+                build_evidence_request(&index, &context, ReplyShape::default()),
+                handles,
+            )
+        }
+
+        /// The compact reply's instructions are the system turn, the same
+        /// for every document, so the server's cache keeps them; the user
+        /// turn is the document alone, and its grammar cites exactly the
+        /// lines it shows.
+        #[test]
+        fn a_compact_request_keeps_its_instructions_in_the_system_turn() {
+            assert_eq!(ReplyShape::default().form, ReplyForm::Compact);
+            let documents = [
+                invoice(),
+                source_from_text(
+                    "NOTICE OF TERMINATION\n\nDated March 3, 2026.\nTo: Imogen Castellanos",
+                ),
+                source_from_text("This section restates the obligations in full. ".repeat(900)),
+            ];
+            let mut systems = Vec::new();
+            for document in &documents {
+                for style in [IdStyle::Stable, IdStyle::Ordinal] {
+                    let (request, handles) = compact_request_for(document, style);
+                    let system = request.system.clone().expect("a system turn");
+                    assert!(system.starts_with(SYSTEM_INSTRUCTION));
+                    assert!(system.ends_with(COMPACT_INSTRUCTIONS));
+                    assert!(
+                        request.prompt.starts_with("The whole ")
+                            || request.prompt.starts_with("Excerpts from a "),
+                        "{}",
+                        request.prompt
+                    );
+                    assert!(!request.prompt.contains("type:"));
+                    assert!(request.prompt.ends_with("JSON only."));
+                    let grammar = request.grammar.as_deref().unwrap();
+                    let mut cited = grammar_ids(grammar);
+                    let mut shown = prompt_handles(&request.prompt);
+                    assert_eq!(shown, handles);
+                    cited.sort();
+                    shown.sort();
+                    assert_eq!(cited, shown, "{style:?}: {grammar}");
+                    systems.push(system);
+                }
+            }
+            systems.dedup();
+            assert_eq!(systems.len(), 1);
+        }
+
+        #[test]
+        fn the_compact_instructions_keep_the_rules_that_matter() {
+            let prompt = COMPACT_INSTRUCTIONS;
+            for role in DateRole::ALL {
+                assert!(
+                    prompt.contains(&format!("\n  {} ->", role.as_str())),
+                    "role {} is not explained",
+                    role.as_str()
+                );
+            }
+            for role in PartyRole::ALL {
+                assert!(prompt.contains(role.as_str()), "{}", role.as_str());
+            }
+            for rule in [
+                "Use the document's own words for it, whole",
+                "Never substitute a label the document does not contain",
+                "was itself written or",
+                "belongs to that OTHER document",
+                "\"issued under\"",
+                "\"pursuant to\"",
+                "\"dated as of\"",
+                "\"as amended by\"",
+                "Never a due date, deadline, renewal, return-by or end date",
+                "A signed-on date loses to a stated effective date",
+                "A first name on its own is never a party",
+                "signatories who are not parties",
+                "anyone copied (cc)",
+                "(To:, Dear, Bill to)",
+                "An invoice, order or slip lists its issuer, named at its top, and its customer",
+                "other when the lines do not say",
+                "\"review\":true only if the document contradicts itself",
+            ] {
+                assert!(prompt.contains(rule), "{rule}");
+            }
+            assert!(prompt.ends_with(
+                r#"{"type":["..",id],"date":["YYYY-MM-DD","role",id],"parties":[["name","role",id]],"subject":["..",id],"amount":id}"#
+            ));
+            // 450 of the model's tokens; the estimate runs a little high.
+            let estimate = crate::engine::estimated_prompt_tokens(prompt);
+            assert!(estimate < 560, "{estimate}");
+        }
+
+        #[test]
+        fn the_compact_grammar_states_each_fact_with_one_id_and_nothing_else() {
+            let grammar =
+                evidence_grammar(["p1.b1", "p1.b2"], IdStyle::Stable, ReplyShape::default());
+            for rule in [
+                r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
+                r#"date ::= "\"date\":" ( "null" | "[" iso "," drole "," id "]" )"#,
+                r#"party ::= "[" s80 "," prole "," id "]""#,
+                r#"amount ::= ",\"amount\":" id"#,
+                r#"review ::= ",\"review\":true""#,
+            ] {
+                assert!(grammar.contains(rule), "{rule}\n{grammar}");
+            }
+            for absent in ["confidence", "identifier", "facts", "ids ::=", "conf ::="] {
+                assert!(!grammar.contains(absent), "{absent}");
+            }
+            assert!(!grammar.contains("\\\"due\\\""));
+            let empty =
+                evidence_grammar(std::iter::empty(), IdStyle::Stable, ReplyShape::default());
+            assert!(!empty.contains("id ::="));
+            assert!(
+                empty.contains(
+                    r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]" review? "}""#
+                )
+            );
+            // The longest compact reply is far inside the reply budget.
+            let id = "\"p100.b100.r100\"";
+            let s = |n: usize| format!("\"{}\"", "9".repeat(n));
+            let party = format!("[{},\"addressee\",{id}]", s(80));
+            let worst = format!(
+                "{{\"type\":[{},{id}],\"date\":[\"2026-12-31\",\"termination\",{id}],\
+                 \"parties\":[{party},{party},{party}],\"subject\":[{},{id}],\"amount\":{id},\
+                 \"review\":true}}",
+                s(80),
+                s(60)
+            );
+            let tokens = crate::engine::estimated_prompt_tokens(&worst);
+            assert!(
+                tokens < crate::client::MAX_REPLY_TOKENS as usize,
+                "{tokens}"
+            );
+        }
+
+        #[test]
+        fn the_form_first_recorded_keeps_its_prompt_version() {
+            // The 22520ea live recordings were made with this version; a
+            // replay of them must still find it.
+            let facts = ReplyShape {
+                form: ReplyForm::Facts,
+                ..ReplyShape::default()
+            };
+            assert_eq!(evidence_prompt_version(facts), "6134f0168dcf");
+            assert_ne!(
+                evidence_prompt_version(ReplyShape::default()),
+                "6134f0168dcf"
+            );
+            assert_eq!(evidence_system(facts), None);
         }
     }
 }

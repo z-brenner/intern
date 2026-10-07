@@ -13,6 +13,7 @@
 //!                  [--latency-gate 1.5]
 //!                  [--pipeline digest|evidence] [--id-style stable|ordinal]
 //!                  [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
+//!                  [--reply-form compact|facts]
 //!                  [--field-order fact-first|evidence-first] [--string-limits bounded|unbounded]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
@@ -47,6 +48,7 @@ const USAGE: &str = "usage:
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
                    [--pipeline digest|evidence] [--id-style stable|ordinal]
                    [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
+                   [--reply-form compact|facts]
                    [--field-order fact-first|evidence-first] [--string-limits bounded|unbounded]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
@@ -87,6 +89,7 @@ const RUN_KEYS: &[&str] = &[
     "id-style",
     "retrieval-tier",
     "context-tokens",
+    "reply-form",
     "field-order",
     "string-limits",
 ];
@@ -242,6 +245,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "allow-stale",
                 "pipeline",
                 "context-tokens",
+                "reply-form",
                 "field-order",
                 "string-limits",
             ],

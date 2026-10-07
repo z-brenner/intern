@@ -50,6 +50,11 @@ const MAX_ERROR_BYTES: u64 = 16 * 1024;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelRequest {
     pub prompt: String,
+    /// The system turn, when it is particular to the request: the evidence
+    /// pipeline's compact form carries its fixed instructions there, where
+    /// the server's prompt cache keeps them from one document to the next.
+    /// `None` is [`SYSTEM_INSTRUCTION`].
+    pub system: Option<String>,
     /// The grammar this request's reply must follow, when it is particular to
     /// the request: the evidence pipeline's lists exactly the evidence ids
     /// its prompt shows. `None` is the digest pipeline's fixed
@@ -86,7 +91,26 @@ impl ModelRequest {
             hasher.update([0_u8]);
             hasher.update(grammar.as_bytes());
         }
+        if let Some(system) = &self.system {
+            hasher.update([0_u8, 1_u8]);
+            hasher.update(system.as_bytes());
+        }
         format!("{:x}", hasher.finalize())
+    }
+
+    /// The system turn the request is sent with.
+    pub fn system_turn(&self) -> &str {
+        self.system.as_deref().unwrap_or(SYSTEM_INSTRUCTION)
+    }
+
+    /// Every character the model reads for this request beyond the chat
+    /// template: the system turn when it is the request's own, and the
+    /// user turn.
+    pub fn input_characters(&self) -> usize {
+        self.system
+            .as_deref()
+            .map_or(0, |system| system.chars().count())
+            + self.prompt.chars().count()
     }
 }
 
@@ -340,7 +364,7 @@ impl ModelClient {
         let mut body = json!({
             "model": self.model_id,
             "messages": [
-                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "system", "content": request.system_turn()},
                 {"role": "user", "content": request.prompt}
             ],
             "stream": false,
@@ -598,10 +622,193 @@ pub(crate) fn facts_from_text(
 ) -> Result<ModelProposal, AttemptError> {
     let json =
         extract_json_object(content).ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-    let wire: WireFacts = serde_json::from_str(json)
+    let value: Value = serde_json::from_str(json)
         .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
+    let wire = match compact_wire(&value) {
+        Some(wire) => wire,
+        None => serde_json::from_value::<WireFacts>(value)
+            .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?,
+    };
     wire.into_domain(handles)
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))
+}
+
+/// A compact reply ([`crate::prompt::ReplyForm::Compact`]) read into the
+/// same shape as a fields reply, or `None` for a reply that is not one: a
+/// fact is an array of its value - a date with its role, a party with its
+/// role - and the ids of its lines, `amount` the id of the amount's line,
+/// `review` the one request for a person. Lenient as [`facts_from_text`]
+/// is: the parts of an array are told apart by what they are, not only by
+/// where they stand, so `[id, value]` reads as well as `[value, id]`.
+///
+/// A compact reply asks for no confidence of its own; it reads as full,
+/// and only `review` or the document's own checks send it to a person.
+fn compact_wire(value: &Value) -> Option<WireFacts> {
+    let object = value.as_object()?;
+    let arrays = ["type", "date", "subject"]
+        .iter()
+        .any(|key| object.get(*key).is_some_and(Value::is_array))
+        || object
+            .get("parties")
+            .and_then(Value::as_array)
+            .is_some_and(|parties| parties.iter().any(Value::is_array));
+    if !arrays && object.contains_key("confidence") {
+        return None;
+    }
+    let ids_of = |values: Vec<&Value>| {
+        WireIds::Many(
+            values
+                .into_iter()
+                .filter_map(|value| match value {
+                    Value::String(text) => Some(WireId::Text(text.clone())),
+                    Value::Number(number) => number.as_u64().map(WireId::Number),
+                    _ => None,
+                })
+                .collect(),
+        )
+    };
+    // A fact's value and its ids: the first string that is not an id is
+    // the value, everything else its ids.
+    fn split(value: Option<&Value>) -> (Option<String>, Vec<&Value>) {
+        match value {
+            Some(Value::String(text)) => (Some(text.clone()), Vec::new()),
+            Some(Value::Array(parts)) => {
+                let mut text = None;
+                let mut ids = Vec::new();
+                for part in parts {
+                    match part {
+                        Value::String(word) if looks_like_id(word) => ids.push(part),
+                        Value::String(word) if text.is_none() => text = Some(word.clone()),
+                        Value::Number(_) => ids.push(part),
+                        _ => {}
+                    }
+                }
+                (text, ids)
+            }
+            _ => (None, Vec::new()),
+        }
+    }
+    let (document_type, type_ids) = split(object.get("type"));
+    let (mut document_date, mut date_role) = (None, None);
+    let mut date_ids = Vec::new();
+    match object.get("date") {
+        Some(Value::String(date)) => document_date = Some(date.clone()),
+        Some(Value::Array(parts)) => {
+            for part in parts {
+                match part {
+                    Value::String(text) if document_date.is_none() && is_date_shaped(text) => {
+                        document_date = Some(text.clone());
+                    }
+                    Value::String(text)
+                        if date_role.is_none()
+                            && DateRole::ALL
+                                .iter()
+                                .any(|role| role.as_str().eq_ignore_ascii_case(text.trim())) =>
+                    {
+                        date_role = Some(text.clone());
+                    }
+                    Value::String(text) if looks_like_id(text) => date_ids.push(part),
+                    Value::Number(_) => date_ids.push(part),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut parties = Vec::new();
+    for party in object
+        .get("parties")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        match party {
+            Value::Array(parts) => {
+                let (mut name, mut role) = (None, None);
+                let mut ids = Vec::new();
+                for part in parts {
+                    match part {
+                        Value::String(text) if looks_like_id(text) => ids.push(part),
+                        Value::String(text) if name.is_none() => name = Some(text.clone()),
+                        // A role, or a word that is none: the reply's role
+                        // either way, and no role if it is not one.
+                        Value::String(text) if role.is_none() => role = Some(text.clone()),
+                        Value::Number(_) => ids.push(part),
+                        _ => {}
+                    }
+                }
+                parties.push(WireParty {
+                    ids: ids_of(ids),
+                    name,
+                    role,
+                });
+            }
+            other => parties.push(serde_json::from_value(other.clone()).ok()?),
+        }
+    }
+    let (subject, subject_ids) = split(object.get("subject"));
+    let amount_ids = match object.get("amount") {
+        Some(Value::Array(parts)) => ids_of(
+            parts
+                .iter()
+                .filter(|part| part.as_str().is_none_or(looks_like_id))
+                .collect(),
+        ),
+        Some(other) => ids_of(vec![other]),
+        None => WireIds::None,
+    };
+    Some(WireFacts {
+        type_ids: ids_of(type_ids),
+        document_type,
+        date_ids: ids_of(date_ids),
+        document_date,
+        date_role,
+        parties,
+        subject_ids: ids_of(subject_ids),
+        subject,
+        identifier_ids: WireIds::None,
+        identifier: None,
+        facts: Vec::new(),
+        amount_ids,
+        confidence: 1.0,
+        needs_review: object
+            .get("review")
+            .or_else(|| object.get("needs_review"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+/// Whether a reply's string is an evidence id as a prompt shows one:
+/// `p1.b2`, `p3.b7.r4`, `[p1.b2]`, or a bare number.
+fn looks_like_id(text: &str) -> bool {
+    let bare = text.trim().trim_start_matches('[').trim_end_matches(']');
+    if !bare.is_empty() && bare.chars().all(|character| character.is_ascii_digit()) {
+        return true;
+    }
+    let mut parts = bare.split('.');
+    parts.next().is_some_and(|page| {
+        page.strip_prefix('p')
+            .is_some_and(|number| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+    }) && parts.all(|part| {
+        let mut characters = part.chars();
+        characters.next().is_some_and(|c| c.is_ascii_lowercase())
+            && part.len() > 1
+            && characters.all(|c| c.is_ascii_digit())
+    })
+}
+
+/// Whether a string has a date's shape, `YYYY-MM-DD`; the calendar is
+/// checked later.
+fn is_date_shaped(text: &str) -> bool {
+    let bytes = text.trim().as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(at, byte)| at == 4 || at == 7 || byte.is_ascii_digit())
 }
 
 /// Recovers the JSON object from a reply that may be fenced or prefixed.
@@ -841,6 +1048,9 @@ struct WireFacts {
     identifier: Option<String>,
     #[serde(default, alias = "key_facts")]
     facts: Vec<WireFact>,
+    /// Only a compact reply cites an amount's line.
+    #[serde(skip)]
+    amount_ids: WireIds,
     #[serde(default)]
     confidence: f32,
     #[serde(default)]
@@ -1007,6 +1217,7 @@ impl WireFacts {
             identifier: present(self.identifier),
             identifier_evidence,
             key_facts,
+            amount_evidence: self.amount_ids.resolve(handles, 1, &mut unknown),
             unknown_evidence: unknown,
         };
         Some(ModelProposal {
@@ -1602,6 +1813,77 @@ mod tests {
         ])
     }
 
+    fn stable_handles() -> EvidenceHandles {
+        EvidenceHandles::new(
+            ["p1.b1", "p1.b3.f1", "p1.b5", "p1.b6.r2"]
+                .iter()
+                .map(|id| ((*id).to_owned(), (*id).to_owned()))
+                .collect(),
+        )
+    }
+
+    /// A compact reply reads into the same facts as a fields reply: each
+    /// fact's id mapped back, an id the prompt never showed set aside, the
+    /// amount's line kept, and no confidence of its own to gate on.
+    #[test]
+    fn a_compact_reply_reads_as_facts_with_their_lines() {
+        let reply = r#"{"type":["Invoice","p1.b1"],"date":["2025-05-01","invoice","p1.b3.f1"],"parties":[["Halvorsen Fixture Works LLC","issuer","p1.b1"],["Quillon Ridge Bakery, Inc.","customer","p9.b9"]],"subject":["display shelving","p1.b5"],"amount":"p1.b6.r2"}"#;
+        let proposal = proposal_from_text(reply, Some(&stable_handles())).unwrap();
+        let facts = proposal.facts.as_ref().unwrap();
+        assert_eq!(facts.document_type.as_deref(), Some("Invoice"));
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert_eq!(facts.document_date.as_deref(), Some("2025-05-01"));
+        assert_eq!(facts.date_role, Some(DateRole::Invoice));
+        assert_eq!(facts.date_evidence, vec!["p1.b3.f1"]);
+        assert_eq!(facts.parties.len(), 2);
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Issuer));
+        assert_eq!(facts.parties[0].evidence, vec!["p1.b1"]);
+        assert!(facts.parties[1].evidence.is_empty());
+        assert_eq!(facts.unknown_evidence, vec!["p9.b9"]);
+        assert_eq!(facts.subject.as_deref(), Some("display shelving"));
+        assert_eq!(facts.subject_evidence, vec!["p1.b5"]);
+        assert_eq!(facts.amount_evidence, vec!["p1.b6.r2"]);
+        assert_eq!(facts.identifier, None);
+        assert!(facts.key_facts.is_empty());
+        assert!((proposal.confidence - 1.0).abs() < f32::EPSILON);
+        assert!(!proposal.needs_review);
+
+        // Only "review" asks for a person; an empty reply is still a reply.
+        let reply = r#"{"type":null,"date":null,"parties":[],"review":true}"#;
+        let proposal = proposal_from_text(reply, Some(&stable_handles())).unwrap();
+        assert!(proposal.needs_review);
+        assert_eq!(proposal.document_type, None);
+
+        // A hosted model's looser arrays read the same: id first, a role
+        // the list does not have, a calendar day that does not exist.
+        let reply = r#"{"type":["p1.b1","Invoice"],"date":["2025-02-30","invoice","p1.b3.f1"],"parties":[["p1.b5","Quillon Ridge Bakery, Inc.","patron"]],"amount":["$1,248.00","p1.b6.r2"]}"#;
+        let proposal = proposal_from_text(reply, Some(&stable_handles())).unwrap();
+        let facts = proposal.facts.as_ref().unwrap();
+        assert_eq!(facts.document_type.as_deref(), Some("Invoice"));
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert_eq!(facts.document_date, None);
+        assert_eq!(facts.date_role, None);
+        assert_eq!(facts.parties[0].name, "Quillon Ridge Bakery, Inc.");
+        assert_eq!(facts.parties[0].role, None);
+        assert_eq!(facts.amount_evidence, vec!["p1.b6.r2"]);
+        assert!(facts.unknown_evidence.is_empty());
+    }
+
+    /// The request's identity covers a system turn of its own; a request
+    /// without one is identified as it always was.
+    #[test]
+    fn a_requests_own_system_turn_is_part_of_its_identity() {
+        let plain = ModelRequest::new("p");
+        let systemed = ModelRequest {
+            system: Some("s".into()),
+            ..ModelRequest::new("p")
+        };
+        assert_ne!(plain.sha256(), systemed.sha256());
+        assert_eq!(plain.system_turn(), SYSTEM_INSTRUCTION);
+        assert_eq!(systemed.system_turn(), "s");
+        assert_eq!(systemed.input_characters(), 2);
+    }
+
     /// An evidence reply's ids are the prompt's handles, mapped back to the
     /// stable ids of their units before anything is kept; an id the prompt
     /// did not show is set aside and never cited.
@@ -1713,6 +1995,7 @@ mod tests {
             prompt: "p".into(),
             grammar: Some("root ::= \"{}\"".into()),
             evidence: Some(ordinal_handles()),
+            ..ModelRequest::default()
         };
         let proposal = client.propose(&request).unwrap();
         assert_eq!(

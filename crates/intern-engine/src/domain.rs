@@ -360,6 +360,10 @@ pub struct ModelFacts {
     pub identifier_evidence: Vec<String>,
     #[serde(default)]
     pub key_facts: Vec<KeyFact>,
+    /// The line a compact reply says states the main amount; the amount
+    /// itself is read from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub amount_evidence: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_evidence: Vec<String>,
 }
@@ -374,6 +378,7 @@ impl ModelFacts {
             .chain(&self.subject_evidence)
             .chain(&self.identifier_evidence)
             .chain(self.key_facts.iter().flat_map(|fact| &fact.evidence))
+            .chain(&self.amount_evidence)
             .map(String::as_str)
     }
 }
@@ -392,6 +397,12 @@ pub enum Support {
     /// The reply did not state it.
     #[default]
     Absent,
+}
+
+impl Support {
+    pub fn is_absent(&self) -> bool {
+        *self == Self::Absent
+    }
 }
 
 /// A line of the document shown to a reviewer as the evidence for a fact:
@@ -455,6 +466,9 @@ pub struct FactSupport {
     pub identifier: Support,
     #[serde(default)]
     pub key_facts: Vec<Support>,
+    /// The amount a compact reply's cited line states.
+    #[serde(default, skip_serializing_if = "Support::is_absent")]
+    pub amount: Support,
     /// Cited ids the prompt never showed. Never evidence.
     #[serde(default)]
     pub unknown_ids: u32,
@@ -478,6 +492,7 @@ impl FactSupport {
             self.document_date,
             self.subject,
             self.identifier,
+            self.amount,
         ];
         for support in scalars.iter().chain(&self.parties).chain(&self.key_facts) {
             if *support != Support::Absent {
@@ -499,6 +514,7 @@ impl FactSupport {
             self.document_date,
             self.subject,
             self.identifier,
+            self.amount,
         ];
         for support in scalars.iter().chain(&self.parties).chain(&self.key_facts) {
             if matches!(support, Support::Cited | Support::Context) {

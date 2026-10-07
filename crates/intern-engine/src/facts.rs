@@ -715,6 +715,24 @@ pub fn validate_facts_at(
     // digest pipeline's rules. Values, not labels: a subject is what a
     // "Project:" field holds, never a "Bill to" line, the type again or a
     // party's name; an amount reads with the label the document gives it.
+    // A reply that names no identifier leaves it to the document: the
+    // number on the type's own title line, or a field labelled as this
+    // kind of document's number.
+    if identifier.is_none()
+        && let Some(read) = read_identifier(scope, document_type.as_deref(), type_line.as_deref())
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(read.unit),
+                line: Some(read.line.clone()),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        identifier = Some((read.word, read.value));
+        identifier_line = Some(read.line);
+    }
     let identifier = identifier.filter(|(_, value)| {
         value.chars().any(|character| character.is_ascii_digit())
             && !repeats(value, document_type.as_deref())
@@ -738,10 +756,41 @@ pub fn validate_facts_at(
         .then(|| value.to_owned())
     };
     let subject = subject.as_deref().and_then(says_something);
-    let amount = key_facts.iter().zip(&key_units).find_map(|(fact, unit)| {
+    // The amount: a key fact's, or the one the line a compact reply cited
+    // for it states.
+    let mut amount = key_facts.iter().zip(&key_units).find_map(|(fact, unit)| {
         let money = money_in(fact)?;
         Some((amount_label_of(fact, *unit, money), money.to_owned()))
     });
+    if !facts.amount_evidence.is_empty() {
+        let cited = scope.cited_units(&facts.amount_evidence);
+        match cited
+            .first()
+            .and_then(|unit| amount_in(unit).map(|found| (*unit, found)))
+        {
+            Some((unit, (money, line))) => {
+                support.amount = Support::Cited;
+                remember(
+                    &Found {
+                        support: Support::Cited,
+                        unit: Some(unit),
+                        line: Some(line.clone()),
+                        miscited: 0,
+                    },
+                    &mut references,
+                );
+                if amount.is_none() {
+                    amount = Some((amount_label_of(&line, Some(unit), &money), money));
+                }
+            }
+            None => {
+                // A line with no amount on it: an optional fact left out,
+                // and the id counted as a miscitation.
+                support.amount = Support::Unsupported;
+                support.miscited_ids += cited.len().max(1) as u32;
+            }
+        }
+    }
     let other_fact = key_facts
         .iter()
         .filter(|fact| money_in(fact).is_none())
@@ -1777,6 +1826,189 @@ fn fit_type(document_type: &str, relation: &Relation, date: Option<&str>) -> Opt
         .then(|| shorter.to_owned())
 }
 
+/// The amount a line of the document states and the line: in a table row
+/// its last amount (the row's total, or the new figure beside the old), in
+/// a field its first, elsewhere the first after a word that names a total
+/// ("total", "due", "sum") or else the first.
+fn amount_in(unit: &EvidenceUnit) -> Option<(String, String)> {
+    let mut found: Vec<(usize, String, String)> = Vec::new();
+    for line in unit.text.lines() {
+        let mut offset = 0;
+        while let Some(money) = money_in(&line[offset..]) {
+            let at = offset + line[offset..].find(money).unwrap_or(0);
+            found.push((at, money.to_owned(), line.trim().to_owned()));
+            offset = at + money.len();
+        }
+    }
+    let totalled = |(at, _, line): &&(usize, String, String)| {
+        let before = normalize(line.get(..*at).unwrap_or_default());
+        before.split_whitespace().rev().take(6).any(|word| {
+            matches!(
+                word.trim_matches(|character: char| !character.is_alphanumeric()),
+                "total" | "due" | "sum" | "balance" | "principal" | "price" | "amount"
+            )
+        })
+    };
+    let pick = match unit.kind {
+        UnitKind::TableRow => found.last(),
+        UnitKind::Field => found.first(),
+        _ => found.iter().find(totalled).or_else(|| found.first()),
+    }?;
+    Some((pick.1.clone(), pick.2.clone()))
+}
+
+/// An identifier the document gives itself, read without the reply.
+struct ReadIdentifier<'a> {
+    value: String,
+    /// The word its label gives it ([`identifier_word`]).
+    word: &'static str,
+    line: String,
+    unit: &'a EvidenceUnit,
+}
+
+/// Whether a token is an identifier: letters, digits and joining marks,
+/// at least one digit, and not a date, a year, an amount or a phone number.
+fn looks_like_identifier(token: &str) -> bool {
+    let core = token
+        .trim_matches(|character: char| !character.is_alphanumeric())
+        .trim_start_matches('#');
+    let digits = core.chars().filter(char::is_ascii_digit).count();
+    let letters = core
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    (2..=30).contains(&core.chars().count())
+        && digits > 0
+        && (letters > 0 || digits >= 3)
+        && core
+            .chars()
+            .all(|character| character.is_alphanumeric() || matches!(character, '-' | '/' | '.'))
+        && !token.contains('$')
+        && extract_stated_dates(core).is_empty()
+        && numeric_dates(&normalize(core)).is_empty()
+        && !(digits == 4 && core.len() == 4 && (core.starts_with("19") || core.starts_with("20")))
+}
+
+/// Words that label a number on a document: "No.", "#", "Number", "ID".
+const NUMBER_WORDS: &[&str] = &["no", "number", "num", "id", "ref", "reference"];
+
+/// The kinds of number a document of a kind carries, by the words their
+/// labels use.
+fn identifier_labels(head: &str) -> &'static [&'static str] {
+    match head {
+        "invoice" | "bill" => &["invoice", "inv"],
+        "order" | "slip" | "confirmation" => &["order", "po", "slip", "confirmation"],
+        "policy" | "declarations" | "certificate" => &["policy", "certificate"],
+        "quote" | "quotation" | "estimate" => &["quote", "quotation", "estimate"],
+        "receipt" => &["receipt"],
+        "statement" => &["statement"],
+        "notice" | "letter" | "claim" => &["claim", "loan", "policy", "case", "file"],
+        _ => &[],
+    }
+}
+
+/// The identifier a document states for itself: the number right after
+/// its type on its title line ("PACKING SLIP PS-311"), or the value of a
+/// field labelled as this kind's number ("Invoice No.: 7731-B", "| Policy
+/// Number | CPP-4471 |"). `None` when it states neither.
+fn read_identifier<'a>(
+    scope: &ValidationScope<'a>,
+    document_type: Option<&str>,
+    type_line: Option<&str>,
+) -> Option<ReadIdentifier<'a>> {
+    let type_words = words(document_type?);
+    let head = head_noun(&type_words)?.to_owned();
+    if let Some(line) = type_line
+        && let Some(unit) = scope.context_units().find(|unit| {
+            unit.text.lines().any(|text| text.trim() == line.trim())
+                || unit.text.split_whitespace().collect::<Vec<_>>().join(" ") == line.trim()
+        })
+        && let Some(value) = after_type(line, &type_words)
+    {
+        return Some(ReadIdentifier {
+            value,
+            word: "no.",
+            line: line.trim().to_owned(),
+            unit,
+        });
+    }
+    let kinds = identifier_labels(&head);
+    if kinds.is_empty() {
+        return None;
+    }
+    scope.context_units().find_map(|unit| {
+        let label = unit.label.as_deref()?;
+        let label_words = words(label);
+        let names_kind = label_words
+            .iter()
+            .any(|word| kinds.contains(&word.as_str()));
+        let names_number = label.contains('#')
+            || label_words
+                .iter()
+                .any(|word| NUMBER_WORDS.contains(&word.as_str()));
+        if !(names_kind && names_number) {
+            return None;
+        }
+        let value = match unit.kind {
+            UnitKind::TableRow => unit
+                .text
+                .trim()
+                .trim_matches('|')
+                .split('|')
+                .nth(1)?
+                .trim()
+                .to_owned(),
+            _ => label_and_value(&unit.text)
+                .map(|(_, value)| value.to_owned())
+                .unwrap_or_else(|| unit.text.clone()),
+        };
+        let token = value
+            .split_whitespace()
+            .next()
+            .filter(|token| looks_like_identifier(token))?;
+        Some(ReadIdentifier {
+            value: token
+                .trim_matches(|character: char| !character.is_alphanumeric())
+                .to_owned(),
+            word: identifier_word(Some(label)),
+            line: unit.text.trim().to_owned(),
+            unit,
+        })
+    })
+}
+
+/// The number that follows a type on its title line, past a "No." or a
+/// "#": "PACKING SLIP PS-311" gives "PS-311", "STATEMENT OF WORK NO. 4"
+/// gives nothing (one digit is no identifier).
+fn after_type(line: &str, type_words: &[String]) -> Option<String> {
+    let tokens = line.split_whitespace().collect::<Vec<_>>();
+    let line_words = tokens.iter().map(|token| words(token)).collect::<Vec<_>>();
+    let flat = line_words.iter().flatten().cloned().collect::<Vec<_>>();
+    let start = phrase_positions(&flat, type_words).into_iter().next()?;
+    let end_word = start + type_words.len();
+    // The token the type's last word ends in.
+    let mut seen = 0;
+    let mut at = 0;
+    while at < tokens.len() && seen < end_word {
+        seen += line_words[at].len();
+        at += 1;
+    }
+    while at < tokens.len()
+        && (line_words[at].is_empty()
+            || line_words[at]
+                .iter()
+                .all(|word| NUMBER_WORDS.contains(&word.as_str())))
+    {
+        at += 1;
+    }
+    let token = tokens.get(at)?;
+    looks_like_identifier(token).then(|| {
+        token
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_owned()
+    })
+}
+
 /// The label the document gives an amount: a "Total:" before it in the
 /// fact, the field's label or the row's first cell it stands in ("| Annual
 /// Fee | $96,000 |"), or a word the fact itself names it by ("principal").
@@ -2103,7 +2335,7 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
                 fact: "$1,248.00".into(),
                 evidence: vec![id_of(index, "Display shelving")],
             }],
-            unknown_evidence: Vec::new(),
+            ..ModelFacts::default()
         }
     }
 
@@ -2669,7 +2901,9 @@ Dated May 12, 2026";
             outcome.reasons
         );
         let facts = outcome.facts.expect("facts");
-        assert_eq!(facts.identifier, None);
+        // The echoed id is no identifier; the document's own number on its
+        // "Invoice No." line stands in.
+        assert_eq!(facts.identifier.as_deref(), Some("INV-10438"));
         assert_eq!(facts.subject, None);
     }
 
@@ -2916,5 +3150,87 @@ between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.";
             "{}",
             outcome.proposal.description
         );
+    }
+
+    #[test]
+    fn a_compact_replys_amount_is_read_from_the_line_it_cites() {
+        const LETTER: &str = "DEMAND FOR PAYMENT\n\nJuly 8, 2026\n\n\
+To: Highmeadow Orchard Supply Co.\n\n\
+Interest accrued through the date of this letter is $1,287.40, for a total now due of \
+$28,703.00.\n\n| Charge | Before | Now |\n| Base rent | $1,845.00 | $1,965.00 |";
+        let reply = |index: &EvidenceIndex, cited: &str| ModelFacts {
+            document_type: Some("Demand for Payment".into()),
+            type_evidence: vec![id_of(index, "DEMAND")],
+            document_date: Some("2026-07-08".into()),
+            date_evidence: vec![id_of(index, "July 8")],
+            amount_evidence: vec![id_of(index, cited)],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(LETTER, |index| reply(index, "total now due"));
+        let description = &outcome.proposal.description;
+        assert!(description.contains("$28,703.00"), "{description}");
+        assert!(!description.contains("$1,287.40"), "{description}");
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().support.amount,
+            Support::Cited
+        );
+        let (outcome, _) = facts_for(LETTER, |index| reply(index, "Base rent"));
+        let description = &outcome.proposal.description;
+        assert!(
+            description.contains("base rent of $1,965.00"),
+            "{description}"
+        );
+        // A line with no amount on it gives none, and is no claim either.
+        let (outcome, _) = facts_for(LETTER, |index| reply(index, "To: Highmeadow"));
+        assert!(!outcome.proposal.description.contains('$'));
+        let facts = outcome.facts.unwrap();
+        assert_eq!(facts.support.amount, Support::Unsupported);
+        assert!(
+            !outcome
+                .reasons
+                .contains(&ReviewReason::DescriptionUnsupported)
+        );
+    }
+
+    #[test]
+    fn a_document_states_its_own_number_on_its_title_or_in_its_field() {
+        const SLIP: &str = "PACKING SLIP PS-311\n\nDATE JULY 15 2025 QUARTZ MEADOW RETAIL LLC";
+        let (outcome, _) = facts_for(SLIP, |index| ModelFacts {
+            document_type: Some("Packing Slip".into()),
+            type_evidence: vec![id_of(index, "PACKING")],
+            ..ModelFacts::default()
+        });
+        assert!(
+            outcome
+                .proposal
+                .description
+                .starts_with("Packing Slip PS-311"),
+            "{}",
+            outcome.proposal.description
+        );
+        const POLICY: &str = "NOTICE OF CANCELLATION\n\nPolicy Number: KC-WC-7710345\n\n\
+Date of notice: August 12, 2026";
+        let (outcome, _) = facts_for(POLICY, |index| ModelFacts {
+            document_type: Some("Notice of Cancellation".into()),
+            type_evidence: vec![id_of(index, "NOTICE")],
+            ..ModelFacts::default()
+        });
+        assert!(
+            outcome
+                .proposal
+                .description
+                .contains("policy KC-WC-7710345"),
+            "{}",
+            outcome.proposal.description
+        );
+        // A date, a year or a page after the title is no number.
+        const LEASE: &str =
+            "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024\n\nAcme LLC and Contoso Inc.";
+        let (outcome, _) = facts_for(LEASE, |index| ModelFacts {
+            document_type: Some("Lease Agreement".into()),
+            type_evidence: vec![id_of(index, "LEASE")],
+            ..ModelFacts::default()
+        });
+        assert!(outcome.facts.unwrap().identifier.is_none());
     }
 }
