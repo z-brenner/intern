@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::structure::PageLayout;
+
 /// Where a page's text came from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +30,12 @@ pub struct SourcePage {
     pub text: String,
     pub origin: PageOrigin,
     pub ocr_confidence: Option<u32>,
+    /// The page as blocks in reading order, as the parser worker built it
+    /// (see [`crate::structure`]). Absent from pages stored before layouts
+    /// existed and from pages built from plain text;
+    /// [`crate::structure::structured`] segments those from their text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<PageLayout>,
 }
 
 impl SourcePage {
@@ -37,6 +45,7 @@ impl SourcePage {
             text: text.into(),
             origin,
             ocr_confidence: None,
+            layout: None,
         }
     }
 }

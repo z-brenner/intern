@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::domain::{DocumentSource, PageImage, PageOrigin, ParserWarning, SourcePage};
+use crate::structure::PageLayout;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const EXTRACTION_TIMEOUT_SECONDS: u64 = 30 * 60;
@@ -211,6 +212,9 @@ struct WorkerPage {
     source: WorkerPageSource,
     ocr_confidence: Option<f32>,
     vision_escalated: bool,
+    /// Absent from a worker that predates layouts.
+    #[serde(default)]
+    layout: Option<PageLayout>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -328,6 +332,7 @@ pub fn adapt_document(document: WorkerDocument) -> Result<DocumentSource, Extrac
                 ocr_confidence: page
                     .ocr_confidence
                     .map(|confidence| confidence.round().clamp(0.0, 100.0) as u32),
+                layout: page.layout,
             })
             .collect(),
         parser_warnings,
@@ -840,6 +845,35 @@ mod tests {
         assert_eq!(source.pages[1].page_number, 2);
         assert_eq!(source.pages[0].origin, PageOrigin::Native);
         assert!(source.parser_warnings.is_empty());
+    }
+
+    /// A page's layout comes through beside its text; a page without one,
+    /// from a worker that predates layouts, comes through as it always did.
+    #[test]
+    fn a_page_layout_survives_the_protocol() {
+        let source = parsed(
+            r#"{"protocol_version":1,"request_id":"r","event":{"type":"parsed","document":{
+                "pages":[
+                  {"page_number":1,"text":"INVOICE\n\nInvoice date: May 1, 2026","source":"native","ocr_confidence":null,"vision_escalated":false,
+                   "layout":{"width":6120,"height":7920,"route":"fast","signals":{"chars":30},"blocks":[
+                     {"id":"p1.b1","kind":"heading","text":"INVOICE","bbox":null,"source":"native","lines":[{"text":"INVOICE"}]},
+                     {"id":"p1.b2","kind":"key_value","text":"Invoice date: May 1, 2026","bbox":null,"section":"p1.b1","source":"native",
+                      "lines":[{"text":"Invoice date: May 1, 2026"}],
+                      "fields":[{"id":"p1.b2.f1","key":"Invoice date","value":"May 1, 2026"}]}]}},
+                  {"page_number":2,"text":"Second page.","source":"native","ocr_confidence":null,"vision_escalated":false}
+                ],"warnings":[],"truncated":false,"optional_image":null}}}"#,
+        )
+        .unwrap();
+
+        let layout = source.pages[0].layout.as_ref().unwrap();
+        assert_eq!(layout.blocks[1].fields[0].value, "May 1, 2026");
+        assert_eq!(source.pages[1].layout, None);
+        let document = crate::structure::structured(&source);
+        assert_eq!(
+            document.block("p1.b2").unwrap().section.as_deref(),
+            Some("p1.b1")
+        );
+        assert_eq!(document.block("p2.b1").unwrap().text, "Second page.");
     }
 
     #[test]

@@ -421,7 +421,7 @@ fn flush_pending(
     }
 }
 
-fn is_heading_line(line: &str) -> bool {
+pub(crate) fn is_heading_line(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.chars().count() > 90 {
         return false;
