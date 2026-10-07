@@ -233,6 +233,8 @@ export function quarterlyBusinessReview() {
   const nextQbr = '2026-12-17';
   const termEnd = '2027-03-31';
   const proposalDue = '2027-01-15';
+  // The open action items' due dates, on the slide and among the traps.
+  const actionsDue = ['2026-10-09', '2026-10-16', '2026-10-23'];
   const slides = [
     { title: 'Quarterly Business Review - Q3 2026', subtitle: [`Prepared for ${customer}`, `Presented by ${vendor}`, `Presented ${longDate(presented)}`] },
     { title: 'Agenda', body: ['Attendees and goals for the session', 'Q3 results: volume, accuracy, and speed', 'Support summary', 'Value delivered year to date', 'Product roadmap', 'Open action items', 'Renewal planning and next steps'] },
@@ -242,7 +244,7 @@ export function quarterlyBusinessReview() {
     { title: 'Support summary', table: [['Severity', 'Opened', 'Resolved in SLA', 'Median time to resolve'], ['Severity 1', '0', '-', '-'], ['Severity 2', '2', '2', '5.5 hours'], ['Severity 3', '17', '16', '2.1 days'], ['How-to questions', '41', '41', '4.0 hours']] },
     { title: 'Value delivered year to date', body: ['Labor savings from slotting optimization: $412,000 (estimate agreed with Finance)', 'Mis-ship credits avoided: $96,500 versus 2025 run rate', 'Overtime hours down 22% in peak weeks', 'Carrier compliance chargebacks down 61%'] },
     { title: 'Product roadmap', table: [['Release', 'Target date', 'Highlights'], ['26.4', longDate(release), 'Wave planning v2, labor forecasting dashboard'], ['27.1', longDate(nextRelease), 'Cartonization rules engine, returns grading app'], ['27.2', 'Q2 2027', 'Yard management integration (beta)']] },
-    { title: 'Open action items', table: [['Item', 'Owner', 'Due'], ['Enable wave planning v2 beta in Building 2', 'Thaddeus Okonkwo', '2026-10-09'], ['Share Q4 peak staffing plan', 'Mireille Ostrowski', '2026-10-16'], ['Review label printer failover runbook', 'Saul Ravenscroft', '2026-10-23']] },
+    { title: 'Open action items', table: [['Item', 'Owner', 'Due'], ['Enable wave planning v2 beta in Building 2', 'Thaddeus Okonkwo', actionsDue[0]], ['Share Q4 peak staffing plan', 'Mireille Ostrowski', actionsDue[1]], ['Review label printer failover runbook', 'Saul Ravenscroft', actionsDue[2]]] },
     { title: 'Renewal planning', body: [`Current subscription term ends ${longDate(termEnd)}`, `Renewal proposal to be delivered by ${longDate(proposalDue)}`, 'Expansion option: third building (Oriel Junction) under evaluation for 2027', 'Multi-year pricing available for a three-year term'] },
     { title: 'Next steps and contacts', body: [`Next quarterly review: ${longDate(nextQbr)}`, 'Customer Success: Kofi Achterberg, kofi.achterberg@lindenhall-logistics.example', 'Account Executive: Juniper Dahlquist, (608) 555-0164', 'Support portal: support.lindenhall-logistics.example'] },
   ];
@@ -263,7 +265,7 @@ export function quarterlyBusinessReview() {
       acceptableTypes: ['Business Review', 'QBR'],
       date: presented,
       role: 'issuance',
-      forbiddenDates: [[release, 'roadmap release date'], [nextRelease, 'roadmap release date'], [termEnd, 'subscription term end'], [proposalDue, 'renewal proposal due'], [nextQbr, 'next quarterly review']],
+      forbiddenDates: [[release, 'roadmap release date'], [nextRelease, 'roadmap release date'], [termEnd, 'subscription term end'], [proposalDue, 'renewal proposal due'], [nextQbr, 'next quarterly review'], ...actionsDue.map((due) => [due, 'action item due date'])],
       parties: [customer],
       relation: 'for',
       acceptablePartySets: [{ parties: [vendor], relation: 'from' }, { parties: [customer], relation: 'with' }, { parties: [vendor, customer], relation: 'between' }],

@@ -95,6 +95,14 @@ function printed(document: BenchDocument, texts: Record<string, string[]>) {
   return document.clean_text !== undefined ? normalise(document.clean_text) : carried(document, texts);
 }
 
+/// What the printed page shows of the part Intern reads. The worker reads
+/// only the first frame of a TIFF, so a fact drawn only on a later frame is
+/// one no description built from the reading could state.
+function readable(document: BenchDocument, texts: Record<string, string[]>) {
+  if (document.format === 'tiff') return normalise(texts[document.id][0]);
+  return printed(document, texts);
+}
+
 async function inventory(root: string) {
   const names = (await readdir(root)).sort();
   return Promise.all(names.map(async (name) => ({ name, sha256: createHash('sha256').update(await readFile(join(root, name))).digest('hex') })));
@@ -240,11 +248,14 @@ describe('InternBench corpus generator', () => {
     for (const document of documents) {
       const where = document.id;
       const text = loose(printed(document, generated.texts));
+      const read = loose(readable(document, generated.texts));
       const { gold } = document;
       const names = [...gold.parties, ...gold.acceptable_party_sets.flatMap((set) => set.parties), ...gold.party_roles.map((entry) => entry.name), ...gold.forbidden_parties.map((entry) => entry.name)];
       for (const name of names) expect(text.includes(loose(name)), `${where}: "${name}"`).toBe(true);
-      for (const group of gold.description_facts) expect(group.some((fact) => text.includes(loose(fact))), `${where}: none of ${JSON.stringify(group)}`).toBe(true);
-      for (const term of gold.subject_terms) expect(text.includes(loose(term)), `${where}: subject term "${term}"`).toBe(true);
+      // A description is built from what Intern reads, so what it should
+      // state must be on a page Intern reads.
+      for (const group of gold.description_facts) expect(group.some((fact) => read.includes(loose(fact))), `${where}: none of ${JSON.stringify(group)} is on a page Intern reads`).toBe(true);
+      for (const term of gold.subject_terms) expect(read.includes(loose(term)), `${where}: subject term "${term}"`).toBe(true);
     }
   });
 

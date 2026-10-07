@@ -239,7 +239,7 @@ export function scanUpsideDownPo() {
   flow.paragraph('Purchasing - 41 Starling Way, Westharrow, MI 49101 - (269) 555-0153', { size: 10, face: 'sans', after: 12 });
   flow.heading('PURCHASE ORDER', { level: 1, size: 17, face: 'sans-bold', before: 0 });
   flow.fields([['PO Number:', number], ['PO Date:', longDate(poDate)], ['Vendor:', `${vendor}, 6 Mill Race Lane, Linden Cross, PA 19047`], ['Ship To:', `${buyer}, Receiving, 41 Starling Way, Westharrow, MI 49101`], ['Deliver By:', longDate(deliver)], ['Terms:', 'Net 45, FOB destination']], { labelWidth: 96, size: 11 });
-  const lines = [['Ripstop nylon, 70D, forest green (yards)', 1200, 685], ['Waterproof-breathable membrane laminate (yards)', 800, 1240], ['Polyester mesh, 40 in. (yards)', 450, 395], ['YKK-compatible coil zipper tape, #5 (yards)', 2000, 88]];
+  const lines = [['Ripstop nylon, 70D, forest green (yards)', 1200, 685], ['Waterproof-breathable membrane laminate (yards)', 800, 1240], ['Polyester mesh, 40 in. (yards)', 450, 395], ['Coil zipper tape, #5 (yards)', 2000, 88]];
   for (const [description, quantity, unit] of lines) flow.paragraph(`${description}: ${quantity} at ${money(unit)} = ${money(quantity * unit)}`, { size: 11, after: 3 });
   const total = lines.reduce((sum, [, quantity, unit]) => sum + quantity * unit, 0);
   flow.paragraph(`Order total: ${money(total)}`, { face: 'sans-bold', size: 12, before: 6 });
@@ -893,8 +893,8 @@ export function scanFaxTwoFrames() {
       acceptablePartySets: [{ parties: [recipient], relation: 'to' }],
       roles: [[sender, 'issuer'], [sender, 'seller'], [recipient, 'recipient'], [recipient, 'customer']],
       forbiddenParties: [],
-      facts: [['propeller'], ['$6,840.00', '6,840'], ['N0612X', quoteNumber]],
-      subjectTerms: ['propeller overhaul', 'quotation', 'aircraft'],
+      facts: [['propeller'], [recipient, 'Highmeadow Air Charter'], ['N0612X']],
+      subjectTerms: ['propeller overhaul', 'quotation'],
       readiness: 'needs_review',
       dateText: [longDate(sent)],
     }),

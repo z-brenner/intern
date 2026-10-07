@@ -2017,7 +2017,7 @@
         "competing_dates",
         "layout_parties"
       ],
-      "notes": "The declarations page is two columns drawn row by row, so the text layer puts each left line beside the right line at the same height: the named insured shares a line with the agency, and the policy period shares one with the producer. The policy period starts 07/01/2026 (the gold, as the policy's effective date) and ends 07/01/2027; the issue date (06/18/2026) is accepted as the date the declarations were issued. The insured is the party; the insurer is accepted as the issuer; the agency and producer are traps.",
+      "notes": "The declarations page is two columns drawn row by row, so the text layer puts each left line beside the right line at the same height: the policy period's From/To dates share a line with the agency name, its 12:01 A.M. continuation shares one with the producer, and the named insured shares one with the agency's street address. The policy period starts 07/01/2026 (the gold, as the policy's effective date) and ends 07/01/2027; the issue date (06/18/2026) is accepted as the date the declarations were issued. The insured is the party; the insurer is accepted as the issuer; the agency and producer are traps.",
       "gold": {
         "document_type": "Commercial Package Policy Declarations",
         "acceptable_types": [
@@ -3310,7 +3310,7 @@
         "competing_dates",
         "irrelevant_names"
       ],
-      "notes": "The cover says only \"Fiscal Year 2026\" and the members' letter is undated. The report is dated once, under the independent auditors' signature on page 41: September 18, 2026. The fiscal year end (June 30, 2026) is stated throughout and is accepted. The prior year end, the annual meeting (December 3, 2026), and the patronage payment date (December 15, 2026) are traps. Every page carries its own figures: three pages for each of six divisions, two for each of twelve locations, a page for each of ten member counties, 24 risk factors, the audited statements, and 27 notes. Directors, managers, and the auditors are named; the report is the cooperative's.",
+      "notes": "The cover says only \"Fiscal Year 2026\" and the members' letter is undated. The report is dated under the independent auditors' signature on page 41: September 18, 2026. The date is repeated once, in the subsequent-events note on page 48, and nowhere else. The fiscal year end (June 30, 2026) is stated throughout and is accepted. The prior year end, the annual meeting (December 3, 2026), and the patronage payment date (December 15, 2026) are traps. Every page carries its own figures: three pages for each of six divisions, two for each of twelve locations, a page for each of ten member counties, 24 risk factors, the audited statements, and 27 notes. Directors, managers, and the auditors are named; the report is the cooperative's.",
       "gold": {
         "document_type": "Annual Report",
         "acceptable_types": [
@@ -3835,6 +3835,18 @@
           {
             "date": "2026-12-17",
             "why": "next quarterly review"
+          },
+          {
+            "date": "2026-10-09",
+            "why": "action item due date"
+          },
+          {
+            "date": "2026-10-16",
+            "why": "action item due date"
+          },
+          {
+            "date": "2026-10-23",
+            "why": "action item due date"
           }
         ],
         "parties": [
@@ -4392,7 +4404,7 @@
         "competing_dates",
         "referenced_agreement"
       ],
-      "notes": "An email is dated by when it was sent: the Date header (Tue, 17 Mar 2026 09:42:11 -0500). The quoted request below the reply carries its own sent date (Mon, 9 Mar 2026) and the vendor quote date (March 2, 2026), the renewal effective date (April 1, 2026), the end of the current term (March 31, 2026), and the approval deadline (March 20, 2026). The sender approves; the recipient is accepted. The vendor is the subject of the approval, not a correspondent.",
+      "notes": "An email is dated by when it was sent: the Date header (Tue, 17 Mar 2026 09:42:11 -0500). The quoted request below the reply carries its own sent date (Mon, 9 Mar 2026) and the vendor quote date (March 2, 2026), the renewal effective date (April 1, 2026), the end of the current term (March 31, 2026), and the approval deadline (March 20, 2026). The sender approves; the recipient (to) is accepted, and so is the vendor the approval is for (for): it is the subject of the approval, not a correspondent.",
       "gold": {
         "document_type": "Approval Email",
         "acceptable_types": [
@@ -4437,6 +4449,12 @@
               "Saul Ravenscroft"
             ],
             "relation": "to"
+          },
+          {
+            "parties": [
+              "Basalt Telemetry Inc."
+            ],
+            "relation": "for"
           }
         ],
         "party_roles": [
@@ -4451,6 +4469,10 @@
           {
             "name": "Saul Ravenscroft",
             "role": "recipient"
+          },
+          {
+            "name": "Basalt Telemetry Inc.",
+            "role": "subject"
           }
         ],
         "forbidden_parties": [],
@@ -5068,7 +5090,7 @@
         "pages": [
           {
             "page": 1,
-            "text": "Thornbury Outdoor Gear Co.\nPurchasing - 41 Starling Way, Westharrow, MI 49101 - (269) 555-0153\nPURCHASE ORDER\nPO Number: TOG-PO-4471\nPO Date: June 3, 2026\nVendor: Ridgewell Textiles Ltd., 6 Mill Race Lane, Linden Cross, PA 19047\nShip To: Thornbury Outdoor Gear Co., Receiving, 41 Starling Way, Westharrow, MI\n49101\nDeliver By: July 15, 2026\nTerms: Net 45, FOB destination\nRipstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\nWaterproof-breathable membrane laminate (yards): 800 at $12.40 = $9,920.00\nPolyester mesh, 40 in. (yards): 450 at $3.95 = $1,777.50\nYKK-compatible coil zipper tape, #5 (yards): 2000 at $0.88 = $1,760.00\nOrder total: $21,677.50\nAll fabric must meet the attached color standard and ship with mill test reports. Partial shipments require\napproval. Please acknowledge this order within three business days.\nAuthorized by: Imogen Wexley, Purchasing Manager"
+            "text": "Thornbury Outdoor Gear Co.\nPurchasing - 41 Starling Way, Westharrow, MI 49101 - (269) 555-0153\nPURCHASE ORDER\nPO Number: TOG-PO-4471\nPO Date: June 3, 2026\nVendor: Ridgewell Textiles Ltd., 6 Mill Race Lane, Linden Cross, PA 19047\nShip To: Thornbury Outdoor Gear Co., Receiving, 41 Starling Way, Westharrow, MI\n49101\nDeliver By: July 15, 2026\nTerms: Net 45, FOB destination\nRipstop nylon, 70D, forest green (yards): 1200 at $6.85 = $8,220.00\nWaterproof-breathable membrane laminate (yards): 800 at $12.40 = $9,920.00\nPolyester mesh, 40 in. (yards): 450 at $3.95 = $1,777.50\nCoil zipper tape, #5 (yards): 2000 at $0.88 = $1,760.00\nOrder total: $21,677.50\nAll fabric must meet the attached color standard and ship with mill test reports. Partial shipments require\napproval. Please acknowledge this order within three business days.\nAuthorized by: Imogen Wexley, Purchasing Manager"
           }
         ],
         "dates": [
@@ -6083,19 +6105,17 @@
             "propeller"
           ],
           [
-            "$6,840.00",
-            "6,840"
+            "Highmeadow Air Charter LLC",
+            "Highmeadow Air Charter"
           ],
           [
-            "N0612X",
-            "KRA-Q-2611"
+            "N0612X"
           ]
         ],
         "description_forbidden": [],
         "subject_terms": [
           "propeller overhaul",
-          "quotation",
-          "aircraft"
+          "quotation"
         ],
         "expected_readiness": "needs_review",
         "evidence": {
