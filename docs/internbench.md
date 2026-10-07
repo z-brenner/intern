@@ -53,8 +53,9 @@ still lists every document. `--out DIR` writes somewhere else. A full build
 replaces the files the directory's earlier `manifest.json` lists and removes
 nothing else, and the generator refuses a directory that is not empty and
 holds no InternBench manifest. `scripts/run-internbench.sh` generates the
-default corpus again whenever `bench/generated/manifest.json` is not the
-committed `bench/manifest.json`.
+default corpus again whenever a file in it differs from the committed
+`bench/manifest.json`. A live run given `--manifest` refuses to start when
+any selected document's bytes disagree with it.
 
 | Group | Documents |
 | --- | --- |
@@ -274,7 +275,10 @@ scored some from stale replies, never writes a baseline.
   are good when false. Replay is deterministic, so any flip is real.
 * **A full run that drops a baseline document fails**, live or replay: a
   gold entry deleted by accident would otherwise take its coverage with it.
-  Write a new baseline to drop a document on purpose.
+  So does a baseline document whose gold entry says `"recording":
+  "pending"`, which replay leaves unscored; pending is only for a document
+  nobody has recorded yet. Write a new baseline to drop a document on
+  purpose.
 * **Live is gated in aggregate** over the documents both runs share. A rate
   may fall by at most one document's worth. The trap-date, forbidden-party
   and unsafe-ready counts may not rise. A shared document that failed counts

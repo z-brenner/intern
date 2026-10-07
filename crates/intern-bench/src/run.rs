@@ -188,19 +188,28 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     missing.join(", ")
                 ));
             }
+            // A live run is expensive and its recording is only worth keeping
+            // if it read the documents the manifest vouches for, so a
+            // mismatch stops it before the first document.
             if let Some((manifest, _)) = &manifest {
-                for document in &documents {
-                    let bytes =
-                        std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
-                    if manifest
-                        .sha256(&document.file)
-                        .is_some_and(|expected| expected != sha256_hex(&bytes))
-                    {
-                        eprintln!(
-                            "warning: {} differs from the manifest; the corpus was generated from other sources",
-                            document.file
-                        );
-                    }
+                let differ = documents
+                    .iter()
+                    .filter(|document| {
+                        let bytes =
+                            std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
+                        manifest
+                            .sha256(&document.file)
+                            .is_some_and(|expected| expected != sha256_hex(&bytes))
+                    })
+                    .map(|document| document.file.as_str())
+                    .collect::<Vec<_>>();
+                if !differ.is_empty() {
+                    return Err(format!(
+                        "{} document(s) in {} differ from the manifest (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
+                        differ.len(),
+                        options.corpus.display(),
+                        differ.join(", ")
+                    ));
                 }
             }
             let machine = MachineInfo::current();

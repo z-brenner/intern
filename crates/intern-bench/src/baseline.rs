@@ -271,9 +271,15 @@ pub fn compare(
 
     let mut shared = Vec::new();
     let mut stopped_completing = Vec::new();
+    let mut gone_pending = Vec::new();
     for record in &report.records {
         if record.status == PENDING {
             comparison.pending.push(record.id.clone());
+            // Pending is for a document nobody has recorded yet. One the
+            // baseline already scores would lose its coverage unnoticed.
+            if baseline.documents.contains_key(&record.id) {
+                gone_pending.push(record.id.clone());
+            }
             continue;
         }
         let Some(expected) = baseline.documents.get(&record.id) else {
@@ -377,6 +383,13 @@ pub fn compare(
         .extend(comparison.missing.iter().map(|id| {
             format!(
                 "{id}: in the baseline but not in this run (its regression coverage would be lost; write a new baseline to drop it on purpose)"
+            )
+        }));
+    comparison
+        .failures
+        .extend(gone_pending.iter().map(|id| {
+            format!(
+                "{id}: in the baseline but pending in the gold, so nothing scores it (record it again, or write a new baseline to drop it on purpose)"
             )
         }));
     comparison.passed = comparison.failures.is_empty();
@@ -646,6 +659,37 @@ mod tests {
         let comparison = compare(&subset, &baseline, None);
         assert!(comparison.missing.is_empty());
         assert!(comparison.passed, "{:?}", comparison.failures);
+    }
+
+    /// Turning a baselined document back to pending would take it out of
+    /// every gate; only a document the baseline never held may be pending.
+    #[test]
+    fn a_baselined_document_that_turns_pending_fails() {
+        let baseline = before();
+        let mut records = (0..9)
+            .map(|index| {
+                record(
+                    &format!("doc-{index}"),
+                    "completed",
+                    json!({"filename_correct": true, "date_forbidden": false, "ready": true}),
+                    1_000.0,
+                )
+            })
+            .collect::<Vec<_>>();
+        records.push(record("doc-9", PENDING, json!({}), 0.0));
+        records.push(record("doc-new", PENDING, json!({}), 0.0));
+        let mut run = report("replay", records);
+        let comparison = compare(&run, &baseline, None);
+        assert!(comparison.missing.is_empty());
+        assert_eq!(comparison.pending, vec!["doc-9", "doc-new"]);
+        assert!(!comparison.passed);
+        assert_eq!(comparison.failures.len(), 1, "{:?}", comparison.failures);
+        assert!(comparison.failures[0].starts_with("doc-9: in the baseline but pending"));
+
+        // Selecting it with --only does not excuse it either.
+        run.corpus.only = vec!["doc-9".into()];
+        run.records.retain(|record| record.id == "doc-9");
+        assert!(!compare(&run, &baseline, None).passed);
     }
 
     #[test]
