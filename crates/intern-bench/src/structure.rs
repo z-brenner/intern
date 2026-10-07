@@ -38,8 +38,11 @@
 //!   must be found three times, without overlap.
 //! * `kv_accuracy`: a labelled value is found when a line holds the label
 //!   and, after it, the value; or when a line holds the label and nothing
-//!   else (colons, bars and dashes aside) and the next line holds the
-//!   value. The score is the share of pairs found.
+//!   else (colons, bars, dashes and full stops aside) and the next line
+//!   holds the value; or when a table row (`| … |`) holds the label in a
+//!   cell and the next line, also a table row, holds the value in the cell
+//!   of the same column - a label set over its value, linearised as a
+//!   table. The score is the share of pairs found.
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
@@ -188,6 +191,30 @@ fn holds_in_order(line: &str, cells: &[String]) -> bool {
 fn only_separators(rest: &str) -> bool {
     rest.chars()
         .all(|character| character.is_whitespace() || matches!(character, ':' | '|' | '-' | '.'))
+}
+
+/// The cells of a line linearised as a table row (`| a | b |`), or none
+/// for any other line.
+fn table_cells(line: &str) -> Option<Vec<&str>> {
+    let inner = line.strip_prefix('|')?.strip_suffix('|')?;
+    Some(inner.split('|').map(str::trim).collect())
+}
+
+/// Whether a table row holds the label in one cell and the next line, a
+/// row of the same table, holds the value in the cell below it: how a
+/// table linearises labels set over their values.
+fn below_in_table(lines: &[String], key: &str, value: &str) -> bool {
+    lines.windows(2).any(|pair| {
+        let (Some(labels), Some(values)) = (table_cells(&pair[0]), table_cells(&pair[1])) else {
+            return false;
+        };
+        labels.iter().enumerate().any(|(column, cell)| {
+            find_bounded(cell, key, 0).is_some()
+                && values
+                    .get(column)
+                    .is_some_and(|below| find_bounded(below, value, 0).is_some())
+        })
+    })
 }
 
 /// A page the gold gives a route for, and the route it took.
@@ -468,25 +495,26 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
         }
         measure.key_values += 1;
         let found = !key.is_empty()
-            && lines.iter().enumerate().any(|(index, line)| {
-                let mut from = 0;
-                while let Some(at) = find_bounded(line, &key, from) {
-                    let rest = &line[at + key.len()..];
-                    if find_bounded(rest, &value, 0).is_some() {
-                        return true;
+            && (below_in_table(&lines, &key, &value)
+                || lines.iter().enumerate().any(|(index, line)| {
+                    let mut from = 0;
+                    while let Some(at) = find_bounded(line, &key, from) {
+                        let rest = &line[at + key.len()..];
+                        if find_bounded(rest, &value, 0).is_some() {
+                            return true;
+                        }
+                        if only_separators(&line[..at])
+                            && only_separators(rest)
+                            && lines
+                                .get(index + 1)
+                                .is_some_and(|next| find_bounded(next, &value, 0).is_some())
+                        {
+                            return true;
+                        }
+                        from = at + key.len();
                     }
-                    if only_separators(&line[..at])
-                        && only_separators(rest)
-                        && lines
-                            .get(index + 1)
-                            .is_some_and(|next| find_bounded(next, &value, 0).is_some())
-                    {
-                        return true;
-                    }
-                    from = at + key.len();
-                }
-                false
-            });
+                    false
+                }));
         if found {
             measure.key_values_found += 1;
         } else {
@@ -725,6 +753,20 @@ mod tests {
         // A value before its label is not its value.
         let before = measure(&truth, &source(&["03/04/2026 Invoice Date"]));
         assert_eq!(before.key_values_found, 0);
+        // Labels over their values, linearised as a table: each value is
+        // in the cell under its label, and only there.
+        let grid = measure(
+            &truth,
+            &source(&[
+                "| Invoice Date | Due Date |\n| 03/04/2026 | 04/03/2026 |\n| BILL TO |\n| Quillon Ridge Bakery, Inc. |",
+            ]),
+        );
+        assert_eq!(grid.kv_accuracy(), Some(1.0), "{:?}", grid.misses);
+        let shifted = measure(
+            &truth,
+            &source(&["| Invoice Date | Due Date |\n| 04/03/2026 | 03/04/2026 |"]),
+        );
+        assert_eq!(shifted.key_values_found, 0);
     }
 
     #[test]
