@@ -466,6 +466,16 @@ fn stages(out: &mut String, report: &Report) {
         })
         .collect::<Vec<_>>();
     table(out, &["Stage", "Docs", "p50", "p95", "Max"], &timed);
+    let left_out = report.summary.documents
+        - report.summary.completed
+        - report.summary.statuses.get(PENDING).copied().unwrap_or(0);
+    if left_out > 0 {
+        let _ = writeln!(
+            out,
+            "Over the {} documents that completed. The other {left_out} (failed, or not scored) are left out: a failed document's time is how long it took to fail.\n",
+            report.summary.completed
+        );
+    }
     let counted = METRICS
         .iter()
         .filter(|(_, unit)| *unit != Unit::Milliseconds)
@@ -619,10 +629,14 @@ fn baseline(out: &mut String, report: &Report) {
     };
     list(out, "Failures", &comparison.failures);
     if report.mode == "live" {
+        let ungated = comparison
+            .ungated_regressions()
+            .cloned()
+            .collect::<Vec<_>>();
         list(
             out,
             "Per-document flips to worse (reported, not gated live)",
-            &comparison.document_regressions,
+            &ungated,
         );
     }
     list(out, "Improvements", &comparison.document_improvements);

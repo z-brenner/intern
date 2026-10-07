@@ -423,8 +423,8 @@ fn a_replay_scores_what_it_can_and_fails_on_what_it_cannot() {
     assert_eq!(summary.rates["filename_correct"].total, 3);
     assert_eq!(summary.statuses["stale_prompt"], 1);
     assert_eq!(
-        report.latency.overall["total_ms"].count, 3,
-        "unscorable documents took no time"
+        report.latency.overall["total_ms"].count, 2,
+        "only completed documents: unscorable ones took no time, the failed one took time to fail"
     );
     assert_eq!(report.ocr.documents.len(), 1);
     assert_eq!(report.groups["category"]["png"].documents, 1);

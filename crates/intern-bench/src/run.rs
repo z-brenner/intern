@@ -259,7 +259,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             eprintln!("regressed: {line}");
         }
         if report.mode == "live" {
-            for line in &comparison.document_regressions {
+            for line in comparison.ungated_regressions() {
                 eprintln!("flipped (not gated live): {line}");
             }
         }

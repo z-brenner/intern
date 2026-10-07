@@ -15,7 +15,7 @@ use crate::{
     machine::{MachineInfo, ModelInfo},
     memory::{INTERVAL_MS, MemoryPeaks},
     ocr::OcrMeasure,
-    record::{DocumentRecord, PENDING, is_unscorable},
+    record::{COMPLETED, DocumentRecord},
     stats::{Distribution, round},
     timing::{self, METRICS},
 };
@@ -165,7 +165,7 @@ pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> S
     for record in records {
         summary.documents += 1;
         *summary.statuses.entry(record.status.clone()).or_insert(0) += 1;
-        if record.status == crate::record::COMPLETED {
+        if record.status == COMPLETED {
             summary.completed += 1;
             if record.readiness.as_deref() == Some("needs_review") {
                 reviewed += 1;
@@ -275,7 +275,9 @@ pub fn groups(records: &[DocumentRecord]) -> BTreeMap<String, BTreeMap<String, S
         .collect()
 }
 
-/// Distributions of every timing metric, overall and by slice.
+/// Distributions of every timing metric, overall and by slice, over the
+/// documents that completed (see [`timed`]); each distribution's `count`
+/// says how many had the metric.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Latency {
     #[serde(default)]
@@ -288,10 +290,15 @@ pub struct Latency {
     pub by_text_layer: BTreeMap<String, BTreeMap<String, Distribution>>,
 }
 
-/// Records whose timings describe real work: not pending, and not a
-/// replay that could not run.
-fn timed(record: &DocumentRecord) -> bool {
-    record.status != PENDING && !is_unscorable(&record.status)
+/// Records whose timings describe the whole pipeline: the documents that
+/// completed. A failed document's time is how long it took to fail - an
+/// extraction failure has no analysis time at all, a model failure no
+/// validation or naming - so mixing it in would give each stage a
+/// different set of documents, and a slow document that starts failing
+/// would make p95 look faster. Failures are counted in the summary's
+/// statuses instead.
+pub fn timed(record: &DocumentRecord) -> bool {
+    record.status == COMPLETED
 }
 
 pub fn distributions<'a>(
@@ -609,10 +616,15 @@ mod tests {
         assert_eq!(groups["page_bucket"]["10-24"].documents, 1);
         assert_eq!(groups["category"]["table"].documents, 2);
 
-        let latency = latency(&records);
+        let mut failed = records[1].clone();
+        failed.id = "d".into();
+        failed.status = "model_failed".into();
+        let mut timed = records.clone();
+        timed.push(failed);
+        let latency = latency(&timed);
         assert_eq!(
             latency.overall["total_ms"].count, 2,
-            "the stale record took no time"
+            "only completed documents: the stale one took no time, the failed one took time to fail"
         );
         assert_eq!(latency.overall["total_ms"].p95, 300.0);
         assert_eq!(latency.by_page_bucket["1"]["total_ms"].p50, 100.0);
