@@ -19,6 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::router::bounds::{MAX_GUTTER_CANDIDATES, MAX_RUNS, MAX_RUNS_PER_LINE};
 use super::text::{is_heading_line, is_label, median, split_key_value};
 use super::{
     BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, TextSource,
@@ -85,7 +86,8 @@ struct PageStats {
 }
 
 /// Blocks in reading order from a page's runs. Boxes are in the runs'
-/// frame; ids are left for [`super::number_blocks`].
+/// frame; ids are left for [`super::number_blocks`]. A page past the
+/// analysis's bounds ([`super::router::bounds`]) has none.
 pub fn analyze_runs(
     runs: &[TextRun],
     width: u32,
@@ -93,37 +95,49 @@ pub fn analyze_runs(
     rulings: &[[u32; 4]],
     source: TextSource,
 ) -> Vec<LayoutBlock> {
-    let items = runs
-        .iter()
-        .filter(|run| !run.text.trim().is_empty() && run.bbox[2] > run.bbox[0])
-        .map(|run| Item {
-            text: run.text.trim().to_owned(),
-            x0: f64::from(run.bbox[0]),
-            y0: f64::from(run.bbox[1]),
-            x1: f64::from(run.bbox[2]),
-            y1: f64::from(run.bbox[3].max(run.bbox[1] + 1)),
-            bold: run.bold,
-            confidence: run.confidence,
-        })
-        .collect::<Vec<_>>();
+    analyze_runs_within(runs, width, height, rulings, source, &|| false).unwrap_or_default()
+}
+
+/// [`analyze_runs`], or none: for a page with more runs than the analysis
+/// takes on, in all or on one line, and as soon as `stop` says so - the
+/// request canceled, or its time up - between one region of the page and
+/// the next.
+pub fn analyze_runs_within(
+    runs: &[TextRun],
+    width: u32,
+    height: u32,
+    rulings: &[[u32; 4]],
+    source: TextSource,
+    stop: &dyn Fn() -> bool,
+) -> Option<Vec<LayoutBlock>> {
+    let items = items_of(runs);
     if items.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
+    }
+    if too_crowded(&items) {
+        return None;
     }
     let stats = page_stats(&items, f64::from(width.max(1)), f64::from(height.max(1)));
     let mut leaves = Vec::new();
-    cut_region(
+    if !cut_region(
         &items,
         (0..items.len()).collect(),
         f64::from(width.max(1)),
         0,
         &mut leaves,
-    );
+        stop,
+    ) {
+        return None;
+    }
     let rulings = rulings
         .iter()
         .map(|ruling| ruling.map(f64::from))
         .collect::<Vec<_>>();
     let mut blocks = Vec::new();
     for leaf in leaves {
+        if stop() {
+            return None;
+        }
         blocks.extend(leaf_blocks(&items, leaf, &stats, &rulings, source));
     }
     mark_running_lines(&mut blocks, &stats);
@@ -134,7 +148,64 @@ pub fn analyze_runs(
         BlockKind::PageFooter => 2,
         _ => 1,
     });
-    blocks
+    Some(blocks)
+}
+
+/// The runs the analysis reads: those with text and width.
+fn items_of(runs: &[TextRun]) -> Vec<Item> {
+    runs.iter()
+        .filter(|run| !run.text.trim().is_empty() && run.bbox[2] > run.bbox[0])
+        .map(|run| Item {
+            text: run.text.trim().to_owned(),
+            x0: f64::from(run.bbox[0]),
+            y0: f64::from(run.bbox[1]),
+            x1: f64::from(run.bbox[2]),
+            y1: f64::from(run.bbox[3].max(run.bbox[1] + 1)),
+            bold: run.bold,
+            confidence: run.confidence,
+        })
+        .collect()
+}
+
+/// The band down the page an item's middle falls in: five points tall, the
+/// line [`too_crowded`] counts it on.
+fn band(item: &Item) -> i64 {
+    (item.center_y() / 50.0).floor() as i64
+}
+
+/// Whether a page has more runs than the analysis takes on: more than
+/// [`MAX_RUNS`] in all, or more than [`MAX_RUNS_PER_LINE`] within five
+/// points of each other down the page - where the comparisons of each run
+/// with the others on its line add up.
+fn too_crowded(items: &[Item]) -> bool {
+    if items.len() > MAX_RUNS {
+        return true;
+    }
+    let mut lines: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    for item in items {
+        let count = lines.entry(band(item)).or_default();
+        *count += 1;
+        if *count > MAX_RUNS_PER_LINE {
+            return true;
+        }
+    }
+    false
+}
+
+/// How crowded a page's runs are, counted as [`too_crowded`] counts them:
+/// the runs the analysis reads, and the most of them on one line. The
+/// routing calibration (`examples/route_calibration.rs`) measures the
+/// corpus against [`MAX_RUNS`] and [`MAX_RUNS_PER_LINE`] with it.
+pub fn crowding(runs: &[TextRun]) -> (usize, usize) {
+    let items = items_of(runs);
+    let mut lines: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    let mut most = 0;
+    for item in &items {
+        let count = lines.entry(band(item)).or_default();
+        *count += 1;
+        most = most.max(*count);
+    }
+    (items.len(), most)
 }
 
 /// The body text height is the height most of the page's characters are set
@@ -199,37 +270,60 @@ fn rows_of(items: &[Item], ids: &[usize]) -> Vec<Row> {
             .then(left.cmp(right))
     });
     let mut rows: Vec<Row> = Vec::new();
+    // The widest run on the row being built. Its runs are kept left to
+    // right, so the only ones a run can overlap start less than that far
+    // to its left, or before its right edge: the rest are checked by where
+    // they start, not one by one.
+    let mut widest = 0.0_f64;
     for id in sorted {
         let item = &items[id];
         let joins = rows.last().is_some_and(|row| {
             let row_center = (row.y0 + row.y1) / 2.0;
             let item_center = item.center_y();
-            item_center >= row.y0
-                && item_center <= row.y1
-                && row_center >= item.y0
-                && row_center <= item.y1
-                // A run that would overlap another on the row is a line
-                // of its own, however near its baseline - unless the two
-                // share a baseline and only touch: a date set a little too
-                // wide for its column runs into the next column's value.
-                && row.members.iter().all(|member| {
-                    let other = &items[*member];
-                    other.x1 <= item.x0 + 1.0
-                        || item.x1 <= other.x0 + 1.0
-                        || overflows_into(other, item)
-                })
+            if item_center < row.y0
+                || item_center > row.y1
+                || row_center < item.y0
+                || row_center > item.y1
+            {
+                return false;
+            }
+            let from = row
+                .members
+                .partition_point(|member| items[*member].x0 < item.x0 - widest - 1.0);
+            let to = row
+                .members
+                .partition_point(|member| items[*member].x0 < item.x1 + 1.0);
+            // A run that would overlap another on the row is a line of its
+            // own, however near its baseline - unless the two share a
+            // baseline and only touch: a date set a little too wide for its
+            // column runs into the next column's value.
+            row.members[from..to.max(from)].iter().all(|member| {
+                let other = &items[*member];
+                other.x1 <= item.x0 + 1.0
+                    || item.x1 <= other.x0 + 1.0
+                    || overflows_into(other, item)
+            })
         });
         if joins {
             let row = rows.last_mut().expect("checked above");
-            row.members.push(id);
+            let at = row.members.partition_point(|member| {
+                items[*member]
+                    .x0
+                    .total_cmp(&item.x0)
+                    .then(member.cmp(&id))
+                    .is_lt()
+            });
+            row.members.insert(at, id);
             row.y0 = row.y0.min(item.y0);
             row.y1 = row.y1.max(item.y1);
+            widest = widest.max(item.x1 - item.x0);
         } else {
             rows.push(Row {
                 members: vec![id],
                 y0: item.y0,
                 y1: item.y1,
             });
+            widest = item.x1 - item.x0;
         }
     }
     for row in &mut rows {
@@ -273,29 +367,36 @@ enum Cut {
 /// on a page built to make the recursion pathological.
 const MAX_DEPTH: usize = 32;
 
+/// Cuts a region into the leaves read row by row, in reading order. False
+/// when `stop` said to stop, and the leaves are then not all there.
 fn cut_region(
     items: &[Item],
     ids: Vec<usize>,
     page_width: f64,
     depth: usize,
     leaves: &mut Vec<Vec<usize>>,
-) {
+    stop: &dyn Fn() -> bool,
+) -> bool {
+    if stop() {
+        return false;
+    }
     if ids.len() < 2 || depth >= MAX_DEPTH {
         leaves.push(ids);
-        return;
+        return true;
     }
     let cut = column_cut(items, &ids, page_width).or_else(|| horizontal_cut(items, &ids));
     match cut {
         Some(Cut::Columns(left, right)) => {
-            cut_region(items, left, page_width, depth + 1, leaves);
-            cut_region(items, right, page_width, depth + 1, leaves);
+            cut_region(items, left, page_width, depth + 1, leaves, stop)
+                && cut_region(items, right, page_width, depth + 1, leaves, stop)
         }
-        Some(Cut::Bands(bands)) => {
-            for band in bands {
-                cut_region(items, band, page_width, depth + 1, leaves);
-            }
+        Some(Cut::Bands(bands)) => bands
+            .into_iter()
+            .all(|band| cut_region(items, band, page_width, depth + 1, leaves, stop)),
+        None => {
+            leaves.push(ids);
+            true
         }
-        None => leaves.push(ids),
     }
 }
 
@@ -408,15 +509,24 @@ fn free_intervals(items: &[Item], row: &Row, left_edge: f64, right_edge: f64) ->
     free
 }
 
+/// Where two rows' free stretches overlap by at least `minimum`. Both are
+/// left to right and do not overlap themselves, as [`free_intervals`]
+/// makes them, so one pass over each finds every overlap, in order.
 fn intersect(these: &[(f64, f64)], those: &[(f64, f64)], minimum: f64) -> Vec<(f64, f64)> {
     let mut out = Vec::new();
-    for (a0, a1) in these {
-        for (b0, b1) in those {
-            let start = a0.max(*b0);
-            let end = a1.min(*b1);
-            if end - start >= minimum {
-                out.push((start, end));
-            }
+    let (mut this, mut that) = (0, 0);
+    while this < these.len() && that < those.len() {
+        let (a0, a1) = these[this];
+        let (b0, b1) = those[that];
+        let start = a0.max(b0);
+        let end = a1.min(b1);
+        if end - start >= minimum {
+            out.push((start, end));
+        }
+        if a1 < b1 {
+            this += 1;
+        } else {
+            that += 1;
         }
     }
     out
@@ -456,6 +566,9 @@ fn column_cut(items: &[Item], ids: &[usize], page_width: f64) -> Option<Cut> {
         .collect::<Vec<_>>();
     let mut candidates: Vec<(f64, f64)> = Vec::new();
     for window in free.windows(3) {
+        if candidates.len() >= MAX_GUTTER_CANDIDATES {
+            break;
+        }
         for (start, end) in intersect(
             &intersect(&window[0], &window[1], minimum),
             &window[2],
@@ -2419,6 +2532,149 @@ mod tests {
         );
         assert_eq!(blocks[0].fields[1].value, "Briarport");
         assert_eq!(blocks[1].text, "Members in Alamosa Bend County");
+    }
+
+    /// A page of more runs than the analysis takes on, or of too many on
+    /// one line, has no geometry layout: it is read as its text instead.
+    #[test]
+    fn a_page_past_the_analysis_bounds_is_not_analysed() {
+        let line = (0..=MAX_RUNS_PER_LINE)
+            .map(|index| run(10.0 + index as f64 * 2.0, 100.0, "x", 3.0))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            analyze_runs_within(&line, 6120, 7920, &[], TextSource::Native, &|| false),
+            None
+        );
+        let page = (0..=MAX_RUNS)
+            .map(|index| run(54.0, 10.0 + index as f64 * 0.19, "y", 3.0))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            analyze_runs_within(&page, 6120, 7920, &[], TextSource::Native, &|| false),
+            None
+        );
+        // Told to stop, the analysis stops.
+        let two = [
+            run(54.0, 100.0, "One line.", 9.0),
+            run(54.0, 140.0, "Another.", 9.0),
+        ];
+        assert_eq!(
+            analyze_runs_within(&two, 6120, 7920, &[], TextSource::Native, &|| true),
+            None
+        );
+        assert!(
+            analyze_runs_within(&two, 6120, 7920, &[], TextSource::Native, &|| false).is_some()
+        );
+    }
+
+    /// Rows as they were found before a run was checked only against the
+    /// runs near it: against every run on its row.
+    fn rows_checked_against_every_run(items: &[Item], ids: &[usize]) -> Vec<Vec<usize>> {
+        let mut sorted = ids.to_vec();
+        sorted.sort_by(|left, right| {
+            items[*left]
+                .center_y()
+                .total_cmp(&items[*right].center_y())
+                .then(items[*left].x0.total_cmp(&items[*right].x0))
+                .then(left.cmp(right))
+        });
+        let mut rows: Vec<Row> = Vec::new();
+        for id in sorted {
+            let item = &items[id];
+            let joins = rows.last().is_some_and(|row| {
+                let row_center = (row.y0 + row.y1) / 2.0;
+                let item_center = item.center_y();
+                item_center >= row.y0
+                    && item_center <= row.y1
+                    && row_center >= item.y0
+                    && row_center <= item.y1
+                    && row.members.iter().all(|member| {
+                        let other = &items[*member];
+                        other.x1 <= item.x0 + 1.0
+                            || item.x1 <= other.x0 + 1.0
+                            || overflows_into(other, item)
+                    })
+            });
+            if joins {
+                let row = rows.last_mut().expect("checked above");
+                row.members.push(id);
+                row.y0 = row.y0.min(item.y0);
+                row.y1 = row.y1.max(item.y1);
+            } else {
+                rows.push(Row {
+                    members: vec![id],
+                    y0: item.y0,
+                    y1: item.y1,
+                });
+            }
+        }
+        rows.into_iter()
+            .map(|mut row| {
+                row.members.sort_by(|left, right| {
+                    items[*left]
+                        .x0
+                        .total_cmp(&items[*right].x0)
+                        .then(left.cmp(right))
+                });
+                row.members
+            })
+            .collect()
+    }
+
+    /// A run is checked only against the runs on its row that start near
+    /// it, and the rows come out as they did when it was checked against
+    /// every one: on a fixed scatter of runs that overlap, overprint, run
+    /// into each other, and sit over one run as wide as the page.
+    #[test]
+    fn rows_check_only_the_runs_near_each_run() {
+        let mut seed = 0x2545_f491_u64;
+        let mut next = |below: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        let mut runs = Vec::new();
+        for _ in 0..600 {
+            let x = next(500) as f64;
+            let y = 100.0 + next(12) as f64 * 6.0 + next(3) as f64;
+            let letters = 1 + next(12) as usize;
+            let size = 8.0 + next(3) as f64;
+            runs.push(run(x, y, &"w".repeat(letters), size));
+        }
+        runs.push(run(40.0, 106.0, &"W".repeat(110), 9.0));
+        let items = items_of(&runs);
+        let ids = (0..items.len()).collect::<Vec<_>>();
+
+        let rows = rows_of(&items, &ids)
+            .into_iter()
+            .map(|row| row.members)
+            .collect::<Vec<_>>();
+
+        assert!(rows.len() > 12, "the scatter makes rows of its own");
+        assert_eq!(rows, rows_checked_against_every_run(&items, &ids));
+    }
+
+    /// One pass over two rows' free stretches finds what every pair would.
+    #[test]
+    fn free_stretches_intersect_in_one_pass() {
+        let these = [(0.0, 100.0), (150.0, 300.0), (400.0, 900.0)];
+        let those = [
+            (50.0, 200.0),
+            (250.0, 450.0),
+            (500.0, 600.0),
+            (800.0, 1000.0),
+        ];
+        let mut every_pair = Vec::new();
+        for (a0, a1) in these {
+            for (b0, b1) in those {
+                let (start, end) = (f64::max(a0, b0), f64::min(a1, b1));
+                if end - start >= 30.0 {
+                    every_pair.push((start, end));
+                }
+            }
+        }
+
+        assert_eq!(intersect(&these, &those, 30.0), every_pair);
     }
 
     #[test]

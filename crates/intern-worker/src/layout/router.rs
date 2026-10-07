@@ -150,6 +150,7 @@ pub(crate) fn is_text_region(native: &NativePage, image: &[u32; 4], page_area: f
     let covered = native
         .segments
         .iter()
+        .take(bounds::MAX_SEGMENTS)
         .map(|segment| intersection(image, segment))
         .sum::<f64>();
     covered <= area(image) * 0.1 && per_mille(area(image), page_area) >= thresholds::IMAGE_REGION
@@ -206,7 +207,19 @@ pub fn measure_signals(native: &NativePage, text: &str, image_coverage: f32) -> 
             .collect::<Vec<_>>();
         &turned
     };
-    let structure = Structure::of(segments);
+    // A page with more text objects than the router takes on is not
+    // measured for structure: it reads as one flow, and keeps its text.
+    let crowded = segments.len() > bounds::MAX_SEGMENTS;
+    let segments = &segments[..segments.len().min(bounds::MAX_SEGMENTS)];
+    let structure = if crowded {
+        Structure {
+            columns: 1,
+            interleave: 0,
+            aligned_rows: 0,
+        }
+    } else {
+        Structure::of(segments)
+    };
     RouteSignals {
         chars: u32::try_from(chars).unwrap_or(u32::MAX),
         segments: u32::try_from(native.segments.len()).unwrap_or(u32::MAX),
@@ -222,12 +235,51 @@ pub fn measure_signals(native: &NativePage, text: &str, image_coverage: f32) -> 
         aligned_rows: structure.aligned_rows,
         key_values: key_value_lines(text),
         key_value_grid: key_value_grid_lines(text),
-        overlap: overlap(segments),
+        overlap: if crowded { 0 } else { overlap(segments) },
         font_sizes: font_sizes(segments),
         rulings: u16::try_from(native.rulings.len()).unwrap_or(u16::MAX),
         image_region: image_region(native),
         rotation: native.rotation % 360,
     }
+}
+
+/// What the router and the layout analysis take on of a page, at most.
+///
+/// Each bounds what a page built to be slow can cost - the analysis of
+/// where text sits compares runs with the runs around them, and a page of
+/// thousands of one-character runs on one line, or a page two hundred
+/// inches wide, would otherwise take minutes - and each is many times what
+/// any page of InternBench's 72 documents or the generated fixtures has:
+/// the routing calibration (`examples/route_calibration.rs`) measured
+/// their 442 pages, and `docs/document-routing.md` has the table. A page
+/// past one keeps its text and is read on the fast route.
+pub mod bounds {
+    /// Text objects a page's survey keeps: 22 times the corpus's densest
+    /// page (226 on the ruled inspection log). A page drawn one character
+    /// to an object has a few thousand.
+    pub const MAX_SEGMENTS: usize = 5_000;
+    /// Images a page's survey keeps, the largest first; their area still
+    /// counts every image. No corpus page has more than one.
+    pub const MAX_IMAGES: usize = 64;
+    /// Rules a page's survey keeps: 6.7 times the corpus's most ruled page
+    /// (300, the inspection log).
+    pub const MAX_RULINGS: usize = 2_000;
+    /// Runs a page's layout is built from: 17 times the corpus's most (226).
+    pub const MAX_RUNS: usize = 4_000;
+    /// Runs on one line - within five points of each other down the page:
+    /// 31 times the corpus's most (8).
+    pub const MAX_RUNS_PER_LINE: usize = 250;
+    /// Candidate gutters one region of a page tries, in the order they are
+    /// found down it: nine times the most gutters a corpus page has (7,
+    /// between the eight columns of a table).
+    pub const MAX_GUTTER_CANDIDATES: usize = 64;
+    /// Bands of whitespace the router counts in one part of a page: nine
+    /// times the corpus's most (7).
+    pub const MAX_GUTTERS: usize = 64;
+    /// Points across a part of a page the router looks for gutters in: the
+    /// widest page a PDF can have is two hundred inches (14,400 points); a
+    /// letter page is 612, turned on its side 792.
+    pub const MAX_WIDTH_POINTS: usize = 15_000;
 }
 
 /// Thresholds, each with the measurement that set it in
@@ -482,10 +534,12 @@ fn image_region(native: &NativePage) -> u16 {
     native
         .images
         .iter()
+        .take(bounds::MAX_IMAGES)
         .filter(|image| {
             let covered = native
                 .segments
                 .iter()
+                .take(bounds::MAX_SEGMENTS)
                 .map(|segment| intersection(image, segment))
                 .sum::<f64>();
             covered <= area(image) * 0.1
@@ -681,22 +735,31 @@ fn gutters(rows: &[SegmentRow], height: f64) -> Vec<(f64, f64, usize)> {
         .unwrap_or(0);
     let bin = UNITS_PER_POINT as u32;
     let bins = ((right.saturating_sub(left)) / bin + 1) as usize;
-    if bins > 100_000 {
+    if bins > bounds::MAX_WIDTH_POINTS {
         return Vec::new();
     }
-    let mut coverage = vec![0_u32; bins];
+    // How many rows cover each point across, counted where each cell starts
+    // and ends. A row's cells run left to right without overlapping, but two
+    // can share the point one ends and the next starts in; the second then
+    // starts after it, so a row counts once at every point it covers.
+    let mut steps = vec![0_i64; bins + 1];
     for row in rows {
-        let mut covered = vec![false; bins];
+        let mut covered_to = 0;
         for cell in &row.cells {
-            let first = ((cell.0 - left) / bin) as usize;
+            let first = (((cell.0 - left) / bin) as usize).clamp(covered_to, bins);
             let last = ((cell.1 - left).div_ceil(bin) as usize).min(bins);
-            for flag in &mut covered[first.min(bins)..last] {
-                *flag = true;
+            if first < last {
+                steps[first] += 1;
+                steps[last] -= 1;
+                covered_to = last;
             }
         }
-        for (count, flag) in coverage.iter_mut().zip(covered) {
-            *count += u32::from(flag);
-        }
+    }
+    let mut coverage = Vec::with_capacity(bins);
+    let mut running = 0_i64;
+    for step in &steps[..bins] {
+        running += step;
+        coverage.push(u32::try_from(running.max(0)).unwrap_or(u32::MAX));
     }
     let tolerance = (rows.len() as u32 / 8).max(1);
     let minimum = (height * 0.9).max(60.0);
@@ -708,6 +771,9 @@ fn gutters(rows: &[SegmentRow], height: f64) -> Vec<(f64, f64, usize)> {
         .map(|count| *count <= tolerance)
         .chain(std::iter::once(false));
     for (index, low) in lows.enumerate() {
+        if found.len() >= bounds::MAX_GUTTERS {
+            break;
+        }
         match (low, start) {
             (true, None) => start = Some(index),
             (false, Some(first)) => {
@@ -881,6 +947,58 @@ mod tests {
         let single = "Invoice Date: January 5, 2026\nBill To: Contoso Worldwide, Inc.\n\
                       The tenant will pay the following: rent and fees: monthly.";
         assert_eq!(key_value_grid_lines(single), 0);
+    }
+
+    /// A page with more text objects than the router takes on reads as one
+    /// flow, measured no further: two columns of one-character objects
+    /// written row by row would otherwise cost a comparison of every one
+    /// with every other.
+    #[test]
+    fn a_crowded_page_is_not_measured_for_structure() {
+        let mut segments = Vec::new();
+        for row in 0..120 {
+            for column in 0..45 {
+                let x = 54 + column * 5 + if column >= 22 { 100 } else { 0 };
+                segments.push([
+                    x * 10,
+                    (100 + row * 5) * 10,
+                    (x + 4) * 10,
+                    (104 + row * 5) * 10,
+                ]);
+            }
+        }
+        assert!(segments.len() > bounds::MAX_SEGMENTS);
+        let page = NativePage {
+            width: 6120,
+            height: 7920,
+            segments,
+            ..NativePage::default()
+        };
+
+        let signals = measure_signals(&page, "", 0.0);
+
+        assert_eq!(signals.columns, 1);
+        assert_eq!(signals.aligned_rows, 0);
+        assert_eq!(route_page(&signals, false), PageRoute::Fast);
+    }
+
+    /// Gutters are counted from where each row's cells start and end; two
+    /// columns are two columns however many rows there are.
+    #[test]
+    fn gutters_count_columns_however_tall_the_page() {
+        let mut segments = Vec::new();
+        for row in 0..400 {
+            segments.push(segment(54, 100 + row * 12, 200));
+            segments.push(segment(320, 100 + row * 12, 200));
+        }
+        let page = NativePage {
+            width: 6120,
+            height: 79_200,
+            segments,
+            ..NativePage::default()
+        };
+
+        assert_eq!(measure_signals(&page, "", 0.0).columns, 2);
     }
 
     #[test]

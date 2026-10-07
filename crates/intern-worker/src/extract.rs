@@ -755,6 +755,7 @@ where
                 path,
                 limits,
                 cancel,
+                started,
                 &mut pool,
                 vision_taken,
             ) {
@@ -803,20 +804,34 @@ where
     // A request canceled while its last pages were being read is canceled,
     // even if every page it was waiting for came back.
     cancel.check()?;
-    cancel.timed(
+    let stop = || halted(cancel, started, limits);
+    let document = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || assemble(plans, outcomes),
-    )
+        || assemble(plans, outcomes, &stop),
+    )?;
+    // A layout the time ran out on was left unbuilt; the document is not
+    // returned half-read as if it were whole.
+    timed_check(cancel, started, limits)?;
+    Ok(document)
+}
+
+/// Whether the request was canceled or its time is up - the token's own
+/// deadline, or the extraction's: what the layout analysis asks between
+/// the regions of a page.
+fn halted(cancel: &CancellationToken, started: Instant, limits: &ResourceLimits) -> bool {
+    cancel.check().is_err() || started.elapsed() > limits.max_duration
 }
 
 /// Decides how one page is read, finishes it if it needs no OCR, and hands
 /// it to the OCR workers if it does.
+#[allow(clippy::too_many_arguments)]
 fn plan_page<O: OcrBackend + Sync + ?Sized>(
     mut inspection: PdfPageInspection,
     pdf: &dyn PdfBackend,
     path: &Path,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
+    started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
 ) -> Result<PagePlan, ExtractionError> {
@@ -981,9 +996,10 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     }
 
     let route = native_route(route, &signals);
+    let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || native_page(page_number, inspection, signals, route),
+        || native_page(page_number, inspection, signals, route, &stop),
     );
     Ok(PagePlan::Done { page, vision })
 }
@@ -1054,22 +1070,27 @@ fn render_for_ocr(
 }
 
 /// A page read from its native text: exactly as PDFium read it on the fast
-/// route, or the linearization of its blocks on the layout route.
+/// route, or the linearization of its blocks on the layout route - unless
+/// the page is past what the analysis takes on, or `stop` says the request
+/// is canceled or out of time, when it is read as on the fast route.
 fn native_page(
     page_number: usize,
     inspection: PdfPageInspection,
     signals: RouteSignals,
     route: PageRoute,
+    stop: &dyn Fn() -> bool,
 ) -> ExtractedPage {
+    // A page past the analysis's bounds, or one the time ran out on, is
+    // read as its text.
     let geometry = inspection
         .native
         .as_ref()
-        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty());
+        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty())
+        .and_then(|native| {
+            crate::layout::geometry_layout(native, Vec::new(), signals, route, stop)
+        });
     let (text, mut layout) = match geometry {
-        Some(native) => {
-            let layout = crate::layout::geometry_layout(native, Vec::new(), signals, route);
-            (crate::layout::linearize(&layout.blocks), layout)
-        }
+        Some(layout) => (crate::layout::linearize(&layout.blocks), layout),
         None => {
             let layout = crate::layout::fast_layout(
                 &inspection.native_text,
@@ -1105,6 +1126,7 @@ fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
 fn assemble(
     plans: Vec<PagePlan>,
     outcomes: Vec<OcrOutcome>,
+    stop: &dyn Fn() -> bool,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut outcomes = outcomes
         .into_iter()
@@ -1137,7 +1159,7 @@ fn assemble(
                 let size = sizes.first().copied().ok_or_else(unread)?;
                 let vision = vision.transpose()?;
                 (
-                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals),
+                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals, stop),
                     vision,
                 )
             }
@@ -1163,13 +1185,17 @@ fn assemble(
                                 size,
                                 Some(scale),
                                 signals,
+                                stop,
                             ),
                             page_vision,
                         )
                     }
                     _ => {
                         let route = native_route(PageRoute::Ocr, &signals);
-                        (native_page(page_number, inspection, signals, route), vision)
+                        (
+                            native_page(page_number, inspection, signals, route, stop),
+                            vision,
+                        )
                     }
                 }
             }
@@ -1197,10 +1223,11 @@ fn assemble(
                     signals,
                     &readings,
                     scale,
+                    stop,
                 )
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route)
+                    native_page(page_number, inspection, signals, route, stop)
                 });
                 (page, vision)
             }
@@ -1925,7 +1952,11 @@ pub fn extract_image(
     // be 300 DPI, which is what scanners write.
     let mut page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || crate::layout::ocr_page(1, result, size, None, RouteSignals::default()),
+        || {
+            crate::layout::ocr_page(1, result, size, None, RouteSignals::default(), &|| {
+                cancel.check().is_err()
+            })
+        },
     );
     page.vision_escalated = true;
     let mut pages = vec![page];
@@ -1952,7 +1983,16 @@ pub fn extract_image(
         drop(rendered);
         pages.push(cancel.timed(
             |timings| &mut timings.analysis_micros,
-            || crate::layout::ocr_page(index + 2, result, size, None, RouteSignals::default()),
+            || {
+                crate::layout::ocr_page(
+                    index + 2,
+                    result,
+                    size,
+                    None,
+                    RouteSignals::default(),
+                    &|| cancel.check().is_err(),
+                )
+            },
         ));
     }
     let mut warnings = Vec::new();

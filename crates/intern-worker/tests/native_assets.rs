@@ -457,6 +457,88 @@ fn a_rule_inside_a_form_is_where_the_form_is_drawn() {
     );
 }
 
+/// Two columns of capitals set apart, 28 to a line on 144 lines: some
+/// eight thousand runs, twice what the layout analysis takes on, on a page
+/// the router sends to it.
+#[cfg(feature = "native-pdfium")]
+fn crowded_columns_pdf() -> Vec<u8> {
+    let letters = ["(X)"; 28].join(" -1500 ");
+    let mut contents = String::new();
+    for line in 0..144 {
+        let y = 760 - line * 5;
+        for x in [54, 330] {
+            contents.push_str(&format!("BT /F1 4 Tf {x} {y} Td [{letters}] TJ ET\n"));
+        }
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A page with more runs than the layout analysis takes on is read as its
+/// text: its characters stop being read once there are more, and the page
+/// the router sent to the layout route is read on the fast one.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_of_more_runs_than_the_analysis_takes_on_keeps_its_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::{PageRoute, route_page};
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("crowded.pdf");
+    std::fs::write(&path, crowded_columns_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    let signals = pages[0].signals.unwrap();
+    assert_eq!(
+        route_page(&signals, false),
+        PageRoute::Layout,
+        "{signals:?}"
+    );
+    let native = pages[0].native.as_ref().unwrap();
+    assert!(
+        backend
+            .page_runs(&path, 0, native, &cancel)
+            .unwrap()
+            .is_empty(),
+        "a page past the bound has no runs"
+    );
+
+    let document =
+        extract_pdf(&path, &backend, &NoOcr, &ResourceLimits::default(), &cancel).unwrap();
+    let page = &document.pages[0];
+    assert_eq!(page.text, pages[0].native_text);
+    assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
+}
+
 /// Text on a quarter-turned page is all read: drawn past the displayed
 /// width, it used to be dropped.
 #[cfg(feature = "native-pdfium")]

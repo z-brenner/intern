@@ -8,6 +8,8 @@ use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
+use crate::layout::router::bounds::{MAX_IMAGES, MAX_RULINGS, MAX_RUNS, MAX_SEGMENTS};
+#[cfg(feature = "native-pdfium")]
 use crate::layout::{NativePage, PageRoute, TextRun, measure_signals, router::needs_runs};
 #[cfg(feature = "native-pdfium")]
 use crate::limits::{MAX_PAGE_COUNT, render_size_within};
@@ -318,7 +320,8 @@ fn survey_object(
             survey.invisible_text_objects += 1;
         }
         let bbox = frame.points(left, bottom, right, top);
-        if bbox[2] > bbox[0] && bbox[3] > bbox[1] {
+        // One past the router's bound is enough to say the page has more.
+        if bbox[2] > bbox[0] && bbox[3] > bbox[1] && survey.text_boxes.len() <= MAX_SEGMENTS {
             survey.text_boxes.push(bbox);
         }
         return;
@@ -373,6 +376,25 @@ fn survey_path(
     }
 }
 
+#[cfg(feature = "native-pdfium")]
+impl ObjectSurvey {
+    /// What the survey keeps, held to the router's bounds: the largest
+    /// images, the first rules. The image area still counts every image.
+    fn bounded(mut self) -> Self {
+        if self.images.len() > MAX_IMAGES {
+            self.images.sort_by_key(|image| {
+                std::cmp::Reverse(
+                    u64::from(image[2].saturating_sub(image[0]))
+                        * u64::from(image[3].saturating_sub(image[1])),
+                )
+            });
+            self.images.truncate(MAX_IMAGES);
+        }
+        self.rulings.truncate(MAX_RULINGS);
+        self
+    }
+}
+
 /// The page's text as runs: characters on one baseline with no gap wider
 /// than most of their height between them.
 ///
@@ -384,6 +406,10 @@ fn survey_path(
 /// `/Rotate` runs across the page's own frame, one character above the
 /// next, so each character and segment is turned first, and each run is
 /// turned back into the page's frame once it is built.
+///
+/// A page with more runs than the layout analysis takes on
+/// ([`MAX_RUNS`]) has none: it is read as its text, and its characters past
+/// that are not asked for.
 #[cfg(feature = "native-pdfium")]
 fn text_runs(text: &PdfPageText<'_>, frame: &Frame, native: &NativePage) -> Vec<TextRun> {
     let (display_width, display_height) = native.display_size();
@@ -425,24 +451,34 @@ fn character_runs(
     // PDFium's weight is unreliable for the standard fonts, whose names say
     // it instead, and a face's name costs two calls and an allocation, so
     // it is asked of a run's ends rather than of every character.
-    fn finish(building: Option<Building>, chars: &PdfPageTextChars<'_>, runs: &mut Vec<TextRun>) {
+    //
+    // Returns whether the run is one the analysis reads: one with width.
+    fn finish(
+        building: Option<Building>,
+        chars: &PdfPageTextChars<'_>,
+        runs: &mut Vec<TextRun>,
+    ) -> bool {
         let Some(building) = building else {
-            return;
+            return false;
         };
         let text = building.text.trim_end().to_owned();
         if text.is_empty() {
-            return;
+            return false;
         }
         let bold_at = |index: usize| chars.get(index).is_ok_and(|character| is_bold(&character));
         let bold = bold_at(building.first) && building.last.is_none_or(bold_at);
+        let bbox = building.bbox.map(|value| value.round().max(0.0) as u32);
         runs.push(TextRun {
             text,
-            bbox: building.bbox.map(|value| value.round().max(0.0) as u32),
+            bbox,
             bold,
             confidence: None,
         });
+        bbox[2] > bbox[0]
     }
     let mut runs = Vec::new();
+    // Runs the analysis would read; past MAX_RUNS it reads none.
+    let mut read = 0_usize;
     let mut current: Option<Building> = None;
     let mut pending_space = false;
     let mut segment = 0_usize;
@@ -453,7 +489,10 @@ fn character_runs(
             continue;
         };
         if value == '\r' || value == '\n' {
-            finish(current.take(), &chars, &mut runs);
+            read += usize::from(finish(current.take(), &chars, &mut runs));
+            if read > MAX_RUNS {
+                return Vec::new();
+            }
             pending_space = false;
             continue;
         }
@@ -513,7 +552,10 @@ fn character_runs(
             ];
             run.last = Some(index);
         } else {
-            finish(current.take(), &chars, &mut runs);
+            read += usize::from(finish(current.take(), &chars, &mut runs));
+            if read > MAX_RUNS {
+                return Vec::new();
+            }
             current = Some(Building {
                 text: value.to_string(),
                 bbox,
@@ -523,7 +565,10 @@ fn character_runs(
         }
         pending_space = false;
     }
-    finish(current.take(), &chars, &mut runs);
+    read += usize::from(finish(current.take(), &chars, &mut runs));
+    if read > MAX_RUNS {
+        return Vec::new();
+    }
     runs
 }
 
@@ -637,6 +682,7 @@ impl PdfiumBackend {
                 for object in page.objects().iter() {
                     survey_object(&object, &ON_THE_PAGE, &frame, &mut survey);
                 }
+                let survey = survey.bounded();
                 let page_area = page.width().value.abs() * page.height().value.abs();
                 let image_coverage = if page_area <= f32::EPSILON {
                     0.0

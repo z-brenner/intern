@@ -29,7 +29,7 @@ mod geometry;
 pub mod router;
 mod text;
 
-pub use geometry::{TextRun, analyze_runs};
+pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
 pub use text::{blocks_from_lines, blocks_from_text};
 use text::{blocks_from_page_lines, line_spans};
@@ -480,13 +480,16 @@ fn segment_lines(segments: &[[u32; 4]]) -> Vec<[u32; 4]> {
 }
 
 /// The layout of a page rebuilt from its geometry: its own runs, and any
-/// runs OCR read from images on it (already in the page's frame).
+/// runs OCR read from images on it (already in the page's frame). None
+/// for a page past the analysis's bounds ([`router::bounds`]), or when
+/// `stop` says to stop; the page is then read as its text.
 pub fn geometry_layout(
     native: &NativePage,
     extra_runs: Vec<TextRun>,
     signals: RouteSignals,
     route: PageRoute,
-) -> PageLayout {
+    stop: &dyn Fn() -> bool,
+) -> Option<PageLayout> {
     // The page is analysed as it is displayed, which is how it reads: a
     // page turned by `/Rotate` has its runs and rules turned first. Its
     // blocks are then already in the displayed frame.
@@ -514,14 +517,14 @@ pub fn geometry_layout(
         .map(|ruling| turn(*ruling))
         .collect::<Vec<_>>();
     let (width, height) = native.display_size();
-    let blocks = analyze_runs(&runs, width, height, &rulings, TextSource::Native);
-    PageLayout {
+    let blocks = analyze_runs_within(&runs, width, height, &rulings, TextSource::Native, stop)?;
+    Some(PageLayout {
         width,
         height,
         route,
         signals,
         blocks,
-    }
+    })
 }
 
 /// Every box in a page's blocks, turned from the page's frame to the page
@@ -562,8 +565,9 @@ pub const NOMINAL_UNITS_PER_PIXEL: f64 = UNITS_PER_POINT * 72.0 / 300.0;
 /// runs an unruled table down its columns or across a row of boxes, and
 /// pairs no label with its value; on InternBench's scans, reading the
 /// blocks instead took labelled values from 90% to 99% with every table
-/// row and reading order kept. A reading with no lines keeps the engine's
-/// text.
+/// row and reading order kept. A reading with no lines, or one past what
+/// the analysis takes on ([`router::bounds`]) or stopped by `stop`, keeps
+/// the engine's text.
 ///
 /// `size` is the image read, in pixels, before the engine turned it;
 /// `scale` is tenths of a point per pixel, [`NOMINAL_UNITS_PER_PIXEL`] when
@@ -575,10 +579,11 @@ pub fn ocr_page(
     size: (u32, u32),
     scale: Option<f64>,
     signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
 ) -> ExtractedPage {
-    let mut layout = ocr_layout(&reading, size, scale, signals);
+    let (mut layout, analysed) = ocr_layout_of(&reading, size, scale, signals, stop);
     number_blocks(page_number, &mut layout.blocks);
-    let text = if reading.lines.is_empty() || layout.blocks.is_empty() {
+    let text = if !analysed || layout.blocks.is_empty() {
         reading.text
     } else {
         linearize(&layout.blocks)
@@ -601,7 +606,21 @@ pub fn ocr_layout(
     size: (u32, u32),
     scale: Option<f64>,
     signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
 ) -> PageLayout {
+    ocr_layout_of(reading, size, scale, signals, stop).0
+}
+
+/// [`ocr_layout`], and whether its blocks were built from the reading's
+/// lines. A reading with no lines, or one past the analysis's bounds, has
+/// blocks built from its text instead.
+fn ocr_layout_of(
+    reading: &OcrResult,
+    size: (u32, u32),
+    scale: Option<f64>,
+    signals: RouteSignals,
+    stop: &dyn Fn() -> bool,
+) -> (PageLayout, bool) {
     let scale = scale.unwrap_or(NOMINAL_UNITS_PER_PIXEL);
     let (width, height) = if reading.rotation_degrees % 180 == 90 {
         (size.1, size.0)
@@ -610,13 +629,8 @@ pub fn ocr_layout(
     };
     let to_units = |pixels: u32| (f64::from(pixels) * scale).round().max(0.0) as u32;
     let (width, height) = (to_units(width), to_units(height));
-    let blocks = if reading.lines.is_empty() {
-        let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
-        let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
-        for block in &mut blocks {
-            block.confidence = confidence;
-        }
-        blocks
+    let analysed = if reading.lines.is_empty() {
+        None
     } else {
         let runs = reading
             .lines
@@ -628,15 +642,25 @@ pub fn ocr_layout(
                 confidence: Some(line.confidence),
             })
             .collect::<Vec<_>>();
-        analyze_runs(&runs, width, height, &[], TextSource::Ocr)
+        analyze_runs_within(&runs, width, height, &[], TextSource::Ocr, stop)
     };
-    PageLayout {
+    let from_lines = analysed.is_some();
+    let blocks = analysed.unwrap_or_else(|| {
+        let confidence = Some(reading.mean_confidence.round().clamp(0.0, 100.0) as u8);
+        let mut blocks = blocks_from_text(&reading.text, TextSource::Ocr);
+        for block in &mut blocks {
+            block.confidence = confidence;
+        }
+        blocks
+    });
+    let layout = PageLayout {
         width,
         height,
         route: PageRoute::Ocr,
         signals,
         blocks,
-    }
+    };
+    (layout, from_lines)
 }
 
 /// Images on a page that may hold text of their own: large, and with no
@@ -702,6 +726,7 @@ pub fn regions_page(
     signals: RouteSignals,
     readings: &[(OcrResult, [u32; 4])],
     scale: f64,
+    stop: &dyn Fn() -> bool,
 ) -> Option<ExtractedPage> {
     let native = inspection.native.as_ref()?;
     if native.runs.is_empty() {
@@ -755,7 +780,7 @@ pub fn regions_page(
     if extra.is_empty() {
         return None;
     }
-    let mut layout = geometry_layout(native, extra, signals, PageRoute::OcrRegions);
+    let mut layout = geometry_layout(native, extra, signals, PageRoute::OcrRegions, stop)?;
     number_blocks(page_number, &mut layout.blocks);
     Some(ExtractedPage {
         page_number,
