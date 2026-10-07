@@ -54,8 +54,8 @@ use std::{
 
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, Evidence, ModelClient,
-    ModelProposal, ModelRequest, PageImage, PartyRelation, Proposer, SupervisedWorker,
-    TokenConfidence, ValidatedProposal, compose_filename,
+    ModelProposal, ModelRequest, PageImage, PartyRelation, Proposer, ProposerReply,
+    SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
     legacy::{
@@ -680,11 +680,19 @@ impl Proposer for RecordingProposer {
         &self,
         request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
-        let result = self.inner.propose_scored(request);
+        self.propose_measured(request)
+            .map(|reply| (reply.proposal, reply.token_confidence))
+    }
+
+    /// The engine asks for the measured reply, so this is where a reply is
+    /// recorded. The server's timings ride on to the report and stay out of
+    /// the recording: they describe one machine on one run, never the reply.
+    fn propose_measured(&self, request: &ModelRequest) -> EngineResult<ProposerReply> {
+        let result = self.inner.propose_measured(request);
         let reply = match &result {
-            Ok((proposal, token_confidence)) => RecordedReply::Proposed {
-                proposal: proposal.clone(),
-                token_confidence: *token_confidence,
+            Ok(reply) => RecordedReply::Proposed {
+                proposal: reply.proposal.clone(),
+                token_confidence: reply.token_confidence,
             },
             Err(error) => RecordedReply::Failed {
                 code: error.code().as_str().to_owned(),
@@ -973,13 +981,16 @@ fn score(fixture: &Value, actual: ScoreInput<'_>) -> Value {
         );
         // Picking the right date and knowing why it is the right date are two
         // different things, and the second is what keeps the first from being
-        // luck. Scored only where the corpus states a role and a date was
-        // produced, because a role attached to no date measures nothing.
+        // luck. The corpus's role is the role of its reviewed date, so it is
+        // scored only when that date was produced: an acceptable date can
+        // rightly carry another role, and a role attached to no date, or to
+        // a wrong one, measures nothing.
         if let Some(gold_role) = fixture
             .get("date_role")
             .and_then(Value::as_str)
             .filter(|role| !role.is_empty())
             && actual.document_date.is_some()
+            && actual.document_date == gold_date
         {
             scores.insert(
                 "date_role_correct".into(),

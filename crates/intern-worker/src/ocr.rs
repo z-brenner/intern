@@ -252,31 +252,43 @@ impl TesseractOcr {
         } else {
             format!("rotated-{rotation}")
         };
+        cancel.record(|timings| timings.ocr_passes += 1);
         // The page as it came is encoded as it is: turning it by nothing
         // used to cost a copy of the whole page, and then a second encode of
         // the image orientation detection had already been given.
-        let input = if rotation == 0 {
-            self.write_png(workspace, &format!("{label}.png"), page)?
-        } else {
-            let rotated = apply_detected_rotation(page.clone(), rotation)?;
-            self.write_png(workspace, &format!("{label}.png"), &rotated)?
-        };
+        let input = cancel.timed(
+            |timings| &mut timings.ocr_encode_micros,
+            || {
+                if rotation == 0 {
+                    self.write_png(workspace, &format!("{label}.png"), page)
+                } else {
+                    let rotated = apply_detected_rotation(page.clone(), rotation)?;
+                    self.write_png(workspace, &format!("{label}.png"), &rotated)
+                }
+            },
+        )?;
         let output_base = workspace.path().join(format!("ocr-{label}"));
-        let child = Command::new(&self.executable)
-            .arg(input)
-            .arg(&output_base)
-            .arg("-l")
-            .arg(&self.language)
-            .arg("--tessdata-dir")
-            .arg(&self.tessdata_directory)
-            .arg("--psm")
-            .arg(RECOGNITION_SEGMENTATION)
-            .args(TSV_RENDERER)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(ExtractionError::io)?;
-        Self::require_success(self.wait_for_child(child, cancel)?)?;
+        let status = cancel.timed(
+            |timings| &mut timings.ocr_engine_micros,
+            || {
+                let child = Command::new(&self.executable)
+                    .arg(input)
+                    .arg(&output_base)
+                    .arg("-l")
+                    .arg(&self.language)
+                    .arg("--tessdata-dir")
+                    .arg(&self.tessdata_directory)
+                    .arg("--psm")
+                    .arg(RECOGNITION_SEGMENTATION)
+                    .args(TSV_RENDERER)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .map_err(ExtractionError::io)?;
+                self.wait_for_child(child, cancel)
+            },
+        )?;
+        Self::require_success(status)?;
         let output_path = output_base.with_extension("tsv");
         workspace.register_existing(&output_path)?;
         // Name the file. Tesseract can exit 0 having written a different renderer's
@@ -306,7 +318,11 @@ impl TesseractOcr {
         page: &DynamicImage,
         cancel: &CancellationToken,
     ) -> Result<u16, ExtractionError> {
-        let input = self.write_png(workspace, "orientation.png", &orientation_image(page))?;
+        cancel.record(|timings| timings.orientation_passes += 1);
+        let input = cancel.timed(
+            |timings| &mut timings.ocr_encode_micros,
+            || self.write_png(workspace, "orientation.png", &orientation_image(page)),
+        )?;
         let osd_base = workspace.path().join("orientation");
         let osd_stderr_path = workspace.write("osd.stderr", b"")?;
         let osd_stderr = std::fs::OpenOptions::new()
@@ -314,20 +330,25 @@ impl TesseractOcr {
             .truncate(true)
             .open(&osd_stderr_path)
             .map_err(ExtractionError::io)?;
-        let osd_child = Command::new(&self.executable)
-            .arg(&input)
-            .arg(&osd_base)
-            .arg("-l")
-            .arg("osd")
-            .arg("--tessdata-dir")
-            .arg(&self.tessdata_directory)
-            .arg("--psm")
-            .arg("0")
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(osd_stderr))
-            .spawn()
-            .map_err(ExtractionError::io)?;
-        let osd_status = self.wait_for_child(osd_child, cancel)?;
+        let osd_status = cancel.timed(
+            |timings| &mut timings.ocr_engine_micros,
+            || {
+                let osd_child = Command::new(&self.executable)
+                    .arg(&input)
+                    .arg(&osd_base)
+                    .arg("-l")
+                    .arg("osd")
+                    .arg("--tessdata-dir")
+                    .arg(&self.tessdata_directory)
+                    .arg("--psm")
+                    .arg("0")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::from(osd_stderr))
+                    .spawn()
+                    .map_err(ExtractionError::io)?;
+                self.wait_for_child(osd_child, cancel)
+            },
+        )?;
         workspace.register_existing(&osd_stderr_path)?;
         let mut osd_diagnostic = Vec::new();
         std::fs::File::open(&osd_stderr_path)
@@ -376,7 +397,10 @@ impl OcrBackend for TesseractOcr {
         }
         let workspace =
             TempWorkspace::create("tesseract", ResourceLimits::default().max_temp_bytes)?;
-        let page = recognition_image(&page.image);
+        let page = cancel.timed(
+            |timings| &mut timings.ocr_encode_micros,
+            || recognition_image(&page.image),
+        );
         read_upright(&mut PagePasses {
             ocr: self,
             workspace: &workspace,

@@ -85,6 +85,7 @@ pub fn extract_eml(
         warnings: vec![],
         truncated: false,
         optional_image: None,
+        timings: None,
     })
 }
 
@@ -133,6 +134,7 @@ pub fn extract_msg_in_zone(
         warnings: vec![],
         truncated: false,
         optional_image: None,
+        timings: None,
     })
 }
 

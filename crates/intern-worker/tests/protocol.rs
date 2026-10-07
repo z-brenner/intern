@@ -271,6 +271,7 @@ fn empty_document() -> ExtractedDocument {
         warnings: vec![],
         truncated: false,
         optional_image: None,
+        timings: None,
     }
 }
 
@@ -427,6 +428,7 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
             warnings: vec![],
             truncated: false,
             optional_image: None,
+            timings: None,
         })
     })
     .unwrap();
@@ -450,6 +452,72 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
     );
     assert_eq!(parsed["event"]["document"]["truncated"], true);
     assert_eq!(parsed["event"]["document"]["warnings"][0], "TEXT_TRUNCATED");
+}
+
+/// A parsed document says where its extraction's time went: what the
+/// readers recorded on the request's token, and the wall time of the whole
+/// extraction, which the protocol takes itself.
+#[test]
+fn a_parsed_event_carries_the_extraction_timings() {
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let reader = TerminalGatedReader {
+        chunks: vec![
+            parse_line("timed", "one.txt"),
+            joined_lines([shutdown_line()]),
+        ],
+        next: 0,
+        output,
+        first_terminal: b"\"type\":\"parsed\"",
+    };
+
+    run_concurrent_worker(reader, captured.clone(), Vec::new(), |_path, cancel| {
+        cancel.record(|timings| timings.snapshot_micros = 120);
+        cancel.timed(
+            |timings| &mut timings.parse_micros,
+            || std::thread::sleep(Duration::from_millis(5)),
+        );
+        Ok(empty_document())
+    })
+    .unwrap();
+
+    let (bytes, _) = &*captured.0;
+    let parsed = String::from_utf8(bytes.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"]["type"] == "parsed")
+        .unwrap();
+    let timings = &parsed["event"]["document"]["timings"];
+    assert_eq!(timings["snapshot_micros"], 120, "{timings}");
+    let parse = timings["parse_micros"].as_u64().unwrap();
+    assert!(parse >= 5_000, "{timings}");
+    assert!(
+        timings["total_micros"].as_u64().unwrap() >= parse,
+        "{timings}"
+    );
+    assert_eq!(timings["ocr_pages"], 0, "{timings}");
+}
+
+/// The field is optional on the wire: a document without timings is
+/// exactly the line the protocol always sent, with no key and no null, and
+/// such a line still reads.
+#[test]
+fn a_document_without_timings_serializes_as_it_always_did() {
+    let document = ExtractedDocument {
+        pages: vec![page(1, "Lease".to_owned())],
+        ..empty_document()
+    };
+
+    let line = serde_json::to_string(&document).unwrap();
+
+    assert_eq!(
+        line,
+        r#"{"pages":[{"page_number":1,"text":"Lease","source":"any_doc","ocr_confidence":null,"vision_escalated":false}],"warnings":[],"truncated":false,"optional_image":null}"#
+    );
+    let read: ExtractedDocument = serde_json::from_str(&line).unwrap();
+    assert_eq!(read, document);
+    assert_eq!(read.timings, None);
 }
 
 fn page(number: usize, text: String) -> intern_worker::extract::ExtractedPage {
@@ -493,6 +561,7 @@ fn document_char_cap_truncates_later_pages() {
                 warnings: vec![],
                 truncated: false,
                 optional_image: None,
+                timings: None,
             })
         },
     )

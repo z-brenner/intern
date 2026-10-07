@@ -46,6 +46,9 @@ jobs:
   # validation, evidence, distillation, or naming is measured here on every
   # push; a change to the prompt makes the recording stale, and the job says
   # so rather than scoring the wrong replies. See docs/evaluation.md.
+  # InternBench is replayed the same way, from bench/recording.json against
+  # bench/baseline.json, and needs no generated corpus: a document's bytes are
+  # checked against bench/manifest.json. See docs/internbench.md.
   corpus-replay:
     name: Corpus replay against the recorded baseline (Ubuntu)
     runs-on: ubuntu-latest
@@ -74,12 +77,22 @@ jobs:
           --fixtures fixtures/generated --expected fixtures/expected.json
           --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
           --output corpus-report.json
-      - name: Upload corpus report
+      - name: Replay InternBench and compare with its baseline
+        if: always()
+        run: >-
+          cargo run --locked -p intern-bench --
+          run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json
+          --replay bench/recording.json --baseline bench/baseline.json
+          --output internbench-report.json --markdown internbench-report.md
+      - name: Upload corpus reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: corpus-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: corpus-report.json
+          path: |
+            corpus-report.json
+            internbench-report.json
+            internbench-report.md
           if-no-files-found: ignore
 
   # Rust feedback in minutes rather than the Windows job's half hour: format,

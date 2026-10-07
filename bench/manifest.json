@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "suite": "internbench",
+  "generator": {
+    "node": "24.15.0"
+  },
+  "files": [
+    {
+      "file": "notice-rent-increase.pdf",
+      "size": 2781,
+      "sha256": "d4a48e6c2f1c9309787bbc3268866f03438fb1b6ccdbe2025fd47c1d800ff65b"
+    },
+    {
+      "file": "invoice-date-in-table.pdf",
+      "size": 2709,
+      "sha256": "e4eef3d4f414478affca757bc462bb9f50db0542a998b3ee029fdb1eda847ae0"
+    },
+    {
+      "file": "invoice-layout-only.pdf",
+      "size": 2348,
+      "sha256": "791cb0456e476577956780b01ffea307e5d4d4a2f85ef23cd43701d5827e4653"
+    },
+    {
+      "file": "account-statement.pdf",
+      "size": 4500,
+      "sha256": "2bf45f7f2030c59c5fc04130a1ec2937b5e17ec663337187b1eedccb3a177a47"
+    },
+    {
+      "file": "purchase-order.pdf",
+      "size": 3298,
+      "sha256": "7b086c1e1dddea3c6a1284bffaaa866a259ba865e93f9bc8d8a5cfc8b71312df"
+    },
+    {
+      "file": "services-agreement.pdf",
+      "size": 15567,
+      "sha256": "c2fa2df766498705eecd0f3a8085201e5af10dafadf7075ce155e599cfad16ef"
+    },
+    {
+      "file": "second-amendment.pdf",
+      "size": 4211,
+      "sha256": "a923528c8c735143420679d15be5a2599c9aa5907c63648f2dd397e4d6d670fa"
+    },
+    {
+      "file": "sow-under-msa-5p.pdf",
+      "size": 12443,
+      "sha256": "2a7aaa1804d98188ab90a5eb269ea3a6a435304cf72dde8a6ec35bf5e3b11041"
+    },
+    {
+      "file": "notice-of-default.pdf",
+      "size": 4247,
+      "sha256": "4e66bb867781983b811f5d1d797e2c05cf2b3e55ab85a972495f978e1a6b5aec"
+    },
+    {
+      "file": "offer-letter.pdf",
+      "size": 3573,
+      "sha256": "71d768e178492f5f26b968e7dd5595249e39dbc32a96db32a1f329e9035f2640"
+    },
+    {
+      "file": "prior-authorization.pdf",
+      "size": 3235,
+      "sha256": "0ee26bb6121908233651381bbc5aed2fd30ebb61ac9072b6527c19cfdf186b6c"
+    },
+    {
+      "file": "explanation-of-benefits.pdf",
+      "size": 3557,
+      "sha256": "05d72b7f56a05548f6ecf6019e401ce028cb0b1e14f02b9043f8101834796051"
+    },
+    {
+      "file": "promissory-note.pdf",
+      "size": 4894,
+      "sha256": "6a8e6fe5767b03dbcdf12b625542877f9966c568ca917321f3be048ee6081411"
+    },
+    {
+      "file": "capital-call-notice.pdf",
+      "size": 3511,
+      "sha256": "8b216de59aba76099d7fcaecc0255245575c02fd1eb61f29734824af6157c5fb"
+    },
+    {
+      "file": "engagement-letter.pdf",
+      "size": 4168,
+      "sha256": "4946571cc5182b2d8536715145986d5a052b5c21c0024efd3d58d750c1800906"
+    },
+    {
+      "file": "letterhead-letter.pdf",
+      "size": 2363,
+      "sha256": "08cda0c7b8b6b5deb4a7538c8972dc7f7835f2e20a8aa7dbe722085d95860145"
+    },
+    {
+      "file": "lease-two-column.pdf",
+      "size": 5928,
+      "sha256": "2d7f5c871d633c8f2069dbaa715fa5086a8fbce45ece3a92d9ac5abf7d4c7463"
+    },
+    {
+      "file": "declarations-interleaved.pdf",
+      "size": 3972,
+      "sha256": "9a6a4e4e6d4b08d69c72ec627a06ddabf4da152b83ef5f6bf0007e5e45a705fe"
+    },
+    {
+      "file": "annual-report-excerpt-8p.pdf",
+      "size": 11775,
+      "sha256": "1d6d727166705128e005ef5dac3a4582aa840b0276cbbdc54b9efb1e7f0655e5"
+    },
+    {
+      "file": "vendor-registration-form.pdf",
+      "size": 3235,
+      "sha256": "63d5da056162767969f168c7bace920f81e334739d5bdb91fc153496b4f2dd14"
+    },
+    {
+      "file": "change-order-form.pdf",
+      "size": 2890,
+      "sha256": "549e31d678ba54fccada8da8e7ed225ab05c01038b43e84c04c06569b2b16dd9"
+    },
+    {
+      "file": "board-minutes.pdf",
+      "size": 4294,
+      "sha256": "9959e99d7be43568329a9cf35b7dbfc8a4a53c4bab1dbec4a2388290a01f0dad"
+    },
+    {
+      "file": "field-condition-report.pdf",
+      "size": 3701,
+      "sha256": "0271c576ab27c2090dd53af42f5864aca37c888dff8490d331a0eedbd6fb53ff"
+    },
+    {
+      "file": "aircraft-maintenance-log.pdf",
+      "size": 3335,
+      "sha256": "79da2247e7cd50dcdac983c6bdeef5892927290395153fe3a54643200d282d7c"
+    },
+    {
+      "file": "assignment-assumption.pdf",
+      "size": 4161,
+      "sha256": "df3f81c7cea358c424efb5d3b81436f535e868c1c5eacd14000e3a18bf395314"
+    },
+    {
+      "file": "data-processing-agreement-10p.pdf",
+      "size": 23420,
+      "sha256": "a2035c4d055ea128622c2288d5ee4290dd70937961609bb290bc7d9a5634cfa5"
+    },
+    {
+      "file": "asset-purchase-agreement-25p.pdf",
+      "size": 45902,
+      "sha256": "90279f96b2abb91e85b92096d848d0cf7314cd649d9e6fd9a893f1a47fce15a0"
+    },
+    {
+      "file": "credit-agreement-50p.pdf",
+      "size": 82651,
+      "sha256": "670a021344d2adc2514de1536bc40706f01ff81c318a808c2f8e84fdb45616ce"
+    },
+    {
+      "file": "annual-report-100p.pdf",
+      "size": 166123,
+      "sha256": "ca0b552f107f1bb3c99599736a6acd2255e52935b43f0f5d8a027fc57297b861"
+    },
+    {
+      "file": "separation-agreement.docx",
+      "size": 5842,
+      "sha256": "3ac87b8810ed368d5df90f182706e611aff7ea18835fedf99c03cd086e985d01"
+    },
+    {
+      "file": "demand-letter.docx",
+      "size": 4864,
+      "sha256": "4726c36c1a466b5dbc3ba450a813981772a560852d9446499f590ab45937086a"
+    },
+    {
+      "file": "board-resolution.docx",
+      "size": 4998,
+      "sha256": "1c77bf5291186e4e91dc80f1c0fc848b6951651abade93ef7a89ce836537951b"
+    },
+    {
+      "file": "quarterly-business-review.pptx",
+      "size": 17750,
+      "sha256": "3a16bb7ee099dc1d2a679891b5af539797859d980ddc3d9c57a6b7dd6e47c8a0"
+    },
+    {
+      "file": "product-launch-plan.pptx",
+      "size": 13914,
+      "sha256": "f41ebcc5c7f635fdbf33351b32c83a7487ce676d4a3111742916df7147dd9bd6"
+    },
+    {
+      "file": "payroll-register.xlsx",
+      "size": 8276,
+      "sha256": "dfdeef7b08b0173e16f6b7f039570b58f8549f92617cf12fb61ec384fe2f51a2"
+    },
+    {
+      "file": "ap-aging-report.csv",
+      "size": 1994,
+      "sha256": "872e5341b40628c289012ceeb3e2efafe007619cfc65a5a508e953077f120e0a"
+    },
+    {
+      "file": "harvest-log.xlsx",
+      "size": 6450,
+      "sha256": "cf456906088ddb5c40110b73b6d82ed500fb5464df1fdac7cf7b198f138a4be8"
+    },
+    {
+      "file": "email-approval-thread.eml",
+      "size": 4194,
+      "sha256": "3a00721b9519dc2f1bf06cb247fe03adb2a54646a6f8b4faa32f1ff2c4ec07e3"
+    },
+    {
+      "file": "court-hearing-notice.txt",
+      "size": 2651,
+      "sha256": "3298bfe710df0ca95ee782efaf56b2325f8b8f2c33bb707d96d1cae5d4e4aa46"
+    },
+    {
+      "file": "scan-clean-lease-2p.pdf",
+      "size": 75540,
+      "sha256": "f5c4a8b61982fae3d9091541a0ca09147f14bbddb0c31ce101cc74992768367b"
+    },
+    {
+      "file": "scan-mixed-amendment.pdf",
+      "size": 25874,
+      "sha256": "fa4bc3275404a1a969ab0d707c87226965e3803a9bdb6fb3ac266a2ca443f835"
+    },
+    {
+      "file": "scan-rotated-90-invoice.png",
+      "size": 29247,
+      "sha256": "bc76c9620d4d7c0555e5ed3d2f0f7274af55bdb39ba6c526dfe3ef068d2d0039"
+    },
+    {
+      "file": "scan-upside-down-po.pdf",
+      "size": 33417,
+      "sha256": "59198bcf7c4633fb52d809567cd844d27f88bda5e3fc881e1b104ad65c7e40cb"
+    },
+    {
+      "file": "scan-skewed-notice.tiff",
+      "size": 3124078,
+      "sha256": "771780b13265bf1e70c3b6239c83860e4efca33369379855cd9ef390064e2c81"
+    },
+    {
+      "file": "scan-low-res-receipt.png",
+      "size": 21923,
+      "sha256": "f12041cb610bdf65dbe12fe52f10bb018975b6aff4dd31255db5d5c70a37bea6"
+    },
+    {
+      "file": "scan-noisy-statement.pdf",
+      "size": 1755248,
+      "sha256": "0f9c5367f5313b5cc22f567f04caa4311589ee59ac81bfe786011d4312961f37"
+    },
+    {
+      "file": "scan-faint-letter.png",
+      "size": 143380,
+      "sha256": "8d1ce3f9581eb0b83657ba159845681d551e5d6d55b1eaad4cc0332affc418b3"
+    },
+    {
+      "file": "scan-agreement-10p.pdf",
+      "size": 494704,
+      "sha256": "ca398c847707f40f714d3073e7b8802f7e615ca0f3873ad14b4e6714276ed101"
+    },
+    {
+      "file": "scan-lease-25p.pdf",
+      "size": 635076,
+      "sha256": "140b940419067964000f2f84363ed4fde0d828d2450c8ede74418414491731c3"
+    },
+    {
+      "file": "ocr-corrupted-invoice.pdf",
+      "size": 30163,
+      "sha256": "4fc6039f8ce87ed0dc73202b8119229005cd1492977dc0e2a2222897289c0654"
+    },
+    {
+      "file": "scan-fax-two-frames.tiff",
+      "size": 47108,
+      "sha256": "fcc9a64d8333da651ad7c1a3ce41adbb2a525eae6d65fdca3e2cca133177e22c"
+    },
+    {
+      "file": "scan-patient-intake-form.png",
+      "size": 37700,
+      "sha256": "d54b80b71aa477bf62f78ba80b945ede5f56bed449dcee3b204a07be70ad569b"
+    }
+  ]
+}

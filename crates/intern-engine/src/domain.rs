@@ -316,6 +316,10 @@ pub struct ComposedName {
 }
 
 /// Local-only measurements for one analysis. Never leaves the machine.
+///
+/// Every field after `inference_millis` arrived later than the analyses a
+/// queue may already hold, so each reads as zero, or absent, from one stored
+/// without it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisTelemetry {
@@ -323,7 +327,59 @@ pub struct AnalysisTelemetry {
     pub digest_characters: usize,
     pub compression_ratio: f32,
     pub distill_micros: u64,
+    /// Wall time of the model request, as the engine waited for it.
     pub inference_millis: u64,
+    /// Building the prompt from the digest.
+    #[serde(default)]
+    pub prompt_micros: u64,
+    /// Validating the reply, and the readability and token-confidence gates
+    /// after it.
+    #[serde(default)]
+    pub validation_micros: u64,
+    /// Composing the filename, the description and the stated dates, and
+    /// fingerprinting the text.
+    #[serde(default)]
+    pub naming_micros: u64,
+    /// Distillations made after the first, to fit the prompt to the model's
+    /// context or after the model said it did not fit.
+    #[serde(default)]
+    pub redistillations: u32,
+    /// Characters of the user turn sent to the model.
+    #[serde(default)]
+    pub prompt_characters: usize,
+    /// The engine's own estimate of the tokens that user turn costs.
+    #[serde(default)]
+    pub estimated_prompt_tokens: usize,
+    /// What the model server said about the request, when it said anything:
+    /// the local server does, a hosted service does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelTimings>,
+}
+
+/// How the model server spent one request, in its own words.
+///
+/// llama-server reports this with every reply. Its prefill counts only the
+/// tokens it had to evaluate: a prompt that begins as the previous one did
+/// reuses that prefix from the slot's cache, and the reused tokens cost
+/// nothing. The system turn is always reused. The user turn's fixed
+/// instructions are reused only when the previous document was likewise
+/// condensed or complete: `build_prompt` puts the sentence saying which in
+/// front of them, so a complete document after a condensed one, or the
+/// reverse, evaluates the whole instruction block again and `cached_tokens`
+/// falls (see docs/pipeline-bottlenecks.md, Latency item 2).
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTimings {
+    /// Prompt tokens the server evaluated.
+    pub prompt_tokens: u64,
+    /// Prompt tokens reused from the slot's cache rather than evaluated.
+    pub cached_tokens: u64,
+    /// Time spent evaluating `prompt_tokens`.
+    pub prefill_micros: u64,
+    /// Tokens of reply generated.
+    pub generated_tokens: u64,
+    /// Time spent generating them.
+    pub generation_micros: u64,
 }
 
 /// Everything Intern knows about one document.
@@ -356,4 +412,59 @@ pub struct DocumentAnalysis {
     /// did not ask for them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_confidence: Option<TokenConfidence>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A queue holds analyses stored before the stage timings existed. They
+    /// still read, the new figures as zero and no model timings, and an
+    /// analysis without model timings is written without the key.
+    #[test]
+    fn telemetry_stored_before_stage_timings_still_reads() {
+        let stored: AnalysisTelemetry = serde_json::from_str(
+            r#"{"sourceCharacters":1200,"digestCharacters":900,"compressionRatio":0.75,
+                "distillMicros":310,"inferenceMillis":14000}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            stored,
+            AnalysisTelemetry {
+                source_characters: 1_200,
+                digest_characters: 900,
+                compression_ratio: 0.75,
+                distill_micros: 310,
+                inference_millis: 14_000,
+                ..AnalysisTelemetry::default()
+            }
+        );
+        assert_eq!(stored.model, None);
+        let written = serde_json::to_value(stored).unwrap();
+        assert!(written.get("model").is_none(), "{written}");
+        assert_eq!(written["promptMicros"], 0);
+        assert_eq!(written["estimatedPromptTokens"], 0);
+
+        let measured = AnalysisTelemetry {
+            redistillations: 1,
+            prompt_characters: 5_400,
+            model: Some(ModelTimings {
+                prompt_tokens: 4,
+                cached_tokens: 1_210,
+                prefill_micros: 206_870,
+                generated_tokens: 115,
+                generation_micros: 16_131_292,
+            }),
+            ..stored
+        };
+        let written = serde_json::to_value(measured).unwrap();
+        assert_eq!(written["model"]["cachedTokens"], 1_210);
+        assert_eq!(written["model"]["generationMicros"], 16_131_292);
+        assert_eq!(written["redistillations"], 1);
+        assert_eq!(
+            serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),
+            measured
+        );
+    }
 }
