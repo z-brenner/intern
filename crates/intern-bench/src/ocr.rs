@@ -45,15 +45,26 @@ pub fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Text as recognition is judged on: the cell rules and label colons a
+/// layout writes around what was read - `| a | b |` rows, `Label: value`
+/// lines - set aside on both sides, then whitespace collapsed. A page whose
+/// text is its blocks is held to what it read, not to how it was laid out;
+/// a colon or a rule the engine read wrongly is still a miss, because the
+/// truth's own colons and rules are set aside the same way.
+pub fn comparable(text: &str) -> String {
+    collapse_whitespace(&text.replace(['|', ':'], " "))
+}
+
 /// Character edit distance and the truth's length in characters.
 pub fn char_distance(truth: &str, read: &str) -> (usize, usize) {
-    let truth = collapse_whitespace(truth).chars().collect::<Vec<_>>();
-    let read = collapse_whitespace(read).chars().collect::<Vec<_>>();
+    let truth = comparable(truth).chars().collect::<Vec<_>>();
+    let read = comparable(read).chars().collect::<Vec<_>>();
     (levenshtein(&truth, &read), truth.len())
 }
 
 /// Word edit distance and the truth's length in words.
 pub fn word_distance(truth: &str, read: &str) -> (usize, usize) {
+    let (truth, read) = (comparable(truth), comparable(read));
     let truth = truth.split_whitespace().collect::<Vec<_>>();
     let read = read.split_whitespace().collect::<Vec<_>>();
     (levenshtein(&truth, &read), truth.len())
@@ -276,6 +287,18 @@ mod tests {
         value.chars().collect()
     }
 
+    /// A page read as its blocks writes rows between rules and labels with
+    /// colons; recognition is judged without them, on both sides.
+    #[test]
+    fn layout_punctuation_is_not_an_ocr_error() {
+        let drawn = "Full legal name Date of birth\nIone Kowalczyk 11/23/1990\nHome address\n52 Umber Street";
+        let read = "| Full legal name | Date of birth |\n| Ione Kowalczyk | 11/23/1990 |\n\nHome address: 52 Umber Street";
+        assert_eq!(char_distance(drawn, read).0, 0);
+        assert_eq!(word_distance(drawn, read).0, 0);
+        // A colon read wrongly is still a miss.
+        assert_eq!(char_distance("Date: 11/23/1990", "Date; 11/23/1990").0, 1);
+    }
+
     /// Confidence is pooled by page, like the error rates: a one-page scan
     /// does not count as much as a three-page one.
     #[test]
@@ -386,7 +409,8 @@ mod tests {
         // all ten characters of the page never returned.
         assert_eq!(measure.char_distance, 1 + 4 + 1 + 10);
         assert_eq!(measure.char_distance_ci, 1 + 10);
-        assert_eq!(measure.truth_chars, 37 + 21 + 10);
+        // Colons set aside: "Date: March" is compared as "Date March".
+        assert_eq!(measure.truth_chars, 36 + 21 + 10);
         assert_eq!(measure.date_accuracy(), Some(1.0), "case-insensitive");
         assert_eq!(measure.name_accuracy(), Some(1.0));
         assert_eq!(
@@ -433,9 +457,10 @@ mod tests {
             (1, 2)
         );
         assert_eq!(measure.date_accuracy(), Some(0.5));
-        // The second frame's 56 characters, all missed, of 36 + 56.
-        assert_eq!(measure.char_distance, 56);
-        assert_eq!(measure.truth_chars, 36 + 56);
+        // The second frame's 55 characters, all missed, of 34 + 55 (colons
+        // set aside).
+        assert_eq!(measure.char_distance, 55);
+        assert_eq!(measure.truth_chars, 34 + 55);
         assert_eq!(measure.wer(), Some(8.0 / 15.0));
         assert_eq!(
             measure.mean_confidence,
