@@ -367,14 +367,33 @@ fn table_rows(lines: &[&str]) -> LayoutTable {
     LayoutTable { rows }
 }
 
+/// A Markdown row's cells, read as the worker reads them (its
+/// `table_cells`): an escaped pipe is part of its cell, not a column, and
+/// stays escaped, so a page segmented here has the cells it would have had
+/// with a layout.
 fn cells_of(line: &str) -> Vec<String> {
     let trimmed = line.trim();
     let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
     let inner = inner.strip_suffix('|').unwrap_or(inner);
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_owned())
-        .collect()
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            current.push(character);
+            escaped = true;
+        } else if character == '|' {
+            cells.push(current.trim().to_owned());
+            current.clear();
+        } else {
+            current.push(character);
+        }
+    }
+    cells.push(current.trim().to_owned());
+    cells
 }
 
 fn markdown_level(line: &str) -> Option<u8> {
@@ -531,6 +550,25 @@ mod tests {
             document.block("p1.b2").unwrap().lines[0].text,
             "Tenant pays rent monthly."
         );
+    }
+
+    /// An escaped pipe is part of its cell, as the worker reads it.
+    #[test]
+    fn an_escaped_pipe_in_a_segmented_table_is_part_of_its_cell() {
+        let document = structured(&DocumentSource::from_pages(vec![SourcePage::new(
+            1,
+            "| Clause | Terms |\n| --- | --- |\n| 4 | Net 30 \\| Net 45 |",
+            PageOrigin::Office,
+        )]));
+
+        let table = document.block("p1.b1").unwrap().table.as_ref().unwrap();
+        assert_eq!(table.rows.len(), 2);
+        let cells = table.rows[1]
+            .cells
+            .iter()
+            .map(|cell| cell.text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(cells, ["4", "Net 30 \\| Net 45"]);
     }
 
     #[test]

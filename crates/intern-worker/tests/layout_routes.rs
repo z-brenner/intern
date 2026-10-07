@@ -566,6 +566,14 @@ fn a_bad_prior_ocr_layer_is_read_again_and_replaced_only_when_the_reading_is_bet
     let kept = read(&StandInPdf::new(vec![bad_prior_ocr()]), &NoBetter);
     assert_eq!(kept.pages[0].source, PageSource::Native);
     assert_eq!(kept.pages[0].text, bad_prior_ocr().native_text);
+    // The layer has text enough not to want the page image on its own, but
+    // a reading that came back unsure says the page is hard to read either
+    // way, so its image goes with the layer's text.
+    assert_eq!(
+        kept.optional_image.as_ref().map(|image| image.page_number),
+        Some(1)
+    );
+    assert!(kept.pages[0].vision_escalated);
 
     // And OCR that cannot run leaves it too, rather than failing a page
     // that had text.

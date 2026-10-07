@@ -1297,12 +1297,17 @@ fn assemble(
                             page_vision,
                         )
                     }
-                    _ => {
+                    fresh => {
+                        // The layer stays, but a reading that came back
+                        // unsure says the page is hard to read either way:
+                        // the image it was rendered with goes with the
+                        // layer's text, as it would with a scan's.
+                        let reread_vision = fresh.and_then(|(_, _, page_vision)| page_vision);
                         let route = native_route(PageRoute::Ocr, &signals);
                         (
                             native_page(page_number, inspection, signals, route, stop)
                                 .finish(&mut characters),
-                            vision,
+                            vision.or(reread_vision),
                         )
                     }
                 }
