@@ -710,7 +710,7 @@ where
     limits.validate_page_count(inspections.len())?;
     let page_count = inspections.len();
     let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
-    let queue = limits.max_resident_rendered_pages.max(1);
+    let queue = limits.max_queued_rendered_pages.max(1);
 
     let (plans, outcomes, failure) = std::thread::scope(|scope| {
         let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
@@ -1249,9 +1249,11 @@ struct OcrOutcome {
 /// The OCR workers for one document, started the first time a page needs
 /// one: a text PDF never starts a thread.
 ///
-/// Rendered pages wait in a queue that holds at most `queue` of them, so a
-/// document's renders run at most that far ahead of its OCR, and memory
-/// holds the pages being read plus that many waiting.
+/// Rendered pages wait in a queue that holds at most `queue` of them
+/// ([`crate::limits::MAX_QUEUED_RENDERED_PAGES`]), so a document's renders
+/// run at most that far ahead of its OCR: memory holds the page being
+/// rendered, at most `queue` waiting, and one being read by each of the
+/// `workers`.
 struct OcrPool<'scope, 'env, O: OcrBackend + Sync + ?Sized> {
     scope: &'scope std::thread::Scope<'scope, 'env>,
     ocr: &'env O,

@@ -3,8 +3,8 @@
 //! and the OCR pool that reads scanned pages side by side.
 
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use image::{DynamicImage, RgbImage};
@@ -100,6 +100,10 @@ fn scanned_page(page_index: usize) -> PdfPageInspection {
 }
 
 fn read(pdf: &StandInPdf, ocr: &(impl OcrBackend + Sync)) -> ExtractedDocument {
+    read_with(pdf, ocr)
+}
+
+fn read_with(pdf: &dyn PdfBackend, ocr: &(impl OcrBackend + Sync)) -> ExtractedDocument {
     extract_pdf(
         Path::new("document.pdf"),
         pdf,
@@ -307,6 +311,84 @@ fn scanned_pages_are_read_side_by_side_and_put_back_in_order() {
     // Read again one worker at a time, the document is the same.
     let sequential = read(&StandInPdf::new(pages), &UnevenOcr::new(1));
     assert_eq!(sequential, document);
+}
+
+/// A scanned PDF whose renders and readings are counted together, so the
+/// pages held at once - rendered and not yet read - can be seen.
+struct CountedScans {
+    pages: Vec<PdfPageInspection>,
+    rendered: Arc<AtomicUsize>,
+    read: Arc<AtomicUsize>,
+    most_held: AtomicUsize,
+}
+
+impl PdfBackend for CountedScans {
+    fn inspect(
+        &self,
+        _path: &Path,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+        Ok(self.pages.clone())
+    }
+
+    fn render_within(
+        &self,
+        _path: &Path,
+        page_index: usize,
+        _max_pixels: u64,
+        _cancel: &CancellationToken,
+    ) -> Result<RenderedPage, ExtractionError> {
+        let rendered = self.rendered.fetch_add(1, Ordering::SeqCst) + 1;
+        let held = rendered - self.read.load(Ordering::SeqCst);
+        self.most_held.fetch_max(held, Ordering::SeqCst);
+        let page = &self.pages[page_index];
+        Ok(RenderedPage::new(
+            page_index,
+            DynamicImage::ImageRgb8(RgbImage::new(page.width_pixels, page.height_pixels)),
+        ))
+    }
+}
+
+/// Slow OCR on three workers that counts the pages it has finished.
+struct CountingSlowOcr(Arc<AtomicUsize>);
+
+impl OcrBackend for CountingSlowOcr {
+    fn recognize(
+        &self,
+        _page: &RenderedPage,
+        _cancel: &CancellationToken,
+    ) -> Result<OcrResult, ExtractionError> {
+        std::thread::sleep(Duration::from_millis(30));
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(OcrResult::new("PAGE", 95.0))
+    }
+
+    fn concurrency(&self) -> usize {
+        3
+    }
+}
+
+/// However slow OCR is, renders run no further ahead of it than the queue
+/// allows: the pages held at once are the one being rendered, those
+/// waiting, and one per worker.
+#[test]
+fn rendered_pages_held_at_once_are_bounded_by_the_workers_and_the_queue() {
+    let finished = Arc::new(AtomicUsize::new(0));
+    let pdf = CountedScans {
+        pages: (0..12).map(scanned_page).collect(),
+        rendered: Arc::new(AtomicUsize::new(0)),
+        read: Arc::clone(&finished),
+        most_held: AtomicUsize::new(0),
+    };
+
+    let document = read_with(&pdf, &CountingSlowOcr(finished));
+
+    assert_eq!(document.pages.len(), 12);
+    let limits = ResourceLimits::default();
+    let bound = 1 + limits.max_queued_rendered_pages + 3;
+    let most_held = pdf.most_held.load(Ordering::SeqCst);
+    assert!(most_held <= bound, "{most_held} pages held, bound {bound}");
+    assert!(most_held >= 2, "pages were read side by side");
 }
 
 /// OCR that cannot run at all.
