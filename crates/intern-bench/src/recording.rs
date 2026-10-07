@@ -33,7 +33,10 @@
 //! large is condensed and asked again - and replay must hand back the
 //! refusal for the first prompt to walk the same path. A rendered page
 //! image is kept as its signal only, with the pixels dropped, because the
-//! engine reads the image's presence, never its bytes.
+//! engine reads the image's presence, never its bytes. A page's layout is
+//! kept as its blocks, without their lines or the boxes of table cells and
+//! fields (see [`compact_layouts`]): nothing that reads a recording uses
+//! them, and they would multiply its size.
 
 use std::{
     collections::HashMap,
@@ -97,8 +100,17 @@ impl Recording {
         Ok((recording, bytes))
     }
 
+    /// Writes the recording, every parsed source's layouts compacted (see
+    /// [`compact_layouts`]), whether the recording was made live or merged
+    /// from older ones.
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let rendered = serde_json::to_string_pretty(self)
+        let mut compacted = self.clone();
+        for document in &mut compacted.documents {
+            if let RecordedExtraction::Parsed { source } = &mut document.extraction {
+                *source = compact_layouts(std::mem::take(source));
+            }
+        }
+        let rendered = serde_json::to_string_pretty(&compacted)
             .map_err(|error| format!("cannot render recording: {error}"))?;
         std::fs::write(path, rendered + "\n")
             .map_err(|error| format!("cannot write recording {}: {error}", path.display()))
@@ -192,6 +204,37 @@ pub fn without_image_bytes(mut source: DocumentSource) -> DocumentSource {
         bytes: Vec::new(),
         ..image
     });
+    source
+}
+
+/// What a recording keeps of a page's layout: every block with its kind,
+/// text, box, level, section, source and confidence, a table's cell texts
+/// and header flags, a key-value block's fields, and the router's route and
+/// signals. It drops each block's lines and the boxes of cells and fields:
+/// nothing that reads a recording uses them, and on a long scan they are
+/// most of the file.
+pub fn compact_layouts(mut source: DocumentSource) -> DocumentSource {
+    for layout in source
+        .pages
+        .iter_mut()
+        .filter_map(|page| page.layout.as_mut())
+    {
+        for block in &mut layout.blocks {
+            block.lines.clear();
+            for cell in block
+                .table
+                .iter_mut()
+                .flat_map(|table| &mut table.rows)
+                .flat_map(|row| &mut row.cells)
+            {
+                cell.bbox = None;
+            }
+            for field in &mut block.fields {
+                field.key_bbox = None;
+                field.value_bbox = None;
+            }
+        }
+    }
     source
 }
 
@@ -367,6 +410,55 @@ mod tests {
         let image = kept.page_image.unwrap();
         assert!(image.bytes.is_empty());
         assert_eq!(image.page_number, 1);
+    }
+
+    #[test]
+    fn a_recorded_layout_keeps_its_blocks_but_not_their_lines_or_cell_boxes() {
+        let source: DocumentSource = serde_json::from_value(serde_json::json!({
+            "pages": [{
+                "page_number": 1, "origin": "native", "ocr_confidence": null,
+                "text": "Date: May 18, 2026\n| Item | Amount |",
+                "layout": {"width": 6120, "height": 7920, "route": "layout", "blocks": [
+                    {"id": "p1.b1", "kind": "key_value", "text": "Date: May 18, 2026",
+                     "bbox": [10, 20, 30, 40], "source": "native",
+                     "lines": [{"text": "Date: May 18, 2026", "bbox": [10, 20, 30, 40]}],
+                     "fields": [{"id": "p1.b1.f1", "key": "Date", "value": "May 18, 2026",
+                                 "key_bbox": [10, 20, 15, 40], "value_bbox": [16, 20, 30, 40]}]},
+                    {"id": "p1.b2", "kind": "table", "text": "| Item | Amount |",
+                     "bbox": [10, 50, 30, 60], "source": "native",
+                     "lines": [{"text": "Item Amount"}],
+                     "table": {"rows": [{"id": "p1.b2.r1", "cells": [
+                        {"id": "p1.b2.r1.c1", "text": "Item", "bbox": [10, 50, 20, 60], "header": true},
+                        {"id": "p1.b2.r1.c2", "text": "Amount", "bbox": [21, 50, 30, 60]}]}]}}
+                ]}
+            }],
+            "parser_warnings": [], "page_image": null
+        }))
+        .unwrap();
+
+        let kept = compact_layouts(source.clone());
+
+        assert_eq!(kept.pages[0].text, source.pages[0].text);
+        let layout = kept.pages[0].layout.as_ref().unwrap();
+        assert_eq!(layout.blocks.len(), 2);
+        let (fields, table) = (&layout.blocks[0], &layout.blocks[1]);
+        assert!(fields.lines.is_empty() && table.lines.is_empty());
+        assert_eq!(fields.bbox, Some([10, 20, 30, 40]));
+        assert_eq!(fields.text, "Date: May 18, 2026");
+        assert_eq!(
+            (
+                fields.fields[0].key.as_str(),
+                fields.fields[0].value.as_str()
+            ),
+            ("Date", "May 18, 2026")
+        );
+        assert_eq!(
+            (fields.fields[0].key_bbox, fields.fields[0].value_bbox),
+            (None, None)
+        );
+        let cells = &table.table.as_ref().unwrap().rows[0].cells;
+        assert_eq!((cells[0].text.as_str(), cells[0].header), ("Item", true));
+        assert!(cells.iter().all(|cell| cell.bbox.is_none()));
     }
 
     #[test]
