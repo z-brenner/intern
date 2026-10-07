@@ -268,3 +268,57 @@ fn required<'a>(values: &'a HashMap<String, String>, key: &str) -> Result<&'a st
         .map(String::as_str)
         .ok_or_else(|| format!("missing --{key}\n{USAGE}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(arguments: &[&str]) -> Result<RunOptions, String> {
+        let arguments = arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        run_options(&parse(&arguments, RUN_KEYS)?)
+    }
+
+    #[test]
+    fn extract_only_takes_a_worker_and_nothing_a_model_needs() {
+        let base = ["--corpus", "c", "--gold", "g.json", "--extract-only"];
+        let parsed = options(&[&base[..], &["--worker", "w", "--no-warmup"]].concat()).unwrap();
+        let Mode::Extract { options } = parsed.mode else {
+            panic!("not an extract-only run");
+        };
+        assert_eq!(options.worker, PathBuf::from("w"));
+        assert!(!options.warm_up);
+
+        assert!(options_error(&base).contains("missing --worker"));
+        for (extra, refused) in [
+            (
+                &["--endpoint", "http://x"][..],
+                "--endpoint is not for --extract-only runs",
+            ),
+            (
+                &["--record", "r.json"][..],
+                "--record is not for --extract-only runs",
+            ),
+            (
+                &["--allow-stale"][..],
+                "--allow-stale is not for --extract-only runs",
+            ),
+            (
+                &["--replay", "r.json"][..],
+                "--replay and --extract-only are different runs",
+            ),
+        ] {
+            let error = options_error(&[&base[..], &["--worker", "w"], extra].concat());
+            assert!(error.contains(refused), "{error}");
+        }
+    }
+
+    fn options_error(arguments: &[&str]) -> String {
+        match options(arguments) {
+            Ok(_) => panic!("accepted {arguments:?}"),
+            Err(error) => error,
+        }
+    }
+}

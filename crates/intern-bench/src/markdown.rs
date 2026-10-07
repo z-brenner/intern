@@ -551,11 +551,15 @@ fn routes(out: &mut String, report: &Report) {
     );
 }
 
+/// Distributions of every metric, keyed by a group's value.
+type LatencySlices =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Distribution>>;
+
 /// Worker time per document by route class, page count and kind, with the
 /// stages it is made of.
 fn extraction_time(out: &mut String, report: &Report) {
     let latency = &report.latency;
-    if latency.overall.get("worker_total_ms").is_none() {
+    if !latency.overall.contains_key("worker_total_ms") {
         return;
     }
     let _ = writeln!(out, "## Extraction time");
@@ -570,10 +574,7 @@ fn extraction_time(out: &mut String, report: &Report) {
     };
     let p50 = |distribution: &Distribution| distribution.p50;
     let p95 = |distribution: &Distribution| distribution.p95;
-    let sections: [(
-        &str,
-        &std::collections::BTreeMap<String, std::collections::BTreeMap<String, Distribution>>,
-    ); 3] = [
+    let sections: [(&str, &LatencySlices); 3] = [
         ("Route class", &latency.by_route_class),
         ("Pages", &latency.by_page_bucket),
         ("Kind", &latency.by_kind),
@@ -841,8 +842,8 @@ fn ocr(out: &mut String, report: &Report) {
     let _ = writeln!(
         out,
         "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the read pages that survive OCR. \
-         A page the reader does not return (a TIFF frame it does not read) is reported as unread and left out, with what is drawn only on it. \
-         A scan whose extraction failed counts as read empty: every character and value on it missed.\n"
+         A page the reader does not return (a TIFF frame it does not read, shown as unread) counts as read empty, \
+         as does every page of a scan whose extraction failed: every character and value on it missed.\n"
     );
 }
 

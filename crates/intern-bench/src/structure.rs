@@ -146,11 +146,11 @@ pub fn find_bounded(haystack: &str, needle: &str, from: usize) -> Option<usize> 
         let end = at + needle.len();
         let before = haystack[..at].chars().next_back();
         let after = haystack[end..].chars().next();
-        let clear_before = !(first.is_alphanumeric() && before.is_some_and(char::is_alphanumeric))
-            && !(first.is_ascii_digit() && number_before(haystack, at));
-        let clear_after = !(last.is_alphanumeric() && after.is_some_and(char::is_alphanumeric))
-            && !(last.is_ascii_digit() && number_after(haystack, end));
-        if clear_before && clear_after {
+        let joined_before = first.is_alphanumeric() && before.is_some_and(char::is_alphanumeric)
+            || first.is_ascii_digit() && number_before(haystack, at);
+        let joined_after = last.is_alphanumeric() && after.is_some_and(char::is_alphanumeric)
+            || last.is_ascii_digit() && number_after(haystack, end);
+        if !joined_before && !joined_after {
             return Some(at);
         }
         start = at + first.len_utf8();

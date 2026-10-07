@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
+    extract::EXTRACTION_SCORES,
     record::{COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, PENDING, is_unscorable},
     report::{EXTRACT, Report},
     score::{bad_when_true, lower_is_better},
@@ -100,7 +101,8 @@ pub struct BaselineDocument {
 }
 
 /// How far an extract-only score may move the wrong way before the
-/// document regresses, or `None` for a score that is not gated.
+/// document regresses, or `None` for a score that is not gated (one
+/// extraction does not decide, or OCR's mean confidence).
 ///
 /// Extraction is deterministic for one worker build on one machine, so the
 /// tolerance is not for noise. A score that counts whole items - a snippet
@@ -121,7 +123,8 @@ pub fn value_tolerance(key: &str) -> Option<f64> {
         "ocr_mean_confidence" => None,
         "ocr_cer" | "ocr_cer_ci" => Some(0.005),
         "ocr_wer" => Some(0.01),
-        _ => Some(0.0),
+        key if EXTRACTION_SCORES.contains(&key) => Some(0.0),
+        _ => None,
     }
 }
 
@@ -702,7 +705,7 @@ fn latency_check(
 mod tests {
     use super::*;
     use crate::{
-        report::{RunInfo, build},
+        report::{EXTRACT, RunInfo, build},
         timing,
     };
     use serde_json::json;
@@ -1221,6 +1224,140 @@ mod tests {
             .timings
             .insert("total_ms".into(), json!(16_000.0));
         assert!(!compare(&subset, &baseline, Some(1.5)).passed);
+    }
+
+    fn extracted(id: &str, scores: Value, worker_ms: f64) -> DocumentRecord {
+        let mut record = record(id, COMPLETED, scores, 0.0);
+        record.timings.insert("total_ms".into(), Value::Null);
+        record
+            .timings
+            .insert("worker_total_ms".into(), json!(worker_ms));
+        record
+    }
+
+    fn extract_baseline() -> Baseline {
+        Baseline::from_report(&report(
+            EXTRACT,
+            vec![
+                extracted(
+                    "scan",
+                    json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 91.0}),
+                    900.0,
+                ),
+                extracted(
+                    "lease",
+                    json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
+                    5.0,
+                ),
+            ],
+        ))
+    }
+
+    #[test]
+    fn an_extract_baseline_keeps_every_gated_fraction_and_no_trap_counts() {
+        let baseline = extract_baseline();
+        assert_eq!(baseline.mode, EXTRACT);
+        let scan = &baseline.documents["scan"];
+        assert_eq!(scan.values["ocr_cer"], 0.04);
+        assert!(
+            !scan.values.contains_key("ocr_mean_confidence"),
+            "a diagnostic is not held"
+        );
+        assert!(scan.scores.is_empty());
+        assert_eq!(scan.timings["worker_total_ms"], 900.0);
+        assert!(baseline.aggregate.is_empty(), "{:?}", baseline.aggregate);
+        let reparsed = Baseline::parse(baseline.to_json().as_bytes()).unwrap();
+        assert_eq!(
+            reparsed.documents["lease"].values["table_row_accuracy"],
+            0.5
+        );
+
+        // A replay baseline is written exactly as before: no values.
+        let replay = before();
+        assert!(
+            replay
+                .documents
+                .values()
+                .all(|document| document.values.is_empty())
+        );
+        assert!(!replay.to_json().contains("\"values\""));
+    }
+
+    #[test]
+    fn extract_runs_are_held_per_document_with_tolerance_only_on_error_rates() {
+        let baseline = extract_baseline();
+        let run = |scan: Value, lease: Value, ms: f64| {
+            report(
+                EXTRACT,
+                vec![extracted("scan", scan, ms), extracted("lease", lease, 5.0)],
+            )
+        };
+        // The same scores, OCR a few characters worse and less sure of
+        // itself: within tolerance.
+        let jitter = run(
+            json!({"ocr_cer": 0.044, "ocr_wer": 0.108, "ocr_date_accuracy": 1.0, "ocr_mean_confidence": 60.0}),
+            json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
+            900.0,
+        );
+        let comparison = compare(&jitter, &baseline, None);
+        assert_eq!(comparison.gates, vec!["documents"]);
+        assert!(comparison.passed, "{:?}", comparison.failures);
+
+        // One row lost, one snippet pair gained, the error rate past its
+        // tolerance, a date misread.
+        let moved = run(
+            json!({"ocr_cer": 0.046, "ocr_wer": 0.1, "ocr_date_accuracy": 0.5}),
+            json!({"reading_order_accuracy": 1.0, "table_row_accuracy": 0.25, "route_correct": 1.0}),
+            900.0,
+        );
+        let comparison = compare(&moved, &baseline, None);
+        assert!(!comparison.passed);
+        assert_eq!(
+            comparison.failures,
+            vec![
+                "scan: ocr_cer was 0.04, now 0.046 (tolerance 0.005)",
+                "scan: ocr_date_accuracy was 1, now 0.5",
+                "lease: table_row_accuracy was 0.5, now 0.25",
+            ]
+        );
+        assert_eq!(
+            comparison.document_improvements,
+            vec!["lease: reading_order_accuracy was 0.75, now 1"]
+        );
+
+        // Latency only when asked, over the worker's stages.
+        let slow = run(
+            json!({"ocr_cer": 0.04, "ocr_wer": 0.1, "ocr_date_accuracy": 1.0}),
+            json!({"reading_order_accuracy": 0.75, "table_row_accuracy": 0.5, "route_correct": 1.0}),
+            2_000.0,
+        );
+        assert!(compare(&slow, &baseline, None).passed);
+        let gated = compare(&slow, &baseline, Some(1.5));
+        assert_eq!(gated.gates, vec!["documents", "latency"]);
+        assert_eq!(
+            gated.failures,
+            vec![
+                "worker_total_ms p95: 2000 ms against a baseline of 900 ms (limit 1350 ms, 2 documents)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_extract_run_and_a_replay_baseline_are_never_held_to_each_other() {
+        let extract = report(EXTRACT, vec![extracted("doc-0", json!({}), 1.0)]);
+        let comparison = compare(&extract, &before(), None);
+        assert!(!comparison.passed);
+        assert_eq!(comparison.failures.len(), 1);
+        assert!(
+            comparison.failures[0]
+                .starts_with("the baseline was written by a replay run and this is an extract run"),
+            "{:?}",
+            comparison.failures
+        );
+        let replay = report("replay", after(&[], 1_000.0));
+        let comparison = compare(&replay, &extract_baseline(), None);
+        assert!(!comparison.passed);
+        assert!(comparison.failures[0].contains("an extract run and this is a replay run"));
     }
 
     #[test]
