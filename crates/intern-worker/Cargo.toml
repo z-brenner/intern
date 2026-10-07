@@ -9,6 +9,11 @@ license.workspace = true
 name = "intern-worker"
 path = "src/main.rs"
 
+# Calibrates the PDF page router; it reads PDFs, so it needs PDFium.
+[[example]]
+name = "route_calibration"
+required-features = ["native-pdfium"]
+
 [features]
 default = []
 native-pdfium = ["dep:pdfium-render"]
