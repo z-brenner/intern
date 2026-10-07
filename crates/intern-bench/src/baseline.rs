@@ -629,26 +629,51 @@ fn latency_checks(
     {
         return whole_corpus_latency(report, baseline, ratio, pairs.len());
     }
+    // A stage the baseline measured for a document and this run did not -
+    // a worker that reports no timings, say - would shrink the sample, or
+    // drop the stage, and the gate would pass on less than it claims.
+    let mut unmeasured = Vec::new();
     let checks = timing::METRICS
         .iter()
         .filter(|(_, unit)| *unit == Unit::Milliseconds)
         .filter_map(|(metric, _)| {
-            let (was, now): (Vec<f64>, Vec<f64>) = pairs
-                .iter()
-                .filter_map(|(record, expected)| {
-                    Some((
-                        *expected.timings.get(*metric)?,
-                        timing::get(&record.timings, metric)?,
-                    ))
-                })
-                .unzip();
+            let mut was = Vec::new();
+            let mut now = Vec::new();
+            for (record, expected) in &pairs {
+                let Some(before) = expected.timings.get(*metric) else {
+                    continue;
+                };
+                match timing::get(&record.timings, metric) {
+                    Some(current) => {
+                        was.push(*before);
+                        now.push(current);
+                    }
+                    None => unmeasured.push(format!("{} {metric}", record.id)),
+                }
+            }
             let baseline_p95 = Distribution::of(&was)?.p95;
             let current_p95 = Distribution::of(&now)?.p95;
             (baseline_p95 >= 1.0)
                 .then(|| latency_check(metric, was.len(), baseline_p95, current_p95, ratio))
         })
         .collect();
+    if !unmeasured.is_empty() {
+        return Err(unmeasured_error(&unmeasured));
+    }
     Ok(checks)
+}
+
+fn unmeasured_error(unmeasured: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut listed = unmeasured.iter().take(SHOWN).cloned().collect::<Vec<_>>();
+    if unmeasured.len() > SHOWN {
+        listed.push(format!("and {} more", unmeasured.len() - SHOWN));
+    }
+    format!(
+        "this run did not measure {} stage time(s) the baseline holds, so the gate would compare less than it says: {}",
+        unmeasured.len(),
+        listed.join(", ")
+    )
 }
 
 fn whole_corpus_latency(
@@ -665,6 +690,15 @@ fn whole_corpus_latency(
             "the baseline keeps no per-document timings, so it can only be compared whole, and this run does not cover exactly its documents, all completed; write the baseline again"
                 .to_owned(),
         );
+    }
+    let unmeasured = baseline
+        .latency
+        .keys()
+        .filter(|metric| !report.latency.overall.contains_key(*metric))
+        .map(|metric| format!("every document's {metric}"))
+        .collect::<Vec<_>>();
+    if !unmeasured.is_empty() {
+        return Err(unmeasured_error(&unmeasured));
     }
     Ok(baseline
         .latency
@@ -1358,6 +1392,40 @@ mod tests {
         let comparison = compare(&replay, &extract_baseline(), None);
         assert!(!comparison.passed);
         assert!(comparison.failures[0].contains("an extract run and this is a replay run"));
+    }
+
+    /// A stage the baseline measured and this run did not - a worker that
+    /// reports no timings - refuses the latency gate instead of comparing a
+    /// smaller sample.
+    #[test]
+    fn the_latency_gate_refuses_a_run_missing_a_measured_stage() {
+        let with_worker = |records: &mut Vec<DocumentRecord>| {
+            for record in records {
+                record
+                    .timings
+                    .insert("worker_total_ms".into(), json!(200.0));
+            }
+        };
+        let mut records = after(&[], 1_000.0);
+        with_worker(&mut records);
+        let baseline = Baseline::from_report(&report("live", records));
+
+        let mut measured = after(&[], 1_000.0);
+        with_worker(&mut measured);
+        assert!(compare(&report("live", measured.clone()), &baseline, Some(1.5)).passed);
+
+        measured[3]
+            .timings
+            .insert("worker_total_ms".into(), Value::Null);
+        let comparison = compare(&report("live", measured), &baseline, Some(1.5));
+        assert!(!comparison.passed);
+        assert!(
+            comparison.failures.iter().any(|line| line.starts_with(
+                "latency: this run did not measure 1 stage time(s) the baseline holds"
+            ) && line.contains("doc-3 worker_total_ms")),
+            "{:?}",
+            comparison.failures
+        );
     }
 
     #[test]
