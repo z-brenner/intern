@@ -178,15 +178,37 @@ pub fn replay_document(
             Some("not in the manifest, and no file to check the recording against".to_owned()),
         );
     }
-    if let (Some(current), Some(was)) = (&current, &recorded.sha256)
-        && current != was
-    {
+    if let Some(current) = &current {
+        match &recorded.sha256 {
+            Some(was) if was == current => {}
+            Some(was) => {
+                return unscored(
+                    STALE_FIXTURE,
+                    Some(format!(
+                        "recorded from {}, now {}",
+                        short(was),
+                        short(current)
+                    )),
+                );
+            }
+            // A hand-edited or partial recording: nothing says which bytes
+            // the stored extraction came from.
+            None => {
+                return unscored(
+                    STALE_FIXTURE,
+                    Some("the recording does not say which bytes it was made from".to_owned()),
+                );
+            }
+        }
+    }
+    // The worker picks its reader by extension, so the same bytes under
+    // another name are not the document recorded.
+    if recorded.file != document.file {
         return unscored(
             STALE_FIXTURE,
             Some(format!(
-                "recorded from {}, now {}",
-                short(was),
-                short(current)
+                "recorded as {}, now {}",
+                recorded.file, document.file
             )),
         );
     }

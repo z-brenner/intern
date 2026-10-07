@@ -504,6 +504,78 @@ fn a_document_the_manifest_does_not_vouch_for_is_stale_when_there_is_no_file() {
 }
 
 #[test]
+fn a_recording_that_does_not_say_which_bytes_it_read_is_stale() {
+    let bench = Bench::new();
+    let mut recorded = Recording::load(&bench.path("recording.json")).unwrap().0;
+    recorded
+        .documents
+        .iter_mut()
+        .find(|document| document.id == "invoice-alpha")
+        .unwrap()
+        .sha256 = None;
+    recorded.save(&bench.path("recording.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    let record = report.record("invoice-alpha").unwrap();
+    assert_eq!(record.status, "stale_fixture");
+    assert!(
+        record.error.as_deref().unwrap().contains("which bytes"),
+        "{:?}",
+        record.error
+    );
+}
+
+#[test]
+fn a_recording_made_under_another_file_name_is_stale() {
+    let bench = Bench::new();
+    // The same bytes, but the gold now names the document with another
+    // extension, so the live worker would read it with another reader.
+    let mut recorded = Recording::load(&bench.path("recording.json")).unwrap().0;
+    recorded
+        .documents
+        .iter_mut()
+        .find(|document| document.id == "invoice-alpha")
+        .unwrap()
+        .file = "invoice-alpha.png".into();
+    recorded.save(&bench.path("recording.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    let record = report.record("invoice-alpha").unwrap();
+    assert_eq!(record.status, "stale_fixture");
+    assert!(
+        record
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("recorded as invoice-alpha.png"),
+        "{:?}",
+        record.error
+    );
+}
+
+#[test]
 fn a_subset_run_never_overwrites_a_baseline_that_covers_more() {
     let bench = Bench::new();
     let (exit, _) = bench.replay("full.json", |options| {

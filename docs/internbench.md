@@ -158,7 +158,10 @@ report and on its page. It follows the same rules as the existing corpus:
 * a document whose prompt the engine no longer builds is `stale_prompt`;
 * a document whose bytes changed is `stale_fixture`, and so is one a
   `--manifest` does not list when there is no file to hash either (with no
-  manifest and no corpus, nothing is checked, and the run warns);
+  manifest and no corpus, nothing is checked, and the run warns). So is a
+  recorded document that does not say which bytes it was made from, or that
+  was recorded under another file name (the worker picks its reader by
+  extension);
 * a document the recording lacks is `unrecorded`.
 
 Each one fails the run (exit 2). `--allow-stale` lets only `stale_prompt`
