@@ -20,7 +20,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::router::bounds::{MAX_GUTTER_CANDIDATES, MAX_RUNS, MAX_RUNS_PER_LINE};
-use super::text::{is_heading_line, is_label, median, split_key_value};
+use super::text::{
+    is_heading_line, is_label, is_part_heading, median, opens_a_clause, reads_as_label,
+    split_key_value,
+};
 use super::{
     BlockKind, KeyValue, LayoutBlock, LayoutCell, LayoutLine, LayoutRow, LayoutTable, TextSource,
     mean_confidence, union,
@@ -1740,10 +1743,40 @@ fn key_values_at(
     Some((end.max(start + 1), block))
 }
 
+/// Whether a line's text, set over another's, can be the label of the
+/// value under it, whatever their sizes say.
+///
+/// Never a line that holds a label and its value already (`Name: Saoirse
+/// Whitcombe`), nor over one that opens with a label (`By:`, `Title:`,
+/// `INSURER A:`) - each is a field of its own; never a part of the document
+/// (`ARTICLE 4 - OPERATING EXPENSES`), nor over the first line of a
+/// numbered clause (`4.1 Beginning with`). On a page OCR read, whose line
+/// heights are its letters' and not its type size, the line has to read as
+/// a label as well ([`reads_as_label`]): a name over an address, a firm
+/// over its signature line, or a title over the text it heads is not one.
+fn label_over_value(label: &str, value: &str, source: TextSource) -> bool {
+    let label = label.trim();
+    let value = value.trim();
+    let key = label.trim_end_matches(':').trim_end();
+    if key.contains(':')
+        || split_key_value(value).is_some()
+        || (value.ends_with(':') && is_label(value))
+        || is_part_heading(key)
+        || opens_a_clause(value)
+    {
+        return false;
+    }
+    match source {
+        TextSource::Native => true,
+        TextSource::Ocr => (label.ends_with(':') && is_label(label)) || reads_as_label(key),
+    }
+}
+
 /// A form's fields set as a small label over the value filled in under it,
 /// one after another: `1. Legal business name` over `Emberglow Coatings
 /// Ltd.`. Each label is a line of one cell, set smaller than the line
-/// right under it, which starts where the label starts.
+/// right under it, which starts where the label starts, and reads as a
+/// label of it ([`label_over_value`]).
 fn labels_over_values_at(
     items: &[Item],
     lines: &[Line],
@@ -1763,6 +1796,11 @@ fn labels_over_values_at(
             && value.y0 - label.y1 <= stats.line_gap + stats.body_height * 0.6
             && smaller_than(items, &[label.cells.clone()], &[value.cells.clone()])
             && !is_heading_line(&items[value.cells[0]].text)
+            && label_over_value(
+                &items[label.cells[0]].text,
+                &items[value.cells[0]].text,
+                source,
+            )
     };
     if !pair_at(start) {
         return None;
@@ -2499,6 +2537,151 @@ mod tests {
         );
         assert_eq!(blocks[1].kind, BlockKind::Paragraph);
         assert!(blocks[1].fields.is_empty());
+    }
+
+    /// Every labelled value OCR's layout found, as key and value.
+    fn fields_of(blocks: &[LayoutBlock]) -> Vec<(&str, &str)> {
+        blocks
+            .iter()
+            .flat_map(|block| &block.fields)
+            .map(|field| (field.key.as_str(), field.value.as_str()))
+            .collect()
+    }
+
+    fn analyze_ocr(runs: &[TextRun]) -> Vec<LayoutBlock> {
+        let blocks = analyze_runs(runs, 6120, 7920, &[], TextSource::Ocr);
+        assert_words_kept(runs, &blocks);
+        blocks
+    }
+
+    /// OCR measures a line of capitals smaller than a line of prose under
+    /// it, but a part's heading is not the label of the clause it opens:
+    /// it stays a line of its own, and gains no colon.
+    #[test]
+    fn a_heading_read_by_ocr_is_not_the_label_of_its_first_clause() {
+        let runs = vec![
+            run(
+                54.0,
+                100.0,
+                "3.2 Rent payments will be made by electronic funds transfer",
+                10.0,
+            ),
+            run(
+                54.0,
+                114.0,
+                "to the account Landlord designates in writing each month.",
+                10.0,
+            ),
+            run(54.0, 140.0, "ARTICLE 4 - OPERATING EXPENSES AND TAXES", 7.0),
+            run(
+                54.0,
+                152.0,
+                "4.1 Beginning with the second calendar year of the Term, Tenant",
+                10.0,
+            ),
+            run(
+                54.0,
+                166.0,
+                "will pay, as additional rent, its share of Operating Expenses.",
+                10.0,
+            ),
+        ];
+
+        let blocks = analyze_ocr(&runs);
+
+        assert!(fields_of(&blocks).is_empty(), "{:#?}", texts(&blocks));
+        assert!(
+            blocks
+                .iter()
+                .any(|block| block.text == "ARTICLE 4 - OPERATING EXPENSES AND TAXES"),
+            "{:#?}",
+            texts(&blocks)
+        );
+        assert!(!crate::layout::linearize(&blocks).contains("TAXES:"));
+    }
+
+    /// A signature block read by OCR: the firm is not the label of its
+    /// signature line, and a line holding a label and its value is not the
+    /// label of the next one. Each labelled line is a field of its own.
+    #[test]
+    fn a_signature_block_read_by_ocr_pairs_only_its_own_labels() {
+        let runs = vec![
+            run(54.0, 100.0, "Palisade Tower Partners LLC", 7.5),
+            run(54.0, 112.0, "By: Wexcombe", 10.0),
+            run(54.0, 126.0, "Name: Saoirse Whitcombe", 7.5),
+            run(54.0, 138.0, "Title: Authorized Signatory", 10.0),
+        ];
+
+        let blocks = analyze_ocr(&runs);
+
+        let fields = fields_of(&blocks);
+        assert!(
+            !fields
+                .iter()
+                .any(|(key, _)| *key == "Palisade Tower Partners LLC" || key.contains(':')),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&("Name", "Saoirse Whitcombe")),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&("Title", "Authorized Signatory")),
+            "{fields:?}"
+        );
+        let text = crate::layout::linearize(&blocks);
+        assert!(
+            !text.contains("LLC:") && !text.contains("Whitcombe:"),
+            "{text}"
+        );
+    }
+
+    /// A letter's sender over their address is a name, not a label.
+    #[test]
+    fn a_name_over_an_address_read_by_ocr_is_not_a_field() {
+        let runs = vec![
+            run(54.0, 100.0, "Mireille Saltonstall", 8.0),
+            run(54.0, 111.0, "18 Alder Court", 10.0),
+            run(54.0, 123.0, "Wexcombe, OR 97321", 10.0),
+            run(54.0, 150.0, "Corriveau Millwork Supply Co.", 8.0),
+            run(54.0, 161.0, "4180 Sawmill Creek Road", 10.0),
+        ];
+
+        let blocks = analyze_ocr(&runs);
+
+        assert!(fields_of(&blocks).is_empty(), "{:#?}", texts(&blocks));
+        assert!(!crate::layout::linearize(&blocks).contains(':'));
+    }
+
+    /// What OCR reads of a form's small captions over the boxes filled in
+    /// under them stays a set of fields: a caption in capitals, one in
+    /// sentence case, one that names its field.
+    #[test]
+    fn small_captions_read_by_ocr_still_label_their_boxes() {
+        let runs = vec![
+            run(54.0, 100.0, "PRODUCER", 7.0),
+            run(54.0, 110.0, "Hartsfield & Quail Insurance Brokers", 10.0),
+            run(54.0, 140.0, "Full legal name", 7.0),
+            run(54.0, 150.0, "Ione Kowalczyk", 10.0),
+            run(54.0, 180.0, "Insurance Plan", 7.0),
+            run(54.0, 190.0, "Meadowlark Health Plan", 10.0),
+        ];
+
+        let blocks = analyze_ocr(&runs);
+
+        let fields = fields_of(&blocks);
+        assert!(
+            fields.contains(&("PRODUCER", "Hartsfield & Quail Insurance Brokers")),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&("Full legal name", "Ione Kowalczyk")),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&("Insurance Plan", "Meadowlark Health Plan")),
+            "{fields:?}"
+        );
     }
 
     /// A value written after its label goes on under it only where its
