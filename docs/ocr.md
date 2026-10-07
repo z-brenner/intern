@@ -111,7 +111,14 @@ drawn on each page. Two research sets back it up: 30 synthetic business
 pages in clean, scanned and fax quality (dates, amounts and identifiers
 scored as exact strings), and 50 FUNSD form scans (noisy, low resolution,
 order-free word scoring). FUNSD is a research set: it was used for this
-measurement and is not committed.
+measurement and is not committed. intern-bench's OCR measure folds
+typographic quotes and apostrophes (`‘ ’ “ ”`) to `'` and `"` on both
+sides before comparing: PP-OCR's recognition dictionary has no curly
+quotes, so it emits every one straight, and a quote's glyph style carries
+no filing information. Nothing else is folded - a misread such as
+`0ccurrence` still counts. The tables below were measured before the fold,
+so their PP-OCR word error rates include words that differ only by a
+straightened quote.
 
 Each scanned page was rendered once through the worker's own PDFium path
 (300 DPI, as OCR receives it) and the same pixels were handed to every
