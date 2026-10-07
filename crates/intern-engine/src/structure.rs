@@ -12,8 +12,8 @@
 //! blocks. A page that arrived with a layout keeps it. A page that did not -
 //! one stored before layouts existed, one past the worker's layout budget,
 //! one built from plain text by a test or a tool - is segmented from its
-//! text with the same id scheme, the distiller's own heading and table
-//! detection deciding what each block is. Either way every block falls
+//! text exactly as the worker segments a page it has no geometry for, with
+//! the same ids, kinds and labelled values. Either way every block falls
 //! under the nearest heading above it, across pages.
 //!
 //! Coordinates are tenths of a PDF point from the top left of the page as
@@ -22,7 +22,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::distill::is_heading_line;
 use crate::domain::{DocumentSource, PageOrigin};
 
 /// One page as blocks in reading order, as the worker built it.
@@ -242,66 +241,145 @@ pub fn structured(source: &DocumentSource) -> StructuredDocument {
     StructuredDocument { pages }
 }
 
-/// A page's text as blocks, the way distillation segments it: a blank line
-/// ends a block, a line that reads as a heading is one, and consecutive `|`
-/// lines are a table.
+/// Paragraphs longer than this many lines are split at the next line that
+/// ends a sentence, as the worker splits them.
+const MAX_PARAGRAPH_LINES: usize = 12;
+
+/// A page's text as blocks, exactly as the parser worker builds a page that
+/// has text and no geometry (`PageLayout::of_text`, `blocks_from_text`): a
+/// blank line ends a block; a Markdown heading, or a short line nearly all
+/// capitals that does not end in a colon, is a heading; consecutive `|`
+/// lines are a table, the row above a `| --- |` separator its header;
+/// consecutive `Key: value` lines are labelled values; a bulleted or
+/// enumerated line starts a list item; anything else is a paragraph, split
+/// after twelve lines where a line ends a sentence. Blocks are numbered the
+/// worker's way, so a page stored before layouts existed reads exactly
+/// like one the worker sends today. The worker's contract test holds the
+/// two to each other.
 fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBlock> {
     let source = if origin == PageOrigin::Ocr {
         TextSource::Ocr
     } else {
         TextSource::Native
     };
+    let lines = text.lines().map(str::trim_end).collect::<Vec<_>>();
+    let kinds = lines.iter().map(|line| classify(line)).collect::<Vec<_>>();
     let mut blocks = Vec::new();
-    let mut pending: Vec<&str> = Vec::new();
-    let mut pending_table = false;
-    let flush = |pending: &mut Vec<&str>, table: bool, blocks: &mut Vec<LayoutBlock>| {
-        if pending.is_empty() {
-            return;
-        }
-        let kind = if table {
-            BlockKind::Table
-        } else {
-            BlockKind::Paragraph
-        };
-        blocks.push(block(kind, std::mem::take(pending), source));
-    };
-    for line in text.lines() {
-        let trimmed = line.trim_end();
-        if trimmed.trim().is_empty() {
-            flush(&mut pending, pending_table, &mut blocks);
-            continue;
-        }
-        let table_line = trimmed.trim_start().starts_with('|');
-        if table_line != pending_table && !pending.is_empty() {
-            flush(&mut pending, pending_table, &mut blocks);
-        }
-        pending_table = table_line;
-        if !table_line && is_heading_line(trimmed) {
-            flush(&mut pending, pending_table, &mut blocks);
-            let mut heading = block(BlockKind::Heading, vec![trimmed.trim()], source);
-            heading.level = markdown_level(trimmed.trim());
-            blocks.push(heading);
-            continue;
-        }
-        pending.push(trimmed);
-    }
-    flush(&mut pending, pending_table, &mut blocks);
-    for (index, block) in blocks.iter_mut().enumerate() {
-        block.id = format!("p{page_number}.b{}", index + 1);
-        if let Some(table) = &mut block.table {
-            for (row_index, row) in table.rows.iter_mut().enumerate() {
-                row.id = format!("{}.r{}", block.id, row_index + 1);
-                for (cell_index, cell) in row.cells.iter_mut().enumerate() {
-                    cell.id = format!("{}.c{}", row.id, cell_index + 1);
+    let mut index = 0;
+    while index < lines.len() {
+        let kind = kinds[index];
+        let start = index;
+        match kind {
+            LineKind::Blank => {
+                index += 1;
+            }
+            LineKind::MarkdownHeading(level) => {
+                index += 1;
+                let mut heading = block(BlockKind::Heading, &lines[start..index], source);
+                heading.level = Some(level);
+                blocks.push(heading);
+            }
+            LineKind::TableRow | LineKind::TableSeparator => {
+                while index < lines.len()
+                    && matches!(kinds[index], LineKind::TableRow | LineKind::TableSeparator)
+                {
+                    index += 1;
                 }
+                let mut table = block(BlockKind::Table, &lines[start..index], source);
+                table.table = Some(table_rows(&lines[start..index], &kinds[start..index]));
+                blocks.push(table);
+            }
+            LineKind::KeyValue => {
+                index += 1;
+                while index < lines.len() && kinds[index] == LineKind::KeyValue {
+                    index += 1;
+                }
+                let mut labelled = block(BlockKind::KeyValue, &lines[start..index], source);
+                labelled.fields = lines[start..index]
+                    .iter()
+                    .filter_map(|line| {
+                        let (key, value) = split_key_value(line.trim())?;
+                        Some(KeyValue {
+                            id: String::new(),
+                            key: key.trim_end_matches(':').trim().to_owned(),
+                            value: value.to_owned(),
+                            key_bbox: None,
+                            value_bbox: None,
+                        })
+                    })
+                    .collect();
+                blocks.push(labelled);
+            }
+            LineKind::Heading => {
+                index += 1;
+                blocks.push(block(BlockKind::Heading, &lines[start..index], source));
+            }
+            LineKind::ListItem | LineKind::Text => {
+                index += 1;
+                while index < lines.len()
+                    && kinds[index] == LineKind::Text
+                    && !(index - start >= MAX_PARAGRAPH_LINES && ends_sentence(lines[index - 1]))
+                {
+                    index += 1;
+                }
+                let block_kind = if kind == LineKind::ListItem {
+                    BlockKind::ListItem
+                } else {
+                    BlockKind::Paragraph
+                };
+                blocks.push(block(block_kind, &lines[start..index], source));
             }
         }
     }
+    number_blocks(page_number, &mut blocks);
     blocks
 }
 
-fn block(kind: BlockKind, lines: Vec<&str>, source: TextSource) -> LayoutBlock {
-    let table = (kind == BlockKind::Table).then(|| table_rows(&lines));
+/// What one line of text is, as the worker classifies it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineKind {
+    Blank,
+    MarkdownHeading(u8),
+    TableRow,
+    TableSeparator,
+    ListItem,
+    KeyValue,
+    Heading,
+    Text,
+}
+
+fn classify(line: &str) -> LineKind {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return LineKind::Blank;
+    }
+    if let Some(level) = markdown_heading_level(trimmed) {
+        return LineKind::MarkdownHeading(level);
+    }
+    if trimmed.starts_with('|') {
+        return if is_table_separator(trimmed) {
+            LineKind::TableSeparator
+        } else {
+            LineKind::TableRow
+        };
+    }
+    if is_list_item(trimmed) {
+        return LineKind::ListItem;
+    }
+    if split_key_value(trimmed).is_some() {
+        return LineKind::KeyValue;
+    }
+    if is_heading_line(trimmed) {
+        return LineKind::Heading;
+    }
+    LineKind::Text
+}
+
+fn ends_sentence(line: &str) -> bool {
+    line.trim_end().ends_with(['.', ':', ';', '!', '?'])
+}
+
+fn block(kind: BlockKind, lines: &[&str], source: TextSource) -> LayoutBlock {
     LayoutBlock {
         id: String::new(),
         kind,
@@ -319,23 +397,37 @@ fn block(kind: BlockKind, lines: Vec<&str>, source: TextSource) -> LayoutBlock {
                 confidence: None,
             })
             .collect(),
-        table,
+        table: None,
         fields: Vec::new(),
+    }
+}
+
+/// Gives each block, row, cell, and field its id from its position on the
+/// page, dropping blocks with no text, as the worker numbers them.
+fn number_blocks(page_number: usize, blocks: &mut Vec<LayoutBlock>) {
+    blocks.retain(|block| !block.text.trim().is_empty());
+    for (index, block) in blocks.iter_mut().enumerate() {
+        block.id = format!("p{page_number}.b{}", index + 1);
+        if let Some(table) = &mut block.table {
+            for (row_index, row) in table.rows.iter_mut().enumerate() {
+                row.id = format!("{}.r{}", block.id, row_index + 1);
+                for (cell_index, cell) in row.cells.iter_mut().enumerate() {
+                    cell.id = format!("{}.c{}", row.id, cell_index + 1);
+                }
+            }
+        }
+        for (field_index, field) in block.fields.iter_mut().enumerate() {
+            field.id = format!("{}.f{}", block.id, field_index + 1);
+        }
     }
 }
 
 /// A Markdown table's rows: the cells between its pipes, the row above a
 /// `| --- |` separator marked as the header.
-fn table_rows(lines: &[&str]) -> LayoutTable {
+fn table_rows(lines: &[&str], kinds: &[LineKind]) -> LayoutTable {
     let mut rows: Vec<LayoutRow> = Vec::new();
-    for line in lines {
-        let cells = cells_of(line);
-        let separator = !cells.is_empty()
-            && cells.iter().all(|cell| {
-                let core = cell.trim_matches(':');
-                core.len() >= 3 && core.chars().all(|character| character == '-')
-            });
-        if separator {
+    for (line, kind) in lines.iter().zip(kinds) {
+        if *kind == LineKind::TableSeparator {
             if let Some(row) = rows.last_mut() {
                 for cell in &mut row.cells {
                     cell.header = true;
@@ -345,7 +437,7 @@ fn table_rows(lines: &[&str]) -> LayoutTable {
         }
         rows.push(LayoutRow {
             id: String::new(),
-            cells: cells
+            cells: table_cells(line)
                 .into_iter()
                 .map(|text| LayoutCell {
                     id: String::new(),
@@ -359,22 +451,155 @@ fn table_rows(lines: &[&str]) -> LayoutTable {
     LayoutTable { rows }
 }
 
-fn cells_of(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
-    let inner = inner.strip_suffix('|').unwrap_or(inner);
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_owned())
-        .collect()
-}
-
-fn markdown_level(line: &str) -> Option<u8> {
+fn markdown_heading_level(line: &str) -> Option<u8> {
     let hashes = line
         .chars()
         .take_while(|character| *character == '#')
         .count();
-    ((1..=6).contains(&hashes) && line[hashes..].starts_with(' ')).then_some(hashes as u8)
+    let rest = &line[hashes..];
+    ((1..=6).contains(&hashes) && rest.starts_with(' ') && !rest.trim().is_empty())
+        .then_some(hashes as u8)
+}
+
+/// `| --- | :---: |`, the line Markdown puts under a table's header row.
+fn is_table_separator(line: &str) -> bool {
+    let cells = table_cells(line);
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let core = cell.trim().trim_matches(':');
+            core.len() >= 3 && core.chars().all(|character| character == '-')
+        })
+}
+
+/// A table row's cells: the text between unescaped pipes, trimmed. Empty
+/// cells are kept, so a cell stays in its column.
+fn table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for character in inner.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            current.push(character);
+            escaped = true;
+        } else if character == '|' {
+            cells.push(current.trim().to_owned());
+            current.clear();
+        } else {
+            current.push(character);
+        }
+    }
+    cells.push(current.trim().to_owned());
+    cells
+}
+
+/// Whether a line starts with a bullet or a parenthesised enumerator.
+fn is_list_item(line: &str) -> bool {
+    let mut characters = line.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if matches!(first, '•' | '◦' | '▪' | '‣' | '●' | '○' | '■' | '□' | '–')
+        || (matches!(first, '-' | '*' | '+') && line[1..].starts_with(' '))
+    {
+        return line.chars().count() > 2;
+    }
+    // (a) (iv) (12) a) 3)
+    let marker_end = line.find(' ').unwrap_or(0);
+    if marker_end == 0 || marker_end > 6 {
+        return false;
+    }
+    let marker = &line[..marker_end];
+    let core = marker.trim_start_matches('(');
+    let Some(core) = core.strip_suffix(')') else {
+        return false;
+    };
+    !core.is_empty()
+        && ((core.len() <= 2 && core.chars().all(|character| character.is_ascii_digit()))
+            || (core.len() == 1 && core.chars().all(|character| character.is_ascii_lowercase()))
+            || core
+                .chars()
+                .all(|character| matches!(character, 'i' | 'v' | 'x')))
+}
+
+/// A short line that is nearly all capitals and does not end in a colon:
+/// the worker's rule, which is distillation's without the colon.
+fn is_heading_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 90 || trimmed.ends_with(':') {
+        return false;
+    }
+    if trimmed.ends_with('.') && trimmed.split_whitespace().count() > 6 {
+        return false;
+    }
+    let letters = trimmed
+        .chars()
+        .filter(|character| character.is_alphabetic());
+    let letter_count = letters.clone().count();
+    if letter_count < 3 {
+        return false;
+    }
+    let uppercase = letters.filter(|character| character.is_uppercase()).count();
+    uppercase * 10 >= letter_count * 8
+}
+
+/// `Invoice date: May 1, 2026` as its label and value, by the worker's
+/// rule: a label of at most six words and forty characters that starts
+/// with a capital and holds no sentence, then a colon and a space.
+pub(crate) fn split_key_value(line: &str) -> Option<(&str, &str)> {
+    let colon = line.find(": ")?;
+    let key = line[..colon].trim();
+    let value = line[colon + 2..].trim();
+    if value.is_empty() || !is_label(key) {
+        return None;
+    }
+    Some((key, value))
+}
+
+/// Whether text reads as a field label: short, starting with a capital, no
+/// sentence punctuation inside it.
+fn is_label(key: &str) -> bool {
+    let key = key.trim().trim_end_matches(':').trim();
+    if key.is_empty() || key.chars().count() > 40 || key.split_whitespace().count() > 6 {
+        return false;
+    }
+    let Some(first) = key.chars().next() else {
+        return false;
+    };
+    if !first.is_uppercase() {
+        return false;
+    }
+    if key.contains(['"', '“', '”', ';', ',', ':']) {
+        return false;
+    }
+    let words = key.split_whitespace().collect::<Vec<_>>();
+    let lowercase_words = words
+        .iter()
+        .filter(|word| word.chars().next().is_some_and(char::is_lowercase))
+        .filter(|word| {
+            !matches!(
+                **word,
+                "of" | "and"
+                    | "or"
+                    | "to"
+                    | "the"
+                    | "for"
+                    | "no."
+                    | "no"
+                    | "by"
+                    | "in"
+                    | "on"
+                    | "at"
+                    | "per"
+            )
+        })
+        .count();
+    lowercase_words <= 2 && !(words.len() > 3 && lowercase_words > 1)
 }
 
 /// Links each block to the heading it falls under, across pages: a heading

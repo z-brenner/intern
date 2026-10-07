@@ -177,3 +177,66 @@ fn every_layout_the_worker_writes_reaches_the_engine_whole() {
     let structured = intern_engine::structure::structured(&source);
     assert!(structured.block("p4.b5").is_some());
 }
+
+/// A page the engine has no layout for - stored before layouts existed, or
+/// built from plain text - is segmented by the engine exactly as this
+/// worker segments a page of text it has no geometry for: the same blocks,
+/// ids, kinds, text, lines, table rows and cells, labelled values and
+/// sections. The evidence index reads either the same way.
+#[test]
+fn the_engine_segments_text_exactly_as_the_worker_does() {
+    let long_paragraph = (0..30)
+        .map(|line| {
+            if line % 5 == 4 {
+                format!("line {line} ends here.")
+            } else {
+                format!("line {line} runs on")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let documents: Vec<Vec<String>> = vec![
+        vec![
+            "# Written Consent\n\nThe undersigned directors consent.\nIt is resolved.\n\n## Resolutions\n\n| Item | Vote |\n| --- | --- |\n| Budget | For |\n|  | Against |\n\n- First point\n- Second point\nDate: March 4, 2026\nSigned by: Ada Example".to_owned(),
+        ],
+        vec![
+            "NOTICE OF TERMINATION\nThe tenant will pay the following amounts: rent and fees.\nTime: 12:01 a.m.\nhttp://example.test/x".to_owned(),
+            "PARTIES:\nLandlord: Oakhaven Retail Properties LLC\nTenant: Sorrel & Thistle Tea House LLC\n\n(a) first item\n(iv) fourth item\n3) third\n• bullet\n–dash\n- \n\n| Esc \\| aped | Cell |\n| :---: | --- |\n| 1 | 2 |".to_owned(),
+        ],
+        vec![long_paragraph],
+        vec![
+            "INVOICE\r\nInvoice Number: INV-20417\r\nInvoice Date: 03/04/2026\r\n\r\nBill To:\r\nQuillon Ridge Bakery, Inc.\r\n   \r\n  indented line\r\n####### not a heading\r\n#\r\n# ".to_owned(),
+            String::new(),
+            "\n\n\n".to_owned(),
+            "ARTICLE 2. RENT\nTenant pays rent monthly.\nIn advance.\n\n| Year | Rent |\n| --- | --- |\n| 1 | $34.00 |\n\nSigned.".to_owned(),
+        ],
+    ];
+    for pages in documents {
+        let mut layouts = pages
+            .iter()
+            .enumerate()
+            .map(|(index, text)| PageLayout::of_text(index + 1, text))
+            .collect::<Vec<_>>();
+        intern_worker::layout::assign_sections(layouts.iter_mut());
+        let source = intern_engine::DocumentSource::from_pages(
+            pages
+                .iter()
+                .enumerate()
+                .map(|(index, text)| {
+                    intern_engine::SourcePage::new(
+                        index + 1,
+                        text.clone(),
+                        intern_engine::PageOrigin::Native,
+                    )
+                })
+                .collect(),
+        );
+        let structured = intern_engine::structure::structured(&source);
+        assert_eq!(structured.pages.len(), layouts.len());
+        for (engine_page, worker_page) in structured.pages.iter().zip(&layouts) {
+            let engine = serde_json::to_value(&engine_page.blocks).unwrap();
+            let worker = serde_json::to_value(&worker_page.blocks).unwrap();
+            assert_eq!(engine, worker, "{pages:?}");
+        }
+    }
+}
