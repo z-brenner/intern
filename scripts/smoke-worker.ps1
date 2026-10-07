@@ -167,7 +167,17 @@ try {
     $Process.StandardInput.Close()
     if (-not $Process.WaitForExit(10000)) { throw "Worker did not exit after shutdown" }
     if ($Process.ExitCode -ne 0) { throw "Worker exited with $($Process.ExitCode): $(Get-WorkerStderr)" }
-    Write-Host "Package-shaped worker hello, native PDF, PDFium+Tesseract OCR, DOCX/image, and invalid-fixture smoke passed."
+    # A runtime that carries ONNX Runtime and the OCR models reads scans with
+    # PP-OCR. If they do not load, the worker says so on stderr and reads with
+    # Tesseract instead - which passes every assertion above while shipping
+    # the engine the package was not built for.
+    if (-not $StderrTask.Wait(10000)) { throw "Worker stderr did not close after exit" }
+    $UsesPpOcr = Test-Path -LiteralPath (Join-Path $Runtime "onnxruntime.dll") -PathType Leaf
+    if ($UsesPpOcr -and $StderrTask.Result.Contains("OCR_ENGINE_FALLBACK")) {
+        throw "The runtime carries PP-OCR, but the worker fell back to Tesseract: $($StderrTask.Result)"
+    }
+    $OcrEngine = if ($UsesPpOcr) { "PP-OCR" } else { "Tesseract" }
+    Write-Host "Package-shaped worker hello, native PDF, PDFium+$OcrEngine OCR, DOCX/image, and invalid-fixture smoke passed."
 }
 finally {
     if (-not $Process.HasExited) { $Process.Kill($true) }

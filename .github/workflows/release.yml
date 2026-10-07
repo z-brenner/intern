@@ -127,10 +127,12 @@ jobs:
           New-Item -ItemType Directory src-tauri\resources\tessdata -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Run apply, undo, recovery, worker, and workspace tests
@@ -167,6 +169,7 @@ jobs:
           Remove-Item src-tauri\resources\tessdata\compile-placeholder.traineddata -Force
           Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
           Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
+          Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
           ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       - run: npm run assets:verify -- --require-bundled
       - run: cargo test --locked -p intern-worker --test generated_fixtures --features windows-native

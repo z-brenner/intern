@@ -7,9 +7,11 @@ by the Windows package. `runtime-assets.json` is the authoritative,
 SHA-256-addressed inventory of native files bundled by the release build. `Cargo.lock` and
 `package-lock.json` are the authoritative source-package inventories.
 
-Model weights are not part of the installer or GitHub release. When the user
-chooses local model setup, Intern downloads the separately licensed model files
-described by `model-manifest.json` directly to the user's local application data.
+Language model weights are not part of the installer or GitHub release. When the
+user chooses local model setup, Intern downloads the separately licensed model
+files described by `model-manifest.json` directly to the user's local application
+data. The small OCR models listed below are different: they ship in the installer,
+under `ocr-models/`, because reading a scan must work offline from the first run.
 
 ## Native runtime assets
 
@@ -21,6 +23,10 @@ described by `model-manifest.json` directly to the user's local application data
 | tessdata_fast English and OSD data | commit `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | Tesseract OCR contributors |
 | vcpkg | baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | MIT | Microsoft Corporation and contributors |
 | Leptonica | version resolved by the pinned vcpkg baseline | BSD-2-Clause | Dan Bloomberg and contributors |
+| ONNX Runtime | 1.30.0, `Microsoft.ML.OnnxRuntime` NuGet package, Windows x64 CPU build (`onnxruntime.dll` only) | MIT | Microsoft Corporation |
+| PP-OCRv5 mobile text detection model (`ocr-models/text-detection.onnx`) | `PaddlePaddle/PP-OCRv5_mobile_det_onnx` at revision `e6f4fa85f00e168c862bc462aebca69eef9b3d3d` | Apache-2.0 | The PaddlePaddle Authors |
+| PP-OCRv5 mobile English text recognition model (`ocr-models/text-recognition.onnx`) and its character list, which is compiled into the parser worker | `PaddlePaddle/en_PP-OCRv5_mobile_rec_onnx` at revision `3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b` | Apache-2.0 | The PaddlePaddle Authors |
+| PP-LCNet document orientation model (`ocr-models/page-orientation.onnx`) | `PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx` at revision `7330ab7039123e46af2dc03154b9969aa412c61d` | Apache-2.0 | The PaddlePaddle Authors |
 
 Sources:
 
@@ -31,6 +37,17 @@ Sources:
 - <https://github.com/tesseract-ocr/tessdata_fast>
 - <https://github.com/microsoft/vcpkg>
 - <https://github.com/DanBloomberg/leptonica>
+- <https://github.com/microsoft/onnxruntime> and
+  <https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.30.0>
+- <https://github.com/PaddlePaddle/PaddleOCR> and
+  <https://huggingface.co/PaddlePaddle>
+
+ONNX Runtime's own third-party notices are installed beside its license as
+`licenses/onnxruntime-ThirdPartyNotices.txt`. Intern loads ONNX Runtime from its
+installation directory by absolute path and turns its telemetry off. The OCR
+models carry no license file of their own; the Apache License 2.0 text pinned
+from the PaddleOCR repository (release v3.7.0) is installed as
+`licenses/PaddleOCR-models-LICENSE.txt`.
 
 The pinned vcpkg build can include runtime DLLs from Tesseract's dependency
 closure. Depending on the pinned port graph, those files can include libraries
@@ -74,6 +91,7 @@ transitive versions are pinned in the lockfiles.
 | serde / serde_json | Apache-2.0 OR MIT |
 | image | Apache-2.0 OR MIT |
 | pdfium-render | Apache-2.0 OR MIT |
+| ort (ONNX Runtime bindings, loading the runtime at run time) | Apache-2.0 OR MIT |
 | thiserror | Apache-2.0 OR MIT |
 | zip | MIT |
 | base64 | Apache-2.0 OR MIT |

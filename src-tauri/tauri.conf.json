@@ -41,7 +41,8 @@
       "resources/licenses/": "licenses/",
       "resources/tessdata/*.traineddata": "tessdata/",
       "resources/native/pdfium/*.dll": "",
-      "resources/native/sidecars/*.dll": ""
+      "resources/native/sidecars/*.dll": "",
+      "resources/ocr-models/*.onnx": "ocr-models/"
     },
     "windows": {
       "nsis": {

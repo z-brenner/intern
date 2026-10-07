@@ -67,7 +67,7 @@ try {
         $Digest = (Get-FileHash -LiteralPath $Packaged -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($Digest -ne [string]$Entry.sha256) { throw "Installed SHA-256 mismatch: $Relative" }
     }
-    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata")) {
+    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
         if (-not $Seen.ContainsKey($Required)) { throw "Installed manifest omits required runtime: $Required" }
     }
     if (-not (Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File -Filter "THIRD_PARTY_NOTICES.md")) { throw "Third-party notices are missing from the installation" }
