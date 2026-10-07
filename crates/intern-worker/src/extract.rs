@@ -1153,7 +1153,17 @@ fn native_page(
             inspection.native_text,
             None,
             Some(FastLayout {
-                native: inspection.native,
+                // A fast layout reads only the page's size, its turn and its
+                // segments. Its runs - as many as the analysis takes on, and
+                // read for nothing when the geometry layout was not kept -
+                // and its images and rules go here, not when the pages are
+                // put in order.
+                native: inspection.native.map(|native| NativePage {
+                    runs: Vec::new(),
+                    images: Vec::new(),
+                    rulings: Vec::new(),
+                    ..native
+                }),
                 signals,
             }),
         ),
@@ -2990,6 +3000,54 @@ mod text_page_layouts {
                 .layout
                 .is_some()
         );
+    }
+
+    /// A page whose geometry layout is not kept - the document's layouts
+    /// are full - is read as its text, and holds none of its runs while it
+    /// waits for its fast layout.
+    #[test]
+    fn a_page_read_as_its_text_holds_no_runs_while_it_waits() {
+        use crate::layout::TextRun;
+
+        let runs = (0..40)
+            .map(|line| TextRun {
+                text: format!("Line {line}"),
+                bbox: [540, 600 + line * 120, 1800, 690 + line * 120],
+                bold: false,
+                confidence: None,
+            })
+            .collect::<Vec<_>>();
+        let inspection = PdfPageInspection {
+            page_index: 0,
+            native_text: "Line 0".to_owned(),
+            native: Some(NativePage {
+                width: 6120,
+                height: 7920,
+                segments: runs.iter().map(|run| run.bbox).collect(),
+                runs,
+                ..NativePage::default()
+            }),
+            ..PdfPageInspection::default()
+        };
+        let mut full = TextBudget {
+            characters: MAX_DOCUMENT_CHARS,
+            layout_parts: 0,
+        };
+
+        let read = native_page(
+            1,
+            inspection,
+            RouteSignals::default(),
+            PageRoute::Layout,
+            &|| false,
+            &mut full,
+        );
+
+        assert!(read.page.layout.is_none());
+        let native = read.fast.unwrap().native.unwrap();
+        assert!(native.runs.is_empty());
+        assert_eq!(native.segments.len(), 40, "the fast layout's line boxes");
+        assert_eq!((native.width, native.height), (6120, 7920));
     }
 
     /// An OCR reading whose lines were not analysed, with more lines of
