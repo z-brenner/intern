@@ -277,6 +277,126 @@ pub fn assign_sections<'a>(layouts: impl IntoIterator<Item = &'a mut PageLayout>
     }
 }
 
+/// Marks the running headers and footers of a document: a short block at
+/// the top or the bottom of a page whose text, figures aside, is at the top
+/// or the bottom of at least a quarter of the pages, two at the least
+/// (`Annual Report, Fiscal Year 2026`, `Asset Purchase Agreement - 17`), or
+/// that is only a page number. It takes three words to repeat: `PART 2` at
+/// the top of a page is a heading, however many parts there are. Their text
+/// is left as it is, and where they stand in the page; only their kind
+/// changes, so that what repeats on every page can be told from what the
+/// page says. A letterhead on the first page alone is not one.
+pub fn mark_running_blocks(layouts: &mut [&mut PageLayout]) {
+    /// How far into a page, from either end, a running block may be.
+    const REACH: usize = 2;
+    let candidate = |block: &LayoutBlock| {
+        matches!(
+            block.kind,
+            BlockKind::Paragraph | BlockKind::Heading | BlockKind::Other
+        ) && block.lines.len() <= 2
+            && block.text.split_whitespace().count() <= 20
+    };
+    // The text with its case folded and every run of digits one `#`, so
+    // `Page 9` and `Page 10` repeat.
+    let shape = |text: &str| {
+        text.split_whitespace()
+            .map(|word| {
+                let mut shaped = String::new();
+                for character in word.chars() {
+                    if character.is_ascii_digit() {
+                        if !shaped.ends_with('#') {
+                            shaped.push('#');
+                        }
+                    } else {
+                        shaped.extend(character.to_lowercase());
+                    }
+                }
+                shaped
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let ends = |layout: &PageLayout| {
+        let count = layout.blocks.len();
+        let top = (0..count.min(REACH)).collect::<Vec<_>>();
+        let bottom =
+            (count.saturating_sub(REACH).max(top.len().min(count))..count).collect::<Vec<_>>();
+        (top, bottom)
+    };
+    let pages = layouts.len();
+    let mut seen_top: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut seen_bottom: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for layout in layouts.iter() {
+        let (top, bottom) = ends(layout);
+        let mut page_top = std::collections::HashSet::new();
+        let mut page_bottom = std::collections::HashSet::new();
+        for index in top {
+            let block = &layout.blocks[index];
+            if candidate(block) {
+                page_top.insert(shape(&block.text));
+            }
+        }
+        for index in bottom {
+            let block = &layout.blocks[index];
+            if candidate(block) {
+                page_bottom.insert(shape(&block.text));
+            }
+        }
+        for text in page_top {
+            *seen_top.entry(text).or_default() += 1;
+        }
+        for text in page_bottom {
+            *seen_bottom.entry(text).or_default() += 1;
+        }
+    }
+    for layout in layouts.iter_mut() {
+        let (top, bottom) = ends(layout);
+        for (indexes, seen, kind) in [
+            (top, &seen_top, BlockKind::PageHeader),
+            (bottom, &seen_bottom, BlockKind::PageFooter),
+        ] {
+            for index in indexes {
+                let block = &mut layout.blocks[index];
+                if !candidate(block) {
+                    continue;
+                }
+                let shape = shape(&block.text);
+                let repeated = shape.split(' ').count() >= 3
+                    && seen
+                        .get(&shape)
+                        .is_some_and(|count| *count >= 2 && *count * 4 >= pages);
+                if repeated || is_page_number(&block.text) {
+                    block.kind = kind;
+                    block.level = None;
+                }
+            }
+        }
+    }
+}
+
+/// `7`, `- 7 -`, `Page 7`, `Page 7 of 12`, `7/12`. A bare number has at
+/// most three digits: `2026` alone is a year.
+fn is_page_number(text: &str) -> bool {
+    let words = text
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, '-' | '/' | '|' | '.' | '(' | ')')
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let number = |word: &&str| word.chars().all(|character| character.is_ascii_digit());
+    let named = words
+        .iter()
+        .any(|word| word.eq_ignore_ascii_case("page") || word.eq_ignore_ascii_case("of"));
+    !words.is_empty()
+        && words.len() <= 4
+        && words.iter().any(number)
+        && words.iter().all(|word| {
+            number(word) || word.eq_ignore_ascii_case("page") || word.eq_ignore_ascii_case("of")
+        })
+        && (named || words.iter().all(|word| word.len() <= 3))
+}
+
 /// The layout of a native PDF page on the fast route: the blocks of its
 /// text, exactly as PDFium read it, with each line's box where the page's
 /// segments say where its lines are.
@@ -704,6 +824,44 @@ mod tests {
         assert_eq!(second.blocks[0].section.as_deref(), Some("p1.b2"));
         assert_eq!(second.blocks[1].section.as_deref(), Some("p1.b1"));
         assert_eq!(second.blocks[2].section.as_deref(), Some("p2.b2"));
+    }
+
+    #[test]
+    fn running_headers_footers_and_page_numbers_are_marked_across_pages() {
+        let page = |number: usize, body: &str| {
+            let mut layout = PageLayout::of_text(
+                number,
+                &format!(
+                    "Kingsfold Specialty Foods - Annual Report 2026\n\nPART {number}\n\n{body}\n\nPage {number} of 3"
+                ),
+            );
+            layout.blocks[1].kind = BlockKind::Heading;
+            layout
+        };
+        let mut first = PageLayout::of_text(
+            1,
+            "KINGSFOLD SPECIALTY FOODS INC.\n\nLetter to members.\n\n1",
+        );
+        let mut second = page(2, "Revenue rose.");
+        let mut third = page(3, "Margins held.");
+
+        mark_running_blocks(&mut [&mut first, &mut second, &mut third]);
+
+        assert_eq!(
+            first.blocks[0].kind,
+            BlockKind::Heading,
+            "a letterhead once"
+        );
+        assert_eq!(first.blocks[2].kind, BlockKind::PageFooter, "a page number");
+        for layout in [&second, &third] {
+            assert_eq!(layout.blocks[0].kind, BlockKind::PageHeader);
+            assert_eq!(layout.blocks[1].kind, BlockKind::Heading);
+            assert_eq!(layout.blocks[2].kind, BlockKind::Paragraph);
+            assert_eq!(layout.blocks[3].kind, BlockKind::PageFooter);
+        }
+        assert!(!is_page_number("2026"), "a year alone");
+        assert!(is_page_number("- 17 -") && is_page_number("Page 4 of 12"));
+        assert!(!is_page_number("Section 4"));
     }
 
     #[test]

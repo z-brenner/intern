@@ -1193,10 +1193,15 @@ fn assemble(
     })
 }
 
-/// Links every block on every page to the heading it falls under, across
-/// pages.
+/// Marks every page's running header and footer, and links every block on
+/// every page to the heading it falls under, across pages.
 pub fn link_sections(pages: &mut [ExtractedPage]) {
-    crate::layout::assign_sections(pages.iter_mut().filter_map(|page| page.layout.as_mut()));
+    let mut layouts = pages
+        .iter_mut()
+        .filter_map(|page| page.layout.as_mut())
+        .collect::<Vec<_>>();
+    crate::layout::mark_running_blocks(&mut layouts);
+    crate::layout::assign_sections(layouts);
 }
 
 impl ExtractedPage {
