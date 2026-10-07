@@ -3,7 +3,7 @@ use std::time::Duration;
 use intern_worker::extract::load_oriented_image;
 use intern_worker::limits::{
     MAX_DECOMPRESSED_OFFICE_BYTES, MAX_EXTRACTION_DURATION, MAX_IMAGE_FILE_MEGAPIXELS,
-    MAX_PAGE_COUNT, MAX_PAGE_MEGAPIXELS, MAX_PAGE_PIXELS, MAX_RESIDENT_RENDERED_PAGES,
+    MAX_PAGE_COUNT, MAX_PAGE_MEGAPIXELS, MAX_PAGE_PIXELS, MAX_QUEUED_RENDERED_PAGES,
     MAX_SOURCE_BYTES, MAX_TEMP_BYTES, RENDER_DPI, ResourceLimits, render_size_within,
 };
 use intern_worker::temp::TempWorkspace;
@@ -20,7 +20,8 @@ fn default_limits_enforce_the_worker_resource_contract() {
     assert_eq!(MAX_PAGE_MEGAPIXELS, 25);
     assert_eq!(MAX_IMAGE_FILE_MEGAPIXELS, 100);
     assert_eq!(MAX_EXTRACTION_DURATION, Duration::from_secs(30 * 60));
-    assert_eq!(MAX_RESIDENT_RENDERED_PAGES, 1);
+    assert_eq!(MAX_QUEUED_RENDERED_PAGES, 1);
+    assert_eq!(limits.max_queued_rendered_pages, MAX_QUEUED_RENDERED_PAGES);
     assert_eq!(limits.max_source_bytes, MAX_SOURCE_BYTES);
     assert_eq!(limits.max_page_count, MAX_PAGE_COUNT);
     assert!(limits.validate_source_size(MAX_SOURCE_BYTES).is_ok());

@@ -475,6 +475,22 @@ pub trait PdfBackend {
     ) -> Result<RenderedPage, ExtractionError> {
         self.render_within(path, page_index, u64::MAX, cancel)
     }
+
+    /// The page's text as runs ([`crate::layout::TextRun`]), for a page
+    /// routed to read its geometry whose inspection carries none - one past
+    /// the runs a document reads ahead
+    /// ([`crate::layout::router::bounds::MAX_DOCUMENT_RUNS`]). `native` is
+    /// what inspection measured of it. Asked for one page at a time, as
+    /// each is read. A backend with no characters to give returns none.
+    fn page_runs(
+        &self,
+        _path: &Path,
+        _page_index: usize,
+        _native: &NativePage,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<crate::layout::TextRun>, ExtractionError> {
+        Ok(Vec::new())
+    }
 }
 
 pub trait OcrBackend {
@@ -648,7 +664,8 @@ enum PagePlan {
         signals: RouteSignals,
         vision: Option<VisionImage>,
     },
-    /// Native text, with images that may hold text of their own.
+    /// Native text, with images that may hold text of their own. Its
+    /// characters are read once OCR's readings of those images are back.
     Regions {
         inspection: PdfPageInspection,
         signals: RouteSignals,
@@ -661,13 +678,14 @@ enum PagePlan {
 }
 
 impl PagePlan {
-    /// Whether the page brings the page image with it already.
+    /// Whether the page brings the page image with it for certain. A page
+    /// read again does not: if the fresh reading wins, the image made from
+    /// its text layer goes with the layer, and a later page that wants one
+    /// has to have been rendered for it.
     fn has_page_image(&self) -> bool {
         match self {
-            PagePlan::Done { vision, .. }
-            | PagePlan::Reread { vision, .. }
-            | PagePlan::Regions { vision, .. } => vision.is_some(),
-            PagePlan::Scan { .. } => false,
+            PagePlan::Done { vision, .. } | PagePlan::Regions { vision, .. } => vision.is_some(),
+            PagePlan::Reread { .. } | PagePlan::Scan { .. } => false,
         }
     }
 }
@@ -709,7 +727,7 @@ where
     limits.validate_page_count(inspections.len())?;
     let page_count = inspections.len();
     let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
-    let queue = limits.max_resident_rendered_pages.max(1);
+    let queue = limits.max_queued_rendered_pages.max(1);
 
     let (plans, outcomes, failure) = std::thread::scope(|scope| {
         let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
@@ -739,6 +757,7 @@ where
                 path,
                 limits,
                 cancel,
+                started,
                 &mut pool,
                 vision_taken,
             ) {
@@ -787,20 +806,36 @@ where
     // A request canceled while its last pages were being read is canceled,
     // even if every page it was waiting for came back.
     cancel.check()?;
-    cancel.timed(
+    let stop = || halted(cancel, started, limits);
+    let runs =
+        |inspection: &mut PdfPageInspection, route| read_runs(inspection, route, pdf, path, cancel);
+    let document = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || assemble(plans, outcomes),
-    )
+        || assemble(plans, outcomes, &runs, &stop),
+    )?;
+    // A layout the time ran out on was left unbuilt; the document is not
+    // returned half-read as if it were whole.
+    timed_check(cancel, started, limits)?;
+    Ok(document)
+}
+
+/// Whether the request was canceled or its time is up - the token's own
+/// deadline, or the extraction's: what the layout analysis asks between
+/// the regions of a page.
+fn halted(cancel: &CancellationToken, started: Instant, limits: &ResourceLimits) -> bool {
+    cancel.check().is_err() || started.elapsed() > limits.max_duration
 }
 
 /// Decides how one page is read, finishes it if it needs no OCR, and hands
 /// it to the OCR workers if it does.
+#[allow(clippy::too_many_arguments)]
 fn plan_page<O: OcrBackend + Sync + ?Sized>(
-    inspection: PdfPageInspection,
+    mut inspection: PdfPageInspection,
     pdf: &dyn PdfBackend,
     path: &Path,
     limits: &ResourceLimits,
     cancel: &CancellationToken,
+    started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
 ) -> Result<PagePlan, ExtractionError> {
@@ -946,12 +981,45 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
         }
     }
 
+    cancel.timed(
+        |timings| &mut timings.analysis_micros,
+        || read_runs(&mut inspection, route, pdf, path, cancel),
+    )?;
     let route = native_route(route, &signals);
+    let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || native_page(page_number, inspection, signals, route),
+        || native_page(page_number, inspection, signals, route, &stop),
     );
     Ok(PagePlan::Done { page, vision })
+}
+
+/// Reads a page's characters into runs if `route` reads its geometry and
+/// inspection did not: a page past the runs a document reads ahead.
+///
+/// They are read when the page is - once it is planned, or for a page
+/// whose image regions OCR reads, once those readings are back - so past
+/// that budget no more than one page's characters are held at a time. A
+/// page whose characters cannot be read keeps its text.
+fn read_runs(
+    inspection: &mut PdfPageInspection,
+    route: PageRoute,
+    pdf: &dyn PdfBackend,
+    path: &Path,
+    cancel: &CancellationToken,
+) -> Result<(), ExtractionError> {
+    let page_index = inspection.page_index;
+    if crate::layout::router::needs_runs(route)
+        && let Some(native) = inspection.native.as_mut()
+        && native.runs.is_empty()
+    {
+        match pdf.page_runs(path, page_index, native, cancel) {
+            Ok(runs) => native.runs = runs,
+            Err(error) if ends_the_document(&error) => return Err(error),
+            Err(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// The router's signals for a page: what the backend measured while it had
@@ -1020,22 +1088,27 @@ fn render_for_ocr(
 }
 
 /// A page read from its native text: exactly as PDFium read it on the fast
-/// route, or the linearization of its blocks on the layout route.
+/// route, or the linearization of its blocks on the layout route - unless
+/// the page is past what the analysis takes on, or `stop` says the request
+/// is canceled or out of time, when it is read as on the fast route.
 fn native_page(
     page_number: usize,
     inspection: PdfPageInspection,
     signals: RouteSignals,
     route: PageRoute,
+    stop: &dyn Fn() -> bool,
 ) -> ExtractedPage {
+    // A page past the analysis's bounds, or one the time ran out on, is
+    // read as its text.
     let geometry = inspection
         .native
         .as_ref()
-        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty());
+        .filter(|native| route == PageRoute::Layout && !native.runs.is_empty())
+        .and_then(|native| {
+            crate::layout::geometry_layout(native, Vec::new(), signals, route, stop)
+        });
     let (text, mut layout) = match geometry {
-        Some(native) => {
-            let layout = crate::layout::geometry_layout(native, Vec::new(), signals, route);
-            (crate::layout::linearize(&layout.blocks), layout)
-        }
+        Some(layout) => (crate::layout::linearize(&layout.blocks), layout),
         None => {
             let layout = crate::layout::fast_layout(
                 &inspection.native_text,
@@ -1071,6 +1144,8 @@ fn reread_is_better(reading: &OcrResult, signals: &RouteSignals) -> bool {
 fn assemble(
     plans: Vec<PagePlan>,
     outcomes: Vec<OcrOutcome>,
+    runs: &dyn Fn(&mut PdfPageInspection, PageRoute) -> Result<(), ExtractionError>,
+    stop: &dyn Fn() -> bool,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut outcomes = outcomes
         .into_iter()
@@ -1103,7 +1178,7 @@ fn assemble(
                 let size = sizes.first().copied().ok_or_else(unread)?;
                 let vision = vision.transpose()?;
                 (
-                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals),
+                    crate::layout::ocr_page(page_number, reading, size, Some(scale), signals, stop),
                     vision,
                 )
             }
@@ -1129,24 +1204,29 @@ fn assemble(
                                 size,
                                 Some(scale),
                                 signals,
+                                stop,
                             ),
                             page_vision,
                         )
                     }
                     _ => {
                         let route = native_route(PageRoute::Ocr, &signals);
-                        (native_page(page_number, inspection, signals, route), vision)
+                        (
+                            native_page(page_number, inspection, signals, route, stop),
+                            vision,
+                        )
                     }
                 }
             }
             PagePlan::Regions {
-                inspection,
+                mut inspection,
                 signals,
                 crops,
                 scale,
                 vision,
             } => {
                 let page_number = inspection.page_index + 1;
+                runs(&mut inspection, PageRoute::OcrRegions)?;
                 let readings = outcome
                     .map(|outcome| {
                         outcome
@@ -1163,10 +1243,11 @@ fn assemble(
                     signals,
                     &readings,
                     scale,
+                    stop,
                 )
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route)
+                    native_page(page_number, inspection, signals, route, stop)
                 });
                 (page, vision)
             }
@@ -1248,9 +1329,11 @@ struct OcrOutcome {
 /// The OCR workers for one document, started the first time a page needs
 /// one: a text PDF never starts a thread.
 ///
-/// Rendered pages wait in a queue that holds at most `queue` of them, so a
-/// document's renders run at most that far ahead of its OCR, and memory
-/// holds the pages being read plus that many waiting.
+/// Rendered pages wait in a queue that holds at most `queue` of them
+/// ([`crate::limits::MAX_QUEUED_RENDERED_PAGES`]), so a document's renders
+/// run at most that far ahead of its OCR: memory holds the page being
+/// rendered, at most `queue` waiting, and one being read by each of the
+/// `workers`.
 struct OcrPool<'scope, 'env, O: OcrBackend + Sync + ?Sized> {
     scope: &'scope std::thread::Scope<'scope, 'env>,
     ocr: &'env O,
@@ -1889,7 +1972,11 @@ pub fn extract_image(
     // be 300 DPI, which is what scanners write.
     let mut page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || crate::layout::ocr_page(1, result, size, None, RouteSignals::default()),
+        || {
+            crate::layout::ocr_page(1, result, size, None, RouteSignals::default(), &|| {
+                cancel.check().is_err()
+            })
+        },
     );
     page.vision_escalated = true;
     let mut pages = vec![page];
@@ -1916,7 +2003,16 @@ pub fn extract_image(
         drop(rendered);
         pages.push(cancel.timed(
             |timings| &mut timings.analysis_micros,
-            || crate::layout::ocr_page(index + 2, result, size, None, RouteSignals::default()),
+            || {
+                crate::layout::ocr_page(
+                    index + 2,
+                    result,
+                    size,
+                    None,
+                    RouteSignals::default(),
+                    &|| cancel.check().is_err(),
+                )
+            },
         ));
     }
     let mut warnings = Vec::new();
