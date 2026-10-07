@@ -50,6 +50,9 @@ pub struct RouteSignals {
     pub aligned_rows: u16,
     /// Lines that read as a label and its value.
     pub key_values: u16,
+    /// Lines holding two or more labelled values side by side: the rows of
+    /// a grid of fields, or signature blocks set next to each other.
+    pub key_value_grid: u16,
     /// Per mille of segments drawn over another segment.
     pub overlap: u16,
     /// Distinct text heights, to the half point.
@@ -204,6 +207,7 @@ pub fn measure_signals(native: &NativePage, text: &str, image_coverage: f32) -> 
         interleave: structure.interleave,
         aligned_rows: structure.aligned_rows,
         key_values: key_value_lines(text),
+        key_value_grid: key_value_grid_lines(text),
         overlap: overlap(&native.segments),
         font_sizes: font_sizes(&native.segments),
         rulings: u16::try_from(native.rulings.len()).unwrap_or(u16::MAX),
@@ -229,8 +233,8 @@ pub mod thresholds {
     pub const REGION_MIN_CHARS: u32 = 20;
     /// Lines of aligned cells that make a page a table page.
     pub const ALIGNED_ROWS: u16 = 3;
-    /// Labelled lines that make a page a form.
-    pub const KEY_VALUES: u16 = 6;
+    /// Lines of labelled values side by side that make a page a form.
+    pub const KEY_VALUE_GRID: u16 = 2;
     /// Segments drawn over each other.
     pub const OVERLAP: u16 = 100;
 }
@@ -260,7 +264,7 @@ pub fn route_page(signals: &RouteSignals, needs_ocr: bool) -> PageRoute {
     }
     if signals.columns >= 2
         || signals.aligned_rows >= ALIGNED_ROWS
-        || signals.key_values >= KEY_VALUES
+        || signals.key_value_grid >= KEY_VALUE_GRID
         || signals.overlap >= OVERLAP
     {
         return PageRoute::Layout;
@@ -379,6 +383,43 @@ fn key_value_lines(text: &str) -> u16 {
         .filter(|line| split_key_value(line).is_some() || (line.ends_with(':') && is_label(line)))
         .count();
     u16::try_from(count).unwrap_or(u16::MAX)
+}
+
+/// Lines with two or more labels on them, each a capitalised name of a few
+/// words ending in a colon: `Invoice No: 4471   Date: May 1, 2026`, or
+/// `Name: Ada Example   Name: Ben Example` across two signature blocks.
+/// PDFium runs such a line together, so the fast route would read the
+/// second label as part of the first one's value.
+fn key_value_grid_lines(text: &str) -> u16 {
+    let count = text.lines().filter(|line| labels_on(line) >= 2).count();
+    u16::try_from(count).unwrap_or(u16::MAX)
+}
+
+/// How many labels a line holds: words ending in a colon, with the up to
+/// four words before them, that together read as a label and start with a
+/// capital.
+fn labels_on(line: &str) -> usize {
+    let words = line.split_whitespace().collect::<Vec<_>>();
+    let mut labels = 0;
+    let mut start = 0;
+    for (index, word) in words.iter().enumerate() {
+        if !word.ends_with(':') || word.len() < 2 {
+            continue;
+        }
+        let first = (start.max(index.saturating_sub(4))..=index).find(|first| {
+            words[*first].chars().next().is_some_and(char::is_uppercase)
+                && is_label(&words[*first..=index].join(" "))
+        });
+        if let Some(first) = first
+            && words[first..index]
+                .iter()
+                .all(|word| !word.ends_with([',', '.', ';']))
+        {
+            labels += 1;
+            start = index + 1;
+        }
+    }
+    labels
 }
 
 /// Per mille of segments that overlap another by at least half the smaller
@@ -770,6 +811,18 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_of_labelled_values_is_told_from_one_label_per_line() {
+        let grid = "Invoice No: INV-20417   Date: March 4, 2026\n\
+                    By: /s/ Ada Example   By: /s/ Ben Example\n\
+                    Name: Ada Example   Name: Ben Example\n\
+                    Time: 12:01 a.m. standard time";
+        assert_eq!(key_value_grid_lines(grid), 3);
+        let single = "Invoice Date: January 5, 2026\nBill To: Contoso Worldwide, Inc.\n\
+                      The tenant will pay the following: rent and fees: monthly.";
+        assert_eq!(key_value_grid_lines(single), 0);
+    }
+
+    #[test]
     fn routes_follow_the_signals() {
         let plain = RouteSignals {
             chars: 2_000,
@@ -793,6 +846,27 @@ mod tests {
             route_page(
                 &RouteSignals {
                     aligned_rows: 4,
+                    ..plain
+                },
+                false
+            ),
+            PageRoute::Layout
+        );
+        assert_eq!(
+            route_page(
+                &RouteSignals {
+                    key_values: 12,
+                    ..plain
+                },
+                false
+            ),
+            PageRoute::Fast,
+            "one label to a line reads well as it is"
+        );
+        assert_eq!(
+            route_page(
+                &RouteSignals {
+                    key_value_grid: 2,
                     ..plain
                 },
                 false

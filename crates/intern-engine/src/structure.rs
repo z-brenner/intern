@@ -70,6 +70,7 @@ pub struct RouteSignals {
     pub interleave: u16,
     pub aligned_rows: u16,
     pub key_values: u16,
+    pub key_value_grid: u16,
     pub overlap: u16,
     pub font_sizes: u8,
     pub rulings: u16,

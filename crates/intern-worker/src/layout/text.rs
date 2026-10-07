@@ -334,8 +334,9 @@ pub(crate) fn split_key_value(line: &str) -> Option<(&str, &str)> {
     Some((key, value))
 }
 
-/// Whether text reads as a field label: short, starting with a letter, no
-/// sentence punctuation inside it.
+/// Whether text reads as a field label: short, starting with a capital, no
+/// sentence punctuation inside it. A lowercase start is the middle of a
+/// sentence that happens to hold a colon.
 pub(crate) fn is_label(key: &str) -> bool {
     let key = key.trim().trim_end_matches(':').trim();
     if key.is_empty() || key.chars().count() > 40 || key.split_whitespace().count() > 6 {
@@ -344,7 +345,7 @@ pub(crate) fn is_label(key: &str) -> bool {
     let Some(first) = key.chars().next() else {
         return false;
     };
-    if !first.is_alphabetic() {
+    if !first.is_uppercase() {
         return false;
     }
     if key.contains(['"', '“', '”', ';', ',', ':']) {

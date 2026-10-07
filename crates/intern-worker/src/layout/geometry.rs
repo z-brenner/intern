@@ -209,10 +209,14 @@ fn rows_of(items: &[Item], ids: &[usize]) -> Vec<Row> {
                 && row_center >= item.y0
                 && row_center <= item.y1
                 // A run that would overlap another on the row is a line
-                // of its own, however near its baseline.
+                // of its own, however near its baseline - unless the two
+                // share a baseline and only touch: a date set a little too
+                // wide for its column runs into the next column's value.
                 && row.members.iter().all(|member| {
                     let other = &items[*member];
-                    other.x1 <= item.x0 + 1.0 || item.x1 <= other.x0 + 1.0
+                    other.x1 <= item.x0 + 1.0
+                        || item.x1 <= other.x0 + 1.0
+                        || overflows_into(other, item)
                 })
         });
         if joins {
@@ -237,6 +241,19 @@ fn rows_of(items: &[Item], ids: &[usize]) -> Vec<Row> {
         });
     }
     rows
+}
+
+/// Whether two runs on one baseline overlap only where the end of one runs
+/// into the start of the other: the same top and bottom, and less than a
+/// third of the shorter one covered. Text printed over text covers far
+/// more of it.
+fn overflows_into(left: &Item, right: &Item) -> bool {
+    let height = left.height().min(right.height());
+    let same_line =
+        (left.y0 - right.y0).abs() <= height * 0.1 && (left.y1 - right.y1).abs() <= height * 0.1;
+    let overlap = left.x1.min(right.x1) - left.x0.max(right.x0);
+    let shorter = (left.x1 - left.x0).min(right.x1 - right.x0);
+    same_line && overlap < shorter / 3.0
 }
 
 fn median_height(items: &[Item], ids: &[usize]) -> f64 {
@@ -289,8 +306,10 @@ fn horizontal_cut(items: &[Item], ids: &[usize]) -> Option<Cut> {
     let rows = rows_of(items, ids);
     let mut bands: Vec<Vec<usize>> = Vec::new();
     let mut bottom = f64::NEG_INFINITY;
-    for row in rows {
-        if bands.is_empty() || row.y0 - bottom > height * 1.25 {
+    for (index, row) in rows.iter().enumerate() {
+        let gap = row.y0 - bottom > height * 1.25;
+        let labelled = index > 0 && labels_over(items, &rows[index - 1], row);
+        if bands.is_empty() || (gap && !labelled) {
             bands.push(Vec::new());
         }
         bottom = bottom.max(row.y1);
@@ -300,6 +319,33 @@ fn horizontal_cut(items: &[Item], ids: &[usize]) -> Option<Cut> {
             .extend(row.members.iter().copied());
     }
     (bands.len() > 1).then_some(Cut::Bands(bands))
+}
+
+/// Whether a row of small labels stands over the values filled in under
+/// them - `TO OWNER` over the owner's name, the boxes of a form - which
+/// may sit further apart than lines of text do and still belong together:
+/// every value starts under a label, set larger than every label, and no
+/// more than two of its lines below.
+fn labels_over(items: &[Item], labels: &Row, values: &Row) -> bool {
+    let largest_label = labels
+        .members
+        .iter()
+        .map(|member| items[*member].height())
+        .fold(0.0, f64::max);
+    let smallest_value = values
+        .members
+        .iter()
+        .map(|member| items[*member].height())
+        .fold(f64::INFINITY, f64::min);
+    let tolerance = tolerance(smallest_value);
+    largest_label <= smallest_value * 0.85
+        && values.y0 - labels.y1 <= smallest_value * 2.0
+        && values.members.iter().all(|value| {
+            labels
+                .members
+                .iter()
+                .any(|label| (items[*value].x0 - items[*label].x0).abs() <= tolerance)
+        })
 }
 
 /// A gutter: a vertical band of whitespace, `[start, end]`, through the
@@ -601,10 +647,35 @@ fn follow_gutter(
 }
 
 /// Whether two sides of a gutter are separate flows rather than the columns
-/// of one table: prose on both sides, labels down both sides, or lines that
-/// mostly do not share a baseline.
+/// of one table: labels down both sides, prose on both sides, a grid of
+/// labelled values beside a block with none, or lines that mostly do not
+/// share a baseline - unless the two sides are one table whose cells wrap
+/// (see [`one_table`]).
 fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) -> bool {
     if left.len() < 2 || right.len() < 2 {
+        return false;
+    }
+    let labelled = |rows: &[Row]| {
+        rows.iter()
+            .filter(|row| starts_with_label(items, row))
+            .count()
+    };
+    // Rows whose label and value are both on this side.
+    let self_contained = |rows: &[Row]| {
+        rows.iter()
+            .filter(|row| {
+                let first = &items[row.members[0]];
+                (first.text.ends_with(':') && is_label(&first.text) && row.members.len() >= 2)
+                    || split_key_value(&first.text).is_some()
+            })
+            .count()
+    };
+    let (left_labels, right_labels) = (labelled(left), labelled(right));
+    // Labels down both sides: two forms side by side.
+    if left_labels >= 2 && right_labels >= 2 {
+        return true;
+    }
+    if one_table(items, left, right) {
         return false;
     }
     let prose = |rows: &[Row]| {
@@ -642,30 +713,9 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
     {
         return true;
     }
-    let labelled = |rows: &[Row]| {
-        rows.iter()
-            .filter(|row| {
-                let first = &items[row.members[0]];
-                (first.text.ends_with(':') && is_label(&first.text))
-                    || split_key_value(&first.text).is_some()
-            })
-            .count()
-    };
-    // Rows whose label and value are both on this side.
-    let self_contained = |rows: &[Row]| {
-        rows.iter()
-            .filter(|row| {
-                let first = &items[row.members[0]];
-                (first.text.ends_with(':') && is_label(&first.text) && row.members.len() >= 2)
-                    || split_key_value(&first.text).is_some()
-            })
-            .count()
-    };
-    let (left_labels, right_labels) = (labelled(left), labelled(right));
-    // Labels down both sides, or a grid of labelled values beside a block
-    // with none: an address beside a statement's date and account number.
-    if (left_labels >= 2 && right_labels >= 2)
-        || (left_labels == 0 && self_contained(right) >= 3)
+    // A grid of labelled values beside a block with none: an address beside
+    // a statement's date and account number.
+    if (left_labels == 0 && self_contained(right) >= 3)
         || (right_labels == 0 && self_contained(left) >= 3)
     {
         return true;
@@ -683,6 +733,93 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
         matched as f64 / these.len().max(1) as f64
     };
     left.len() >= 3 && right.len() >= 3 && shared(left, right).max(shared(right, left)) < 0.5
+}
+
+/// Whether a row opens with a label: `Date:`, or `Date: May 1`.
+fn starts_with_label(items: &[Item], row: &Row) -> bool {
+    let first = &items[row.members[0]];
+    (first.text.ends_with(':') && is_label(&first.text)) || split_key_value(&first.text).is_some()
+}
+
+/// Whether the two sides of a gutter are the columns of one table: one
+/// side is a grid - rows of two or more cells that line up with each other,
+/// not labels with their values - or a column of figures, and every row on
+/// the side with fewer rows starts level with a row on the other, which
+/// only adds the lines its cells wrap onto. A test plan whose last column
+/// wraps, or line items beside their amounts, reads this way; two columns
+/// of prose do not, because neither side is a grid.
+fn one_table(items: &[Item], left: &[Row], right: &[Row]) -> bool {
+    let grid = |rows: &[Row]| {
+        let height = median_height(
+            items,
+            &rows
+                .iter()
+                .flat_map(|row| row.members.iter().copied())
+                .collect::<Vec<_>>(),
+        );
+        let tolerance = tolerance(height);
+        let starts = |row: &Row| {
+            row.members
+                .iter()
+                .skip(1)
+                .map(|member| items[*member].x0)
+                .collect::<Vec<_>>()
+        };
+        let candidates = rows
+            .iter()
+            .filter(|row| row.members.len() >= 2 && !starts_with_label(items, row))
+            .collect::<Vec<_>>();
+        let aligned = candidates
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| {
+                candidates.iter().enumerate().any(|(other_index, other)| {
+                    other_index != *index
+                        && starts(row).iter().any(|x| {
+                            starts(other)
+                                .iter()
+                                .any(|other_x| (x - other_x).abs() <= tolerance)
+                        })
+                })
+            })
+            .count();
+        aligned >= 2 && aligned * 2 >= rows.len()
+    };
+    let figures = |rows: &[Row]| {
+        let cells = rows
+            .iter()
+            .flat_map(|row| &row.members)
+            .map(|member| &items[*member])
+            .collect::<Vec<_>>();
+        let figures = cells.iter().filter(|item| figure(&item.text)).count();
+        figures >= 2 && figures * 3 >= cells.len() * 2
+    };
+    let (fewer, more) = if left.len() <= right.len() {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let in_step = fewer
+        .iter()
+        .filter(|row| {
+            more.iter()
+                .any(|other| (row.y0 - other.y0).abs() <= row.height().min(other.height()) * 0.3)
+        })
+        .count()
+        * 5
+        >= fewer.len() * 4;
+    in_step && (grid(left) || grid(right) || figures(left) || figures(right))
+}
+
+/// A figure: an amount, a quantity, a date in numbers - digits, with no
+/// more than a few letters (a currency code, a unit).
+fn figure(text: &str) -> bool {
+    let digits = text.chars().filter(char::is_ascii_digit).count();
+    let letters = text
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .count();
+    digits > 0 && letters <= 3
 }
 
 /// What one row of a leaf is.
@@ -767,9 +904,12 @@ fn tolerance(height: f64) -> f64 {
 /// Whether a cell lines up with a column: the same left edge, or - for a
 /// short cell, a number set flush right or a centred heading - the same
 /// right edge or centre. Lines of prose end where they happen to, so a long
-/// cell lines up by its left edge alone.
+/// cell lines up by its right edge only when it ends exactly where the
+/// column does: a total's label set flush right.
 fn aligned(item: &Item, column: &Column, tolerance: f64) -> bool {
+    const FLUSH: f64 = 2.0 * super::UNITS_PER_POINT;
     (item.x0 - column.x0).abs() <= tolerance
+        || (item.x1 - column.x1).abs() <= FLUSH
         || (item.words() <= 3
             && ((item.x1 - column.x1).abs() <= tolerance
                 || ((item.x0 + item.x1) / 2.0 - (column.x0 + column.x1) / 2.0).abs() <= tolerance))
@@ -863,11 +1003,21 @@ fn table_at(
     let mut rows: Vec<Vec<Vec<usize>>> = vec![first.cells.iter().map(|cell| vec![*cell]).collect()];
     let mut row_lines: Vec<Vec<usize>> = vec![vec![start]];
     let mut multi_cell_rows = 1;
+    // The least space between one row and the next, once there is a second
+    // row to measure it by.
+    let mut row_gap: Option<f64> = None;
     let mut end = start + 1;
     while end < lines.len() {
         let line = &lines[end];
         let above = &lines[end - 1];
-        if line.y0 - above.y1 > stats.body_height.max(stats.line_gap * 2.0) * 1.6 {
+        // Small labels over the values filled in under them may sit further
+        // apart than the rows of a table do: the boxes of a form.
+        let reach = if rows.len() == 1 && smaller_than(items, &rows[0], &[line.cells.clone()]) {
+            2.5
+        } else {
+            1.6
+        };
+        if line.y0 - above.y1 > stats.body_height.max(stats.line_gap * 2.0) * reach {
             break;
         }
         let matched = line
@@ -879,30 +1029,36 @@ fn table_at(
                     .any(|column| aligned(&items[**cell], column, tolerance))
             })
             .count();
+        let gap = line.y0 - above.y1;
+        let close = gap <= stats.line_gap + stats.body_height * 0.5;
+        // Closer under the row above than the table's rows are to each
+        // other: the row's cells wrap, the first one included.
+        let wraps = row_gap.is_some_and(|row_gap| gap < row_gap * 0.5);
         if line.cells.len() >= 2 {
             // Wrapped cells: nothing in the first column, close under the row
-            // above, and every cell under one of that row's cells.
-            let close = line.y0 - above.y1 <= stats.line_gap + stats.body_height * 0.5;
+            // above, every cell under one of that row's cells, and none of
+            // them a figure - an amount under an amount is the next row.
             let first_column = columns
                 .iter()
-                .map(|column| column.x0)
-                .fold(f64::INFINITY, f64::min);
+                .min_by(|left, right| left.x0.total_cmp(&right.x0))
+                .copied();
             let previous = rows.last_mut().expect("a table has a row");
             let positions = line
                 .cells
                 .iter()
                 .map(|cell| {
                     previous.iter().position(|above_cell| {
-                        (items[above_cell[0]].x0 - items[*cell].x0).abs() <= tolerance
+                        sits_under(items, above_cell, &items[*cell], tolerance)
                     })
                 })
                 .collect::<Option<Vec<_>>>();
-            let starts_first_column = line
-                .cells
-                .iter()
-                .any(|cell| (items[*cell].x0 - first_column).abs() <= tolerance);
+            let starts_first_column = line.cells.iter().any(|cell| {
+                first_column.is_some_and(|column| aligned(&items[*cell], &column, tolerance))
+            });
+            let figures = line.cells.iter().any(|cell| figure(&items[*cell].text));
             if close
-                && !starts_first_column
+                && (!starts_first_column || wraps)
+                && !figures
                 && let Some(positions) = positions
                 && positions.windows(2).all(|pair| pair[0] < pair[1])
             {
@@ -937,6 +1093,9 @@ fn table_at(
                     }),
                 }
             }
+            if gap >= 0.0 {
+                row_gap = Some(row_gap.map_or(gap, |row_gap: f64| row_gap.min(gap)));
+            }
             rows.push(line.cells.iter().map(|cell| vec![*cell]).collect());
             row_lines.push(vec![end]);
             multi_cell_rows += 1;
@@ -947,16 +1106,33 @@ fn table_at(
         // row above, it continues that row's cell; flush with the first
         // column and followed by more table rows, it is a row of its own.
         let item = &items[line.cells[0]];
-        let close = line.y0 - above.y1 <= stats.line_gap + stats.body_height * 0.5;
+        // A section heading - set larger than the text, or bold under rows
+        // that are not, in capitals or running on past the first column -
+        // ends the table, whatever follows it. A group's label inside a
+        // table keeps to its column.
+        let previous_bold = rows
+            .last()
+            .is_some_and(|row| row.iter().flatten().all(|id| items[*id].bold));
+        let past_first_column = columns
+            .iter()
+            .min_by(|left, right| left.x0.total_cmp(&right.x0))
+            .is_some_and(|column| item.x1 > column.x1 + tolerance);
+        if item.height() > stats.body_height * 1.18
+            || (item.bold && !previous_bold && (is_heading_line(&item.text) || past_first_column))
+        {
+            break;
+        }
         let previous = rows.last_mut().expect("a table has a row");
         let under = previous
             .iter()
-            .position(|cell| {
-                let cell_x0 = items[cell[0]].x0;
-                (item.x0 - cell_x0).abs() <= tolerance
-            })
-            .filter(|position| *position > 0 || previous.len() == 1);
-        if close && let Some(position) = under {
+            .position(|cell| sits_under(items, cell, item, tolerance))
+            .filter(|position| *position > 0 || previous.len() == 1 || wraps);
+        // A lone figure under a column of figures is a total, not the rest
+        // of the amount above it.
+        if close
+            && (wraps || !figure(&item.text))
+            && let Some(position) = under
+        {
             previous[position].push(line.cells[0]);
             row_lines.last_mut().expect("a table has a row").push(end);
             end += 1;
@@ -1066,10 +1242,26 @@ fn table_at(
     Some((end, block))
 }
 
+/// Whether a run on the line under a table cell sits under it: flush with
+/// its left edge, or - text set flush right or centred, like a wrapped
+/// column heading - with its right edge, or inside its span.
+fn sits_under(items: &[Item], cell: &[usize], item: &Item, tolerance: f64) -> bool {
+    let (x0, x1) = cell
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(x0, x1), id| {
+            (x0.min(items[*id].x0), x1.max(items[*id].x1))
+        });
+    let middle = (item.x0 + item.x1) / 2.0;
+    (item.x0 - x0).abs() <= tolerance
+        || (item.x1 - x1).abs() <= tolerance
+        || (middle > x0 && middle < x1 && item.x0 >= x0 - tolerance && item.x1 <= x1 + tolerance)
+}
+
 /// The rows with every cell in its column: a row with a cell missing - a
 /// transaction with a credit and no debit - gets an empty cell where the
 /// missing one would be, so the figures stay under their headings. The
-/// columns are the cells of the row with the most of them; a row whose cells
+/// columns are what the cells of the rows with the most of them span; a row
+/// whose cells
 /// do not fall one to a column, left to right, is kept as it is, and so is
 /// a row of one cell, which labels a group or spans the table.
 fn in_columns(items: &[Item], rows: Vec<Vec<Vec<usize>>>, tolerance: f64) -> Vec<Vec<Vec<usize>>> {
@@ -1079,12 +1271,17 @@ fn in_columns(items: &[Item], rows: Vec<Vec<Vec<usize>>>, tolerance: f64) -> Vec
                 (x0.min(items[*id].x0), x1.max(items[*id].x1))
             })
     };
-    let Some(widest) = rows.iter().max_by_key(|row| row.len()) else {
+    let widest = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if widest < 3 {
         return rows;
-    };
-    let columns = widest.iter().map(|cell| span(cell)).collect::<Vec<_>>();
-    if columns.len() < 3 {
-        return rows;
+    }
+    // Each column spans what its cells span in every row that has them all.
+    let mut columns = vec![(f64::INFINITY, f64::NEG_INFINITY); widest];
+    for row in rows.iter().filter(|row| row.len() == widest) {
+        for (column, cell) in columns.iter_mut().zip(row) {
+            let (x0, x1) = span(cell);
+            *column = (column.0.min(x0), column.1.max(x1));
+        }
     }
     rows.into_iter()
         .map(|row| {
@@ -1228,9 +1425,20 @@ fn key_values_at(
     stats: &PageStats,
     source: TextSource,
 ) -> Option<(usize, LayoutBlock)> {
-    if !is_key_value_line(items, &lines[start]) {
+    // A line set larger than the text around it is a heading, colon or
+    // not: `Segment Review: Aerospace Components`.
+    if !is_key_value_line(items, &lines[start]) || lines[start].height() > stats.body_height * 1.18
+    {
         return None;
     }
+    let left_edge = lines
+        .iter()
+        .map(|line| line.x0)
+        .fold(f64::INFINITY, f64::min);
+    let right_edge = lines
+        .iter()
+        .map(|line| line.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
     struct Pair {
         key: String,
         key_bbox: [u32; 4],
@@ -1318,13 +1526,18 @@ fn key_values_at(
         let tolerance = tolerance(stats.body_height);
         let first = &items[line.cells[0]];
         // Only a single line of text continues a value: a row of cells is
-        // a table starting.
+        // a table starting. A value written after its label on one line
+        // goes on under it only if that line ran to the end of the text's
+        // width and wrapped: a short `Location: Briarport` is followed by
+        // the next item, not more of it.
+        let above = &lines[end - 1];
+        let wrapped = above.x1 >= right_edge - (right_edge - left_edge) * 0.2;
         let continues = line.cells.len() == 1
             && match (pair.value_x0, pair.value_x1) {
-                (Some(x0), Some(x1)) => {
-                    (first.x0 - x0).abs() <= tolerance
-                        || (pair.set_apart && (line.x1 - x1).abs() <= tolerance)
+                (Some(x0), Some(x1)) if pair.set_apart => {
+                    (first.x0 - x0).abs() <= tolerance || (line.x1 - x1).abs() <= tolerance
                 }
+                (Some(x0), Some(_)) => wrapped && (first.x0 - x0).abs() <= tolerance,
                 _ => first.x0 > pair.label_x0 + stats.body_height * 0.5,
             };
         if !continues || (is_heading_line(&line.text(items)) && pair.value_x0.is_some()) {
@@ -1366,7 +1579,14 @@ fn key_values_at(
             });
         }
     }
-    let mut block = block_of(BlockKind::KeyValue, block_lines, source);
+    // A label with nothing after it - `THE CONTRACT IS CHANGED AS
+    // FOLLOWS:` over a table - introduces what follows: it is text.
+    let kind = if fields.is_empty() {
+        BlockKind::Paragraph
+    } else {
+        BlockKind::KeyValue
+    };
+    let mut block = block_of(kind, block_lines, source);
     block.fields = fields;
     Some((end.max(start + 1), block))
 }
@@ -1820,6 +2040,252 @@ mod tests {
             (fields[0].key.as_str(), fields[0].value.as_str()),
             ("Invoice Date", "March 4, 2026")
         );
+    }
+
+    /// A test plan's rows: an id, a scenario, and a pass condition that
+    /// wraps onto a second line now and then. The band between the
+    /// scenario and the condition runs the table's height, and both sides
+    /// are prose, but the left side is a grid of ids and scenarios whose
+    /// rows start level with the conditions: one table, not two columns.
+    #[test]
+    fn a_table_whose_last_column_wraps_is_not_cut_into_columns() {
+        let rows = [
+            (
+                "T4",
+                "Pressure transient below 35 psi at two loggers",
+                "Transient alert with map location",
+                "",
+            ),
+            (
+                "T5",
+                "Operator confirms an alert and opens a work order",
+                "Work order created with asset ID and",
+                "coordinates",
+            ),
+            (
+                "T6",
+                "Stale meter excluded from the leak scoring run",
+                "Meter listed on data quality report",
+                "",
+            ),
+            (
+                "T7",
+                "Reverse-flow alarm routed to cross-connection",
+                "Alert assigned to the backflow program",
+                "queue",
+            ),
+            (
+                "T8",
+                "Role-based access for the customer service team",
+                "Edit control hidden and API refused",
+                "",
+            ),
+        ];
+        let mut runs = vec![
+            bold(run(75.0, 69.0, "Test", 9.0)),
+            bold(run(112.0, 69.0, "Scenario", 9.0)),
+            bold(run(374.0, 69.0, "Pass condition", 9.0)),
+        ];
+        let mut y = 86.0;
+        for (id, scenario, condition, wrapped) in rows {
+            runs.push(run(75.0, y, id, 9.0));
+            runs.push(run(112.0, y, scenario, 9.0));
+            runs.push(run(374.0, y, condition, 9.0));
+            if !wrapped.is_empty() {
+                runs.push(run(374.0, y + 10.6, wrapped, 9.0));
+                y += 10.6;
+            }
+            y += 16.6;
+        }
+
+        let blocks = analyze_runs(&runs, 6120, 7920, &[], TextSource::Native);
+
+        assert_eq!(blocks.len(), 1, "{:#?}", texts(&blocks));
+        let table = blocks[0].table.as_ref().unwrap();
+        assert_eq!(table.rows.len(), 6);
+        assert_eq!(
+            table.rows[2].cells[2].text,
+            "Work order created with asset ID and coordinates"
+        );
+        assert_eq!(table.rows[4].cells[0].text, "T7");
+        assert_eq!(
+            table.rows[4].cells[2].text,
+            "Alert assigned to the backflow program queue"
+        );
+    }
+
+    /// A schedule whose first column wraps, whose lease date runs into the
+    /// next column, and whose heading wraps flush right.
+    #[test]
+    fn wrapped_first_cells_overflowing_dates_and_wrapped_headings_stay_in_their_rows() {
+        let mut runs = vec![
+            bold(run(75.0, 92.7, "Premises", 10.0)),
+            bold(run(225.0, 92.7, "Landlord", 10.0)),
+            bold(run(346.0, 92.7, "Lease dated", 10.0)),
+            bold(run(412.0, 92.7, "Expires", 10.0)),
+            bold(run(500.0, 92.7, "Cases on", 10.0)),
+            bold(run(520.0, 102.8, "hand", 10.0)),
+        ];
+        let rows = [
+            (
+                "1410 Orchard Row",
+                "Orchard Row LLC",
+                "May 1, 2016",
+                "April 30, 2031",
+                "48,200",
+                "(plant and offices)",
+                119.5,
+            ),
+            (
+                "22 Pennant Street",
+                "Pennant Park LLC",
+                "September 15, 2021",
+                "September 14, 2026",
+                "31,500",
+                "(warehouse)",
+                146.8,
+            ),
+        ];
+        for (premises, landlord, dated, expires, size, wrapped, y) in rows {
+            runs.push(run(75.0, y, premises, 10.0));
+            runs.push(run(225.0, y, landlord, 10.0));
+            runs.push(run(346.0, y, dated, 10.0));
+            runs.push(run(412.0, y, expires, 10.0));
+            runs.push(run(511.0, y, size, 10.0));
+            runs.push(run(75.0, y + 10.6, wrapped, 10.0));
+        }
+
+        let blocks = analyze_runs(&runs, 6120, 7920, &[], TextSource::Native);
+
+        assert_eq!(blocks.len(), 1, "{:#?}", texts(&blocks));
+        assert_eq!(
+            blocks[0].text,
+            "| Premises | Landlord | Lease dated | Expires | Cases on hand |\n\
+             | 1410 Orchard Row (plant and offices) | Orchard Row LLC | May 1, 2016 | April 30, 2031 | 48,200 |\n\
+             | 22 Pennant Street (warehouse) | Pennant Park LLC | September 15, 2021 | September 14, 2026 | 31,500 |"
+        );
+    }
+
+    /// Line items, the totals set flush right under them, and the section
+    /// heading after them.
+    #[test]
+    fn totals_are_rows_of_their_own_and_a_section_heading_ends_the_table() {
+        let mut runs = vec![
+            bold(run(54.0, 100.0, "Item", 9.0)),
+            bold(run(300.0, 100.0, "Qty", 9.0)),
+            bold(run(380.0, 100.0, "Unit Price", 9.0)),
+            bold(run(500.0, 100.0, "Amount", 9.0)),
+        ];
+        for (row, (item, quantity, price, amount)) in [
+            ("Pastry display case", "1", "2,385.00", "2,385.00"),
+            ("Bread shelving", "3", "264.50", "793.50"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 116.0 + row as f64 * 16.0;
+            runs.push(run(54.0, y, item, 9.0));
+            runs.push(run(300.0, y, quantity, 9.0));
+            runs.push(run(380.0, y, price, 9.0));
+            runs.push(run(500.0, y, amount, 9.0));
+        }
+        // Labels flush right with the Unit Price column, which ends at 425.
+        for (row, (label, amount)) in [
+            ("Subtotal", "3,178.50"),
+            ("Sales tax 8.7% (fixtures)", "276.53"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 148.0 + row as f64 * 14.0;
+            let width = label.chars().count() as f64 * 4.5;
+            runs.push(run(425.0 - width, y, label, 9.0));
+            runs.push(run(500.0, y, amount, 9.0));
+        }
+        runs.push(bold(run(
+            54.0,
+            190.0,
+            "SECTION D - Certifications (attach)",
+            9.0,
+        )));
+        runs.push(run(
+            54.0,
+            206.0,
+            "Attach every certificate the business holds.",
+            9.0,
+        ));
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(
+            blocks[0].text,
+            "| Item | Qty | Unit Price | Amount |\n\
+             | Pastry display case | 1 | 2,385.00 | 2,385.00 |\n\
+             | Bread shelving | 3 | 264.50 | 793.50 |\n\
+             |  |  | Subtotal | 3,178.50 |\n\
+             |  |  | Sales tax 8.7% (fixtures) | 276.53 |",
+            "{:#?}",
+            texts(&blocks)
+        );
+        assert_eq!(blocks[1].text, "SECTION D - Certifications (attach)");
+        assert_eq!(blocks[1].kind, BlockKind::Heading);
+    }
+
+    /// The boxes of a form: small labels with the values filled in under
+    /// them, further apart than lines of text, and a label over nothing.
+    #[test]
+    fn small_labels_over_their_values_are_fields_and_a_bare_label_is_text() {
+        let runs = vec![
+            run(43.0, 102.0, "TO OWNER", 7.5),
+            run(309.0, 102.0, "TO CONTRACTOR", 7.5),
+            run(45.0, 126.0, "Briarport Library District", 11.0),
+            run(311.0, 126.0, "Stonebridge Builders Inc.", 11.0),
+            run(40.0, 168.0, "THE CONTRACT IS CHANGED AS FOLLOWS:", 10.0),
+        ];
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks[0].kind, BlockKind::Table, "{:#?}", texts(&blocks));
+        let fields = &blocks[0].fields;
+        assert_eq!(
+            (fields[1].key.as_str(), fields[1].value.as_str()),
+            ("TO CONTRACTOR", "Stonebridge Builders Inc.")
+        );
+        assert_eq!(blocks[1].kind, BlockKind::Paragraph);
+        assert!(blocks[1].fields.is_empty());
+    }
+
+    /// A value written after its label goes on under it only where its
+    /// line wrapped.
+    #[test]
+    fn a_labelled_line_continues_only_where_it_wrapped() {
+        let runs = vec![
+            run(
+                54.0,
+                100.0,
+                "Re: Loan No. 40-118273 under the Loan Agreement dated March 18, 2022 between",
+                10.0,
+            ),
+            run(
+                54.0,
+                112.0,
+                "the lender and the borrower, and the related promissory note",
+                10.0,
+            ),
+            run(54.0, 124.0, "Location: Briarport", 10.0),
+            run(54.0, 136.0, "Members in Alamosa Bend County", 10.0),
+        ];
+
+        let blocks = analyze(&runs);
+
+        assert_eq!(blocks[0].fields.len(), 2, "{:#?}", texts(&blocks));
+        assert!(
+            blocks[0].fields[0]
+                .value
+                .ends_with("related promissory note")
+        );
+        assert_eq!(blocks[0].fields[1].value, "Briarport");
+        assert_eq!(blocks[1].text, "Members in Alamosa Bend County");
     }
 
     #[test]

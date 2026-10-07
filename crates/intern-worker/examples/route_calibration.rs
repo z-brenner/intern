@@ -101,7 +101,7 @@ fn main() {
     let backend = PdfiumBackend::new(runtime).expect("PDFium loads");
     println!(
         "document\tpage\troute\tchars\tsegments\timage_coverage\tinvisible\tgarbage\tcolumns\t\
-         interleave\taligned_rows\tkey_values\toverlap\tfont_sizes\trulings\timage_region\t\
+         interleave\taligned_rows\tkey_values\tkey_value_grid\toverlap\tfont_sizes\trulings\timage_region\t\
          tables\tset_apart_fields\tcolumn_jumps\tneeds_layout\tsignals_us\tfast_blocks_us\t\
          geometry_us\tinspect_us\tinspect_analysis_us\tinspect_all_runs_analysis_us"
     );
@@ -149,7 +149,7 @@ fn main() {
             let needs = route != PageRoute::Ocr
                 && (found.tables > 0 || found.set_apart >= 2 || found.jumps > 0);
             println!(
-                "{name}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}",
+                "{name}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}\t{:.1}",
                 page.page_index + 1,
                 route_name(route),
                 signals.chars,
@@ -161,6 +161,7 @@ fn main() {
                 signals.interleave,
                 signals.aligned_rows,
                 signals.key_values,
+                signals.key_value_grid,
                 signals.overlap,
                 signals.font_sizes,
                 signals.rulings,
