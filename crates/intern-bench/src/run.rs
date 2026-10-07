@@ -79,6 +79,30 @@ pub fn select<'a>(gold: &'a GoldFile, only: &[String]) -> Result<Vec<&'a GoldDoc
 }
 
 pub fn run(options: RunOptions) -> Result<i32, String> {
+    // A baseline written from a subset over one that covers more would hold
+    // later full runs to the subset alone: every document left out would
+    // read as new, and new documents gate nothing. Re-record a subset with
+    // `merge-recordings` instead, then write the baseline from a replay of
+    // the whole corpus.
+    if let Some(path) = &options.write_baseline
+        && !options.only.is_empty()
+        && let Ok(bytes) = std::fs::read(path)
+    {
+        let existing = Baseline::parse(&bytes)?;
+        let dropped = existing
+            .documents
+            .keys()
+            .filter(|id| !options.only.contains(id))
+            .count();
+        if dropped > 0 {
+            return Err(format!(
+                "--write-baseline with --only would drop {dropped} document(s) from {}; \
+                 merge the subset's recording with `intern-bench merge-recordings`, \
+                 then write the baseline from a replay of the whole corpus",
+                path.display()
+            ));
+        }
+    }
     let (gold, gold_bytes) = GoldFile::load(&options.gold)?;
     let documents = select(&gold, &options.only)?;
     let manifest = match &options.manifest {
@@ -104,6 +128,16 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             allow_stale,
         } => {
             let (recorded, bytes) = Recording::load(&recording)?;
+            let configuration_change = replay::configuration_change(&recorded);
+            if let Some(change) = &configuration_change {
+                eprintln!("WARNING: {change}");
+            }
+            if manifest.is_none() && !options.corpus.is_dir() {
+                eprintln!(
+                    "WARNING: no --manifest and no corpus at {}: nothing checks that the documents are the ones recorded",
+                    options.corpus.display()
+                );
+            }
             let records = documents
                 .iter()
                 .map(|document| {
@@ -130,6 +164,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     recorded_at: recorded.recorded_at.clone(),
                     git_commit: recorded.git_commit.clone(),
                     note: recorded.note.clone(),
+                    configuration_change,
                 }),
                 corpus,
             };
@@ -153,19 +188,28 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     missing.join(", ")
                 ));
             }
+            // A live run is expensive and its recording is only worth keeping
+            // if it read the documents the manifest vouches for, so a
+            // mismatch stops it before the first document.
             if let Some((manifest, _)) = &manifest {
-                for document in &documents {
-                    let bytes =
-                        std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
-                    if manifest
-                        .sha256(&document.file)
-                        .is_some_and(|expected| expected != sha256_hex(&bytes))
-                    {
-                        eprintln!(
-                            "warning: {} differs from the manifest; the corpus was generated from other sources",
-                            document.file
-                        );
-                    }
+                let differ = documents
+                    .iter()
+                    .filter(|document| {
+                        let bytes =
+                            std::fs::read(options.corpus.join(&document.file)).unwrap_or_default();
+                        manifest
+                            .sha256(&document.file)
+                            .is_some_and(|expected| expected != sha256_hex(&bytes))
+                    })
+                    .map(|document| document.file.as_str())
+                    .collect::<Vec<_>>();
+                if !differ.is_empty() {
+                    return Err(format!(
+                        "{} document(s) in {} differ from the manifest (regenerate them with `node bench/generate.mjs` on the pinned Node, or leave out --manifest to measure these bytes anyway): {}",
+                        differ.len(),
+                        options.corpus.display(),
+                        differ.join(", ")
+                    ));
                 }
             }
             let machine = MachineInfo::current();
@@ -223,7 +267,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             unscored.join(", ")
         );
         eprintln!(
-            "re-record (scripts/run-internbench.sh), or pass --allow-stale to score stale prompts anyway"
+            "re-record (scripts/run-internbench.sh, then `intern-bench merge-recordings` to replace only these documents); --allow-stale scores stale_prompt documents anyway, never stale_fixture or unrecorded ones"
         );
         exit = EXIT_REGRESSED;
     }
@@ -259,7 +303,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             eprintln!("regressed: {line}");
         }
         if report.mode == "live" {
-            for line in &comparison.document_regressions {
+            for line in comparison.ungated_regressions() {
                 eprintln!("flipped (not gated live): {line}");
             }
         }
@@ -283,7 +327,23 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
         }
         report.baseline = Some(comparison);
     }
-    if let Some(path) = &options.write_baseline {
+    // A baseline written from a replay that could not score every document,
+    // or that scored some from stale replies, would replace good coverage
+    // with nothing - or with scores that do not measure this code.
+    let unfit = report
+        .records
+        .iter()
+        .filter(|record| is_unscorable(&record.status) || record.stale)
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    if options.write_baseline.is_some() && !unfit.is_empty() {
+        eprintln!(
+            "not writing the baseline: {} document(s) are stale or could not be scored ({})",
+            unfit.len(),
+            unfit.join(", ")
+        );
+        exit = EXIT_REGRESSED;
+    } else if let Some(path) = &options.write_baseline {
         write(path, &Baseline::from_report(&report).to_json(), "baseline")?;
         eprintln!(
             "wrote the baseline for {} documents to {}",

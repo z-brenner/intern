@@ -18,7 +18,9 @@
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
-#                       the default corpus is generated when it is missing)
+#                       the default corpus is generated again unless its manifest.json
+#                       is the committed bench/manifest.json, so a missing, partial
+#                       (--only) or out-of-date corpus is never run)
 #   MANIFEST            the generator's manifest (default: bench/manifest.json when present)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
@@ -62,7 +64,22 @@ if [ -z "${INTERN_BENCH:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-bench)
   INTERN_BENCH="${CARGO_TARGET_DIR:-$REPO/target}/release/intern-bench"
 fi
-if [ "$CORPUS" = "$REPO/bench/generated" ] && [ ! -f "$CORPUS/manifest.json" ]; then
+# Regenerate when any file differs from the committed manifest, not only
+# when the generated manifest does: a file edited by hand leaves that
+# manifest as it was. The runner refuses to start on a mismatch either way.
+corpus_matches_manifest() {
+  node -e '
+    const { createHash } = require("node:crypto");
+    const { existsSync, readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const [corpus, manifest] = process.argv.slice(1);
+    for (const { file, sha256 } of JSON.parse(readFileSync(manifest, "utf8")).files) {
+      const path = join(corpus, file);
+      if (!existsSync(path) || createHash("sha256").update(readFileSync(path)).digest("hex") !== sha256) process.exit(1);
+    }
+  ' "$CORPUS" "$REPO/bench/manifest.json"
+}
+if [ "$CORPUS" = "$REPO/bench/generated" ] && ! corpus_matches_manifest; then
   (cd "$REPO" && node bench/generate.mjs)
 fi
 mkdir -p "$OUT_DIR"

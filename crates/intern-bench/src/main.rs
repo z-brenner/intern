@@ -12,6 +12,8 @@
 //!                  [--latency-gate 1.5]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
+//! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
+//!                  [--gold bench/gold.json] [--only id,id] [--note TEXT]
 //! ```
 //!
 //! Exit status: 0 when the run scored; 2 when it regressed against the
@@ -33,7 +35,9 @@ const USAGE: &str = "usage:
                    [--only id,id] [--manifest MANIFEST.json] [--output REPORT.json] [--markdown REPORT.md]
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
-  intern-bench report --input REPORT.json --markdown OUT.md";
+  intern-bench report --input REPORT.json --markdown OUT.md
+  intern-bench merge-recordings --base A.json --add B.json --output C.json
+                   [--gold GOLD.json (default bench/gold.json)] [--only id,id] [--note TEXT]";
 
 /// Arguments that take no value.
 const FLAGS: &[&str] = &["allow-stale", "no-warmup"];
@@ -92,6 +96,19 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
             render_report(
                 &PathBuf::from(required(&values, "input")?),
                 &PathBuf::from(required(&values, "markdown")?),
+            )
+        }
+        "merge-recordings" => {
+            let values = parse(rest, &["base", "add", "output", "gold", "only", "note"])?;
+            intern_bench::merge::merge_command(
+                &PathBuf::from(required(&values, "base")?),
+                &PathBuf::from(required(&values, "add")?),
+                &PathBuf::from(required(&values, "output")?),
+                &values
+                    .get("gold")
+                    .map_or_else(|| PathBuf::from("bench/gold.json"), PathBuf::from),
+                &id_list(values.get("only")),
+                values.get("note").map(String::as_str),
             )
         }
         "--help" | "-h" | "help" => {
@@ -157,16 +174,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
         corpus: PathBuf::from(required(values, "corpus")?),
         gold: PathBuf::from(required(values, "gold")?),
         manifest: path("manifest"),
-        only: values
-            .get("only")
-            .map(|list| {
-                list.split(',')
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        only: id_list(values.get("only")),
         output: path("output"),
         markdown: path("markdown"),
         baseline: path("baseline"),
@@ -183,6 +191,18 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
             .transpose()?,
         mode,
     })
+}
+
+/// `--only a,b`: the ids, blanks dropped.
+fn id_list(list: Option<&String>) -> Vec<String> {
+    list.map(|list| {
+        list.split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 fn parse(arguments: &[String], allowed: &[&str]) -> Result<HashMap<String, String>, String> {

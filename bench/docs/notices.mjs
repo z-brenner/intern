@@ -175,7 +175,7 @@ export function noticeOfDefault() {
       acceptablePartySets: [{ parties: [borrower], relation: 'to' }, { parties: [lender], relation: 'from' }],
       roles: [[borrower, 'subject'], [borrower, 'recipient'], [borrower, 'borrower'], [lender, 'issuer'], [lender, 'lender']],
       forbiddenParties: [[signer, 'lender officer who signs'], [counsel, 'lender\'s outside counsel, copied'], [counselPerson, 'lender\'s counsel, copied']],
-      facts: [[money(total), money(total).slice(1)], [borrower, 'Glasswing'], [loanNumber, 'Loan No']],
+      facts: [[money(total), money(total).slice(1)], [borrower, 'Glasswing'], [loanNumber]],
       forbiddenFacts: [],
       subjectTerms: ['default', 'past-due', 'cure', 'loan'],
       readiness: 'ready',

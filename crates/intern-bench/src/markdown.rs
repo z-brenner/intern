@@ -14,15 +14,26 @@ use crate::{
 /// The misses listed before the rest are left to the JSON.
 const MAX_MISSES: usize = 40;
 
-/// The headline boolean scores, in the order a reader asks about them.
+/// The headline boolean scores, in the order a reader asks about them. Three
+/// are judged only when the answer gives them something to judge; a failed
+/// document is a miss on all of them.
 pub const HEADLINE_RATES: &[(&str, &str)] = &[
     ("filename_correct", "Filename (the whole name)"),
     ("type_correct", "Document type"),
     ("date_correct", "Date"),
-    ("date_role_correct", "Date role"),
+    (
+        "date_role_correct",
+        "Date role (when the reviewed date was chosen)",
+    ),
     ("parties_correct", "Parties"),
-    ("relation_correct", "Relation word"),
-    ("party_role_correct", "Party in the right role"),
+    (
+        "relation_correct",
+        "Relation word (when parties were named)",
+    ),
+    (
+        "party_role_correct",
+        "Party in the right role (when parties were named)",
+    ),
     ("readiness_match", "Ready / review routing"),
     ("description_complete", "Description has every fact"),
     ("description_factual", "Description states nothing false"),
@@ -57,7 +68,8 @@ pub fn render(report: &Report) -> String {
     let _ = writeln!(
         out,
         "Keep this run's JSON, make the change, run again, then:\n\n```text\nintern-bench compare --before before.json --after after.json --markdown diff.md\n```\n\n\
-         It lists every rate's change in points, each document whose score flipped, and the change in p50/p95 of every stage. \
+         It recomputes every rate and count over the documents both runs scored, lists each document whose score flipped, \
+         and gives the change in p50/p95 of every stage over the documents both completed - between two live runs only, since a replay's timings are its recording's. \
          `intern-bench report --input report.json --markdown report.md` re-renders this page from the JSON."
     );
     out
@@ -93,6 +105,13 @@ fn header(out: &mut String, report: &Report) {
             let _ = write!(corpus, " · {count} {status}");
         }
     }
+    let stale = report.records.iter().filter(|record| record.stale).count();
+    if stale > 0 {
+        let _ = write!(
+            corpus,
+            " · {stale} scored from stale replies (--allow-stale)"
+        );
+    }
     if !report.corpus.gold_sha256.is_empty() {
         let _ = write!(corpus, " · gold `{}`", short(&report.corpus.gold_sha256));
     }
@@ -114,10 +133,25 @@ fn header(out: &mut String, report: &Report) {
         );
     }
     if report.timings_source == "recorded" {
-        let _ = writeln!(
-            out,
-            "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run."
-        );
+        let stale = report.records.iter().filter(|record| record.stale).count();
+        if stale == 0 {
+            let _ = writeln!(
+                out,
+                "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run."
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "\n> Replay: every score is this code's except those of the {stale} document(s) scored from replies to prompts the engine no longer builds (`--allow-stale`, marked in Misses), which do not measure this code. Timings and memory are the recording's, taken on the machine above - not measured by this run."
+            );
+        }
+    }
+    if let Some(change) = report
+        .recording
+        .as_ref()
+        .and_then(|recording| recording.configuration_change.as_deref())
+    {
+        let _ = writeln!(out, "\n> **Warning:** {change}.");
     }
     let _ = writeln!(out);
 }
@@ -367,14 +401,13 @@ fn figure(value: Option<f64>) -> String {
 }
 
 fn ocr_row(name: String, layer: &str, figures: &OcrFigures, time: Option<f64>) -> Vec<String> {
-    let pages = if figures.pages_missing > 0 {
-        format!(
-            "{} (+{} unread)",
-            figures.pages_compared, figures.pages_missing
-        )
-    } else {
-        figures.pages_compared.to_string()
-    };
+    let mut pages = figures.pages_compared.to_string();
+    if figures.pages_missing > 0 {
+        let _ = write!(pages, " (+{} unread)", figures.pages_missing);
+    }
+    if figures.pages_failed > 0 {
+        let _ = write!(pages, " (+{} failed, read as empty)", figures.pages_failed);
+    }
     vec![
         name,
         layer.to_owned(),
@@ -424,7 +457,9 @@ fn ocr(out: &mut String, report: &Report) {
     );
     let _ = writeln!(
         out,
-        "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the scans that survive OCR.\n"
+        "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the read pages that survive OCR. \
+         A page the reader does not return (a TIFF frame it does not read) is reported as unread and left out, with what is drawn only on it. \
+         A scan whose extraction failed counts as read empty: every character and value on it missed.\n"
     );
 }
 
@@ -454,6 +489,16 @@ fn stages(out: &mut String, report: &Report) {
         })
         .collect::<Vec<_>>();
     table(out, &["Stage", "Docs", "p50", "p95", "Max"], &timed);
+    let left_out = report.summary.documents
+        - report.summary.completed
+        - report.summary.statuses.get(PENDING).copied().unwrap_or(0);
+    if left_out > 0 {
+        let _ = writeln!(
+            out,
+            "Over the {} documents that completed. The other {left_out} (failed, or not scored) are left out: a failed document's time is how long it took to fail.\n",
+            report.summary.completed
+        );
+    }
     let counted = METRICS
         .iter()
         .filter(|(_, unit)| *unit != Unit::Milliseconds)
@@ -546,8 +591,9 @@ fn misses(out: &mut String, report: &Report) {
             } else {
                 format!(" · trap: {}", record.traps.join("; "))
             };
+            let stale = if record.stale { " · stale reply" } else { "" };
             Some(format!(
-                "- **{}**: expected `{}`, got `{}`{traps}{reasons}",
+                "- **{}**: expected `{}`, got `{}`{traps}{reasons}{stale}",
                 record.id,
                 record
                     .gold_filenames
@@ -560,6 +606,19 @@ fn misses(out: &mut String, report: &Report) {
         .collect::<Vec<_>>();
     let _ = writeln!(out, "## Misses ({})", lines.len());
     let _ = writeln!(out);
+    let stale = report
+        .records
+        .iter()
+        .filter(|record| record.stale)
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    if !stale.is_empty() {
+        let _ = writeln!(
+            out,
+            "Scored from replies to prompts the engine no longer builds (`--allow-stale`): {}.\n",
+            stale.join(", ")
+        );
+    }
     if lines.is_empty() {
         let _ = writeln!(out, "Every scored filename is right.\n");
         return;
@@ -607,10 +666,14 @@ fn baseline(out: &mut String, report: &Report) {
     };
     list(out, "Failures", &comparison.failures);
     if report.mode == "live" {
+        let ungated = comparison
+            .ungated_regressions()
+            .cloned()
+            .collect::<Vec<_>>();
         list(
             out,
             "Per-document flips to worse (reported, not gated live)",
-            &comparison.document_regressions,
+            &ungated,
         );
     }
     list(out, "Improvements", &comparison.document_improvements);

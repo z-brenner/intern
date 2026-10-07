@@ -367,7 +367,7 @@ export function assetPurchaseAgreement() {
       relation: 'between',
       roles: [[buyer, 'buyer'], [seller, 'seller']],
       forbiddenParties: [[members[0], 'member joining only for the non-compete'], [escrowAgent, 'escrow agent'], [contractCounterparties[0], 'counterparty to an assigned contract'], [customers[0], 'largest customer']],
-      facts: [[money(price), '14,250,000', '$14.25 million'], ['preserves', 'jams', 'fruit'], [seller, 'Bramblecrest']],
+      facts: [[money(price), '14,250,000', '$14.25 million'], ['preserves', 'jams'], [seller, 'Bramblecrest']],
       subjectTerms: ['asset purchase', 'preserves', 'purchase price', 'earn-out'],
       readiness: 'ready',
       dateText: [longDate(dated)],

@@ -120,9 +120,13 @@ pub struct GoldAnswer {
     pub party_roles: Vec<PartyRole>,
     #[serde(default)]
     pub forbidden_parties: Vec<Forbidden>,
-    /// Each fact is a list of surface forms; any one of them covers it.
+    /// Each fact is a list of surface forms; any one of them covers it, so
+    /// every form is specific enough that a description containing it states
+    /// the fact (the generator tests hold the gold to this).
     #[serde(default)]
     pub description_facts: Vec<Vec<String>>,
+    /// What a careless reading would assert that the document does not say.
+    /// A value the document prints is never listed: stating it is true.
     #[serde(default)]
     pub description_forbidden: Vec<String>,
     #[serde(default)]

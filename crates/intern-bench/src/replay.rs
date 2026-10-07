@@ -7,11 +7,23 @@
 //! of roles and types, naming) runs as the code now is, so a change to any
 //! of it is scored as a live run would score it.
 //!
+//! The engine is configured as the app configures it now - today's digest
+//! budget and the local server's context - not as the recording says it
+//! was. A change to either in code changes the prompts of the documents it
+//! touches, and replay must see that: had it rebuilt the recorded prompts
+//! from the recorded configuration, every hash would still match and the
+//! old replies would be scored as if the change had not happened. When the
+//! recording's configuration differs from today's, the run also says so
+//! loudly ([`configuration_change`]).
+//!
 //! A prompt the recording has no reply for means the engine now asks
 //! something the model was never asked: the document is `stale_prompt`,
-//! and the run fails unless staleness is allowed. A document whose bytes
-//! differ from the ones recorded is `stale_fixture`; one the recording
-//! lacks is `unrecorded`. Timings and memory are the recording's, flagged.
+//! and the run fails unless staleness is allowed (`--allow-stale` scores it
+//! from the reply the recorded run ended on, marked `stale`). A document
+//! whose bytes differ from the ones recorded is `stale_fixture`; one the
+//! recording lacks is `unrecorded`; either always fails the run and needs
+//! recording again, whatever `--allow-stale` says. Timings and memory are
+//! the recording's, flagged.
 
 use std::{collections::BTreeMap, path::Path};
 
@@ -82,18 +94,46 @@ fn collect(value: &Value, key: Option<&str>, files: &mut BTreeMap<String, String
     }
 }
 
-/// The budget a recording was made with: the engine's default, or a
-/// passthrough-free one of the recorded size.
-pub fn budget_of(recording: &Recording) -> DigestBudget {
-    let default = DigestBudget::default();
-    if recording.budget_characters == default.max_characters {
-        default
-    } else {
-        DigestBudget {
-            passthrough_characters: recording.budget_characters,
-            max_characters: recording.budget_characters,
-        }
+/// The digest budget the app uses now, which replay rebuilds prompts with.
+pub fn current_budget() -> DigestBudget {
+    DigestBudget::default()
+}
+
+/// The context the local server runs with now, which the engine fits
+/// prompts to.
+pub fn current_context() -> Option<usize> {
+    Some(intern_engine::server::CONTEXT_TOKENS as usize)
+}
+
+/// How the configuration the recording was made with differs from the one
+/// the engine uses now, or `None` when they agree. Replay uses today's, so
+/// every document whose prompt the difference changes is `stale_prompt`.
+pub fn configuration_change(recording: &Recording) -> Option<String> {
+    let mut changes = Vec::new();
+    let budget = current_budget().max_characters;
+    if recording.budget_characters != budget {
+        changes.push(format!(
+            "a digest budget of {} characters (now {budget})",
+            recording.budget_characters
+        ));
     }
+    let context = current_context();
+    if recording.context_tokens != context {
+        let describe = |tokens: Option<usize>| {
+            tokens.map_or_else(|| "no stated".to_owned(), |tokens| tokens.to_string())
+        };
+        changes.push(format!(
+            "{} context tokens (now {})",
+            describe(recording.context_tokens),
+            describe(context)
+        ));
+    }
+    (!changes.is_empty()).then(|| {
+        format!(
+            "the recording was made with {}; replay builds every prompt as the engine does now, so each document whose prompt that changes is stale_prompt - record again",
+            changes.join(" and ")
+        )
+    })
 }
 
 pub fn replay_document(
@@ -127,15 +167,48 @@ pub fn replay_document(
                 .ok()
                 .map(|bytes| sha256_hex(&bytes))
         });
-    if let (Some(current), Some(was)) = (&current, &recorded.sha256)
-        && current != was
-    {
+    // A manifest was given to vouch for every document, and this one is not
+    // in it, nor is there a file to hash - CI, where the corpus is not
+    // generated. It is not known to be the document recorded, so it is not
+    // scored as if it were. With no manifest at all, nothing was asked to be
+    // verified; `run` says so once for the whole replay.
+    if current.is_none() && manifest.is_some() {
+        return unscored(
+            STALE_FIXTURE,
+            Some("not in the manifest, and no file to check the recording against".to_owned()),
+        );
+    }
+    if let Some(current) = &current {
+        match &recorded.sha256 {
+            Some(was) if was == current => {}
+            Some(was) => {
+                return unscored(
+                    STALE_FIXTURE,
+                    Some(format!(
+                        "recorded from {}, now {}",
+                        short(was),
+                        short(current)
+                    )),
+                );
+            }
+            // A hand-edited or partial recording: nothing says which bytes
+            // the stored extraction came from.
+            None => {
+                return unscored(
+                    STALE_FIXTURE,
+                    Some("the recording does not say which bytes it was made from".to_owned()),
+                );
+            }
+        }
+    }
+    // The worker picks its reader by extension, so the same bytes under
+    // another name are not the document recorded.
+    if recorded.file != document.file {
         return unscored(
             STALE_FIXTURE,
             Some(format!(
-                "recorded from {}, now {}",
-                short(was),
-                short(current)
+                "recorded as {}, now {}",
+                recorded.file, document.file
             )),
         );
     }
@@ -149,7 +222,7 @@ pub fn replay_document(
                     error: Some(code.clone()),
                     analysis: None,
                     source: None,
-                    budget: budget_of(recording),
+                    budget: current_budget(),
                     exchanges: &[],
                     last_prompt: None,
                     timings: recorded_timings(&recorded.timings),
@@ -166,12 +239,12 @@ pub fn replay_document(
     let log = ExchangeLog::default();
     let lookup = LookupProposer::new(
         &recorded.exchanges,
-        recording.context_tokens,
+        current_context(),
         allow_stale,
         log.clone(),
     );
     let misses = lookup.misses();
-    let engine = Engine::with_proposer(Box::new(lookup)).with_budget(budget_of(recording));
+    let engine = Engine::with_proposer(Box::new(lookup)).with_budget(current_budget());
     let result = engine.analyze(source, document.extension(), &[]);
     let (exchanges, last_prompt) = log.take();
     let missed = misses
@@ -210,7 +283,7 @@ pub fn replay_document(
             error,
             analysis,
             source: Some(source),
-            budget: budget_of(recording),
+            budget: current_budget(),
             exchanges: &exchanges,
             last_prompt: last_prompt.as_deref(),
             timings: recorded_timings(&recorded.timings),
@@ -240,6 +313,40 @@ fn short(sha: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configuration_change_since_the_recording_is_named() {
+        let mut recording = Recording {
+            schema_version: crate::recording::RECORDING_SCHEMA_VERSION,
+            suite: String::new(),
+            recorded_at: String::new(),
+            model: Default::default(),
+            context_tokens: current_context(),
+            budget_characters: current_budget().max_characters,
+            machine: Default::default(),
+            git_commit: None,
+            worker: None,
+            note: String::new(),
+            documents: Vec::new(),
+        };
+        assert_eq!(configuration_change(&recording), None);
+        recording.budget_characters = 9_000;
+        recording.context_tokens = Some(16_384);
+        let change = configuration_change(&recording).unwrap();
+        let budget = current_budget().max_characters;
+        let context = current_context().unwrap();
+        assert!(
+            change.contains(&format!(
+                "a digest budget of 9000 characters (now {budget})"
+            )),
+            "{change}"
+        );
+        assert!(
+            change.contains(&format!("16384 context tokens (now {context})")),
+            "{change}"
+        );
+        assert!(change.ends_with("record again"), "{change}");
+    }
 
     #[test]
     fn the_manifest_is_read_in_the_generators_shape_and_tolerated_in_others() {

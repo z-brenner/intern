@@ -147,6 +147,16 @@ pub enum WorkerEvent {
     },
 }
 
+/// A parsed document as the worker sends it.
+///
+/// Unknown fields are refused, so the worker and this host must agree on
+/// the shape. `timings` is the one optional field: a worker of this build
+/// fills it on every parsed document, and this host accepts a document with
+/// or without it. A host built before the field existed refuses it
+/// (`WORKER_PROTOCOL_INVALID` on every document) even though both sides say
+/// protocol version 1. The version was deliberately not raised: the worker
+/// and the host ship together in one installer and are never paired across
+/// builds, and the field changes nothing the host decides.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerDocument {
@@ -154,7 +164,8 @@ pub struct WorkerDocument {
     warnings: Vec<String>,
     truncated: bool,
     optional_image: Option<WorkerImage>,
-    /// Absent from a worker that predates it.
+    /// Where the worker's time went. Optional: absent from a worker that
+    /// predates it, and never an input to anything the host decides.
     #[serde(default)]
     timings: Option<ExtractionTimings>,
 }

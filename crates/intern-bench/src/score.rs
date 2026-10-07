@@ -5,6 +5,16 @@
 //! define is left out rather than set false, so a rate's denominator is
 //! always the documents that could be right or wrong about it.
 //!
+//! A document that failed - the worker could not read it, or the model
+//! gave no usable answer - is scored on exactly the keys the reviewed
+//! answer would be scored on, and is a miss on every one: each
+//! good-when-true score is false (the conditional ones too: the date role,
+//! the relation word, the party's role), each fraction is 0, and a scan's
+//! OCR counts as read empty. It sprang no trap and was filed under no name,
+//! so the trap and unsafe scores are false. It asserted nothing, so the
+//! description's claims are not checked (`description_factual` and the
+//! claim counts are absent).
+//!
 //! The comparisons the corpus evaluator (`intern-evaluate`) has proven -
 //! what counts as the right type, the same party, the right filename - are
 //! the same here, copied rather than shared because they live in that
@@ -38,12 +48,20 @@ pub fn lower_is_better(key: &str) -> bool {
     key.starts_with("ocr_cer") || key.starts_with("ocr_wer")
 }
 
+/// Fractional scores that are not a share of one: Tesseract's mean
+/// confidence runs from 0 to 100, so it is shown as a number, never as a
+/// percentage or a change in points.
+pub fn is_unit_fraction(key: &str) -> bool {
+    key != "ocr_mean_confidence"
+}
+
 /// What Intern produced for a document, in the terms it is scored on.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Outcome<'a> {
     /// False when extraction or the model failed and there is no analysis.
     /// The document still counts: every answer the gold defines is scored
-    /// as missed, because a person was given no name.
+    /// as missed, because a person was given no name (see the module
+    /// documentation for exactly which keys).
     pub analysed: bool,
     pub filename: Option<&'a str>,
     pub description: &'a str,
@@ -144,11 +162,19 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         );
         flag(scores, "date_present", outcome.document_date.is_some());
         // Knowing why a date is the right one is what keeps picking it
-        // from being luck; a role attached to no date measures nothing.
-        if let Some(role) = gold.date_role.as_deref().filter(|role| !role.is_empty())
-            && outcome.document_date.is_some()
-        {
-            flag(scores, "date_role_correct", outcome.date_role == Some(role));
+        // from being luck. The gold's role is the role of the reviewed
+        // date, so it is judged only when that date was chosen: another
+        // acceptable date can rightly carry another role, and a role
+        // attached to no date, or to a wrong one, measures nothing. A
+        // failed document is a miss here as everywhere.
+        if let Some(role) = gold.date_role.as_deref().filter(|role| !role.is_empty()) {
+            if !outcome.analysed {
+                flag(scores, "date_role_correct", false);
+            } else if outcome.document_date.is_some()
+                && outcome.document_date == gold.document_date.as_deref()
+            {
+                flag(scores, "date_role_correct", outcome.date_role == Some(role));
+            }
         }
     }
     if !dates.is_empty() || !gold.forbidden_dates.is_empty() {
@@ -163,23 +189,42 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
             .extend(trap.map(|trap| format!("date {}", trap.describe())));
     }
 
-    // Parties.
+    // Parties. A failed document named nobody by failing, not by choice:
+    // it matches no set, not even a reviewed answer that names nobody.
     let sets = gold.party_sets();
-    let judged = judge_parties(&sets, outcome.parties);
+    let judged = if outcome.analysed {
+        judge_parties(&sets, outcome.parties)
+    } else {
+        PartyJudgement::failed(&sets)
+    };
     if gold.parties.is_some() {
         let counts = &judged.counts;
         flag(scores, "parties_correct", judged.correct_set.is_some());
         scores.insert("parties_matched".into(), json!(counts.matched));
         scores.insert("parties_expected".into(), json!(counts.expected));
         scores.insert("parties_spurious".into(), json!(counts.spurious));
+        let reviewed_parties = gold.parties.as_deref().unwrap_or_default();
+        let reviewed_relation = gold
+            .party_relation
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        if !outcome.analysed {
+            // Missed wherever the reviewed answer would be judged.
+            if reviewed_relation.is_some() && !reviewed_parties.is_empty() {
+                flag(scores, "relation_correct", false);
+            }
+            if let Some(relation) = reviewed_relation
+                && party_role_correct(document, &sets, relation, reviewed_parties).is_some()
+            {
+                flag(scores, "party_role_correct", false);
+            }
+        }
         // The connecting word is judged for the parties actually named:
         // "for" is right for the tenant of a rent notice and wrong for its
         // landlord, though both are acceptable parties - the landlord with
         // "from".
-        if gold
-            .party_relation
-            .as_deref()
-            .is_some_and(|value| !value.is_empty())
+        if reviewed_relation.is_some()
+            && outcome.analysed
             && !outcome.parties.is_empty()
             && let Some(produced) = outcome.party_relation
         {
@@ -198,7 +243,8 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
                     .any(|&index| sets[index].relation.as_deref() == Some(produced)),
             );
         }
-        if let Some(relation) = outcome.party_relation
+        if outcome.analysed
+            && let Some(relation) = outcome.party_relation
             && let Some(correct) = party_role_correct(document, &sets, relation, outcome.parties)
         {
             flag(scores, "party_role_correct", correct);
@@ -300,10 +346,12 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         .as_deref()
         .filter(|value| matches!(*value, "ready" | "needs_review"))
     {
+        // A failed document was routed nowhere: it is not the review the
+        // gold asks for any more than it is a ready name.
         flag(
             scores,
             "readiness_match",
-            (expected == "ready") == outcome.ready,
+            outcome.analysed && (expected == "ready") == outcome.ready,
         );
     }
     if let Some(correct) = filename_correct {
@@ -313,10 +361,14 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
         }
     }
 
-    // OCR, on the pages that were scanned.
-    if let (Some(truth), Some(source)) = (&document.ocr_truth, texts.source)
-        && let Some(measured) = measure(truth, source)
-    {
+    // OCR, on the pages that were scanned. A scan the extractor failed on
+    // is read as empty rather than left out, so failing is never better
+    // than reading badly.
+    if let Some(truth) = &document.ocr_truth {
+        let measured = match texts.source {
+            Some(source) => measure(truth, source),
+            None => OcrMeasure::unread(truth),
+        };
         let ocr_scores = [
             ("ocr_cer", measured.cer()),
             ("ocr_cer_ci", measured.cer_ci()),
@@ -340,6 +392,11 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
 /// every reviewed or acceptable type, date, and party set, composed by the
 /// engine's own naming with the document's extension. Empty when the gold
 /// gives no date or no type, because then there is no name to compare.
+///
+/// A two-party `between` set is composed in both orders. The prompt never
+/// says which side comes first, and `party_role_correct` already accepts
+/// either, so "between A and B" and "between B and A" are the same right
+/// answer; the reviewed order comes first.
 pub fn gold_filenames(document: &GoldDocument) -> Vec<String> {
     let gold = &document.gold;
     let (Some(gold_type), Some(gold_date)) = (&gold.document_type, &gold.document_date) else {
@@ -366,21 +423,29 @@ pub fn gold_filenames(document: &GoldDocument) -> Vec<String> {
                     .find(|relation| relation.as_str() == value)
             })
             .unwrap_or(PartyRelation::None);
-        for document_type in &types {
-            for date in &dates {
-                let proposal = ValidatedProposal {
-                    document_type: Some((*document_type).clone()),
-                    document_date: Some((*date).clone()),
-                    date_role: None,
-                    parties: set.parties.clone(),
-                    party_relation: relation,
-                    description: String::new(),
-                    confidence: 1.0,
-                    evidence: Evidence::default(),
-                };
-                let name = compose_filename(&proposal, document.extension(), &[]).value;
-                if !names.contains(&name) {
-                    names.push(name);
+        let mut orders = vec![set.parties.clone()];
+        if relation == PartyRelation::Between
+            && let [first, second] = set.parties.as_slice()
+        {
+            orders.push(vec![second.clone(), first.clone()]);
+        }
+        for parties in &orders {
+            for document_type in &types {
+                for date in &dates {
+                    let proposal = ValidatedProposal {
+                        document_type: Some((*document_type).clone()),
+                        document_date: Some((*date).clone()),
+                        date_role: None,
+                        parties: parties.clone(),
+                        party_relation: relation,
+                        description: String::new(),
+                        confidence: 1.0,
+                        evidence: Evidence::default(),
+                    };
+                    let name = compose_filename(&proposal, document.extension(), &[]).value;
+                    if !names.contains(&name) {
+                        names.push(name);
+                    }
                 }
             }
         }
@@ -435,6 +500,23 @@ struct PartyJudgement {
     overlapping: Vec<usize>,
     /// Against the first exact set, or the reviewed one when none is.
     counts: PartyCounts,
+}
+
+impl PartyJudgement {
+    /// A failed document: no set matched, counted against the reviewed
+    /// one.
+    fn failed(sets: &[PartySet]) -> Self {
+        Self {
+            correct_set: None,
+            exact: Vec::new(),
+            overlapping: Vec::new(),
+            counts: PartyCounts {
+                matched: 0,
+                expected: sets.first().map_or(0, |set| set.parties.len()),
+                spurious: 0,
+            },
+        }
+    }
 }
 
 fn judge_parties(sets: &[PartySet], produced: &[String]) -> PartyJudgement {
@@ -774,7 +856,9 @@ mod tests {
         more.gold.acceptable_types = vec!["Commercial Invoice".into()];
         more.gold.acceptable_dates = vec!["2026-03-05".into()];
         let names = gold_filenames(&more);
-        assert_eq!(names.len(), 2 * 2 * 2);
+        // Two types, two dates, and the "from" set plus the two-party
+        // "between" set in either order.
+        assert_eq!(names.len(), 2 * 2 * 3);
         assert!(names.contains(
             &"2026-03-05 Commercial Invoice from Halvorsen Fixture Works LLC.pdf".to_owned()
         ));
@@ -1028,22 +1112,181 @@ mod tests {
         assert_eq!(scored.scores["unsafe_ready"], json!(false));
     }
 
+    /// A failed document is scored on exactly the keys the reviewed answer
+    /// is scored on, every one a miss; it springs no trap and asserts
+    /// nothing.
     #[test]
     fn a_failed_document_misses_every_defined_answer_and_asserts_nothing() {
-        let scored = score(&invoice(), &Outcome::default(), &Texts::default());
+        let document = invoice();
+        let failed = score(&document, &Outcome::default(), &Texts::default());
         for key in [
             "filename_correct",
             "type_correct",
+            "type_present",
             "date_correct",
+            "date_exact",
+            "date_present",
+            "date_role_correct",
             "parties_correct",
+            "relation_correct",
+            "party_role_correct",
+            "readiness_match",
+            "description_complete",
+            "description_specific",
             "ready",
         ] {
-            assert_eq!(scored.scores[key], json!(false), "{key}");
+            assert_eq!(failed.scores[key], json!(false), "{key}");
         }
-        assert_eq!(scored.scores["description_completeness"], json!(0.0));
-        assert_eq!(scored.scores["evidence_recall"], json!(0.0));
-        assert!(!scored.scores.contains_key("description_factual"));
-        assert!(!scored.scores.contains_key("description_claims"));
+        for key in [
+            "date_forbidden",
+            "party_forbidden",
+            "unsafe_ready",
+            "needless_review",
+        ] {
+            assert_eq!(failed.scores[key], json!(false), "{key}: no trap sprung");
+        }
+        assert_eq!(failed.scores["description_completeness"], json!(0.0));
+        assert_eq!(failed.scores["description_specificity"], json!(0.0));
+        assert_eq!(failed.scores["evidence_recall"], json!(0.0));
+        assert_eq!(failed.scores["parties_matched"], json!(0));
+        assert_eq!(failed.scores["parties_expected"], json!(1));
+        assert!(!failed.scores.contains_key("description_factual"));
+        assert!(!failed.scores.contains_key("description_claims"));
+
+        // The keys are the reviewed answer's own, and each is a miss.
+        let parties = halvorsen();
+        let reviewed = score(
+            &document,
+            &outcome(
+                &parties,
+                "from",
+                "2026-03-04 Invoice from Halvorsen Fixture Works LLC.pdf",
+            ),
+            &Texts::default(),
+        );
+        let boolean_keys = |scored: &Scored| {
+            scored
+                .scores
+                .iter()
+                .filter(|(_, value)| value.is_boolean())
+                .map(|(key, _)| key.clone())
+                .filter(|key| key != "description_factual")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(boolean_keys(&failed), boolean_keys(&reviewed));
+        for key in boolean_keys(&reviewed) {
+            if !bad_when_true(&key) && key != "ready" {
+                assert_eq!(reviewed.scores[&key], json!(true), "{key}");
+            }
+        }
+    }
+
+    /// The two answers a failed document could be mistaken as getting
+    /// right: naming nobody where the gold names nobody, and not being
+    /// ready where the gold wants review.
+    #[test]
+    fn a_failed_document_is_not_right_by_naming_nobody_or_by_not_being_ready() {
+        let mut nobody = invoice();
+        nobody.gold.parties = Some(Vec::new());
+        nobody.gold.party_relation = Some("none".into());
+        nobody.gold.acceptable_party_sets = vec![PartySet {
+            parties: Vec::new(),
+            relation: Some("none".into()),
+        }];
+        nobody.gold.expected_readiness = Some("needs_review".into());
+        let failed = score(&nobody, &Outcome::default(), &Texts::default());
+        assert_eq!(failed.scores["parties_correct"], json!(false));
+        assert_eq!(failed.scores["parties_expected"], json!(0));
+        assert_eq!(failed.scores["readiness_match"], json!(false));
+        assert!(
+            !failed.scores.contains_key("relation_correct"),
+            "the reviewed answer names nobody, so no relation word is judged"
+        );
+
+        // A completed outcome that names nobody and asks for review is
+        // right on both.
+        let mut answered = outcome(&[], "none", "x.pdf");
+        answered.ready = false;
+        let right = score(&nobody, &answered, &Texts::default());
+        assert_eq!(right.scores["parties_correct"], json!(true));
+        assert_eq!(right.scores["readiness_match"], json!(true));
+    }
+
+    /// The gold's role is the reviewed date's: it is judged only when that
+    /// date was chosen.
+    #[test]
+    fn the_date_role_is_judged_only_for_the_reviewed_date() {
+        let mut document = invoice();
+        document.gold.date_role = Some("effective".into());
+        document.gold.acceptable_dates = vec!["2026-02-18".into()];
+        let parties = halvorsen();
+        let role = |date: &str, role: &str| {
+            let mut answer = outcome(&parties, "from", "x.pdf");
+            answer.document_date = Some(date);
+            answer.date_role = Some(role);
+            score(&document, &answer, &Texts::default())
+                .scores
+                .get("date_role_correct")
+                .cloned()
+        };
+        assert_eq!(role("2026-03-04", "effective"), Some(json!(true)));
+        assert_eq!(role("2026-03-04", "issuance"), Some(json!(false)));
+        // The acceptable date with its own role, and the trap date with the
+        // reviewed role: neither is judged against the reviewed date's role.
+        assert_eq!(role("2026-02-18", "issuance"), None);
+        assert_eq!(role("2026-04-03", "effective"), None);
+    }
+
+    /// "between" names two sides in no particular order.
+    #[test]
+    fn a_two_party_between_name_is_right_in_either_order() {
+        let mut agreement = invoice();
+        agreement.gold.document_type = Some("Master Services Agreement".into());
+        agreement.gold.parties = Some(vec![
+            "Cedarmark Cloud Services Inc.".into(),
+            "Pinehollow Credit Union".into(),
+        ]);
+        agreement.gold.party_relation = Some("between".into());
+        agreement.gold.acceptable_party_sets.clear();
+        agreement.gold.forbidden_parties.clear();
+        agreement.gold.party_roles = vec![
+            PartyRole {
+                name: "Cedarmark Cloud Services Inc.".into(),
+                role: "counterparty".into(),
+            },
+            PartyRole {
+                name: "Pinehollow Credit Union".into(),
+                role: "counterparty".into(),
+            },
+        ];
+        let names = gold_filenames(&agreement);
+        assert_eq!(
+            names,
+            vec![
+                "2026-03-04 Master Services Agreement between Cedarmark Cloud Services Inc and Pinehollow Credit Union.pdf",
+                "2026-03-04 Master Services Agreement between Pinehollow Credit Union and Cedarmark Cloud Services Inc.pdf",
+            ],
+            "the reviewed order first"
+        );
+        let reversed = vec![
+            "Pinehollow Credit Union".to_owned(),
+            "Cedarmark Cloud Services Inc.".to_owned(),
+        ];
+        let mut answer = outcome(&reversed, "between", &names[1]);
+        answer.document_type = Some("Master Services Agreement");
+        let scores = score(&agreement, &answer, &Texts::default()).scores;
+        for key in [
+            "filename_correct",
+            "parties_correct",
+            "relation_correct",
+            "party_role_correct",
+        ] {
+            assert_eq!(scores[key], json!(true), "{key}");
+        }
+        assert_eq!(scores["unsafe_ready"], json!(false));
+        // A one-sided relation keeps its order: only "between" is
+        // symmetric.
+        assert_eq!(gold_filenames(&invoice()).len(), 3);
     }
 
     #[test]

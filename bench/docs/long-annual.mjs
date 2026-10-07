@@ -1,6 +1,7 @@
 /// A one-hundred-page annual report of a farmers' cooperative. The cover
-/// says only "Fiscal Year 2026"; the report is dated once, on the
-/// independent auditors' report in the middle of the book. Every page is
+/// says only "Fiscal Year 2026"; the report is dated on the independent
+/// auditors' report in the middle of the book, and the date is repeated
+/// only in the subsequent-events note of the financial statements. Every page is
 /// built from a data model of divisions, locations, members, and accounts,
 /// so no two pages say the same thing.
 import { Flow } from '../lib/layout.mjs';
@@ -801,6 +802,10 @@ export function annualReport() {
   const { bytes, text } = digitalPdf(pages);
   const datedPage = pageContaining(text, `Kestrel Ridge, Utah ${longDate(reportDate)}`.replace(/\s+/g, ' '));
   if (datedPage < 40 || datedPage > 60) throw new Error(`${id}: the report date must fall on pages 40-60, not ${datedPage}`);
+  const flat = (value) => value.replace(/\s+/g, ' ');
+  const repeatedPage = pageContaining(text, flat(`subsequent events through ${longDate(reportDate)}`));
+  const datedPages = text.filter((page) => flat(page).includes(flat(longDate(reportDate)))).length;
+  if (datedPages !== 2) throw new Error(`${id}: the notes say the report date is on two pages, but ${datedPages} state it`);
   if (pages.length !== 100) throw new Error(`${id}: expected 100 pages, laid out ${pages.length}`);
   return result({
     id,
@@ -812,7 +817,7 @@ export function annualReport() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['pages_100', 'information_dense', 'middle_fact', 'financial', 'table', 'competing_dates', 'irrelevant_names'],
-    notes: `The cover says only "Fiscal Year 2026" and the members' letter is undated. The report is dated once, under the independent auditors' signature on page ${datedPage}: ${longDate(reportDate)}. The fiscal year end (${longDate(yearEnd)}) is stated throughout and is accepted. The prior year end, the annual meeting (${longDate(meeting)}), and the patronage payment date (${longDate(patronageDate)}) are traps. Every page carries its own figures: three pages for each of six divisions, two for each of twelve locations, a page for each of ten member counties, ${risks.length} risk factors, the audited statements, and ${notes.length} notes. Directors, managers, and the auditors are named; the report is the cooperative's.`,
+    notes: `The cover says only "Fiscal Year 2026" and the members' letter is undated. The report is dated under the independent auditors' signature on page ${datedPage}: ${longDate(reportDate)}. The date is repeated once, in the subsequent-events note on page ${repeatedPage}, and nowhere else. The fiscal year end (${longDate(yearEnd)}) is stated throughout and is accepted. The prior year end, the annual meeting (${longDate(meeting)}), and the patronage payment date (${longDate(patronageDate)}) are traps. Every page carries its own figures: three pages for each of six divisions, two for each of twelve locations, a page for each of ten member counties, ${risks.length} risk factors, the audited statements, and ${notes.length} notes. Directors, managers, and the auditors are named; the report is the cooperative's.`,
     gold: gold({
       type: 'Annual Report',
       acceptableTypes: ['Annual Report Fiscal Year 2026'],
@@ -825,7 +830,7 @@ export function annualReport() {
       acceptablePartySets: [{ parties: [COOP], relation: 'for' }],
       roles: [[COOP, 'issuer'], [COOP, 'subject']],
       forbiddenParties: [[AUDITOR, 'independent auditors'], [directors[0], 'board chair'], [executives[0], 'chief executive']],
-      facts: [['Fiscal Year 2026', 'fiscal 2026', 'FY2026'], ['cooperative', 'Cooperative'], [`$${k(totalRevenue[4])}`, k(totalRevenue[4]), 'patronage']],
+      facts: [['Fiscal Year 2026', 'fiscal 2026', 'FY2026'], ['Tamsin Valley Farmers Cooperative', 'Tamsin Valley'], [`$${k(totalRevenue[4])}`, k(totalRevenue[4])]],
       subjectTerms: ['annual report', 'cooperative', 'patronage', 'grain', 'members'],
       readiness: 'ready',
       dateText: [longDate(reportDate)],

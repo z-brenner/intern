@@ -15,7 +15,7 @@ use crate::{
     machine::{MachineInfo, ModelInfo},
     memory::{INTERVAL_MS, MemoryPeaks},
     ocr::OcrMeasure,
-    record::{DocumentRecord, PENDING, is_unscorable},
+    record::{COMPLETED, DocumentRecord},
     stats::{Distribution, round},
     timing::{self, METRICS},
 };
@@ -81,6 +81,10 @@ pub struct RecordingInfo {
     pub git_commit: Option<String>,
     #[serde(default)]
     pub note: String,
+    /// How the digest budget or context the recording was made with differs
+    /// from the engine's now; replay uses today's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_change: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -165,7 +169,7 @@ pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> S
     for record in records {
         summary.documents += 1;
         *summary.statuses.entry(record.status.clone()).or_insert(0) += 1;
-        if record.status == crate::record::COMPLETED {
+        if record.status == COMPLETED {
             summary.completed += 1;
             if record.readiness.as_deref() == Some("needs_review") {
                 reviewed += 1;
@@ -275,7 +279,9 @@ pub fn groups(records: &[DocumentRecord]) -> BTreeMap<String, BTreeMap<String, S
         .collect()
 }
 
-/// Distributions of every timing metric, overall and by slice.
+/// Distributions of every timing metric, overall and by slice, over the
+/// documents that completed (see [`timed`]); each distribution's `count`
+/// says how many had the metric.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Latency {
     #[serde(default)]
@@ -288,10 +294,15 @@ pub struct Latency {
     pub by_text_layer: BTreeMap<String, BTreeMap<String, Distribution>>,
 }
 
-/// Records whose timings describe real work: not pending, and not a
-/// replay that could not run.
-fn timed(record: &DocumentRecord) -> bool {
-    record.status != PENDING && !is_unscorable(&record.status)
+/// Records whose timings describe the whole pipeline: the documents that
+/// completed. A failed document's time is how long it took to fail - an
+/// extraction failure has no analysis time at all, a model failure no
+/// validation or naming - so mixing it in would give each stage a
+/// different set of documents, and a slow document that starts failing
+/// would make p95 look faster. Failures are counted in the summary's
+/// statuses instead.
+pub fn timed(record: &DocumentRecord) -> bool {
+    record.status == COMPLETED
 }
 
 pub fn distributions<'a>(
@@ -338,6 +349,9 @@ pub fn latency(records: &[DocumentRecord]) -> Latency {
 pub struct OcrFigures {
     pub pages_compared: usize,
     pub pages_missing: usize,
+    /// Pages of scans whose extraction failed, counted as read empty.
+    #[serde(default)]
+    pub pages_failed: usize,
     pub cer: Option<f64>,
     pub cer_ci: Option<f64>,
     pub wer: Option<f64>,
@@ -353,6 +367,7 @@ impl OcrFigures {
         Self {
             pages_compared: measure.pages_compared,
             pages_missing: measure.pages_missing,
+            pages_failed: measure.pages_failed,
             cer: rounded(measure.cer()),
             cer_ci: rounded(measure.cer_ci()),
             wer: rounded(measure.wer()),
@@ -379,6 +394,7 @@ pub struct OcrRow {
 pub struct OcrReport {
     /// Distances summed over every compared page of every document, over
     /// the truth's total length; the targeted accuracies likewise pooled.
+    /// A scan whose extraction failed is in it, read as empty.
     #[serde(default)]
     pub aggregate: Option<OcrFigures>,
     #[serde(default)]
@@ -387,14 +403,12 @@ pub struct OcrReport {
 
 pub fn ocr_report(records: &[DocumentRecord]) -> OcrReport {
     let mut pooled = OcrMeasure::default();
-    let mut confidences = Vec::new();
     let mut rows = Vec::new();
     for record in records {
         let Some(measure) = &record.ocr else {
             continue;
         };
         pooled.accumulate(measure);
-        confidences.extend(measure.mean_confidence);
         rows.push(OcrRow {
             id: record.id.clone(),
             text_layer: record.text_layer.clone(),
@@ -405,8 +419,6 @@ pub fn ocr_report(records: &[DocumentRecord]) -> OcrReport {
     if rows.is_empty() {
         return OcrReport::default();
     }
-    pooled.mean_confidence = (!confidences.is_empty())
-        .then(|| confidences.iter().sum::<f64>() / confidences.len() as f64);
     OcrReport {
         aggregate: Some(OcrFigures::of(&pooled)),
         documents: rows,
@@ -604,10 +616,15 @@ mod tests {
         assert_eq!(groups["page_bucket"]["10-24"].documents, 1);
         assert_eq!(groups["category"]["table"].documents, 2);
 
-        let latency = latency(&records);
+        let mut failed = records[1].clone();
+        failed.id = "d".into();
+        failed.status = "model_failed".into();
+        let mut timed = records.clone();
+        timed.push(failed);
+        let latency = latency(&timed);
         assert_eq!(
             latency.overall["total_ms"].count, 2,
-            "the stale record took no time"
+            "only completed documents: the stale one took no time, the failed one took time to fail"
         );
         assert_eq!(latency.overall["total_ms"].p95, 300.0);
         assert_eq!(latency.by_page_bucket["1"]["total_ms"].p50, 100.0);

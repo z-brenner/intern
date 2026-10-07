@@ -165,7 +165,7 @@ export function scanMixedAmendment() {
       relation: 'between',
       roles: [[supplier, 'seller'], [distributor, 'buyer']],
       forbiddenParties: [['Odalys Kettleborough', 'signatory'], ['Joaquin Halloran', 'signatory']],
-      facts: [['Oregon', 'Washington', 'territory'], ['minimum', 'price schedule', 'prices'], [longDate(newEnd), '2029']],
+      facts: [['Oregon', 'Washington'], ['$1,850,000', '1,850,000'], [longDate(newEnd), '2029']],
       subjectTerms: ['amendment', 'distribution', 'territory', 'kitchenware'],
       readiness: 'either',
       dateText: [longDate(own)],
@@ -239,7 +239,7 @@ export function scanUpsideDownPo() {
   flow.paragraph('Purchasing - 41 Starling Way, Westharrow, MI 49101 - (269) 555-0153', { size: 10, face: 'sans', after: 12 });
   flow.heading('PURCHASE ORDER', { level: 1, size: 17, face: 'sans-bold', before: 0 });
   flow.fields([['PO Number:', number], ['PO Date:', longDate(poDate)], ['Vendor:', `${vendor}, 6 Mill Race Lane, Linden Cross, PA 19047`], ['Ship To:', `${buyer}, Receiving, 41 Starling Way, Westharrow, MI 49101`], ['Deliver By:', longDate(deliver)], ['Terms:', 'Net 45, FOB destination']], { labelWidth: 96, size: 11 });
-  const lines = [['Ripstop nylon, 70D, forest green (yards)', 1200, 685], ['Waterproof-breathable membrane laminate (yards)', 800, 1240], ['Polyester mesh, 40 in. (yards)', 450, 395], ['YKK-compatible coil zipper tape, #5 (yards)', 2000, 88]];
+  const lines = [['Ripstop nylon, 70D, forest green (yards)', 1200, 685], ['Waterproof-breathable membrane laminate (yards)', 800, 1240], ['Polyester mesh, 40 in. (yards)', 450, 395], ['Coil zipper tape, #5 (yards)', 2000, 88]];
   for (const [description, quantity, unit] of lines) flow.paragraph(`${description}: ${quantity} at ${money(unit)} = ${money(quantity * unit)}`, { size: 11, after: 3 });
   const total = lines.reduce((sum, [, quantity, unit]) => sum + quantity * unit, 0);
   flow.paragraph(`Order total: ${money(total)}`, { face: 'sans-bold', size: 12, before: 6 });
@@ -331,7 +331,7 @@ export function scanSkewedNotice() {
       acceptablePartySets: [{ parties: [tenant], relation: 'to' }, { parties: [landlord], relation: 'from' }],
       roles: [[tenant, 'subject'], [tenant, 'recipient'], [tenant, 'tenant'], [landlord, 'issuer'], [landlord, 'landlord']],
       forbiddenParties: [['Greer Sandoval', 'property manager who signs']],
-      facts: [['nonrenewal', 'not renew', 'will not renew'], ['Apartment 12B', '12B'], [longDate(ends), 'September 30']],
+      facts: [[landlord, 'Harrowgate'], ['Apartment 12B', '12B'], [longDate(ends), 'September 30']],
       subjectTerms: ['nonrenewal', 'lease', 'renovation', 'move out'],
       readiness: 'either',
       dateText: [longDate(noticeDate)],
@@ -406,7 +406,7 @@ export function scanLowResReceipt() {
       relation: 'from',
       roles: [[store, 'issuer'], [store, 'seller']],
       forbiddenParties: [],
-      facts: [[money(subtotal + tax), amount(subtotal + tax)], ['fence', 'fencing', 'T-POST', 'barbed wire']],
+      facts: [[money(subtotal + tax), amount(subtotal + tax)], ['barbed wire', 'T-POST']],
       subjectTerms: ['fencing', 'fence staples', 'barbed wire', 'hardware'],
       readiness: 'needs_review',
       dateText: [numericDate(saleDate)],
@@ -521,7 +521,7 @@ export function scanFaintLetter() {
       acceptablePartySets: [{ parties: [employer], relation: 'to' }, { parties: [employee], relation: 'for' }],
       roles: [[employee, 'issuer'], [employee, 'employee'], [employee, 'subject'], [employer, 'recipient'], [employer, 'employer']],
       forbiddenParties: [['Dr. Rufus Pemberton', 'practice owner the letter is addressed to']],
-      facts: [['resignation', 'resigns', 'resigning'], [employer, 'Ashgrove'], ['Lead Veterinary Technician', 'veterinary technician']],
+      facts: [['March 27, 2026', 'March 27'], [employer, 'Ashgrove'], ['Lead Veterinary Technician', 'veterinary technician']],
       subjectTerms: ['resignation', 'veterinary', 'last day'],
       readiness: 'either',
       dateText: [longDate(letterDate)],
@@ -629,7 +629,7 @@ export function scanAgreement() {
       relation: 'between',
       roles: [[supplier, 'seller'], [distributor, 'buyer']],
       forbiddenParties: [['Kasimir Fontaine', 'signatory'], ['Delphine Corrigan', 'signatory']],
-      facts: [['microscopes', 'microscope', 'optical'], ['exclusive'], ['Territory', 'western United States', 'California']],
+      facts: [['microscopes', 'microscope'], ['Basalt Ridge Optics Inc.', 'Basalt Ridge'], ['western United States', 'California']],
       subjectTerms: ['distribution', 'microscopes', 'exclusive', 'territory'],
       readiness: 'either',
       dateText: [longDate(effective)],
@@ -740,7 +740,7 @@ export function scanLease() {
       relation: 'between',
       roles: [[landlord, 'landlord'], [tenant, 'tenant']],
       forbiddenParties: [['Saoirse Whitcombe', 'signatory'], ['Kingsfold Property Services', 'landlord\'s property manager']],
-      facts: [['Suite 400', 'fourth floor'], ['Palisade Tower'], ['seven', '7-year', '2033']],
+      facts: [['Suite 400', 'fourth floor'], ['Palisade Tower'], ['14,860 rentable square feet', '14,860']],
       subjectTerms: ['office lease', 'Suite 400', 'Palisade Tower', 'tenant improvement'],
       readiness: 'either',
       dateText: [longDate(dated)],
@@ -831,7 +831,7 @@ export function ocrCorruptedInvoice() {
       relation: 'from',
       roles: [[issuer, 'issuer'], [customer, 'customer']],
       forbiddenParties: [[customer, 'bill-to customer']],
-      facts: [[money(subtotal + tax), amount(subtotal + tax), money(subtotal + tax).replace(',', '')], ['stair treads', 'millwork', 'oak']],
+      facts: [[money(subtotal + tax), amount(subtotal + tax), money(subtotal + tax).replace(',', '')], ['stair treads', 'oak']],
       subjectTerms: ['millwork', 'stair treads', 'invoice'],
       readiness: 'needs_review',
       dateText: [corruptedDate],
@@ -893,8 +893,8 @@ export function scanFaxTwoFrames() {
       acceptablePartySets: [{ parties: [recipient], relation: 'to' }],
       roles: [[sender, 'issuer'], [sender, 'seller'], [recipient, 'recipient'], [recipient, 'customer']],
       forbiddenParties: [],
-      facts: [['propeller'], ['$6,840.00', '6,840'], ['N0612X', quoteNumber]],
-      subjectTerms: ['propeller overhaul', 'quotation', 'aircraft'],
+      facts: [['propeller'], [recipient, 'Highmeadow Air Charter'], ['N0612X']],
+      subjectTerms: ['propeller overhaul', 'quotation'],
       readiness: 'needs_review',
       dateText: [longDate(sent)],
     }),
@@ -980,7 +980,7 @@ export function scanPatientIntakeForm() {
       acceptablePartySets: [{ parties: [patient], relation: 'from' }, { parties: [clinic], relation: 'with' }],
       roles: [[patient, 'subject'], [patient, 'patient'], [patient, 'issuer'], [clinic, 'provider'], [clinic, 'counterparty']],
       forbiddenParties: [['Rufus Kowalczyk', 'emergency contact'], ['Dr. Saoirse Brightwater', 'requested physician'], ['Meadowlark Health Plan', 'insurance plan']],
-      facts: [[patient, 'Kowalczyk'], [clinic, 'Calder Way'], ['intake', 'new patient']],
+      facts: [[patient, 'Kowalczyk'], [clinic, 'Calder Way'], ['Meadowlark Health Plan', 'Meadowlark']],
       subjectTerms: ['intake', 'new patient', 'insurance', 'medical history'],
       readiness: 'either',
       dateText: [numericDate(signed)],

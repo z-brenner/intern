@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,6 +95,36 @@ function printed(document: BenchDocument, texts: Record<string, string[]>) {
   return document.clean_text !== undefined ? normalise(document.clean_text) : carried(document, texts);
 }
 
+/// What the printed page shows of the part Intern reads. The worker reads
+/// only the first frame of a TIFF, so a fact drawn only on a later frame is
+/// one no description built from the reading could state.
+function readable(document: BenchDocument, texts: Record<string, string[]>) {
+  if (document.format === 'tiff') return normalise(texts[document.id][0]);
+  return printed(document, texts);
+}
+
+/// Whether a page states a fact: its words in order, or - for an amount or
+/// other number - the same value however the page groups it.
+function states(page: string, fact: string) {
+  if (loose(page).includes(loose(fact))) return true;
+  const value = fact.replace(/[$,%\s]/g, '');
+  if (!/^\d+(\.\d+)?$/.test(value)) return false;
+  return (normalise(page).match(/\d[\d,]*(\.\d+)?/g) ?? []).some((number) => Number(number.replace(/,/g, '')) === Number(value));
+}
+
+/// Words that state nothing on their own.
+const STOP_WORDS = new Set(['a', 'an', 'the', 'of', 'and', 'or', 'for', 'to', 'in', 'on', 'at', 'by', 'with', 'from', 'as', 'per', 'no', 'not', 'will', 'is', 'this', 'that']);
+const NUMBER_WORDS = new Set([
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen',
+  'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety', 'hundred',
+  'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth',
+]);
+
+/// Whether a form states a number: digits, or a number spelled out.
+function statesNumber(form: string) {
+  return /\d/.test(form) || form.toLowerCase().split(/[^a-z]+/).some((word) => NUMBER_WORDS.has(word));
+}
+
 async function inventory(root: string) {
   const names = (await readdir(root)).sort();
   return Promise.all(names.map(async (name) => ({ name, sha256: createHash('sha256').update(await readFile(join(root, name))).digest('hex') })));
@@ -162,6 +192,49 @@ describe('InternBench corpus generator', () => {
   it('writes byte-identical files on every run', async () => {
     expect(again.manifest).toEqual(generated.manifest);
     expect(await inventory(second)).toEqual(await inventory(first));
+  });
+
+  it('rebuilds only the --only documents and keeps the rest of the corpus', async () => {
+    const corpus = await mkdtemp(join(tmpdir(), 'internbench-only-'));
+    try {
+      await cp(first, corpus, { recursive: true });
+      const rebuilt = await generateBench(corpus, { only: ['invoice-date-in-table'] });
+      expect(rebuilt.manifest.files.map((entry) => entry.file)).toEqual(['invoice-date-in-table.pdf']);
+      // Every other document is still there, and the manifest on disk is
+      // the full one again, not a list of the one document rebuilt.
+      expect(await inventory(corpus)).toEqual(await inventory(first));
+      expect(await readFile(join(corpus, 'manifest.json'), 'utf8')).toBe(await readFile(join(first, 'manifest.json'), 'utf8'));
+    } finally {
+      await rm(corpus, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the manifest of a corpus that holds only some documents as partial', async () => {
+    const corpus = await mkdtemp(join(tmpdir(), 'internbench-partial-'));
+    try {
+      await generateBench(corpus, { only: ['invoice-date-in-table'] });
+      const manifest = JSON.parse(await readFile(join(corpus, 'manifest.json'), 'utf8'));
+      expect(manifest.partial).toBe(true);
+      expect(manifest.files.map((entry: { file: string }) => entry.file)).toEqual(['invoice-date-in-table.pdf']);
+      // A full build over it replaces the files it listed and drops the mark.
+      await generateBench(corpus);
+      expect(await inventory(corpus)).toEqual(await inventory(first));
+    } finally {
+      await rm(corpus, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('refuses to write into a directory that is not an earlier output', async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), 'internbench-elsewhere-'));
+    try {
+      await writeFile(join(elsewhere, 'notes.txt'), 'not a corpus');
+      await expect(generateBench(elsewhere, { only: ['invoice-date-in-table'] })).rejects.toThrow(/holds no InternBench manifest/);
+      await expect(generateBench(elsewhere)).rejects.toThrow(/holds no InternBench manifest/);
+      expect(await readdir(elsewhere)).toEqual(['notes.txt']);
+      await expect(generateBench(BENCH)).rejects.toThrow(/refusing to write the corpus/);
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it('produces exactly the reviewed gold', async () => {
@@ -240,11 +313,65 @@ describe('InternBench corpus generator', () => {
     for (const document of documents) {
       const where = document.id;
       const text = loose(printed(document, generated.texts));
+      const read = loose(readable(document, generated.texts));
       const { gold } = document;
       const names = [...gold.parties, ...gold.acceptable_party_sets.flatMap((set) => set.parties), ...gold.party_roles.map((entry) => entry.name), ...gold.forbidden_parties.map((entry) => entry.name)];
       for (const name of names) expect(text.includes(loose(name)), `${where}: "${name}"`).toBe(true);
-      for (const group of gold.description_facts) expect(group.some((fact) => text.includes(loose(fact))), `${where}: none of ${JSON.stringify(group)}`).toBe(true);
-      for (const term of gold.subject_terms) expect(text.includes(loose(term)), `${where}: subject term "${term}"`).toBe(true);
+      // A description is built from what Intern reads, so what it should
+      // state must be on a page Intern reads.
+      for (const group of gold.description_facts) expect(read.includes(loose(group[0])), `${where}: fact "${group[0]}" is not on a page Intern reads`).toBe(true);
+      for (const term of gold.subject_terms) expect(read.includes(loose(term)), `${where}: subject term "${term}"`).toBe(true);
+    }
+  });
+
+  it('never forbids a fact the document states', () => {
+    // description_forbidden holds what a careless reading would assert and
+    // the document does not say: a description containing one is scored as
+    // stating something false. A value the page prints (an invoice's real
+    // subtotal) is true, so it may never be listed.
+    const invoice = documents.find((document) => document.id === 'invoice-date-in-table');
+    expect(invoice && states(printed(invoice, generated.texts), '$4,296.75'), 'the check finds the invoice subtotal it was written for').toBe(true);
+    for (const document of documents) {
+      const text = printed(document, generated.texts);
+      for (const fact of document.gold.description_forbidden) {
+        expect(states(text, fact), `${document.id}: description_forbidden "${fact}" is printed on the document`).toBe(false);
+      }
+    }
+  });
+
+  it('lists only specific, stated spellings of each description fact', () => {
+    // A fact counts as covered when any of its forms is in the description
+    // (a substring, ignoring case), so every form must say the fact itself:
+    // not a stop word, not a word the document type already says, not
+    // another of the document's subject terms (which any description of it
+    // uses), and - for a fact that is a number - not the number's label
+    // without the number ("Loan No" for a loan number, "vendor" for "32
+    // vendors").
+    for (const document of documents) {
+      const where = document.id;
+      const { gold } = document;
+      const typeWords = new Set(loose(gold.document_type).split(' '));
+      const subjects = new Set(gold.subject_terms.map(loose));
+      for (const group of gold.description_facts) {
+        const [primary, ...alternates] = group;
+        const forms = group.map((form) => normalise(form).toLowerCase());
+        expect(new Set(forms).size, `${where}: ${JSON.stringify(group)} repeats a form (matching ignores case)`).toBe(forms.length);
+        for (const form of group) {
+          const words = loose(form).split(' ').filter(Boolean);
+          expect(words.every((word) => STOP_WORDS.has(word) || typeWords.has(word)), `${where}: "${form}" says no more than the type "${gold.document_type}"`).toBe(false);
+        }
+        for (const alternate of alternates) {
+          // A shorter spelling of the primary ("Basalt Telemetry" for
+          // "Basalt Telemetry Inc.") states it, whatever else it is.
+          const shortening = loose(primary).includes(loose(alternate));
+          if (!shortening) expect(subjects.has(loose(alternate)), `${where}: "${alternate}" is a subject term, not a statement of "${primary}"`).toBe(false);
+          if (!statesNumber(primary)) continue;
+          // An address may drop its house number ("Gristmill Lane"); any
+          // other spelling of a number fact keeps the number.
+          const street = shortening && loose(alternate).split(' ').length >= 2;
+          expect(statesNumber(alternate) || street, `${where}: "${alternate}" drops the number "${primary}" states`).toBe(true);
+        }
+      }
     }
   });
 

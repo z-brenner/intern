@@ -280,7 +280,7 @@ export function dataProcessingAgreement() {
       relation: 'between',
       roles: [[controller, 'client'], [processor, 'provider']],
       forbiddenParties: SUBPROCESSORS.slice(0, 4).map(([name]) => [name, 'sub-processor listed in Annex III']),
-      facts: [['sub-processor', 'sub-processors', 'Sub-processor'], ['student', 'students', 'classroom'], ['48 hours', 'forty-eight hours', 'breach']],
+      facts: [['Skylark Analytics Ltd.', 'Skylark'], ['classroom analytics', 'classroom'], ['forty-eight hours', '48 hours']],
       subjectTerms: ['data processing', 'sub-processors', 'GDPR', 'student data'],
       readiness: 'ready',
       dateText: [longDate(effective)],
