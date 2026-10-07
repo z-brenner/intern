@@ -103,6 +103,7 @@ fn invoice_reply() -> ModelProposal {
             document_type: Some("INVOICE".into()),
             parties: vec!["HALVORSEN FIXTURE WORKS, LLC".into()],
         },
+        facts: None,
     }
 }
 
@@ -123,6 +124,7 @@ fn notice_reply() -> ModelProposal {
             document_type: Some("NOTICE OF RENT INCREASE".into()),
             parties: vec!["To: Pell Andersby, Unit 4, 22 Wren Street".into()],
         },
+        facts: None,
     }
 }
 

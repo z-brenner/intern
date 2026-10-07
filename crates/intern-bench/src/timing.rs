@@ -290,6 +290,7 @@ mod tests {
                     confidence: 0.5,
                     needs_review: false,
                     evidence: intern_engine::Evidence::default(),
+                    facts: None,
                 },
                 token_confidence: None,
             },

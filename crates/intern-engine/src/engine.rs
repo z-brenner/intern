@@ -216,6 +216,7 @@ impl Engine {
                     prompt_characters,
                     estimated_prompt_tokens,
                     model,
+                    ..AnalysisTelemetry::default()
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
@@ -242,6 +243,7 @@ pub fn finish(
     telemetry: AnalysisTelemetry,
 ) -> DocumentAnalysis {
     let filename = compose_filename(&outcome.proposal, extension, existing_names).value;
+    let outcome_facts = outcome.facts;
     DocumentAnalysis {
         filename,
         description: outcome.proposal.description.clone(),
@@ -253,6 +255,7 @@ pub fn finish(
         stated_dates: stated_dates(digest),
         text_fingerprint: None,
         token_confidence: None,
+        facts: outcome_facts,
     }
 }
 
@@ -404,6 +407,7 @@ mod tests {
                 confidence: 0.9,
                 needs_review: false,
                 evidence: crate::domain::Evidence::default(),
+                facts: None,
             },
             &digest,
         );
@@ -445,6 +449,7 @@ mod tests {
                         document_type: Some("CONSULTING AGREEMENT".into()),
                         parties: vec!["Acme Corporation".into()],
                     },
+                    facts: None,
                 },
                 self.0,
             ))

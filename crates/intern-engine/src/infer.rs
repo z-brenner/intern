@@ -1212,6 +1212,7 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
                         confidence: 0.9,
                         needs_review: false,
                         evidence: crate::domain::Evidence::default(),
+                        facts: None,
                     },
                     &digest,
                 );

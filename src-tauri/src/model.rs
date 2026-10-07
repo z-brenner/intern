@@ -458,8 +458,10 @@ mod tests {
                 confidence: 0.8,
                 needs_review: false,
                 evidence: Evidence::default(),
+                facts: None,
             }),
             stated_dates: Vec::new(),
+            facts: None,
         }
     }
 

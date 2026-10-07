@@ -165,6 +165,7 @@ fn analysis(
                 .into_iter()
                 .collect(),
         },
+        facts: None,
     };
     let outcome = validate(proposal, &digest);
     finish(outcome, &digest, "pdf", &[], AnalysisTelemetry::default())

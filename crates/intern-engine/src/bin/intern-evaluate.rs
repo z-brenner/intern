@@ -1413,6 +1413,7 @@ mod tests {
                 document_type: Some("INVOICE".into()),
                 parties: vec!["Acme Corporation, 500 Foundry Road".into()],
             },
+            facts: None,
         }
     }
 

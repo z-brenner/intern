@@ -371,9 +371,7 @@ mod tests {
 
     #[test]
     fn the_lookup_answers_recorded_prompts_and_counts_the_rest() {
-        let request = ModelRequest {
-            prompt: "a prompt".into(),
-        };
+        let request = ModelRequest::new("a prompt");
         let recorded = Exchange {
             prompt_sha256: request.sha256(),
             prompt_characters: 8,
@@ -391,9 +389,7 @@ mod tests {
             EngineErrorCode::ModelReplyTruncated
         );
         assert!(misses.lock().unwrap().is_empty());
-        let other = ModelRequest {
-            prompt: "another prompt".into(),
-        };
+        let other = ModelRequest::new("another prompt");
         assert!(lookup.propose_measured(&other).is_err());
         assert_eq!(*misses.lock().unwrap(), vec![other.sha256()]);
         assert_eq!(lookup.context_tokens(), Some(8_192));

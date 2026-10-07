@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::domain::{
-    DateRole, Evidence, ModelProposal, ModelTimings, PartyRelation, TokenConfidence,
+    DateRole, Evidence, KeyFact, ModelFacts, ModelProposal, ModelTimings, PartyFact, PartyRelation,
+    PartyRole, TokenConfidence,
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
@@ -26,7 +27,9 @@ use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
 /// contract that opens with one long paragraph naming the date and both
 /// parties is quoted as evidence three times over - past 420 tokens, into a
 /// reply cut off mid-string. Transport only: [`ModelRequest::sha256`] covers
-/// the prompt alone, so recordings stay valid.
+/// the prompt and a grammar particular to the request, never this, so
+/// recordings stay valid. An evidence-pipeline reply is capped by its
+/// grammar far below it (see `the_evidence_grammar_bounds_the_reply`).
 pub(crate) const MAX_REPLY_TOKENS: u32 = 1_024;
 
 /// How much of a reply body is worth reading. A reply is a short JSON object;
@@ -44,23 +47,84 @@ const MAX_ERROR_BYTES: u64 = 16 * 1024;
 /// Text only, by construction. Intern reads documents as text and the local
 /// server runs without a vision projector, so there is no field here that could
 /// ask it for something it cannot do.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelRequest {
     pub prompt: String,
+    /// The grammar this request's reply must follow, when it is particular to
+    /// the request: the evidence pipeline's lists exactly the evidence ids
+    /// its prompt shows. `None` is the digest pipeline's fixed
+    /// [`RESPONSE_GRAMMAR`].
+    pub grammar: Option<String>,
+    /// The evidence handles the prompt shows, for reading an
+    /// evidence-pipeline reply. `None` for the digest pipeline.
+    pub evidence: Option<EvidenceHandles>,
 }
 
 impl ModelRequest {
-    pub fn from_digest(digest: &crate::distill::DocumentDigest) -> Self {
+    /// A digest-pipeline request: the prompt alone, answered under the fixed
+    /// grammar.
+    pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: build_prompt(digest),
+            prompt: prompt.into(),
+            ..Self::default()
         }
     }
 
-    /// A stable identity for this exact input, for evaluation records.
+    pub fn from_digest(digest: &crate::distill::DocumentDigest) -> Self {
+        Self::new(build_prompt(digest))
+    }
+
+    /// A stable identity for this exact input, for evaluation records: the
+    /// prompt, and the grammar when the request carries its own, so a
+    /// recorded reply never answers a request whose grammar has changed. A
+    /// request under the fixed grammar is identified by its prompt alone, as
+    /// it always was, so every recording made before stays valid.
     pub fn sha256(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.prompt.as_bytes());
+        if let Some(grammar) = &self.grammar {
+            hasher.update([0_u8]);
+            hasher.update(grammar.as_bytes());
+        }
         format!("{:x}", hasher.finalize())
+    }
+}
+
+/// The evidence handles an evidence-pipeline prompt shows, each with the
+/// stable id of the unit it stands for.
+///
+/// With [`crate::retrieve::IdStyle::Stable`] a handle is the id itself; with
+/// [`crate::retrieve::IdStyle::Ordinal`] it is a number local to the
+/// prompt. Either way only the stable id is ever stored.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EvidenceHandles {
+    handles: Vec<(String, String)>,
+}
+
+impl EvidenceHandles {
+    /// `(handle, stable id)` pairs, in prompt order.
+    pub fn new(handles: Vec<(String, String)>) -> Self {
+        Self { handles }
+    }
+
+    pub fn handles(&self) -> impl Iterator<Item = &str> {
+        self.handles.iter().map(|(handle, _)| handle.as_str())
+    }
+
+    /// The stable id of the unit a reply's id names, or `None` when the
+    /// prompt showed no such handle. A reply may write a handle bare, as
+    /// `[handle]` the way the prompt shows it, or as a number.
+    pub fn resolve(&self, cited: &str) -> Option<&str> {
+        let cited = cited.trim();
+        let cited = cited
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .unwrap_or(cited)
+            .trim();
+        self.handles
+            .iter()
+            .find(|(handle, _)| handle == cited)
+            .map(|(_, id)| id.as_str())
     }
 }
 
@@ -118,6 +182,7 @@ pub struct ModelClient {
     model_id: String,
     http: Client,
     token_confidence: bool,
+    context_tokens: usize,
 }
 
 impl Proposer for ModelClient {
@@ -136,9 +201,10 @@ impl Proposer for ModelClient {
         ModelClient::propose_measured(self, request)
     }
 
-    /// The local server always runs with this context.
+    /// The context the local server runs with: [`crate::server::CONTEXT_TOKENS`]
+    /// unless [`ModelClient::with_context_tokens`] says otherwise.
     fn context_tokens(&self) -> Option<usize> {
-        Some(crate::server::CONTEXT_TOKENS as usize)
+        Some(self.context_tokens)
     }
 }
 
@@ -176,7 +242,15 @@ impl ModelClient {
             model_id: model_id.into(),
             http,
             token_confidence: false,
+            context_tokens: crate::server::CONTEXT_TOKENS as usize,
         })
+    }
+
+    /// The context the server was started with, for a server started with
+    /// another `--ctx-size` than the app's: prompts are fitted to it.
+    pub fn with_context_tokens(mut self, tokens: usize) -> Self {
+        self.context_tokens = tokens;
+        self
     }
 
     /// Asks the server for the probability of every token it generates, so
@@ -251,16 +325,17 @@ impl ModelClient {
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
         let token_confidence = completion.token_confidence();
         let timings = completion.model_timings();
-        decode(completion).map(|proposal| ProposerReply {
+        decode(completion, request.evidence.as_ref()).map(|proposal| ProposerReply {
             proposal,
             token_confidence,
             timings,
         })
     }
 
-    /// The request body. Only the user turn identifies a request
-    /// ([`ModelRequest::sha256`]); everything here is transport, and the
-    /// token-probability fields in particular change no generated token.
+    /// The request body. Only the user turn, and a grammar particular to the
+    /// request, identify it ([`ModelRequest::sha256`]); everything else here
+    /// is transport, and the token-probability fields in particular change
+    /// no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
         let mut body = json!({
             "model": self.model_id,
@@ -272,7 +347,7 @@ impl ModelClient {
             "temperature": 0,
             "top_k": 1,
             "max_tokens": MAX_REPLY_TOKENS,
-            "grammar": RESPONSE_GRAMMAR,
+            "grammar": request.grammar.as_deref().unwrap_or(RESPONSE_GRAMMAR),
             "cache_prompt": true,
             // Hybrid-reasoning models must answer directly: Intern needs a form
             // filled in, not a chain of thought, and thinking tokens are pure
@@ -290,7 +365,8 @@ impl ModelClient {
 }
 
 /// How probable the model found the tokens of its `document_date` and
-/// `parties` values, from the per-token probabilities a server reported.
+/// `parties` values, from the per-token probabilities a server reported -
+/// in an evidence-pipeline reply, its `date` and each party's `name`.
 ///
 /// The grammar forces every key, quote, and bracket, and the model's raw
 /// probability for a forced token says nothing about the answer, so only
@@ -308,10 +384,24 @@ pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidenc
         ranges.push((start, text.len()));
     }
     let mut spans = Vec::new();
-    for key in [&b"\"document_date\":"[..], &b"\"parties\":"[..]] {
+    for key in [
+        &b"\"document_date\":"[..],
+        &b"\"parties\":"[..],
+        &b"\"date\":"[..],
+    ] {
         if let Some(at) = find(&text, key) {
             value_spans(&text, at + key.len(), &mut spans);
         }
+    }
+    // An evidence-pipeline reply names each party in a `"name"` of its own.
+    // The key cannot occur in the digest pipeline's reply, whose strings
+    // escape every quote, so that reply's spans are unchanged.
+    let name = &b"\"name\":"[..];
+    let mut from = 0;
+    while let Some(offset) = find(&text[from..], name) {
+        let at = from + offset + name.len();
+        value_spans(&text, at, &mut spans);
+        from = at;
     }
     let mut count = 0_u32;
     let mut sum = 0.0_f64;
@@ -440,7 +530,14 @@ pub(crate) fn is_context_overflow(body: &[u8]) -> bool {
 /// and the same request is cut off again. Any other reason - `stop`, a
 /// server's own `eos_token` or `end_turn` - is accepted when the content reads
 /// as a proposal, because the content is what is checked.
-pub(crate) fn decode(completion: ChatCompletion) -> Result<ModelProposal, AttemptError> {
+///
+/// `evidence` is the request's evidence handles: an evidence-pipeline reply
+/// is read as facts and evidence ids ([`facts_from_text`]), any other as the
+/// digest pipeline's proposal.
+pub(crate) fn decode(
+    completion: ChatCompletion,
+    evidence: Option<&EvidenceHandles>,
+) -> Result<ModelProposal, AttemptError> {
     let choice = completion
         .choices
         .into_iter()
@@ -463,17 +560,47 @@ pub(crate) fn decode(completion: ChatCompletion) -> Result<ModelProposal, Attemp
         .content
         .and_then(AssistantContent::into_text)
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-    proposal_from_text(&content)
+    proposal_from_text(&content, evidence)
 }
 
 /// Reads a proposal out of the text a model replied with, fences and
-/// chatter tolerated.
-pub(crate) fn proposal_from_text(content: &str) -> Result<ModelProposal, AttemptError> {
+/// chatter tolerated: as facts and evidence ids when the request showed
+/// evidence handles, as the digest pipeline's proposal otherwise.
+pub(crate) fn proposal_from_text(
+    content: &str,
+    evidence: Option<&EvidenceHandles>,
+) -> Result<ModelProposal, AttemptError> {
+    if let Some(handles) = evidence {
+        return facts_from_text(content, handles);
+    }
     let json =
         extract_json_object(content).ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
     let wire: WireProposal = serde_json::from_str(json)
         .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
     wire.into_domain()
+        .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))
+}
+
+/// Reads an evidence-pipeline reply: facts, each after the ids of the
+/// evidence it cites.
+///
+/// Lenient about shape, because a hosted model answers without a grammar:
+/// `type` or `document_type`, one id or a list, ids as strings or numbers,
+/// `[p1.b2]` as the prompt shows it. Strict about meaning: every id is
+/// mapped back to the stable id of the unit its handle stands for, and an id
+/// the prompt did not show is set aside in
+/// [`ModelFacts::unknown_evidence`] - never evidence for anything. A role
+/// that is not one of [`PartyRole`]'s is no role, and a date that is not on
+/// the calendar is no date, as in the digest pipeline.
+pub(crate) fn facts_from_text(
+    content: &str,
+    handles: &EvidenceHandles,
+) -> Result<ModelProposal, AttemptError> {
+    let json =
+        extract_json_object(content).ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))?;
+    let wire: WireFacts = serde_json::from_str(json)
+        .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
+    wire.into_domain(handles)
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))
 }
 
@@ -675,6 +802,228 @@ impl WireProposal {
                 document_type: self.type_evidence,
                 parties: self.party_evidence,
             },
+            facts: None,
+        })
+    }
+}
+
+/// Most evidence ids a single fact may cite; the grammar's `ids` rule.
+pub(crate) const MAX_IDS: usize = 3;
+/// Most evidence ids a party, an identifier or a key fact may cite; the
+/// grammar's `ids2` rule.
+pub(crate) const MAX_IDS_SHORT: usize = 2;
+/// Most parties a reply may name.
+pub(crate) const MAX_PARTIES: usize = 3;
+/// Most key facts a reply may name.
+pub(crate) const MAX_KEY_FACTS: usize = 2;
+
+#[derive(Deserialize)]
+struct WireFacts {
+    #[serde(default, alias = "document_type_ids", alias = "type_evidence")]
+    type_ids: WireIds,
+    #[serde(default, rename = "type", alias = "document_type")]
+    document_type: Option<String>,
+    #[serde(default, alias = "document_date_ids", alias = "date_evidence")]
+    date_ids: WireIds,
+    #[serde(default, rename = "date", alias = "document_date")]
+    document_date: Option<String>,
+    #[serde(default)]
+    date_role: Option<String>,
+    #[serde(default)]
+    parties: Vec<WireParty>,
+    #[serde(default, alias = "subject_evidence")]
+    subject_ids: WireIds,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default, alias = "identifier_evidence")]
+    identifier_ids: WireIds,
+    #[serde(default)]
+    identifier: Option<String>,
+    #[serde(default, alias = "key_facts")]
+    facts: Vec<WireFact>,
+    #[serde(default)]
+    confidence: f32,
+    #[serde(default)]
+    needs_review: bool,
+}
+
+#[derive(Deserialize)]
+struct WireParty {
+    #[serde(default, alias = "evidence", alias = "party_ids")]
+    ids: WireIds,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireFact {
+    Cited {
+        #[serde(default, alias = "evidence")]
+        ids: WireIds,
+        #[serde(alias = "value", alias = "text")]
+        fact: String,
+    },
+    Bare(String),
+}
+
+/// One id or a list of them, each a string or a number; or nothing.
+#[derive(Default, Deserialize)]
+#[serde(untagged)]
+enum WireIds {
+    #[default]
+    None,
+    One(WireId),
+    Many(Vec<WireId>),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireId {
+    Text(String),
+    Number(u64),
+}
+
+impl WireId {
+    fn text(&self) -> String {
+        match self {
+            Self::Text(text) => text.clone(),
+            Self::Number(number) => number.to_string(),
+        }
+    }
+}
+
+impl WireIds {
+    /// The stable ids of the handles cited, each once and at most `cap` of
+    /// them; ids the prompt did not show go to `unknown`.
+    fn resolve(
+        self,
+        handles: &EvidenceHandles,
+        cap: usize,
+        unknown: &mut Vec<String>,
+    ) -> Vec<String> {
+        let cited = match self {
+            Self::None => Vec::new(),
+            Self::One(id) => vec![id],
+            Self::Many(ids) => ids,
+        };
+        let mut resolved = Vec::new();
+        for id in cited {
+            let text = id.text();
+            match handles.resolve(&text) {
+                Some(stable) => {
+                    if resolved.len() < cap && !resolved.iter().any(|kept| kept == stable) {
+                        resolved.push(stable.to_owned());
+                    }
+                }
+                None => {
+                    if !unknown.contains(&text) {
+                        unknown.push(text);
+                    }
+                }
+            }
+        }
+        resolved
+    }
+}
+
+/// A value the reply gave, trimmed; blank is absent.
+fn present(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("null"))
+}
+
+impl WireFacts {
+    fn into_domain(self, handles: &EvidenceHandles) -> Option<ModelProposal> {
+        if !self.confidence.is_finite() || !(0.0..=1.0).contains(&self.confidence) {
+            return None;
+        }
+        let mut unknown = Vec::new();
+        let type_evidence = self.type_ids.resolve(handles, MAX_IDS, &mut unknown);
+        let date_evidence = self.date_ids.resolve(handles, MAX_IDS, &mut unknown);
+        let mut document_date = present(self.document_date);
+        let mut date_role = self.date_role.as_deref().and_then(|role| {
+            DateRole::ALL
+                .into_iter()
+                .find(|known| known.as_str().eq_ignore_ascii_case(role.trim()))
+        });
+        if document_date
+            .as_deref()
+            .is_some_and(|date| !is_valid_iso_date(date))
+        {
+            // As in the digest pipeline: a date that is not on the calendar
+            // is the model inventing one, and its role goes with it.
+            document_date = None;
+            date_role = None;
+        }
+        if document_date.is_none() {
+            date_role = None;
+        }
+        let mut parties = Vec::new();
+        for party in self.parties {
+            let evidence = party.ids.resolve(handles, MAX_IDS_SHORT, &mut unknown);
+            let Some(name) = present(party.name) else {
+                continue;
+            };
+            if parties.len() == MAX_PARTIES {
+                continue;
+            }
+            parties.push(PartyFact {
+                name,
+                role: party.role.as_deref().and_then(PartyRole::parse),
+                evidence,
+            });
+        }
+        let subject_evidence = self.subject_ids.resolve(handles, MAX_IDS, &mut unknown);
+        let identifier_evidence = self
+            .identifier_ids
+            .resolve(handles, MAX_IDS_SHORT, &mut unknown);
+        let mut key_facts = Vec::new();
+        for fact in self.facts {
+            let (ids, fact) = match fact {
+                WireFact::Cited { ids, fact } => (ids, fact),
+                WireFact::Bare(fact) => (WireIds::None, fact),
+            };
+            let evidence = ids.resolve(handles, MAX_IDS_SHORT, &mut unknown);
+            let Some(fact) = present(Some(fact)) else {
+                continue;
+            };
+            if key_facts.len() < MAX_KEY_FACTS {
+                key_facts.push(KeyFact { fact, evidence });
+            }
+        }
+        let facts = ModelFacts {
+            document_type: present(self.document_type),
+            type_evidence,
+            document_date,
+            date_role,
+            date_evidence,
+            parties,
+            subject: present(self.subject),
+            subject_evidence,
+            identifier: present(self.identifier),
+            identifier_evidence,
+            key_facts,
+            unknown_evidence: unknown,
+        };
+        Some(ModelProposal {
+            document_type: facts.document_type.clone(),
+            document_date: facts.document_date.clone(),
+            date_role: facts.date_role,
+            parties: facts
+                .parties
+                .iter()
+                .map(|party| party.name.clone())
+                .collect(),
+            party_relation: PartyRelation::None,
+            description: String::new(),
+            confidence: self.confidence,
+            needs_review: self.needs_review,
+            evidence: Evidence::default(),
+            facts: Some(Box::new(facts)),
         })
     }
 }
@@ -783,7 +1132,7 @@ mod tests {
     #[test]
     fn the_request_carries_the_grammar_and_no_thinking() {
         let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
-        let body = client.completion_request(&ModelRequest { prompt: "p".into() });
+        let body = client.completion_request(&ModelRequest::new("p"));
         assert_eq!(body["grammar"], serde_json::json!(RESPONSE_GRAMMAR));
         assert_eq!(body["temperature"], serde_json::json!(0));
         assert_eq!(body["max_tokens"], serde_json::json!(1_024));
@@ -799,7 +1148,7 @@ mod tests {
     #[test]
     fn every_request_is_plain_text() {
         let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
-        let body = client.completion_request(&ModelRequest { prompt: "p".into() });
+        let body = client.completion_request(&ModelRequest::new("p"));
         assert!(body["messages"][1]["content"].is_string());
         assert!(!body.to_string().contains("image_url"));
     }
@@ -816,7 +1165,7 @@ mod tests {
         let server = scripted_server(vec![http_reply("503 Service Unavailable", &[], "")]);
 
         let error = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
 
         assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
@@ -837,7 +1186,7 @@ mod tests {
             overflow,
         )]);
         let error = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::ModelInputTooLarge);
         assert_eq!(server.attempts(), 1);
@@ -849,7 +1198,7 @@ mod tests {
             r#"{"error":{"code":400,"message":"invalid grammar","type":"invalid_request_error"}}"#,
         )]);
         let error = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::ModelRequestFailed);
     }
@@ -864,7 +1213,7 @@ mod tests {
             r#"{"type_evidence":"This Master Services Agreement is entered into as of March 1, 2025 by and between"#,
         )]);
         let error = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::ModelReplyTruncated);
         assert_eq!(server.attempts(), 1);
@@ -876,7 +1225,7 @@ mod tests {
     fn malformed_complete_reply_is_retried_once() {
         let server = scripted_server(vec![completion_reply("stop", "I think this is a memo.")]);
         let error = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::ModelResponseInvalid);
         assert_eq!(server.attempts(), 2);
@@ -886,7 +1235,7 @@ mod tests {
             completion_reply("stop", VALID_REPLY),
         ]);
         let proposal = local_client(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap();
         assert_eq!(proposal.document_type.as_deref(), Some("Memo"));
         assert_eq!(server.attempts(), 2);
@@ -894,7 +1243,7 @@ mod tests {
 
     fn decoded(reply: Value) -> Result<ModelProposal, EngineErrorCode> {
         let completion: ChatCompletion = serde_json::from_value(reply).unwrap();
-        decode(completion).map_err(|AttemptError(code)| code)
+        decode(completion, None).map_err(|AttemptError(code)| code)
     }
 
     /// OpenAI's refusal shape - `content: null` beside a `refusal` - did not
@@ -983,7 +1332,7 @@ mod tests {
     /// about the request, least of all what identifies it in a recording.
     #[test]
     fn token_probabilities_are_requested_only_when_enabled() {
-        let request = ModelRequest { prompt: "p".into() };
+        let request = ModelRequest::new("p");
         let plain = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
         let body = plain.completion_request(&request);
         assert!(body.get("logprobs").is_none());
@@ -1132,7 +1481,7 @@ mod tests {
                 generation_micros: 16_131_292,
             })
         );
-        let proposal = decode(completion).unwrap();
+        let proposal = decode(completion, None).unwrap();
         assert_eq!(proposal.document_date.as_deref(), Some("2026-03-04"));
     }
 
@@ -1148,7 +1497,7 @@ mod tests {
         ] {
             let completion: ChatCompletion = serde_json::from_value(reply.clone()).unwrap();
             assert_eq!(completion.model_timings(), None, "{reply}");
-            assert!(decode(completion).is_ok(), "{reply}");
+            assert!(decode(completion, None).is_ok(), "{reply}");
         }
         // A server that predates prompt caching reused nothing.
         let completion: ChatCompletion = serde_json::from_value(json!({"choices":[],
@@ -1189,7 +1538,7 @@ mod tests {
         ]);
 
         let reply = local_client(server.address)
-            .propose_measured(&ModelRequest { prompt: "p".into() })
+            .propose_measured(&ModelRequest::new("p"))
             .unwrap();
 
         assert_eq!(server.attempts(), 2);
@@ -1209,7 +1558,7 @@ mod tests {
         // The scored and plain answers are the same reply without them.
         let server = scripted_server(vec![timed(VALID_REPLY, 7)]);
         let client = local_client(server.address);
-        let request = ModelRequest { prompt: "p".into() };
+        let request = ModelRequest::new("p");
         let measured = client.propose_measured(&request).unwrap();
         assert_eq!(
             client.propose_scored(&request).unwrap(),
@@ -1226,13 +1575,11 @@ mod tests {
         struct Fixed;
         impl Proposer for Fixed {
             fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
-                proposal_from_text(VALID_REPLY).map_err(AttemptError::into_error)
+                proposal_from_text(VALID_REPLY, None).map_err(AttemptError::into_error)
             }
         }
 
-        let reply = Fixed
-            .propose_measured(&ModelRequest { prompt: "p".into() })
-            .unwrap();
+        let reply = Fixed.propose_measured(&ModelRequest::new("p")).unwrap();
 
         assert_eq!(reply.proposal.document_type.as_deref(), Some("Memo"));
         assert_eq!(reply.token_confidence, None);
@@ -1242,8 +1589,170 @@ mod tests {
     #[test]
     fn the_request_identity_follows_the_prompt() {
         assert_ne!(
-            ModelRequest { prompt: "a".into() }.sha256(),
-            ModelRequest { prompt: "b".into() }.sha256()
+            ModelRequest::new("a").sha256(),
+            ModelRequest::new("b").sha256()
         );
+    }
+
+    fn ordinal_handles() -> EvidenceHandles {
+        EvidenceHandles::new(vec![
+            ("1".into(), "p1.b1".into()),
+            ("2".into(), "p1.b3.f1".into()),
+            ("3".into(), "p1.b5".into()),
+        ])
+    }
+
+    /// An evidence reply's ids are the prompt's handles, mapped back to the
+    /// stable ids of their units before anything is kept; an id the prompt
+    /// did not show is set aside and never cited.
+    #[test]
+    fn an_evidence_reply_maps_handles_back_to_stable_ids() {
+        let reply = r#"{"type_ids":[1],"type":"Invoice","date_ids":[2],"date":"2025-05-01","date_role":"invoice","parties":[{"ids":[1,9],"name":"Halvorsen Fixture Works LLC","role":"issuer"},{"ids":[3],"name":"Quillon Ridge Bakery, Inc.","role":"customer"}],"identifier_ids":[2],"identifier":"INV-10438","confidence":0.9,"needs_review":false}"#;
+        let proposal = proposal_from_text(reply, Some(&ordinal_handles())).unwrap();
+        let facts = proposal.facts.as_ref().unwrap();
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert_eq!(facts.date_evidence, vec!["p1.b3.f1"]);
+        assert_eq!(facts.parties[0].evidence, vec!["p1.b1"]);
+        assert_eq!(facts.parties[0].role, Some(PartyRole::Issuer));
+        assert_eq!(facts.parties[1].evidence, vec!["p1.b5"]);
+        assert_eq!(facts.identifier.as_deref(), Some("INV-10438"));
+        assert_eq!(facts.unknown_evidence, vec!["9"]);
+        assert!(facts.cited_ids().all(|id| id.starts_with("p1.")));
+        // The digest-shaped fields carry the same facts; the description is
+        // the engine's to compose.
+        assert_eq!(proposal.document_type.as_deref(), Some("Invoice"));
+        assert_eq!(proposal.document_date.as_deref(), Some("2025-05-01"));
+        assert_eq!(proposal.parties.len(), 2);
+        assert_eq!(proposal.description, "");
+        assert_eq!(proposal.evidence, Evidence::default());
+    }
+
+    /// A hosted model answers without a grammar, so the shape is read
+    /// leniently - and the meaning strictly.
+    #[test]
+    fn a_hosted_evidence_reply_is_read_leniently_and_strictly() {
+        let handles = EvidenceHandles::new(vec![
+            ("p1.b1".into(), "p1.b1".into()),
+            ("p1.b2".into(), "p1.b2".into()),
+        ]);
+        let reply = r#"Here are the facts:
+```json
+{"document_type_ids":"[p1.b1]","document_type":"Notice","date_evidence":["p1.b2","p7.b7"],"document_date":"2025-02-30","date_role":"notice","parties":[{"evidence":"p1.b2","name":"Imogen Castellanos","role":"resident"},{"ids":[],"name":"  ","role":"tenant"},{"ids":["p1.b1"],"name":"Cresthaven Court Holdings LLC","role":"OTHER"}],"key_facts":["rent rises to $1,965.00",{"ids":["p1.b2"],"fact":"effective August 1, 2026"}],"confidence":0.8}
+```"#;
+        let proposal = proposal_from_text(reply, Some(&handles)).unwrap();
+        let facts = proposal.facts.unwrap();
+        assert_eq!(facts.document_type.as_deref(), Some("Notice"));
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert_eq!(facts.date_evidence, vec!["p1.b2"]);
+        assert_eq!(facts.unknown_evidence, vec!["p7.b7"]);
+        // Not a calendar date: no date, and no role for it.
+        assert_eq!(facts.document_date, None);
+        assert_eq!(facts.date_role, None);
+        // A role that is not one of ours is no role, never "other"; a
+        // blank name is no party.
+        assert_eq!(facts.parties.len(), 2);
+        assert_eq!(facts.parties[0].role, None);
+        assert_eq!(facts.parties[0].evidence, vec!["p1.b2"]);
+        assert_eq!(facts.parties[1].role, Some(PartyRole::Other));
+        assert_eq!(facts.key_facts.len(), 2);
+        assert!(facts.key_facts[0].evidence.is_empty());
+        assert!(!proposal.needs_review);
+    }
+
+    #[test]
+    fn an_evidence_reply_with_an_impossible_confidence_is_malformed() {
+        let reply = r#"{"type_ids":[],"type":null,"date_ids":[],"date":null,"date_role":null,"parties":[],"confidence":7,"needs_review":false}"#;
+        assert_eq!(
+            proposal_from_text(reply, Some(&ordinal_handles()))
+                .unwrap_err()
+                .0,
+            EngineErrorCode::ModelResponseInvalid
+        );
+    }
+
+    /// The grammar is part of a request's identity only when the request
+    /// carries its own, so every digest-pipeline recording stays valid.
+    #[test]
+    fn the_request_identity_covers_a_grammar_of_its_own() {
+        let plain = ModelRequest::new("p");
+        let mut expected = Sha256::new();
+        expected.update(b"p");
+        assert_eq!(plain.sha256(), format!("{:x}", expected.finalize()));
+        let with = |grammar: &str| ModelRequest {
+            grammar: Some(grammar.into()),
+            ..ModelRequest::new("p")
+        };
+        assert_ne!(with("root ::= \"a\"").sha256(), plain.sha256());
+        assert_ne!(
+            with("root ::= \"a\"").sha256(),
+            with("root ::= \"b\"").sha256()
+        );
+        // The handle map is read from the prompt, so it identifies nothing.
+        let mapped = ModelRequest {
+            evidence: Some(ordinal_handles()),
+            ..with("root ::= \"a\"")
+        };
+        assert_eq!(mapped.sha256(), with("root ::= \"a\"").sha256());
+    }
+
+    /// The local server is sent the request's own grammar, and its reply is
+    /// read as facts.
+    #[test]
+    fn a_local_evidence_request_sends_its_grammar_and_reads_ids() {
+        let server = scripted_server(vec![completion_reply(
+            "stop",
+            r#"{"type_ids":[1],"type":"Invoice","date_ids":[],"date":null,"date_role":null,"parties":[],"confidence":0.7,"needs_review":false}"#,
+        )]);
+        let client = ModelClient::new(
+            &format!("http://{}/v1/chat/completions", server.address),
+            "k",
+            "m",
+        )
+        .unwrap();
+        let request = ModelRequest {
+            prompt: "p".into(),
+            grammar: Some("root ::= \"{}\"".into()),
+            evidence: Some(ordinal_handles()),
+        };
+        let proposal = client.propose(&request).unwrap();
+        assert_eq!(
+            proposal.facts.unwrap().type_evidence,
+            vec!["p1.b1".to_owned()]
+        );
+        let body: Value = serde_json::from_str(&server.bodies()[0]).unwrap();
+        assert_eq!(body["grammar"], json!("root ::= \"{}\""));
+        // The digest pipeline's request still carries the fixed grammar.
+        assert_eq!(
+            client.completion_request(&ModelRequest::new("p"))["grammar"],
+            json!(RESPONSE_GRAMMAR)
+        );
+    }
+
+    /// In an evidence reply the date and every party's name are the values
+    /// read; ids, roles and keys are not.
+    #[test]
+    fn token_confidence_reads_the_evidence_replys_date_and_names() {
+        let tokens = pieces(&[
+            (
+                r#"{"type_ids":[1],"type":"Invoice","date_ids":[2],"date":""#,
+                0.01,
+            ),
+            ("2025-05-01", 0.8),
+            (
+                r#"","date_role":"invoice","parties":[{"ids":[1],"name":""#,
+                0.02,
+            ),
+            ("Acme", 0.6),
+            (r#"","role":"issuer"},{"ids":[3],"name":""#, 0.03),
+            ("Contoso", 0.4),
+            (
+                r#"","role":"customer"}],"confidence":0.9,"needs_review":false}"#,
+                0.05,
+            ),
+        ]);
+        let confidence = token_confidence(&tokens).unwrap();
+        assert_eq!(confidence.tokens, 3);
+        assert!(close(confidence.min, 0.4), "{confidence:?}");
+        assert!(close(confidence.mean, 0.6), "{confidence:?}");
     }
 }

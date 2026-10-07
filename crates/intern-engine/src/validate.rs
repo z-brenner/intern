@@ -223,6 +223,7 @@ pub fn validate_at(
         status,
         reasons,
         candidate: original,
+        facts: None,
     }
 }
 
@@ -1132,6 +1133,7 @@ mod tests {
                     "by and between Acme Corporation and Contoso Worldwide, Inc.".into(),
                 ],
             },
+            facts: None,
         }
     }
 
@@ -1477,6 +1479,7 @@ Countersigned June 2, 2023.
                 document_type: None,
                 parties: Vec::new(),
             },
+            facts: None,
         };
         let outcome = validate(candidate, &digest_of(document));
         assert_eq!(
@@ -1511,6 +1514,7 @@ Countersigned June 2, 2023.
                 document_type: Some("INVOICE".into()),
                 parties: vec!["Bill To: Contoso Worldwide, Inc.".into()],
             },
+            facts: None,
         };
         let outcome = validate(candidate, &digest_of(document));
         assert_eq!(outcome.proposal.date_role, Some(DateRole::Invoice));
@@ -1699,6 +1703,7 @@ The Consultant will provide services commencing April 15, 2026.
                 document_type: Some("CONSULTING AGREEMENT".into()),
                 parties: Vec::new(),
             },
+            facts: None,
         };
         let outcome = validate_at(candidate, &digest_of(document), 2026);
         assert_eq!(
@@ -2154,6 +2159,7 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
             confidence: 0.9,
             needs_review: false,
             evidence: Evidence::default(),
+            facts: None,
         }
     }
 

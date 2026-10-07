@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::client::{
-    AttemptError, ChatCompletion, ModelRequest, Proposer, decode, is_context_overflow,
-    proposal_from_text, read_capped, read_error_body,
+    AttemptError, ChatCompletion, EvidenceHandles, ModelRequest, Proposer, decode,
+    is_context_overflow, proposal_from_text, read_capped, read_error_body,
 };
 use crate::domain::{DocumentAnalysis, ModelProposal};
 use crate::engine::Engine;
@@ -365,11 +365,11 @@ impl HostedClient {
         }
         let bytes = read_capped(response, EngineErrorCode::HostedModelUnreachable)?;
         Ok(match self.config.provider {
-            HostedProvider::Anthropic => decode_anthropic(&bytes)?,
+            HostedProvider::Anthropic => decode_anthropic(&bytes, request.evidence.as_ref())?,
             HostedProvider::OpenAiCompatible => {
                 let completion: ChatCompletion = serde_json::from_slice(&bytes)
                     .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
-                decode(completion)?
+                decode(completion, request.evidence.as_ref())?
             }
         })
     }
@@ -541,7 +541,10 @@ struct AnthropicBlock {
 /// over; only the text blocks carry the answer. A refusal, and a reply cut
 /// off at the token cap, are reported as what they are rather than as a
 /// malformed reply, so neither is sent - and paid for - again.
-pub(crate) fn decode_anthropic(bytes: &[u8]) -> Result<ModelProposal, AttemptError> {
+pub(crate) fn decode_anthropic(
+    bytes: &[u8],
+    evidence: Option<&EvidenceHandles>,
+) -> Result<ModelProposal, AttemptError> {
     let message: AnthropicMessage = serde_json::from_slice(bytes)
         .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
     match message.stop_reason.as_deref() {
@@ -559,7 +562,7 @@ pub(crate) fn decode_anthropic(bytes: &[u8]) -> Result<ModelProposal, AttemptErr
     if text.trim().is_empty() {
         return Err(AttemptError(EngineErrorCode::ModelResponseInvalid));
     }
-    proposal_from_text(&text)
+    proposal_from_text(&text, evidence)
 }
 
 const fn hosted_error(code: EngineErrorCode) -> EngineError {
@@ -737,9 +740,7 @@ mod tests {
     #[test]
     fn an_anthropic_request_is_a_messages_call_with_no_sampling_knobs() {
         let client = HostedClient::new(config(HostedProvider::Anthropic, "", "")).unwrap();
-        let body = client.request_body(&ModelRequest {
-            prompt: "File this.".into(),
-        });
+        let body = client.request_body(&ModelRequest::new("File this."));
         assert_eq!(body["model"], json!(DEFAULT_ANTHROPIC_MODEL));
         assert_eq!(body["max_tokens"], json!(MAX_REPLY_TOKENS));
         assert_eq!(body["system"], json!(SYSTEM_INSTRUCTION));
@@ -764,9 +765,7 @@ mod tests {
             "local-model",
         ))
         .unwrap();
-        let body = client.request_body(&ModelRequest {
-            prompt: "File this.".into(),
-        });
+        let body = client.request_body(&ModelRequest::new("File this."));
         assert_eq!(body["model"], json!("local-model"));
         assert_eq!(body["messages"][0]["role"], json!("system"));
         assert_eq!(body["messages"][1]["content"], json!("File this."));
@@ -782,26 +781,47 @@ mod tests {
     #[test]
     fn an_anthropic_reply_is_read_from_its_text_blocks_only() {
         let reply = br#"{"content":[{"type":"thinking","thinking":"..."},{"type":"text","text":"```json\n{\"document_type\":\"Invoice\",\"document_date\":\"2026-03-02\",\"date_role\":\"invoice\",\"parties\":[\"Acme\"],\"party_relation\":\"from\",\"description\":\"An invoice.\",\"confidence\":0.9,\"needs_review\":false}\n```"}],"stop_reason":"end_turn"}"#;
-        let proposal = decode_anthropic(reply).unwrap();
+        let proposal = decode_anthropic(reply, None).unwrap();
         assert_eq!(proposal.document_type.as_deref(), Some("Invoice"));
         assert_eq!(proposal.document_date.as_deref(), Some("2026-03-02"));
         assert_eq!(proposal.parties, vec!["Acme".to_string()]);
+    }
+
+    /// A hosted model has no grammar to keep it to the ids it was shown.
+    /// An id it invents is dropped and counted, and is never evidence.
+    #[test]
+    fn a_hosted_evidence_reply_never_cites_an_id_it_was_not_shown() {
+        let handles = crate::client::EvidenceHandles::new(vec![
+            ("p1.b1".into(), "p1.b1".into()),
+            ("p1.b2".into(), "p1.b2".into()),
+        ]);
+        let reply = br#"{"content":[{"type":"text","text":"{\"type_ids\":[\"p1.b1\",\"p4.b9\"],\"type\":\"Notice\",\"date_ids\":[\"p2.b1\"],\"date\":\"2024-01-02\",\"date_role\":\"notice\",\"parties\":[{\"ids\":[\"p1.b2\",\"p1.b2\",\"p3.b3\"],\"name\":\"Northstar Calibration Holdings LLC\",\"role\":\"addressee\"}],\"confidence\":0.9,\"needs_review\":false}"}],"stop_reason":"end_turn"}"#;
+        let proposal = decode_anthropic(reply, Some(&handles)).unwrap();
+        let facts = proposal.facts.unwrap();
+        assert_eq!(facts.type_evidence, vec!["p1.b1"]);
+        assert!(facts.date_evidence.is_empty());
+        assert_eq!(facts.parties[0].evidence, vec!["p1.b2"]);
+        assert_eq!(facts.unknown_evidence, vec!["p4.b9", "p2.b1", "p3.b3"]);
+        assert!(
+            facts.cited_ids().all(|id| handles.resolve(id).is_some()),
+            "only shown ids are cited"
+        );
     }
 
     #[test]
     fn a_refusal_and_a_truncated_reply_are_named_not_retried_as_malformed() {
         let refused = br#"{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"cyber"}}"#;
         assert_eq!(
-            decode_anthropic(refused).unwrap_err().0,
+            decode_anthropic(refused, None).unwrap_err().0,
             EngineErrorCode::HostedModelRefused
         );
         let truncated = br#"{"content":[{"type":"text","text":"{\"document_type\":"}],"stop_reason":"max_tokens"}"#;
         assert_eq!(
-            decode_anthropic(truncated).unwrap_err().0,
+            decode_anthropic(truncated, None).unwrap_err().0,
             EngineErrorCode::ModelReplyTruncated
         );
         assert_eq!(
-            decode_anthropic(b"not json").unwrap_err().0,
+            decode_anthropic(b"not json", None).unwrap_err().0,
             EngineErrorCode::ModelResponseInvalid
         );
     }
@@ -1030,7 +1050,7 @@ mod tests {
             r#"{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}"#,
         )]);
         let error = local_openai(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::HostedModelRateLimited);
         assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
@@ -1042,7 +1062,7 @@ mod tests {
             r#"{"error":{"message":"You exceeded your current quota.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}}"#,
         )]);
         let error = local_openai(server.address)
-            .propose(&ModelRequest { prompt: "p".into() })
+            .propose(&ModelRequest::new("p"))
             .unwrap_err();
         assert_eq!(error.code(), EngineErrorCode::HostedModelBilling);
         assert_eq!(error.retry_after(), None);
@@ -1061,7 +1081,7 @@ mod tests {
         ] {
             let server = scripted_server(vec![completion_reply(reason, "{\"type_evidence\":")]);
             let error = local_openai(server.address)
-                .propose(&ModelRequest { prompt: "p".into() })
+                .propose(&ModelRequest::new("p"))
                 .unwrap_err();
             assert_eq!(error.code(), code, "{reason}");
             assert_eq!(server.attempts(), 1, "{reason}");
