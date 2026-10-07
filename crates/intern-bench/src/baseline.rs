@@ -369,6 +369,16 @@ pub fn compare(
     } else {
         comparison.failures = comparison.document_regressions.clone();
     }
+    // A full run that no longer scores a document the baseline holds has
+    // dropped its coverage - a gold entry deleted by accident reads exactly
+    // like this. Dropping one on purpose means writing a new baseline.
+    comparison
+        .failures
+        .extend(comparison.missing.iter().map(|id| {
+            format!(
+                "{id}: in the baseline but not in this run (its regression coverage would be lost; write a new baseline to drop it on purpose)"
+            )
+        }));
     comparison.passed = comparison.failures.is_empty();
     comparison
 }
@@ -597,6 +607,45 @@ mod tests {
             1_000.0,
         ));
         Baseline::from_report(&report("replay", records))
+    }
+
+    /// A full run that no longer has a document the baseline holds fails,
+    /// in replay and live alike: its coverage would otherwise vanish. A run
+    /// limited with `--only` is not held to the documents it left out.
+    #[test]
+    fn a_full_run_that_drops_a_baseline_document_fails() {
+        let baseline = before();
+        let nine = |mode: &str| {
+            let records = (0..9)
+                .map(|index| {
+                    record(
+                        &format!("doc-{index}"),
+                        "completed",
+                        json!({"filename_correct": true, "date_forbidden": false, "ready": true}),
+                        1_000.0,
+                    )
+                })
+                .collect::<Vec<_>>();
+            report(mode, records)
+        };
+        for mode in ["replay", "live"] {
+            let comparison = compare(&nine(mode), &baseline, None);
+            assert_eq!(comparison.missing, vec!["doc-9".to_owned()], "{mode}");
+            assert!(!comparison.passed, "{mode}");
+            assert!(
+                comparison
+                    .failures
+                    .iter()
+                    .any(|line| line.starts_with("doc-9:")),
+                "{mode}: {:?}",
+                comparison.failures
+            );
+        }
+        let mut subset = nine("replay");
+        subset.corpus.only = (0..9).map(|index| format!("doc-{index}")).collect();
+        let comparison = compare(&subset, &baseline, None);
+        assert!(comparison.missing.is_empty());
+        assert!(comparison.passed, "{:?}", comparison.failures);
     }
 
     #[test]

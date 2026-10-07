@@ -262,12 +262,16 @@ count, and read p95 as "the slow documents" rather than as a guarantee.
 `--write-baseline bench/baseline.json` records a run as the baseline. A
 run limited with `--only` refuses to overwrite a baseline that covers
 other documents: the documents left out would read as new, and new
-documents gate nothing.
+documents gate nothing. A replay that could not score every document, or
+scored some from stale replies, never writes a baseline.
 `--baseline bench/baseline.json` compares a run with it:
 
 * **Replay is gated per document.** A score that was good and is now bad is
   a regression, as in `intern-evaluate`. Trap, forbidden and unsafe scores
   are good when false. Replay is deterministic, so any flip is real.
+* **A full run that drops a baseline document fails**, live or replay: a
+  gold entry deleted by accident would otherwise take its coverage with it.
+  Write a new baseline to drop a document on purpose.
 * **Live is gated in aggregate** over the documents both runs share. A rate
   may fall by at most one document's worth. The trap-date, forbidden-party
   and unsafe-ready counts may not rise. A shared document that failed counts

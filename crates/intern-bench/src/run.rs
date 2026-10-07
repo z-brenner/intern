@@ -318,7 +318,23 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
         }
         report.baseline = Some(comparison);
     }
-    if let Some(path) = &options.write_baseline {
+    // A baseline written from a replay that could not score every document,
+    // or that scored some from stale replies, would replace good coverage
+    // with nothing - or with scores that do not measure this code.
+    let unfit = report
+        .records
+        .iter()
+        .filter(|record| is_unscorable(&record.status) || record.stale)
+        .map(|record| record.id.as_str())
+        .collect::<Vec<_>>();
+    if options.write_baseline.is_some() && !unfit.is_empty() {
+        eprintln!(
+            "not writing the baseline: {} document(s) are stale or could not be scored ({})",
+            unfit.len(),
+            unfit.join(", ")
+        );
+        exit = EXIT_REGRESSED;
+    } else if let Some(path) = &options.write_baseline {
         write(path, &Baseline::from_report(&report).to_json(), "baseline")?;
         eprintln!(
             "wrote the baseline for {} documents to {}",

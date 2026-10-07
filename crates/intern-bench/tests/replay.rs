@@ -529,6 +529,37 @@ fn a_subset_run_never_overwrites_a_baseline_that_covers_more() {
 }
 
 #[test]
+fn a_replay_that_cannot_score_everything_never_writes_the_baseline() {
+    let bench = Bench::new();
+    let scorable = vec!["invoice-alpha".to_owned(), "scan-delta".to_owned()];
+    let (exit, _) = bench.replay("good.json", |options| {
+        options.only = scorable.clone();
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+    let before = std::fs::read(bench.path("baseline.json")).unwrap();
+
+    // The same documents, but one of them now changed under the recording.
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("stale.json", |options| {
+        options.only = scorable.clone();
+        options.manifest = Some(bench.path("manifest.json"));
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+    assert_eq!(std::fs::read(bench.path("baseline.json")).unwrap(), before);
+}
+
+#[test]
 fn a_baseline_holds_replay_to_every_document_and_compare_names_the_flip() {
     let bench = Bench::new();
     let scorable = |options: &mut RunOptions| {
