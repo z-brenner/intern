@@ -125,10 +125,12 @@ The script starts `llama-server` with the app's flags: one slot, CPU only,
 8,192-token context, the model's own chat template, no projector. It waits
 until the server is healthy and runs `intern-bench run` with a recording.
 It stops the server however the run ends, and never prints the API key it
-generated. Before the corpus, one short synthetic document goes through the
-worker and the engine and is discarded, so the first scored document is not
-charged for a cold worker or an empty prompt cache. `--only id,id` runs a
-subset.
+generated. Before the corpus, one short synthetic text document goes through
+the worker and the engine and is discarded, so the first scored document is
+not charged for starting the worker or for an empty prompt cache. The first
+PDF a worker process reads still loads PDFium, which is counted as parse;
+the worker is started again after a timeout, a cancellation or a crash.
+`--only id,id` runs a subset.
 
 Each document goes the way it goes in the app: `SupervisedWorker` extracts
 it, then `Engine::analyze` distils it, fits the prompt to the context, asks
@@ -148,15 +150,23 @@ cargo run --release --locked -p intern-bench -- run --corpus bench/generated \
 Replay re-runs everything after the model (distillation, validation, role
 and type inference, naming, scoring) from what the worker read and what the
 model replied. It needs no worker, model or generated corpus: fixture
-staleness is checked against the manifest. It follows the same rules as the
-existing corpus:
+staleness is checked against the manifest. Prompts are built as the app
+builds them today, with today's digest budget and context size; when either
+differs from the recording's, the run says so on standard error, in the
+report and on its page. It follows the same rules as the existing corpus:
 
 * a document whose prompt the engine no longer builds is `stale_prompt`;
-* a document whose bytes changed is `stale_fixture`.
+* a document whose bytes changed is `stale_fixture`;
+* a document the recording lacks is `unrecorded`.
 
-Either one fails the run unless `--allow-stale` is given. Replay reports the
-recording's timings and says so (`timings_source: recorded`). It cannot
-measure a change to extraction or to the prompt; those need a live run.
+Each one fails the run (exit 2). `--allow-stale` lets only `stale_prompt`
+through: the document is scored from the reply the recorded run ended on,
+marked `"stale": true`, and the report says those scores do not measure this
+code. A `stale_fixture` or `unrecorded` document always fails the run and
+has to be recorded again (see [Working with it](#working-with-it)). Replay
+reports the recording's timings and says so (`timings_source: recorded`).
+It cannot measure a change to extraction or to the prompt; those need a
+live run.
 
 ### Comparing two runs
 
@@ -164,10 +174,17 @@ measure a change to extraction or to the prompt; those need a live run.
 intern-bench compare --before before.json --after after.json --markdown diff.md
 ```
 
-This aligns the two reports by document. It reports every rate and count
-change, every document that flipped on every score (fixed or broken), and
-the change in p50 and p95 of every stage. `intern-bench report --input
-report.json --markdown report.md` re-renders a report's Markdown.
+This aligns the two reports by document. Every rate, mean and count is
+computed again over the documents both runs scored, and each score over the
+documents that have it in both, so a subset run, a document added since or
+one that went stale moves no figure; the comparison says when the two runs
+cover different documents or gold. It lists every document that flipped on
+every score (fixed or broken). Latency, as the change in p50 and p95 of
+every stage, is compared over the documents both runs completed, and only
+between two live runs: a replay reports its recording's timings, so a
+comparison involving one shows no latency change and says why. Each side
+names its machine and, for a replay, its recording. `intern-bench report
+--input report.json --markdown report.md` re-renders a report's Markdown.
 
 ## Reading a report
 
@@ -179,7 +196,8 @@ report.json --markdown report.md` re-renders a report's Markdown.
 * `groups`: the same summary sliced by `kind`, `text_layer`, `format`, page
   bucket and category.
 * `latency`: p50, p90, p95, max and mean of every timing, overall and by
-  page bucket, kind and text layer.
+  page bucket, kind and text layer, over the documents that completed (a
+  failed document's time is only how long it took to fail).
 * `ocr`, `memory`, and one record per document holding the name, the
   description, the review reasons, the scores, the claims checked, the traps
   sprung and the timings.
@@ -196,12 +214,13 @@ whether it was filed without review.
 
 | Score | Meaning |
 | --- | --- |
-| `filename_correct` | The name equals one composed by the engine's own naming from an acceptable type × date × party set, compared the way Windows compares names. Scored where the gold has a date and a type. |
-| `type_correct`, `date_correct`, `date_exact`, `date_role_correct` | The facts in the name. |
+| `filename_correct` | The name equals one composed by the engine's own naming from an acceptable type × date × party set, compared the way Windows compares names. A two-party `between` name is right in either order. Scored where the gold has a date and a type. |
+| `type_correct`, `date_correct`, `date_exact` | The facts in the name. |
+| `date_role_correct` | The date's role, judged only when the reviewed date was chosen: the gold's role is that date's, and another acceptable date can rightly have another. |
 | `date_forbidden` | A trap date was chosen. It is good when false. |
 | `parties_correct` | Exactly one acceptable set of parties, nobody else. `parties_spurious` counts extras. |
 | `party_forbidden` | A party the gold marks as a trap was named. |
-| `relation_correct`, `party_role_correct` | The joining word, and whether the party it points at holds that role: `from` an issuer or sender, `for` a subject, `to` a recipient, `with` a counterparty. For `between`, every role-holder must be named. |
+| `relation_correct`, `party_role_correct` | The joining word, and whether the party it points at holds that role: `from` an issuer or sender, `for` a subject, `to` a recipient, `with` a counterparty. For `between`, every role-holder must be named. Judged when parties were named. |
 | `description_completeness` | Fraction of the gold facts the sentence states. |
 | `description_factual` | Every checkable claim (dates, amounts, percentages, identifiers, capitalised names) occurs in the document, and no forbidden fact is asserted. The extraction is a heuristic that leans towards "supported", so a failure is worth reading. |
 | `description_specificity` | The mean of three marks: names a party or gold fact; carries a concrete detail; 10–42 words. |
@@ -210,9 +229,12 @@ whether it was filed without review.
 | `readiness_match`, `unsafe_ready`, `needless_review` | Routing against the gold; ready with a wrong name; review although the name was right and the gold says ready. |
 | `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. |
 
-A score the gold does not define is omitted rather than counted as false. A
-document that failed is a miss on everything its gold defines: the corpus is
-the denominator.
+A score the gold does not define is omitted rather than counted as false,
+so a rate's denominator is the documents that could be right or wrong about
+it: every document for most scores, and for the date role, the relation word
+and the party's role, the documents whose answer gave them something to
+judge. A document that failed is a miss on every score its reviewed answer
+would be judged on, those three included.
 
 ### Timings
 
@@ -243,12 +265,16 @@ count, and read p95 as "the slow documents" rather than as a guarantee.
   are good when false. Replay is deterministic, so any flip is real.
 * **Live is gated in aggregate** over the documents both runs share. A rate
   may fall by at most one document's worth. The trap-date, forbidden-party
-  and unsafe-ready counts may not rise. Live inference is not bit-identical
-  across machines, which is why single-document flips are reported but not
-  fatal.
-* **Latency is gated only when asked**, with `--latency-gate RATIO`. Then
-  p95 of the total and of every stage must stay within RATIO times the
-  baseline. Use it only between runs on the same machine.
+  and unsafe-ready counts may not rise. A shared document that failed counts
+  in them as the miss it is, and a document that completed in the baseline
+  and no longer does fails the run on its own. Live inference is not
+  bit-identical across machines, which is why single-document score flips
+  are reported but not fatal.
+* **Latency is gated only live and only when asked**, with
+  `--latency-gate RATIO`. Then p95 of the total and of every stage, over the
+  documents that completed in both the run and the baseline, must stay
+  within RATIO times the baseline's; a subset run is held to the same subset.
+  Use it only between runs on the same machine.
 
 A regression exits 2. There are deliberately no absolute thresholds:
 the baseline is what Intern does today, and the gates stop it getting
@@ -256,8 +282,13 @@ worse while the work makes it better.
 
 ## Working with it
 
+The recording and baseline of record are `bench/recording.json` and
+`bench/baseline.json`. A live run writes them (`--record`,
+`--write-baseline`), and they are committed with the change that produced
+them; replay and the gates read them.
+
 For a change to anything after the model (validation, inference, naming,
-house style), replay against the committed recording, and check the
+house style), replay against `bench/recording.json`, and check the
 compare against the baseline before and after the change.
 
 For a change to extraction, distillation or the prompt, run live before
@@ -265,6 +296,18 @@ and after on the same machine at the same thread count, then `compare` the
 two reports. If the change is accepted, commit the new recording and
 baseline with it, so the review diff shows exactly which documents moved.
 
-The baseline InternBench produced against the code it was built on is in
-[`bench/reports/`](../bench/reports/), and
-[`pipeline-bottlenecks.md`](pipeline-bottlenecks.md) reads it.
+When a builder change alters a few documents' bytes, replay reports them
+`stale_fixture`. Record only those live (`-- --only id,id` to the script,
+which writes `target/internbench/recording.json`), then merge them into the
+recording of record:
+
+```sh
+intern-bench merge-recordings --base bench/recording.json \
+  --add target/internbench/recording.json --output bench/recording.json
+```
+
+Every other document keeps its recorded reply. The merge refuses a
+recording made with another model file, digest budget or context.
+
+[`pipeline-bottlenecks.md`](pipeline-bottlenecks.md) quotes its measured
+figures from a live run's report and says which.
