@@ -110,7 +110,7 @@ describe('the Rust (Ubuntu) job', () => {
     const windowsPlaceholders = [...windows.matchAll(/New-Item -ItemType File (src-tauri\\resources\\\S+compile-placeholder\.\w+)/g)]
       .map((match) => match[1].replaceAll('\\', '/'));
     const linuxPlaceholders = [...linux.matchAll(/touch (src-tauri\/resources\/\S+compile-placeholder\.\w+)/g)].map((match) => match[1]);
-    expect(windowsPlaceholders).toHaveLength(4);
+    expect(windowsPlaceholders).toHaveLength(5);
     expect(linuxPlaceholders.sort()).toEqual(windowsPlaceholders.sort());
   });
 });

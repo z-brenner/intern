@@ -20,6 +20,7 @@ $BinariesDirectory = Join-Path $RepositoryRoot "src-tauri/binaries"
 $ResourcesDirectory = Join-Path $RepositoryRoot "src-tauri/resources"
 $NativeDirectory = Join-Path $ResourcesDirectory "native"
 $TessdataDirectory = Join-Path $ResourcesDirectory "tessdata"
+$OcrModelsDirectory = Join-Path $ResourcesDirectory "ocr-models"
 $LicensesDirectory = Join-Path $ResourcesDirectory "licenses"
 $TargetTriple = "x86_64-pc-windows-msvc"
 $RuntimePackages = @{}
@@ -126,6 +127,7 @@ function Get-PackagedRuntimePath {
         return (Split-Path -Leaf $Path).Replace("-$TargetTriple", "")
     }
     if ($Relative.StartsWith("src-tauri/resources/tessdata/")) { return "tessdata/$(Split-Path -Leaf $Path)" }
+    if ($Relative.StartsWith("src-tauri/resources/ocr-models/")) { return "ocr-models/$(Split-Path -Leaf $Path)" }
     if ($Relative.StartsWith("src-tauri/resources/native/")) { return (Split-Path -Leaf $Path) }
     throw "No package mapping for staged runtime file: $Relative"
 }
@@ -145,7 +147,8 @@ try {
     if (Test-Path -LiteralPath $NativeDirectory) { Remove-Item -LiteralPath $NativeDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $TessdataDirectory) { Remove-Item -LiteralPath $TessdataDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $LicensesDirectory) { Remove-Item -LiteralPath $LicensesDirectory -Recurse -Force }
-    New-Item -ItemType Directory -Path $NativeDirectory, $TessdataDirectory, $LicensesDirectory -Force | Out-Null
+    if (Test-Path -LiteralPath $OcrModelsDirectory) { Remove-Item -LiteralPath $OcrModelsDirectory -Recurse -Force }
+    New-Item -ItemType Directory -Path $NativeDirectory, $TessdataDirectory, $LicensesDirectory, $OcrModelsDirectory -Force | Out-Null
 
     $Downloads = @{}
     foreach ($Download in $Manifest.downloads) { $Downloads[$Download.id] = Get-PinnedDownload $Download }
@@ -191,6 +194,47 @@ try {
     $TessdataVersion = [string]($Manifest.downloads | Where-Object id -eq "eng.traineddata").version
     Register-RuntimePackage $EngDestination "tessdata_fast" $TessdataVersion
     Register-RuntimePackage $OsdDestination "tessdata_fast" $TessdataVersion
+
+    # ONNX Runtime for PP-OCR: Microsoft's own CPU build from its NuGet
+    # package, which is a zip of every platform's build. Only the x64 runtime
+    # DLL and the package's license texts are taken out of it, and the DLL is
+    # checked against its own pin as well as the package's. It is staged
+    # beside the executables like every other sidecar DLL; the worker loads
+    # it by absolute path from the install directory.
+    $OnnxDownload = $Manifest.downloads | Where-Object id -eq "onnxruntime"
+    $OnnxExtract = Join-Path $WorkDirectory "onnxruntime"
+    if (Test-Path -LiteralPath $OnnxExtract) { Remove-Item -LiteralPath $OnnxExtract -Recurse -Force }
+    New-Item -ItemType Directory -Path $OnnxExtract | Out-Null
+    Assert-SafeZipArchive $Downloads["onnxruntime"]
+    $OnnxPackage = [System.IO.Compression.ZipFile]::OpenRead($Downloads["onnxruntime"])
+    try {
+        foreach ($EntryName in @($OnnxDownload.extract.path, "LICENSE", "ThirdPartyNotices.txt")) {
+            $Entry = $OnnxPackage.GetEntry($EntryName)
+            if ($null -eq $Entry) { throw "The pinned ONNX Runtime package has no $EntryName" }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($Entry, (Join-Path $OnnxExtract (Split-Path -Leaf $EntryName)), $true)
+        }
+    } finally { $OnnxPackage.Dispose() }
+    $OnnxDll = Join-Path $OnnxExtract (Split-Path -Leaf $OnnxDownload.extract.path)
+    Assert-ExactFile -Path $OnnxDll -Size $OnnxDownload.extract.size -Sha256 $OnnxDownload.extract.sha256 -Label "onnxruntime extracted DLL"
+    Copy-SidecarDll $OnnxDll "ONNX Runtime" ([string]$OnnxDownload.version)
+    Copy-RuntimeFile (Join-Path $OnnxExtract "LICENSE") (Join-Path $LicensesDirectory "onnxruntime-LICENSE.txt")
+    Copy-RuntimeFile (Join-Path $OnnxExtract "ThirdPartyNotices.txt") (Join-Path $LicensesDirectory "onnxruntime-ThirdPartyNotices.txt")
+
+    # The PP-OCR models, each pinned to a Hugging Face revision, under the
+    # file names the worker looks for. They carry no license file of their
+    # own; their Apache-2.0 text is pinned from the PaddleOCR repository.
+    $OcrModelPackages = [ordered]@{
+        "ocr-text-detection" = "PaddlePaddle/PP-OCRv5_mobile_det_onnx"
+        "ocr-text-recognition" = "PaddlePaddle/en_PP-OCRv5_mobile_rec_onnx"
+        "ocr-page-orientation" = "PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx"
+    }
+    foreach ($ModelId in $OcrModelPackages.Keys) {
+        $ModelDownload = $Manifest.downloads | Where-Object id -eq $ModelId
+        $ModelDestination = Join-Path $OcrModelsDirectory $ModelDownload.archive
+        Copy-RuntimeFile $Downloads[$ModelId] $ModelDestination
+        Register-RuntimePackage $ModelDestination $OcrModelPackages[$ModelId] ([string]$ModelDownload.version)
+    }
+    Copy-RuntimeFile $Downloads["paddleocr-license"] (Join-Path $LicensesDirectory "PaddleOCR-models-LICENSE.txt")
 
     $VcpkgDirectory = Join-Path $WorkDirectory "vcpkg"
     if (-not (Test-Path -LiteralPath (Join-Path $VcpkgDirectory ".git"))) {
@@ -262,8 +306,8 @@ try {
     Copy-RuntimeFile $TesseractCopyright (Join-Path $LicensesDirectory "tessdata-Apache-2.0.txt")
 
     $BundledFiles = @(
-        Get-ChildItem -LiteralPath $BinariesDirectory, $NativeDirectory, $TessdataDirectory -Recurse -File |
-            Where-Object { $_.Extension -in @(".exe", ".dll", ".traineddata") } |
+        Get-ChildItem -LiteralPath $BinariesDirectory, $NativeDirectory, $TessdataDirectory, $OcrModelsDirectory -Recurse -File |
+            Where-Object { $_.Extension -in @(".exe", ".dll", ".traineddata", ".onnx") } |
             Sort-Object FullName |
             ForEach-Object {
                 $Relative = [System.IO.Path]::GetRelativePath($RepositoryRoot, $_.FullName).Replace("\", "/")

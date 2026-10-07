@@ -41,6 +41,51 @@
       "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/osd.traineddata",
       "size": 10562727,
       "sha256": "9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff"
+    },
+    {
+      "id": "onnxruntime",
+      "version": "1.30.0",
+      "archive": "microsoft.ml.onnxruntime.1.30.0.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.30.0/microsoft.ml.onnxruntime.1.30.0.nupkg",
+      "size": 157230753,
+      "sha256": "30df119bd9164eaa187666d93147448fdd4a9a1a3caf83f1505daf7af2d1c5d2",
+      "extract": {
+        "path": "runtimes/win-x64/native/onnxruntime.dll",
+        "size": 16462648,
+        "sha256": "7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da"
+      }
+    },
+    {
+      "id": "ocr-text-detection",
+      "version": "e6f4fa85f00e168c862bc462aebca69eef9b3d3d",
+      "archive": "text-detection.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv5_mobile_det_onnx/resolve/e6f4fa85f00e168c862bc462aebca69eef9b3d3d/inference.onnx",
+      "size": 4826518,
+      "sha256": "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d"
+    },
+    {
+      "id": "ocr-text-recognition",
+      "version": "3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b",
+      "archive": "text-recognition.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/en_PP-OCRv5_mobile_rec_onnx/resolve/3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b/inference.onnx",
+      "size": 7848423,
+      "sha256": "b5f833dfc5d0eb71da397b4efa06ebeee9b431b690a47d6af40d77d8eabc557f"
+    },
+    {
+      "id": "ocr-page-orientation",
+      "version": "7330ab7039123e46af2dc03154b9969aa412c61d",
+      "archive": "page-orientation.onnx",
+      "url": "https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx/resolve/7330ab7039123e46af2dc03154b9969aa412c61d/inference.onnx",
+      "size": 6788069,
+      "sha256": "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92"
+    },
+    {
+      "id": "paddleocr-license",
+      "version": "v3.7.0",
+      "archive": "PaddleOCR-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/b03f46425e8ff4442b268ce449e3eef758146cd4/LICENSE",
+      "size": 11376,
+      "sha256": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e"
     }
   ],
   "vcpkg": {
