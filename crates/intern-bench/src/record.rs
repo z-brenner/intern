@@ -272,11 +272,14 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     };
     let scored = score(document, &outcome, &texts);
     record.scores = scored.scores;
-    // Beside `digest_recall`: what the evidence context would carry. A
-    // document that could not be read carries nothing, and still counts.
-    record.scores.extend(
-        crate::context::context_scores(document, observation.source, observation.retrieval).scores,
-    );
+    // Beside `digest_recall`: what the evidence context would carry, and
+    // what it costs, measured from the extracted text as an extract run
+    // measures it. A document that could not be read carries nothing, and
+    // still counts.
+    let context =
+        crate::context::context_scores(document, observation.source, observation.retrieval);
+    record.scores.extend(context.scores);
+    record.timings.extend(context.timings);
     // What only the evidence pipeline measures: nothing for the digest's.
     if let Some(analysis) = observation.analysis {
         record
@@ -346,5 +349,53 @@ mod tests {
                 "{key}"
             );
         }
+    }
+
+    /// A document that was read carries what its evidence context costs
+    /// beside what it holds, as an extract run's record does.
+    #[test]
+    fn a_read_document_carries_its_context_measurements() {
+        let document = GoldDocument {
+            id: "notice".into(),
+            file: "notice.pdf".into(),
+            pages: 1,
+            ..GoldDocument::default()
+        };
+        let source = intern_engine::source_from_text(
+            "NOTICE OF DEFAULT\n\nDate: October 14, 2025\n\nTo: Glasswing Ceramics LLC",
+        );
+        let retrieval = RetrievalConfig::default();
+        let record = scored_record(
+            &document,
+            Observation {
+                status: "model_failed",
+                error: None,
+                analysis: None,
+                source: Some(&source),
+                budget: DigestBudget::default(),
+                retrieval: &retrieval,
+                exchanges: &[],
+                last_prompt: None,
+                timings: timing::empty(),
+                timings_recorded: true,
+                memory: MemoryPeaks::default(),
+                replayed: true,
+                stale: false,
+            },
+        );
+        for key in [
+            "context_tokens",
+            "context_units",
+            "index_units",
+            "index_ms",
+            "retrieval_ms",
+        ] {
+            assert!(
+                timing::get(&record.timings, key).is_some(),
+                "{key}: {:?}",
+                record.timings.get(key)
+            );
+        }
+        assert!(timing::get(&record.timings, "context_units").unwrap() > 0.0);
     }
 }

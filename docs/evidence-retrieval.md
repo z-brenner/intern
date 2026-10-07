@@ -156,8 +156,10 @@ running lines) at both.
 
 and, with the timings, `context_tokens`, `context_units`, `index_units`,
 `index_ms` and `retrieval_ms`. Extract-only runs report them next to
-`digest_recall` (and an extract baseline gates them with no tolerance);
-replay and live runs report the fractions too.
+`digest_recall` (and an extract baseline gates them with no tolerance).
+Replay and live runs report all of them too. In a replay, `index_ms` and
+`retrieval_ms` are measured when the report is made, from the recorded
+text; the rest of the timings are the recording's.
 
 `intern-bench retrieval` sweeps configurations over recorded sources,
 needing no worker and no model:

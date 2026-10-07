@@ -352,11 +352,16 @@ impl Engine {
 
     /// The evidence prepared again at half the scale: what the engine sends a
     /// model that said the prompt did not fit. The estimate is an estimate;
-    /// the server counts exactly.
+    /// the server counts exactly. Its timings include the first preparation's,
+    /// as the digest pipeline's retry counts its first distillation.
     pub fn refit_halved(&self, prepared: &PreparedEvidence) -> EngineResult<PreparedEvidence> {
         let scale = (prepared.scale_pct / 2).max(1);
         let mut halved = self.fit(prepared.index.clone(), prepared.index_micros, scale)?;
         halved.refits += prepared.refits + 1;
+        halved.retrieval_micros = halved
+            .retrieval_micros
+            .saturating_add(prepared.retrieval_micros);
+        halved.prompt_micros = halved.prompt_micros.saturating_add(prepared.prompt_micros);
         Ok(halved)
     }
 
@@ -1373,6 +1378,32 @@ mod tests {
         let analysis = engine.analyze(&source_from_text(long), "pdf", &[]).unwrap();
         assert_eq!(analysis.telemetry.redistillations, 1);
         assert_eq!(analysis.status, ProposalStatus::NeedsReview);
+    }
+
+    /// A retry at half the evidence reports all the preparing it took: the
+    /// first retrieval and prompt as well as its own.
+    #[test]
+    fn a_half_scale_refit_keeps_the_first_preparations_time() {
+        let engine =
+            Engine::with_proposer(Box::new(std::sync::Arc::new(Recording::new(vec![Ok(())]))));
+        let mut prepared = engine
+            .prepare(&source_from_text("INVOICE\nInvoice Date: May 1, 2025"))
+            .unwrap();
+        prepared.retrieval_micros = 5_000_000;
+        prepared.prompt_micros = 3_000_000;
+        let halved = engine.refit_halved(&prepared).unwrap();
+        assert!(
+            halved.retrieval_micros >= 5_000_000,
+            "{}",
+            halved.retrieval_micros
+        );
+        assert!(
+            halved.prompt_micros >= 3_000_000,
+            "{}",
+            halved.prompt_micros
+        );
+        assert_eq!(halved.index_micros, prepared.index_micros);
+        assert_eq!(halved.refits, prepared.refits + 1);
     }
 
     /// At the least context the measurement tools accept, a document still
