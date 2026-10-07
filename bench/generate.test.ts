@@ -477,12 +477,23 @@ function normalisedText(text: string) {
   return normalise(text).replace(/[‐-—]/g, '-');
 }
 
-describe('InternBench structure gold and the documents added for it', () => {
-  const pending = () => documents.filter((document) => document.recording === 'pending');
+/// The documents added with the structure gold. They were pending a
+/// recording until the phase 2 live run recorded them.
+const ADDED_FOR_STRUCTURE = [
+  'newsletter-three-column', 'agreement-two-column-footnotes', 'meeting-notice-columns', 'meeting-notice-interleaved',
+  'meeting-notice-reversed', 'rate-confirmation-rotated', 'inspection-log-ruled-2p', 'price-list-unruled',
+  'invoice-label-above', 'invoice-right-aligned', 'invoice-boxed-grid', 'benefits-change-checkbox-form',
+  'loss-notice-boxed-fields', 'scan-rotated-page-in-pdf', 'scan-cancellation-notice-150dpi', 'scan-remittance-advice-120dpi',
+  'scan-mixed-middle-page', 'mixed-signature-region', 'scan-certificate-of-insurance', 'scan-bill-of-lading',
+];
 
-  it('adds twenty documents, each pending a recording, with full gold and a structure block', () => {
-    expect(pending().length).toBe(20);
-    for (const document of pending()) {
+describe('InternBench structure gold and the documents added for it', () => {
+  const added = () => documents.filter((document) => ADDED_FOR_STRUCTURE.includes(document.id));
+
+  it('adds twenty documents with full gold and a structure block, every one now recorded', () => {
+    expect(added().length).toBe(20);
+    expect(documents.filter((document) => document.recording === 'pending').map((document) => document.id)).toEqual([]);
+    for (const document of added()) {
       expect(document.structure, document.id).toBeDefined();
       expect(document.gold.document_date, document.id).not.toBeNull();
       expect(document.gold.forbidden_dates.length, `${document.id}: traps`).toBeGreaterThan(0);

@@ -67,7 +67,6 @@ export function inspectionLogTwoPages() {
       keyValues: fields,
       routes: { 1: 'layout', 2: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Fire Extinguisher Inspection Report',
       acceptableTypes: ['Inspection Report', 'Fire Extinguisher Inspection'],
@@ -136,7 +135,6 @@ export function priceListUnruled() {
       tables: [[columns.map((column) => column.header), ...rows]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Price List',
       acceptableTypes: ['Wholesale Price List', 'Availability and Price List'],
@@ -251,7 +249,6 @@ export function invoiceLabelAbove() {
       keyValues: [...header, ['BILL TO', customer], ['INSTALLATION DATE', numericDate(installed)], ['TOTAL DUE', money(priced.total)]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       date: invoiceDate,
@@ -313,7 +310,6 @@ export function invoiceRightAligned() {
       keyValues: [...header, ...totals],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       date: invoiceDate,
@@ -412,7 +408,6 @@ export function invoiceBoxedGrid() {
       tables: [[['Work performed', 'Qty', 'Rate', 'Amount'], ...priced.rows.map((row) => [row.description, String(row.quantity), amount(row.unit), amount(row.total)])]],
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Invoice',
       acceptableTypes: ['Service Invoice'],
@@ -508,7 +503,6 @@ export function benefitsChangeForm() {
       keyValues: boxes,
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Benefits Enrollment Change Form',
       acceptableTypes: ['Benefits Change Form', 'Benefits Enrollment Form'],
@@ -580,7 +574,6 @@ export function lossNoticeBoxedFields() {
       keyValues: rows.flat().map(([label, value]) => [label, value]),
       routes: { 1: 'layout' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Property Loss Notice',
       acceptableTypes: ['Notice of Loss', 'Loss Notice'],

@@ -98,7 +98,6 @@ export function scanRotatedPageInPdf() {
       keyValues: fields,
       routes: { 1: 'ocr', 2: 'ocr' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Notice of Freight Claim',
       acceptableTypes: ['Freight Claim', 'Freight Claim Letter'],
@@ -160,7 +159,6 @@ export function scanCancellationNotice150() {
     notes: `A grey scan at 150 DPI: 10.5-point text is about 22 pixels to the em, enough to read but not to read every digit. Five dates compete: the notice is dated ${numericDate(mailed)}; the cancellation's effective date (${numericDate(cancels)}), the policy period (${numericDate(periodStart)} to ${numericDate(periodEnd)}) and the missed installment's due date (${numericDate(premiumDue)}) are traps. From the insurer to the insured; the producer receives a copy.`,
     ocrTruth: truth,
     structure: structure({ keyValues: fields, routes: { 1: 'ocr' } }),
-    recording: 'pending',
     gold: gold({
       type: 'Notice of Cancellation',
       acceptableTypes: ['Cancellation Notice', 'Notice of Cancellation for Nonpayment of Premium'],
@@ -248,7 +246,6 @@ export function scanRemittanceAdvice120() {
       keyValues: [...fields, ['Net payment', money(net)]],
       routes: { 1: 'ocr' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Remittance Advice',
       acceptableTypes: ['Payment Remittance Advice', 'Remittance'],
@@ -335,7 +332,6 @@ export function scanMixedMiddlePage() {
       tables: [schedule],
       routes: { 1: 'fast', 2: 'ocr', 3: 'fast' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Lease Renewal Agreement',
       acceptableTypes: ['Lease Renewal', 'Lease Extension Agreement'],
@@ -430,7 +426,6 @@ export function mixedSignatureRegion() {
       readingOrder: ['IN WITNESS WHEREOF', 'Rosalind Achterberg', longDate(signedLicensor), 'Barnaby Quist', longDate(signedLicensee)],
       routes: { 1: 'fast', 2: 'ocr_regions' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'First Amendment to Software License Agreement',
       acceptableTypes: ['Amendment to Software License Agreement', 'License Amendment'],
@@ -513,7 +508,6 @@ export function scanCertificateOfInsurance() {
       keyValues: [['DATE (MM/DD/YYYY)', numericDate(issued)], ['PRODUCER', producer], ['INSURED', insured], ['CERTIFICATE HOLDER', holder], ['CERTIFICATE NUMBER', 'HQ-26-06-4415']],
       routes: { 1: 'ocr' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Certificate of Liability Insurance',
       acceptableTypes: ['Certificate of Insurance'],
@@ -604,7 +598,6 @@ export function scanBillOfLading() {
       keyValues: [...head, ['SHIP FROM', shipper], ['SHIP TO', consignee]],
       routes: { 1: 'ocr' },
     }),
-    recording: 'pending',
     gold: gold({
       type: 'Bill of Lading',
       acceptableTypes: ['Straight Bill of Lading'],

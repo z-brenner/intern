@@ -6906,8 +6906,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "agreement-two-column-footnotes",
@@ -7027,8 +7026,7 @@
           "1": "layout",
           "2": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-columns",
@@ -7143,8 +7141,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-interleaved",
@@ -7260,8 +7257,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "meeting-notice-reversed",
@@ -7377,8 +7373,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "rate-confirmation-rotated",
@@ -7564,8 +7559,7 @@
           "1": "layout",
           "2": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "inspection-log-ruled-2p",
@@ -8103,8 +8097,7 @@
           "1": "layout",
           "2": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "price-list-unruled",
@@ -8362,8 +8355,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-label-above",
@@ -8486,8 +8478,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-right-aligned",
@@ -8667,8 +8658,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "invoice-boxed-grid",
@@ -8849,8 +8839,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "benefits-change-checkbox-form",
@@ -9092,8 +9081,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "loss-notice-boxed-fields",
@@ -9285,8 +9273,7 @@
         "expected_routes": {
           "1": "layout"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-rotated-page-in-pdf",
@@ -9503,8 +9490,7 @@
           "1": "ocr",
           "2": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-cancellation-notice-150dpi",
@@ -9674,8 +9660,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-remittance-advice-120dpi",
@@ -9915,8 +9900,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-mixed-middle-page",
@@ -10080,8 +10064,7 @@
           "2": "ocr",
           "3": "fast"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "mixed-signature-region",
@@ -10214,8 +10197,7 @@
           "1": "fast",
           "2": "ocr_regions"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-certificate-of-insurance",
@@ -10457,8 +10439,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     },
     {
       "id": "scan-bill-of-lading",
@@ -10702,8 +10683,7 @@
         "expected_routes": {
           "1": "ocr"
         }
-      },
-      "recording": "pending"
+      }
     }
   ]
 }
