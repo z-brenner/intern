@@ -205,7 +205,12 @@ impl Frame {
 #[derive(Default)]
 struct ObjectSurvey {
     image_area: f32,
+    /// The images the router reads, set by [`ObjectSurvey::bounded`].
     images: Vec<[u32; 4]>,
+    /// The largest images drawn so far, at most [`MAX_IMAGES`], each with
+    /// its area and its place in drawing order.
+    largest_images: Vec<(u64, usize, [u32; 4])>,
+    images_drawn: usize,
     text_objects: u32,
     invisible_text_objects: u32,
     /// The box of each text object, in content-stream order: the runs of
@@ -330,7 +335,7 @@ fn survey_object(
     }
     if object.as_image_object().is_some() {
         survey.image_area += (right - left).abs() * (top - bottom).abs();
-        survey.images.push(frame.points(left, bottom, right, top));
+        survey.keep_image(frame.points(left, bottom, right, top));
         return;
     }
     if let Some(path) = object.as_path_object() {
@@ -354,7 +359,7 @@ fn survey_path(
     let thin_across = height <= RULE_THICKNESS && width >= RULE_LENGTH;
     let thin_down = width <= RULE_THICKNESS && height >= RULE_LENGTH;
     if thin_across || thin_down {
-        survey.rulings.push(frame.points(left, bottom, right, top));
+        survey.keep_ruling(frame.points(left, bottom, right, top));
     } else if path.is_stroked().unwrap_or(false)
         && path
             .fill_mode()
@@ -363,36 +368,63 @@ fn survey_path(
         && height >= RULE_LENGTH
     {
         // An outlined box: its four sides are rules.
-        survey
-            .rulings
-            .push(frame.points(left, top - 0.5, right, top));
-        survey
-            .rulings
-            .push(frame.points(left, bottom, right, bottom + 0.5));
-        survey
-            .rulings
-            .push(frame.points(left, bottom, left + 0.5, top));
-        survey
-            .rulings
-            .push(frame.points(right - 0.5, bottom, right, top));
+        survey.keep_ruling(frame.points(left, top - 0.5, right, top));
+        survey.keep_ruling(frame.points(left, bottom, right, bottom + 0.5));
+        survey.keep_ruling(frame.points(left, bottom, left + 0.5, top));
+        survey.keep_ruling(frame.points(right - 0.5, bottom, right, top));
     }
 }
 
 #[cfg(feature = "native-pdfium")]
 impl ObjectSurvey {
-    /// What the survey keeps, held to the router's bounds: the largest
-    /// images, the first rules. The image area still counts every image.
-    fn bounded(mut self) -> Self {
-        if self.images.len() > MAX_IMAGES {
-            self.images.sort_by_key(|image| {
-                std::cmp::Reverse(
-                    u64::from(image[2].saturating_sub(image[0]))
-                        * u64::from(image[3].saturating_sub(image[1])),
-                )
-            });
-            self.images.truncate(MAX_IMAGES);
+    /// Keeps an image while it is among the [`MAX_IMAGES`] largest drawn so
+    /// far, as the walk goes: a page of a million small images holds 64 of
+    /// them, never all. Of images the same size, the earlier drawn is kept.
+    fn keep_image(&mut self, image: [u32; 4]) {
+        let area = u64::from(image[2].saturating_sub(image[0]))
+            * u64::from(image[3].saturating_sub(image[1]));
+        let drawn = self.images_drawn;
+        self.images_drawn += 1;
+        if self.largest_images.len() < MAX_IMAGES {
+            self.largest_images.push((area, drawn, image));
+            return;
         }
-        self.rulings.truncate(MAX_RULINGS);
+        // The one the bound would drop first: the smallest, and of the
+        // smallest the latest drawn.
+        let Some((weakest, &(weakest_area, ..))) = self
+            .largest_images
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, (area, drawn, _))| (*area, std::cmp::Reverse(*drawn)))
+        else {
+            return;
+        };
+        if area > weakest_area {
+            self.largest_images[weakest] = (area, drawn, image);
+        }
+    }
+
+    /// Keeps a rule while the page has fewer than [`MAX_RULINGS`]: the
+    /// first ones drawn, as the walk goes.
+    fn keep_ruling(&mut self, ruling: [u32; 4]) {
+        if self.rulings.len() < MAX_RULINGS {
+            self.rulings.push(ruling);
+        }
+    }
+
+    /// What the survey keeps, held to the router's bounds as it walked: the
+    /// largest images, largest first when there were more than the bound
+    /// and in drawing order otherwise, and the first rules. The image area
+    /// still counts every image.
+    fn bounded(mut self) -> Self {
+        if self.images_drawn > MAX_IMAGES {
+            self.largest_images
+                .sort_by_key(|&(area, drawn, _)| (std::cmp::Reverse(area), drawn));
+        }
+        self.images = std::mem::take(&mut self.largest_images)
+            .into_iter()
+            .map(|(_, _, image)| image)
+            .collect();
         self
     }
 }
@@ -835,5 +867,79 @@ impl PdfBackend for PdfiumBackend {
         Err(ExtractionError::native_assets_missing(
             "PDFium support is unavailable",
         ))
+    }
+}
+
+#[cfg(all(test, feature = "native-pdfium"))]
+mod survey_bounds {
+    use super::*;
+
+    /// Image boxes of a few sizes, many the same, from a fixed sequence.
+    fn images(count: usize) -> Vec<[u32; 4]> {
+        let mut state = 7_u32;
+        (0..count)
+            .map(|_| {
+                state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let side = 10 + (state >> 16) % 40;
+                let left = (state >> 8) % 500;
+                [left, 0, left + side, side]
+            })
+            .collect()
+    }
+
+    /// Every image collected first, then the largest kept, the earlier of a
+    /// size first: what the survey did before it bounded as it walked.
+    fn collected_then_bounded(images: &[[u32; 4]]) -> Vec<[u32; 4]> {
+        let mut all = images.to_vec();
+        if all.len() > MAX_IMAGES {
+            all.sort_by_key(|image| {
+                std::cmp::Reverse(
+                    u64::from(image[2].saturating_sub(image[0]))
+                        * u64::from(image[3].saturating_sub(image[1])),
+                )
+            });
+            all.truncate(MAX_IMAGES);
+        }
+        all
+    }
+
+    #[test]
+    fn a_page_of_many_images_holds_the_largest_as_it_walks_and_keeps_the_same_ones() {
+        for count in [
+            0,
+            1,
+            MAX_IMAGES - 1,
+            MAX_IMAGES,
+            MAX_IMAGES + 1,
+            1_000,
+            20_000,
+        ] {
+            let drawn = images(count);
+            let mut survey = ObjectSurvey::default();
+            for image in &drawn {
+                survey.keep_image(*image);
+                assert!(survey.largest_images.len() <= MAX_IMAGES);
+            }
+            assert_eq!(
+                survey.bounded().images,
+                collected_then_bounded(&drawn),
+                "{count} images"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_of_many_rules_holds_the_first_ones() {
+        let mut survey = ObjectSurvey::default();
+        for index in 0..(MAX_RULINGS as u32 + 5_000) {
+            survey.keep_ruling([index, 0, index + 20, 1]);
+        }
+        let rulings = survey.bounded().rulings;
+        assert_eq!(rulings.len(), MAX_RULINGS);
+        assert_eq!(rulings[0], [0, 0, 20, 1]);
+        assert_eq!(
+            rulings[MAX_RULINGS - 1],
+            [MAX_RULINGS as u32 - 1, 0, MAX_RULINGS as u32 + 19, 1]
+        );
     }
 }
