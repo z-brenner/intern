@@ -573,6 +573,43 @@ fn pages_the_worker_will_cut_have_no_layout_built() {
     assert_eq!(built, [false, true, true, true, false, false]);
 }
 
+/// A fast layout holds an object for every line and cell of its page, and
+/// the character caps do not bound how many: a page of more than a page's
+/// layout may hold, and pages past what the document's may hold together,
+/// are read as their text with no layout built.
+#[test]
+fn pages_of_more_lines_than_layouts_may_hold_have_no_layout_built() {
+    use intern_worker::limits::{MAX_DOCUMENT_LAYOUT_PARTS, MAX_PAGE_LAYOUT_PARTS};
+
+    let dense = "A\n\n".repeat(MAX_PAGE_LAYOUT_PARTS / 2);
+    let full = "A\n".repeat(MAX_PAGE_LAYOUT_PARTS - 1);
+    let fitting = MAX_DOCUMENT_LAYOUT_PARTS / MAX_PAGE_LAYOUT_PARTS;
+    let texts = std::iter::once(&dense)
+        .chain(std::iter::repeat_n(&full, fitting + 1))
+        .collect::<Vec<_>>();
+    let pages = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| PdfPageInspection {
+            page_index: index,
+            ..page(text, 0.0)
+        })
+        .collect();
+    let (document, renders) = route(pages, Vec::new());
+    assert_eq!(renders, 0);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    let mut expected = vec![false];
+    expected.extend(std::iter::repeat_n(true, fitting));
+    expected.push(false);
+    assert_eq!(built, expected);
+    assert_eq!(document.pages[0].text, dense);
+    assert!(!document.truncated);
+}
+
 /// Scanned pages count against the document's characters too: a page the
 /// worker will cut keeps its text for the cut but lets its layout go.
 #[test]

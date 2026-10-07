@@ -797,7 +797,7 @@ fn workbook_document(
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut pages = Vec::new();
     let mut elided = false;
-    let mut characters = crate::limits::MAX_DOCUMENT_CHARS;
+    let mut budget = crate::extract::TextBudget::document();
     for (name, sheet) in sheets {
         let Some(sheet) = sheet else {
             continue;
@@ -808,7 +808,7 @@ fn workbook_document(
             pages.len() + 1,
             text,
             PageSource::AnyDoc,
-            &mut characters,
+            &mut budget,
         ));
     }
     if pages.is_empty() {

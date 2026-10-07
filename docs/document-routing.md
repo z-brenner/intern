@@ -423,6 +423,21 @@ and inspection reads runs ahead only while the pages read so far stay
 within the document's characters, so the layouts and runs held while a
 document is planned repeat at most its characters and a page.
 
+The character caps do not bound how many objects a layout built from text
+holds, one for every line and every table cell: two million characters
+can be hundreds of thousands of one-letter lines, or of pipes. So a page
+whose layout is built from its text (a fast PDF page, or any reader with
+no geometry) gets one only while its lines and pipes fit both
+`MAX_PAGE_LAYOUT_PARTS` (50,000 on a page) and what the document has left
+of `MAX_DOCUMENT_LAYOUT_PARTS` (200,000), counted in page order. The
+densest page of InternBench and the fixtures has 647, and the densest
+document 10,192. A page past either is read as its text with no layout.
+The engine, segmenting a page that came without a layout, holds itself to
+the same two bounds; a page past them is cut into plain stretches of its
+text of at most 4 KB each, so it can still be indexed. Layouts from a
+page's geometry or its OCR are bounded where they are read, by runs and by
+what OCR finds on a page.
+
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the
 most; reading a page's characters 0.74 ms at the median.
