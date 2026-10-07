@@ -51,6 +51,23 @@ pre-pass would have called it a corrupt archive; a legacy workbook carries a
 `FilePass` record; and PDFium's password error on a PDF maps to the same code.
 Every error message is one line, never a debug dump.
 
+Every page also carries a layout: the page as blocks in reading order -
+headings, paragraphs, tables with their rows and cells, labelled values -
+each with a stable id (`p3.b7`, rows `p3.b7.r2`, fields `p3.b7.f1`), the
+heading it falls under, its box on the page where the reader knows one, and
+where its text came from. A PDF page is routed before it is read: most pages
+keep PDFium's text exactly as it has always been read and get blocks built
+cheaply from it; a page whose columns, tables or grids of labelled values
+PDFium would run together is rebuilt from the geometry of its characters,
+and its text becomes those blocks in order; a page with no usable text, or
+an invisible text layer that is a bad prior OCR, is read by OCR; and a large
+image on a text page that may hold text of its own is cropped and read too.
+Scanned pages are read side by side by a pool of OCR workers. Office files,
+sheets, email and text get blocks from their own structure.
+[Document routing](document-routing.md) has the signals, the thresholds and
+the measurements behind them; the engine's `structured()` returns the blocks
+of every page of every document.
+
 Plain text and Markdown are read directly, by byte-order mark: UTF-16 in
 either order and a marked UTF-8 file all decode, and the mark itself never
 reaches the text. Unmarked text that is not UTF-8 is, on the Windows machines
