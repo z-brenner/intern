@@ -104,7 +104,7 @@ A page that has to be OCR'd is rendered at 300 DPI or, when that would pass
 the 25-megapixel render cap, at the highest resolution that fits it. A phone
 photo that some tool wrapped in a PDF at 72 DPI is a 4032 × 3024 point page,
 about 212 megapixels at 300 DPI; it is rendered at about 103 DPI, which
-Tesseract reads perfectly well, instead of failing the document. Only a page
+OCR reads perfectly well, instead of failing the document. Only a page
 that would have to go below 50 DPI to fit is a resource limit, and the size of
 what was actually rendered is still checked against the cap. A standalone
 image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
@@ -115,7 +115,19 @@ straight into the page-sized copy, and only then turned upright, so a
 48-megapixel photo costs the worker about 220 MB at its peak rather than the
 760 MB a filtered resample's floating-point intermediate took.
 
-OCR text keeps the layout Tesseract found. The worker rebuilds it from
+Scans are read by PP-OCR, a text-detection network, an English recognizer and
+a page-orientation classifier run through ONNX Runtime, when the runtime and
+models are installed beside the worker, as they are in the Windows package. On
+InternBench's scans it makes a fifth of Tesseract's character errors and reads
+more of the dates and identifiers, at about three times Tesseract's CPU per
+page, which OCR's share of a document's time absorbs. Without those files - a
+development machine, a Linux CI runner - or when they fail to load, Tesseract
+reads scans exactly as before. [OCR](ocr.md) has the engine, its settings,
+the benchmark behind each one, and what it costs. Either way the reading
+comes back as lines with boxes and confidences, which the layout analysis
+turns into blocks like any other page's.
+
+Tesseract's text keeps the layout Tesseract found. The worker rebuilds it from
 Tesseract's TSV output: words on a line joined with a space, lines with a
 newline, and a new block or paragraph with a blank line, the way Tesseract's
 own text output separates them. It used to be one line per page, which left
@@ -161,6 +173,10 @@ documented as intent:
 * PDFium is bound once per process and shared. Binding it per document made
   every PDF after the first one in a queue fail as "native assets missing";
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
+The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
+asks its orientation classifier first and then runs the same confidence
+search ([OCR](ocr.md)).
+
 * A page is read as it came first, in grey: Tesseract binarises whatever it is
   given, and grey is a third of the bytes to encode for every pass. A reading
   of at least three words at a mean confidence of 75 or more is done — one
@@ -188,7 +204,8 @@ documented as intent:
 A PDF reports its progress as it goes: a `reading` event as each page is
 reached and an `ocr` event as each goes to OCR, carrying how many pages are
 finished and the page count, at most four of each a second; a standalone
-image reports none of its one page finished as it goes to OCR. The window
+image reports the pages finished as each of its frames goes to OCR, none for
+the first. The window
 shows that as a whole percentage. A 200-page scan used to sit at 0% until it
 was done.
 
