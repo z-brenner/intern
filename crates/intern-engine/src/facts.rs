@@ -62,6 +62,8 @@ const SUBJECT_OVERLAP: f32 = 0.6;
 const DEFINED_TERM_REACH: usize = 60;
 /// How far before a party's name its label may stand: `Bill To:`.
 const LABEL_REACH: usize = 40;
+/// Longest unit that can be a letterhead's.
+const LETTERHEAD_CHARACTERS: usize = 120;
 /// Longest line a date line is cut to, as distill cuts them.
 const MAX_DATE_LINE_CHARACTERS: usize = 150;
 
@@ -547,12 +549,16 @@ pub fn validate_facts_at(
             None | Some(PartyRole::Other) => Support::Absent,
             Some(role) => role_support(scope, name, role, &party.evidence),
         };
+        let document_role = (!matches!(role_support, Support::Cited | Support::Context))
+            .then(|| labelled_role(scope, name))
+            .flatten();
         let first_seen = first_appearance(scope, name);
         parties.push((
             ValidatedParty {
                 name: name.to_owned(),
                 role: party.role,
                 role_support,
+                document_role,
                 support: found.support,
                 evidence: found
                     .unit
@@ -575,12 +581,24 @@ pub fn validate_facts_at(
         .into_iter()
         .map(|(party, _)| party)
         .collect::<Vec<_>>();
+    // The reply's role where the document supports it, else the role the
+    // document's own wording gives, else the reply's role, unsupported.
     let cast = parties
         .iter()
-        .map(|party| CastMember {
-            name: party.name.clone(),
-            role: party.role,
-            role_supported: matches!(party.role_support, Support::Cited | Support::Context),
+        .map(|party| {
+            let supported = matches!(party.role_support, Support::Cited | Support::Context);
+            match (supported, party.document_role) {
+                (false, Some(role)) => CastMember {
+                    name: party.name.clone(),
+                    role: Some(role),
+                    role_supported: true,
+                },
+                _ => CastMember {
+                    name: party.name.clone(),
+                    role: party.role,
+                    role_supported: supported,
+                },
+            }
         })
         .collect::<Vec<_>>();
     let class = DocumentClass::of(document_type.as_deref());
@@ -622,7 +640,7 @@ pub fn validate_facts_at(
             remember(&found, &mut references);
             let label = found
                 .unit
-                .and_then(|unit| identifier_label(unit, found.line.as_deref(), value));
+                .and_then(|unit| identifier_label(scope.index, unit, found.line.as_deref(), value));
             identifier = Some((identifier_word(label.as_deref()), value.to_owned()));
         }
     }
@@ -664,9 +682,17 @@ pub fn validate_facts_at(
         document_type: document_type.as_deref(),
         relation: Some(&relation),
         parties: &cast,
-        subject: subject.as_deref(),
+        // A subject or a number that only repeats the type says nothing
+        // the sentence does not already, and a number has a digit in it.
+        subject: subject
+            .as_deref()
+            .filter(|value| !repeats(value, document_type.as_deref())),
         identifier: identifier
             .as_ref()
+            .filter(|(_, value)| {
+                value.chars().any(|character| character.is_ascii_digit())
+                    && !repeats(value, document_type.as_deref())
+            })
             .map(|(word, value)| (*word, value.as_str())),
         amount,
         other_fact,
@@ -788,6 +814,19 @@ fn titled(value: &str) -> String {
         .join(" ")
 }
 
+/// Whether every word of `value` is a word of the document's type:
+/// "Credit Agreement" for a Credit Agreement.
+fn repeats(value: &str, document_type: Option<&str>) -> bool {
+    let Some(document_type) = document_type else {
+        return false;
+    };
+    let kind = normalize(document_type);
+    let kind = kind.split_whitespace().collect::<Vec<_>>();
+    normalize(value)
+        .split_whitespace()
+        .all(|word| kind.contains(&word))
+}
+
 /// Which view a guard fired in.
 fn scope_name(context: bool, document: bool) -> String {
     match (context, document) {
@@ -903,7 +942,10 @@ fn role_words(role: PartyRole) -> (&'static [&'static str], &'static [&'static s
         PartyRole::Employee => (&["employee"], &["employee", "executive"]),
         PartyRole::Buyer => (&["buyer", "purchaser", "sold to"], &["buyer", "purchaser"]),
         PartyRole::Seller => (&["seller", "vendor"], &["seller", "vendor", "supplier"]),
-        PartyRole::Landlord => (&["landlord", "lessor"], &["landlord", "lessor"]),
+        PartyRole::Landlord => (
+            &["landlord", "lessor", "owner"],
+            &["landlord", "lessor", "owner"],
+        ),
         PartyRole::Tenant => (&["tenant", "lessee", "resident"], &["tenant", "lessee"]),
         PartyRole::Issuer => (
             &[
@@ -969,7 +1011,7 @@ fn role_support(
 ) -> Support {
     let normalized = normalize(name);
     let loose = normalize_loosely(name);
-    let supports = |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role);
+    let supports = |unit: &EvidenceUnit| unit_supports_role(unit, &normalized, &loose, role, true);
     if scope.cited_units(cited).into_iter().any(supports) {
         return Support::Cited;
     }
@@ -979,7 +1021,60 @@ fn role_support(
     Support::Unsupported
 }
 
-fn unit_supports_role(unit: &EvidenceUnit, normalized: &str, loose: &str, role: PartyRole) -> bool {
+/// The roles a document's wording can give a party, the sides a document is
+/// about and the sides it comes from first, the generic ones last.
+const LABELLED_ROLES: [PartyRole; 18] = [
+    PartyRole::Tenant,
+    PartyRole::Landlord,
+    PartyRole::Borrower,
+    PartyRole::Lender,
+    PartyRole::Employee,
+    PartyRole::Employer,
+    PartyRole::Licensee,
+    PartyRole::Licensor,
+    PartyRole::Buyer,
+    PartyRole::Seller,
+    PartyRole::Client,
+    PartyRole::Contractor,
+    PartyRole::Customer,
+    PartyRole::Vendor,
+    PartyRole::Issuer,
+    PartyRole::Sender,
+    PartyRole::Recipient,
+    PartyRole::Addressee,
+];
+
+/// The first role, in [`LABELLED_ROLES`]' order, that what the model was
+/// shown gives `name` in its own words: a label, a defined term, a
+/// letterhead, an issuer or customer cue.
+fn labelled_role(scope: &ValidationScope<'_>, name: &str) -> Option<PartyRole> {
+    let normalized = normalize(name);
+    let loose = normalize_loosely(name);
+    let naming = scope
+        .context_units()
+        .filter(|unit| {
+            contains_whole(&unit.normalized, &normalized)
+                || contains_whole(&normalize_loosely(&unit.text), &loose)
+        })
+        .collect::<Vec<_>>();
+    LABELLED_ROLES.into_iter().find(|role| {
+        naming
+            .iter()
+            .any(|unit| unit_supports_role(unit, &normalized, &loose, *role, false))
+    })
+}
+
+/// `cues`: whether an issued document's issuer and customer cues count.
+/// They name the issuing and the billed side, not which of the issuing
+/// side's roles - vendor, seller, issuer - a party has, so a role read from
+/// the document alone takes them only as issuer and customer.
+fn unit_supports_role(
+    unit: &EvidenceUnit,
+    normalized: &str,
+    loose: &str,
+    role: PartyRole,
+    cues: bool,
+) -> bool {
     let (labels, terms) = role_words(role);
     let mut positions = whole_positions(&unit.normalized, normalized)
         .into_iter()
@@ -1012,7 +1107,12 @@ fn unit_supports_role(unit: &EvidenceUnit, normalized: &str, loose: &str, role: 
             return true;
         }
     }
-    if matches!(role, PartyRole::Issuer | PartyRole::Sender) && unit.features.position.letterhead {
+    // A letterhead is a few short lines at the top of the first page, not
+    // the opening paragraph that happens to be among them.
+    if matches!(role, PartyRole::Issuer | PartyRole::Sender)
+        && unit.features.position.letterhead
+        && unit.text.chars().count() <= LETTERHEAD_CHARACTERS
+    {
         return true;
     }
     let on_cue_line = |cues: &[&str]| {
@@ -1022,8 +1122,10 @@ fn unit_supports_role(unit: &EvidenceUnit, normalized: &str, loose: &str, role: 
         })
     };
     match role {
-        PartyRole::Issuer | PartyRole::Vendor | PartyRole::Seller => on_cue_line(ISSUER_CUES),
-        PartyRole::Customer | PartyRole::Recipient | PartyRole::Buyer | PartyRole::Client => {
+        PartyRole::Issuer => on_cue_line(ISSUER_CUES),
+        PartyRole::Vendor | PartyRole::Seller if cues => on_cue_line(ISSUER_CUES),
+        PartyRole::Customer => on_cue_line(CUSTOMER_CUES),
+        PartyRole::Recipient | PartyRole::Buyer | PartyRole::Client if cues => {
             on_cue_line(CUSTOMER_CUES)
         }
         _ => false,
@@ -1196,7 +1298,38 @@ fn cue_issuer(
 
 /// The label an identifier carries: its field's or row's label, or the
 /// words just before it on its line ("Invoice No.").
-fn identifier_label(unit: &EvidenceUnit, line: Option<&str>, identifier: &str) -> Option<String> {
+fn identifier_label(
+    index: &EvidenceIndex,
+    unit: &EvidenceUnit,
+    line: Option<&str>,
+    identifier: &str,
+) -> Option<String> {
+    // A table row's label is its first cell; an identifier in a row is
+    // labelled by its column's header ("| Invoice No. | ... |").
+    if unit.kind == UnitKind::TableRow
+        && let Some(header) = unit
+            .table_header
+            .and_then(|ordinal| index.units().get(ordinal as usize))
+    {
+        let cells = |text: &str| {
+            text.trim()
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let row = cells(&unit.text);
+        let wanted = normalize_loosely(identifier);
+        if let Some(column) = row
+            .iter()
+            .position(|cell| normalize_loosely(cell).contains(&wanted))
+            && let Some(label) = cells(&header.text).into_iter().nth(column)
+            && !label.is_empty()
+        {
+            return Some(label);
+        }
+    }
     if let Some(label) = &unit.label {
         return Some(label.clone());
     }
@@ -1783,7 +1916,8 @@ Dated May 12, 2026";
             "Notice of Rent Increase from Cresthaven Court Holdings LLC to Imogen Castellanos \
              regarding rent for Apartment 4C."
         );
-        // Swapped roles: neither is stated, so neither decides anything.
+        // Swapped roles: the document states neither, so neither decides
+        // anything - the document's own words do.
         let outcome = check(
             with_roles(PartyRole::Landlord, PartyRole::Tenant),
             &context,
@@ -1792,7 +1926,95 @@ Dated May 12, 2026";
         let parties = &outcome.facts.as_ref().unwrap().parties;
         assert_eq!(parties[0].role_support, Support::Unsupported);
         assert_eq!(parties[1].role_support, Support::Unsupported);
+        assert_eq!(parties[0].document_role, Some(PartyRole::Tenant));
+        assert_eq!(parties[1].document_role, Some(PartyRole::Issuer));
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::For);
+        assert_eq!(outcome.proposal.parties, vec!["Imogen Castellanos"]);
+
+        // A document that gives no role in words leaves an unsupported
+        // claim nothing to stand on: the names are kept without a joining
+        // word.
+        let plain = "NOTICE OF RENT INCREASE\n\nImogen Castellanos and Cresthaven Court Holdings LLC \
+                     agree that the rent for Apartment 4C rises on August 1, 2026, and that every other \
+                     term of the residential lease stays as it is.\n\nDated May 12, 2026";
+        let index = index_of(plain);
+        let line = id_of(&index, "Imogen Castellanos and");
+        let facts = ModelFacts {
+            document_type: Some("Notice of Rent Increase".into()),
+            type_evidence: vec![id_of(&index, "NOTICE OF RENT INCREASE")],
+            document_date: Some("2026-05-12".into()),
+            date_evidence: vec![id_of(&index, "Dated May")],
+            parties: vec![
+                party(
+                    "Imogen Castellanos",
+                    Some(PartyRole::Landlord),
+                    &[line.clone()],
+                ),
+                party(
+                    "Cresthaven Court Holdings LLC",
+                    Some(PartyRole::Tenant),
+                    &[line],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        let parties = &outcome.facts.as_ref().unwrap().parties;
+        assert_eq!(parties[0].document_role, None);
         assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+    }
+
+    /// An invoice that names only its customer names no one: the bill-to
+    /// company is never the party an invoice is filed under.
+    #[test]
+    fn an_invoice_naming_only_its_customer_files_under_no_party() {
+        let index = index_of(INVOICE);
+        let mut facts = invoice_facts(&index);
+        facts.parties.remove(0);
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(
+            outcome.proposal.parties.is_empty(),
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
+        assert!(
+            outcome
+                .proposal
+                .description
+                .starts_with("Invoice to Quillon Ridge Bakery, Inc. for display shelving"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// An identifier in a table is labelled by its column.
+    #[test]
+    fn an_identifier_in_a_table_reads_with_its_columns_header() {
+        let text = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n| Invoice No. | Invoice Date | Terms |\n\
+| --- | --- | --- |\n| INV-20417 | March 4, 2026 | Net 30 |\n\nBill To: Quillon Ridge Bakery, Inc.";
+        let index = index_of(text);
+        let row = id_of(&index, "| INV-20417");
+        let facts = ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(&index, "INVOICE")],
+            document_date: Some("2026-03-04".into()),
+            date_evidence: vec![row.clone()],
+            parties: vec![party(
+                "Halvorsen Fixture Works LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(&index, "Halvorsen")],
+            )],
+            identifier: Some("INV-20417".into()),
+            identifier_evidence: vec![row],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(
+            outcome.proposal.description.contains(", invoice INV-20417"),
+            "{}",
+            outcome.proposal.description
+        );
     }
 
     /// A subject's names and numbers are claims, checked as a written

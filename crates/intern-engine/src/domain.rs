@@ -418,6 +418,12 @@ pub struct ValidatedParty {
     pub role: Option<PartyRole>,
     #[serde(default)]
     pub role_support: Support,
+    /// The role the document's own wording gives the party - `Resident:`
+    /// before the name, `("Tenant")` after it - when the reply gave it no
+    /// role the document supports. It decides the relation in the reply's
+    /// role's place; an unsupported role never does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_role: Option<PartyRole>,
     #[serde(default)]
     pub support: Support,
     /// The stable ids of the units that state the name.
@@ -946,6 +952,7 @@ mod tests {
                 role_support: Support::Cited,
                 support: Support::Cited,
                 evidence: vec!["p1.b1".into()],
+                document_role: None,
             }],
             document_class: DocumentClass::Issued,
             support: FactSupport {

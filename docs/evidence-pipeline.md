@@ -121,7 +121,10 @@ The other checks:
   - the issuer and customer cues on the same line.
 
   A role nothing supports never decides how the parties read in the
-  filename.
+  filename. When the reply gives a party no supported role, the role the
+  document's own wording gives it does (`ValidatedParty::document_role`):
+  `Resident:` before the name makes a tenant, `Owner:` a landlord,
+  `("Lender")` after it a lender.
 - **Everything else** applies as in the digest pipeline: confidence, the
   model's own request for review, parser warnings, barely readable pages,
   and the token-confidence gate.
@@ -167,9 +170,9 @@ order the document first names them.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name; then the side opposite a supported customer |
-| Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; two parties marked other read `between` |
-| Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart |
+| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name; then the side opposite a supported customer. The customer alone is never the filename's party |
+| Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
+| Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
 | Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else `to` the recipient; else `for` the provider's counterpart; else `from` the issuer |
 | Form | `for` the filer (issuer or sender, then employee, tenant, vendor or customer) |
@@ -206,6 +209,10 @@ Some parts are optional:
 - **The amount** is used for issued documents. Elsewhere it is used only
   when labelled as a principal, commitment, price, rent or premium.
 - **A key fact** that is not an amount stands in for a missing subject.
+- **Repetition.** A subject or an identifier that only repeats the type is
+  left out, and an identifier without a digit is not a number. An
+  identifier in a table reads with its column's header (`invoice
+  INV-20417`).
 - **Too long.** A sentence over 42 words drops parts in a fixed order: the
   amount, the identifier, the preparer, the subject's tail, the subject,
   then the second party. It is never cut mid-phrase.

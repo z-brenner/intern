@@ -295,12 +295,12 @@ pub fn relation_from_roles(
             {
                 return one(PartyRelation::From, issuer, "the issuer's cues");
             }
+            let receiving = |party: &CastMember| {
+                party
+                    .supported_role()
+                    .is_some_and(|role| RECEIVING.contains(&role))
+            };
             if let [a, b, ..] = parties {
-                let receiving = |party: &CastMember| {
-                    party
-                        .supported_role()
-                        .is_some_and(|role| RECEIVING.contains(&role))
-                };
                 match (receiving(a), receiving(b)) {
                     (true, false) => {
                         return one(PartyRelation::From, b, "the other side of the customer");
@@ -311,7 +311,21 @@ pub fn relation_from_roles(
                     _ => {}
                 }
             }
-            unresolved()
+            // The customer of an issued document is never its filename's
+            // party: "Invoice - Quillon Ridge Bakery" reads as Quillon's
+            // invoice. With no issuer to name, none is named.
+            match parties.iter().find(|party| !receiving(party)) {
+                Some(party) => Relation {
+                    relation: PartyRelation::None,
+                    parties: vec![party.name.clone()],
+                    basis: "issued: unresolved".into(),
+                },
+                None => Relation {
+                    relation: PartyRelation::None,
+                    parties: Vec::new(),
+                    basis: "issued: only the customer is named".into(),
+                },
+            }
         }
         DocumentClass::Notice => {
             if let Some(party) = with(SUBSTANTIVE) {
@@ -325,6 +339,9 @@ pub fn relation_from_roles(
             }
             if let Some(party) = counterpart(false) {
                 return one(PartyRelation::For, party, "the provider's counterpart");
+            }
+            if let Some(party) = with(PROVIDER) {
+                return one(PartyRelation::From, party, "the provider");
             }
             if let [a, b, ..] = parties
                 && a.supported_role() == Some(PartyRole::Other)
@@ -350,6 +367,9 @@ pub fn relation_from_roles(
             }
             if let Some(party) = counterpart(false) {
                 return one(PartyRelation::For, party, "the provider's counterpart");
+            }
+            if let Some(party) = with(PROVIDER) {
+                return one(PartyRelation::From, party, "the provider");
             }
             unresolved()
         }
@@ -586,6 +606,10 @@ fn compose(
                 }
             } else if let Some(first) = &first {
                 text.push_str(&format!(" {} {first}", word_for(joining)));
+            } else if let Some(customer) = receiving_side() {
+                // No issuer named: the customer the document bills is
+                // still who it is to.
+                text.push_str(&format!(" to {customer}"));
             }
             if let Some(subject) = &subject {
                 tail.push(format!(" for {subject}"));
