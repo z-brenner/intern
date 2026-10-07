@@ -492,6 +492,7 @@ fn column_cut(items: &[Item], ids: &[usize], page_width: f64) -> Option<Cut> {
     for (_, gutter) in gutters {
         let mut left = Vec::new();
         let mut right = Vec::new();
+        let mut spanning = Vec::new();
         for row in &rows[gutter.first..=gutter.last] {
             for member in &row.members {
                 match crossing(
@@ -503,7 +504,7 @@ fn column_cut(items: &[Item], ids: &[usize], page_width: f64) -> Option<Cut> {
                 ) {
                     Crossing::Left | Crossing::SpillsLeft => left.push(*member),
                     Crossing::Right | Crossing::SpillsRight => right.push(*member),
-                    Crossing::Spans => {}
+                    Crossing::Spans => spanning.push(*member),
                 }
             }
         }
@@ -513,6 +514,18 @@ fn column_cut(items: &[Item], ids: &[usize], page_width: f64) -> Option<Cut> {
             continue;
         }
         if gutter.first == 0 && gutter.last == rows.len() - 1 {
+            // A run over the gutter - one a row let spill into it before a
+            // later row narrowed the gutter under it - goes with the side
+            // its middle is on. A cut regroups text; it never loses any.
+            let middle = (gutter.start + gutter.end) / 2.0;
+            for member in spanning {
+                let item = &items[member];
+                if (item.x0 + item.x1) / 2.0 <= middle {
+                    left.push(member);
+                } else {
+                    right.push(member);
+                }
+            }
             return Some(Cut::Columns(left, right));
         }
         let band = |range: std::ops::Range<usize>| {
@@ -1864,7 +1877,30 @@ mod tests {
     }
 
     fn analyze(runs: &[TextRun]) -> Vec<LayoutBlock> {
-        analyze_runs(runs, 6120, 7920, &[], TextSource::Native)
+        let blocks = analyze_runs(runs, 6120, 7920, &[], TextSource::Native);
+        assert_words_kept(runs, &blocks);
+        blocks
+    }
+
+    /// Every word of every run is in the blocks, once: the analysis orders,
+    /// groups, and labels text - a label gains a colon, a table its pipes -
+    /// but never loses or repeats any.
+    fn assert_words_kept(runs: &[TextRun], blocks: &[LayoutBlock]) {
+        fn words<'a>(texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+            let mut words = texts
+                .flat_map(str::split_whitespace)
+                .filter(|word| *word != "|")
+                .map(|word| word.trim_end_matches(':').to_owned())
+                .filter(|word| !word.is_empty())
+                .collect::<Vec<_>>();
+            words.sort();
+            words
+        }
+        assert_eq!(
+            words(runs.iter().map(|run| run.text.as_str())),
+            words(blocks.iter().map(|block| block.text.as_str())),
+            "{blocks:#?}"
+        );
     }
 
     fn texts(blocks: &[LayoutBlock]) -> Vec<&str> {
@@ -2194,6 +2230,7 @@ mod tests {
         }
 
         let blocks = analyze_runs(&runs, 6120, 7920, &[], TextSource::Native);
+        assert_words_kept(&runs, &blocks);
 
         assert_eq!(blocks.len(), 1, "{:#?}", texts(&blocks));
         let table = blocks[0].table.as_ref().unwrap();
@@ -2251,6 +2288,7 @@ mod tests {
         }
 
         let blocks = analyze_runs(&runs, 6120, 7920, &[], TextSource::Native);
+        assert_words_kept(&runs, &blocks);
 
         assert_eq!(blocks.len(), 1, "{:#?}", texts(&blocks));
         assert_eq!(
