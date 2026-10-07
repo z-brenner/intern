@@ -39,7 +39,7 @@ it('the release gate only accepts evidence from the shipping pipeline', async ()
     readFile('scripts/validate-model-evaluation.mjs', 'utf8'),
     readFile('.github/workflows/release.yml', 'utf8'),
   ]);
-  expect(validator).toContain("report.pipeline === 'new'");
+  expect(validator).toContain("report.pipeline === 'evidence'");
   expect(validator).toContain('date_forbidden');
   expect(release).toContain('intern-evaluate');
   expect(release).toContain('validate-model-evaluation.mjs');
