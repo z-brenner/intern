@@ -2,7 +2,7 @@
 /// header grids and whose parties are told apart by where they sit on the
 /// page rather than by any sentence naming them.
 import { Flow } from '../lib/layout.mjs';
-import { gold } from '../lib/gold.mjs';
+import { gold, structure } from '../lib/gold.mjs';
 import { amount, ledgerDate, longDate, money, numericDate } from '../lib/format.mjs';
 import { digitalPdf, result } from './common.mjs';
 
@@ -93,6 +93,14 @@ export function invoiceDateInTable() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['invoice', 'table', 'date_in_table', 'competing_dates', 'layout_parties'],
+    structure: structure({
+      tables: [
+        [['Invoice No.', 'Invoice Date', 'Customer PO', 'PO Date', 'Ship Date', 'Terms', 'Due Date'], [invoiceNumber, numericDate(invoiceDate), poNumber, numericDate(poDate), numericDate(shipDate), 'Net 30', numericDate(dueDate)]],
+        [['Item', 'Description', 'Qty', 'Unit Price', 'Amount'], ...priced.rows.map((row) => [row.sku, row.description, String(row.quantity), amount(row.unit), amount(row.total)])],
+      ],
+      keyValues: [['Invoice Date', numericDate(invoiceDate)], ['PO Date', numericDate(poDate)], ['Ship Date', numericDate(shipDate)], ['Due Date', numericDate(dueDate)], ['BILL TO', 'Quillon Ridge Bakery, Inc.'], ['SHIP TO', 'Quillon Ridge Bakery - Harbor Street Cafe'], ['TOTAL DUE (USD)', money(priced.total)]],
+      routes: { 1: 'layout' },
+    }),
     notes: `Four dates share one header row - invoice ${numericDate(invoiceDate)}, PO ${numericDate(poDate)}, ship ${numericDate(shipDate)}, due ${numericDate(dueDate)} - and the row's labels sit on the line above the values, so the date's meaning comes only from column position. Dates are numeric; the ship and due dates have days above 12, which settles month-first order. The issuer is named only in the letterhead; the bill-to and ship-to blocks name the customer twice, in bold, and the customer is the trap. Total ${total}.`,
     gold: gold({
       type: 'Invoice',
@@ -180,6 +188,11 @@ export function invoiceLayoutOnly() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['invoice', 'layout_parties', 'table', 'competing_dates'],
+    structure: structure({
+      tables: [[['Item', 'Description', 'Qty', 'Price', 'Extended'], ...priced.rows.map((row) => [row.sku, row.description, String(row.quantity), amount(row.unit), amount(row.total)])]],
+      keyValues: [...meta, ['SOLD TO', customer], ['Balance Due', money(priced.total)]],
+      routes: { 1: 'layout' },
+    }),
     notes: `No sentence says who issued this invoice: the issuer is the small unlabelled block at the top left and the "Remit to" box at the foot; the customer is the largest name on the page, in a bold "SOLD TO" box, and a freight carrier is named twice. Dates are in ledger form: invoice ${ledgerDate(invoiceDate)}, order ${ledgerDate(orderDate)}, due ${ledgerDate(dueDate)}.`,
     gold: gold({
       type: 'Invoice',
@@ -276,6 +289,14 @@ export function purchaseOrder() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['purchase_order', 'table', 'date_in_table', 'competing_dates'],
+    structure: structure({
+      tables: [
+        [['PO Number', 'PO Date', 'Buyer', 'Ship Via', 'F.O.B.', 'Payment Terms'], [poNumber, longDate(poDate), buyerPerson, 'Best way, prepaid', 'Destination', '2% 10, Net 45']],
+        [['Line', 'Part No.', 'Description', 'Qty', 'Unit Price', 'Ext. Price'], ...priced.rows.map((row, index) => [String(index + 1), row.sku, row.description, String(row.quantity), amount(row.unit), amount(row.total)])],
+      ],
+      keyValues: [['VENDOR', vendor], ['SHIP TO', `${buyer} - Receiving Dock 3`], ['Order Total (USD)', total]],
+      routes: { 1: 'layout' },
+    }),
     notes: `The PO date (${longDate(poDate)}) appears only as a cell in the header grid. The vendor's quotation date (${longDate(quoteDate)}), the requested delivery date (${longDate(deliveryDate)}), and the cancellation cut-off (${longDate(cancelDate)}) are written out in sentences and are easier to find. A purchase order is filed under the buyer that issued it; "to" the vendor is also accepted.`,
     gold: gold({
       type: 'Purchase Order',

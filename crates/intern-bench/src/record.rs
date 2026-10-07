@@ -14,6 +14,7 @@ use crate::{
     ocr::OcrMeasure,
     recording::Exchange,
     score::{Outcome, Texts, gold_filenames, score},
+    structure::{self, StructureMeasure},
     timing::{self, Timings},
 };
 
@@ -99,6 +100,18 @@ pub struct DocumentRecord {
     pub traps: Vec<String>,
     #[serde(default)]
     pub ocr: Option<OcrMeasure>,
+    /// The structure the gold gives, measured over the text read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure: Option<StructureMeasure>,
+    /// The most expensive route a page took (`ocr`, `ocr_regions`,
+    /// `layout`, `fast`), or `unrouted` when the worker sent no layouts;
+    /// none when nothing was read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_class: Option<String>,
+    /// Each page's route, in page order (`none` for a page without a
+    /// layout); empty when no page had one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_routes: Vec<String>,
     /// The SHA-256 of every prompt the engine sent, in order.
     #[serde(default)]
     pub prompt_sha256: Vec<String>,
@@ -132,6 +145,16 @@ impl DocumentRecord {
 
     pub fn bool_score(&self, key: &str) -> Option<bool> {
         self.scores.get(key).and_then(Value::as_bool)
+    }
+
+    /// The routes the extracted document's pages took; each page's only
+    /// when the worker sent layouts.
+    pub fn set_routes(&mut self, source: &DocumentSource) {
+        let class = structure::route_class(source);
+        self.route_class = Some(class.to_owned());
+        if class != "unrouted" {
+            self.page_routes = structure::page_routes(source);
+        }
     }
 }
 
@@ -244,5 +267,9 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     record.forbidden_description = scored.forbidden_description;
     record.traps = scored.traps;
     record.ocr = scored.ocr;
+    record.structure = scored.structure;
+    if let Some(source) = observation.source {
+        record.set_routes(source);
+    }
     record
 }

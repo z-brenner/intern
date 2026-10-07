@@ -4,9 +4,11 @@
 use std::fmt::Write as _;
 
 use crate::{
-    gold::PAGE_BUCKETS,
+    extract::EXTRACTION_SCORES,
+    gold::{PAGE_BUCKETS, ROUTES},
     record::{COMPLETED, PENDING},
-    report::{OcrFigures, Rate, Report, Summary},
+    report::{EXTRACT, OcrFigures, Rate, Report, StructureFigures, Summary},
+    score::is_unit_fraction,
     stats::Distribution,
     timing::{METRICS, Unit},
 };
@@ -53,13 +55,21 @@ pub const HEADLINE_MEANS: &[(&str, &str)] = &[
 ];
 
 pub fn render(report: &Report) -> String {
+    if report.mode == EXTRACT {
+        return render_extraction(report);
+    }
     let mut out = String::new();
     header(&mut out, report);
     scorecard(&mut out, &report.summary);
     safety(&mut out, &report.summary);
     groups(&mut out, report);
     ocr(&mut out, report);
+    structure(&mut out, report);
+    routes(&mut out, report);
     stages(&mut out, report);
+    if report.timings_source != "recorded" {
+        extraction_time(&mut out, report);
+    }
     memory(&mut out, report);
     misses(&mut out, report);
     baseline(&mut out, report);
@@ -85,16 +95,22 @@ fn header(out: &mut String, report: &Report) {
         .unwrap_or_else(|| "unknown".to_owned());
     let _ = writeln!(out, "- **Run:** {} · commit `{commit}`", report.created_at);
     let _ = writeln!(out, "- **Machine:** {}", report.machine.summary());
-    let mut model = format!("`{}`", report.model.id);
-    if let (Some(size), Some(sha)) = (report.model.size_bytes, &report.model.sha256) {
-        let _ = write!(
-            model,
-            " · {:.2} GB · sha256 `{}`",
-            size as f64 / 1e9,
-            &sha[..sha.len().min(12)]
-        );
+    if report.mode == EXTRACT {
+        if let Some(worker) = &report.worker {
+            let _ = writeln!(out, "- **Worker:** `{worker}`");
+        }
+    } else {
+        let mut model = format!("`{}`", report.model.id);
+        if let (Some(size), Some(sha)) = (report.model.size_bytes, &report.model.sha256) {
+            let _ = write!(
+                model,
+                " · {:.2} GB · sha256 `{}`",
+                size as f64 / 1e9,
+                &sha[..sha.len().min(12)]
+            );
+        }
+        let _ = writeln!(out, "- **Model:** {model}");
     }
-    let _ = writeln!(out, "- **Model:** {model}");
     let summary = &report.summary;
     let mut corpus = format!(
         "{} documents · {} completed",
@@ -119,6 +135,13 @@ fn header(out: &mut String, report: &Report) {
         let _ = write!(corpus, " · only {}", report.corpus.only.join(", "));
     }
     let _ = writeln!(out, "- **Corpus:** {corpus}");
+    if let Some(wall) = report.wall_ms {
+        let _ = writeln!(
+            out,
+            "- **Wall time:** {} for the whole run, the worker's start included",
+            duration(wall)
+        );
+    }
     if let Some(recording) = &report.recording {
         let _ = writeln!(
             out,
@@ -133,7 +156,6 @@ fn header(out: &mut String, report: &Report) {
         );
     }
     if report.timings_source == "recorded" {
-        let stale = report.records.iter().filter(|record| record.stale).count();
         if stale == 0 {
             let _ = writeln!(
                 out,
@@ -152,6 +174,12 @@ fn header(out: &mut String, report: &Report) {
         .and_then(|recording| recording.configuration_change.as_deref())
     {
         let _ = writeln!(out, "\n> **Warning:** {change}.");
+    }
+    if report.mode == EXTRACT {
+        let _ = writeln!(
+            out,
+            "\n> Extract-only: the parser worker alone, no model. Each document is scored on what extraction decides - OCR against the drawn text, the structure the gold gives, and whether the gold's evidence reaches the digest - and timed as the worker reports it."
+        );
     }
     let _ = writeln!(out);
 }
@@ -300,6 +328,362 @@ fn safety(out: &mut String, summary: &Summary) {
         ]);
     }
     table(out, &["Check", "Count"], &rows);
+}
+
+/// An extract-only run's page: what was read, how well, and how fast.
+fn render_extraction(report: &Report) -> String {
+    let mut out = String::new();
+    header(&mut out, report);
+    extraction_scorecard(&mut out, report);
+    structure(&mut out, report);
+    routes(&mut out, report);
+    ocr(&mut out, report);
+    extraction_time(&mut out, report);
+    stages(&mut out, report);
+    memory(&mut out, report);
+    extraction_misses(&mut out, report);
+    baseline(&mut out, report);
+    let _ = writeln!(out, "## How to compare");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Keep this run's JSON, change the worker, run again with the same corpus, then:\n\n```text\nintern-bench compare --before before.json --after after.json --markdown diff.md\n```\n\n\
+         It recomputes every score over the documents both runs read, lists each document whose score moved past the extract-only gate's tolerance, \
+         and gives the change in p50/p95 of every worker stage over the documents both completed. Compare runs made on the same machine. \
+         `intern-bench report --input report.json --markdown report.md` re-renders this page from the JSON."
+    );
+    out
+}
+
+fn share(found: usize, total: usize) -> String {
+    if total == 0 {
+        "–".to_owned()
+    } else {
+        format!("{found}/{total} ({})", percent(found as f64 / total as f64))
+    }
+}
+
+/// Every extraction score: pooled where it pools by item, and as the mean
+/// of the documents that have it.
+fn extraction_scorecard(out: &mut String, report: &Report) {
+    let _ = writeln!(out, "## Extraction scorecard");
+    let _ = writeln!(out);
+    let pooled = report
+        .structure
+        .as_ref()
+        .map(|structure| &structure.aggregate);
+    let ocr = report.ocr.aggregate.as_ref();
+    let pooled_cell = |key: &str| -> String {
+        let structure = |pick: fn(&StructureFigures) -> (usize, usize)| {
+            pooled.map_or_else(
+                || "–".to_owned(),
+                |figures| {
+                    let (found, total) = pick(figures);
+                    share(found, total)
+                },
+            )
+        };
+        let rate = |value: Option<f64>| value.map_or_else(|| "–".to_owned(), percent);
+        match key {
+            "reading_order_accuracy" => structure(|f| (f.pairs_in_order, f.pairs)),
+            "table_row_accuracy" => structure(|f| (f.rows_found, f.rows)),
+            "table_cell_recall" => structure(|f| (f.cells_found, f.cells)),
+            "kv_accuracy" => structure(|f| (f.key_values_found, f.key_values)),
+            "route_correct" => structure(|f| (f.routes_correct, f.route_pages)),
+            "ocr_cer" => rate(ocr.and_then(|figures| figures.cer)),
+            "ocr_cer_ci" => rate(ocr.and_then(|figures| figures.cer_ci)),
+            "ocr_wer" => rate(ocr.and_then(|figures| figures.wer)),
+            "ocr_date_accuracy" => rate(ocr.and_then(|figures| figures.date_accuracy)),
+            "ocr_name_accuracy" => rate(ocr.and_then(|figures| figures.name_accuracy)),
+            "ocr_identifier_accuracy" => rate(ocr.and_then(|figures| figures.identifier_accuracy)),
+            "ocr_mean_confidence" => ocr
+                .and_then(|figures| figures.mean_confidence)
+                .map_or_else(|| "–".to_owned(), |value| format!("{value:.1}")),
+            _ => "–".to_owned(),
+        }
+    };
+    let rows = EXTRACTION_SCORES
+        .iter()
+        .filter_map(|key| {
+            let mean = report.summary.means.get(*key)?;
+            let shown = if is_unit_fraction(key) {
+                percent(mean.mean)
+            } else {
+                format!("{:.1}", mean.mean)
+            };
+            Some(vec![
+                format!("`{key}`"),
+                pooled_cell(key),
+                format!("{shown} ({} docs)", mean.total_docs),
+            ])
+        })
+        .collect::<Vec<_>>();
+    table(out, &["Score", "Pooled", "Mean per document"], &rows);
+    let _ = writeln!(
+        out,
+        "Pooled figures count items over every document (snippet pairs, rows, cells, labelled values, pages; OCR characters, words and values); the mean gives each document one vote. A document whose extraction failed counts with every item missed. `digest_recall` is the share of the gold's date and party evidence in the digest the engine would build from this text.\n"
+    );
+}
+
+fn structure(out: &mut String, report: &Report) {
+    let Some(structure) = &report.structure else {
+        return;
+    };
+    let _ = writeln!(out, "## Structure");
+    let _ = writeln!(out);
+    let row = |name: String, class: &str, figures: &StructureFigures| {
+        vec![
+            name,
+            class.to_owned(),
+            share(figures.pairs_in_order, figures.pairs),
+            share(figures.rows_found, figures.rows),
+            share(figures.cells_found, figures.cells),
+            share(figures.key_values_found, figures.key_values),
+            share(figures.routes_correct, figures.route_pages),
+        ]
+    };
+    let mut rows = structure
+        .documents
+        .iter()
+        .map(|document| {
+            let class = if document.status == COMPLETED {
+                document.route_class.as_deref().unwrap_or("–")
+            } else {
+                document.status.as_str()
+            };
+            row(document.id.clone(), class, &document.figures)
+        })
+        .collect::<Vec<_>>();
+    rows.push(row("**All**".into(), "", &structure.aggregate));
+    table(
+        out,
+        &[
+            "Document",
+            "Route class",
+            "Reading order (pairs)",
+            "Table rows",
+            "Table cells",
+            "Key-values",
+            "Routes (pages)",
+        ],
+        &rows,
+    );
+    let _ = writeln!(
+        out,
+        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line, in order. Table cells: cells found in their table's lines. Key-values: values after their label on its line, alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
+    );
+}
+
+fn routes(out: &mut String, report: &Report) {
+    let Some(routes) = &report.routes else {
+        return;
+    };
+    let _ = writeln!(out, "## Routes");
+    let _ = writeln!(out);
+    let mut names = ROUTES
+        .iter()
+        .map(|route| (*route).to_owned())
+        .collect::<Vec<_>>();
+    for name in routes.pages.keys() {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+    let pages = names
+        .iter()
+        .filter_map(|name| {
+            routes
+                .pages
+                .get(name)
+                .map(|count| format!("{name} {count}"))
+        })
+        .collect::<Vec<_>>();
+    if !pages.is_empty() {
+        let _ = writeln!(out, "- **Pages:** {}", pages.join(" · "));
+    }
+    let classes = routes
+        .classes
+        .iter()
+        .map(|(class, count)| format!("{class} {count}"))
+        .collect::<Vec<_>>();
+    if !classes.is_empty() {
+        let _ = writeln!(
+            out,
+            "- **Documents by route class:** {}",
+            classes.join(" · ")
+        );
+    }
+    let _ = writeln!(out);
+    if routes.confusion.is_empty() {
+        return;
+    }
+    let mut taken = routes
+        .confusion
+        .values()
+        .flat_map(|row| row.keys().cloned())
+        .collect::<Vec<_>>();
+    taken.sort_by_key(|name| {
+        ROUTES
+            .iter()
+            .position(|route| route == name)
+            .unwrap_or(ROUTES.len())
+    });
+    taken.dedup();
+    let mut header = vec!["Expected, then taken".to_owned()];
+    header.extend(taken.iter().cloned());
+    let rows = ROUTES
+        .iter()
+        .filter_map(|expected| {
+            let row = routes.confusion.get(*expected)?;
+            let mut cells = vec![(*expected).to_owned()];
+            cells.extend(taken.iter().map(|name| {
+                row.get(name)
+                    .map_or_else(|| "·".to_owned(), usize::to_string)
+            }));
+            Some(cells)
+        })
+        .collect::<Vec<_>>();
+    let header = header.iter().map(String::as_str).collect::<Vec<_>>();
+    table(out, &header, &rows);
+    let _ = writeln!(
+        out,
+        "Pages the gold gives a route for, by the route they should take and the one they took (`none`: the page came without a layout).\n"
+    );
+}
+
+/// Distributions of every metric, keyed by a group's value.
+type LatencySlices =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Distribution>>;
+
+/// Worker time per document by route class, page count and kind, with the
+/// stages it is made of.
+fn extraction_time(out: &mut String, report: &Report) {
+    let latency = &report.latency;
+    if !latency.overall.contains_key("worker_total_ms") {
+        return;
+    }
+    let _ = writeln!(out, "## Extraction time");
+    let _ = writeln!(out);
+    let p = |metrics: &std::collections::BTreeMap<String, Distribution>,
+             metric: &str,
+             pick: fn(&Distribution) -> f64| {
+        metrics.get(metric).map_or_else(
+            || "–".to_owned(),
+            |distribution| duration(pick(distribution)),
+        )
+    };
+    let p50 = |distribution: &Distribution| distribution.p50;
+    let p95 = |distribution: &Distribution| distribution.p95;
+    let sections: [(&str, &LatencySlices); 3] = [
+        ("Route class", &latency.by_route_class),
+        ("Pages", &latency.by_page_bucket),
+        ("Kind", &latency.by_kind),
+    ];
+    for (column, groups) in sections {
+        if groups.is_empty() {
+            continue;
+        }
+        let mut values = groups.keys().cloned().collect::<Vec<_>>();
+        if column == "Pages" {
+            values.sort_by_key(|value| PAGE_BUCKETS.iter().position(|bucket| bucket == value));
+        } else if column == "Route class" {
+            values.sort_by_key(|value| {
+                ["fast", "layout", "ocr_regions", "ocr", "unrouted"]
+                    .iter()
+                    .position(|class| class == value)
+            });
+        }
+        let rows = values
+            .iter()
+            .map(|value| {
+                let metrics = &groups[value];
+                vec![
+                    value.clone(),
+                    metrics.get("worker_total_ms").map_or_else(
+                        || "0".to_owned(),
+                        |distribution| distribution.count.to_string(),
+                    ),
+                    p(metrics, "extraction_wall_ms", p50),
+                    p(metrics, "extraction_wall_ms", p95),
+                    p(metrics, "worker_total_ms", p50),
+                    p(metrics, "worker_total_ms", p95),
+                    p(metrics, "worker_parse_ms", p95),
+                    p(metrics, "worker_analysis_ms", p95),
+                    p(metrics, "worker_render_ms", p95),
+                    p(metrics, "worker_ocr_ms", p95),
+                ]
+            })
+            .collect::<Vec<_>>();
+        table(
+            out,
+            &[
+                column,
+                "Docs",
+                "p50 wall",
+                "p95 wall",
+                "p50 worker",
+                "p95 worker",
+                "p95 parse",
+                "p95 analysis",
+                "p95 render",
+                "p95 OCR",
+            ],
+            &rows,
+        );
+    }
+    let _ = writeln!(
+        out,
+        "Over the documents that completed. Wall is the runner's clock around the request; worker is the worker's own total. OCR is summed over the pages, so when the worker reads pages in parallel it can exceed the total. A document's route class is the most expensive route any of its pages took (ocr > ocr_regions > layout > fast), or `unrouted` when the worker sent no layouts.\n"
+    );
+}
+
+/// What extraction failed on, and the structure items it missed.
+fn extraction_misses(out: &mut String, report: &Report) {
+    let mut lines = Vec::new();
+    for record in &report.records {
+        if record.status != COMPLETED {
+            lines.push(format!(
+                "- **{}**: {}{}",
+                record.id,
+                record.status,
+                record
+                    .error
+                    .as_deref()
+                    .map(|error| format!(" ({error})"))
+                    .unwrap_or_default()
+            ));
+            continue;
+        }
+        if let Some(structure) = &record.structure
+            && !structure.misses.is_empty()
+        {
+            lines.push(format!(
+                "- **{}**: {}",
+                record.id,
+                structure.misses.join("; ")
+            ));
+        }
+    }
+    let _ = writeln!(out, "## Misses ({})", lines.len());
+    let _ = writeln!(out);
+    if lines.is_empty() {
+        let _ = writeln!(
+            out,
+            "Every document was read, and every structure item found.\n"
+        );
+        return;
+    }
+    for line in lines.iter().take(MAX_MISSES) {
+        let _ = writeln!(out, "{line}");
+    }
+    if lines.len() > MAX_MISSES {
+        let _ = writeln!(
+            out,
+            "- … and {} more in the JSON report",
+            lines.len() - MAX_MISSES
+        );
+    }
+    let _ = writeln!(out);
 }
 
 fn latency_cells(report: &Report, by: &str, value: &str) -> [String; 2] {
@@ -458,8 +842,8 @@ fn ocr(out: &mut String, report: &Report) {
     let _ = writeln!(
         out,
         "Error rates are edit distances over the drawn text's length, pooled over pages; Dates, Names and IDs are the fraction of those drawn on the read pages that survive OCR. \
-         A page the reader does not return (a TIFF frame it does not read) is reported as unread and left out, with what is drawn only on it. \
-         A scan whose extraction failed counts as read empty: every character and value on it missed.\n"
+         A page the reader does not return (a TIFF frame it does not read, shown as unread) counts as read empty, \
+         as does every page of a scan whose extraction failed: every character and value on it missed.\n"
     );
 }
 

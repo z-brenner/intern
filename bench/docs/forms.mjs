@@ -2,7 +2,7 @@
 /// construction change order. Facts live in labelled boxes; the defining
 /// date is one box among several dated ones.
 import { Page } from '../lib/layout.mjs';
-import { gold } from '../lib/gold.mjs';
+import { gold, structure } from '../lib/gold.mjs';
 import { amount, money, numericDate } from '../lib/format.mjs';
 import { digitalPdf, result } from './common.mjs';
 
@@ -107,6 +107,10 @@ export function vendorRegistrationForm() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['form', 'layout_parties', 'competing_dates'],
+    structure: structure({
+      keyValues: [['1. Legal business name (as shown on your income tax return)', vendor], ['3. Federal employer identification number (EIN)', '84-0293157'], ['6. Date of incorporation', numericDate(incorporated)], ['14. General liability carrier', 'Highmeadow Casualty Company'], ['16. Policy expiration date', numericDate(insuranceExpires)], ['22. Date signed', numericDate(signed)]],
+      routes: { 1: 'layout' },
+    }),
     notes: `Every fact is a typed value in a labelled box. The defining date is the "Date signed" box (${numericDate(signed)}); the date of incorporation (${numericDate(incorporated)}) and the insurance expiration (${numericDate(insuranceExpires)}) are other boxes, and the form revision is a month and year in the footer. The legal name appears only in box 1. The county owns the form; filing it "with" the county is accepted, but the insurance carrier, bank, and contacts are not parties.`,
     gold: gold({
       type: 'Vendor Registration Form',
@@ -217,6 +221,11 @@ export function changeOrderForm() {
     textLayer: 'native',
     pages: pages.length,
     categories: ['form', 'table', 'date_in_table', 'competing_dates', 'layout_parties'],
+    structure: structure({
+      tables: [[['Reference', 'Description', 'Amount'], ...changes.map(([reference, description, value]) => [reference, description, value < 0 ? `(${money(-value)})` : money(value)])]],
+      keyValues: [['TO OWNER', owner], ['TO CONTRACTOR', contractor], ['CHANGE ORDER NUMBER', '006'], ['DATE', numericDate(coDate)], ['CONTRACT DATE', numericDate(contractDate)], ['The original Contract Sum was', money(original)], ['The new Contract Sum including this Change Order will be', money(original + previous + net)]],
+      routes: { 1: 'layout' },
+    }),
     notes: `The change order's date (${numericDate(coDate)}) is a cell in a row of boxed fields beside the contract date (${numericDate(contractDate)}), which belongs to the underlying construction contract. The revised substantial completion date (${numericDate(completion)}) is a trap; the three signature dates (05/07, 05/11, 05/14/2026) are left unscored. A change order modifies the contract between owner and contractor; the architect prepares and signs it but is not a party.`,
     gold: gold({
       type: 'Change Order',

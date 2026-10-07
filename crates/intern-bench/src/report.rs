@@ -17,18 +17,21 @@ use crate::{
     ocr::OcrMeasure,
     record::{COMPLETED, DocumentRecord},
     stats::{Distribution, round},
+    structure::StructureMeasure,
     timing::{self, METRICS},
 };
 
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 pub const SUITE: &str = "internbench";
+/// The mode of an extract-only run, and of the baselines written from one.
+pub const EXTRACT: &str = "extract";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Report {
     pub schema_version: u32,
     #[serde(default)]
     pub suite: String,
-    /// `live` or `replay`.
+    /// `live`, `replay`, or `extract` (the worker alone).
     pub mode: String,
     #[serde(default)]
     pub created_at: String,
@@ -50,16 +53,28 @@ pub struct Report {
     pub recording: Option<RecordingInfo>,
     #[serde(default)]
     pub corpus: CorpusInfo,
+    /// How long the whole run took, warm-up included, in milliseconds; a
+    /// replay measures none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall_ms: Option<f64>,
     #[serde(default)]
     pub summary: Summary,
-    /// Summaries sliced by `kind`, `text_layer`, `format`, `page_bucket`
-    /// and `category`, each keyed by the group's value.
+    /// Summaries sliced by `kind`, `text_layer`, `format`, `page_bucket`,
+    /// `route_class` and `category`, each keyed by the group's value.
     #[serde(default)]
     pub groups: BTreeMap<String, BTreeMap<String, Summary>>,
     #[serde(default)]
     pub latency: Latency,
     #[serde(default)]
     pub ocr: OcrReport,
+    /// The structure the gold gives, measured over the text read; absent
+    /// when no document has a structure block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structure: Option<StructureReport>,
+    /// Which route each page took; absent when no page came with a layout
+    /// and the gold expects no route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routes: Option<RouteReport>,
     #[serde(default)]
     pub memory: MemoryReport,
     #[serde(default)]
@@ -143,7 +158,8 @@ pub struct Summary {
     pub scored: usize,
     pub completed: usize,
     pub statuses: BTreeMap<String, usize>,
-    /// Of the completed documents, the fraction sent to review.
+    /// Of the completed documents that were named, the fraction sent to
+    /// review; none for an extract-only run, which names nothing.
     #[serde(default)]
     pub review_rate: Option<f64>,
     /// Unsupported description claims over all claims.
@@ -165,12 +181,16 @@ pub struct Summary {
 pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> Summary {
     let mut summary = Summary::default();
     let mut reviewed = 0;
+    // Completed documents that were routed at all: an extract-only record
+    // names nothing and is neither ready nor sent to review.
+    let mut routed = 0;
     let mut fractions: BTreeMap<String, (f64, usize)> = BTreeMap::new();
     for record in records {
         summary.documents += 1;
         *summary.statuses.entry(record.status.clone()).or_insert(0) += 1;
         if record.status == COMPLETED {
             summary.completed += 1;
+            routed += usize::from(record.readiness.is_some());
             if record.readiness.as_deref() == Some("needs_review") {
                 reviewed += 1;
             }
@@ -224,8 +244,7 @@ pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> S
             )
         })
         .collect();
-    summary.review_rate =
-        (summary.completed > 0).then(|| round(reviewed as f64 / summary.completed as f64, 4));
+    summary.review_rate = (routed > 0).then(|| round(reviewed as f64 / routed as f64, 4));
     summary.unsupported_fact_rate = (summary.counts.claims > 0).then(|| {
         round(
             summary.counts.unsupported_claims as f64 / summary.counts.claims as f64,
@@ -244,6 +263,12 @@ pub fn group_keys(record: &DocumentRecord) -> Vec<(&'static str, String)> {
         ("format", record.format.clone()),
         ("page_bucket", record.page_bucket.clone()),
     ];
+    keys.extend(
+        record
+            .route_class
+            .iter()
+            .map(|class| ("route_class", class.clone())),
+    );
     keys.extend(
         record
             .categories
@@ -292,6 +317,10 @@ pub struct Latency {
     pub by_kind: BTreeMap<String, BTreeMap<String, Distribution>>,
     #[serde(default)]
     pub by_text_layer: BTreeMap<String, BTreeMap<String, Distribution>>,
+    /// By the most expensive route a document's pages took (`ocr`,
+    /// `ocr_regions`, `layout`, `fast`), or `unrouted`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_route_class: BTreeMap<String, BTreeMap<String, Distribution>>,
 }
 
 /// Records whose timings describe the whole pipeline: the documents that
@@ -323,13 +352,13 @@ pub fn distributions<'a>(
 }
 
 pub fn latency(records: &[DocumentRecord]) -> Latency {
-    let by = |key: fn(&DocumentRecord) -> &str| {
+    let by = |key: fn(&DocumentRecord) -> Option<&str>| {
         let mut groups: BTreeMap<String, Vec<&DocumentRecord>> = BTreeMap::new();
         for record in records {
-            groups
-                .entry(key(record).to_owned())
-                .or_default()
-                .push(record);
+            let Some(value) = key(record) else {
+                continue;
+            };
+            groups.entry(value.to_owned()).or_default().push(record);
         }
         groups
             .into_iter()
@@ -339,9 +368,10 @@ pub fn latency(records: &[DocumentRecord]) -> Latency {
     };
     Latency {
         overall: distributions(records.iter()),
-        by_page_bucket: by(|record| &record.page_bucket),
-        by_kind: by(|record| &record.kind),
-        by_text_layer: by(|record| &record.text_layer),
+        by_page_bucket: by(|record| Some(&record.page_bucket)),
+        by_kind: by(|record| Some(&record.kind)),
+        by_text_layer: by(|record| Some(&record.text_layer)),
+        by_route_class: by(|record| record.route_class.as_deref()),
     }
 }
 
@@ -425,6 +455,132 @@ pub fn ocr_report(records: &[DocumentRecord]) -> OcrReport {
     }
 }
 
+/// A structure measure's scores and the counts they are made of.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct StructureFigures {
+    pub reading_order_accuracy: Option<f64>,
+    pub table_row_accuracy: Option<f64>,
+    pub table_cell_recall: Option<f64>,
+    pub kv_accuracy: Option<f64>,
+    pub route_correct: Option<f64>,
+    pub pairs: usize,
+    pub pairs_in_order: usize,
+    pub rows: usize,
+    pub rows_found: usize,
+    pub cells: usize,
+    pub cells_found: usize,
+    pub key_values: usize,
+    pub key_values_found: usize,
+    pub route_pages: usize,
+    pub routes_correct: usize,
+}
+
+impl StructureFigures {
+    pub fn of(measure: &StructureMeasure) -> Self {
+        let rounded = |value: Option<f64>| value.map(|value| round(value, 4));
+        Self {
+            reading_order_accuracy: rounded(measure.reading_order_accuracy()),
+            table_row_accuracy: rounded(measure.table_row_accuracy()),
+            table_cell_recall: rounded(measure.table_cell_recall()),
+            kv_accuracy: rounded(measure.kv_accuracy()),
+            route_correct: rounded(measure.route_correct()),
+            pairs: measure.pairs,
+            pairs_in_order: measure.pairs_in_order,
+            rows: measure.rows,
+            rows_found: measure.rows_found,
+            cells: measure.cells,
+            cells_found: measure.cells_found,
+            key_values: measure.key_values,
+            key_values_found: measure.key_values_found,
+            route_pages: measure.route_pages,
+            routes_correct: measure.routes_correct,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct StructureRow {
+    pub id: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub route_class: Option<String>,
+    #[serde(flatten)]
+    pub figures: StructureFigures,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct StructureReport {
+    /// Every count summed over the documents, each score the share of the
+    /// pooled items (pairs, rows, cells, labelled values, pages): a document with
+    /// forty table rows weighs forty times one with one. A document whose
+    /// extraction failed is in it, every item missed.
+    pub aggregate: StructureFigures,
+    pub documents: Vec<StructureRow>,
+}
+
+pub fn structure_report(records: &[DocumentRecord]) -> Option<StructureReport> {
+    let mut pooled = StructureMeasure::default();
+    let mut rows = Vec::new();
+    for record in records {
+        let Some(measure) = &record.structure else {
+            continue;
+        };
+        pooled.accumulate(measure);
+        rows.push(StructureRow {
+            id: record.id.clone(),
+            status: record.status.clone(),
+            route_class: record.route_class.clone(),
+            figures: StructureFigures::of(measure),
+        });
+    }
+    (!rows.is_empty()).then(|| StructureReport {
+        aggregate: StructureFigures::of(&pooled),
+        documents: rows,
+    })
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RouteReport {
+    /// Pages per route over every document read: `fast`, `layout`, `ocr`,
+    /// `ocr_regions`, or `none` for a page sent without a layout.
+    pub pages: BTreeMap<String, usize>,
+    /// Documents per route class (`unrouted` when the worker sent no
+    /// layouts).
+    pub classes: BTreeMap<String, usize>,
+    /// Expected route, then the route taken, then pages: over every page
+    /// the gold gives a route for, in documents whose pages came with
+    /// layouts.
+    pub confusion: BTreeMap<String, BTreeMap<String, usize>>,
+}
+
+pub fn route_report(records: &[DocumentRecord]) -> Option<RouteReport> {
+    let mut report = RouteReport::default();
+    for record in records {
+        for route in &record.page_routes {
+            *report.pages.entry(route.clone()).or_default() += 1;
+        }
+        if let Some(class) = &record.route_class {
+            *report.classes.entry(class.clone()).or_default() += 1;
+        }
+        for check in record
+            .structure
+            .iter()
+            .filter(|measure| !measure.failed)
+            .flat_map(|measure| &measure.routes)
+        {
+            *report
+                .confusion
+                .entry(check.expected.clone())
+                .or_default()
+                .entry(check.actual.clone())
+                .or_default() += 1;
+        }
+    }
+    let routed = !report.pages.is_empty() || !report.confusion.is_empty();
+    routed.then_some(report)
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MemoryReport {
     /// False when no document had a sample (not Linux, or nothing ran).
@@ -489,6 +645,7 @@ pub struct RunInfo {
     pub timings_source: String,
     pub recording: Option<RecordingInfo>,
     pub corpus: CorpusInfo,
+    pub wall_ms: Option<f64>,
 }
 
 pub fn build(info: RunInfo, records: Vec<DocumentRecord>) -> Report {
@@ -504,10 +661,13 @@ pub fn build(info: RunInfo, records: Vec<DocumentRecord>) -> Report {
         timings_source: info.timings_source,
         recording: info.recording,
         corpus: info.corpus,
+        wall_ms: info.wall_ms,
         summary: summarize(&records),
         groups: groups(&records),
         latency: latency(&records),
         ocr: ocr_report(&records),
+        structure: structure_report(&records),
+        routes: route_report(&records),
         memory: memory_report(&records),
         records,
         baseline: None,

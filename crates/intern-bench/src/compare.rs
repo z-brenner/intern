@@ -11,6 +11,10 @@
 //! *broken*, from bad to good *fixed* - trap scores being good when false,
 //! as in the baseline gate.
 //!
+//! A fractional score - a structure score, an OCR error rate or accuracy,
+//! digest recall - that moved further than the extract-only gate tolerates
+//! ([`value_tolerance`]) is listed per document as *worse* or *better*.
+//!
 //! Latency is compared, as each stage's p50 and p95 change in per cent, over
 //! the documents both runs completed, and only between two runs that
 //! measured their timings. A replay reports its recording's timings, taken
@@ -20,9 +24,10 @@
 use std::{collections::BTreeSet, fmt::Write as _};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
+    baseline::value_tolerance,
     markdown::{HEADLINE_MEANS, HEADLINE_RATES, duration, metric_value, percent},
     record::{COMPLETED, DocumentRecord, PENDING, is_unscorable},
     report::{self, Rate, Report, Summary},
@@ -123,6 +128,12 @@ pub struct Comparison {
     pub counts: Vec<ValueDelta>,
     pub broken: Vec<Flip>,
     pub fixed: Vec<Flip>,
+    /// Fractional scores that moved the wrong way by more than the
+    /// extract-only gate's tolerance, and the right way.
+    #[serde(default)]
+    pub worse: Vec<Flip>,
+    #[serde(default)]
+    pub better: Vec<Flip>,
     pub status_changes: Vec<Change>,
     pub filename_changes: Vec<Change>,
     pub only_before: Vec<String>,
@@ -248,6 +259,7 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
     let completed = aligned
         .iter()
         .filter(|(was, now)| was.status == COMPLETED && now.status == COMPLETED)
+        .filter(|(was, now)| was.readiness.is_some() && now.readiness.is_some())
         .collect::<Vec<_>>();
     let review_rate = |pick: fn(&(DocumentRecord, DocumentRecord)) -> &DocumentRecord| {
         (!completed.is_empty()).then(|| {
@@ -378,6 +390,42 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
                 comparison.broken.push(flip);
             }
         }
+        if scored(record) && scored(now) {
+            let keys = record
+                .scores
+                .keys()
+                .filter(|key| now.scores.contains_key(*key))
+                .collect::<Vec<_>>();
+            for key in keys {
+                let (Some(was), Some(is), Some(tolerance)) = (
+                    record.scores[key]
+                        .as_f64()
+                        .filter(|_| record.scores[key].is_f64()),
+                    now.scores[key]
+                        .as_f64()
+                        .filter(|_| now.scores[key].is_f64()),
+                    value_tolerance(key),
+                ) else {
+                    continue;
+                };
+                let gain = if lower_is_better(key) {
+                    was - is
+                } else {
+                    is - was
+                };
+                let flip = Flip {
+                    id: record.id.clone(),
+                    score: key.clone(),
+                    before: json!(was),
+                    after: json!(is),
+                };
+                if gain < -tolerance - 1e-9 {
+                    comparison.worse.push(flip);
+                } else if gain > tolerance + 1e-9 {
+                    comparison.better.push(flip);
+                }
+            }
+        }
     }
     let before_ids = before
         .records
@@ -414,6 +462,14 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             "The gold differs between the runs: a score can move because the reviewed answer changed, not the code."
                 .to_owned(),
         );
+    }
+    if comparison.before.mode != comparison.after.mode
+        && (comparison.before.mode == "extract" || comparison.after.mode == "extract")
+    {
+        comparison.notes.push(format!(
+            "A {} run is compared with a {} run: only the scores both have - extraction's - are comparable.",
+            comparison.before.mode, comparison.after.mode
+        ));
     }
     let unscored = pairs.len() - comparison.aligned;
     if unscored > 0 {
@@ -668,68 +724,115 @@ pub fn render(comparison: &Comparison) -> String {
     }
     let _ = writeln!(out);
 
-    let _ = writeln!(out, "## Safety counts\n");
-    let _ = writeln!(out, "| Count | Before | After | Change |");
-    let _ = writeln!(out, "| --- | ---: | ---: | ---: |");
-    for delta in &comparison.counts {
-        let show = |value: Option<f64>| {
-            value.map_or_else(
+    // Two extract-only runs name nothing: there are no safety counts and
+    // no flips of a name's scores, only the extraction scores above and
+    // their movements below.
+    let extraction = comparison.before.mode == "extract" && comparison.after.mode == "extract";
+    if !extraction {
+        let _ = writeln!(out, "## Safety counts\n");
+        let _ = writeln!(out, "| Count | Before | After | Change |");
+        let _ = writeln!(out, "| --- | ---: | ---: | ---: |");
+        for delta in &comparison.counts {
+            let show = |value: Option<f64>| {
+                value.map_or_else(
+                    || "–".to_owned(),
+                    |value| {
+                        if delta.metric.ends_with("_rate") {
+                            percent(value)
+                        } else {
+                            format!("{value:.0}")
+                        }
+                    },
+                )
+            };
+            let change = delta.delta.map_or_else(
                 || "–".to_owned(),
                 |value| {
-                    if delta.metric.ends_with("_rate") {
-                        percent(value)
+                    let shown = if delta.metric.ends_with("_rate") {
+                        signed(round(value * 100.0, 1), " pts")
                     } else {
-                        format!("{value:.0}")
-                    }
+                        signed(value, "")
+                    };
+                    format!("{shown}{}", verdict(&delta.metric, value))
                 },
-            )
-        };
-        let change = delta.delta.map_or_else(
-            || "–".to_owned(),
-            |value| {
-                let shown = if delta.metric.ends_with("_rate") {
-                    signed(round(value * 100.0, 1), " pts")
-                } else {
-                    signed(value, "")
-                };
-                format!("{shown}{}", verdict(&delta.metric, value))
-            },
-        );
-        let _ = writeln!(
-            out,
-            "| {} | {} | {} | {change} |",
-            delta.metric,
-            show(delta.before),
-            show(delta.after)
-        );
-    }
-    let _ = writeln!(out);
-
-    let flips = |out: &mut String, title: &str, flips: &[Flip]| {
-        let mut by_document: Vec<(&str, Vec<&str>)> = Vec::new();
-        for flip in flips {
-            match by_document.iter_mut().find(|(id, _)| *id == flip.id) {
-                Some((_, scores)) => scores.push(&flip.score),
-                None => by_document.push((&flip.id, vec![&flip.score])),
-            }
+            );
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {change} |",
+                delta.metric,
+                show(delta.before),
+                show(delta.after)
+            );
         }
-        let _ = writeln!(
-            out,
-            "## {title}: {} score(s) in {} document(s)\n",
-            flips.len(),
-            by_document.len()
-        );
+        let _ = writeln!(out);
+
+        let flips = |out: &mut String, title: &str, flips: &[Flip]| {
+            let mut by_document: Vec<(&str, Vec<&str>)> = Vec::new();
+            for flip in flips {
+                match by_document.iter_mut().find(|(id, _)| *id == flip.id) {
+                    Some((_, scores)) => scores.push(&flip.score),
+                    None => by_document.push((&flip.id, vec![&flip.score])),
+                }
+            }
+            let _ = writeln!(
+                out,
+                "## {title}: {} score(s) in {} document(s)\n",
+                flips.len(),
+                by_document.len()
+            );
+            if flips.is_empty() {
+                let _ = writeln!(out, "None.\n");
+                return;
+            }
+            for (id, scores) in by_document {
+                let _ = writeln!(out, "- **{id}**: {}", scores.join(", "));
+            }
+            let _ = writeln!(out);
+        };
+        flips(&mut out, "Broken", &comparison.broken);
+        flips(&mut out, "Fixed", &comparison.fixed);
+    }
+    let moved = |out: &mut String, title: &str, flips: &[Flip]| {
         if flips.is_empty() {
-            let _ = writeln!(out, "None.\n");
             return;
         }
-        for (id, scores) in by_document {
-            let _ = writeln!(out, "- **{id}**: {}", scores.join(", "));
+        let _ = writeln!(out, "## {title}: {} score(s)\n", flips.len());
+        let _ = writeln!(out, "| Document | Score | Before | After |");
+        let _ = writeln!(out, "| --- | --- | ---: | ---: |");
+        for flip in flips {
+            let show = |value: &Value| {
+                value.as_f64().map_or_else(
+                    || "–".to_owned(),
+                    |value| {
+                        if is_unit_fraction(&flip.score) {
+                            percent(value)
+                        } else {
+                            format!("{value:.1}")
+                        }
+                    },
+                )
+            };
+            let _ = writeln!(
+                out,
+                "| {} | `{}` | {} | {} |",
+                flip.id,
+                flip.score,
+                show(&flip.before),
+                show(&flip.after)
+            );
         }
         let _ = writeln!(out);
     };
-    flips(&mut out, "Broken", &comparison.broken);
-    flips(&mut out, "Fixed", &comparison.fixed);
+    moved(
+        &mut out,
+        "Worse past the extract-only tolerance",
+        &comparison.worse,
+    );
+    moved(
+        &mut out,
+        "Better past the extract-only tolerance",
+        &comparison.better,
+    );
 
     if !comparison.status_changes.is_empty() {
         let _ = writeln!(out, "## Status changes\n");
@@ -1111,6 +1214,48 @@ mod tests {
                 .any(|delta| delta.metric == "unsupported_fact_rate"
                     && delta.before == Some(0.0)
                     && delta.after.is_none())
+        );
+    }
+
+    #[test]
+    fn extraction_scores_that_moved_past_tolerance_are_named() {
+        let run = |cer: f64, rows: f64, completeness: f64| {
+            let mut report = report(vec![(
+                "a",
+                json!({"ocr_cer": cer, "table_row_accuracy": rows, "description_completeness": completeness, "ocr_mean_confidence": 80.0}),
+                "a.pdf",
+                100.0,
+            )]);
+            report.mode = "extract".into();
+            report
+        };
+        let comparison = compare(&run(0.05, 0.5, 0.5), &run(0.03, 0.25, 1.0));
+        let named = |flips: &[Flip]| {
+            flips
+                .iter()
+                .map(|flip| format!("{}:{}", flip.id, flip.score))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(named(&comparison.better), vec!["a:ocr_cer"]);
+        assert_eq!(
+            named(&comparison.worse),
+            vec!["a:table_row_accuracy"],
+            "a score extraction does not decide is not listed"
+        );
+        let rendered = render(&comparison);
+        assert!(
+            rendered.contains("| a | `table_row_accuracy` | 50.0% | 25.0% |"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("## Safety counts") && !rendered.contains("review_rate"),
+            "two extract-only runs name nothing: {rendered}"
+        );
+        // Within the error rate's tolerance: not listed.
+        assert!(
+            compare(&run(0.05, 0.5, 0.5), &run(0.053, 0.5, 0.5))
+                .worse
+                .is_empty()
         );
     }
 

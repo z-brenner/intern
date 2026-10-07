@@ -217,22 +217,8 @@ pub fn run(
 /// Starts the worker and fills the server's prompt cache with the system
 /// instruction, on a document nobody scores.
 fn warm_up(worker: &SupervisedWorker, engine: &Engine) -> Result<(), String> {
-    let directory =
-        std::env::temp_dir().join(format!("intern-bench-warm-up-{}", std::process::id()));
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
-    let path = directory.join("warm-up.txt");
-    std::fs::write(&path, WARM_UP_TEXT)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
     let started = Instant::now();
-    let (extracted, _) = extract(worker, "bench-warm-up", &path);
-    let _ = std::fs::remove_dir_all(&directory);
-    let source = extracted.map_err(|failure| {
-        format!(
-            "the worker could not read the warm-up document: {}",
-            failure.code
-        )
-    })?;
+    let source = warm_up_worker(worker)?;
     engine
         .analyze(&source, "txt", &[])
         .map_err(|error| format!("the model did not answer the warm-up document: {error}"))?;
@@ -240,9 +226,29 @@ fn warm_up(worker: &SupervisedWorker, engine: &Engine) -> Result<(), String> {
     Ok(())
 }
 
+/// Starts the worker on a short text document nobody scores, so the first
+/// scored document is not charged for the start.
+pub(crate) fn warm_up_worker(worker: &SupervisedWorker) -> Result<DocumentSource, String> {
+    let directory =
+        std::env::temp_dir().join(format!("intern-bench-warm-up-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+    let path = directory.join("warm-up.txt");
+    std::fs::write(&path, WARM_UP_TEXT)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    let (extracted, _) = extract(worker, "bench-warm-up", &path);
+    let _ = std::fs::remove_dir_all(&directory);
+    extracted.map_err(|failure| {
+        format!(
+            "the worker could not read the warm-up document: {}",
+            failure.code
+        )
+    })
+}
+
 /// Extracts a document, with the worker's account of its stages when the
 /// worker gives one. A failed extraction reports none.
-fn extract(
+pub(crate) fn extract(
     worker: &SupervisedWorker,
     request_id: &str,
     path: &Path,
@@ -256,7 +262,7 @@ fn extract(
     }
 }
 
-fn micros_since(started: Instant) -> u64 {
+pub(crate) fn micros_since(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 

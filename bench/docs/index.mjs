@@ -13,6 +13,9 @@ import { dataProcessingAgreement } from './long-dpa.mjs';
 import { assetPurchaseAgreement } from './long-apa.mjs';
 import { creditAgreement } from './long-credit.mjs';
 import { annualReport } from './long-annual.mjs';
+import { agreementTwoColumnFootnotes, meetingNoticeColumns, meetingNoticeInterleaved, meetingNoticeReversed, newsletterThreeColumn, rateConfirmationRotated } from './columns.mjs';
+import { benefitsChangeForm, inspectionLogTwoPages, invoiceBoxedGrid, invoiceLabelAbove, invoiceRightAligned, lossNoticeBoxedFields, priceListUnruled } from './grids.mjs';
+import { mixedSignatureRegion, scanBillOfLading, scanCancellationNotice150, scanCertificateOfInsurance, scanMixedMiddlePage, scanRemittanceAdvice120, scanRotatedPageInPdf } from './critical.mjs';
 import { ocrCorruptedInvoice, scanAgreement, scanCleanLease, scanFaintLetter, scanFaxTwoFrames, scanLease, scanLowResReceipt, scanMixedAmendment, scanNoisyStatement, scanPatientIntakeForm, scanRotatedInvoice, scanSkewedNotice, scanUpsideDownPo } from './scans.mjs';
 
 export const BUILDERS = [
@@ -68,4 +71,25 @@ export const BUILDERS = [
   ['ocr-corrupted-invoice', ocrCorruptedInvoice],
   ['scan-fax-two-frames', scanFaxTwoFrames],
   ['scan-patient-intake-form', scanPatientIntakeForm],
+  // Added for the structure measurements; recorded live later.
+  ['newsletter-three-column', newsletterThreeColumn],
+  ['agreement-two-column-footnotes', agreementTwoColumnFootnotes],
+  ['meeting-notice-columns', meetingNoticeColumns],
+  ['meeting-notice-interleaved', meetingNoticeInterleaved],
+  ['meeting-notice-reversed', meetingNoticeReversed],
+  ['rate-confirmation-rotated', rateConfirmationRotated],
+  ['inspection-log-ruled-2p', inspectionLogTwoPages],
+  ['price-list-unruled', priceListUnruled],
+  ['invoice-label-above', invoiceLabelAbove],
+  ['invoice-right-aligned', invoiceRightAligned],
+  ['invoice-boxed-grid', invoiceBoxedGrid],
+  ['benefits-change-checkbox-form', benefitsChangeForm],
+  ['loss-notice-boxed-fields', lossNoticeBoxedFields],
+  ['scan-rotated-page-in-pdf', scanRotatedPageInPdf],
+  ['scan-cancellation-notice-150dpi', scanCancellationNotice150],
+  ['scan-remittance-advice-120dpi', scanRemittanceAdvice120],
+  ['scan-mixed-middle-page', scanMixedMiddlePage],
+  ['mixed-signature-region', mixedSignatureRegion],
+  ['scan-certificate-of-insurance', scanCertificateOfInsurance],
+  ['scan-bill-of-lading', scanBillOfLading],
 ];
