@@ -312,7 +312,12 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
             }
             LineKind::Heading => {
                 index += 1;
-                blocks.push(block(BlockKind::Heading, text, &lines[start..index], source));
+                blocks.push(block(
+                    BlockKind::Heading,
+                    text,
+                    &lines[start..index],
+                    source,
+                ));
             }
             LineKind::ListItem | LineKind::Text => {
                 index += 1;
