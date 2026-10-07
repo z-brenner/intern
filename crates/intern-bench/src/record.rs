@@ -272,12 +272,11 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     };
     let scored = score(document, &outcome, &texts);
     record.scores = scored.scores;
-    // Beside `digest_recall`: what the evidence context would carry.
-    if let Some(source) = observation.source {
-        record.scores.extend(
-            crate::context::context_scores(document, Some(source), observation.retrieval).scores,
-        );
-    }
+    // Beside `digest_recall`: what the evidence context would carry. A
+    // document that could not be read carries nothing, and still counts.
+    record.scores.extend(
+        crate::context::context_scores(document, observation.source, observation.retrieval).scores,
+    );
     // What only the evidence pipeline measures: nothing for the digest's.
     if let Some(analysis) = observation.analysis {
         record
@@ -293,4 +292,59 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
         record.set_routes(source);
     }
     record
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gold::GoldAnswer;
+
+    /// A document that could not be read is a miss on the evidence context
+    /// too: its zeroes stay in every `context_*` denominator, so a
+    /// configuration that fails to read documents never looks better for it.
+    #[test]
+    fn a_failed_extraction_scores_zero_context_recall() {
+        let document = GoldDocument {
+            id: "notice".into(),
+            file: "notice.pdf".into(),
+            pages: 1,
+            gold: GoldAnswer {
+                document_type: Some("Notice of Default".into()),
+                document_date: Some("2025-10-14".into()),
+                parties: Some(vec!["Glasswing Ceramics LLC".into()]),
+                ..GoldAnswer::default()
+            },
+            ..GoldDocument::default()
+        };
+        let retrieval = RetrievalConfig::default();
+        let record = scored_record(
+            &document,
+            Observation {
+                status: "extraction_failed",
+                error: Some("PARSER_FAILED".into()),
+                analysis: None,
+                source: None,
+                budget: DigestBudget::default(),
+                retrieval: &retrieval,
+                exchanges: &[],
+                last_prompt: None,
+                timings: Timings::default(),
+                timings_recorded: false,
+                memory: MemoryPeaks::default(),
+                replayed: true,
+                stale: false,
+            },
+        );
+        for key in [
+            "context_type_recall",
+            "context_date_recall",
+            "context_recall",
+        ] {
+            assert_eq!(
+                record.scores.get(key).and_then(Value::as_f64),
+                Some(0.0),
+                "{key}"
+            );
+        }
+    }
 }

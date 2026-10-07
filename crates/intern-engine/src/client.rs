@@ -84,6 +84,12 @@ impl ModelRequest {
     /// recorded reply never answers a request whose grammar has changed. A
     /// request under the fixed grammar is identified by its prompt alone, as
     /// it always was, so every recording made before stays valid.
+    ///
+    /// A recorded reply's ids are already the stable ids its handles stood
+    /// for. Ordinal handles do not show those ids in the prompt, so their
+    /// mapping is part of the identity too: the same prompt over units whose
+    /// ids changed is a different request. Stable handles are the ids
+    /// themselves, already in the prompt, and add nothing.
     pub fn sha256(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.prompt.as_bytes());
@@ -94,6 +100,15 @@ impl ModelRequest {
         if let Some(system) = &self.system {
             hasher.update([0_u8, 1_u8]);
             hasher.update(system.as_bytes());
+        }
+        if let Some(evidence) = self.evidence.as_ref().filter(|e| e.remaps()) {
+            hasher.update([0_u8, 2_u8]);
+            for (handle, id) in &evidence.handles {
+                hasher.update(handle.as_bytes());
+                hasher.update([0_u8]);
+                hasher.update(id.as_bytes());
+                hasher.update([0_u8]);
+            }
         }
         format!("{:x}", hasher.finalize())
     }
@@ -129,6 +144,12 @@ impl EvidenceHandles {
     /// `(handle, stable id)` pairs, in prompt order.
     pub fn new(handles: Vec<(String, String)>) -> Self {
         Self { handles }
+    }
+
+    /// Whether any handle stands for an id other than itself: ordinal
+    /// handles do, stable ones never.
+    pub fn remaps(&self) -> bool {
+        self.handles.iter().any(|(handle, id)| handle != id)
     }
 
     pub fn handles(&self) -> impl Iterator<Item = &str> {
@@ -1929,6 +1950,31 @@ mod tests {
         assert!(facts.unknown_evidence.is_empty());
     }
 
+    /// An ordinal request's identity covers what its numbers stand for: the
+    /// same prompt over units whose stable ids moved is a different request,
+    /// and a recorded reply to the old one is stale. A stable request is
+    /// identified as before.
+    #[test]
+    fn an_ordinal_requests_identity_covers_the_ids_its_numbers_stand_for() {
+        let request = |handles: EvidenceHandles| ModelRequest {
+            system: Some("s".into()),
+            grammar: Some("g".into()),
+            evidence: Some(handles),
+            ..ModelRequest::new("p")
+        };
+        let moved = EvidenceHandles::new(vec![
+            ("1".into(), "p1.b1".into()),
+            ("2".into(), "p1.b4.f1".into()),
+            ("3".into(), "p1.b5".into()),
+        ]);
+        assert_ne!(request(ordinal_handles()).sha256(), request(moved).sha256());
+        let unmapped = ModelRequest {
+            evidence: None,
+            ..request(stable_handles())
+        };
+        assert_eq!(request(stable_handles()).sha256(), unmapped.sha256());
+    }
+
     /// The request's identity covers a system turn of its own; a request
     /// without one is identified as it always was.
     #[test]
@@ -2029,12 +2075,21 @@ mod tests {
             with("root ::= \"a\"").sha256(),
             with("root ::= \"b\"").sha256()
         );
-        // The handle map is read from the prompt, so it identifies nothing.
-        let mapped = ModelRequest {
-            evidence: Some(ordinal_handles()),
+        // Stable handles are the ids the prompt shows, so their map
+        // identifies nothing; ordinal numbers do not show what they stand
+        // for, so theirs does.
+        let mapped = |handles: EvidenceHandles| ModelRequest {
+            evidence: Some(handles),
             ..with("root ::= \"a\"")
         };
-        assert_eq!(mapped.sha256(), with("root ::= \"a\"").sha256());
+        assert_eq!(
+            mapped(stable_handles()).sha256(),
+            with("root ::= \"a\"").sha256()
+        );
+        assert_ne!(
+            mapped(ordinal_handles()).sha256(),
+            with("root ::= \"a\"").sha256()
+        );
     }
 
     /// The local server is sent the request's own grammar, and its reply is
