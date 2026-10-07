@@ -264,6 +264,50 @@ fn photo_pdf(width: u32, height: u32) -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A landscape page stored as a portrait sheet turned a quarter, with text
+/// drawn on both sides of where the displayed width would cut it.
+#[cfg(feature = "native-pdfium")]
+fn turned_landscape_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Rotate 90 ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "",
+            b"BT /F1 12 Tf 300 100 Td (CARRIER RATE CONFIRMATION) Tj ET \
+              BT /F1 12 Tf 300 700 Td (Confirmed June 8, 2026) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// Text on a quarter-turned page is all read: drawn past the displayed
+/// width, it used to be dropped.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_quarter_turned_page_keeps_all_its_text() {
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("turned.pdf");
+    std::fs::write(&path, turned_landscape_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+
+    let text = &pages[0].native_text;
+    assert!(text.contains("CARRIER RATE CONFIRMATION"), "{text:?}");
+    assert!(text.contains("Confirmed June 8, 2026"), "{text:?}");
+}
+
 #[cfg(feature = "native-pdfium")]
 #[test]
 fn form_xobject_nested_image_contributes_rendered_coverage() {

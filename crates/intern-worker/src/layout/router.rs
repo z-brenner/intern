@@ -192,7 +192,21 @@ pub fn measure_signals(native: &NativePage, text: &str, image_coverage: f32) -> 
     let chars = non_whitespace
         .filter(|character| !character.is_control() && *character != '\u{fffd}')
         .count();
-    let structure = Structure::of(&native.segments);
+    // Lines, columns and rows are the page's as it is read: a page turned
+    // by `/Rotate` has its text set across its own frame, so its segments
+    // are turned the way it is displayed before they are measured.
+    let turned;
+    let segments = if native.rotation % 360 == 0 {
+        &native.segments
+    } else {
+        turned = native
+            .segments
+            .iter()
+            .map(|segment| native.to_display(*segment))
+            .collect::<Vec<_>>();
+        &turned
+    };
+    let structure = Structure::of(segments);
     RouteSignals {
         chars: u32::try_from(chars).unwrap_or(u32::MAX),
         segments: u32::try_from(native.segments.len()).unwrap_or(u32::MAX),
@@ -208,8 +222,8 @@ pub fn measure_signals(native: &NativePage, text: &str, image_coverage: f32) -> 
         aligned_rows: structure.aligned_rows,
         key_values: key_value_lines(text),
         key_value_grid: key_value_grid_lines(text),
-        overlap: overlap(&native.segments),
-        font_sizes: font_sizes(&native.segments),
+        overlap: overlap(segments),
+        font_sizes: font_sizes(segments),
         rulings: u16::try_from(native.rulings.len()).unwrap_or(u16::MAX),
         image_region: image_region(native),
         rotation: native.rotation % 360,
@@ -808,6 +822,53 @@ mod tests {
         let prose = measure(prose);
         assert_eq!(prose.aligned_rows, 0);
         assert_eq!(prose.columns, 1);
+    }
+
+    /// A landscape table stored as a portrait page turned a quarter is set
+    /// down the page's own frame; measured as displayed, it is the same
+    /// table, and the page is routed as one.
+    #[test]
+    fn a_quarter_turned_table_is_measured_as_displayed() {
+        let mut displayed = Vec::new();
+        for row in 0..5 {
+            displayed.push(segment(54, 100 + row * 14, 80));
+            displayed.push(segment(250, 100 + row * 14, 30));
+            displayed.push(segment(450, 100 + row * 14, 60));
+        }
+        let upright = measure_signals(
+            &NativePage {
+                width: 7920,
+                height: 6120,
+                segments: displayed.clone(),
+                ..NativePage::default()
+            },
+            "",
+            0.0,
+        );
+        let turned = measure_signals(
+            &NativePage {
+                width: 6120,
+                height: 7920,
+                rotation: 90,
+                segments: displayed
+                    .iter()
+                    .map(|segment| from_display(*segment, 90, 7920, 6120))
+                    .collect(),
+                ..NativePage::default()
+            },
+            "",
+            0.0,
+        );
+
+        assert_eq!(upright.aligned_rows, 5);
+        assert_eq!(
+            RouteSignals {
+                rotation: 0,
+                ..turned
+            },
+            upright
+        );
+        assert_eq!(route_page(&turned, false), PageRoute::Layout);
     }
 
     #[test]

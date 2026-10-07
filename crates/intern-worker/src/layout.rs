@@ -479,27 +479,34 @@ pub fn geometry_layout(
     signals: RouteSignals,
     route: PageRoute,
 ) -> PageLayout {
-    let runs;
-    let all = if extra_runs.is_empty() {
-        &native.runs
-    } else {
-        runs = native
-            .runs
-            .iter()
-            .cloned()
-            .chain(extra_runs)
-            .collect::<Vec<_>>();
-        &runs
+    // The page is analysed as it is displayed, which is how it reads: a
+    // page turned by `/Rotate` has its runs and rules turned first. Its
+    // blocks are then already in the displayed frame.
+    let turned = native.rotation % 360 != 0;
+    let turn = |bbox: [u32; 4]| {
+        if turned {
+            native.to_display(bbox)
+        } else {
+            bbox
+        }
     };
-    let mut blocks = analyze_runs(
-        all,
-        native.width,
-        native.height,
-        &native.rulings,
-        TextSource::Native,
-    );
-    to_display_blocks(&mut blocks, native);
+    let runs = native
+        .runs
+        .iter()
+        .cloned()
+        .chain(extra_runs)
+        .map(|run| TextRun {
+            bbox: turn(run.bbox),
+            ..run
+        })
+        .collect::<Vec<_>>();
+    let rulings = native
+        .rulings
+        .iter()
+        .map(|ruling| turn(*ruling))
+        .collect::<Vec<_>>();
     let (width, height) = native.display_size();
+    let blocks = analyze_runs(&runs, width, height, &rulings, TextSource::Native);
     PageLayout {
         width,
         height,

@@ -337,8 +337,40 @@ fn survey_object(object: &PdfPageObject<'_>, frame: &Frame, survey: &mut ObjectS
 /// Each character is asked for its box, its value, whether PDFium generated
 /// it, and its weight - four calls - which is why only pages routed to a
 /// geometry route are read this way.
+///
+/// Lines are found on the page as it is displayed: text on a page turned by
+/// `/Rotate` runs across the page's own frame, one character above the
+/// next, so each character and segment is turned first, and each run is
+/// turned back into the page's frame once it is built.
 #[cfg(feature = "native-pdfium")]
-fn text_runs(text: &PdfPageText<'_>, frame: &Frame, segments: &[[u32; 4]]) -> Vec<TextRun> {
+fn text_runs(text: &PdfPageText<'_>, frame: &Frame, native: &NativePage) -> Vec<TextRun> {
+    let (display_width, display_height) = native.display_size();
+    let segments = native
+        .segments
+        .iter()
+        .map(|segment| native.to_display(*segment))
+        .collect::<Vec<_>>();
+    let segments = segments.as_slice();
+    let mut runs = character_runs(text, frame, native, segments);
+    for run in &mut runs {
+        run.bbox = crate::layout::router::from_display(
+            run.bbox,
+            native.rotation,
+            display_width,
+            display_height,
+        );
+    }
+    runs
+}
+
+/// [`text_runs`] on the page as displayed.
+#[cfg(feature = "native-pdfium")]
+fn character_runs(
+    text: &PdfPageText<'_>,
+    frame: &Frame,
+    native: &NativePage,
+    segments: &[[u32; 4]],
+) -> Vec<TextRun> {
     struct Building {
         text: String,
         bbox: [f64; 4],
@@ -393,7 +425,7 @@ fn text_runs(text: &PdfPageText<'_>, frame: &Frame, segments: &[[u32; 4]]) -> Ve
         let Ok(bounds) = character.loose_bounds() else {
             continue;
         };
-        let bbox = frame.rect(&bounds).map(f64::from);
+        let bbox = native.to_display(frame.rect(&bounds)).map(f64::from);
         if bbox[3] <= bbox[1] {
             continue;
         }
@@ -494,6 +526,29 @@ fn font_weight(weight: PdfFontWeight) -> u32 {
     }
 }
 
+/// Every character on the page, in the order the document defines them.
+///
+/// PDFium bounds a page's text by the page's size as displayed, but its
+/// characters sit where the content stream drew them, before `/Rotate`
+/// turns the page. On a page turned a quarter - a landscape rate sheet
+/// stored as a portrait one - the displayed width is the drawn height, and
+/// every character past it was lost: the title cut to "CARRIER RA", the
+/// charges and the confirmation date gone. Such a page is bounded by its
+/// size as drawn. Every other page is read exactly as it always was.
+#[cfg(feature = "native-pdfium")]
+fn page_text(page: &PdfPage<'_>, text: &PdfPageText<'_>, rotation: u16) -> String {
+    if rotation % 180 == 90 {
+        text.inside_rect(PdfRect::new(
+            PdfPoints::ZERO,
+            PdfPoints::ZERO,
+            page.width(),
+            page.height(),
+        ))
+    } else {
+        text.all()
+    }
+}
+
 #[cfg(feature = "native-pdfium")]
 fn rotation_degrees(page: &PdfPage<'_>) -> u16 {
     match page.rotation() {
@@ -536,13 +591,13 @@ impl PdfiumBackend {
             for (page_index, page) in document.pages().iter().enumerate() {
                 cancel.check()?;
                 let text = page.text().map_err(|error| one_line(&error))?;
-                let native_text = text.all();
+                let rotation = rotation_degrees(&page);
+                let native_text = page_text(&page, &text, rotation);
                 // The size at full resolution, unbudgeted: whether a page fits
                 // the render cap is the caller's question to ask of it.
                 let size = render_size_within(page.width().value, page.height().value, u64::MAX);
                 let (width_pixels, height_pixels) = (size.width, size.height);
                 let analysis_started = Instant::now();
-                let rotation = rotation_degrees(&page);
                 let frame = Frame::of(&page, rotation);
                 let mut survey = ObjectSurvey::default();
                 for object in page.objects().iter() {
@@ -580,7 +635,7 @@ impl PdfiumBackend {
                 };
                 let route = router(&signals, crate::extract::page_needs_ocr(&inspection));
                 if needs_runs(route) {
-                    native.runs = text_runs(&text, &frame, &native.segments);
+                    native.runs = text_runs(&text, &frame, &native);
                 }
                 inspection.native = Some(native);
                 analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
