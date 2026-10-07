@@ -3,6 +3,7 @@ pub mod email;
 pub mod extract;
 pub mod limits;
 pub mod ocr;
+pub mod paddle;
 pub mod panic_hook;
 pub mod pdf;
 pub mod protocol;
