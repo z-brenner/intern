@@ -26,16 +26,18 @@
 //!   consecutive gold snippets is in order when both are found and the
 //!   first starts before the second. The score is the share of the n - 1
 //!   pairs in order, so a missing snippet breaks both pairs it belongs to.
-//! * `table_row_accuracy`: a gold row is found when one line holds all of
-//!   its non-empty cells in order, each after the end of the one before.
-//!   A blank cell says something too. When some rows of a table leave the
-//!   leading cell blank and others do not - a check-box group, whose
-//!   chosen options are marked `X` - the values the others hold there are
-//!   the table's *marks*, and a row whose leading cell is blank is not
-//!   found on a line where a mark stands between the cell of another row
-//!   before it (or the line's start) and its first cell: that `X` is
-//!   beside an option the gold leaves unmarked. The score is the share of
-//!   rows found, over every table.
+//! * `table_row_accuracy`: a gold row is found when one line of its
+//!   table's region (below) holds all of its non-empty cells in order, each
+//!   after the end of the one before, with no cell of another row of the
+//!   table wholly between two of them - two rows read across each other
+//!   are neither found. A blank cell says something too. When some rows
+//!   of a table leave the leading cell blank and others do not - a
+//!   check-box group, whose chosen options are marked `X` - the values the
+//!   others hold there are the table's *marks*, and a row whose leading
+//!   cell is blank is not found on a line where a mark stands between the
+//!   cell of another row before it (or the line's start) and its first
+//!   cell: that `X` is beside an option the gold leaves unmarked. The
+//!   score is the share of rows found, over every table.
 //! * `table_cell_recall`: the share of the gold's non-empty cells found in
 //!   their table's *region*: the lines from the first one holding a cell
 //!   of the table's first row (the first line, if none does) to the last
@@ -47,12 +49,14 @@
 //!   Cells are counted with their multiplicity: a value the table prints
 //!   three times must be found three times, without overlap.
 //! * `kv_accuracy`: a labelled value is found when a line holds the label
-//!   and, after it, the value; or when a line holds the label and nothing
-//!   else (colons, bars, dashes and full stops aside) and the next line
-//!   holds the value; or when a table row (`| … |`) holds the label in a
-//!   cell and the next line, also a table row, holds the value in the cell
-//!   of the same column - a label set over its value, linearised as a
-//!   table. The score is the share of pairs found.
+//!   and, after it but before the next gold label on the line, the value
+//!   (a value after another label is that label's); or when a line holds
+//!   the label and nothing else (colons, bars, dashes and full stops
+//!   aside) and the next line holds the value; or when a table row
+//!   (`| … |`) holds the label in a cell and the next line, also a table
+//!   row, holds the value in the cell of the same column - a label set
+//!   over its value, linearised as a table. The score is the share of
+//!   pairs found.
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
@@ -315,15 +319,33 @@ impl GoldTable {
         (start, end.max(start))
     }
 
+    /// The non-blank cells of every row but `index`, marks included.
+    fn cells_besides(&self, index: usize) -> Vec<&str> {
+        let mut cells = Vec::new();
+        for (other, row) in self.rows.iter().enumerate() {
+            if other == index {
+                continue;
+            }
+            for cell in &row.cells {
+                if !cells.contains(&cell.as_str()) {
+                    cells.push(cell.as_str());
+                }
+            }
+        }
+        cells
+    }
+
     /// Whether `line` holds row `index`: every non-blank cell in order,
-    /// each starting after the end of the one before; and, when its leading
-    /// cell is blank, no mark between the cell of another row before it on
-    /// the line (or the line's start) and its first cell - an `X` there is
-    /// beside this option, which the gold leaves unmarked.
+    /// each starting after the end of the one before, with no cell of
+    /// another row of the table wholly between two of them; and, when its
+    /// leading cell is blank, no mark between the cell of another row
+    /// before it on the line (or the line's start) and its first cell - an
+    /// `X` there is beside this option, which the gold leaves unmarked.
     fn holds_row(&self, line: &str, index: usize) -> bool {
         let row = &self.rows[index];
         let marks = self.marks.iter().map(String::as_str).collect::<Vec<_>>();
         let captions = self.captions_besides(index);
+        let others = self.cells_besides(index);
         let unmarked = |at: usize| {
             let since = captions
                 .iter()
@@ -346,7 +368,8 @@ impl GoldTable {
                     if position == 0 {
                         !row.blank_lead || unmarked(*at)
                     } else {
-                        ends.iter().any(|end| end <= at)
+                        ends.iter()
+                            .any(|end| end <= at && !holds_within(line, &others, *end, *at))
                     }
                 })
                 .map(|at| at + cell.len())
@@ -593,13 +616,21 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
     // Tables.
     for (table_index, table) in truth.tables.iter().enumerate() {
         let table = GoldTable::of(table);
+        if table.rows.is_empty() {
+            continue;
+        }
+        let (start, end) = table.region(&lines);
+        let region_lines = lines.get(start..=end).unwrap_or_default();
         for (row_index, row) in table.rows.iter().enumerate() {
             measure.rows += 1;
-            if lines.iter().any(|line| table.holds_row(line, row_index)) {
+            if region_lines
+                .iter()
+                .any(|line| table.holds_row(line, row_index))
+            {
                 measure.rows_found += 1;
             } else {
                 measure.misses.push(format!(
-                    "table {} row {}: \"{}{}\" not on one line",
+                    "table {} row {}: \"{}{}\" not on one line of the table",
                     table_index + 1,
                     row_index + 1,
                     if row.blank_lead { "(blank) | " } else { "" },
@@ -607,11 +638,7 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
                 ));
             }
         }
-        if table.rows.is_empty() {
-            continue;
-        }
-        let (start, end) = table.region(&lines);
-        let region = lines.get(start..=end).unwrap_or_default().join("\n");
+        let region = region_lines.join("\n");
         let mut wanted: Vec<(&String, usize)> = Vec::new();
         for cell in table.rows.iter().flat_map(|row| &row.cells) {
             match wanted.iter_mut().find(|(value, _)| *value == cell) {
@@ -633,6 +660,13 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
     }
 
     // Labelled values.
+    let labels = truth
+        .key_values
+        .iter()
+        .map(|pair| normalise(&pair.key))
+        .filter(|key| !key.is_empty())
+        .collect::<Vec<_>>();
+    let labels = labels.iter().map(String::as_str).collect::<Vec<_>>();
     for pair in &truth.key_values {
         let key = normalise(&pair.key);
         let value = normalise(&pair.value);
@@ -646,7 +680,11 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
                     let mut from = 0;
                     while let Some(at) = find_bounded(line, &key, from) {
                         let rest = &line[at + key.len()..];
-                        if find_bounded(rest, &value, 0).is_some() {
+                        // The value, before the next gold label on the
+                        // line: one after it is that label's.
+                        if find_bounded(rest, &value, 0)
+                            .is_some_and(|start| !holds_within(rest, &labels, 0, start))
+                        {
                             return true;
                         }
                         if only_separators(&line[..at])
@@ -844,6 +882,29 @@ mod tests {
     }
 
     #[test]
+    fn a_row_holds_no_other_row_between_its_cells_and_lies_in_its_table() {
+        let truth = StructureTruth {
+            tables: vec![rows(&[&["Part", "Qty"], &["Bolt", "4"], &["Nut", "12"]])],
+            ..StructureTruth::default()
+        };
+        // Two rows read across each other: "Bolt" and "4" are on one line
+        // in order, but with the other row between them.
+        let crossed = measure(&truth, &source(&["Part Qty\nBolt Nut 12 4"]));
+        assert_eq!(crossed.rows_found, 2, "{:?}", crossed.misses);
+        assert!(
+            crossed.misses[0].contains("row 2: \"Bolt | 4\""),
+            "{:?}",
+            crossed.misses
+        );
+        // A row printed before the table, in a sentence, is not the row.
+        let outside = measure(
+            &truth,
+            &source(&["Order Bolt 4 today\nPart Qty\nBolt\nNut 12"]),
+        );
+        assert_eq!(outside.rows_found, 2, "{:?}", outside.misses);
+    }
+
+    #[test]
     fn a_blank_mark_is_part_of_a_check_box_row() {
         let truth = StructureTruth {
             tables: vec![rows(&[
@@ -878,9 +939,16 @@ mod tests {
             &truth,
             &source(&["X Gold PPO Silver PPO High-deductible HSA\nWaive coverage"]),
         );
-        assert_eq!(wrong.rows_found, 3, "{:?}", wrong.misses);
+        // Nor is the chosen option's row found: another option stands
+        // between its X and its caption.
+        assert_eq!(wrong.rows_found, 2, "{:?}", wrong.misses);
         assert!(
             wrong.misses[0].contains("\"(blank) | Gold PPO\" not on one line"),
+            "{:?}",
+            wrong.misses
+        );
+        assert!(
+            wrong.misses[1].contains("\"X | Silver PPO\" not on one line"),
             "{:?}",
             wrong.misses
         );
@@ -994,6 +1062,17 @@ mod tests {
         // A value before its label is not its value.
         let before = measure(&truth, &source(&["03/04/2026 Invoice Date"]));
         assert_eq!(before.key_values_found, 0);
+        // Nor is one after the next label on the line: it is that label's.
+        let crowded = measure(
+            &truth,
+            &source(&["Invoice Date Due Date 03/04/2026 04/03/2026"]),
+        );
+        assert_eq!(crowded.key_values_found, 1, "{:?}", crowded.misses);
+        assert!(
+            crowded.misses[0].contains("\"Invoice Date\" = \"03/04/2026\""),
+            "{:?}",
+            crowded.misses
+        );
         // Labels over their values, linearised as a table: each value is
         // in the cell under its label, and only there.
         let grid = measure(

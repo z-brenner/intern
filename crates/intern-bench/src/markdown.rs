@@ -470,7 +470,7 @@ fn structure(out: &mut String, report: &Report) {
     );
     let _ = writeln!(
         out,
-        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line, in order, an empty check box left empty. Table cells: cells found in their table's lines. Key-values: values after their label on its line, alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
+        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line of their table, in order, with no other row between them and an empty check box left empty. Table cells: cells found in their table's lines. Key-values: values after their label on its line (before the next label), alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
     );
 }
 
