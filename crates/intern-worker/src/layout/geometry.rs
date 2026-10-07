@@ -1937,6 +1937,78 @@ mod tests {
         assert!(!table.rows[1].cells[0].header);
     }
 
+    /// Boxes of a certificate - a captioned producer on the left, labelled
+    /// insurers on the right - over a schedule that runs across the gap
+    /// between them: the schedule is one table, its rows whole.
+    #[test]
+    fn a_table_across_the_gutter_under_labelled_boxes_stays_whole() {
+        let mut runs = vec![
+            run(54.0, 80.0, "PRODUCER", 8.0),
+            run(54.0, 92.0, "Hartsfield Insurance Brokers", 9.0),
+            run(54.0, 104.0, "300 Bell Tower Road", 9.0),
+            run(54.0, 116.0, "Calloway, SC 29630", 9.0),
+            run(320.0, 80.0, "INSURER A: Bramblecote Casualty Company", 9.0),
+            run(320.0, 92.0, "INSURER B: Wexley Indemnity Company", 9.0),
+            run(320.0, 104.0, "INSURER C: Fenmoor Specialty Co.", 9.0),
+            run(320.0, 116.0, "CERTIFICATE NUMBER: HQ-26-06-4415", 9.0),
+        ];
+        let rows = [
+            ["LTR", "TYPE", "POLICY NUMBER", "EFF", "EXP", "LIMIT"],
+            [
+                "A",
+                "General",
+                "BCC-GL-4471902",
+                "04/01/2026",
+                "04/01/2027",
+                "$1,000,000",
+            ],
+            [
+                "B",
+                "Auto",
+                "WIC-CA-208815",
+                "01/15/2026",
+                "01/15/2027",
+                "$1,000,000",
+            ],
+            [
+                "C",
+                "Umbrella",
+                "FSI-UMB-77310",
+                "04/01/2026",
+                "04/01/2027",
+                "$5,000,000",
+            ],
+        ];
+        for (index, cells) in rows.iter().enumerate() {
+            let y = 140.0 + index as f64 * 14.0;
+            for (cell, x) in cells.iter().zip([54.0, 80.0, 200.0, 320.0, 390.0, 460.0]) {
+                runs.push(run(x, y, cell, 9.0));
+            }
+        }
+
+        let blocks = analyze(&runs);
+
+        let table = blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Table)
+            .unwrap_or_else(|| panic!("{blocks:#?}"));
+        assert!(
+            table.text.contains(
+                "| A | General | BCC-GL-4471902 | 04/01/2026 | 04/01/2027 | $1,000,000 |"
+            ),
+            "{}",
+            table.text
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|block| block.kind == BlockKind::Table)
+                .count(),
+            1,
+            "{blocks:#?}"
+        );
+    }
+
     #[test]
     fn a_wrapped_cell_continues_its_row() {
         let runs = vec![
