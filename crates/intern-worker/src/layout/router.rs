@@ -258,6 +258,13 @@ pub mod bounds {
     /// page (226 on the ruled inspection log). A page drawn one character
     /// to an object has a few thousand.
     pub const MAX_SEGMENTS: usize = 5_000;
+    /// Objects a page's survey visits, the children of forms included: a
+    /// page with more is not measured at all and keeps its text, read on
+    /// the fast route. Four times the text objects the survey keeps.
+    pub const MAX_SURVEY_OBJECTS: usize = 20_000;
+    /// Forms drawn inside forms that the survey follows, the page's own
+    /// objects at depth 0: a page nested deeper is not measured.
+    pub const MAX_FORM_DEPTH: usize = 16;
     /// Images a page's survey keeps, the largest first; their area still
     /// counts every image. No corpus page has more than one.
     pub const MAX_IMAGES: usize = 64;

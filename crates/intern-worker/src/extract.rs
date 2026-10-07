@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -735,6 +736,9 @@ where
     let page_count = inspections.len();
     let workers = ocr.concurrency().clamp(1, MAX_OCR_WORKERS);
     let queue = limits.max_queued_rendered_pages.max(1);
+    // The document's characters, counted down as pages read as their text
+    // are built: a page the worker will cut has no layout built for it.
+    let characters = Cell::new(MAX_DOCUMENT_CHARS);
 
     let (plans, outcomes, failure) = std::thread::scope(|scope| {
         let mut pool = OcrPool::new(scope, ocr, cancel, workers, queue, page_count);
@@ -767,6 +771,7 @@ where
                 started,
                 &mut pool,
                 vision_taken,
+                &characters,
             ) {
                 Ok(plan) => {
                     if matches!(plan, PagePlan::Done { .. }) {
@@ -818,7 +823,7 @@ where
         |inspection: &mut PdfPageInspection, route| read_runs(inspection, route, pdf, path, cancel);
     let document = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || assemble(plans, outcomes, &runs, &stop),
+        || assemble(plans, outcomes, &runs, &stop, &characters),
     )?;
     // A layout the time ran out on was left unbuilt; the document is not
     // returned half-read as if it were whole.
@@ -845,6 +850,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     started: Instant,
     pool: &mut OcrPool<'_, '_, O>,
     vision_taken: bool,
+    characters: &Cell<usize>,
 ) -> Result<PagePlan, ExtractionError> {
     let page_index = inspection.page_index;
     let page_number = page_index + 1;
@@ -996,7 +1002,7 @@ fn plan_page<O: OcrBackend + Sync + ?Sized>(
     let stop = || halted(cancel, started, limits);
     let page = cancel.timed(
         |timings| &mut timings.analysis_micros,
-        || native_page(page_number, inspection, signals, route, &stop),
+        || native_page(page_number, inspection, signals, route, &stop, characters),
     );
     Ok(PagePlan::Done { page, vision })
 }
@@ -1098,12 +1104,17 @@ fn render_for_ocr(
 /// route, or the linearization of its blocks on the layout route - unless
 /// the page is past what the analysis takes on, or `stop` says the request
 /// is canceled or out of time, when it is read as on the fast route.
+///
+/// A page read as its text has no layout built when the worker will cut
+/// that text on the way out (see [`goes_out_whole`]); `characters` is what
+/// is left of the document's characters, counted down page by page.
 fn native_page(
     page_number: usize,
     inspection: PdfPageInspection,
     signals: RouteSignals,
     route: PageRoute,
     stop: &dyn Fn() -> bool,
+    characters: &Cell<usize>,
 ) -> ExtractedPage {
     // A page past the analysis's bounds, or one the time ran out on, is
     // read as its text.
@@ -1114,25 +1125,37 @@ fn native_page(
         .and_then(|native| {
             crate::layout::geometry_layout(native, Vec::new(), signals, route, stop)
         });
+    let mut remaining = characters.get();
     let (text, mut layout) = match geometry {
-        Some(layout) => (crate::layout::linearize(&layout.blocks), layout),
+        Some(layout) => {
+            // The page's text is written from its layout, which the bounds
+            // on the analysis already keep small; it still counts.
+            let text = crate::layout::linearize(&layout.blocks);
+            goes_out_whole(&text, &mut remaining);
+            (text, Some(layout))
+        }
         None => {
-            let layout = crate::layout::fast_layout(
-                &inspection.native_text,
-                inspection.native.as_ref(),
-                signals,
-            );
+            let layout = goes_out_whole(&inspection.native_text, &mut remaining).then(|| {
+                crate::layout::fast_layout(
+                    &inspection.native_text,
+                    inspection.native.as_ref(),
+                    signals,
+                )
+            });
             (inspection.native_text, layout)
         }
     };
-    crate::layout::number_blocks(page_number, &mut layout.blocks);
+    characters.set(remaining);
+    if let Some(layout) = layout.as_mut() {
+        crate::layout::number_blocks(page_number, &mut layout.blocks);
+    }
     ExtractedPage {
         page_number,
         text,
         source: PageSource::Native,
         ocr_confidence: None,
         vision_escalated: false,
-        layout: Some(layout),
+        layout,
     }
 }
 
@@ -1153,6 +1176,7 @@ fn assemble(
     outcomes: Vec<OcrOutcome>,
     runs: &dyn Fn(&mut PdfPageInspection, PageRoute) -> Result<(), ExtractionError>,
     stop: &dyn Fn() -> bool,
+    characters: &Cell<usize>,
 ) -> Result<ExtractedDocument, ExtractionError> {
     let mut outcomes = outcomes
         .into_iter()
@@ -1219,7 +1243,7 @@ fn assemble(
                     _ => {
                         let route = native_route(PageRoute::Ocr, &signals);
                         (
-                            native_page(page_number, inspection, signals, route, stop),
+                            native_page(page_number, inspection, signals, route, stop, characters),
                             vision,
                         )
                     }
@@ -1254,7 +1278,7 @@ fn assemble(
                 )
                 .unwrap_or_else(|| {
                     let route = native_route(PageRoute::OcrRegions, &signals);
-                    native_page(page_number, inspection, signals, route, stop)
+                    native_page(page_number, inspection, signals, route, stop, characters)
                 });
                 (page, vision)
             }
@@ -1316,19 +1340,11 @@ impl ExtractedPage {
         source: PageSource,
         budget: &mut usize,
     ) -> Self {
-        let allowed = MAX_PAGE_CHARS.min(*budget);
-        let layout = match text.char_indices().nth(allowed) {
-            Some(_) => {
-                *budget -= allowed;
-                None
-            }
-            None => {
-                *budget -= text.chars().count();
-                let mut layout = PageLayout::of_text(page_number, &text);
-                crate::layout::assign_sections([&mut layout]);
-                Some(layout)
-            }
-        };
+        let layout = goes_out_whole(&text, budget).then(|| {
+            let mut layout = PageLayout::of_text(page_number, &text);
+            crate::layout::assign_sections([&mut layout]);
+            layout
+        });
         Self {
             page_number,
             text,
@@ -1336,6 +1352,25 @@ impl ExtractedPage {
             ocr_confidence: None,
             vision_escalated: false,
             layout,
+        }
+    }
+}
+
+/// Whether a page of `text` leaves the worker whole, counting it against
+/// `budget` - what is left of the document's [`MAX_DOCUMENT_CHARS`] - as the
+/// worker will on the way out: a page keeps at most [`MAX_PAGE_CHARS`], and
+/// no more than the document has left. A page that does not is cut there
+/// and loses its layout, so none is worth building for it.
+fn goes_out_whole(text: &str, budget: &mut usize) -> bool {
+    let allowed = MAX_PAGE_CHARS.min(*budget);
+    match text.char_indices().nth(allowed) {
+        Some(_) => {
+            *budget -= allowed;
+            false
+        }
+        None => {
+            *budget -= text.chars().count();
+            true
         }
     }
 }

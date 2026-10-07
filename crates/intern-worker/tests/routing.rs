@@ -541,3 +541,34 @@ fn below_floor_dpi_is_resource_limit() {
     let (width, height) = ocr.sizes.lock().unwrap()[0];
     assert!(u64::from(width) * u64::from(height) <= MAX_PAGE_PIXELS);
 }
+
+/// A page the worker will cut on the way out - past the characters a page
+/// may carry, or past the document's - has no layout built for it: a
+/// layout repeats its text several times over.
+#[test]
+fn pages_the_worker_will_cut_have_no_layout_built() {
+    use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+
+    let full = "word ".repeat(MAX_PAGE_CHARS / 5);
+    let over = format!("{full}x");
+    let texts = [&over, &full, &full, &full, &full, &full];
+    let pages = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| PdfPageInspection {
+            page_index: index,
+            ..page(text, 0.0)
+        })
+        .collect();
+    let (document, renders) = route(pages, Vec::new());
+    assert_eq!(renders, 0);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    // The first page is cut to a page's worth, which the document counts;
+    // three whole pages use the rest of it, and the pages after are cut.
+    assert_eq!(MAX_DOCUMENT_CHARS, 4 * MAX_PAGE_CHARS);
+    assert_eq!(built, [false, true, true, true, false, false]);
+}

@@ -375,6 +375,8 @@ documents or the generated fixtures has. The calibration, rerun over their
 
 | Bound | Value | Largest measured |
 | --- | ---: | --- |
+| Objects a page's survey visits, forms' children included (`MAX_SURVEY_OBJECTS`) | 20,000 | not measured; four times `MAX_SEGMENTS` |
+| Forms nested inside forms the survey follows (`MAX_FORM_DEPTH`) | 16 | not measured; an imported page is one form deep |
 | Text objects a page's survey keeps (`MAX_SEGMENTS`) | 5,000 | 226 (the ruled inspection log) |
 | Images a page's survey keeps, the largest first (`MAX_IMAGES`) | 64 | 1 |
 | Rules a page's survey keeps (`MAX_RULINGS`) | 2,000 | 300 (the inspection log) |
@@ -386,7 +388,12 @@ documents or the generated fixtures has. The calibration, rerun over their
 | Points across a part of a page searched for gutters (`MAX_WIDTH_POINTS`) | 15,000 | a PDF page is at most 14,400 |
 
 A page past a bound keeps its text and is read on the fast route. A page
-with more text objects than the survey keeps is measured for no structure;
+with more objects than the survey visits, or forms nested deeper than it
+follows, is not measured at all: the walk stops at the bound, and the page
+is read as its text. The survey keeps images and rules within their bounds
+as it walks, the largest images and the first rules, rather than gathering
+every one and cutting the list afterwards. A page with more text objects
+than the survey keeps is measured for no structure;
 one with more runs than the analysis takes on has its characters read no
 further than that and no geometry layout. Rows are built checking each run
 only against the runs that start near it, two rows' free stretches
@@ -395,6 +402,12 @@ start and end, so the rest grows about linearly with the runs. Between the
 regions of a page the analysis asks whether the request was canceled or its
 time is up; if so it stops, and the document fails as out of time rather
 than coming back half-read.
+
+A page read as its text has no layout built when the worker will cut that
+text on the way out - a page past `MAX_PAGE_CHARS` (2,000,000 characters),
+or past the document's first `MAX_DOCUMENT_CHARS` (8,000,000) - since a
+layout repeats its text several times over; every reader counts a
+document's characters the way the worker does when it sends them.
 
 On the calibration's pages (contended): the geometry analysis takes 64 µs
 a page at the median and 524 µs at the most; the signals 222 µs at the

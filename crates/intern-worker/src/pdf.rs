@@ -9,7 +9,8 @@ use crate::extract::{
 };
 #[cfg(feature = "native-pdfium")]
 use crate::layout::router::bounds::{
-    MAX_DOCUMENT_RUNS, MAX_IMAGES, MAX_RULINGS, MAX_RUNS, MAX_SEGMENTS,
+    MAX_DOCUMENT_RUNS, MAX_FORM_DEPTH, MAX_IMAGES, MAX_RULINGS, MAX_RUNS, MAX_SEGMENTS,
+    MAX_SURVEY_OBJECTS,
 };
 #[cfg(feature = "native-pdfium")]
 use crate::layout::{NativePage, TextRun, measure_signals, router::needs_runs};
@@ -211,6 +212,12 @@ struct ObjectSurvey {
     /// its area and its place in drawing order.
     largest_images: Vec<(u64, usize, [u32; 4])>,
     images_drawn: usize,
+    /// Objects visited, forms' children included.
+    visited: usize,
+    /// The page had more objects than [`MAX_SURVEY_OBJECTS`], or forms
+    /// nested deeper than [`MAX_FORM_DEPTH`], and the walk stopped: what it
+    /// found describes only part of the page.
+    incomplete: bool,
     text_objects: u32,
     invisible_text_objects: u32,
     /// The box of each text object, in content-stream order: the runs of
@@ -295,18 +302,33 @@ fn form_placement(object: &PdfPageObject<'_>) -> Placement {
 /// form's own map, so a page a tool wrapped whole in one form - an imported
 /// page from iText, pdfpages, or macOS - is surveyed as the page it is: its
 /// text objects are text boxes, its logo an image the size of the logo.
+///
+/// The walk is bounded: past [`MAX_SURVEY_OBJECTS`] objects, or forms nested
+/// past [`MAX_FORM_DEPTH`], it stops and marks the survey incomplete.
 #[cfg(feature = "native-pdfium")]
 fn survey_object(
     object: &PdfPageObject<'_>,
     placement: &Placement,
     frame: &Frame,
     survey: &mut ObjectSurvey,
+    depth: usize,
 ) {
+    if survey.incomplete {
+        return;
+    }
+    survey.visited += 1;
+    if survey.visited > MAX_SURVEY_OBJECTS || depth > MAX_FORM_DEPTH {
+        survey.incomplete = true;
+        return;
+    }
     if let Some(form) = object.as_x_object_form_object() {
         let inner = placed_within(&form_placement(object), placement);
         for index in form.as_range() {
+            if survey.incomplete {
+                return;
+            }
             if let Ok(child) = form.get(index) {
-                survey_object(&child, &inner, frame, survey);
+                survey_object(&child, &inner, frame, survey, depth + 1);
             }
         }
         return;
@@ -718,9 +740,21 @@ impl PdfiumBackend {
                 let frame = Frame::of(&page, rotation);
                 let mut survey = ObjectSurvey::default();
                 for object in page.objects().iter() {
-                    survey_object(&object, &ON_THE_PAGE, &frame, &mut survey);
+                    if survey.incomplete {
+                        break;
+                    }
+                    survey_object(&object, &ON_THE_PAGE, &frame, &mut survey, 0);
                 }
-                let survey = survey.bounded();
+                let mut survey = survey.bounded();
+                // A page the survey could not finish is not measured for
+                // structure: it keeps its text, and nothing is built from a
+                // geometry seen only in part.
+                let measured = !survey.incomplete;
+                if !measured {
+                    survey.text_boxes.clear();
+                    survey.images.clear();
+                    survey.rulings.clear();
+                }
                 let page_area = page.width().value.abs() * page.height().value.abs();
                 let image_coverage = if page_area <= f32::EPSILON {
                     0.0
@@ -752,11 +786,11 @@ impl PdfiumBackend {
                     signals: Some(signals),
                 };
                 let route = router(&signals, crate::extract::page_needs_ocr(&inspection));
-                if needs_runs(route) && runs_held < run_budget {
+                if measured && needs_runs(route) && runs_held < run_budget {
                     native.runs = text_runs(&text, &frame, &native);
                     runs_held = runs_held.saturating_add(native.runs.len());
                 }
-                inspection.native = Some(native);
+                inspection.native = measured.then_some(native);
                 analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
                 inspections.push(inspection);
             }
