@@ -266,6 +266,11 @@ pub mod bounds {
     pub const MAX_RULINGS: usize = 2_000;
     /// Runs a page's layout is built from: 17 times the corpus's most (226).
     pub const MAX_RUNS: usize = 4_000;
+    /// Runs inspection reads ahead for a document's pages, while it has
+    /// each page open: a page past them has its characters read when it is
+    /// read, one page at a time, at the cost of loading it again. The
+    /// corpus's largest document has 6,735 (the 100-page annual report).
+    pub const MAX_DOCUMENT_RUNS: usize = 100_000;
     /// Runs on one line - within five points of each other down the page:
     /// 31 times the corpus's most (8).
     pub const MAX_RUNS_PER_LINE: usize = 250;

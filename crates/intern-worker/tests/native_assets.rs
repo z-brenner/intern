@@ -539,6 +539,75 @@ fn a_page_of_more_runs_than_the_analysis_takes_on_keeps_its_text() {
     assert_eq!(page.layout.as_ref().unwrap().route, PageRoute::Fast);
 }
 
+/// Two pages of a few lines each.
+#[cfg(feature = "native-pdfium")]
+fn two_page_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 7 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "",
+            b"BT /F1 11 Tf 72 700 Td (Hollowmere Freight Co.) Tj ET \
+              BT /F1 11 Tf 72 680 Td (Delivery receipt for pallet 7) Tj ET",
+        ),
+        stream(
+            "",
+            b"BT /F1 11 Tf 72 700 Td (Received in good order) Tj ET \
+              BT /F1 11 Tf 72 680 Td (Signed at the Brackenridge dock) Tj ET",
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// Inspection reads a document's characters ahead only within its budget;
+/// a page past it has none, and its characters are read when it is.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_document_s_characters_are_read_ahead_only_within_its_budget() {
+    use intern_worker::layout::PageRoute;
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("two-pages.pdf");
+    std::fs::write(&path, two_page_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+    let geometry = |_: &intern_worker::layout::RouteSignals, _: bool| PageRoute::Layout;
+
+    let every = backend
+        .inspect_routed(&path, &cancel, geometry, usize::MAX)
+        .unwrap();
+    let budgeted = backend.inspect_routed(&path, &cancel, geometry, 1).unwrap();
+
+    let runs = |pages: &[intern_worker::extract::PdfPageInspection], index: usize| {
+        pages[index].native.as_ref().unwrap().runs.clone()
+    };
+    assert!(!runs(&every, 1).is_empty());
+    assert_eq!(runs(&budgeted, 0), runs(&every, 0));
+    assert!(runs(&budgeted, 1).is_empty(), "past the budget");
+    let native = budgeted[1].native.as_ref().unwrap();
+    assert_eq!(
+        backend.page_runs(&path, 1, native, &cancel).unwrap(),
+        runs(&every, 1)
+    );
+}
+
 /// Text on a quarter-turned page is all read: drawn past the displayed
 /// width, it used to be dropped.
 #[cfg(feature = "native-pdfium")]

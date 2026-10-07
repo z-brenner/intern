@@ -8,9 +8,11 @@ use crate::extract::{
     CancellationToken, ExtractionError, PdfBackend, PdfPageInspection, RenderedPage,
 };
 #[cfg(feature = "native-pdfium")]
-use crate::layout::router::bounds::{MAX_IMAGES, MAX_RULINGS, MAX_RUNS, MAX_SEGMENTS};
+use crate::layout::router::bounds::{
+    MAX_DOCUMENT_RUNS, MAX_IMAGES, MAX_RULINGS, MAX_RUNS, MAX_SEGMENTS,
+};
 #[cfg(feature = "native-pdfium")]
-use crate::layout::{NativePage, PageRoute, TextRun, measure_signals, router::needs_runs};
+use crate::layout::{NativePage, TextRun, measure_signals, router::needs_runs};
 #[cfg(feature = "native-pdfium")]
 use crate::limits::{MAX_PAGE_COUNT, render_size_within};
 #[cfg(feature = "native-pdfium")]
@@ -641,16 +643,19 @@ fn rotation_degrees(page: &PdfPage<'_>) -> u16 {
 impl PdfiumBackend {
     /// [`PdfBackend::inspect`], with the characters of the pages `router`
     /// sends down a geometry route - decided from each page's signals, and
-    /// whether the scan rule sends it to OCR - read into runs as well.
-    /// Inspection reads none: a page's characters are read when the page
-    /// is ([`PdfBackend::page_runs`]). The routing calibration in
-    /// `examples/route_calibration.rs` reads every page's runs here, to see
-    /// what the router passed over.
+    /// whether the scan rule sends it to OCR - read into runs as well, while
+    /// the runs read stay within `run_budget` for the document. A page past
+    /// it has its characters read when it is read
+    /// ([`PdfBackend::page_runs`]), so what a document holds at once is
+    /// bounded, and a page within it is not loaded and read a second time.
+    /// The routing calibration in `examples/route_calibration.rs` reads
+    /// every page's runs here, to see what the router passed over.
     pub fn inspect_routed(
         &self,
         path: &Path,
         cancel: &CancellationToken,
         router: impl Fn(&crate::layout::RouteSignals, bool) -> crate::layout::PageRoute,
+        run_budget: usize,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
         cancel.check()?;
         // Loading the document, each page, and its text is reading the
@@ -660,6 +665,7 @@ impl PdfiumBackend {
         // lazily are counted too.
         let started = Instant::now();
         let mut analysis_micros = 0_u64;
+        let mut runs_held = 0_usize;
         let inspections = self.with_document(path, |document| {
             if document.pages().len() as usize > MAX_PAGE_COUNT {
                 return Err(ExtractionError::resource_limit(
@@ -714,8 +720,9 @@ impl PdfiumBackend {
                     signals: Some(signals),
                 };
                 let route = router(&signals, crate::extract::page_needs_ocr(&inspection));
-                if needs_runs(route) {
+                if needs_runs(route) && runs_held < run_budget {
                     native.runs = text_runs(&text, &frame, &native);
+                    runs_held = runs_held.saturating_add(native.runs.len());
                 }
                 inspection.native = Some(native);
                 analysis_micros = analysis_micros.saturating_add(micros_since(analysis_started));
@@ -739,8 +746,7 @@ impl PdfBackend for PdfiumBackend {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
-        // No page's characters are read here; see `page_runs`.
-        self.inspect_routed(path, cancel, |_, _| PageRoute::Fast)
+        self.inspect_routed(path, cancel, crate::layout::route_page, MAX_DOCUMENT_RUNS)
     }
 
     fn page_runs(

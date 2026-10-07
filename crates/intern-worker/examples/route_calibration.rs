@@ -114,8 +114,8 @@ fn main() {
         let name = path
             .file_name()
             .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-        // As inspection reads a document: no page's characters, which are
-        // read when a page that needs them is planned.
+        // As inspection reads a document: the characters of the pages the
+        // router sends down a geometry route, within the document's budget.
         let routed_cancel = CancellationToken::new();
         let started = Instant::now();
         let Ok(routed) = backend.inspect(path, &routed_cancel) else {
@@ -127,13 +127,18 @@ fn main() {
         // Every page read into runs, whatever the router says.
         let all_cancel = CancellationToken::new();
         let everything = backend
-            .inspect_routed(path, &all_cancel, |_, needs_ocr| {
-                if needs_ocr {
-                    PageRoute::Ocr
-                } else {
-                    PageRoute::Layout
-                }
-            })
+            .inspect_routed(
+                path,
+                &all_cancel,
+                |_, needs_ocr| {
+                    if needs_ocr {
+                        PageRoute::Ocr
+                    } else {
+                        PageRoute::Layout
+                    }
+                },
+                usize::MAX,
+            )
             .expect("readable the second time");
         let all_analysis = all_cancel.timings().analysis_micros;
         let pages = routed.len().max(1) as f64;
