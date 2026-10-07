@@ -225,16 +225,16 @@ pub const EVIDENCE_FIRST_INSTRUCTIONS: &str = concat!(
 
 /// The instructions of a [`ReplyForm::Compact`] reply: its facts as short
 /// arrays, each with the id of the line that states it - a type, a date and
-/// its role, up to three parties and their roles, a subject - and the id of
-/// the line with the main amount. Everything else the description needs is
-/// read from the document itself.
+/// its role, up to three parties and their roles, a subject. Everything else
+/// the description needs - an amount, a number - is read from the document
+/// itself.
 ///
 /// They go in the system turn, after [`SYSTEM_INSTRUCTION`], and the
 /// document in the user turn: llama-server keeps its cache of a hybrid
 /// model only at the start of the last user message, so instructions at
 /// the head of the user turn were prefilled afresh for every document. In
 /// the system turn they are the same prefix for every document and are
-/// read once. 450 tokens with this model's tokenizer.
+/// read once. Under 450 tokens with this model's tokenizer.
 pub const COMPACT_INSTRUCTIONS: &str = concat!(
     r#"Give each fact with the id of the line that states it.
 
@@ -255,10 +255,9 @@ parties: at most 3, full names as written: first who it is to or about (To:, Dea
 role: client, contractor, employer, employee, buyer, seller, landlord, tenant, issuer, recipient, vendor, customer, borrower, lender, licensor, licensee, sender, addressee; other when the lines do not say.
 
 subject: at most 8 words: the work, goods, premises, position or matter.
-amount: the id of the line with its main amount.
 Leave out what the lines do not state."#,
     "\n\n",
-    r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id],"amount":id}"#
+    r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id]}"#
 );
 
 /// The instructions for `order`.
@@ -568,7 +567,7 @@ pub fn evidence_grammar<'a>(
 
 /// The grammar of a [`ReplyForm::Compact`] reply: a type and its id, a
 /// date, its role and its id, up to three parties each with a role and an
-/// id, and optionally a subject and its id and the id of the amount's line. Each fact is an array with its id last, so a fact is
+/// id, and optionally a subject and its id. Each fact is an array with its id last, so a fact is
 /// never stated without the line it stands on; an absent type or date is
 /// `null`. `words` are the ids as the reply writes them.
 fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> String {
@@ -580,7 +579,7 @@ fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> 
         ));
     } else {
         grammar.push_str(concat!(
-            r#"root ::= "{" type "," date "," parties subject? amount? "}""#,
+            r#"root ::= "{" type "," date "," parties subject? "}""#,
             "\n",
             r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
             "\n",
@@ -591,8 +590,6 @@ fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> 
             r#"party ::= "[" s80 "," prole "," id "]""#,
             "\n",
             r#"subject ::= ",\"subject\":[" s60 "," id "]""#,
-            "\n",
-            r#"amount ::= ",\"amount\":" id"#,
             "\n",
         ));
         grammar.push_str("id ::= ");
@@ -1330,7 +1327,7 @@ mod tests {
                 assert!(prompt.contains(rule), "{rule}");
             }
             assert!(prompt.ends_with(
-                r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id],"amount":id}"#
+                r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id]}"#
             ));
             assert!(
                 !prompt.contains("\"..\""),
@@ -1349,7 +1346,6 @@ mod tests {
                 r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
                 r#"date ::= "\"date\":" ( "null" | "[" iso "," drole "," id "]" )"#,
                 r#"party ::= "[" s80 "," prole "," id "]""#,
-                r#"amount ::= ",\"amount\":" id"#,
                 r#"s80 ::= "\"" first char{0,79} "\"""#,
             ] {
                 assert!(grammar.contains(rule), "{rule}\n{grammar}");
@@ -1357,6 +1353,7 @@ mod tests {
             for absent in [
                 "confidence",
                 "review",
+                "amount",
                 "identifier",
                 "facts",
                 "ids ::=",
@@ -1375,7 +1372,7 @@ mod tests {
             let party = format!("[{},\"addressee\",{id}]", s(80));
             let worst = format!(
                 "{{\"type\":[{},{id}],\"date\":[\"2026-12-31\",\"termination\",{id}],\
-                 \"parties\":[{party},{party},{party}],\"subject\":[{},{id}],\"amount\":{id}}}",
+                 \"parties\":[{party},{party},{party}],\"subject\":[{},{id}]}}",
                 s(80),
                 s(60)
             );

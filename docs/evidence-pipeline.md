@@ -27,14 +27,18 @@ two forms (`prompt::ReplyForm`).
 {"type":["Invoice","p1.b2"],"date":["2025-05-01","invoice","p1.b4.f1"],
  "parties":[["Halvorsen Fixture Works LLC","issuer","p1.b1"],
             ["Quillon Ridge Bakery, Inc.","customer","p1.b6.f1"]],
- "subject":["display shelving","p1.b7"],"amount":"p1.b9.r2"}
+ "subject":["display shelving","p1.b7"]}
 ```
 
 - **Each fact is an array with its id last**: the type, the date with its
   role, up to three parties with their roles, and optionally a subject.
-  `amount` is the id of the line that states the main amount; the amount
-  itself is read from that line (a table row's last amount, a field's, or
-  the one after "total", "due" or "sum"). An absent type or date is `null`.
+  An absent type or date is `null`.
+- **No amount.** The amount is read from the document: an issued
+  document's last labelled total (`Total`, `Amount Due`, `Balance Due`),
+  otherwise the first amount a field or table row labels as a price,
+  principal, salary, rent, fee or similar, otherwise the first total. An
+  amount's id cost 9 to 10 generated tokens (`,"amount":"p1.b9.r2"`) and
+  named the line the document's own label finds.
 - **No confidence, no review flag, no identifier, no key facts.** In the
   96 live replies of the first form the reply's own confidence was 0.9 and
   its `needs_review` false every time, so neither gated anything; offered
@@ -43,10 +47,11 @@ two forms (`prompt::ReplyForm`).
   identifier is read from the document instead: the number after the type
   on its title line (`PACKING SLIP PS-311`), or a field labelled as that
   kind of document's number (`Invoice No.:`, `Policy Number`).
-- **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 450
-  tokens with the model's tokenizer) and the user turn is the document
-  alone: one line that says whether the whole document follows or only
-  excerpts, then the evidence lines, each written `[handle] text`.
+- **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 418
+  tokens with the model's tokenizer; 460 with the shared opening line)
+  and the user turn is the document alone: one line that says whether
+  the whole document follows or only excerpts, then the evidence lines,
+  each written `[handle] text`.
   llama-server keeps a hybrid model's cache only at checkpoints - the start
   of the last user message, and a few tokens before the end of the prompt -
   so instructions at the head of the user turn were prefilled afresh for
