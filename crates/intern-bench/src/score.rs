@@ -42,7 +42,19 @@ use crate::{
 /// forbidden party named, a wrong name filed without review, a right one
 /// sent to review.
 pub fn bad_when_true(key: &str) -> bool {
-    key.ends_with("_forbidden") || matches!(key, "unsafe_ready" | "needless_review")
+    key.ends_with("_forbidden")
+        || matches!(
+            key,
+            "unsafe_ready" | "needless_review" | "unsupported_fact_doc"
+        )
+}
+
+/// Whether a review reason says validation found something the model gave
+/// unsupported by the document: `DATE_UNSUPPORTED`, `TYPE_UNSUPPORTED`,
+/// `PARTY_UNSUPPORTED`, `DESCRIPTION_UNSUPPORTED`, or any later reason
+/// named the same way, so the old and new pipelines are counted alike.
+pub fn is_unsupported_reason(reason: &str) -> bool {
+    reason.ends_with("_UNSUPPORTED")
 }
 
 /// OCR's edit distances, in characters (exact and ignoring case) and in
@@ -85,6 +97,9 @@ pub struct Outcome<'a> {
     pub ready: bool,
     /// The evidence the model quoted, before validation withheld anything.
     pub evidence: Option<&'a Evidence>,
+    /// A review reason says validation found something the model gave
+    /// unsupported (see [`is_unsupported_reason`]).
+    pub unsupported_reason: bool,
 }
 
 /// The texts a document's scores are checked against.
@@ -312,6 +327,14 @@ pub fn score(document: &GoldDocument, outcome: &Outcome<'_>, texts: &Texts<'_>) 
             covered == gold.description_facts.len(),
         );
     }
+    // Whichever fact it was - a date, type, party or description claim the
+    // document does not support - validation sent it to review saying so.
+    // A failed document asserted nothing, like a trap it did not spring.
+    flag(
+        scores,
+        "unsupported_fact_doc",
+        outcome.analysed && outcome.unsupported_reason,
+    );
     if outcome.analysed {
         if let Some(text) = texts.document {
             scored.claims = check_claims(description, text);
@@ -889,6 +912,7 @@ mod tests {
             party_relation: Some(relation),
             ready: true,
             evidence: None,
+            unsupported_reason: false,
         }
     }
 
@@ -1200,6 +1224,7 @@ mod tests {
             "party_forbidden",
             "unsafe_ready",
             "needless_review",
+            "unsupported_fact_doc",
         ] {
             assert_eq!(failed.scores[key], json!(false), "{key}: no trap sprung");
         }
@@ -1236,6 +1261,43 @@ mod tests {
             if !bad_when_true(&key) && key != "ready" {
                 assert_eq!(reviewed.scores[&key], json!(true), "{key}");
             }
+        }
+    }
+
+    /// Any `*_UNSUPPORTED` review reason marks the document, whichever fact
+    /// it was about, so a pipeline that reports facts differently is
+    /// counted the same way.
+    #[test]
+    fn a_document_sent_to_review_for_an_unsupported_fact_is_counted() {
+        let document = invoice();
+        let parties = halvorsen();
+        let named = "2026-03-04 Invoice from Halvorsen Fixture Works LLC.pdf";
+        let clean = score(
+            &document,
+            &outcome(&parties, "from", named),
+            &Texts::default(),
+        );
+        assert_eq!(clean.scores["unsupported_fact_doc"], json!(false));
+        let flagged = score(
+            &document,
+            &Outcome {
+                unsupported_reason: true,
+                ..outcome(&parties, "from", named)
+            },
+            &Texts::default(),
+        );
+        assert_eq!(flagged.scores["unsupported_fact_doc"], json!(true));
+        assert!(bad_when_true("unsupported_fact_doc"));
+        for reason in [
+            "DATE_UNSUPPORTED",
+            "TYPE_UNSUPPORTED",
+            "PARTY_UNSUPPORTED",
+            "DESCRIPTION_UNSUPPORTED",
+        ] {
+            assert!(is_unsupported_reason(reason), "{reason}");
+        }
+        for reason in ["DATE_AMBIGUOUS", "LOW_CONFIDENCE", "TYPE_INFERRED"] {
+            assert!(!is_unsupported_reason(reason), "{reason}");
         }
     }
 

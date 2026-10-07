@@ -31,7 +31,7 @@ use crate::{
     baseline::{extract_values, value_moved},
     markdown::{HEADLINE_MEANS, HEADLINE_RATES, duration, metric_value, percent},
     record::{COMPLETED, DocumentRecord, PENDING, is_unscorable},
-    report::{self, Rate, Report, Summary},
+    report::{self, Rate, Report, ScorecardKind, Summary},
     score::{OCR_EDIT_COUNTS, bad_when_true, is_unit_fraction, lower_is_better},
     stats::{Distribution, round},
     timing::{self, METRICS},
@@ -107,6 +107,49 @@ pub struct LatencyDelta {
     pub p95_change_percent: Option<f64>,
 }
 
+/// One figure of the phase 3 comparison list ([`report::SCORECARD`]) on
+/// both sides.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ScorecardDelta {
+    pub metric: String,
+    pub before: Option<f64>,
+    pub after: Option<f64>,
+    /// After minus before, in the figure's own unit (a share of one for a
+    /// rate or mean, milliseconds, tokens).
+    pub delta: Option<f64>,
+    /// The documents both sides' figures are over.
+    #[serde(default)]
+    pub documents: usize,
+}
+
+/// The headline scores of one slice (`long`, `complex`) on both sides.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct SliceDelta {
+    pub slice: String,
+    /// The slice's documents both runs scored.
+    pub documents: usize,
+    /// `filename_correct`, `date_correct`, `parties_correct`,
+    /// `readiness_match`.
+    pub rates: Vec<RateDelta>,
+    /// Documents filed without review under a wrong name.
+    pub unsafe_ready: ValueDelta,
+    /// `total_ms` and `generation_ms` over the slice's documents both runs
+    /// completed; empty when latency is not compared.
+    #[serde(default)]
+    pub latency: Vec<LatencyDelta>,
+}
+
+/// The rates a slice is compared on.
+const SLICE_RATES: [&str; 4] = [
+    "filename_correct",
+    "date_correct",
+    "parties_correct",
+    "readiness_match",
+];
+
+/// The timings a slice is compared on.
+const SLICE_LATENCY: [&str; 2] = ["total_ms", "generation_ms"];
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Comparison {
     pub before: Side,
@@ -124,6 +167,13 @@ pub struct Comparison {
     /// Why latency is not compared, or what to bear in mind when it is.
     #[serde(default)]
     pub latency_note: Option<String>,
+    /// The phase 3 comparison list, over the aligned documents; its
+    /// latency and token percentiles only when latency is compared.
+    #[serde(default)]
+    pub scorecard: Vec<ScorecardDelta>,
+    /// The headline scores by slice.
+    #[serde(default)]
+    pub slices: Vec<SliceDelta>,
     pub rates: Vec<RateDelta>,
     pub means: Vec<ValueDelta>,
     pub counts: Vec<ValueDelta>,
@@ -191,6 +241,20 @@ fn counts(summary: &Summary) -> Vec<(&'static str, f64)> {
     values
 }
 
+/// One rate on both sides, the change in percentage points.
+fn rate_delta(key: &str, was: &Summary, now: &Summary) -> RateDelta {
+    let before = was.rates.get(key).copied();
+    let after = now.rates.get(key).copied();
+    RateDelta {
+        metric: key.to_owned(),
+        delta_points: before
+            .zip(after)
+            .map(|(was, now)| round((now.rate - was.rate) * 100.0, 1)),
+        before,
+        after,
+    }
+}
+
 fn is_good(key: &str, value: bool) -> bool {
     if bad_when_true(key) { !value } else { value }
 }
@@ -217,6 +281,9 @@ fn aligned_pair(
             id: record.id.clone(),
             status: record.status.clone(),
             readiness: record.readiness.clone(),
+            // What a slice is decided by.
+            pages: record.pages,
+            categories: record.categories.clone(),
             scores: record
                 .scores
                 .iter()
@@ -281,18 +348,7 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
         .collect::<BTreeSet<_>>();
     comparison.rates = rate_keys
         .into_iter()
-        .map(|key| {
-            let was = was_summary.rates.get(key).copied();
-            let now = now_summary.rates.get(key).copied();
-            RateDelta {
-                metric: key.clone(),
-                delta_points: was
-                    .zip(now)
-                    .map(|(was, now)| round((now.rate - was.rate) * 100.0, 1)),
-                before: was,
-                after: now,
-            }
-        })
+        .map(|key| rate_delta(key, &was_summary, &now_summary))
         .collect();
     let mean_keys = was_summary
         .means
@@ -344,6 +400,64 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             }
         })
         .collect();
+
+    // The phase 3 list over the same documents; its percentiles come from
+    // the latency deltas below, when latency is compared.
+    let card = |pick: fn(&(DocumentRecord, DocumentRecord)) -> &DocumentRecord,
+                review_rate: Option<f64>| {
+        report::scorecard(
+            aligned.iter().map(pick),
+            review_rate,
+            completed.len(),
+            &std::collections::BTreeMap::new(),
+        )
+    };
+    let was_card = card(|(was, _)| was, was_summary.review_rate);
+    let now_card = card(|(_, now)| now, now_summary.review_rate);
+    comparison.scorecard = was_card
+        .iter()
+        .zip(&now_card)
+        .map(|(was, now)| ScorecardDelta {
+            metric: was.metric.clone(),
+            before: was.value,
+            after: now.value,
+            delta: was
+                .value
+                .zip(now.value)
+                .map(|(was, now)| round(now - was, 4)),
+            documents: was.documents.min(now.documents),
+        })
+        .collect();
+    for slice in ["long", "complex"] {
+        let members = aligned
+            .iter()
+            .filter(|(was, _)| report::slices(was).contains(&slice))
+            .collect::<Vec<_>>();
+        if members.is_empty() {
+            continue;
+        }
+        let was = report::summarize(members.iter().map(|(was, _)| was));
+        let now = report::summarize(members.iter().map(|(_, now)| now));
+        let (unsafe_before, unsafe_after) = (
+            was.counts.unsafe_ready as f64,
+            now.counts.unsafe_ready as f64,
+        );
+        comparison.slices.push(SliceDelta {
+            slice: slice.to_owned(),
+            documents: members.len(),
+            rates: SLICE_RATES
+                .iter()
+                .map(|key| rate_delta(key, &was, &now))
+                .collect(),
+            unsafe_ready: ValueDelta {
+                metric: "unsafe_ready".to_owned(),
+                before: Some(unsafe_before),
+                after: Some(unsafe_after),
+                delta: Some(unsafe_after - unsafe_before),
+            },
+            latency: Vec::new(),
+        });
+    }
 
     for (record, now) in &pairs {
         if record.status != now.status {
@@ -483,6 +597,42 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
         );
     } else {
         comparison.latency = latency(&pairs);
+        for entry in &mut comparison.scorecard {
+            let Some((metric, percentile)) = report::scorecard_percentile(&entry.metric) else {
+                continue;
+            };
+            let Some(delta) = comparison
+                .latency
+                .iter()
+                .find(|delta| delta.metric == metric)
+            else {
+                continue;
+            };
+            let (before, after) = if percentile == "p50" {
+                (delta.p50_before, delta.p50_after)
+            } else {
+                (delta.p95_before, delta.p95_after)
+            };
+            entry.before = Some(before);
+            entry.after = Some(after);
+            entry.delta = Some(round(after - before, 4));
+            entry.documents = delta.documents;
+        }
+        for slice in &mut comparison.slices {
+            let members = pairs
+                .iter()
+                .filter(|(was, _)| {
+                    report::slices(was)
+                        .iter()
+                        .any(|member| *member == slice.slice)
+                })
+                .copied()
+                .collect::<Vec<_>>();
+            slice.latency = latency(&members)
+                .into_iter()
+                .filter(|delta| SLICE_LATENCY.contains(&delta.metric.as_str()))
+                .collect();
+        }
         if comparison.before.machine != comparison.after.machine {
             comparison.latency_note = Some(format!(
                 "The runs were made on different machines ({} and {}): the changes compare the machines as much as the code.",
@@ -584,6 +734,163 @@ fn is_neutral(metric: &str) -> bool {
     matches!(metric, "claims" | "review_rate")
 }
 
+/// A scorecard figure as it reads.
+fn scorecard_value(metric: &str, value: Option<f64>) -> String {
+    let Some(value) = value else {
+        return "–".to_owned();
+    };
+    match report::scorecard_kind(metric) {
+        Some(ScorecardKind::Milliseconds) => duration(value),
+        Some(ScorecardKind::Tokens) => format!("{value:.0}"),
+        _ => percent(value),
+    }
+}
+
+/// A scorecard change as it reads, with its verdict: a share moves in
+/// points, a time or token count by its difference and per cent.
+fn scorecard_change(entry: &ScorecardDelta) -> String {
+    let (Some(delta), Some(before)) = (entry.delta, entry.before) else {
+        return "–".to_owned();
+    };
+    let kind = report::scorecard_kind(&entry.metric);
+    let better = match kind {
+        Some(ScorecardKind::Rate | ScorecardKind::Mean) => delta > 0.0,
+        Some(ScorecardKind::BadRate | ScorecardKind::Milliseconds | ScorecardKind::Tokens) => {
+            delta < 0.0
+        }
+        _ => return signed(round(delta * 100.0, 1), " pts"),
+    };
+    let shown = match kind {
+        Some(ScorecardKind::Milliseconds | ScorecardKind::Tokens) => {
+            let moved = if kind == Some(ScorecardKind::Milliseconds) {
+                signed(round(delta, 1), " ms")
+            } else {
+                signed(round(delta, 0), "")
+            };
+            match change_percent(before, before + delta) {
+                Some(percent) => format!("{moved} ({})", signed(percent, "%")),
+                None => moved,
+            }
+        }
+        _ => signed(round(delta * 100.0, 1), " pts"),
+    };
+    if delta == 0.0 {
+        shown
+    } else if better {
+        format!("{shown} better")
+    } else {
+        format!("{shown} worse")
+    }
+}
+
+/// The phase 3 comparison list: the figures the change is judged by.
+fn phase3_scorecard(out: &mut String, comparison: &Comparison) {
+    if comparison.scorecard.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## Phase 3 scorecard\n");
+    let _ = writeln!(out, "| Figure | Before | After | Change |");
+    let _ = writeln!(out, "| --- | ---: | ---: | ---: |");
+    for entry in &comparison.scorecard {
+        let label = report::SCORECARD
+            .iter()
+            .find(|(key, _, _)| *key == entry.metric)
+            .map_or(entry.metric.as_str(), |(_, label, _)| label);
+        let _ = writeln!(
+            out,
+            "| {label} | {} | {} | {} |",
+            scorecard_value(&entry.metric, entry.before),
+            scorecard_value(&entry.metric, entry.after),
+            scorecard_change(entry)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\nOver the documents both runs scored; a slice's accuracy over its documents. Latency and tokens are percentiles over the documents both runs completed, shown only when both runs measured their timings.\n"
+    );
+}
+
+/// The headline scores by slice.
+fn slices(out: &mut String, comparison: &Comparison) {
+    if comparison.slices.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "## By slice\n");
+    let _ = writeln!(
+        out,
+        "| Slice | Docs | Filename | Date | Parties | Routing | Unsafe ready | p50 total | p95 total |"
+    );
+    let _ = writeln!(
+        out,
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
+    for slice in &comparison.slices {
+        let rate = |key: &str| {
+            slice
+                .rates
+                .iter()
+                .find(|delta| delta.metric == key)
+                .map_or_else(
+                    || "–".to_owned(),
+                    |delta| {
+                        let side = |rate: &Option<Rate>| {
+                            rate.map_or_else(|| "–".to_owned(), |rate| percent(rate.rate))
+                        };
+                        format!(
+                            "{} → {}{}",
+                            side(&delta.before),
+                            side(&delta.after),
+                            delta
+                                .delta_points
+                                .map(|points| format!(" ({})", signed(points, " pts")))
+                                .unwrap_or_default()
+                        )
+                    },
+                )
+        };
+        let unsafe_ready = format!(
+            "{} → {}",
+            slice.unsafe_ready.before.unwrap_or(0.0),
+            slice.unsafe_ready.after.unwrap_or(0.0)
+        );
+        let total = slice
+            .latency
+            .iter()
+            .find(|delta| delta.metric == "total_ms");
+        let percentile = |pick: fn(&LatencyDelta) -> (f64, f64)| {
+            total.map_or_else(
+                || "–".to_owned(),
+                |delta| {
+                    let (before, after) = pick(delta);
+                    format!("{} → {}", duration(before), duration(after))
+                },
+            )
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {unsafe_ready} | {} | {} |",
+            slice.slice,
+            slice.documents,
+            rate("filename_correct"),
+            rate("date_correct"),
+            rate("parties_correct"),
+            rate("readiness_match"),
+            percentile(|delta| (delta.p50_before, delta.p50_after)),
+            percentile(|delta| (delta.p95_before, delta.p95_after)),
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\n`long`: {} pages or more. `complex`: any of {}. A document may be in both.\n",
+        report::LONG_PAGES,
+        report::COMPLEX_CATEGORIES
+            .iter()
+            .map(|category| format!("`{category}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
 pub fn render(comparison: &Comparison) -> String {
     let mut out = String::new();
     let describe = |side: &Side| {
@@ -627,6 +934,7 @@ pub fn render(comparison: &Comparison) -> String {
     for note in &comparison.notes {
         let _ = writeln!(out, "> {note}\n");
     }
+    phase3_scorecard(&mut out, comparison);
 
     let _ = writeln!(out, "## Scores\n");
     let _ = writeln!(out, "| Score | Before | After | Change |");
@@ -710,6 +1018,7 @@ pub fn render(comparison: &Comparison) -> String {
         );
     }
     let _ = writeln!(out);
+    slices(&mut out, comparison);
 
     // Two extract-only runs name nothing: there are no safety counts and
     // no flips of a name's scores, only the extraction scores above and
@@ -1205,6 +1514,108 @@ mod tests {
                     && delta.before == Some(0.0)
                     && delta.after.is_none())
         );
+    }
+
+    /// The phase 3 list and the slices compare the same documents on both
+    /// sides, and latency only between runs that measured it.
+    #[test]
+    fn the_phase3_scorecard_and_slices_are_compared() {
+        let run = |long_named: bool, long_ms: f64, unsupported: bool| {
+            let mut report = report(vec![
+                (
+                    "long",
+                    json!({"filename_correct": long_named, "date_correct": true, "unsupported_fact_doc": false, "unsafe_ready": false}),
+                    "a.pdf",
+                    long_ms,
+                ),
+                (
+                    "short",
+                    json!({"filename_correct": true, "date_correct": true, "unsupported_fact_doc": unsupported, "unsafe_ready": false}),
+                    "b.pdf",
+                    1_000.0,
+                ),
+            ]);
+            report.mode = "live".into();
+            report.timings_source = "measured".into();
+            report.records[0].pages = 40;
+            report.records[0].categories = vec!["contract".into(), "referenced_agreement".into()];
+            report.records[1].pages = 1;
+            report.records[1].categories = vec!["invoice".into(), "competing_dates".into()];
+            for record in &mut report.records {
+                record.readiness = Some("ready".into());
+            }
+            report
+        };
+        let comparison = compare(&run(false, 9_000.0, true), &run(true, 6_000.0, false));
+        let figure = |key: &str| {
+            comparison
+                .scorecard
+                .iter()
+                .find(|entry| entry.metric == key)
+                .unwrap()
+                .clone()
+        };
+        let long = figure("long_filename_correct");
+        assert_eq!(
+            (long.before, long.after, long.delta),
+            (Some(0.0), Some(1.0), Some(1.0))
+        );
+        assert_eq!(figure("complex_filename_correct").documents, 1);
+        let unsupported = figure("unsupported_fact_doc");
+        assert_eq!(
+            (unsupported.before, unsupported.after),
+            (Some(0.5), Some(0.0))
+        );
+        let total = figure("total_ms_p95");
+        assert!(total.delta.is_some_and(|delta| delta < 0.0), "{total:?}");
+
+        assert_eq!(
+            comparison
+                .slices
+                .iter()
+                .map(|slice| (slice.slice.as_str(), slice.documents))
+                .collect::<Vec<_>>(),
+            vec![("long", 1), ("complex", 1)]
+        );
+        let long_slice = &comparison.slices[0];
+        assert_eq!(long_slice.rates[0].delta_points, Some(100.0));
+        assert_eq!(long_slice.latency[0].metric, "total_ms");
+        assert_eq!(
+            (
+                long_slice.latency[0].p50_before,
+                long_slice.latency[0].p50_after
+            ),
+            (9_000.0, 6_000.0)
+        );
+
+        let rendered = render(&comparison);
+        assert!(
+            rendered.contains(
+                "| Long-document filename accuracy (10+ pages) | 0.0% | 100.0% | +100 pts better |"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .contains("| Unsupported-fact rate (documents) | 50.0% | 0.0% | -50 pts better |"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("| long | 1 | 0.0% → 100.0% (+100 pts) |"),
+            "{rendered}"
+        );
+
+        // A replay's timings are its recording's: no latency figures.
+        let mut replayed = run(true, 6_000.0, false);
+        replayed.timings_source = "recorded".into();
+        let comparison = compare(&run(false, 9_000.0, true), &replayed);
+        let total = comparison
+            .scorecard
+            .iter()
+            .find(|entry| entry.metric == "total_ms_p50")
+            .unwrap();
+        assert_eq!((total.before, total.after), (None, None));
+        assert!(comparison.slices[0].latency.is_empty());
     }
 
     #[test]

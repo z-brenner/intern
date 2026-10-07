@@ -276,8 +276,12 @@ or better. Latency, as the change in p50 and p95 of every stage, is
 compared over the documents both runs completed, and only between two runs
 that measured their timings (live or extract-only): a replay reports its
 recording's timings, so a comparison involving one shows no latency change
-and says why. Each side
-names its machine and, for a replay, its recording. `intern-bench report
+and says why. The comparison opens with the [phase 3
+scorecard](#the-phase-3-scorecard) before and after, and gives each slice
+(`long`, `complex`) its filename, date, parties and routing rates, its
+unsafe-ready count and its total p50 and p95, over the slice's documents
+both runs scored (latency over those both completed). Each side names its
+machine and, for a replay, its recording. `intern-bench report
 --input report.json --markdown report.md` re-renders a report's Markdown.
 
 ## Reading a report
@@ -288,10 +292,13 @@ names its machine and, for a replay, its recording. `intern-bench report
   fractional score as a mean, plus counts of unsafe-ready, trap-date,
   forbidden-party and unsupported-claim outcomes.
 * `groups`: the same summary sliced by `kind`, `text_layer`, `format`, page
-  bucket, route class and category.
+  bucket, route class, category and `slice` (`long` and `complex`, see
+  [the phase 3 scorecard](#the-phase-3-scorecard)).
+* `scorecard`: the phase 3 comparison list, each figure with the documents
+  it is over (absent for an extract-only run, which names nothing).
 * `latency`: p50, p90, p95, max and mean of every timing, overall and by
-  page bucket, kind, text layer and route class, over the documents that
-  completed (a failed document's time is only how long it took to fail). A
+  page bucket, kind, text layer, route class and slice, over the documents
+  that completed (a failed document's time is only how long it took to fail). A
   document's route class is the most expensive route any of its pages took
   - `ocr`, then `ocr_regions`, then `layout`, then `fast` - or `unrouted`
   when the worker sent no layouts (every worker before the router, and every
@@ -313,8 +320,9 @@ names its machine and, for a replay, its recording. `intern-bench report
 
 Keys are sorted and floats rounded, so two runs diff cleanly.
 
-`report.md` is the same report for a person. It opens with a scorecard and a
-safety table, then the per-group tables, OCR, structure and routes, the
+`report.md` is the same report for a person. It opens with a scorecard, the
+phase 3 scorecard and a safety table, then the per-group tables (a slice
+table among them, with generation time), OCR, structure and routes, the
 stage-by-stage latency table with tokens per second, memory, and
 **Misses**. Misses lists every wrong filename with the expected name, the
 trap it sprang and why, and whether it was filed without review. An
@@ -341,6 +349,7 @@ found.
 | `evidence_recall` | The model's quoted evidence contains the date and each party. |
 | `digest_recall`, `prompt_recall` | The gold evidence is in the distilled digest, or in the prompt actually sent. This is deterministic, so a distillation change can be measured in replay without a model. |
 | `readiness_match`, `unsafe_ready`, `needless_review` | Routing against the gold; ready with a wrong name; review although the name was right and the gold says ready. |
+| `unsupported_fact_doc` | Validation sent the document to review because something the model gave is not supported by the document: any review reason ending `_UNSUPPORTED` (`DATE_UNSUPPORTED`, `TYPE_UNSUPPORTED`, `PARTY_UNSUPPORTED`, `DESCRIPTION_UNSUPPORTED` today), whichever fact it was about, so the old and new pipelines are counted alike. Good when false; false for a document that failed, which asserted nothing. Its rate is the scorecard's unsupported-fact rate, by document; `unsupported_fact_rate` in the summary stays the share of description claims. |
 | `ocr_cer`, `ocr_wer`, `ocr_date_accuracy`, `ocr_name_accuracy`, `ocr_identifier_accuracy` | OCR against the drawn text. Levenshtein is computed per page, and the totals are pooled. Whitespace and the `|` rules a layout writes around a table row are set aside on both sides first, so a page whose text is its blocks is not charged for its tables' rules. A colon is text and is kept: one the page printed and the reading dropped is a miss, and the colon a layout writes after a label (`Label: value`) where the page printed none costs a character, and its word. Typographic quotes and apostrophes (`‘ ’ “ ”` and their low forms) are folded to `'` and `"` on both sides: a glyph style that carries no filing information, and PP-OCR, whose recognition dictionary has no curly quotes, emits every one straight. Nothing else is folded, so a misread such as `0ccurrence` still counts. A scanned page the extractor did not return (a TIFF frame it does not read), or every page of a scan whose extraction failed, counts as read empty. |
 
 A score the gold does not define is omitted rather than counted as false,
@@ -349,6 +358,44 @@ it: every document for most scores, and for the date role, the relation word
 and the party's role, the documents whose answer gave them something to
 judge. A document that failed is a miss on every score its reviewed answer
 would be judged on, those three included.
+
+### The phase 3 scorecard
+
+The figures phase 3 (evidence retrieval and fact-only replies) is judged
+by, in the report, its Markdown and `compare`:
+
+| Figure | What it is |
+| --- | --- |
+| Long-document filename accuracy | `filename_correct` over the `long` slice: documents of 10 pages or more. |
+| Complex-document filename accuracy | `filename_correct` over the `complex` slice (below). |
+| Description completeness | The mean of `description_completeness`. |
+| Unsupported-fact rate | The share of documents with `unsupported_fact_doc`. |
+| Review rate | Of the documents that completed and were named, the share sent to review. |
+| Evidence recall | The mean of `evidence_recall`. |
+| Total latency p50, p95 | `total_ms` over the documents that completed. |
+| Generation latency p50, p95 | `generation_ms`, likewise. |
+| Generated tokens p50, p95 | `generated_tokens`, likewise. |
+| Prompt tokens p50 | `prompt_tokens`, likewise. |
+
+A replay's latency and tokens are its recording's, and `compare` shows them
+only between two runs that measured their own.
+
+The `complex` slice is every document with any of these categories:
+`referenced_agreement`, `middle_fact`, `multi_column`, `layout_parties`,
+`irrelevant_names`, `information_dense`, `stream_order`, `date_in_table`,
+`key_value`, `complex_pdf`. Each makes what the document says something to
+find or to reason out: a fact in the middle, a referenced agreement's own
+date and parties, names that are not parties, columns or a content-stream
+order that scramble the reading, a date or labelled value inside a table,
+parties placed only by the layout, a page dense with figures. Three groups
+are left out on purpose. `competing_dates` is on 62 of the 72 documents of
+the corpus as it was when the slice was drawn, so it would make the slice
+the corpus. `table` is on half of them, mostly routine header tables;
+`date_in_table` and `key_value` keep the tables that decide the name. And
+the scan conditions (`rotated_scan`, `noisy_scan`, `low_resolution_scan`
+and the like) measure OCR, which `text_layer` already slices. On that corpus
+the slice holds 51 documents (14 of them by `referenced_agreement` alone)
+and `long` holds 7, 6 of them also complex.
 
 ### Structure scores
 
