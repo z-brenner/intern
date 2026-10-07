@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 
 use intern_bench::{
     compare,
+    live::LiveOptions,
     machine::{MachineInfo, ModelInfo},
     markdown,
     recording::{
         Exchange, RECORDING_SCHEMA_VERSION, RecordedDocument, RecordedExtraction, RecordedReply,
-        Recording,
+        Recording, sha256_hex,
     },
     report::Report,
     run::{EXIT_REGRESSED, Mode, RunOptions, run},
@@ -145,7 +146,7 @@ fn exchange(sha: String, reply: RecordedReply) -> Exchange {
     }
 }
 
-fn recorded(
+fn recorded_document(
     id: &str,
     file: &str,
     extraction: RecordedExtraction,
@@ -203,7 +204,7 @@ fn recording() -> Recording {
         worker: Some("intern-worker".into()),
         note: "built by the test".into(),
         documents: vec![
-            recorded(
+            recorded_document(
                 "invoice-alpha",
                 "invoice-alpha.pdf",
                 RecordedExtraction::Parsed {
@@ -219,7 +220,7 @@ fn recording() -> Recording {
                 12_000.0,
             ),
             // Recorded against a prompt the engine does not build.
-            recorded(
+            recorded_document(
                 "notice-beta",
                 "notice-beta.pdf",
                 RecordedExtraction::Parsed { source: notice },
@@ -232,7 +233,7 @@ fn recording() -> Recording {
                 )],
                 8_000.0,
             ),
-            recorded(
+            recorded_document(
                 "scan-delta",
                 "scan-delta.png",
                 RecordedExtraction::Parsed {
@@ -247,7 +248,7 @@ fn recording() -> Recording {
                 )],
                 30_000.0,
             ),
-            recorded(
+            recorded_document(
                 "broken-epsilon",
                 "broken-epsilon.pdf",
                 RecordedExtraction::Failed {
@@ -279,7 +280,14 @@ impl Bench {
     }
 
     fn replay(&self, output: &str, configure: impl FnOnce(&mut RunOptions)) -> (i32, Report) {
-        let mut options = RunOptions {
+        let mut options = self.options(output);
+        configure(&mut options);
+        let exit = run(options).unwrap();
+        (exit, read_report(&self.path(output)))
+    }
+
+    fn options(&self, output: &str) -> RunOptions {
+        RunOptions {
             // The corpus is never generated here: replay needs only the
             // recording.
             corpus: self.path("generated"),
@@ -295,10 +303,7 @@ impl Bench {
                 recording: self.path("recording.json"),
                 allow_stale: false,
             },
-        };
-        configure(&mut options);
-        let exit = run(options).unwrap();
-        (exit, read_report(&self.path(output)))
+        }
     }
 }
 
@@ -423,8 +428,8 @@ fn a_replay_scores_what_it_can_and_fails_on_what_it_cannot() {
     assert_eq!(summary.rates["filename_correct"].total, 3);
     assert_eq!(summary.statuses["stale_prompt"], 1);
     assert_eq!(
-        report.latency.overall["total_ms"].count, 3,
-        "unscorable documents took no time"
+        report.latency.overall["total_ms"].count, 2,
+        "only completed documents: unscorable ones took no time, the failed one took time to fail"
     );
     assert_eq!(report.ocr.documents.len(), 1);
     assert_eq!(report.groups["category"]["png"].documents, 1);
@@ -472,6 +477,216 @@ fn a_manifest_that_disagrees_with_the_recording_marks_the_document_stale() {
     assert_eq!(report.record("invoice-alpha").unwrap().status, "completed");
     assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
     assert!(report.corpus.manifest_sha256.is_some());
+}
+
+#[test]
+fn a_document_the_manifest_does_not_vouch_for_is_stale_when_there_is_no_file() {
+    let bench = Bench::new();
+    // The manifest lists one document; the other is in the gold and the
+    // recording but nowhere a replay could check its bytes.
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into(), "notice-beta".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("invoice-alpha").unwrap().status, "completed");
+    assert_eq!(
+        report.record("notice-beta").unwrap().status,
+        "stale_fixture"
+    );
+}
+
+#[test]
+fn a_recording_that_does_not_say_which_bytes_it_read_is_stale() {
+    let bench = Bench::new();
+    let mut recorded = Recording::load(&bench.path("recording.json")).unwrap().0;
+    recorded
+        .documents
+        .iter_mut()
+        .find(|document| document.id == "invoice-alpha")
+        .unwrap()
+        .sha256 = None;
+    recorded.save(&bench.path("recording.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    let record = report.record("invoice-alpha").unwrap();
+    assert_eq!(record.status, "stale_fixture");
+    assert!(
+        record.error.as_deref().unwrap().contains("which bytes"),
+        "{:?}",
+        record.error
+    );
+}
+
+#[test]
+fn a_recording_made_under_another_file_name_is_stale() {
+    let bench = Bench::new();
+    // The same bytes, but the gold now names the document with another
+    // extension, so the live worker would read it with another reader.
+    let mut recorded = Recording::load(&bench.path("recording.json")).unwrap().0;
+    recorded
+        .documents
+        .iter_mut()
+        .find(|document| document.id == "invoice-alpha")
+        .unwrap()
+        .file = "invoice-alpha.png".into();
+    recorded.save(&bench.path("recording.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into()];
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    let record = report.record("invoice-alpha").unwrap();
+    assert_eq!(record.status, "stale_fixture");
+    assert!(
+        record
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("recorded as invoice-alpha.png"),
+        "{:?}",
+        record.error
+    );
+}
+
+#[test]
+fn a_live_run_refuses_documents_the_manifest_disagrees_with_or_lacks() {
+    let bench = Bench::new();
+    std::fs::create_dir_all(bench.path("generated")).unwrap();
+    std::fs::write(bench.path("generated/invoice-alpha.pdf"), b"edited by hand").unwrap();
+    std::fs::write(bench.path("generated/notice-beta.pdf"), b"never generated").unwrap();
+    let live = |manifest: Value, only: &[&str]| {
+        std::fs::write(bench.path("manifest.json"), manifest.to_string()).unwrap();
+        let mut options = bench.options("live.json");
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = only.iter().map(|id| (*id).to_owned()).collect();
+        // Nothing here could answer: the run has to stop before the first
+        // document reaches the worker.
+        options.mode = Mode::Live {
+            options: LiveOptions {
+                worker: bench.path("no-such-worker"),
+                endpoint: "http://127.0.0.1:9/v1/chat/completions".into(),
+                api_key: "unused".into(),
+                model_id: "intern-local".into(),
+                model_path: None,
+                warm_up: false,
+                server_pid: None,
+            },
+            record: Some(bench.path("live-recording.json")),
+            note: String::new(),
+        };
+        run(options).unwrap_err()
+    };
+
+    // Bytes that are not the ones the manifest lists.
+    let error = live(
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"}
+        ]}),
+        &["invoice-alpha"],
+    );
+    assert!(
+        error.contains("differ from the manifest") && error.contains("invoice-alpha.pdf"),
+        "{error}"
+    );
+
+    // A document the manifest does not list, beside one it vouches for.
+    let error = live(
+        json!({"schema_version": 1, "files": [
+            {"file": "invoice-alpha.pdf", "sha256": sha256_hex(b"edited by hand")}
+        ]}),
+        &["invoice-alpha", "notice-beta"],
+    );
+    assert!(error.contains("1 document(s)"), "{error}");
+    assert!(
+        error.contains("notice-beta.pdf") && !error.contains("invoice-alpha.pdf"),
+        "{error}"
+    );
+    assert!(!bench.path("live-recording.json").exists());
+    assert!(!bench.path("live.json").exists());
+}
+
+#[test]
+fn a_subset_run_never_overwrites_a_baseline_that_covers_more() {
+    let bench = Bench::new();
+    let (exit, _) = bench.replay("full.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+    let before = std::fs::read(bench.path("baseline.json")).unwrap();
+
+    let mut options = bench.options("subset.json");
+    options.only = vec!["invoice-alpha".into()];
+    options.write_baseline = Some(bench.path("baseline.json"));
+    let error = run(options).unwrap_err();
+    assert!(error.contains("would drop 1 document"), "{error}");
+    assert_eq!(std::fs::read(bench.path("baseline.json")).unwrap(), before);
+
+    // The same subset may rewrite a baseline of exactly that subset.
+    let (exit, _) = bench.replay("again.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+}
+
+#[test]
+fn a_replay_that_cannot_score_everything_never_writes_the_baseline() {
+    let bench = Bench::new();
+    let scorable = vec!["invoice-alpha".to_owned(), "scan-delta".to_owned()];
+    let (exit, _) = bench.replay("good.json", |options| {
+        options.only = scorable.clone();
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, 0);
+    let before = std::fs::read(bench.path("baseline.json")).unwrap();
+
+    // The same documents, but one of them now changed under the recording.
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("stale.json", |options| {
+        options.only = scorable.clone();
+        options.manifest = Some(bench.path("manifest.json"));
+        options.write_baseline = Some(bench.path("baseline.json"));
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+    assert_eq!(std::fs::read(bench.path("baseline.json")).unwrap(), before);
 }
 
 #[test]
@@ -545,4 +760,217 @@ fn a_baseline_holds_replay_to_every_document_and_compare_names_the_flip() {
         "{before_page}"
     );
     assert!(before_page.contains("## OCR"));
+}
+
+/// A long, information-dense memo: every paragraph distinct, so the
+/// digest budget decides what reaches the prompt.
+fn long_text() -> String {
+    let mut text = String::from("MEMORANDUM OF ANNUAL PLANT REVIEW\n\nDate: May 6, 2026\n\n");
+    for index in 0..60 {
+        text.push_str(&format!(
+            "Section {index}. Line {index} at the Orrin Vale plant ran {} shifts in week {}, \
+             producing {} cases of preserves with a reject rate of {}.{} per cent; the crew lead \
+             for bay {} logged {} maintenance tickets and {} safety observations.\n\n",
+            3 + index % 4,
+            index + 1,
+            1_200 + index * 37,
+            index % 7,
+            index % 10,
+            index % 9 + 1,
+            index % 5,
+            index % 3
+        ));
+    }
+    text
+}
+
+/// A digest budget or context changed in code since the recording: replay
+/// builds prompts as the engine does now, so a document whose prompt that
+/// changes is stale - and the run says why, loudly.
+#[test]
+fn a_budget_changed_since_the_recording_makes_long_documents_stale() {
+    let bench = Bench::new();
+    let mut gold = gold();
+    gold["documents"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "memo-long", "file": "memo-long.txt", "kind": "memo", "format": "txt",
+            "text_layer": "native", "pages": 1, "categories": ["information_dense"],
+            "gold": {"document_type": "Memorandum", "document_date": "2026-05-06", "parties": [], "party_relation": "none"}
+        }));
+    std::fs::write(bench.path("gold.json"), gold.to_string()).unwrap();
+    let long = source_from_text(long_text());
+    // Recorded when the budget let a document this long through whole.
+    let old_budget = DigestBudget {
+        passthrough_characters: 40_000,
+        max_characters: 40_000,
+    };
+    assert_ne!(
+        distill(&long, old_budget).text,
+        distill(&long, DigestBudget::default()).text,
+        "the test needs a document the budget changes"
+    );
+    let mut recorded = recording();
+    recorded.budget_characters = old_budget.max_characters;
+    recorded.documents.push(recorded_document(
+        "memo-long",
+        "memo-long.txt",
+        RecordedExtraction::Parsed {
+            source: long.clone(),
+        },
+        vec![exchange(
+            ModelRequest::from_digest(&distill(&long, old_budget)).sha256(),
+            RecordedReply::Proposed {
+                proposal: notice_reply(),
+                token_confidence: None,
+            },
+        )],
+        20_000.0,
+    ));
+    recorded.save(&bench.path("recording.json")).unwrap();
+
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.only = vec!["invoice-alpha".into(), "memo-long".into()];
+        options.markdown = Some(bench.path("report.md"));
+    });
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("memo-long").unwrap().status, "stale_prompt");
+    assert_eq!(
+        report.record("invoice-alpha").unwrap().status,
+        "completed",
+        "a short document's prompt does not depend on the budget"
+    );
+    let change = report
+        .recording
+        .as_ref()
+        .unwrap()
+        .configuration_change
+        .clone()
+        .unwrap();
+    assert!(change.contains("40000 characters"), "{change}");
+    let page = std::fs::read_to_string(bench.path("report.md")).unwrap();
+    assert!(
+        page.contains("> **Warning:** the recording was made with"),
+        "{page}"
+    );
+}
+
+/// `--allow-stale` scores a stale prompt; it cannot rescue a document whose
+/// bytes changed, and the page says which scores came from stale replies.
+#[test]
+fn allowing_staleness_never_passes_a_changed_fixture_and_is_shown() {
+    let bench = Bench::new();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "notice-beta.pdf", "sha256": "sha-of-notice-beta"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("report.json", |options| {
+        options.mode = Mode::Replay {
+            recording: bench.path("recording.json"),
+            allow_stale: true,
+        };
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec![
+            "invoice-alpha".into(),
+            "notice-beta".into(),
+            "scan-delta".into(),
+        ];
+        options.markdown = Some(bench.path("report.md"));
+    });
+    assert_eq!(
+        exit, EXIT_REGRESSED,
+        "stale_fixture fails whatever is allowed"
+    );
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+    assert!(report.record("notice-beta").unwrap().stale);
+    let page = std::fs::read_to_string(bench.path("report.md")).unwrap();
+    assert!(
+        page.contains("1 scored from stale replies (--allow-stale)"),
+        "{page}"
+    );
+    assert!(
+        page.contains("except those of the 1 document(s) scored from replies to prompts the engine no longer builds"),
+        "{page}"
+    );
+    assert!(
+        page.contains("Scored from replies to prompts the engine no longer builds (`--allow-stale`): notice-beta."),
+        "{page}"
+    );
+}
+
+/// One document's bytes changed: it is recorded again on its own and merged
+/// into the recording of record, which then replays clean.
+#[test]
+fn a_document_recorded_again_on_its_own_is_merged_in() {
+    let bench = Bench::new();
+    let with_model = |mut recording: Recording| {
+        recording.model.sha256 = Some("ab".repeat(32));
+        recording
+    };
+    with_model(recording())
+        .save(&bench.path("recording.json"))
+        .unwrap();
+    let mut again = with_model(recording());
+    again.recorded_at = "2026-10-07T10:00:00Z".into();
+    again
+        .documents
+        .retain(|document| document.id == "scan-delta");
+    again.documents[0].sha256 = Some("regenerated".into());
+    again.save(&bench.path("again.json")).unwrap();
+    std::fs::write(
+        bench.path("manifest.json"),
+        json!({"files": [
+            {"file": "invoice-alpha.pdf", "sha256": "sha-of-invoice-alpha"},
+            {"file": "scan-delta.png", "sha256": "regenerated"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let only = |options: &mut RunOptions| {
+        options.manifest = Some(bench.path("manifest.json"));
+        options.only = vec!["invoice-alpha".into(), "scan-delta".into()];
+    };
+    let (exit, report) = bench.replay("stale.json", only);
+    assert_eq!(exit, EXIT_REGRESSED);
+    assert_eq!(report.record("scan-delta").unwrap().status, "stale_fixture");
+
+    intern_bench::merge::merge_command(
+        &bench.path("recording.json"),
+        &bench.path("again.json"),
+        &bench.path("recording.json"),
+        &bench.path("gold.json"),
+        &[],
+        Some("scan-delta regenerated"),
+    )
+    .unwrap();
+    let (exit, report) = bench.replay("merged.json", only);
+    assert_eq!(exit, 0);
+    assert_eq!(report.record("scan-delta").unwrap().status, "completed");
+    let merged = Recording::load(&bench.path("recording.json")).unwrap().0;
+    assert_eq!(
+        merged
+            .documents
+            .iter()
+            .map(|document| document.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "invoice-alpha",
+            "notice-beta",
+            "scan-delta",
+            "broken-epsilon"
+        ],
+        "the gold's order"
+    );
+    assert!(
+        merged.note.ends_with("scan-delta regenerated"),
+        "{}",
+        merged.note
+    );
 }

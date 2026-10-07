@@ -1,10 +1,21 @@
 //! Two reports side by side: what a change did.
 //!
-//! Documents are aligned by id. Rates are compared in percentage points,
-//! fractions as differences, counts as differences, and every stage's p50
-//! and p95 as a percentage change. A document whose boolean score went
-//! from good to bad is *broken*, from bad to good *fixed* - trap scores
-//! being good when false, as in the baseline gate.
+//! Documents are aligned by id, and every aggregate is computed again over
+//! the documents both reports scored (completed, or failed and scored as a
+//! miss), never taken from either report's own summary: a run over a
+//! subset, a document added since, or one that went stale in replay would
+//! otherwise move the rates with no change to the code. Each score is
+//! compared over the documents that have it in both runs. Rates are
+//! compared in percentage points, fractions as differences, counts as
+//! differences. A document whose boolean score went from good to bad is
+//! *broken*, from bad to good *fixed* - trap scores being good when false,
+//! as in the baseline gate.
+//!
+//! Latency is compared, as each stage's p50 and p95 change in per cent, over
+//! the documents both runs completed, and only between two runs that
+//! measured their timings. A replay reports its recording's timings, taken
+//! on another run's machine; a difference involving one is not a measured
+//! change, so it is not shown as one.
 
 use std::{collections::BTreeSet, fmt::Write as _};
 
@@ -13,10 +24,11 @@ use serde_json::Value;
 
 use crate::{
     markdown::{HEADLINE_MEANS, HEADLINE_RATES, duration, metric_value, percent},
-    report::{Rate, Report},
-    score::{bad_when_true, lower_is_better},
-    stats::round,
-    timing::METRICS,
+    record::{COMPLETED, DocumentRecord, PENDING, is_unscorable},
+    report::{self, Rate, Report, Summary},
+    score::{bad_when_true, is_unit_fraction, lower_is_better},
+    stats::{Distribution, round},
+    timing::{self, METRICS},
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -25,6 +37,21 @@ pub struct Side {
     pub created_at: String,
     pub git_commit: Option<String>,
     pub documents: usize,
+    /// `measured`, or `recorded` for a replay.
+    #[serde(default)]
+    pub timings_source: String,
+    /// The machine the timings were taken on.
+    #[serde(default)]
+    pub machine: String,
+    /// A replay's recording.
+    #[serde(default)]
+    pub recording_sha256: Option<String>,
+    #[serde(default)]
+    pub recorded_at: Option<String>,
+    #[serde(default)]
+    pub only: Vec<String>,
+    #[serde(default)]
+    pub gold_sha256: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -62,6 +89,10 @@ pub struct Change {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LatencyDelta {
     pub metric: String,
+    /// The documents, completed in both runs with the metric measured, both
+    /// percentiles are over.
+    #[serde(default)]
+    pub documents: usize,
     pub p50_before: f64,
     pub p50_after: f64,
     pub p50_change_percent: Option<f64>,
@@ -74,6 +105,19 @@ pub struct LatencyDelta {
 pub struct Comparison {
     pub before: Side,
     pub after: Side,
+    /// The documents both runs scored, which every rate, mean and count is
+    /// computed over.
+    #[serde(default)]
+    pub aligned: usize,
+    /// The documents both runs completed, which latency is computed over.
+    #[serde(default)]
+    pub completed_in_both: usize,
+    /// How the two runs differ in what they cover, for the reader.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// Why latency is not compared, or what to bear in mind when it is.
+    #[serde(default)]
+    pub latency_note: Option<String>,
     pub rates: Vec<RateDelta>,
     pub means: Vec<ValueDelta>,
     pub counts: Vec<ValueDelta>,
@@ -83,6 +127,7 @@ pub struct Comparison {
     pub filename_changes: Vec<Change>,
     pub only_before: Vec<String>,
     pub only_after: Vec<String>,
+    /// Empty when either run's timings were not measured by it.
     pub latency: Vec<LatencyDelta>,
 }
 
@@ -92,6 +137,18 @@ fn side(report: &Report) -> Side {
         created_at: report.created_at.clone(),
         git_commit: report.git_commit.clone(),
         documents: report.records.len(),
+        timings_source: report.timings_source.clone(),
+        machine: report.machine.summary(),
+        recording_sha256: report
+            .recording
+            .as_ref()
+            .map(|recording| recording.sha256.clone()),
+        recorded_at: report
+            .recording
+            .as_ref()
+            .map(|recording| recording.recorded_at.clone()),
+        only: report.corpus.only.clone(),
+        gold_sha256: report.corpus.gold_sha256.clone(),
     }
 }
 
@@ -99,8 +156,7 @@ fn change_percent(before: f64, after: f64) -> Option<f64> {
     (before > 0.0).then(|| round((after - before) / before * 100.0, 1))
 }
 
-fn counts(report: &Report) -> Vec<(&'static str, f64)> {
-    let summary = &report.summary;
+fn counts(summary: &Summary) -> Vec<(&'static str, f64)> {
     let counts = &summary.counts;
     let mut values = vec![
         ("unsafe_ready", counts.unsafe_ready as f64),
@@ -127,6 +183,47 @@ fn is_good(key: &str, value: bool) -> bool {
     if bad_when_true(key) { !value } else { value }
 }
 
+/// Scored: completed, or failed and scored as a miss.
+fn scored(record: &DocumentRecord) -> bool {
+    record.status != PENDING && !is_unscorable(&record.status)
+}
+
+/// One aligned document on each side, holding only the scores both sides
+/// have, so every score is compared over the same documents.
+fn aligned_pair(
+    before: &DocumentRecord,
+    after: &DocumentRecord,
+) -> (DocumentRecord, DocumentRecord) {
+    let shared = before
+        .scores
+        .keys()
+        .filter(|key| after.scores.contains_key(*key))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let keep = |record: &DocumentRecord| {
+        let mut kept = DocumentRecord {
+            id: record.id.clone(),
+            status: record.status.clone(),
+            readiness: record.readiness.clone(),
+            scores: record
+                .scores
+                .iter()
+                .filter(|(key, _)| shared.contains(*key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            forbidden_description: record.forbidden_description.clone(),
+            ..DocumentRecord::default()
+        };
+        // A forbidden fact asserted counts only where both descriptions
+        // were checked.
+        if !shared.contains("description_factual") {
+            kept.forbidden_description.clear();
+        }
+        kept
+    };
+    (keep(before), keep(after))
+}
+
 pub fn compare(before: &Report, after: &Report) -> Comparison {
     let mut comparison = Comparison {
         before: side(before),
@@ -134,17 +231,46 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
         ..Comparison::default()
     };
 
-    let rate_keys = before
-        .summary
+    let pairs = before
+        .records
+        .iter()
+        .filter_map(|record| Some((record, after.record(&record.id)?)))
+        .collect::<Vec<_>>();
+    let aligned = pairs
+        .iter()
+        .filter(|(was, now)| scored(was) && scored(now))
+        .map(|(was, now)| aligned_pair(was, now))
+        .collect::<Vec<_>>();
+    comparison.aligned = aligned.len();
+    let mut was_summary = report::summarize(aligned.iter().map(|(was, _)| was));
+    let mut now_summary = report::summarize(aligned.iter().map(|(_, now)| now));
+    // The share sent to review, over the documents both runs completed.
+    let completed = aligned
+        .iter()
+        .filter(|(was, now)| was.status == COMPLETED && now.status == COMPLETED)
+        .collect::<Vec<_>>();
+    let review_rate = |pick: fn(&(DocumentRecord, DocumentRecord)) -> &DocumentRecord| {
+        (!completed.is_empty()).then(|| {
+            let reviewed = completed
+                .iter()
+                .filter(|pair| pick(pair).readiness.as_deref() == Some("needs_review"))
+                .count();
+            round(reviewed as f64 / completed.len() as f64, 4)
+        })
+    };
+    was_summary.review_rate = review_rate(|(was, _)| was);
+    now_summary.review_rate = review_rate(|(_, now)| now);
+
+    let rate_keys = was_summary
         .rates
         .keys()
-        .chain(after.summary.rates.keys())
+        .chain(now_summary.rates.keys())
         .collect::<BTreeSet<_>>();
     comparison.rates = rate_keys
         .into_iter()
         .map(|key| {
-            let was = before.summary.rates.get(key).copied();
-            let now = after.summary.rates.get(key).copied();
+            let was = was_summary.rates.get(key).copied();
+            let now = now_summary.rates.get(key).copied();
             RateDelta {
                 metric: key.clone(),
                 delta_points: was
@@ -155,17 +281,16 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             }
         })
         .collect();
-    let mean_keys = before
-        .summary
+    let mean_keys = was_summary
         .means
         .keys()
-        .chain(after.summary.means.keys())
+        .chain(now_summary.means.keys())
         .collect::<BTreeSet<_>>();
     comparison.means = mean_keys
         .into_iter()
         .map(|key| {
-            let was = before.summary.means.get(key).map(|mean| mean.mean);
-            let now = after.summary.means.get(key).map(|mean| mean.mean);
+            let was = was_summary.means.get(key).map(|mean| mean.mean);
+            let now = now_summary.means.get(key).map(|mean| mean.mean);
             ValueDelta {
                 metric: key.clone(),
                 delta: was.zip(now).map(|(was, now)| round(now - was, 4)),
@@ -174,33 +299,40 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
             }
         })
         .collect();
-    let (was_counts, now_counts) = (counts(before), counts(after));
-    comparison.counts = was_counts
+    // Every count either side has: an optional one - a rate with nothing
+    // to be a rate of yet - can appear only after a change, or only before.
+    let (was_counts, now_counts) = (counts(&was_summary), counts(&now_summary));
+    let value = |counts: &[(&str, f64)], metric: &str| {
+        counts
+            .iter()
+            .find(|(other, _)| *other == metric)
+            .map(|(_, value)| *value)
+    };
+    let mut count_names = was_counts
         .iter()
-        .map(|(metric, was)| {
-            let now = now_counts
-                .iter()
-                .find(|(other, _)| other == metric)
-                .map(|(_, value)| *value);
+        .map(|(metric, _)| *metric)
+        .collect::<Vec<_>>();
+    count_names.extend(
+        now_counts
+            .iter()
+            .map(|(metric, _)| *metric)
+            .filter(|metric| !was_counts.iter().any(|(other, _)| other == metric)),
+    );
+    comparison.counts = count_names
+        .into_iter()
+        .map(|metric| {
+            let was = value(&was_counts, metric);
+            let now = value(&now_counts, metric);
             ValueDelta {
-                metric: (*metric).to_owned(),
-                before: Some(*was),
-                delta: now.map(|now| round(now - was, 4)),
+                metric: metric.to_owned(),
+                before: was,
+                delta: was.zip(now).map(|(was, now)| round(now - was, 4)),
                 after: now,
             }
         })
         .collect();
 
-    let after_ids = after
-        .records
-        .iter()
-        .map(|record| record.id.as_str())
-        .collect::<BTreeSet<_>>();
-    for record in &before.records {
-        let Some(now) = after.record(&record.id) else {
-            comparison.only_before.push(record.id.clone());
-            continue;
-        };
+    for (record, now) in &pairs {
         if record.status != now.status {
             comparison.status_changes.push(Change {
                 id: record.id.clone(),
@@ -252,29 +384,110 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
         .iter()
         .map(|record| record.id.as_str())
         .collect::<BTreeSet<_>>();
-    comparison.only_after = after_ids
+    let after_ids = after
+        .records
         .iter()
-        .filter(|id| !before_ids.contains(*id))
+        .map(|record| record.id.as_str())
+        .collect::<BTreeSet<_>>();
+    comparison.only_before = before_ids
+        .difference(&after_ids)
+        .map(|id| (*id).to_owned())
+        .collect();
+    comparison.only_after = after_ids
+        .difference(&before_ids)
         .map(|id| (*id).to_owned())
         .collect();
 
-    comparison.latency = METRICS
+    if comparison.before.only != comparison.after.only {
+        comparison.notes.push(format!(
+            "The runs cover different documents ({} and {}); only the {} both scored are compared.",
+            describe_only(&comparison.before.only),
+            describe_only(&comparison.after.only),
+            comparison.aligned
+        ));
+    }
+    if !comparison.before.gold_sha256.is_empty()
+        && !comparison.after.gold_sha256.is_empty()
+        && comparison.before.gold_sha256 != comparison.after.gold_sha256
+    {
+        comparison.notes.push(
+            "The gold differs between the runs: a score can move because the reviewed answer changed, not the code."
+                .to_owned(),
+        );
+    }
+    let unscored = pairs.len() - comparison.aligned;
+    if unscored > 0 {
+        comparison.notes.push(format!(
+            "{unscored} document(s) in both runs were not scored in one of them (pending, stale or unrecorded) and are left out of every figure."
+        ));
+    }
+
+    comparison.completed_in_both = pairs
+        .iter()
+        .filter(|(was, now)| was.status == COMPLETED && now.status == COMPLETED)
+        .count();
+    let recorded = |side: &Side| side.timings_source == "recorded";
+    if recorded(&comparison.before) || recorded(&comparison.after) {
+        comparison.latency_note = Some(
+            if recorded(&comparison.before)
+                && recorded(&comparison.after)
+                && comparison.before.recording_sha256 == comparison.after.recording_sha256
+            {
+                "Both runs replay the same recording: their timings are the recording's, identical by construction, and say nothing about this change's latency. Latency is not compared.".to_owned()
+            } else {
+                "A replayed run reports its recording's timings, taken when and where the recording was made, not measured by that run; a difference involving one is not a measured change. Latency is not compared: compare two live runs made on the same machine.".to_owned()
+            },
+        );
+    } else {
+        comparison.latency = latency(&pairs);
+        if comparison.before.machine != comparison.after.machine {
+            comparison.latency_note = Some(format!(
+                "The runs were made on different machines ({} and {}): the changes compare the machines as much as the code.",
+                comparison.before.machine, comparison.after.machine
+            ));
+        }
+    }
+    comparison
+}
+
+fn describe_only(only: &[String]) -> String {
+    if only.is_empty() {
+        "the whole corpus".to_owned()
+    } else {
+        format!("only {}", only.join(", "))
+    }
+}
+
+/// p50 and p95 of every metric over the documents both runs completed and
+/// measured it on.
+fn latency(pairs: &[(&DocumentRecord, &DocumentRecord)]) -> Vec<LatencyDelta> {
+    METRICS
         .iter()
         .filter_map(|(metric, _)| {
-            let was = before.latency.overall.get(*metric)?;
-            let now = after.latency.overall.get(*metric)?;
+            let (was, now): (Vec<f64>, Vec<f64>) = pairs
+                .iter()
+                .filter(|(was, now)| report::timed(was) && report::timed(now))
+                .filter_map(|(was, now)| {
+                    Some((
+                        timing::get(&was.timings, metric)?,
+                        timing::get(&now.timings, metric)?,
+                    ))
+                })
+                .unzip();
+            let (was_distribution, now_distribution) =
+                (Distribution::of(&was)?, Distribution::of(&now)?);
             Some(LatencyDelta {
                 metric: (*metric).to_owned(),
-                p50_before: was.p50,
-                p50_after: now.p50,
-                p50_change_percent: change_percent(was.p50, now.p50),
-                p95_before: was.p95,
-                p95_after: now.p95,
-                p95_change_percent: change_percent(was.p95, now.p95),
+                documents: was.len(),
+                p50_before: was_distribution.p50,
+                p50_after: now_distribution.p50,
+                p50_change_percent: change_percent(was_distribution.p50, now_distribution.p50),
+                p95_before: was_distribution.p95,
+                p95_after: now_distribution.p95,
+                p95_change_percent: change_percent(was_distribution.p95, now_distribution.p95),
             })
         })
-        .collect();
-    comparison
+        .collect()
 }
 
 impl Comparison {
@@ -294,9 +507,12 @@ fn signed(value: f64, unit: &str) -> String {
     }
 }
 
-/// How a delta reads: better, worse, or no change.
+/// How a delta reads: better, worse, or no change. Some counts have no
+/// direction: more description claims is neither better nor worse (it is
+/// the denominator of the unsupported-fact rate), and fewer documents sent
+/// to review is better only if the names were right, which the rates say.
 fn verdict(metric: &str, delta: f64) -> &'static str {
-    if delta == 0.0 {
+    if delta == 0.0 || is_neutral(metric) {
         return "";
     }
     let better =
@@ -317,25 +533,57 @@ fn is_lower_better_count(metric: &str) -> bool {
             | "spurious_parties"
             | "forbidden_descriptions"
             | "unsupported_claims"
-            | "review_rate"
             | "unsupported_fact_rate"
     )
+}
+
+fn is_neutral(metric: &str) -> bool {
+    matches!(metric, "claims" | "review_rate")
 }
 
 pub fn render(comparison: &Comparison) -> String {
     let mut out = String::new();
     let describe = |side: &Side| {
-        format!(
-            "{} run {} at `{}` ({} documents)",
+        let mut line = format!(
+            "{} run {} at `{}` ({} documents) on {}",
             side.mode,
             side.created_at,
             side.git_commit.as_deref().unwrap_or("unknown"),
-            side.documents
-        )
+            side.documents,
+            if side.machine.is_empty() {
+                "an unknown machine"
+            } else {
+                &side.machine
+            }
+        );
+        if side.timings_source == "recorded" {
+            let _ = write!(
+                line,
+                " · timings recorded{}{}, not measured",
+                side.recording_sha256
+                    .as_deref()
+                    .map(|sha| format!(" (recording `{}`", &sha[..sha.len().min(12)]))
+                    .unwrap_or_default(),
+                match (&side.recording_sha256, &side.recorded_at) {
+                    (Some(_), Some(at)) if !at.is_empty() => format!(", made {at})"),
+                    (Some(_), _) => ")".to_owned(),
+                    _ => String::new(),
+                }
+            );
+        }
+        line
     };
     let _ = writeln!(out, "# InternBench comparison\n");
     let _ = writeln!(out, "- **Before:** {}", describe(&comparison.before));
-    let _ = writeln!(out, "- **After:** {}\n", describe(&comparison.after));
+    let _ = writeln!(out, "- **After:** {}", describe(&comparison.after));
+    let _ = writeln!(
+        out,
+        "- **Compared:** every score, rate and count over the {} documents both runs scored (completed, or failed and scored as a miss), each score over the documents that have it in both runs; latency over the {} both completed.\n",
+        comparison.aligned, comparison.completed_in_both
+    );
+    for note in &comparison.notes {
+        let _ = writeln!(out, "> {note}\n");
+    }
 
     let _ = writeln!(out, "## Scores\n");
     let _ = writeln!(out, "| Score | Before | After | Change |");
@@ -377,7 +625,6 @@ pub fn render(comparison: &Comparison) -> String {
             cell(&delta.after)
         );
     }
-    let fraction = |value: Option<f64>| value.map_or_else(|| "–".to_owned(), percent);
     let mut listed = BTreeSet::new();
     let means = HEADLINE_MEANS
         .iter()
@@ -385,23 +632,38 @@ pub fn render(comparison: &Comparison) -> String {
         .chain(comparison.means.iter())
         .filter(|delta| listed.insert(delta.metric.clone()));
     for delta in means {
+        // A share of one reads as a percentage and moves in points; a
+        // figure on its own scale (OCR confidence, 0-100) as itself.
+        let unit = is_unit_fraction(&delta.metric);
+        let shown = |value: Option<f64>| {
+            value.map_or_else(
+                || "–".to_owned(),
+                |value| {
+                    if unit {
+                        percent(value)
+                    } else {
+                        format!("{value:.1}")
+                    }
+                },
+            )
+        };
         let change = delta.delta.map_or_else(
             || "–".to_owned(),
             |value| {
-                let points = round(value * 100.0, 1);
-                format!(
-                    "{}{}",
-                    signed(points, " pts"),
-                    verdict(&delta.metric, points)
-                )
+                let (moved, suffix) = if unit {
+                    (round(value * 100.0, 1), " pts")
+                } else {
+                    (round(value, 1), "")
+                };
+                format!("{}{}", signed(moved, suffix), verdict(&delta.metric, moved))
             },
         );
         let _ = writeln!(
             out,
             "| `{}` (mean) | {} | {} | {change} |",
             delta.metric,
-            fraction(delta.before),
-            fraction(delta.after)
+            shown(delta.before),
+            shown(delta.after)
         );
     }
     let _ = writeln!(out);
@@ -504,13 +766,27 @@ pub fn render(comparison: &Comparison) -> String {
         }
     }
 
-    if !comparison.latency.is_empty() {
+    if comparison.latency.is_empty() {
+        if let Some(note) = &comparison.latency_note {
+            let _ = writeln!(out, "## Latency\n\n{note}\n");
+        }
+    } else {
         let _ = writeln!(out, "## Latency\n");
         let _ = writeln!(
             out,
-            "| Stage | p50 before | p50 after | Change | p95 before | p95 after | Change |"
+            "Measured by both runs, over the documents both completed.\n"
         );
-        let _ = writeln!(out, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+        if let Some(note) = &comparison.latency_note {
+            let _ = writeln!(out, "> {note}\n");
+        }
+        let _ = writeln!(
+            out,
+            "| Stage | Docs | p50 before | p50 after | Change | p95 before | p95 after | Change |"
+        );
+        let _ = writeln!(
+            out,
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+        );
         for delta in &comparison.latency {
             let pct = |value: Option<f64>| {
                 value.map_or_else(|| "–".to_owned(), |value| signed(value, "%"))
@@ -524,8 +800,9 @@ pub fn render(comparison: &Comparison) -> String {
             };
             let _ = writeln!(
                 out,
-                "| `{}` | {} | {} | {} | {} | {} | {} |",
+                "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
                 delta.metric,
+                delta.documents,
                 show(delta.p50_before),
                 show(delta.p50_after),
                 pct(delta.p50_change_percent),
@@ -655,8 +932,212 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered
-                .contains("| `total_ms` | 100.0 ms | 100.0 ms | 0% | 200.0 ms | 300.0 ms | +50% |"),
+            rendered.contains(
+                "| `total_ms` | 2 | 100.0 ms | 100.0 ms | 0% | 200.0 ms | 300.0 ms | +50% |"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("over the 2 documents both runs scored"),
+            "{rendered}"
+        );
+    }
+
+    fn rate(comparison: &Comparison, metric: &str) -> RateDelta {
+        comparison
+            .rates
+            .iter()
+            .find(|delta| delta.metric == metric)
+            .cloned()
+            .unwrap()
+    }
+
+    /// A subset run, or a document only one run has, does not move a rate.
+    #[test]
+    fn rates_are_computed_over_the_documents_both_runs_scored() {
+        let before = report(vec![
+            ("a", json!({"filename_correct": true}), "a.pdf", 100.0),
+            ("b", json!({"filename_correct": true}), "b.pdf", 100.0),
+            (
+                "wrong",
+                json!({"filename_correct": false, "unsafe_ready": true}),
+                "w.pdf",
+                100.0,
+            ),
+        ]);
+        let mut after = report(vec![
+            ("a", json!({"filename_correct": true}), "a.pdf", 100.0),
+            ("b", json!({"filename_correct": true}), "b.pdf", 100.0),
+        ]);
+        after.corpus.only = vec!["a".into(), "b".into()];
+        let comparison = compare(&before, &after);
+        assert_eq!(comparison.aligned, 2);
+        let filename = rate(&comparison, "filename_correct");
+        assert_eq!(filename.delta_points, Some(0.0));
+        assert_eq!(filename.before.unwrap().total, 2);
+        assert!(
+            !comparison
+                .rates
+                .iter()
+                .any(|delta| delta.metric == "unsafe_ready"),
+            "the document only one run scored is in no figure"
+        );
+        let unsafe_ready = comparison
+            .counts
+            .iter()
+            .find(|delta| delta.metric == "unsafe_ready")
+            .unwrap();
+        assert_eq!(unsafe_ready.delta, Some(0.0));
+        assert!(comparison.notes[0].starts_with("The runs cover different documents"));
+
+        // A document stale in one run is left out of both.
+        let mut stale = report(vec![
+            ("a", json!({"filename_correct": true}), "a.pdf", 100.0),
+            ("b", json!({}), "b.pdf", 100.0),
+        ]);
+        stale.records[1].status = "stale_prompt".into();
+        let before = report(vec![
+            ("a", json!({"filename_correct": true}), "a.pdf", 100.0),
+            ("b", json!({"filename_correct": false}), "b.pdf", 100.0),
+        ]);
+        let comparison = compare(&before, &stale);
+        assert_eq!(comparison.aligned, 1);
+        assert_eq!(
+            rate(&comparison, "filename_correct").delta_points,
+            Some(0.0)
+        );
+        assert!(
+            comparison
+                .notes
+                .iter()
+                .any(|note| note.starts_with("1 document(s) in both runs were not scored")),
+            "{:?}",
+            comparison.notes
+        );
+    }
+
+    #[test]
+    fn recorded_timings_are_never_shown_as_a_measured_change() {
+        let recorded = |sha: &str| {
+            let mut report = report(vec![(
+                "a",
+                json!({"filename_correct": true}),
+                "a.pdf",
+                100.0,
+            )]);
+            report.timings_source = "recorded".into();
+            report.recording = Some(crate::report::RecordingInfo {
+                sha256: sha.into(),
+                recorded_at: "2026-10-01T09:00:00Z".into(),
+                ..Default::default()
+            });
+            report
+        };
+        let same = compare(&recorded("abc"), &recorded("abc"));
+        assert!(same.latency.is_empty());
+        assert!(
+            same.latency_note
+                .as_deref()
+                .unwrap()
+                .starts_with("Both runs replay the same recording")
+        );
+        let rendered = render(&same);
+        assert!(
+            rendered.contains("## Latency\n\nBoth runs replay"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "timings recorded (recording `abc`, made 2026-10-01T09:00:00Z), not measured"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("| Stage |"));
+
+        let mut live = report(vec![(
+            "a",
+            json!({"filename_correct": true}),
+            "a.pdf",
+            90.0,
+        )]);
+        live.timings_source = "measured".into();
+        let mixed = compare(&recorded("abc"), &live);
+        assert!(mixed.latency.is_empty());
+        assert!(
+            mixed
+                .latency_note
+                .as_deref()
+                .unwrap()
+                .contains("not measured by that run")
+        );
+    }
+
+    /// A count only one side has - a rate of claims when the run before made
+    /// none - is still compared, with a dash for the side that lacks it.
+    #[test]
+    fn a_count_only_the_after_run_has_is_shown() {
+        let with = |claims: u64| {
+            let mut report = report(vec![(
+                "a",
+                json!({"filename_correct": true, "description_claims": claims, "description_unsupported": 0}),
+                "a.pdf",
+                100.0,
+            )]);
+            report.summary = report::summarize(&report.records);
+            report
+        };
+        assert!(with(0).summary.unsupported_fact_rate.is_none());
+        let comparison = compare(&with(0), &with(4));
+        let rate = comparison
+            .counts
+            .iter()
+            .find(|delta| delta.metric == "unsupported_fact_rate")
+            .expect("the after run's rate is compared");
+        assert_eq!(
+            (rate.before, rate.after, rate.delta),
+            (None, Some(0.0), None)
+        );
+        let rendered = render(&comparison);
+        assert!(
+            rendered.contains("| unsupported_fact_rate | – | 0.0% | – |"),
+            "{rendered}"
+        );
+        // And the other way round.
+        let comparison = compare(&with(4), &with(0));
+        assert!(
+            comparison
+                .counts
+                .iter()
+                .any(|delta| delta.metric == "unsupported_fact_rate"
+                    && delta.before == Some(0.0)
+                    && delta.after.is_none())
+        );
+    }
+
+    #[test]
+    fn counts_without_a_direction_get_no_verdict_and_confidence_keeps_its_scale() {
+        let with = |claims: u64, confidence: f64, ready: &str| {
+            let mut report = report(vec![(
+                "a",
+                json!({"filename_correct": true, "description_claims": claims, "description_unsupported": 0, "ocr_mean_confidence": confidence}),
+                "a.pdf",
+                100.0,
+            )]);
+            report.records[0].readiness = Some(ready.into());
+            report.summary = report::summarize(&report.records);
+            report
+        };
+        let rendered = render(&compare(
+            &with(4, 85.0, "needs_review"),
+            &with(9, 87.0, "ready"),
+        ));
+        assert!(rendered.contains("| claims | 4 | 9 | +5 |"), "{rendered}");
+        assert!(
+            rendered.contains("| review_rate | 100.0% | 0.0% | -100 pts |"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("| `ocr_mean_confidence` (mean) | 85.0 | 87.0 | +2 better |"),
             "{rendered}"
         );
     }

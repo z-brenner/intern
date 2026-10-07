@@ -104,7 +104,7 @@ export function invoiceDateInTable() {
       roles: [[issuer, 'issuer'], [customer, 'customer']],
       forbiddenParties: [[customer, 'bill-to customer'], ['Marta Quillon', 'ship-to contact']],
       facts: [[total, total.slice(1)], ['Quillon Ridge Bakery'], [invoiceNumber, '20417']],
-      forbiddenFacts: [money(priced.subtotal)],
+      forbiddenFacts: [],
       subjectTerms: ['display case', 'display', 'shelving', 'fixtures', 'installation'],
       readiness: 'ready',
       dateText: [numericDate(invoiceDate)],

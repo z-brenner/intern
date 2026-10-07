@@ -34,8 +34,10 @@ pub const UNRECORDED: &str = "unrecorded";
 /// failure.
 pub const PENDING: &str = "pending";
 
-/// A status replay could not score, which fails the run unless staleness
-/// is allowed.
+/// A status replay could not score. Any of them fails the run (exit 2):
+/// `--allow-stale` keeps a document from being `stale_prompt` at all, by
+/// scoring it from the old reply and marking it `stale`, but nothing makes
+/// `stale_fixture` or `unrecorded` pass - those need recording again.
 pub fn is_unscorable(status: &str) -> bool {
     matches!(status, STALE_PROMPT | STALE_FIXTURE | UNRECORDED)
 }

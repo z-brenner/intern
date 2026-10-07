@@ -18,8 +18,12 @@
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
-#                       the default corpus is generated when it is missing)
-#   MANIFEST            the generator's manifest (default: bench/manifest.json when present)
+#                       the default corpus is generated again unless every file in it
+#                       matches the committed bench/manifest.json, so a missing, partial
+#                       (--only) or out-of-date corpus is never run)
+#   MANIFEST            the manifest the documents are checked against (default:
+#                       bench/manifest.json for the default corpus, none for another;
+#                       set it empty to check nothing)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
 #
@@ -42,9 +46,19 @@ MODEL="${MODEL:?set MODEL to the GGUF model file}"
 LLAMA_SERVER="${LLAMA_SERVER:?set LLAMA_SERVER to the llama-server binary}"
 WORKER="${INTERN_WORKER:-$REPO/target/release/intern-worker}"
 PORT="${PORT:-18090}"
-CORPUS="${CORPUS:-$REPO/bench/generated}"
+# A path with its directory resolved, so `bench/generated`, a trailing slash
+# or a symlinked checkout all name the default corpus the same way.
+canonical() {
+  local parent
+  parent="$(cd "$(dirname "$1")" 2>/dev/null && pwd -P)" || { printf '%s\n' "$1"; return; }
+  printf '%s/%s\n' "$parent" "$(basename "$1")"
+}
+DEFAULT_CORPUS="$(canonical "$REPO/bench/generated")"
+CORPUS="$(canonical "${CORPUS:-$DEFAULT_CORPUS}")"
 GOLD="${GOLD:-$REPO/bench/gold.json}"
-if [ -z "${MANIFEST:-}" ] && [ -f "$REPO/bench/manifest.json" ]; then
+# The committed manifest vouches for the default corpus only; a corpus of
+# your own brings its own, or none.
+if [ -z "${MANIFEST+set}" ] && [ "$CORPUS" = "$DEFAULT_CORPUS" ] && [ -f "$REPO/bench/manifest.json" ]; then
   MANIFEST="$REPO/bench/manifest.json"
 fi
 if [ -z "${THREADS:-}" ]; then
@@ -62,7 +76,22 @@ if [ -z "${INTERN_BENCH:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-bench)
   INTERN_BENCH="${CARGO_TARGET_DIR:-$REPO/target}/release/intern-bench"
 fi
-if [ "$CORPUS" = "$REPO/bench/generated" ] && [ ! -f "$CORPUS/manifest.json" ]; then
+# Regenerate when any file differs from the committed manifest, not only
+# when the generated manifest does: a file edited by hand leaves that
+# manifest as it was. The runner refuses to start on a mismatch either way.
+corpus_matches_manifest() {
+  node -e '
+    const { createHash } = require("node:crypto");
+    const { existsSync, readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const [corpus, manifest] = process.argv.slice(1);
+    for (const { file, sha256 } of JSON.parse(readFileSync(manifest, "utf8")).files) {
+      const path = join(corpus, file);
+      if (!existsSync(path) || createHash("sha256").update(readFileSync(path)).digest("hex") !== sha256) process.exit(1);
+    }
+  ' "$CORPUS" "$REPO/bench/manifest.json"
+}
+if [ "$CORPUS" = "$DEFAULT_CORPUS" ] && ! corpus_matches_manifest; then
   (cd "$REPO" && node bench/generate.mjs)
 fi
 mkdir -p "$OUT_DIR"

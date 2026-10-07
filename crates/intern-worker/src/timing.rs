@@ -23,8 +23,9 @@ pub struct ExtractionTimings {
     pub total_micros: u64,
     /// Copying the file into the private workspace it is read from.
     pub snapshot_micros: u64,
-    /// Reading the format: loading a PDF and its pages' text, or the whole
-    /// of every other reader less the stages below that it reported.
+    /// Reading the format: binding PDFium (on the first PDF a worker
+    /// process reads), loading a PDF and its pages' text, or the whole of
+    /// every other reader less the stages below that it reported.
     pub parse_micros: u64,
     /// Measuring a PDF page's image coverage and deciding whether it is a
     /// scan.
