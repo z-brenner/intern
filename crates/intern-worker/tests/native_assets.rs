@@ -404,6 +404,59 @@ fn a_page_wrapped_in_a_form_with_a_logo_reads_its_text_once() {
     }
 }
 
+/// A rule drawn inside a form XObject that is drawn 400 points lower than
+/// the form's own space puts it: 300 by the form's matrix, 100 by the
+/// page's where it draws the form.
+#[cfg(feature = "native-pdfium")]
+fn ruled_form_pdf() -> Vec<u8> {
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm0 4 0 R >> >> /Contents 5 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream(
+            "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Matrix [1 0 0 1 0 -300]",
+            b"1 w 54 700 m 558 700 l S",
+        ),
+        stream("", b"q 1 0 0 1 0 -100 cm /Fm0 Do Q"),
+    ];
+    pdf(&objects)
+}
+
+/// Rules inside a form are where the page draws them: 300 points from the
+/// bottom, 492 from the top - not where the form's own space would put
+/// them, 92 from the top, over whatever the page has there.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_rule_inside_a_form_is_where_the_form_is_drawn() {
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("ruled-form.pdf");
+    std::fs::write(&path, ruled_form_pdf()).unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+
+    let pages = backend.inspect(&path, &CancellationToken::new()).unwrap();
+
+    let rulings = &pages[0].native.as_ref().unwrap().rulings;
+    assert_eq!(rulings.len(), 1, "{rulings:?}");
+    let [x0, y0, x1, y1] = rulings[0];
+    assert!(
+        x0.abs_diff(540) <= 10 && x1.abs_diff(5580) <= 10,
+        "{rulings:?}"
+    );
+    assert!(
+        y0.abs_diff(4920) <= 15 && y1.abs_diff(4920) <= 15,
+        "{rulings:?}"
+    );
+}
+
 /// Text on a quarter-turned page is all read: drawn past the displayed
 /// width, it used to be dropped.
 #[cfg(feature = "native-pdfium")]

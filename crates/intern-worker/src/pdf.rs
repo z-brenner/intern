@@ -329,19 +329,14 @@ fn survey_object(
         return;
     }
     if let Some(path) = object.as_path_object() {
-        // Where the path sits in whatever holds it.
-        let held = [
-            bounds.left().value,
-            bounds.bottom().value,
-            bounds.right().value,
-            bounds.top().value,
-        ];
-        survey_path(path, held, frame, survey);
+        survey_path(path, [left, bottom, right, top], frame, survey);
     }
 }
 
 /// A path's rules: a thin line across or down, or the four sides of an
-/// outlined box, from its box on the page.
+/// outlined box, from its box on the page - placed through any form it is
+/// drawn in, like text and images, so a ruled table inside a form is ruled
+/// where it is drawn.
 #[cfg(feature = "native-pdfium")]
 fn survey_path(
     path: &PdfPagePathObject<'_>,
