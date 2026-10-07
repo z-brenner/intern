@@ -2197,7 +2197,7 @@ pub fn extract_image(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     cancel.check()?;
-    let frames = later_frames(path, limits.max_page_count.saturating_sub(1));
+    let frames = later_frames(path, limits.max_page_count.saturating_sub(1), cancel)?;
     // A TIFF that opens with a thumbnail has its first page further on.
     let image = cancel.timed(
         |timings| &mut timings.image_decode_micros,
@@ -2308,15 +2308,24 @@ struct LaterFrames {
 /// TIFF holds one image by construction, and a chain that cannot be
 /// followed, or that loops, ends where it stops making sense: the frames
 /// read up to there are still the document's pages.
-fn later_frames(path: &Path, limit: usize) -> LaterFrames {
+///
+/// The walk reads at most [`MAX_TIFF_ENTRIES`] directory entries in all, and
+/// stops when the request is canceled: a chain of directories each with a
+/// table of tens of thousands of entries reads as truncated where it stops.
+fn later_frames(
+    path: &Path,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<LaterFrames, ExtractionError> {
     let mut frames = LaterFrames::default();
     let Ok(file) = File::open(path) else {
-        return frames;
+        return Ok(frames);
     };
     let mut file = BufReader::new(file);
     let Some(format) = TiffFormat::read(&mut file) else {
-        return frames;
+        return Ok(frames);
     };
+    let mut entries_left = MAX_TIFF_ENTRIES;
     let mut seen = std::collections::HashSet::new();
     let mut next = format.first;
     let mut first_page_found = false;
@@ -2328,8 +2337,14 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
             frames.beyond_limit = true;
             break;
         }
-        let Some(directory) = format.directory(&mut file, next) else {
-            break;
+        cancel.check()?;
+        let directory = match format.directory(&mut file, next, &mut entries_left) {
+            DirectoryRead::Read(directory) => directory,
+            DirectoryRead::Unreadable => break,
+            DirectoryRead::PastBudget => {
+                frames.beyond_limit = true;
+                break;
+            }
         };
         if !directory.reduced_resolution {
             if !first_page_found {
@@ -2347,12 +2362,26 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
         }
         next = directory.next;
     }
-    frames
+    Ok(frames)
 }
 
 /// More directories than any document this reads could be pages of: the
 /// page limit, and then some for reduced-resolution copies.
 const MAX_TIFF_DIRECTORIES: usize = 4_096;
+
+/// The most directory entries a TIFF's walk reads in all. A directory
+/// has a few dozen; a table may say it has 65,535, and every directory of
+/// a chain may say so.
+const MAX_TIFF_ENTRIES: u64 = 262_144;
+
+/// What reading one image file directory came to.
+enum DirectoryRead {
+    Read(TiffDirectory),
+    /// Not a directory this can read: the chain ends there.
+    Unreadable,
+    /// More entries than the walk has left to read.
+    PastBudget,
+}
 
 /// How a TIFF counts: its byte order, classic or BigTIFF, and where its
 /// first image file directory is.
@@ -2423,7 +2452,28 @@ impl TiffFormat {
         }
     }
 
-    fn directory(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<TiffDirectory> {
+    /// Reads the directory at `offset`, counting its entries against
+    /// `entries_left`.
+    fn directory(
+        &self,
+        file: &mut (impl Read + Seek),
+        offset: u64,
+        entries_left: &mut u64,
+    ) -> DirectoryRead {
+        let Some(entries) = self.entry_count(file, offset) else {
+            return DirectoryRead::Unreadable;
+        };
+        if entries > *entries_left {
+            return DirectoryRead::PastBudget;
+        }
+        *entries_left -= entries;
+        match self.entries(file, entries) {
+            Some(directory) => DirectoryRead::Read(directory),
+            None => DirectoryRead::Unreadable,
+        }
+    }
+
+    fn entry_count(&self, file: &mut (impl Read + Seek), offset: u64) -> Option<u64> {
         file.seek(SeekFrom::Start(offset)).ok()?;
         let entries = if self.big {
             let mut count = [0_u8; 8];
@@ -2434,9 +2484,12 @@ impl TiffFormat {
             file.read_exact(&mut count).ok()?;
             u64::from(self.word(count))
         };
-        if entries > u64::from(u16::MAX) {
-            return None;
-        }
+        (entries <= u64::from(u16::MAX)).then_some(entries)
+    }
+
+    /// A directory's `entries` entries and the offset after them, read from
+    /// where its count ends.
+    fn entries(&self, file: &mut impl Read, entries: u64) -> Option<TiffDirectory> {
         let entry_bytes = if self.big { 20 } else { 12 };
         let value_at = if self.big { 12 } else { 8 };
         let mut reduced_resolution = false;
@@ -2745,7 +2798,7 @@ mod tiff_chains {
         reduced.extend(std::iter::repeat_n(true, MAX_TIFF_DIRECTORIES + 10));
         reduced.push(false);
         let file = chain(&reduced, None);
-        let frames = later_frames(file.path(), 10);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
         assert!(frames.directories.is_empty());
         assert!(frames.beyond_limit, "pages may lie past the bound");
     }
@@ -2757,31 +2810,67 @@ mod tiff_chains {
     fn a_thumbnail_first_is_passed_over_for_the_page_after_it() {
         const DIRECTORY: u64 = 2 + 12 + 4;
         let file = chain(&[true, false, false], None);
-        let frames = later_frames(file.path(), 10);
+        let frames = later_frames(file.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.first, Some(8 + DIRECTORY));
         assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
 
         let plain = chain(&[false, true, false], None);
-        let frames = later_frames(plain.path(), 10);
+        let frames = later_frames(plain.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.first, None, "the first directory is the first page");
         assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
 
         // Thumbnails only: the first directory is still read, as before.
         let thumbnails = chain(&[true, true], None);
-        let frames = later_frames(thumbnails.path(), 10);
+        let frames = later_frames(thumbnails.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.first, None);
         assert!(frames.directories.is_empty());
+    }
+
+    /// A chain of directories whose tables say they have more entries than
+    /// the walk reads in all stops where the budget runs out, and reads as
+    /// going on.
+    #[test]
+    fn a_chain_of_huge_entry_tables_stops_at_the_entry_budget() {
+        // A page, then directories that each claim the most entries a
+        // table may, all pointing at the same table.
+        let mut bytes = b"II".to_vec();
+        bytes.extend(42_u16.to_le_bytes());
+        bytes.extend(8_u32.to_le_bytes());
+        let directory = |bytes: &mut Vec<u8>, count: u16, next: u32| {
+            bytes.extend(count.to_le_bytes());
+            bytes.extend(std::iter::repeat_n(0_u8, 12 * usize::from(count)));
+            bytes.extend(next.to_le_bytes());
+        };
+        let huge_at = (8 + 2 + 4) as u32;
+        directory(&mut bytes, 0, huge_at);
+        let huge_end = huge_at as usize + 2 + 12 * usize::from(u16::MAX);
+        let after = (huge_end + 4) as u32;
+        directory(&mut bytes, u16::MAX, after);
+        // Each next directory a fresh table, so the chain does not loop.
+        for _ in 0..8 {
+            let next = bytes.len() as u32 + 2 + 12 * u32::from(u16::MAX) + 4;
+            directory(&mut bytes, u16::MAX, next);
+        }
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), bytes).unwrap();
+
+        let frames = later_frames(file.path(), 100, &CancellationToken::new()).unwrap();
+        assert!(frames.beyond_limit, "pages may lie past the budget");
+
+        let canceled = CancellationToken::new();
+        canceled.cancel();
+        assert!(later_frames(file.path(), 100, &canceled).is_err());
     }
 
     #[test]
     fn a_whole_chain_or_a_looping_one_is_not_marked_as_going_on() {
         let pages = chain(&[false, false, true, false], None);
-        let frames = later_frames(pages.path(), 10);
+        let frames = later_frames(pages.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.directories.len(), 2);
         assert!(!frames.beyond_limit);
 
         let looping = chain(&[false, false, false], Some(0));
-        let frames = later_frames(looping.path(), 10);
+        let frames = later_frames(looping.path(), 10, &CancellationToken::new()).unwrap();
         assert_eq!(frames.directories.len(), 2);
         assert!(
             !frames.beyond_limit,
