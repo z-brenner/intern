@@ -77,6 +77,24 @@ pub fn extraction_record(
     timings: Timings,
     memory: MemoryPeaks,
 ) -> DocumentRecord {
+    extraction_record_with(
+        document,
+        extracted,
+        timings,
+        memory,
+        &RetrievalConfig::default(),
+    )
+}
+
+/// [`extraction_record`], with the `context_*` scores measured for
+/// `retrieval`.
+pub fn extraction_record_with(
+    document: &GoldDocument,
+    extracted: Result<&DocumentSource, &str>,
+    timings: Timings,
+    memory: MemoryPeaks,
+    retrieval: &RetrievalConfig,
+) -> DocumentRecord {
     let (status, source, error) = match extracted {
         Ok(source) => (COMPLETED, Some(source), None),
         Err(code) => (EXTRACTION_FAILED, None, Some(code.to_owned())),
@@ -92,7 +110,7 @@ pub fn extraction_record(
             .scores
             .insert("digest_recall".into(), json!(round(recall, 4)));
     }
-    let context = context_scores(document, source, &RetrievalConfig::default());
+    let context = context_scores(document, source, retrieval);
     record.scores.extend(context.scores);
     record.timings.extend(context.timings);
     record.ocr = extraction.ocr;
@@ -107,6 +125,7 @@ pub fn run(
     documents: &[GoldDocument],
     corpus: &Path,
     options: &ExtractOptions,
+    retrieval: &RetrievalConfig,
 ) -> Result<ExtractRun, String> {
     let started = Instant::now();
     let worker = SupervisedWorker::new(&options.worker);
@@ -128,11 +147,12 @@ pub fn run(
             worker: worker_timings.as_ref(),
             ..Measured::default()
         });
-        let record = extraction_record(
+        let record = extraction_record_with(
             document,
             extracted.as_ref().map_err(|failure| failure.code.as_str()),
             timings,
             memory,
+            retrieval,
         );
         eprintln!(
             "[{}/{}] {} {} in {:.2} s{}",

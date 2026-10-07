@@ -86,6 +86,7 @@ impl Bench {
                     warm_up,
                 },
             },
+            engine: Default::default(),
         }
     }
 

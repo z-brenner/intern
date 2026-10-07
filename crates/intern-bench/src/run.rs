@@ -16,6 +16,7 @@ use crate::{
     live::{self, LiveOptions},
     machine::{MachineInfo, git_commit, utc_now},
     markdown,
+    pipeline::EngineSettings,
     record::{DocumentRecord, PENDING, STALE_PROMPT, is_unscorable},
     recording::{RECORDING_SCHEMA_VERSION, Recording, sha256_hex},
     replay::{self, Manifest},
@@ -52,6 +53,8 @@ pub struct RunOptions {
     pub write_baseline: Option<PathBuf>,
     pub latency_gate: Option<f64>,
     pub mode: Mode,
+    /// The engine's pipeline and retrieval ([`crate::pipeline`]).
+    pub engine: EngineSettings,
 }
 
 /// The documents a run covers, in gold order.
@@ -132,7 +135,8 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
             allow_stale,
         } => {
             let (recorded, bytes) = Recording::load(&recording)?;
-            let configuration_change = replay::configuration_change(&recorded);
+            let configuration_change =
+                crate::pipeline::configuration_change(&recorded, &options.engine)?;
             if let Some(change) = &configuration_change {
                 eprintln!("WARNING: {change}");
             }
@@ -151,6 +155,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                         manifest.as_ref().map(|(manifest, _)| manifest),
                         &options.corpus,
                         allow_stale,
+                        &options.engine,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -190,7 +195,12 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                 .iter()
                 .map(|document| (*document).clone())
                 .collect::<Vec<_>>();
-            let outcome = extract::run(&owned, &options.corpus, &extract_options)?;
+            let outcome = extract::run(
+                &owned,
+                &options.corpus,
+                &extract_options,
+                &options.engine.retrieval,
+            )?;
             let info = RunInfo {
                 mode: EXTRACT.into(),
                 created_at,
@@ -224,7 +234,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                 .map(|document| (*document).clone())
                 .collect::<Vec<_>>();
             let started = std::time::Instant::now();
-            let outcome = live::run(&owned, &options.corpus, &live_options)?;
+            let outcome = live::run(&owned, &options.corpus, &live_options, &options.engine)?;
             let wall_ms = round(started.elapsed().as_secs_f64() * 1000.0, 1);
             if let Some(path) = &record {
                 Recording {
@@ -234,6 +244,7 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
                     model: outcome.model.clone(),
                     context_tokens: outcome.context_tokens,
                     budget_characters: DigestBudget::default().max_characters,
+                    engine: options.engine.header(),
                     machine: machine.clone(),
                     git_commit: commit.clone(),
                     worker: Some(live_options.worker.display().to_string()),

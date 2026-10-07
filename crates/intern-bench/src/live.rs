@@ -26,6 +26,7 @@ use crate::{
     gold::GoldDocument,
     machine::ModelInfo,
     memory::MemorySampler,
+    pipeline::EngineSettings,
     record::{
         COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, Observation, scored_record,
     },
@@ -67,6 +68,7 @@ pub fn run(
     documents: &[GoldDocument],
     corpus: &Path,
     options: &LiveOptions,
+    settings: &EngineSettings,
 ) -> Result<LiveRun, String> {
     let model = ModelInfo::with_file(&options.model_id, options.model_path.as_deref())?;
     let client = ModelClient::new(
@@ -75,6 +77,10 @@ pub fn run(
         &options.model_id,
     )
     .map_err(|error| format!("model client: {error}"))?;
+    let client = match settings.context_tokens {
+        Some(tokens) => client.with_context_tokens(tokens),
+        None => client,
+    };
     let log = ExchangeLog::default();
     let proposer = RecordingProposer {
         inner: client,
@@ -82,7 +88,7 @@ pub fn run(
     };
     let context_tokens = proposer.context_tokens();
     let budget = DigestBudget::default();
-    let engine = Engine::with_proposer(Box::new(proposer)).with_budget(budget);
+    let engine = settings.configure(Engine::with_proposer(Box::new(proposer)).with_budget(budget));
     let worker = SupervisedWorker::new(&options.worker);
 
     if options.warm_up {
@@ -122,6 +128,7 @@ pub fn run(
                         analysis: None,
                         source: None,
                         budget,
+                        retrieval: &settings.retrieval,
                         exchanges: &[],
                         last_prompt: None,
                         timings: timings.clone(),
@@ -168,6 +175,7 @@ pub fn run(
                         analysis,
                         source: Some(&source),
                         budget,
+                        retrieval: &settings.retrieval,
                         exchanges: &exchanges,
                         last_prompt: last_prompt.as_deref(),
                         timings: timings.clone(),

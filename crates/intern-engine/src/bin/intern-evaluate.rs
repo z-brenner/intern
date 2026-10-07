@@ -42,6 +42,17 @@
 //! `--pipeline legacy` runs the pre-redesign head/tail window and prompt over
 //! the identical corpus, which is how the redesign is shown to be an
 //! improvement rather than asserted to be one. Legacy runs are live only.
+//!
+//! `--pipeline evidence` runs the evidence pipeline ([`Pipeline::Evidence`]),
+//! live or from a recording made with it; `--pipeline digest` (or `new`, the
+//! default) the digest pipeline. For the evidence pipeline `--id-style
+//! stable|ordinal` and `--retrieval-tier auto|whole|small|normal|dense` say
+//! how its evidence is chosen and named, `--field-order
+//! fact-first|evidence-first` and `--string-limits bounded|unbounded` how
+//! its reply is shaped, and `--context-tokens N` the
+//! server's context when it is not the app's. A recording says which
+//! pipeline, retrieval and prompt made it, and is replayed only through the
+//! same pipeline.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -54,7 +65,7 @@ use std::{
 
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, Evidence, ModelClient,
-    ModelProposal, ModelRequest, PageImage, PartyRelation, Proposer, ProposerReply,
+    ModelProposal, ModelRequest, PageImage, PartyRelation, Pipeline, Proposer, ProposerReply,
     SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
@@ -63,7 +74,8 @@ use intern_engine::{
         legacy_validate,
     },
     naming::windows_name_key,
-    prompt::SYSTEM_INSTRUCTION,
+    prompt::{FieldOrder, ReplyShape, SYSTEM_INSTRUCTION, StringLimits, evidence_prompt_version},
+    retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -128,6 +140,7 @@ fn run() -> Result<i32, String> {
     if record_path.is_some() && pipeline == "legacy" {
         return Err("legacy runs cannot be recorded".to_owned());
     }
+    let settings = EvidenceSettings::parse(&pipeline, &arguments)?;
 
     let expected: Value = serde_json::from_slice(
         &fs::read(expected_path).map_err(|error| format!("cannot read gold corpus: {error}"))?,
@@ -140,6 +153,7 @@ fn run() -> Result<i32, String> {
     let (mode, records) = match replay_path {
         Some(path) => {
             let recording = Recording::load(path)?;
+            settings.check(&recording)?;
             let records = fixtures
                 .iter()
                 .map(|fixture| {
@@ -151,6 +165,7 @@ fn run() -> Result<i32, String> {
                         budget,
                         allow_stale,
                         min_token_confidence,
+                        &settings,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -163,13 +178,21 @@ fn run() -> Result<i32, String> {
             let client = ModelClient::new(endpoint, api_key, model_id)
                 .map_err(|error| format!("model client: {error}"))?
                 .with_token_confidence(arguments.contains_key("token-confidence"));
+            let client = match settings.context_tokens {
+                Some(tokens) => client.with_context_tokens(tokens),
+                None => client,
+            };
             let recorder = record_path.map(|_| Recorder::new());
             let engine = with_gate(
-                match &recorder {
-                    Some(recorder) => Engine::with_proposer(Box::new(recorder.proposer(client))),
-                    None => Engine::new(client),
-                }
-                .with_budget(budget),
+                settings.configure(
+                    match &recorder {
+                        Some(recorder) => {
+                            Engine::with_proposer(Box::new(recorder.proposer(client)))
+                        }
+                        None => Engine::new(client),
+                    }
+                    .with_budget(budget),
+                ),
                 min_token_confidence,
             );
             let worker = SupervisedWorker::new(worker_path);
@@ -198,6 +221,10 @@ fn run() -> Result<i32, String> {
                     schema_version: Recording::VERSION,
                     model_id: model_id.to_owned(),
                     budget_characters: budget.max_characters,
+                    pipeline: settings.header_pipeline(),
+                    retrieval: settings.header_retrieval(),
+                    prompt_version: settings.header_prompt_version(),
+                    context_tokens: settings.context_tokens,
                     recorded_at_unix: SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .map(|elapsed| elapsed.as_secs())
@@ -377,6 +404,18 @@ fn evaluate_one(
         );
     }
 
+    if live.engine.pipeline() == Pipeline::Evidence {
+        return evaluate_evidence(
+            fixture,
+            name,
+            source,
+            extension,
+            extraction_millis,
+            fixture_sha256,
+            live,
+        );
+    }
+
     let distill_started = Instant::now();
     let digest = live.engine.distill(&source);
     let distill_micros = u64::try_from(distill_started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -414,6 +453,7 @@ fn replay_one(
     budget: DigestBudget,
     allow_stale: bool,
     min_token_confidence: Option<f32>,
+    settings: &EvidenceSettings,
 ) -> Value {
     let name = fixture["file"].as_str().unwrap_or_default();
     let extension = path
@@ -458,6 +498,18 @@ fn replay_one(
             source.clone()
         }
     };
+    if settings.pipeline == Pipeline::Evidence {
+        return replay_evidence(
+            fixture,
+            name,
+            &source,
+            extension,
+            recorded,
+            allow_stale,
+            min_token_confidence,
+            settings,
+        );
+    }
     let digest = intern_engine::distill(&source, budget);
     let prompt_sha256 = ModelRequest::from_digest(&digest).sha256();
     let stale = recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str());
@@ -475,7 +527,7 @@ fn replay_one(
         Some(RecordedReply::Proposed {
             proposal,
             token_confidence,
-        }) => FixedReply(proposal.clone(), *token_confidence),
+        }) => FixedReply(proposal.clone(), *token_confidence, None),
         Some(RecordedReply::Failed { code }) => {
             return json!({"file": name, "status": "model_failed", "error": code, "readiness": null, "replayed": true, "stale": stale});
         }
@@ -513,6 +565,26 @@ fn completed_record(
     digest: &DocumentDigest,
     extraction_millis: u64,
 ) -> Value {
+    completed_record_of(
+        fixture,
+        analysis,
+        (
+            digest.source_characters,
+            digest.digest_characters,
+            digest.page_count,
+        ),
+        extraction_millis,
+    )
+}
+
+/// [`completed_record`], with the source's and the prompt's sizes given:
+/// `(source characters, characters sent, pages)`.
+fn completed_record_of(
+    fixture: &Value,
+    analysis: &DocumentAnalysis,
+    (source_characters, digest_characters, pages): (usize, usize, usize),
+    extraction_millis: u64,
+) -> Value {
     let name = fixture["file"].as_str().unwrap_or_default();
     let scores = score(
         fixture,
@@ -538,11 +610,286 @@ fn completed_record(
         "scores": scores,
         "extraction_millis": extraction_millis,
         "telemetry": analysis.telemetry,
-        "source_characters": digest.source_characters,
-        "digest_characters": digest.digest_characters,
-        "pages": digest.page_count,
+        "source_characters": source_characters,
+        "digest_characters": digest_characters,
+        "pages": pages,
         "token_confidence": analysis.token_confidence,
     })
+}
+
+/// The evidence pipeline's record: the digest pipeline's, with the
+/// validated facts and their support.
+fn evidence_record(
+    fixture: &Value,
+    analysis: &DocumentAnalysis,
+    source: &DocumentSource,
+    extraction_millis: u64,
+) -> Value {
+    let mut record = completed_record_of(
+        fixture,
+        analysis,
+        (
+            analysis.telemetry.source_characters,
+            analysis.telemetry.digest_characters,
+            source.pages.len(),
+        ),
+        extraction_millis,
+    );
+    if let Some(object) = record.as_object_mut() {
+        object.insert(
+            "facts".into(),
+            serde_json::to_value(&analysis.facts).unwrap_or(Value::Null),
+        );
+    }
+    record
+}
+
+/// How the evidence pipeline is configured for a run, from the command
+/// line. Inert for the digest and legacy pipelines.
+struct EvidenceSettings {
+    pipeline: Pipeline,
+    retrieval: RetrievalConfig,
+    shape: ReplyShape,
+    context_tokens: Option<usize>,
+}
+
+impl EvidenceSettings {
+    fn parse(pipeline: &str, arguments: &HashMap<String, String>) -> Result<Self, String> {
+        let pipeline = match pipeline {
+            "new" | "digest" | "legacy" => Pipeline::Digest,
+            "evidence" => Pipeline::Evidence,
+            other => {
+                return Err(format!(
+                    "--pipeline is digest, evidence or legacy, not {other}"
+                ));
+            }
+        };
+        let mut retrieval = RetrievalConfig::default();
+        if let Some(word) = arguments.get("id-style") {
+            retrieval.id_style = IdStyle::parse(word)
+                .ok_or_else(|| format!("--id-style is stable or ordinal, not {word}"))?;
+        }
+        if let Some(word) = arguments.get("retrieval-tier") {
+            retrieval = retrieval.with_tier(word).ok_or_else(|| {
+                format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
+            })?;
+        }
+        let mut shape = ReplyShape::default();
+        if let Some(word) = arguments.get("field-order") {
+            shape.order = FieldOrder::parse(word).ok_or_else(|| {
+                format!("--field-order is fact-first or evidence-first, not {word}")
+            })?;
+        }
+        if let Some(word) = arguments.get("string-limits") {
+            shape.limits = StringLimits::parse(word)
+                .ok_or_else(|| format!("--string-limits is bounded or unbounded, not {word}"))?;
+        }
+        let context_tokens = arguments
+            .get("context-tokens")
+            .map(|value| {
+                value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|tokens| *tokens >= 1_024)
+                    .ok_or_else(|| "--context-tokens must be a number of at least 1024".to_owned())
+            })
+            .transpose()?;
+        if pipeline == Pipeline::Digest
+            && [
+                "id-style",
+                "retrieval-tier",
+                "field-order",
+                "string-limits",
+                "context-tokens",
+            ]
+            .iter()
+            .any(|key| arguments.contains_key(*key))
+        {
+            return Err(
+                "--id-style, --retrieval-tier, --field-order, --string-limits and --context-tokens are for --pipeline evidence"
+                    .to_owned(),
+            );
+        }
+        Ok(Self {
+            pipeline,
+            retrieval,
+            shape,
+            context_tokens,
+        })
+    }
+
+    fn configure(&self, engine: Engine) -> Engine {
+        if self.pipeline == Pipeline::Evidence {
+            engine
+                .with_pipeline(Pipeline::Evidence)
+                .with_retrieval(self.retrieval.clone())
+                .with_reply_shape(self.shape)
+        } else {
+            engine
+        }
+    }
+
+    /// The context the evidence pipeline fits prompts to: the one given,
+    /// or the local server's.
+    fn context(&self) -> Option<usize> {
+        self.context_tokens
+            .or(Some(intern_engine::server::CONTEXT_TOKENS as usize))
+    }
+
+    fn evidence(&self) -> bool {
+        self.pipeline == Pipeline::Evidence
+    }
+
+    fn header_pipeline(&self) -> Option<Pipeline> {
+        self.evidence().then_some(Pipeline::Evidence)
+    }
+
+    fn header_retrieval(&self) -> Option<String> {
+        self.evidence().then(|| self.retrieval.fingerprint())
+    }
+
+    fn header_prompt_version(&self) -> Option<String> {
+        self.evidence().then(|| evidence_prompt_version(self.shape))
+    }
+
+    /// Refuses a recording of the other pipeline, and says when the
+    /// retrieval, the prompt or the context it was made with differ from
+    /// the ones replay uses - whose prompts are then stale.
+    fn check(&self, recording: &Recording) -> Result<(), String> {
+        let recorded = recording.pipeline.unwrap_or(Pipeline::Digest);
+        if recorded != self.pipeline {
+            return Err(format!(
+                "the recording was made with the {} pipeline; replay it with --pipeline {}",
+                recorded.as_str(),
+                recorded.as_str()
+            ));
+        }
+        if !self.evidence() {
+            return Ok(());
+        }
+        if recording.retrieval != self.header_retrieval() {
+            eprintln!("WARNING: the recording was made with another retrieval configuration");
+        }
+        if recording.prompt_version != self.header_prompt_version() {
+            eprintln!("WARNING: the recording was made with another evidence prompt");
+        }
+        if recording
+            .context_tokens
+            .or(Some(intern_engine::server::CONTEXT_TOKENS as usize))
+            != self.context()
+        {
+            eprintln!("WARNING: the recording was made with another context size");
+        }
+        Ok(())
+    }
+}
+
+/// One fixture through the evidence pipeline, live.
+fn evaluate_evidence(
+    fixture: &Value,
+    name: &str,
+    source: DocumentSource,
+    extension: &str,
+    extraction_millis: u64,
+    fixture_sha256: Option<String>,
+    live: &LiveRun<'_>,
+) -> (Value, Option<RecordedFixture>) {
+    let failed = |code: &str| {
+        json!({
+            "file": name,
+            "status": "model_failed",
+            "error": code,
+            "readiness": null,
+            "extraction_millis": extraction_millis,
+        })
+    };
+    let (record, prompt_sha256) = match live.engine.prepare(&source) {
+        Err(error) => (failed(error.code().as_str()), None),
+        Ok(prepared) => {
+            let prompt_sha256 = prepared.request.sha256();
+            let record = match live
+                .engine
+                .analyze_prepared(&source, &prepared, extension, &[])
+            {
+                Ok(analysis) => evidence_record(fixture, &analysis, &source, extraction_millis),
+                Err(error) => failed(error.code().as_str()),
+            };
+            (record, Some(prompt_sha256))
+        }
+    };
+    let entry = live.recorder.map(|recorder| RecordedFixture {
+        file: name.to_owned(),
+        sha256: fixture_sha256,
+        extraction: RecordedExtraction::Parsed {
+            source: without_image_bytes(source),
+        },
+        reply: prompt_sha256
+            .as_deref()
+            .and_then(|sha| recorder.reply_for(sha)),
+        prompt_sha256,
+    });
+    (record, entry)
+}
+
+/// One fixture through the evidence pipeline, from the recording.
+#[allow(clippy::too_many_arguments)]
+fn replay_evidence(
+    fixture: &Value,
+    name: &str,
+    source: &DocumentSource,
+    extension: &str,
+    recorded: &RecordedFixture,
+    allow_stale: bool,
+    min_token_confidence: Option<f32>,
+    settings: &EvidenceSettings,
+) -> Value {
+    let context = settings.context();
+    let failed = |code: &str, stale: bool| json!({"file": name, "status": "model_failed", "error": code, "readiness": null, "replayed": true, "stale": stale});
+    // Preparing reads only the model's context, never its reply.
+    let preparer = settings.configure(Engine::with_proposer(Box::new(FixedReply(
+        ModelProposal::default(),
+        None,
+        context,
+    ))));
+    let prepared = match preparer.prepare(source) {
+        Ok(prepared) => prepared,
+        Err(error) => return failed(error.code().as_str(), false),
+    };
+    let prompt_sha256 = prepared.request.sha256();
+    let stale = recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str());
+    if stale && !allow_stale {
+        return json!({
+            "file": name,
+            "status": "stale_prompt",
+            "readiness": null,
+            "replayed": true,
+            "recorded_prompt_sha256": recorded.prompt_sha256,
+            "prompt_sha256": prompt_sha256,
+        });
+    }
+    let reply = match &recorded.reply {
+        Some(RecordedReply::Proposed {
+            proposal,
+            token_confidence,
+        }) => FixedReply(proposal.clone(), *token_confidence, context),
+        Some(RecordedReply::Failed { code }) => return failed(code, stale),
+        None => return failed("UNRECORDED", stale),
+    };
+    let engine = with_gate(
+        settings.configure(Engine::with_proposer(Box::new(reply))),
+        min_token_confidence,
+    );
+    match engine.analyze_prepared(source, &prepared, extension, &[]) {
+        Ok(analysis) => {
+            let mut record = evidence_record(fixture, &analysis, source, 0);
+            if let Some(object) = record.as_object_mut() {
+                object.insert("replayed".into(), json!(true));
+                object.insert("stale".into(), json!(stale));
+            }
+            record
+        }
+        Err(error) => failed(error.code().as_str(), stale),
+    }
 }
 
 fn with_gate(engine: Engine, min_token_confidence: Option<f32>) -> Engine {
@@ -559,6 +906,17 @@ struct Recording {
     schema_version: u32,
     model_id: String,
     budget_characters: usize,
+    /// The evidence pipeline's recordings say so, with the retrieval and
+    /// prompt they were made with and the server's context; a digest
+    /// pipeline recording carries none of these.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pipeline: Option<Pipeline>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retrieval: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_tokens: Option<usize>,
     recorded_at_unix: u64,
     /// Free text about the machine and runtime the recording was made on.
     #[serde(default)]
@@ -710,7 +1068,10 @@ impl Proposer for RecordingProposer {
 }
 
 /// The reply a replay hands the engine in the model's place.
-struct FixedReply(ModelProposal, Option<TokenConfidence>);
+/// A recorded reply, and the context the recording's model reported - the
+/// evidence pipeline fits its prompts to it, so replay must report the
+/// same. `None` is the digest pipeline's replay, which fits nothing.
+struct FixedReply(ModelProposal, Option<TokenConfidence>, Option<usize>);
 
 impl Proposer for FixedReply {
     fn propose(&self, _request: &ModelRequest) -> EngineResult<ModelProposal> {
@@ -722,6 +1083,10 @@ impl Proposer for FixedReply {
         _request: &ModelRequest,
     ) -> EngineResult<(ModelProposal, Option<TokenConfidence>)> {
         Ok((self.0.clone(), self.1))
+    }
+
+    fn context_tokens(&self) -> Option<usize> {
+        self.2
     }
 }
 
@@ -1430,11 +1795,19 @@ mod tests {
         })
     }
 
+    fn digest_settings() -> EvidenceSettings {
+        EvidenceSettings::parse("new", &HashMap::new()).unwrap()
+    }
+
     fn recording_with(prompt_sha256: Option<String>) -> Recording {
         Recording {
             schema_version: Recording::VERSION,
             model_id: "test".into(),
             budget_characters: DigestBudget::default().max_characters,
+            pipeline: None,
+            retrieval: None,
+            prompt_version: None,
+            context_tokens: None,
             recorded_at_unix: 0,
             note: String::new(),
             fixtures: vec![RecordedFixture {
@@ -1467,6 +1840,7 @@ mod tests {
             budget,
             false,
             None,
+            &digest_settings(),
         );
         assert_eq!(record["status"], json!("completed"), "{record}");
         assert_eq!(record["replayed"], json!(true));
@@ -1500,7 +1874,15 @@ mod tests {
             *token_confidence = Some(low);
         }
         let path = Path::new("/nonexistent/invoice.txt");
-        let ungated = replay_one(&invoice_fixture(), path, &recording, budget, false, None);
+        let ungated = replay_one(
+            &invoice_fixture(),
+            path,
+            &recording,
+            budget,
+            false,
+            None,
+            &digest_settings(),
+        );
         assert_eq!(ungated["readiness"], json!("ready"), "{ungated}");
         assert_eq!(ungated["token_confidence"]["min"], json!(0.3_f32));
         let gated = replay_one(
@@ -1510,6 +1892,7 @@ mod tests {
             budget,
             false,
             Some(0.5),
+            &digest_settings(),
         );
         assert_eq!(gated["readiness"], json!("needs_review"));
     }
@@ -1527,6 +1910,7 @@ mod tests {
             budget,
             false,
             None,
+            &digest_settings(),
         );
         assert_eq!(refused.get("status"), Some(&json!("stale_prompt")));
         assert!(refused.get("scores").is_none());
@@ -1538,6 +1922,7 @@ mod tests {
             budget,
             true,
             None,
+            &digest_settings(),
         );
         assert_eq!(tolerated["status"], json!("completed"));
         assert_eq!(tolerated["stale"], json!(true));
@@ -1549,6 +1934,7 @@ mod tests {
             budget,
             true,
             None,
+            &digest_settings(),
         );
         assert_eq!(missing["status"], json!("unrecorded"));
     }
@@ -1718,6 +2104,7 @@ mod tests {
             budget,
             false,
             None,
+            &digest_settings(),
         );
         assert_eq!(record["scores"]["relation_correct"], json!(true));
         assert_eq!(record["scores"]["filename_correct"], json!(true));
@@ -1740,6 +2127,7 @@ mod tests {
                 budget,
                 false,
                 None,
+                &digest_settings(),
             );
             assert_eq!(record["status"], json!("pending"));
             assert!(record.get("scores").is_none());

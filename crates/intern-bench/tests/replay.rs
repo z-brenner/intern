@@ -195,6 +195,7 @@ fn recording() -> Recording {
         },
         context_tokens: Some(8_192),
         budget_characters: DigestBudget::default().max_characters,
+        engine: Default::default(),
         machine: MachineInfo {
             cpu: Some("Recorded CPU".into()),
             logical_cores: Some(8),
@@ -305,6 +306,7 @@ impl Bench {
                 recording: self.path("recording.json"),
                 allow_stale: false,
             },
+            engine: Default::default(),
         }
     }
 }

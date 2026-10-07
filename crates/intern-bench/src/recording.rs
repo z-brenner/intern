@@ -10,6 +10,7 @@
 //!   "model": {"id", "path", "size_bytes", "sha256"},   // what --model-path named
 //!   "context_tokens": 8192,                              // the proposer's, so replay fits prompts alike
 //!   "budget_characters": 12000,
+//!   "pipeline": "evidence", "retrieval": "...", "prompt_version": "...",  // evidence pipeline only
 //!   "machine": {...}, "git_commit": "...", "worker": "...", "note": "...",
 //!   "documents": [{
 //!     "id", "file",
@@ -70,6 +71,10 @@ pub struct Recording {
     #[serde(default)]
     pub context_tokens: Option<usize>,
     pub budget_characters: usize,
+    /// The engine's pipeline, and for the evidence pipeline its retrieval
+    /// and prompt; nothing for the digest pipeline.
+    #[serde(flatten)]
+    pub engine: crate::pipeline::PipelineHeader,
     #[serde(default)]
     pub machine: MachineInfo,
     #[serde(default)]

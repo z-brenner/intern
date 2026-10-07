@@ -32,6 +32,7 @@ use serde_json::Value;
 
 use crate::{
     gold::GoldDocument,
+    pipeline::EngineSettings,
     record::{
         COMPLETED, DocumentRecord, EXTRACTION_FAILED, MODEL_FAILED, Observation, PENDING,
         STALE_FIXTURE, STALE_PROMPT, UNRECORDED, scored_record,
@@ -109,31 +110,8 @@ pub fn current_context() -> Option<usize> {
 /// the engine uses now, or `None` when they agree. Replay uses today's, so
 /// every document whose prompt the difference changes is `stale_prompt`.
 pub fn configuration_change(recording: &Recording) -> Option<String> {
-    let mut changes = Vec::new();
-    let budget = current_budget().max_characters;
-    if recording.budget_characters != budget {
-        changes.push(format!(
-            "a digest budget of {} characters (now {budget})",
-            recording.budget_characters
-        ));
-    }
-    let context = current_context();
-    if recording.context_tokens != context {
-        let describe = |tokens: Option<usize>| {
-            tokens.map_or_else(|| "no stated".to_owned(), |tokens| tokens.to_string())
-        };
-        changes.push(format!(
-            "{} context tokens (now {})",
-            describe(recording.context_tokens),
-            describe(context)
-        ));
-    }
-    (!changes.is_empty()).then(|| {
-        format!(
-            "the recording was made with {}; replay builds every prompt as the engine does now, so each document whose prompt that changes is stale_prompt - record again",
-            changes.join(" and ")
-        )
-    })
+    crate::pipeline::configuration_change(recording, &EngineSettings::default())
+        .unwrap_or_else(Some)
 }
 
 pub fn replay_document(
@@ -142,6 +120,7 @@ pub fn replay_document(
     manifest: Option<&Manifest>,
     corpus: &Path,
     allow_stale: bool,
+    settings: &EngineSettings,
 ) -> DocumentRecord {
     let unscored = |status: &str, error: Option<String>| {
         let mut record = DocumentRecord::for_document(document, status);
@@ -223,6 +202,7 @@ pub fn replay_document(
                     analysis: None,
                     source: None,
                     budget: current_budget(),
+                    retrieval: &settings.retrieval,
                     exchanges: &[],
                     last_prompt: None,
                     timings: recorded_timings(&recorded.timings),
@@ -239,12 +219,13 @@ pub fn replay_document(
     let log = ExchangeLog::default();
     let lookup = LookupProposer::new(
         &recorded.exchanges,
-        current_context(),
+        settings.context(),
         allow_stale,
         log.clone(),
     );
     let misses = lookup.misses();
-    let engine = Engine::with_proposer(Box::new(lookup)).with_budget(current_budget());
+    let engine =
+        settings.configure(Engine::with_proposer(Box::new(lookup)).with_budget(current_budget()));
     let result = engine.analyze(source, document.extension(), &[]);
     let (exchanges, last_prompt) = log.take();
     let missed = misses
@@ -284,6 +265,7 @@ pub fn replay_document(
             analysis,
             source: Some(source),
             budget: current_budget(),
+            retrieval: &settings.retrieval,
             exchanges: &exchanges,
             last_prompt: last_prompt.as_deref(),
             timings: recorded_timings(&recorded.timings),
@@ -323,6 +305,7 @@ mod tests {
             model: Default::default(),
             context_tokens: current_context(),
             budget_characters: current_budget().max_characters,
+            engine: Default::default(),
             machine: Default::default(),
             git_commit: None,
             worker: None,

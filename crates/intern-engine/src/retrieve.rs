@@ -418,6 +418,41 @@ impl RetrievalConfig {
     }
 }
 
+impl IdStyle {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Ordinal => "ordinal",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Self> {
+        match word.trim() {
+            "stable" => Some(Self::Stable),
+            "ordinal" => Some(Self::Ordinal),
+            _ => None,
+        }
+    }
+}
+
+impl RetrievalConfig {
+    /// This configuration with a tier chosen by name, as the evaluation
+    /// tools take it: `auto`, `small`, `normal` or `dense` sets the policy
+    /// for a document that does not fit whole, and `whole` sends every
+    /// document whole. `None` for any other word.
+    pub fn with_tier(mut self, word: &str) -> Option<Self> {
+        match word.trim() {
+            "auto" => self.tier = TierPolicy::Auto,
+            "small" => self.tier = TierPolicy::Small,
+            "normal" => self.tier = TierPolicy::Normal,
+            "dense" => self.tier = TierPolicy::Dense,
+            "whole" => self.whole_document_tokens = u32::MAX,
+            _ => return None,
+        }
+        Some(self)
+    }
+}
+
 impl RetrievalConfig {
     /// SHA-256 of the configuration's canonical JSON: what a recording
     /// stores so that a change of configuration is a change it can see.

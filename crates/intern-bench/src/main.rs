@@ -11,6 +11,9 @@
 //!                  [--output report.json] [--markdown report.md]
 //!                  [--baseline bench/baseline.json] [--write-baseline bench/baseline.json]
 //!                  [--latency-gate 1.5]
+//!                  [--pipeline digest|evidence] [--id-style stable|ordinal]
+//!                  [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
+//!                  [--field-order fact-first|evidence-first] [--string-limits bounded|unbounded]
 //! intern-bench compare --before a.json --after b.json [--markdown diff.md] [--output diff.json]
 //! intern-bench report  --input report.json --markdown out.md
 //! intern-bench merge-recordings --base bench/recording.json --add new.json --output merged.json
@@ -41,6 +44,9 @@ const USAGE: &str = "usage:
                    | --extract-only --worker PATH [--no-warmup])
                    [--only id,id] [--manifest MANIFEST.json] [--output REPORT.json] [--markdown REPORT.md]
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
+                   [--pipeline digest|evidence] [--id-style stable|ordinal]
+                   [--retrieval-tier auto|whole|small|normal|dense] [--context-tokens N]
+                   [--field-order fact-first|evidence-first] [--string-limits bounded|unbounded]
   intern-bench compare --before A.json --after B.json [--markdown DIFF.md] [--output DIFF.json]
   intern-bench report --input REPORT.json --markdown OUT.md
   intern-bench merge-recordings --base A.json --add B.json --output C.json
@@ -75,6 +81,12 @@ const RUN_KEYS: &[&str] = &[
     "baseline",
     "write-baseline",
     "latency-gate",
+    "pipeline",
+    "id-style",
+    "retrieval-tier",
+    "context-tokens",
+    "field-order",
+    "string-limits",
 ];
 
 fn main() {
@@ -214,6 +226,10 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "note",
                 "server-pid",
                 "allow-stale",
+                "pipeline",
+                "context-tokens",
+                "field-order",
+                "string-limits",
             ],
             "--extract-only",
         )?;
@@ -271,6 +287,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
             })
             .transpose()?,
         mode,
+        engine: intern_bench::pipeline::EngineSettings::parse(values)?,
     })
 }
 

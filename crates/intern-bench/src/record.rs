@@ -168,6 +168,8 @@ pub struct Observation<'a> {
     pub analysis: Option<&'a DocumentAnalysis>,
     pub source: Option<&'a DocumentSource>,
     pub budget: DigestBudget,
+    /// The retrieval the `context_*` scores measure.
+    pub retrieval: &'a RetrievalConfig,
     pub exchanges: &'a [Exchange],
     /// The last prompt sent to the model, in full.
     pub last_prompt: Option<&'a str>,
@@ -269,9 +271,14 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
     // Beside `digest_recall`: what the evidence context would carry.
     if let Some(source) = observation.source {
         record.scores.extend(
-            crate::context::context_scores(document, Some(source), &RetrievalConfig::default())
-                .scores,
+            crate::context::context_scores(document, Some(source), observation.retrieval).scores,
         );
+    }
+    // What only the evidence pipeline measures: nothing for the digest's.
+    if let Some(analysis) = observation.analysis {
+        record
+            .scores
+            .extend(crate::pipeline::evidence_scores(analysis));
     }
     record.claims = scored.claims;
     record.forbidden_description = scored.forbidden_description;
