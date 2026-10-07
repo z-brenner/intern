@@ -149,6 +149,11 @@ impl Field {
                 "facility",
                 "regarding",
                 "subject",
+                "products",
+                "equipment",
+                "software",
+                "supplies",
+                "materials",
             ],
             Self::Identifier => &[
                 "no",
@@ -258,7 +263,20 @@ pub struct FieldBudgets {
 }
 
 impl Default for FieldBudgets {
+    /// The phase plan's budgets, with the parties' cut from 450 to 350:
+    /// past the first few names a long document's party units are lenders
+    /// and sub-processors (docs/evidence-retrieval.md).
     fn default() -> Self {
+        Self {
+            parties: 350,
+            ..Self::plan_start()
+        }
+    }
+}
+
+impl FieldBudgets {
+    /// The phase plan's starting budgets.
+    pub fn plan_start() -> Self {
         Self {
             document_type: 120,
             date: 450,
@@ -307,7 +325,20 @@ pub struct Weights {
 }
 
 impl Default for Weights {
+    /// Every component as designed but BM25, which the InternBench sweep
+    /// found adds nothing to the cue lists it overlaps and costs subject
+    /// recall (docs/evidence-retrieval.md). It stays one weight away.
     fn default() -> Self {
+        Self {
+            bm25: 0,
+            ..Self::all()
+        }
+    }
+}
+
+impl Weights {
+    /// Every component at 100.
+    pub fn all() -> Self {
         Self {
             cues: 100,
             bm25: 100,
@@ -351,10 +382,25 @@ pub struct RetrievalConfig {
 }
 
 impl Default for RetrievalConfig {
+    /// The configuration InternBench chose (docs/evidence-retrieval.md):
+    /// the plan's starting point with BM25 off, the dense tier at 150% and
+    /// the parties' budget at 350.
     fn default() -> Self {
         Self {
-            whole_document_tokens: 1_800,
+            weights: Weights::default(),
             budgets: FieldBudgets::default(),
+            dense_pct: 150,
+            ..Self::plan_start()
+        }
+    }
+}
+
+impl RetrievalConfig {
+    /// The phase plan's starting point, before tuning.
+    pub fn plan_start() -> Self {
+        Self {
+            whole_document_tokens: 1_800,
+            budgets: FieldBudgets::plan_start(),
             small_pct: 60,
             dense_pct: 175,
             expansion_pct: 25,
@@ -364,7 +410,7 @@ impl Default for RetrievalConfig {
             sections_per_field: 3,
             dense_sections_per_field: 5,
             units_per_date: 2,
-            weights: Weights::default(),
+            weights: Weights::all(),
             id_style: IdStyle::Stable,
             tier: TierPolicy::Auto,
             dense_triggers: true,
@@ -548,6 +594,23 @@ pub fn retrieve(
     render(index, config, tier, hierarchical, deduplicated)
 }
 
+/// Every unit's score for one field under `config`, for diagnostics: what
+/// retrieval ranks a field's candidates by, before budgets. Units that
+/// cannot carry the field are absent.
+pub fn field_scores(
+    index: &EvidenceIndex,
+    config: &RetrievalConfig,
+    field: Field,
+) -> BTreeMap<u32, i64> {
+    let candidates = index
+        .units()
+        .iter()
+        .filter(|unit| !unit.running)
+        .map(|unit| unit.ordinal)
+        .collect::<Vec<_>>();
+    score_units(index, config, field, &candidates)
+}
+
 /// What a unit costs as a prompt line: its handle, its text, a newline.
 fn line_cost(unit: &EvidenceUnit, config: &RetrievalConfig) -> u32 {
     let handle = match config.id_style {
@@ -579,7 +642,10 @@ fn score_units(
     for ordinal in candidates {
         let unit = &index.units()[*ordinal as usize];
         let lexical = bm25.get(ordinal).copied().unwrap_or(0);
-        let Some(parts) = components(field, unit, lexical) else {
+        let header = unit
+            .table_header
+            .and_then(|header| index.units().get(header as usize));
+        let Some(parts) = components(field, unit, header, lexical, weights.features > 0) else {
             continue;
         };
         let score = (parts.cues * i64::from(weights.cues)
@@ -625,7 +691,13 @@ fn flag(condition: bool, value: i64) -> i64 {
 /// carry it: a type needs a type word or a title's place, a date a date,
 /// parties a name or a party cue, an identifier an identifier, a key fact
 /// an amount or a key-fact word.
-fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components> {
+fn components(
+    field: Field,
+    unit: &EvidenceUnit,
+    header: Option<&EvidenceUnit>,
+    bm25: i64,
+    features_on: bool,
+) -> Option<Components> {
     let features = &unit.features;
     let cues = &features.cues;
     let position = &features.position;
@@ -647,6 +719,7 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
                 bm25,
                 structure: flag(heading, 40)
                     + flag(heading && unit.level == Some(1), 15)
+                    + flag(heading && position.first_page && cues.type_nouns > 0, 40)
                     + flag(position.title, 80)
                     + flag(characters > 200 && !cues.self_naming, -30),
                 heading: 0,
@@ -657,17 +730,26 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
             }
         }
         Field::Date => {
-            if features.dates.is_empty() && features.date_signals == 0 {
+            // With the date features on, a unit must state a date the
+            // evidence check can read: a bare year ("the Act of 1977") is
+            // a date signal and no date. Without them, the signal is all
+            // there is.
+            let eligible = if features_on {
+                !features.dates.is_empty()
+            } else {
+                features.date_signals > 0
+            };
+            if !eligible {
                 return None;
             }
             let best_mention = features
                 .dates
                 .iter()
                 .map(|mention| {
-                    20 + flag(mention.role.is_some(), 50)
-                        + flag(mention.issue_label, 40)
+                    20 + flag(mention.role.or(mention.column_role).is_some(), 50)
+                        + flag(mention.issue_label || mention.column_issue, 40)
                         + flag(mention.defined_term, 60)
-                        + flag(mention.deadline, -60)
+                        + flag(mention.deadline || mention.column_deadline, -60)
                         + flag(mention.reference, -80)
                 })
                 .max()
@@ -676,11 +758,15 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
                 cues: i64::from(features.date_signals.min(3)) * 30
                     + i64::from(cues.date_role_cues) * 45
                     + boilerplate,
-                bm25,
-                structure: flag(
-                    unit.kind == UnitKind::Field && label_has(unit, &["date", "dated"]),
-                    20,
-                ) + flag(unit.table_header.is_some(), 10)
+                // "date" and "notice" are as common in a due date's label as
+                // in the defining date's: the lexicon counts half here.
+                bm25: bm25 / 2,
+                structure: flag(features.dateline, 40)
+                    + flag(
+                        unit.kind == UnitKind::Field && label_has(unit, &["date", "dated"]),
+                        20,
+                    )
+                    + flag(unit.table_header.is_some(), 10)
                     + flag(heading, 20),
                 heading: flag(tags & tag::DEFINITIONS != 0, 20)
                     + flag(tags & tag::SIGNATURE != 0, 15)
@@ -728,6 +814,20 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
         }
         Field::Subject => {
             let whereas = unit.normalized.starts_with("whereas");
+            // The definition of what the document is about: `"Services"
+            // means ...`, `"Premises" means ...`.
+            let defines_subject = features
+                .defines
+                .iter()
+                .any(|term| term_names_a_subject(term));
+            // A line item: a row under a Description, Item, Service or
+            // Product column.
+            let line_item = unit.kind == UnitKind::TableRow
+                && header.is_some_and(|header| {
+                    ["description", "item", "service", "product", "work", "scope"]
+                        .iter()
+                        .any(|word| header.normalized.contains(word))
+                });
             Components {
                 cues: i64::from(cues.subject_cues) * 24 + boilerplate,
                 bm25,
@@ -750,10 +850,14 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
                         ),
                         50,
                     )
-                    + flag(heading, -10),
+                    + flag(line_item, 35)
+                    + flag(heading && !position.first_page, -10)
+                    + flag(heading && position.first_page && !position.title, 30),
                 heading: flag(tags & tag::SCOPE != 0, 30) + flag(tags & tag::RECITALS != 0, 20),
-                position: flag(position.opening, 30) + flag(position.first_page, 10),
-                features: 0,
+                position: flag(position.opening, 30)
+                    + flag(position.first_page, 10)
+                    + flag(position.early, 20),
+                features: flag(defines_subject, 60),
             }
         }
         Field::Identifier => {
@@ -785,15 +889,55 @@ fn components(field: Field, unit: &EvidenceUnit, bm25: i64) -> Option<Components
                 cues: boilerplate,
                 bm25,
                 structure: flag(unit.kind == UnitKind::TableRow, 10)
-                    + flag(unit.kind == UnitKind::Field, 15),
+                    + flag(unit.kind == UnitKind::Field, 15)
+                    + flag(heading && !features.money.is_empty(), 40),
                 heading: flag(tags & tag::PAYMENT != 0, 25) + flag(tags & tag::TERM != 0, 15),
-                position: flag(position.first_page, 5) + flag(position.closing, 10),
+                position: flag(position.first_page, 5)
+                    + flag(position.closing, 10)
+                    + flag(position.early && !features.money.is_empty(), 20),
                 features: flag(features.money_labelled, 60)
                     + features.money.len().min(2) as i64 * 25,
             }
         }
     };
     Some(parts)
+}
+
+/// Whether a defined term names what a document is about: the services,
+/// the products, the premises, the loan.
+fn term_names_a_subject(term: &str) -> bool {
+    const SUBJECTS: &[&str] = &[
+        "services",
+        "service",
+        "products",
+        "product",
+        "goods",
+        "premises",
+        "property",
+        "equipment",
+        "software",
+        "work",
+        "deliverables",
+        "project",
+        "facility",
+        "facilities",
+        "loan",
+        "loans",
+        "assets",
+        "purchased assets",
+        "business",
+        "platform",
+        "system",
+        "materials",
+        "supplies",
+        "collateral",
+        "scope",
+        "purpose",
+    ];
+    term.split_whitespace()
+        .next_back()
+        .is_some_and(|last| SUBJECTS.contains(&last))
+        || SUBJECTS.contains(&term)
 }
 
 /// BM25 of every candidate against the field's lexicon, scaled to 0-100
@@ -995,6 +1139,8 @@ fn select(
 ) -> Vec<(u32, bool)> {
     /// How many of the best units the parties' greedy cover looks at.
     const PARTY_POOL: usize = 400;
+    /// How many distinct names a new name is worth its full weight for.
+    const PARTY_NAMES_IN_FULL: usize = 6;
     let units = index.units();
     let names = |ordinal: u32| -> Vec<&String> {
         let features = &units[ordinal as usize].features;
@@ -1064,7 +1210,15 @@ fn select(
                         .iter()
                         .filter(|name| !entities_seen.contains(**name))
                         .count() as i64;
-                    let gain = score + new * 30 - flag(!found.is_empty() && new == 0, 40);
+                    // The first few names are the parties; past them a new
+                    // name is more likely a lender in a schedule or a
+                    // sub-processor in an annex, and buys less.
+                    let worth = if entities_seen.len() < PARTY_NAMES_IN_FULL {
+                        30
+                    } else {
+                        10
+                    };
+                    let gain = score + new * worth - flag(!found.is_empty() && new == 0, 40);
                     (gain, *ordinal, position)
                 })
                 .max_by(|left, right| left.0.cmp(&right.0).then(right.1.cmp(&left.1)))
@@ -1385,7 +1539,7 @@ mod tests {
         let partial: RetrievalConfig =
             serde_json::from_str(r#"{"budgets": {"date": 600}, "strategy": "flat"}"#).unwrap();
         assert_eq!(partial.budgets.date, 600);
-        assert_eq!(partial.budgets.parties, 450);
+        assert_eq!(partial.budgets.parties, 350);
         assert_eq!(partial.strategy, Strategy::Flat);
     }
 

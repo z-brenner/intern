@@ -18,7 +18,7 @@
 //! intern-bench retrieval --recording bench/recording.json[,more.json] --gold bench/gold.json
 //!                  [--fixtures fixtures/corpus-recording.json --expected fixtures/expected.json]
 //!                  [--config a.json,b.json] [--sweep] [--only id,id]
-//!                  [--output sweep.json] [--markdown sweep.md]
+//!                  [--output sweep.json] [--markdown sweep.md] [--dump DIR]
 //! ```
 //!
 //! Exit status: 0 when the run scored; 2 when it regressed against the
@@ -48,7 +48,7 @@ const USAGE: &str = "usage:
   intern-bench retrieval --recording A.json[,B.json] --gold GOLD.json
                    [--fixtures RECORDING.json --expected EXPECTED.json]
                    [--config C.json[,D.json]] [--sweep] [--only id,id]
-                   [--output SWEEP.json] [--markdown SWEEP.md]";
+                   [--output SWEEP.json] [--markdown SWEEP.md] [--dump DIR]";
 
 /// Arguments that take no value.
 const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only", "sweep"];
@@ -136,6 +136,7 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                     "only",
                     "output",
                     "markdown",
+                    "dump",
                 ],
             )?;
             let paths = |key: &str| -> Vec<PathBuf> {
@@ -165,6 +166,7 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
                 only: id_list(values.get("only")),
                 output: values.get("output").map(PathBuf::from),
                 markdown: values.get("markdown").map(PathBuf::from),
+                dump: values.get("dump").map(PathBuf::from),
             })
         }
         "--help" | "-h" | "help" => {

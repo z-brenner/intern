@@ -34,8 +34,8 @@ use intern_engine::{
     evidence::{date_match_positions, normalize},
     index::EvidenceIndex,
     retrieve::{
-        EvidenceContext, FieldBudgets, IdStyle, RetrievalConfig, Strategy, TierPolicy, Weights,
-        retrieve,
+        EXPANSION_BIT, EvidenceContext, Field, FieldBudgets, IdStyle, RetrievalConfig, Strategy,
+        TierPolicy, WHOLE_BIT, Weights, field_scores, retrieve,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -143,16 +143,26 @@ pub struct Haystack {
 
 impl Haystack {
     /// A context, unit by unit.
+    ///
+    /// Two units that stand next to each other in the document and both in
+    /// the context also count as one text: a scanned letter's line is its
+    /// own block, and "Lead Veterinary" / "Technician" on consecutive lines
+    /// read as one phrase to the model as they do on the page.
     pub fn context(index: &EvidenceIndex, context: &EvidenceContext) -> Self {
-        let texts = context
+        let units = index.units();
+        let type_texts = context
             .units
             .iter()
-            .map(|ordinal| index.units()[*ordinal as usize].normalized.clone())
+            .map(|ordinal| units[*ordinal as usize].normalized.clone())
             .collect::<Vec<_>>();
-        Self {
-            type_texts: texts.clone(),
-            texts,
+        let mut texts = type_texts.clone();
+        for pair in context.units.windows(2) {
+            let (first, second) = (&units[pair[0] as usize], &units[pair[1] as usize]);
+            if pair[1] == pair[0] + 1 && first.page == second.page {
+                texts.push(format!("{} {}", first.normalized, second.normalized));
+            }
         }
+        Self { texts, type_texts }
     }
 
     /// A digest: its text whole, and for a type each kept block and
@@ -479,6 +489,9 @@ pub struct Summary {
     pub long_reduction: Option<f64>,
     /// The smallest reduction any one document of ten pages or more got.
     pub long_worst_reduction: Option<f64>,
+    /// Documents of ten pages or more whose context is not 40% smaller
+    /// than their digest ([`short_of_reduction`]).
+    pub long_short: usize,
     pub index_ms: Option<Distribution>,
     pub retrieval_ms: Option<Distribution>,
 }
@@ -555,6 +568,10 @@ pub fn summarize<'a>(results: impl IntoIterator<Item = &'a DocumentResult>) -> S
         .iter()
         .filter(|result| result.pages >= 10)
         .collect::<Vec<_>>();
+    summary.long_short = results
+        .iter()
+        .filter(|result| short_of_reduction(result))
+        .count();
     if !long.is_empty() {
         let context: usize = long.iter().map(|result| result.context_tokens).sum();
         let digest: usize = long.iter().map(|result| result.digest_tokens).sum();
@@ -593,10 +610,13 @@ pub struct ConfigResult {
 }
 
 impl ConfigResult {
-    /// How a configuration ranks on the tuning half: fewest violations,
-    /// then the most filename recall, fact recall and subject recall, then
-    /// the fewest tokens on long documents. Lower sorts first.
-    fn rank_key(&self) -> (usize, i64, i64, i64, i64) {
+    /// How a configuration ranks on the tuning half. First the acceptance
+    /// gates: fewest violations; fact recall not below the digest's; fewest
+    /// documents of ten pages or more whose context is not at least 40%
+    /// smaller than their digest. Then the most filename recall, fact
+    /// recall and subject recall, then the fewest tokens on long
+    /// documents. Lower sorts first.
+    fn rank_key(&self) -> (usize, bool, usize, i64, i64, i64, i64) {
         let recall = |item: &str| {
             self.tune
                 .recall
@@ -609,14 +629,36 @@ impl ConfigResult {
             .filter(|result| result.split == "tune" && result.pages >= 10)
             .map(|result| result.context_tokens as i64)
             .sum::<i64>();
+        let facts_below_digest = self
+            .tune
+            .recall
+            .get("facts")
+            .is_some_and(|(context, digest)| context < digest);
+        let long_short = self
+            .documents
+            .iter()
+            .filter(|result| result.split == "tune")
+            .filter(|result| short_of_reduction(result))
+            .count();
         (
             self.tune.violations,
+            facts_below_digest,
+            long_short,
             -recall("filename"),
             -recall("facts"),
             -recall("subject"),
             long_tokens,
         )
     }
+}
+
+/// Whether a document of ten pages or more costs more than 60% of its
+/// digest's tokens. A digest of under a hundred tokens - a long file with
+/// almost no text - is too small to save on and is not held to it.
+pub fn short_of_reduction(result: &DocumentResult) -> bool {
+    result.pages >= 10
+        && result.digest_tokens >= 100
+        && result.context_tokens * 10 > result.digest_tokens * 6
 }
 
 /// Every document of `documents` under `config`, digests and indexes
@@ -627,7 +669,8 @@ fn run_config(
     corpus: &[(String, CorpusDocument)],
     digests: &[(Recall, Option<f64>, usize)],
     indexes: &mut BTreeMap<(usize, usize), (EvidenceIndex, u64)>,
-) -> ConfigResult {
+    dump: Option<&Path>,
+) -> Result<ConfigResult, String> {
     let options = config.index_options();
     let mut documents = Vec::new();
     for (position, (corpus_name, document)) in corpus.iter().enumerate() {
@@ -639,6 +682,14 @@ fn run_config(
                 (index, started.elapsed().as_micros() as u64)
             });
         let measured = measure_with(&document.gold.gold, index, *index_micros, config);
+        if let Some(directory) = dump {
+            let directory = directory.join(name.replace('/', "-"));
+            std::fs::create_dir_all(&directory)
+                .map_err(|error| format!("cannot create {}: {error}", directory.display()))?;
+            let path = directory.join(format!("{}.txt", document.gold.id));
+            std::fs::write(&path, annotated(index, config, &measured))
+                .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        }
         let (digest, digest_recall, digest_tokens) = &digests[position];
         documents.push(DocumentResult {
             id: document.gold.id.clone(),
@@ -658,7 +709,7 @@ fn run_config(
             retrieval_ms: round(measured.retrieval_micros as f64 / 1000.0, 3),
         });
     }
-    ConfigResult {
+    Ok(ConfigResult {
         name: name.to_owned(),
         fingerprint: config.fingerprint(),
         config: config.clone(),
@@ -666,7 +717,75 @@ fn run_config(
         holdout: summarize(documents.iter().filter(|result| result.split == "holdout")),
         all: summarize(&documents),
         documents,
+    })
+}
+
+/// Every unit of a document with its six field scores (type, date,
+/// parties, subject, identifier, key facts; `·` where it cannot carry the
+/// field); the units in the context marked with the fields that chose them
+/// (T D P S I K, `+` context for another unit, W whole document).
+fn annotated(index: &EvidenceIndex, config: &RetrievalConfig, measured: &Measured) -> String {
+    let context = &measured.context;
+    let scores = Field::ALL.map(|field| field_scores(index, config, field));
+    let mut out = format!(
+        "tier {} hierarchical {} tokens {} units {}/{}\nmissing: {}\n\n",
+        context.tier.as_str(),
+        context.hierarchical,
+        context.estimated_tokens,
+        context.units.len(),
+        measured.index_units,
+        measured.recall.missing.join(", ")
+    );
+    let handles = context
+        .handles
+        .iter()
+        .map(|(handle, ordinal)| (*ordinal, handle.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    for unit in index.units() {
+        let ordinal = &unit.ordinal;
+        let Some(handle) = handles.get(ordinal) else {
+            let _ = writeln!(
+                out,
+                "{:8} {} ({}) {}",
+                if unit.running { "running" } else { "-" },
+                unit.id,
+                scores
+                    .iter()
+                    .map(|scores| scores.get(ordinal).map_or("·".to_owned(), i64::to_string))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                unit.text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
+            );
+            continue;
+        };
+        let bits = context.selected_by.get(ordinal).copied().unwrap_or(0);
+        let marks = Field::ALL
+            .iter()
+            .zip(["T", "D", "P", "S", "I", "K"])
+            .map(|(field, mark)| if bits & field.bit() != 0 { mark } else { "." })
+            .chain([
+                if bits & EXPANSION_BIT != 0 { "+" } else { "." },
+                if bits & WHOLE_BIT != 0 { "W" } else { "." },
+            ])
+            .collect::<String>();
+        let _ = writeln!(
+            out,
+            "{marks} [{handle}] ({}) {}",
+            scores
+                .iter()
+                .map(|scores| scores.get(ordinal).map_or("·".to_owned(), i64::to_string))
+                .collect::<Vec<_>>()
+                .join(" "),
+            unit.text.split_whitespace().collect::<Vec<_>>().join(" ")
+        );
     }
+    out
 }
 
 /// The scoring components, by the names the sweep gives them.
@@ -691,17 +810,29 @@ fn set_weight(weights: &mut Weights, component: &str, value: u32) {
     }
 }
 
-/// The configurations the sweep compares: the plan's starting point; each
-/// scoring component off in turn, and each alone; flat against
-/// hierarchical; budgets, the whole-document threshold, unit size, dates
-/// per unit, expansion, and the tier policy.
+/// The configurations the sweep compares, each named once (a
+/// configuration another name already covers is left out):
+///
+/// * `chosen`, [`RetrievalConfig::default`], and `plan_start`, the
+///   phase plan's starting point ([`RetrievalConfig::plan_start`]);
+/// * from each, every scoring component off in turn (`without_*`), each
+///   alone (`only_*`), and the combinations of cue logic, BM25 and
+///   structure;
+/// * from `chosen`: flat against hierarchical, the hierarchical threshold
+///   and sections per field, budgets, the parties' budget, the dense tier,
+///   the whole-document threshold, unit size, dates per unit, expansion,
+///   the tier policy and the id style;
+/// * a grid over BM25's weight, the dense tier and the parties' budget;
+/// * `forced/*`: the component ablations with retrieval forced on every
+///   document, because most of the corpus is short enough to go whole,
+///   which hides how well retrieval itself chooses.
 pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
-    let base = RetrievalConfig::default();
-    let mut configs = vec![("default".to_owned(), base.clone())];
-    let with_weights = |weights: Weights| RetrievalConfig {
-        weights,
-        ..base.clone()
-    };
+    let chosen = RetrievalConfig::default();
+    let start = RetrievalConfig::plan_start();
+    let mut configs: Vec<(String, RetrievalConfig)> = vec![
+        ("chosen".to_owned(), chosen.clone()),
+        ("plan_start".to_owned(), start.clone()),
+    ];
     let off = Weights {
         cues: 0,
         bm25: 0,
@@ -710,66 +841,79 @@ pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
         position: 0,
         features: 0,
     };
-    for name in COMPONENTS {
-        let mut without = Weights::default();
-        set_weight(&mut without, name, 0);
-        configs.push((format!("without_{name}"), with_weights(without)));
-        let mut alone = off.clone();
-        set_weight(&mut alone, name, 100);
-        configs.push((format!("only_{name}"), with_weights(alone)));
+    for (prefix, base) in [("chosen", &chosen), ("plan_start", &start)] {
+        let with_weights = |weights: Weights| RetrievalConfig {
+            weights,
+            ..base.clone()
+        };
+        for name in COMPONENTS {
+            let mut without = base.weights.clone();
+            set_weight(&mut without, name, 0);
+            configs.push((format!("{prefix}/without_{name}"), with_weights(without)));
+            let mut alone = off.clone();
+            set_weight(&mut alone, name, 100);
+            configs.push((format!("{prefix}/only_{name}"), with_weights(alone)));
+        }
+        for (name, weights) in [
+            (
+                "cues_and_bm25",
+                Weights {
+                    cues: 100,
+                    bm25: 100,
+                    ..off.clone()
+                },
+            ),
+            (
+                "cues_bm25_structure",
+                Weights {
+                    cues: 100,
+                    bm25: 100,
+                    structure: 100,
+                    ..off.clone()
+                },
+            ),
+            ("all_components", Weights::all()),
+        ] {
+            configs.push((format!("{prefix}/{name}"), with_weights(weights)));
+        }
     }
-    configs.push((
-        "cues_and_bm25".to_owned(),
-        with_weights(Weights {
-            cues: 100,
-            bm25: 100,
-            ..off.clone()
-        }),
-    ));
-    configs.push((
-        "cues_bm25_structure".to_owned(),
-        with_weights(Weights {
-            cues: 100,
-            bm25: 100,
-            structure: 100,
-            ..off.clone()
-        }),
-    ));
+    let base = chosen.clone();
+    let mut vary = |name: String, config: RetrievalConfig| configs.push((name, config));
     for (name, strategy) in [
         ("flat", Strategy::Flat),
         ("hierarchical", Strategy::Hierarchical),
     ] {
-        configs.push((
+        vary(
             name.to_owned(),
             RetrievalConfig {
                 strategy,
                 ..base.clone()
             },
-        ));
+        );
     }
     for minimum in [100, 150, 600] {
-        configs.push((
+        vary(
             format!("hierarchical_from_{minimum}"),
             RetrievalConfig {
                 hierarchical_min_units: minimum,
                 ..base.clone()
             },
-        ));
+        );
     }
     for sections in [2, 5] {
-        configs.push((
+        vary(
             format!("sections_{sections}"),
             RetrievalConfig {
                 strategy: Strategy::Hierarchical,
                 sections_per_field: sections,
                 ..base.clone()
             },
-        ));
+        );
     }
     for percent in [50, 75, 125, 150] {
         let scaled = |value: u32| value * percent / 100;
         let budgets = &base.budgets;
-        configs.push((
+        vary(
             format!("budgets_{percent}"),
             RetrievalConfig {
                 budgets: FieldBudgets {
@@ -782,64 +926,138 @@ pub fn sweep_configs() -> Vec<(String, RetrievalConfig)> {
                 },
                 ..base.clone()
             },
-        ));
+        );
     }
+    for parties in [250, 300, 450] {
+        vary(
+            format!("parties_{parties}"),
+            RetrievalConfig {
+                budgets: FieldBudgets {
+                    parties,
+                    ..base.budgets.clone()
+                },
+                ..base.clone()
+            },
+        );
+    }
+    for dense in [125, 175, 200] {
+        vary(
+            format!("dense_{dense}"),
+            RetrievalConfig {
+                dense_pct: dense,
+                ..base.clone()
+            },
+        );
+    }
+    vary(
+        "no_dense_triggers".to_owned(),
+        RetrievalConfig {
+            dense_triggers: false,
+            ..base.clone()
+        },
+    );
     for tokens in [0, 1_200, 3_000] {
-        configs.push((
+        vary(
             format!("whole_{tokens}"),
             RetrievalConfig {
                 whole_document_tokens: tokens,
                 ..base.clone()
             },
-        ));
+        );
     }
     for characters in [250, 600] {
-        configs.push((
+        vary(
             format!("unit_chars_{characters}"),
             RetrievalConfig {
                 max_unit_chars: characters,
                 ..base.clone()
             },
-        ));
+        );
     }
     for per_date in [1, 3] {
-        configs.push((
+        vary(
             format!("units_per_date_{per_date}"),
             RetrievalConfig {
                 units_per_date: per_date,
                 ..base.clone()
             },
-        ));
+        );
     }
-    for percent in [0, 50] {
-        configs.push((
+    for percent in [0, 15, 50] {
+        vary(
             format!("expansion_{percent}"),
             RetrievalConfig {
                 expansion_pct: percent,
                 ..base.clone()
             },
-        ));
+        );
     }
     for (name, tier) in [
         ("tier_normal", TierPolicy::Normal),
         ("tier_dense", TierPolicy::Dense),
         ("tier_small", TierPolicy::Small),
     ] {
-        configs.push((
+        vary(
             name.to_owned(),
             RetrievalConfig {
                 tier,
                 ..base.clone()
             },
-        ));
+        );
     }
-    configs.push((
+    vary(
         "ordinal_ids".to_owned(),
         RetrievalConfig {
             id_style: IdStyle::Ordinal,
             ..base.clone()
         },
-    ));
+    );
+    for bm25 in [0, 25, 50, 100] {
+        for dense in [150, 175] {
+            for parties in [350, 450] {
+                vary(
+                    format!("grid/bm25_{bm25}_dense_{dense}_parties_{parties}"),
+                    RetrievalConfig {
+                        weights: Weights {
+                            bm25,
+                            ..base.weights.clone()
+                        },
+                        dense_pct: dense,
+                        budgets: FieldBudgets {
+                            parties,
+                            ..base.budgets.clone()
+                        },
+                        ..base.clone()
+                    },
+                );
+            }
+        }
+    }
+    let forced = configs
+        .iter()
+        .filter(|(name, _)| {
+            name == "chosen"
+                || name == "plan_start"
+                || name.starts_with("chosen/")
+                || matches!(
+                    name.as_str(),
+                    "flat" | "hierarchical" | "tier_normal" | "units_per_date_1"
+                )
+        })
+        .map(|(name, config)| {
+            (
+                format!("forced/{name}"),
+                RetrievalConfig {
+                    whole_document_tokens: 0,
+                    ..config.clone()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    configs.extend(forced);
+    // Each configuration once, under the first name that reaches it.
+    let mut seen = std::collections::BTreeSet::new();
+    configs.retain(|(_, config)| seen.insert(config.fingerprint()));
     configs
 }
 
@@ -856,6 +1074,10 @@ pub struct RetrievalOptions {
     pub only: Vec<String>,
     pub output: Option<PathBuf>,
     pub markdown: Option<PathBuf>,
+    /// A directory to write each document's context into, one file per
+    /// configuration and document, every line marked with the fields that
+    /// chose it.
+    pub dump: Option<PathBuf>,
 }
 
 /// Reads the sources a bench recording holds, with their gold.
@@ -1035,7 +1257,14 @@ pub fn retrieval_command(options: &RetrievalOptions) -> Result<i32, String> {
     let mut results = Vec::new();
     for (name, config) in &configs {
         let started = Instant::now();
-        let result = run_config(name, config, &corpus, &digests, &mut indexes);
+        let result = run_config(
+            name,
+            config,
+            &corpus,
+            &digests,
+            &mut indexes,
+            options.dump.as_deref(),
+        )?;
         eprintln!(
             "{name}: {} violations, filename recall {:?}, {:.1} s",
             result.all.violations,
@@ -1091,46 +1320,57 @@ pub fn render_markdown(results: &[ConfigResult], ranked: &[usize]) -> String {
     };
     let _ = writeln!(
         out,
-        "{} documents ({} tuning, {} held out). Recall in percent, context / digest. A violation is a document whose digest carried the date and every party (`digest_recall` 1.0) and whose context lacks the type, the date or a party.\n",
+        "{} documents ({} tuning, {} held out). Context recall in percent; type, date and parties over every document. Ranked on the tuning half: acceptance gates first (violations, fact recall below the digest's, long documents not 40% smaller), then recall, then long-document tokens. A violation is a document whose digest carried the date and every party (`digest_recall` 1.0) and whose context lacks the type, the date or a party.\n",
         first.all.documents, first.tune.documents, first.holdout.documents
     );
     let _ = writeln!(
         out,
-        "| Rank | Configuration | Violations tune / held out | Filename tune | Filename held out | Type | Date | Parties | Facts | Subject | Tokens p50 | Long-doc reduction |"
+        "| Rank | Configuration | Violations tune / held out | Filename tune / held out | Facts tune / held out | Subject tune / held out | Type | Date | Parties | Tokens p50 | Long-doc reduction | Long docs under 40% |"
     );
     let _ = writeln!(out, "|---|---|---|---|---|---|---|---|---|---|---|---|");
     for (rank, position) in ranked.iter().enumerate() {
         let result = &results[*position];
         let all = &result.all;
+        let pair = |item: &str| {
+            format!(
+                "{} / {}",
+                percent(result.tune.recall.get(item), false),
+                percent(result.holdout.recall.get(item), false)
+            )
+        };
         let _ = writeln!(
             out,
-            "| {} | `{}` | {} / {} | {} | {} | {} | {} | {} | {} | {} | {:.0} | {} |",
+            "| {} | `{}` | {} / {} | {} | {} | {} | {} | {} | {} | {:.0} | {} | {} |",
             rank + 1,
             result.name,
             result.tune.violations,
             result.holdout.violations,
-            percent(result.tune.recall.get("filename"), false),
-            percent(result.holdout.recall.get("filename"), false),
+            pair("filename"),
+            pair("facts"),
+            pair("subject"),
             percent(all.recall.get("type"), false),
             percent(all.recall.get("date"), false),
             percent(all.recall.get("parties"), false),
-            percent(all.recall.get("facts"), false),
-            percent(all.recall.get("subject"), false),
             all.context_tokens
                 .map_or(0.0, |distribution| distribution.p50),
             all.long_reduction
                 .map_or_else(|| "–".to_owned(), |value| format!("{:.1}%", value * 100.0)),
+            all.long_short,
         );
     }
     let digest = &first.all;
     let _ = writeln!(
         out,
-        "\nThe digest: type {}, date {}, parties {}, facts {}, subject {}; tokens p50 {:.0}.\n",
+        "\nThe digest: type {}, date {}, parties {}, facts {} (tune {} / held out {}), subject {} (tune {} / held out {}); tokens p50 {:.0}.\n",
         percent(digest.recall.get("type"), true),
         percent(digest.recall.get("date"), true),
         percent(digest.recall.get("parties"), true),
         percent(digest.recall.get("facts"), true),
+        percent(first.tune.recall.get("facts"), true),
+        percent(first.holdout.recall.get("facts"), true),
         percent(digest.recall.get("subject"), true),
+        percent(first.tune.recall.get("subject"), true),
+        percent(first.holdout.recall.get("subject"), true),
         digest
             .digest_tokens
             .map_or(0.0, |distribution| distribution.p50),

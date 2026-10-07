@@ -155,6 +155,13 @@ pub struct DateMention {
     pub reference: bool,
     /// The definition of a dated term: `"Closing Date" means June 12, 2026`.
     pub defined_term: bool,
+    /// For a date in a table row, what its column's header says, read as
+    /// the date's label: `| Invoice Date | Due Date |` over `| 03/04/2026 |
+    /// 04/03/2026 |` names the first an issue date and the second a
+    /// deadline, which the words before each date on its own line cannot.
+    pub column_role: Option<DateRole>,
+    pub column_deadline: bool,
+    pub column_issue: bool,
 }
 
 /// A value that looks like a document's own number.
@@ -204,6 +211,9 @@ pub struct Position {
     pub title: bool,
     /// The first paragraph of the document.
     pub first_paragraph: bool,
+    /// In the first tenth of the document (and at least its first thirty
+    /// units): the cover, the preamble, the recitals.
+    pub early: bool,
 }
 
 /// Everything read off a unit when the index is built.
@@ -235,6 +245,12 @@ pub struct UnitFeatures {
     pub position: Position,
     /// Section tags of the unit's headings, and of itself for a heading.
     pub section_tags: u16,
+    /// The terms the unit defines, folded: `services` for `"Services"
+    /// means ...`.
+    pub defines: Vec<String>,
+    /// The unit is a date standing alone, or with a word or two: a
+    /// letter's dateline, a form's "Date:" box.
+    pub dateline: bool,
 }
 
 /// One unit of evidence.
@@ -443,6 +459,8 @@ struct Draft {
     confidence: Option<u8>,
     /// From a block the worker marked as a page header or footer.
     marked_running: bool,
+    /// A table header's cells, which label the dates in a row's columns.
+    cells: Vec<String>,
 }
 
 struct Builder {
@@ -538,6 +556,7 @@ impl Builder {
             source: block.source,
             confidence,
             marked_running: matches!(block.kind, BlockKind::PageHeader | BlockKind::PageFooter),
+            cells: Vec::new(),
         });
         Some(ordinal)
     }
@@ -668,6 +687,10 @@ impl Builder {
                 if is_header { None } else { header },
                 confidence,
             );
+            if let Some(ordinal) = pushed {
+                self.drafts[ordinal as usize].cells =
+                    row.cells.iter().map(|cell| cell.text.clone()).collect();
+            }
             if is_header && pushed.is_some() {
                 header = pushed;
             }
@@ -804,6 +827,11 @@ impl Builder {
         let live = (0..drafts.len())
             .filter(|ordinal| !running[*ordinal])
             .collect::<Vec<_>>();
+        let early = live
+            .iter()
+            .take((live.len() / 10).max(30))
+            .copied()
+            .collect::<BTreeSet<_>>();
         let opening = live
             .iter()
             .take(OPENING_UNITS as usize)
@@ -853,12 +881,25 @@ impl Builder {
             }
 
             let mut features = UnitFeatures {
-                dates: date_mentions(&draft.text, numeric_order),
+                dates: date_mentions(
+                    &draft.text,
+                    numeric_order,
+                    draft
+                        .table_header
+                        .map(|header| drafts[header as usize].cells.as_slice()),
+                ),
                 date_signals: saturate(date_signal_count(&draft.text)),
                 section_tags: tags,
                 ..UnitFeatures::default()
             };
             features.cues = cue_counts(&draft.text, text_normalized);
+            features.defines = defined_terms(text_normalized);
+            features.dateline = !features.dates.is_empty()
+                && draft.text.chars().count() <= 40
+                && features
+                    .dates
+                    .iter()
+                    .all(|mention| mention.iso == features.dates[0].iso);
             let label = draft.label.as_deref().map(normalize);
             features.money = money_amounts(&draft.text);
             features.money_labelled = !features.money.is_empty()
@@ -934,6 +975,7 @@ impl Builder {
                 signature,
                 title: titles.contains(&ordinal),
                 first_paragraph: first_paragraph == Some(ordinal),
+                early: early.contains(&ordinal),
             };
 
             units.push(EvidenceUnit {
@@ -1123,7 +1165,11 @@ fn section_tags(heading: &str) -> u16 {
 
 /// Every date a unit states, line by wrapped line, with the wording before
 /// each read the way validation reads it.
-fn date_mentions(text: &str, order: Option<NumericOrder>) -> Vec<DateMention> {
+fn date_mentions(
+    text: &str,
+    order: Option<NumericOrder>,
+    headers: Option<&[String]>,
+) -> Vec<DateMention> {
     let mut mentions = Vec::new();
     for line in wrapped_lines(text) {
         let normalized = normalize(&line);
@@ -1141,7 +1187,24 @@ fn date_mentions(text: &str, order: Option<NumericOrder>) -> Vec<DateMention> {
                 .is_some_and(|character| character.is_ascii_digit())
                 && !normalized[at..].chars().take(10).any(char::is_alphabetic)
                 && !normalized[at..].starts_with(&iso[..4]);
+            // The column a row's date stands in - the cell the pipes before
+            // it put it in - and that column's header as its label.
+            let column_label = headers.and_then(|headers| {
+                let before = &normalized[..at];
+                let pipes = before.matches('|').count();
+                let column = if before.trim_start().starts_with('|') {
+                    pipes.checked_sub(1)?
+                } else {
+                    pipes
+                };
+                let header = normalize(headers.get(column)?);
+                (!header.is_empty()).then(|| format!("{header}: "))
+            });
+            let column = |read: fn(&str) -> bool| column_label.as_deref().is_some_and(read);
             mentions.push(DateMention {
+                column_role: column_label.as_deref().and_then(role_from_wording),
+                column_deadline: column(labels_a_deadline),
+                column_issue: column(labels_the_issue_date),
                 role: role_from_wording(&window),
                 deadline: labels_a_deadline(&window),
                 issue_label: labels_the_issue_date(&window),
@@ -1154,6 +1217,32 @@ fn date_mentions(text: &str, order: Option<NumericOrder>) -> Vec<DateMention> {
         }
     }
     mentions
+}
+
+/// The terms a unit defines: `"Products" means the microscopes ...`
+/// defines `products`. Extracted text often runs a definitions article's
+/// entries together, so every one in the unit is read, up to eight.
+fn defined_terms(normalized: &str) -> Vec<String> {
+    const MOST: usize = 8;
+    let mut terms = Vec::new();
+    for verb in ["\" means", "\" shall mean", "\" has the meaning"] {
+        for (at, _) in normalized.match_indices(verb) {
+            let Some(open) = normalized[..at].rfind('"') else {
+                continue;
+            };
+            let term = normalized[open + 1..at].trim();
+            if !term.is_empty()
+                && term.split_whitespace().count() <= 5
+                && !terms.iter().any(|known: &String| known == term)
+            {
+                terms.push(term.to_owned());
+            }
+            if terms.len() == MOST {
+                return terms;
+            }
+        }
+    }
+    terms
 }
 
 /// Whether the words before a date define a dated term: `"Closing Date"
@@ -1954,6 +2043,43 @@ mod tests {
         first.layout = Some(layout);
         let stripped = EvidenceIndex::build(&DocumentSource::from_pages(vec![first]));
         assert_eq!(full, stripped);
+    }
+
+    /// A row of dates under a header row: the header names each column's
+    /// date, which nothing on the row's own line does. A date alone on its
+    /// line is a dateline; a definitions entry names what it defines.
+    #[test]
+    fn a_tables_header_labels_the_dates_in_its_columns() {
+        let index = EvidenceIndex::build(&source_from_text(
+            "HALVORSEN FIXTURE WORKS LLC\n\nMarch 4, 2026\n\n| Invoice Date | PO Date | Due Date |\n| --- | --- | --- |\n| 03/04/2026 | 02/11/2026 | 04/23/2026 |\n\n\"Services\" means the installation of display cases. \"Site\" means the store.",
+        ));
+        let row = index
+            .units()
+            .iter()
+            .find(|unit| unit.kind == UnitKind::TableRow)
+            .unwrap();
+        let mention = |iso: &str| {
+            row.features
+                .dates
+                .iter()
+                .find(|mention| mention.iso == iso)
+                .unwrap_or_else(|| panic!("{iso} in {:?}", row.features.dates))
+        };
+        assert!(mention("2026-03-04").column_issue);
+        assert_eq!(mention("2026-03-04").column_role, Some(DateRole::Invoice));
+        assert!(mention("2026-04-23").column_deadline);
+        assert!(!mention("2026-02-11").column_deadline);
+        // What validation reads off the row's own line is unchanged.
+        assert!(!mention("2026-04-23").deadline);
+        let dateline = index.unit("p1.b2").unwrap();
+        assert!(dateline.features.dateline);
+        assert!(!row.features.dateline);
+        let definitions = index
+            .units()
+            .iter()
+            .find(|unit| unit.text.contains("\"Services\" means"))
+            .unwrap();
+        assert_eq!(definitions.features.defines, vec!["services", "site"]);
     }
 
     #[test]
