@@ -46,8 +46,8 @@ parser worker.
 
 ## The corpus
 
-`bench/generate.mjs` builds 72 documents into `bench/generated/`
-(gitignored, about 8 MB, about 11 s). The reviewed answers are in
+`bench/generate.mjs` builds 77 documents into `bench/generated/`
+(gitignored, about 9 MB, about 14 s). The reviewed answers are in
 `bench/gold.json`, and a SHA-256 of every file is in `bench/manifest.json`.
 Both are committed. The generator is deterministic: fixed seeds, fixed
 timestamps, a fixed zlib level, and no clock or locale. Run on the pinned
@@ -72,12 +72,16 @@ when any selected document's bytes disagree with it or it does not list one.
 | Long, information-dense PDFs | 10-page data processing addendum (20+ sub-processors); 25-page asset purchase agreement; 50-page credit agreement dated only by the definition of "Closing Date" on page 10; 100-page annual report dated on page 41, under the auditors' report, and again only in a later note |
 | Office, sheets, mail, text | separation agreement, demand letter, written consent (`.docx`); quarterly business review, launch plan (`.pptx`); payroll register with a date serial cell, harvest log (`.xlsx`); AP aging (`.csv`); approval email quoting an older message (`.eml`); hearing notice (`.txt`) |
 | Scans | clean 2- and 10-page image-only PDFs; a 25-page 200-DPI lease; a mixed PDF whose signature page is scanned; rotated 90° and 180°; 3° skew; 100 DPI; speckle noise and blur; faint uneven light; an invisible OCR text layer full of OCR errors; a two-frame TIFF fax; a scanned intake form |
+| Long documents for retrieval (`"recording": "pending"`) | evidence that decides the name, deep inside: a 12-page master services agreement whose Effective Date is stated only in its definitions schedule on page 9; a 25-page industrial lease dated only in its Lease Particulars on page 23, after a letter of intent and an old lease dated on page 1; a 40-page term loan whose lender and borrower are named only on page 1 and on the signature page; a 60-page commercial property policy whose declarations - and policy period - sit on page 30 of its renewal packet; a 100-page watershed monitoring report whose cover dates the review draft and whose final issue date is in the certification on page 88 |
 | Layout and OCR (`"recording": "pending"`) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organisations and identifiers |
 
 Every document carries category tags (`multi_column`, `date_in_table`,
 `referenced_agreement`, `middle_fact`, `pages_50`, `key_value`,
 `stream_order`, `rotated_page`, `image_region`, `ocr_critical_fields`, ...),
-and every report is also sliced by tag. The tests prove that the corpus
+and every report is also sliced by tag. A `pages_N` tag is the page-count
+bucket the document falls in, from N pages up to the next bucket (5, 10,
+25, 50, 100): the 40-page loan is `pages_25`, the 60-page policy
+`pages_50`. The tests prove that the corpus
 covers the required categories, that every gold string occurs in the text
 the document carries,
 and that the long documents are information-dense rather than padded:
@@ -148,11 +152,12 @@ block, every part optional:
 * `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
   only for the pages where the route is not a judgement call.
 
-Twenty-eight documents have one: the twenty added for it, and the two-column
-lease, the interleaved declarations page, both header-table invoices, the
-purchase order, the vendor registration form, the change order and the
-scanned intake form. Adding or changing a `structure` block changes no
-recorded document's other scores.
+Thirty-three documents have one: the twenty added for it, the five long
+documents added for phase 3, and the two-column lease, the interleaved
+declarations page, both header-table invoices, the purchase order, the
+vendor registration form, the change order and the scanned intake form.
+Adding or changing a `structure` block changes no recorded document's other
+scores.
 
 A document added before anyone recorded it says `"recording": "pending"`.
 Replay leaves it unscored (and a baseline may not hold it); extract-only
@@ -261,13 +266,13 @@ The run refuses a corpus that lacks a selected document or, given
 `--manifest`, holds bytes the manifest does not vouch for. `--only`,
 `--baseline`, `--write-baseline` and `--latency-gate` work as for the other
 modes; an extract-only run writes and is held to an extract-only baseline
-(see [Gates](#gates)). The report gives the run's wall time. Over all 72
-documents on the shared 4-core development container it is about 45 s with
-the routing worker and about 70 s with the one before it, which read a
-PDF's scanned pages one at a time; Tesseract takes nearly all of it (the
-25-page scanned lease alone 14 s), and the 52 documents that are not scans
-take under a second together. It can be run on every change to the worker,
-or with `--only` on the documents a change touches.
+(see [Gates](#gates)). The report gives the run's wall time. Over the 72
+documents of the phase 2 corpus, on the shared 4-core development container
+it is about 45 s with the routing worker and about 70 s with the one before
+it, which read a PDF's scanned pages one at a time; Tesseract takes nearly
+all of it (the 25-page scanned lease alone 14 s), and the 52 documents that
+are not scans take under a second together. It can be run on every change
+to the worker, or with `--only` on the documents a change touches.
 
 The scoring is `extract::extraction_record`, a pure function of the gold,
 what the worker returned and the timings; the worker loop around it only
@@ -410,7 +415,9 @@ the corpus. `table` is on half of them, mostly routine header tables;
 the scan conditions (`rotated_scan`, `noisy_scan`, `low_resolution_scan`
 and the like) measure OCR, which `text_layer` already slices. On that corpus
 the slice holds 51 documents (14 of them by `referenced_agreement` alone)
-and `long` holds 7, 6 of them also complex.
+and `long` holds 7, 6 of them also complex. The five long documents added
+for phase 3 are in both, so the 77-document corpus has 56 complex and 12
+long; until they are recorded a replay scores 33 and 7 of them.
 
 ### Structure scores
 

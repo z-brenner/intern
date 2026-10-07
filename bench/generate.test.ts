@@ -423,8 +423,11 @@ describe('InternBench corpus generator', () => {
   it('makes long documents genuinely information-dense', () => {
     const long = documents.filter((document) => document.categories.some((category) => /^pages_\d+$/.test(category)));
     expect(long.map((document) => document.pages).sort((a, b) => a - b)).toEqual(expect.arrayContaining([5, 10, 25, 50, 100]));
+    // A pages_N category is the bucket the page count falls in: 5, 10, 25,
+    // 50 or 100 pages and up to the next.
+    const bucket = (pages: number) => [100, 50, 25, 10, 5].find((floor) => pages >= floor);
     for (const document of long) {
-      expect(document.categories, document.id).toContain(`pages_${document.pages}`);
+      expect(document.categories, document.id).toContain(`pages_${bucket(document.pages)}`);
       const pages = generated.texts[document.id];
       expect(pages.length, document.id).toBe(document.pages);
       const content = withoutRunningLines(pages);
@@ -493,8 +496,8 @@ function normalisedText(text: string) {
 describe('InternBench structure gold and the documents added for it', () => {
   const pending = () => documents.filter((document) => document.recording === 'pending');
 
-  it('adds twenty documents, each pending a recording, with full gold and a structure block', () => {
-    expect(pending().length).toBe(20);
+  it('adds twenty-five documents, each pending a recording, with full gold and a structure block', () => {
+    expect(pending().length).toBe(25);
     for (const document of pending()) {
       expect(document.structure, document.id).toBeDefined();
       expect(document.gold.document_date, document.id).not.toBeNull();
@@ -534,6 +537,31 @@ describe('InternBench structure gold and the documents added for it', () => {
     for (const document of withStructure.filter((entry) => entry.text_layer === 'scan')) {
       for (const route of Object.values(document.structure!.expected_routes ?? {})) expect(route, document.id).toBe('ocr');
     }
+  });
+
+  it('adds five long documents whose deciding evidence sits deep inside', () => {
+    const pagesWith = (document: BenchDocument, needle: string) => generated.texts[document.id].flatMap((page, index) => (normalise(page).includes(normalise(needle)) ? [index + 1] : []));
+    // Each document's page count, and the one page its date is printed on.
+    const expected: Record<string, [number, number]> = {
+      'msa-effective-date-in-definitions-12p': [12, 9],
+      'industrial-lease-dated-in-schedule-25p': [25, 23],
+      'term-loan-parties-apart-40p': [40, 1],
+      'property-policy-declarations-mid-60p': [60, 30],
+      'watershed-monitoring-report-100p': [100, 88],
+    };
+    const phase3Roles = new Set(['client', 'contractor', 'employer', 'employee', 'buyer', 'seller', 'landlord', 'tenant', 'issuer', 'recipient', 'vendor', 'customer', 'borrower', 'lender', 'licensor', 'licensee', 'sender', 'addressee', 'other']);
+    for (const [id, [pages, datePage]] of Object.entries(expected)) {
+      const document = documents.find((entry) => entry.id === id)!;
+      expect(document.pages, id).toBe(pages);
+      expect(document.recording, id).toBe('pending');
+      expect(pagesWith(document, document.gold.evidence.date_text[0]), id).toEqual([datePage]);
+      for (const party of document.gold.parties) {
+        expect(document.gold.party_roles.some((entry) => entry.name === party && phase3Roles.has(entry.role)), `${id}: ${party} has a role from the phase 3 list`).toBe(true);
+      }
+    }
+    // The loan's parties are printed thirty-nine pages apart, and nowhere between.
+    const loan = documents.find((entry) => entry.id === 'term-loan-parties-apart-40p')!;
+    for (const party of loan.gold.parties) expect(pagesWith(loan, party), party).toEqual([1, 40]);
   });
 
   it('refuses a labelled value printed under two occurrences of its label', () => {

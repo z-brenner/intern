@@ -364,6 +364,31 @@
       "file": "scan-bill-of-lading.pdf",
       "size": 23385,
       "sha256": "8d90522be0e5666009c73a18b8bb72e94d05b9269f863e0efcb1eed6951ffe47"
+    },
+    {
+      "file": "msa-effective-date-in-definitions-12p.pdf",
+      "size": 29757,
+      "sha256": "773ecbc12efc3d29bb0591fc1a1cecf8e80cab6379aaef6606bdb4eff26b7f56"
+    },
+    {
+      "file": "industrial-lease-dated-in-schedule-25p.pdf",
+      "size": 60829,
+      "sha256": "b6e31f46c4f68e5edd1d3c8fdd12937efc1dafb725bd66f6b355e8f3ca539497"
+    },
+    {
+      "file": "term-loan-parties-apart-40p.pdf",
+      "size": 127904,
+      "sha256": "cd2f0f7ed55a8d0a0e79d4b5f88606b726e22e56e73e41be1f0332e4494d2566"
+    },
+    {
+      "file": "property-policy-declarations-mid-60p.pdf",
+      "size": 172725,
+      "sha256": "252db71561d11162e29f05a80f5fa7edf7b3b6a0c2e36ee35665c088ca24bb4a"
+    },
+    {
+      "file": "watershed-monitoring-report-100p.pdf",
+      "size": 308117,
+      "sha256": "13b83950c3520c90ff07d499fcb4a44c524aed15da7722676ac31e9289f1b3bd"
     }
   ]
 }

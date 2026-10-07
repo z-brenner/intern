@@ -10704,6 +10704,748 @@
         }
       },
       "recording": "pending"
+    },
+    {
+      "id": "msa-effective-date-in-definitions-12p",
+      "file": "msa-effective-date-in-definitions-12p.pdf",
+      "title": "Twelve-page master services agreement dated only in its definitions schedule",
+      "kind": "contract",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 12,
+      "categories": [
+        "pages_10",
+        "contract",
+        "middle_fact",
+        "competing_dates",
+        "irrelevant_names",
+        "information_dense",
+        "table"
+      ],
+      "notes": "The first page says the agreement is entered into \"as of the Effective Date (as defined in Schedule D)\"; the Effective Date (March 2, 2026) is stated once, in the definitions on page 9, beside the end of the Initial Term (March 1, 2029) and the start of the first statement of work (April 6, 2026). Page 1 dates the RFP (September 30, 2025) and the Proposal (November 18, 2025); the signature page on page 12 dates the signatures (March 9, 2026 and March 11, 2026). The parties are named only on pages 1 and 12; Schedule F names five subcontractors that are not parties. Pages 5 to 8 and 10 to 11 are schedules of services, Sites, rates and controls.",
+      "gold": {
+        "document_type": "Master Services Agreement",
+        "acceptable_types": [
+          "Services Agreement"
+        ],
+        "document_date": "2026-03-02",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2025-09-30",
+            "why": "request for proposal issued"
+          },
+          {
+            "date": "2025-11-18",
+            "why": "contractor proposal date"
+          },
+          {
+            "date": "2026-03-09",
+            "why": "contractor signature date"
+          },
+          {
+            "date": "2026-03-11",
+            "why": "client signature date"
+          },
+          {
+            "date": "2026-04-06",
+            "why": "first statement of work start"
+          },
+          {
+            "date": "2029-03-01",
+            "why": "end of the initial term"
+          }
+        ],
+        "parties": [
+          "Halcyon Ridge Logistics, Inc.",
+          "Quillmont Systems Integration LLC"
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Halcyon Ridge Logistics, Inc.",
+            "role": "client"
+          },
+          {
+            "name": "Halcyon Ridge Logistics, Inc.",
+            "role": "customer"
+          },
+          {
+            "name": "Quillmont Systems Integration LLC",
+            "role": "contractor"
+          },
+          {
+            "name": "Quillmont Systems Integration LLC",
+            "role": "vendor"
+          },
+          {
+            "name": "Quillmont Systems Integration LLC",
+            "role": "seller"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Larchmont Field Services Inc.",
+            "why": "approved subcontractor listed in Schedule F"
+          },
+          {
+            "name": "Tidewell Labeling Systems LLC",
+            "why": "approved subcontractor listed in Schedule F"
+          },
+          {
+            "name": "Brackenfold Data Centers LLC",
+            "why": "approved subcontractor listed in Schedule F"
+          }
+        ],
+        "description_facts": [
+          [
+            "systems integration",
+            "systems integrator"
+          ],
+          [
+            "warehouse"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "master services agreement",
+          "warehouse",
+          "service levels"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "March 2, 2026"
+          ],
+          "party_text": {
+            "Halcyon Ridge Logistics, Inc.": [
+              "Halcyon Ridge Logistics, Inc."
+            ],
+            "Quillmont Systems Integration LLC": [
+              "Quillmont Systems Integration LLC"
+            ]
+          },
+          "date_anchor": "\"Effective Date\" means",
+          "type_text": [
+            "MASTER SERVICES AGREEMENT"
+          ],
+          "identifier_text": [
+            "QSI-MSA-2026-014"
+          ]
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "No. QSI-MSA-2026-014 Contractor will",
+          "proof of delivery.",
+          "12 hours Release engineer",
+          "2 people ONT-1 2",
+          "recurring service; the first,"
+        ],
+        "key_values": [
+          {
+            "key": "Effective Date",
+            "value": "March 2, 2026"
+          }
+        ]
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "industrial-lease-dated-in-schedule-25p",
+      "file": "industrial-lease-dated-in-schedule-25p.pdf",
+      "title": "Twenty-five-page industrial lease dated only in its Lease Particulars near the end",
+      "kind": "contract",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 25,
+      "categories": [
+        "pages_25",
+        "contract",
+        "date_in_table",
+        "competing_dates",
+        "irrelevant_names",
+        "information_dense",
+        "table"
+      ],
+      "notes": "Page 1 says the lease is \"dated as of the date stated in Schedule 1\" and names two earlier documents with their dates: the letter of intent (January 9, 2026) and the lease of the tenant's old building (May 1, 2016). The lease's own date (April 14, 2026) is printed once, in the Lease Particulars table on page 23, beside the Commencement Date (July 1, 2026), Rent Commencement Date (October 1, 2026) and Expiration Date (June 30, 2036). The signatures and notary acknowledgments on page 25 carry April 16, 2026 and April 20, 2026. The guarantor, the broker and the environmental consultant are named but are not parties.",
+      "gold": {
+        "document_type": "Industrial Lease",
+        "acceptable_types": [
+          "Lease",
+          "Lease Agreement",
+          "Industrial Lease Agreement"
+        ],
+        "document_date": "2026-04-14",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2026-01-09",
+            "why": "letter of intent the lease supersedes"
+          },
+          {
+            "date": "2016-05-01",
+            "why": "lease of the old building it replaces"
+          },
+          {
+            "date": "2026-07-01",
+            "why": "commencement date"
+          },
+          {
+            "date": "2026-10-01",
+            "why": "rent commencement date"
+          },
+          {
+            "date": "2036-06-30",
+            "why": "expiration date"
+          },
+          {
+            "date": "2026-04-16",
+            "why": "tenant signature date"
+          },
+          {
+            "date": "2026-04-20",
+            "why": "landlord signature date"
+          }
+        ],
+        "parties": [
+          "Ardent Quay Industrial Properties LP",
+          "Moss & Lanyard Distribution Inc."
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Ardent Quay Industrial Properties LP",
+            "role": "landlord"
+          },
+          {
+            "name": "Moss & Lanyard Distribution Inc.",
+            "role": "tenant"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Moss & Lanyard Holdings LLC",
+            "why": "guarantor, not a party to the lease"
+          },
+          {
+            "name": "Pelham Crane Realty Advisors",
+            "why": "broker"
+          },
+          {
+            "name": "Cinderford Environmental Group",
+            "why": "environmental consultant"
+          }
+        ],
+        "description_facts": [
+          [
+            "Ardent Quay Logistics Park",
+            "Ardent Quay"
+          ],
+          [
+            "312,480 square feet",
+            "312,480"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "industrial lease",
+          "warehouse",
+          "dock"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "April 14, 2026"
+          ],
+          "party_text": {
+            "Ardent Quay Industrial Properties LP": [
+              "Ardent Quay Industrial Properties LP"
+            ],
+            "Moss & Lanyard Distribution Inc.": [
+              "Moss & Lanyard Distribution Inc."
+            ]
+          },
+          "date_anchor": "Date of this Lease",
+          "type_text": [
+            "INDUSTRIAL LEASE"
+          ]
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "TRUCK COURT 7.1 Tenant",
+          "Landlord Work. Door E-23",
+          "37 ND ND ND property line",
+          "5528 psi; no action. Pour strip 5 (column",
+          "specialty subcontractor. G-10 Add",
+          "in. no G1-3 pallet",
+          "Building 6. SCHEDULE 2"
+        ],
+        "key_values": [
+          {
+            "key": "Date of this Lease",
+            "value": "April 14, 2026"
+          },
+          {
+            "key": "Commencement Date",
+            "value": "July 1, 2026"
+          },
+          {
+            "key": "Expiration Date",
+            "value": "June 30, 2036"
+          }
+        ]
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "term-loan-parties-apart-40p",
+      "file": "term-loan-parties-apart-40p.pdf",
+      "title": "Forty-page term loan agreement naming its parties only on the first and last pages",
+      "kind": "contract",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 40,
+      "categories": [
+        "pages_25",
+        "contract",
+        "financial",
+        "irrelevant_names",
+        "competing_dates",
+        "information_dense",
+        "table"
+      ],
+      "notes": "The lender (Oakhurst Mutual Savings Bank) and the borrower (Saltbrook Cold Storage Partners LP) are named only in the preamble on page 1 and on the signature page, page 40, thirty-nine pages apart; every page between says \"Lender\" and \"Borrower\". The agreement is dated in the preamble (August 14, 2026); the definitions give the Maturity Date (August 14, 2033), the same day and month seven years on. The schedules carry the amortization from the first payment (10/01/2026), and name the bank whose loan this one repays, the appraiser, the title insurer and sixteen customers, none of them parties. The definitions also date the appraisal (June 22, 2026), the environmental reports (May 30, 2026) and the loan agreement being repaid (May 3, 2019).",
+      "gold": {
+        "document_type": "Term Loan Agreement",
+        "acceptable_types": [
+          "Loan Agreement"
+        ],
+        "document_date": "2026-08-14",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2033-08-14",
+            "why": "maturity date"
+          },
+          {
+            "date": "2026-10-01",
+            "why": "first payment date"
+          },
+          {
+            "date": "2026-06-22",
+            "why": "appraisal valuation date"
+          },
+          {
+            "date": "2026-05-30",
+            "why": "environmental report date"
+          },
+          {
+            "date": "2019-05-03",
+            "why": "date of the loan being repaid"
+          }
+        ],
+        "parties": [
+          "Oakhurst Mutual Savings Bank",
+          "Saltbrook Cold Storage Partners LP"
+        ],
+        "party_relation": "between",
+        "acceptable_party_sets": [],
+        "party_roles": [
+          {
+            "name": "Oakhurst Mutual Savings Bank",
+            "role": "lender"
+          },
+          {
+            "name": "Saltbrook Cold Storage Partners LP",
+            "role": "borrower"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Kingsbarn Federal Savings Bank",
+            "why": "lender of the loan being repaid"
+          },
+          {
+            "name": "Greywether Valuation Group",
+            "why": "appraiser"
+          },
+          {
+            "name": "Lockhaven Title Insurance Company",
+            "why": "title insurer"
+          },
+          {
+            "name": "Bayfront Poultry Processors Inc.",
+            "why": "customer whose contract is assigned"
+          },
+          {
+            "name": "Saltbrook Holdings GP LLC",
+            "why": "borrower's general partner, signing for it"
+          }
+        ],
+        "description_facts": [
+          [
+            "$152,000,000",
+            "one hundred fifty-two million dollars"
+          ],
+          [
+            "cold storage",
+            "cold-storage",
+            "refrigerated warehouses"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "term loan",
+          "cold storage",
+          "amortization"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "August 14, 2026"
+          ],
+          "party_text": {
+            "Oakhurst Mutual Savings Bank": [
+              "Oakhurst Mutual Savings Bank"
+            ],
+            "Saltbrook Cold Storage Partners LP": [
+              "Saltbrook Cold Storage Partners LP"
+            ]
+          },
+          "type_text": [
+            "TERM LOAN AGREEMENT"
+          ],
+          "identifier_text": [
+            "OMSB-CRE-26-0817"
+          ]
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "insurance in Schedule 5;",
+          "933.21 fence corner post Legal description of SB-4",
+          "Systems SB-4 Rapid-roll",
+          "material findings SB-6 Phase",
+          "$88,269.08 $103,676.03 Jul 2025",
+          "$79,581.33 $103,758.78 Sep 2025",
+          "$2,299,000.00 Replacement Reserve and operating cash",
+          "$87,024.72 $1,125.00 Feb 2026"
+        ],
+        "key_values": [
+          {
+            "key": "Maturity Date",
+            "value": "August 14, 2033"
+          }
+        ]
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "property-policy-declarations-mid-60p",
+      "file": "property-policy-declarations-mid-60p.pdf",
+      "title": "Sixty-page commercial property policy with its declarations in the middle",
+      "kind": "insurance",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 60,
+      "categories": [
+        "pages_50",
+        "financial",
+        "date_in_table",
+        "middle_fact",
+        "irrelevant_names",
+        "competing_dates",
+        "information_dense",
+        "table"
+      ],
+      "notes": "A renewal packet with the coverage forms and location schedules first: the Common Policy Declarations are on page 30, and the Policy Period there (from 07/01/2026 to 07/01/2027) is the only place the effective date appears. The same table gives the countersignature date (06/24/2026); the loss history dates the previous policy period (07/01/2025) and the application (05/12/2026); the loss control schedule dates the survey (03/18/2026). The producer and eight banks with an interest in the buildings are named but are not parties.",
+      "gold": {
+        "document_type": "Commercial Property Policy",
+        "acceptable_types": [
+          "Commercial Property Insurance Policy",
+          "Property Insurance Policy",
+          "Insurance Policy",
+          "Commercial Property Policy Declarations"
+        ],
+        "document_date": "2026-07-01",
+        "acceptable_dates": [],
+        "date_role": "effective",
+        "forbidden_dates": [
+          {
+            "date": "2027-07-01",
+            "why": "policy expiration"
+          },
+          {
+            "date": "2026-06-24",
+            "why": "countersignature date"
+          },
+          {
+            "date": "2025-07-01",
+            "why": "start of the previous policy period"
+          },
+          {
+            "date": "2026-05-12",
+            "why": "application date"
+          },
+          {
+            "date": "2026-03-18",
+            "why": "loss control survey date"
+          }
+        ],
+        "parties": [
+          "Hollowmere Craft Brewing Cooperative"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Gannet Rock Mutual Insurance Company"
+            ],
+            "relation": "from"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Hollowmere Craft Brewing Cooperative",
+            "role": "subject"
+          },
+          {
+            "name": "Hollowmere Craft Brewing Cooperative",
+            "role": "customer"
+          },
+          {
+            "name": "Gannet Rock Mutual Insurance Company",
+            "role": "issuer"
+          },
+          {
+            "name": "Gannet Rock Mutual Insurance Company",
+            "role": "provider"
+          },
+          {
+            "name": "Gannet Rock Mutual Insurance Company",
+            "role": "vendor"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Westbourne Risk Partners LLC",
+            "why": "producer"
+          },
+          {
+            "name": "Wrenhollow Farm Credit, ACA",
+            "why": "mortgageholder"
+          },
+          {
+            "name": "Lakemoor Valley Savings Bank",
+            "why": "mortgageholder"
+          }
+        ],
+        "description_facts": [
+          [
+            "brewing",
+            "brewer",
+            "beer"
+          ],
+          [
+            "Vermont"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "commercial property",
+          "brewery",
+          "policy period"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "07/01/2026"
+          ],
+          "party_text": {
+            "Hollowmere Craft Brewing Cooperative": [
+              "Hollowmere Craft Brewing Cooperative"
+            ]
+          },
+          "date_anchor": "Policy Period",
+          "type_text": [
+            "COMMERCIAL PROPERTY POLICY"
+          ],
+          "identifier_text": [
+            "GRM-CPP-4417305"
+          ]
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "2015 $80,400.00 9 Wastewater",
+          "25 of 60 Policy GRM-CPP-4417305",
+          "0.080 $21,300.00 30 Morrisville",
+          "door $40,100.00 C21-7498 12/03/2021",
+          "expenses $3,250,000.00 29 St.",
+          "the producer. Loc. Month"
+        ],
+        "key_values": [
+          {
+            "key": "Policy Number",
+            "value": "GRM-CPP-4417305"
+          },
+          {
+            "key": "Named Insured",
+            "value": "Hollowmere Craft Brewing Cooperative"
+          }
+        ]
+      },
+      "recording": "pending"
+    },
+    {
+      "id": "watershed-monitoring-report-100p",
+      "file": "watershed-monitoring-report-100p.pdf",
+      "title": "One-hundred-page watershed monitoring report dated in its certification on page 88",
+      "kind": "report",
+      "format": "pdf",
+      "text_layer": "native",
+      "pages": 100,
+      "categories": [
+        "pages_100",
+        "middle_fact",
+        "competing_dates",
+        "irrelevant_names",
+        "information_dense",
+        "table"
+      ],
+      "notes": "The cover dates the review draft (March 3, 2026); the report's own date, the day it was issued in final form (June 19, 2026), is stated once, in the certification on page 88, beside the board meeting it will go to (July 8, 2026). Between them are 40 stations of monthly results, each with twelve 2025 sampling dates. The laboratory and the benthic subconsultant are named but are not parties; the report is the consultant's, for the Authority.",
+      "gold": {
+        "document_type": "Watershed Monitoring Report",
+        "acceptable_types": [
+          "Annual Watershed Monitoring Report",
+          "Water Quality Monitoring Report",
+          "Monitoring Report",
+          "Annual Monitoring Report"
+        ],
+        "document_date": "2026-06-19",
+        "acceptable_dates": [],
+        "date_role": "issuance",
+        "forbidden_dates": [
+          {
+            "date": "2026-03-03",
+            "why": "review draft submitted"
+          },
+          {
+            "date": "2026-07-08",
+            "why": "board meeting the report will go to"
+          }
+        ],
+        "parties": [
+          "Cobalt Basin Water Authority"
+        ],
+        "party_relation": "for",
+        "acceptable_party_sets": [
+          {
+            "parties": [
+              "Thornwick Basin Engineering, PLLC"
+            ],
+            "relation": "from"
+          }
+        ],
+        "party_roles": [
+          {
+            "name": "Cobalt Basin Water Authority",
+            "role": "subject"
+          },
+          {
+            "name": "Cobalt Basin Water Authority",
+            "role": "client"
+          },
+          {
+            "name": "Cobalt Basin Water Authority",
+            "role": "customer"
+          },
+          {
+            "name": "Thornwick Basin Engineering, PLLC",
+            "role": "issuer"
+          },
+          {
+            "name": "Thornwick Basin Engineering, PLLC",
+            "role": "contractor"
+          },
+          {
+            "name": "Thornwick Basin Engineering, PLLC",
+            "role": "provider"
+          }
+        ],
+        "forbidden_parties": [
+          {
+            "name": "Wrenfield Analytical Laboratories, Inc.",
+            "why": "analytical laboratory"
+          },
+          {
+            "name": "Bramblecote Aquatic Ecology LLC",
+            "why": "benthic subconsultant"
+          }
+        ],
+        "description_facts": [
+          [
+            "Cobalt River"
+          ],
+          [
+            "E. coli",
+            "bacteria"
+          ],
+          [
+            "phosphorus",
+            "nutrient"
+          ]
+        ],
+        "description_forbidden": [],
+        "subject_terms": [
+          "watershed",
+          "water quality",
+          "monitoring"
+        ],
+        "expected_readiness": "ready",
+        "evidence": {
+          "date_text": [
+            "June 19, 2026"
+          ],
+          "party_text": {
+            "Cobalt Basin Water Authority": [
+              "Cobalt Basin Water Authority"
+            ]
+          },
+          "date_anchor": "issued in final form on",
+          "type_text": [
+            "ANNUAL WATERSHED MONITORING REPORT"
+          ],
+          "identifier_text": [
+            "TBE-2025-0412"
+          ]
+        }
+      },
+      "ocr_truth": null,
+      "structure": {
+        "reading_order": [
+          "21 72 07/22/2025 616",
+          "180.0 - 04/05/2025 overcast",
+          "the channel 10/25/2025 partly",
+          "Turbidity (NTU) 01/06/2025 2.3",
+          "15 115 10/15/2025 14",
+          "Biology supports the aquatic life use (index 79;",
+          "0.8% pass CB-05 02/07/2025",
+          "C 05/04/2025 CB-18-06 06/07/2025"
+        ]
+      },
+      "recording": "pending"
     }
   ]
 }
