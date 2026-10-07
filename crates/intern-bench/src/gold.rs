@@ -243,6 +243,19 @@ pub struct GoldEvidence {
     /// For each gold party, the verbatim forms it appears in.
     #[serde(default)]
     pub party_text: BTreeMap<String, Vec<String>>,
+    /// The words that define the date, when the document defines it by a
+    /// term rather than stating it plainly (`"Effective Date" means`): a
+    /// reading should carry them with the date, in the same passage. Not
+    /// scored yet; the evidence-retrieval measures read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_anchor: Option<String>,
+    /// Verbatim forms the document states its own type in (its title).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_text: Vec<String>,
+    /// Verbatim forms of the document's own identifier (an agreement,
+    /// policy or loan number).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identifier_text: Vec<String>,
 }
 
 /// What was drawn on the scanned pages, for measuring OCR.
@@ -407,6 +420,31 @@ mod tests {
                 .unwrap_err()
                 .contains("expects the route vision")
         );
+    }
+
+    /// The evidence a long document adds - the words that define its date,
+    /// its title, its own number - is optional, and absent from the gold
+    /// of every document that does not give it.
+    #[test]
+    fn optional_evidence_parses_when_given_and_defaults_when_not() {
+        let gold = GoldFile::parse(
+            br#"{"schema_version": 1, "documents": [
+                {"id": "a", "file": "a.pdf", "gold": {"evidence": {"date_text": ["March 2, 2026"],
+                  "party_text": {}, "date_anchor": "\"Effective Date\" means",
+                  "type_text": ["MASTER SERVICES AGREEMENT"], "identifier_text": ["QSI-MSA-2026-014"]}}},
+                {"id": "b", "file": "b.pdf", "gold": {"evidence": {"date_text": ["May 4, 2026"]}}}]}"#,
+        )
+        .unwrap();
+        let given = &gold.documents[0].gold.evidence;
+        assert_eq!(
+            given.date_anchor.as_deref(),
+            Some("\"Effective Date\" means")
+        );
+        assert_eq!(given.type_text, vec!["MASTER SERVICES AGREEMENT"]);
+        assert_eq!(given.identifier_text, vec!["QSI-MSA-2026-014"]);
+        let absent = &gold.documents[1].gold.evidence;
+        assert!(absent.date_anchor.is_none());
+        assert!(absent.type_text.is_empty() && absent.identifier_text.is_empty());
     }
 
     #[test]

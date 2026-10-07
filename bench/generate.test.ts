@@ -39,7 +39,13 @@ const GOLD_KEYS = [
   'subject_terms', 'expected_readiness', 'evidence',
 ];
 
-type Evidence = { date_text: string[]; party_text: Record<string, string[]> };
+type Evidence = {
+  date_text: string[];
+  party_text: Record<string, string[]>;
+  date_anchor?: string;
+  type_text?: string[];
+  identifier_text?: string[];
+};
 type Gold = {
   document_type: string;
   acceptable_types: string[];
@@ -319,6 +325,13 @@ describe('InternBench corpus generator', () => {
       for (const form of gold.evidence.date_text) expect(carries(form), `${where}: date evidence "${form}"`).toBe(true);
       for (const [party, forms] of Object.entries(gold.evidence.party_text)) {
         for (const form of forms) expect(carries(form), `${where}: party evidence "${form}" for ${party}`).toBe(true);
+      }
+      for (const form of [...(gold.evidence.type_text ?? []), ...(gold.evidence.identifier_text ?? [])]) expect(carries(form), `${where}: evidence "${form}"`).toBe(true);
+      // The words that define the date are printed on the same page as it.
+      const anchor = gold.evidence.date_anchor;
+      if (anchor) {
+        const pages = generated.texts[document.id].map(normalise);
+        expect(pages.some((page) => page.includes(normalise(anchor)) && gold.evidence.date_text.some((form) => page.includes(normalise(form)))), `${where}: date anchor "${anchor}" is not on a page with the date`).toBe(true);
       }
       readings.forEach((text, reading) => {
         if (gold.evidence.date_text.length > 0) expect(gold.evidence.date_text.some((form) => text.includes(normalise(form))), `${where}: reading ${reading} carries no date evidence`).toBe(true);

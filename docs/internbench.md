@@ -108,7 +108,22 @@ Each entry in `bench/gold.json` gives the document's `kind`, `format`,
 * `subject_terms`
 * `expected_readiness`: `ready`, `needs_review` or `either`
 * `evidence`: the verbatim forms in which the document states its date and
-  names its parties
+  names its parties; optionally `date_anchor`, the words that define the
+  date where the document defines it by a term or a label rather than
+  stating it plainly (`"Effective Date" means`, `Date of this Lease`,
+  `Policy Period`), printed on the same page as the date; `type_text`, the
+  title as printed; and `identifier_text`, the document's own number. The
+  optional ones appear only where given and are not scored yet: the
+  evidence-retrieval measures read them.
+
+`party_roles` use the scorer's roles (`issuer`, `sender`, `subject`,
+`recipient`, `counterparty`, which decide `party_role_correct`) and roles
+that say what a party is. The second set includes the phase 3 role list -
+`client`, `contractor`, `employer`, `employee`, `buyer`, `seller`,
+`landlord`, `tenant`, `issuer`, `recipient`, `vendor`, `customer`,
+`borrower`, `lender`, `licensor`, `licensee`, `sender`, `addressee`,
+`other` - alongside the older `patient`, `payer`, `provider`, `firm`,
+`fund`, `investor`, `assignor` and `assignee`; a party may hold several.
 
 A scanned document also has `ocr_truth`: the exact text of each scanned page,
 and the dates, names and identifiers on it. A digital page with a pasted

@@ -889,6 +889,7 @@ mod tests {
                         vec!["HALVORSEN FIXTURE WORKS, LLC".to_owned()],
                     )]
                     .into(),
+                    ..GoldEvidence::default()
                 },
                 ..GoldAnswer::default()
             },
