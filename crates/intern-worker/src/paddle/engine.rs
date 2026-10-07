@@ -160,6 +160,21 @@ impl<T> SessionPool<T> {
         self.lock().idle.push(sessions);
         self.returned.notify_one();
     }
+
+    /// Drops every set no page is using, and says how many. A set out on a
+    /// lease comes back to the pool as before and goes at the next release;
+    /// a page that wants a set after this builds one again.
+    fn release_idle(&self) -> usize {
+        let mut state = self.lock();
+        let idle = std::mem::take(&mut state.idle);
+        state.created -= idle.len();
+        drop(state);
+        self.returned.notify_all();
+        // Outside the lock: dropping a session frees its buffers.
+        let released = idle.len();
+        drop(idle);
+        released
+    }
 }
 
 /// A set of sessions out of the pool, returned when dropped.
@@ -236,11 +251,14 @@ fn session(path: &Path, threads: usize) -> Result<Session, ExtractionError> {
         .map_err(|e| error(&e))?
         .with_inter_op_spinning(false)
         .map_err(|e| error(&e))?
-        // The default arena keeps the largest page's buffers for the life
-        // of the process, and the worker outlives every document: half a
-        // gigabyte held, idle, beside the model server. Without it each run
-        // hands its memory back.
-        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(false).build()])
+        // The arena keeps a page's buffers for the next run instead of
+        // allocating them again: on InternBench's scans, OCR without it took
+        // a fifth longer (dense forms half as long again). It also keeps the
+        // largest page's buffers as long as the session lives, so the worker
+        // drops its sessions when a document has been read (see
+        // `OcrBackend::release`) rather than hold half a gigabyte, idle,
+        // beside the model server.
+        .with_execution_providers([ort::ep::CPU::default().with_arena_allocator(true).build()])
         .map_err(|e| error(&e))?
         .commit_from_file(path)
         .map_err(|e| error(&e))
@@ -787,6 +805,11 @@ impl OcrBackend for PaddleOcr {
     fn concurrency(&self) -> usize {
         self.config.workers.max(1)
     }
+
+    /// Drops the sessions no page is using, and with them their arenas.
+    fn release(&self) {
+        self.pool.release_idle();
+    }
 }
 
 #[cfg(test)]
@@ -825,5 +848,28 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    /// Releasing drops the sets no page holds and lets pages build them
+    /// again; a set out on a lease is kept until it comes back.
+    #[test]
+    fn released_sets_are_built_again_when_a_page_wants_one() {
+        let pool = SessionPool::<u32>::new(2);
+        let cancel = CancellationToken::new();
+        let built = std::sync::atomic::AtomicU32::new(0);
+        let build = || Ok(built.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+        {
+            let _first = pool.acquire(build, &cancel).unwrap();
+            let _second = pool.acquire(build, &cancel).unwrap();
+        }
+        assert_eq!(pool.release_idle(), 2);
+        assert_eq!(pool.lock().created, 0);
+
+        let held = pool.acquire(build, &cancel).unwrap();
+        assert_eq!(built.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(pool.release_idle(), 0, "a leased set is not dropped");
+        drop(held);
+        assert_eq!(pool.release_idle(), 1);
+        assert_eq!(pool.lock().created, 0);
     }
 }
