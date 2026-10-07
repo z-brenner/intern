@@ -20,17 +20,58 @@ use super::{
 const MAX_PARAGRAPH_LINES: usize = 12;
 
 /// Blocks from text with no geometry. Ids are left for
-/// [`super::number_blocks`].
+/// [`super::number_blocks`]. Each block's text is the stretch of `text` its
+/// lines span, byte for byte - line endings, `\r\n` included, and all.
 pub fn blocks_from_text(text: &str, source: TextSource) -> Vec<LayoutBlock> {
-    let lines = text
-        .lines()
-        .map(|line| LayoutLine {
-            text: line.trim_end().to_owned(),
+    let spans = line_spans(text);
+    let lines = spans
+        .iter()
+        .map(|(start, end)| LayoutLine {
+            text: text[*start..*end].to_owned(),
             bbox: None,
             confidence: None,
         })
         .collect::<Vec<_>>();
-    blocks_from_lines(&lines, source)
+    blocks_from_page_lines(text, &spans, &lines, source)
+}
+
+/// Where each line of `text` is, as [`str::lines`] finds the lines: its
+/// first byte, and the end of what it says - before its trailing whitespace
+/// and its line ending.
+pub(crate) fn line_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (newline, _) in text.match_indices('\n') {
+        spans.push((start, newline));
+        start = newline + 1;
+    }
+    if start < text.len() {
+        spans.push((start, text.len()));
+    }
+    for span in &mut spans {
+        span.1 = span.0 + text[span.0..span.1].trim_end().len();
+    }
+    spans
+}
+
+/// Blocks from a page's text and its lines - one line for each of
+/// [`line_spans`], carrying its box where it has one - with each block's
+/// text the exact stretch of the page text from the start of its first
+/// line to the end of its last. A block can then always be found in the
+/// page's text, and cited from it, whatever the text's line endings.
+pub(crate) fn blocks_from_page_lines(
+    text: &str,
+    spans: &[(usize, usize)],
+    lines: &[LayoutLine],
+    source: TextSource,
+) -> Vec<LayoutBlock> {
+    segmented(lines, source)
+        .into_iter()
+        .map(|(range, mut block)| {
+            block.text = text[spans[range.start].0..spans[range.end - 1].1].to_owned();
+            block
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +89,17 @@ enum LineKind {
 /// Blocks from lines in reading order. A line's text is kept exactly, less
 /// trailing whitespace; a block's text is its lines joined with newlines.
 pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<LayoutBlock> {
+    segmented(lines, source)
+        .into_iter()
+        .map(|(_, block)| block)
+        .collect()
+}
+
+/// The blocks of `lines`, each with the lines it was built from.
+fn segmented(
+    lines: &[LayoutLine],
+    source: TextSource,
+) -> Vec<(std::ops::Range<usize>, LayoutBlock)> {
     let kinds = lines
         .iter()
         .map(|line| classify(&line.text))
@@ -67,7 +119,7 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 index += 1;
                 let mut block = block_of(BlockKind::Heading, &lines[start..index], source);
                 block.level = Some(level);
-                blocks.push(block);
+                blocks.push((start..index, block));
             }
             LineKind::TableRow | LineKind::TableSeparator => {
                 while index < lines.len()
@@ -75,10 +127,9 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 {
                     index += 1;
                 }
-                blocks.push(table_block(
-                    &lines[start..index],
-                    &kinds[start..index],
-                    source,
+                blocks.push((
+                    start..index,
+                    table_block(&lines[start..index], &kinds[start..index], source),
                 ));
             }
             LineKind::KeyValue => {
@@ -89,11 +140,14 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 {
                     index += 1;
                 }
-                blocks.push(key_value_block(&lines[start..index], source));
+                blocks.push((start..index, key_value_block(&lines[start..index], source)));
             }
             LineKind::Heading => {
                 index += 1;
-                blocks.push(block_of(BlockKind::Heading, &lines[start..index], source));
+                blocks.push((
+                    start..index,
+                    block_of(BlockKind::Heading, &lines[start..index], source),
+                ));
             }
             LineKind::ListItem | LineKind::Text => {
                 index += 1;
@@ -112,7 +166,10 @@ pub fn blocks_from_lines(lines: &[LayoutLine], source: TextSource) -> Vec<Layout
                 } else {
                     BlockKind::Paragraph
                 };
-                blocks.push(block_of(block_kind, &lines[start..index], source));
+                blocks.push((
+                    start..index,
+                    block_of(block_kind, &lines[start..index], source),
+                ));
             }
         }
     }
@@ -581,6 +638,45 @@ mod tests {
         );
         assert_eq!(blocks[1].lines.len(), 3);
         assert_eq!(blocks[1].bbox, Some([540, 700, 3000, 1020]));
+    }
+
+    /// A block's text is always the stretch of the page text its lines
+    /// span: PDFium ends its lines with `\r\n`, and a line can end in spaces.
+    #[test]
+    fn block_text_is_an_exact_stretch_of_the_page_text() {
+        let text = "NOTICE OF TERMINATION\r\n\r\nThe agreement ends on   \r\n\
+                    May 1, 2026, by notice.\r\nDate: April 2, 2026\r\nTime: 10:00\r\n\
+                    | Item | Amount |  \r\n| Rent | $5 |";
+
+        let blocks = blocks_from_text(text, TextSource::Native);
+
+        let mut from = 0;
+        for block in &blocks {
+            let at = text[from..]
+                .find(&block.text)
+                .unwrap_or_else(|| panic!("{:?} is not in the text after {from}", block.text));
+            from += at + block.text.len();
+        }
+        assert_eq!(
+            blocks[1].text,
+            "The agreement ends on   \r\nMay 1, 2026, by notice."
+        );
+        assert_eq!(blocks[1].lines[0].text, "The agreement ends on");
+        assert_eq!(blocks[2].fields[1].value, "10:00");
+        assert_eq!(
+            blocks[3].table.as_ref().unwrap().rows[1].cells[1].text,
+            "$5"
+        );
+        // Text that ends its lines with `\n` is cut the same way.
+        let plain = text.replace("\r\n", "\n");
+        let joined = blocks_from_text(&plain, TextSource::Native)
+            .iter()
+            .map(|block| block.text.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            joined[1],
+            "The agreement ends on   \nMay 1, 2026, by notice."
+        );
     }
 
     #[test]

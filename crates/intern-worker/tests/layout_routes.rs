@@ -545,7 +545,10 @@ fn a_backend_that_measures_nothing_still_gets_text_blocks() {
     assert_eq!(page.text, "Plain text page.\r\nSecond line.");
     let layout = page.layout.as_ref().unwrap();
     assert_eq!(layout.blocks.len(), 1);
-    assert_eq!(layout.blocks[0].text, "Plain text page.\nSecond line.");
+    // The block is the stretch of the page text it came from, line ending
+    // and all; its lines are the lines.
+    assert_eq!(layout.blocks[0].text, "Plain text page.\r\nSecond line.");
+    assert_eq!(layout.blocks[0].lines[1].text, "Second line.");
     assert_eq!(layout.blocks[0].bbox, None);
 }
 

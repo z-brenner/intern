@@ -602,3 +602,83 @@ fn scanned_lease_ocr_text_has_multiple_lines() {
         page.text
     );
 }
+
+/// Every block of every page the generated fixtures read is a stretch of
+/// that page's text, found in it in order - on the fast route, where the
+/// text is PDFium's with its `\r\n` line ends, and on every other: a block
+/// can always be cited from the page it came from.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn every_block_of_the_fixtures_is_found_in_its_page_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::limits::ResourceLimits;
+
+    struct CannedOcr;
+    impl OcrBackend for CannedOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            Ok(OcrResult::new("SCANNED PAGE\r\nRead by a stand-in.", 90.0))
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/generated");
+    let Ok(entries) = std::fs::read_dir(&fixtures) else {
+        return;
+    };
+    let mut pdfs = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "pdf"))
+        .collect::<Vec<_>>();
+    pdfs.sort();
+    let _turn = pdfium_turn();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    // Scans rendered small: what OCR makes of them is canned anyway.
+    let limits = ResourceLimits {
+        max_page_pixels: 2_000_000,
+        ..ResourceLimits::default()
+    };
+
+    let mut checked = 0;
+    for path in &pdfs {
+        // The encrypted and malformed fixtures have no pages to check.
+        let Ok(document) = extract_pdf(
+            path,
+            &backend,
+            &CannedOcr,
+            &limits,
+            &CancellationToken::new(),
+        ) else {
+            continue;
+        };
+        for page in &document.pages {
+            let Some(layout) = &page.layout else {
+                continue;
+            };
+            let mut from = 0;
+            for block in &layout.blocks {
+                let at = page.text[from..].find(&block.text).unwrap_or_else(|| {
+                    panic!(
+                        "{} page {}: {:?} is not in the page text after byte {from}",
+                        path.display(),
+                        page.page_number,
+                        block.text
+                    )
+                });
+                from += at + block.text.len();
+            }
+            checked += 1;
+        }
+    }
+    assert!(
+        pdfs.is_empty() || checked > 0,
+        "no fixture page was checked"
+    );
+}

@@ -397,12 +397,14 @@ fn every_format_s_pages_carry_blocks_built_from_their_text() {
                 format!("p{}.b1", page.page_number),
                 "{name}"
             );
+            // Each block's text is the stretch of the page text it came
+            // from, in order.
+            let mut from = 0;
             for block in &layout.blocks {
-                assert!(
-                    page.text
-                        .contains(block.text.lines().next().unwrap_or_default()),
-                    "{name}: {block:?}"
-                );
+                let at = page.text[from..]
+                    .find(&block.text)
+                    .unwrap_or_else(|| panic!("{name}: {block:?} is not in the page text"));
+                from += at + block.text.len();
                 assert_eq!(block.bbox, None, "{name}: no geometry to give");
             }
         }

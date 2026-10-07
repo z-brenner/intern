@@ -32,6 +32,7 @@ mod text;
 pub use geometry::{TextRun, analyze_runs};
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
 pub use text::{blocks_from_lines, blocks_from_text};
+use text::{blocks_from_page_lines, line_spans};
 
 /// Tenths of a point in one PDF point.
 pub const UNITS_PER_POINT: f64 = 10.0;
@@ -101,8 +102,12 @@ pub struct LayoutBlock {
     /// `p{page}.b{n}`, `n` counting from 1 in reading order on the page.
     pub id: String,
     pub kind: BlockKind,
-    /// The block's text exactly as the page's text carries it. A table is
-    /// its rows as `| a | b |` lines; a key-value block its pairs as
+    /// The block's text exactly as the page's text carries it: a stretch of
+    /// the page text, byte for byte, line endings included. On a page read
+    /// as it always was - the fast route, and every reader that is not a
+    /// PDF - that is the stretch its lines span; on a page rebuilt from its
+    /// geometry or read by OCR, whose text is its blocks in order, a table
+    /// is its rows as `| a | b |` lines and a key-value block its pairs as
     /// `Key: value` lines.
     pub text: String,
     /// `[x0, y0, x1, y1]`, or none for a reader that knows no geometry.
@@ -214,7 +219,9 @@ impl PageLayout {
 /// a blank line between blocks.
 ///
 /// Deterministic, and the inverse the ids rely on: each block's text occurs
-/// in the page text exactly, in order.
+/// in the page text exactly, in order. A page whose text is kept as its
+/// reader gave it has the same promise from [`blocks_from_text`] and
+/// [`fast_layout`], which take each block's text from it.
 pub fn linearize(blocks: &[LayoutBlock]) -> String {
     let mut text = String::new();
     for block in blocks {
@@ -401,10 +408,11 @@ fn is_page_number(text: &str) -> bool {
 /// text, exactly as PDFium read it, with each line's box where the page's
 /// segments say where its lines are.
 pub fn fast_layout(text: &str, native: Option<&NativePage>, signals: RouteSignals) -> PageLayout {
-    let mut lines = text
-        .lines()
-        .map(|line| LayoutLine {
-            text: line.trim_end().to_owned(),
+    let spans = line_spans(text);
+    let mut lines = spans
+        .iter()
+        .map(|(start, end)| LayoutLine {
+            text: text[*start..*end].to_owned(),
             bbox: None,
             confidence: None,
         })
@@ -425,7 +433,7 @@ pub fn fast_layout(text: &str, native: Option<&NativePage>, signals: RouteSignal
             }
         }
     }
-    let mut blocks = blocks_from_lines(&lines, TextSource::Native);
+    let mut blocks = blocks_from_page_lines(text, &spans, &lines, TextSource::Native);
     let (width, height) = match native {
         Some(native) => {
             to_display_blocks(&mut blocks, native);

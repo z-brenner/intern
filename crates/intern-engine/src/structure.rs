@@ -263,7 +263,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
         } else {
             BlockKind::Paragraph
         };
-        blocks.push(block(kind, std::mem::take(pending), source));
+        blocks.push(block(kind, text, std::mem::take(pending), source));
     };
     for line in text.lines() {
         let trimmed = line.trim_end();
@@ -278,7 +278,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
         pending_table = table_line;
         if !table_line && is_heading_line(trimmed) {
             flush(&mut pending, pending_table, &mut blocks);
-            let mut heading = block(BlockKind::Heading, vec![trimmed.trim()], source);
+            let mut heading = block(BlockKind::Heading, text, vec![trimmed.trim()], source);
             heading.level = markdown_level(trimmed.trim());
             blocks.push(heading);
             continue;
@@ -300,12 +300,20 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
     blocks
 }
 
-fn block(kind: BlockKind, lines: Vec<&str>, source: TextSource) -> LayoutBlock {
+/// A block of `lines`, each a stretch of the page's `text`. Its text is the
+/// stretch from its first line to its last, byte for byte, so the block
+/// can be found in the page's text whatever its line endings.
+fn block(kind: BlockKind, text: &str, lines: Vec<&str>, source: TextSource) -> LayoutBlock {
     let table = (kind == BlockKind::Table).then(|| table_rows(&lines));
+    let offset = |line: &str| line.as_ptr() as usize - text.as_ptr() as usize;
+    let stretch = match (lines.first(), lines.last()) {
+        (Some(first), Some(last)) => &text[offset(first)..offset(last) + last.len()],
+        _ => "",
+    };
     LayoutBlock {
         id: String::new(),
         kind,
-        text: lines.join("\n"),
+        text: stretch.to_owned(),
         bbox: None,
         level: None,
         section: None,
@@ -497,6 +505,32 @@ mod tests {
         assert_eq!(page.blocks[1].section.as_deref(), Some("p2.b1"));
         assert_eq!(document.block("p2.b3").unwrap().kind, BlockKind::Table);
         assert_eq!(document.blocks().count(), 7);
+    }
+
+    /// A segmented block is the stretch of the page text it came from,
+    /// whatever ends the page's lines.
+    #[test]
+    fn a_segmented_block_is_an_exact_stretch_of_the_page_text() {
+        let text = "ARTICLE 2. RENT\r\nTenant pays rent monthly.  \r\nIn advance.\r\n\r\n| Year | Rent |\r\n| 1 | $34.00 |";
+        let document = structured(&DocumentSource::from_pages(vec![SourcePage::new(
+            1,
+            text,
+            PageOrigin::Native,
+        )]));
+
+        let mut from = 0;
+        for block in document.blocks() {
+            let at = text[from..].find(&block.text).unwrap();
+            from += at + block.text.len();
+        }
+        assert_eq!(
+            document.block("p1.b2").unwrap().text,
+            "Tenant pays rent monthly.  \r\nIn advance."
+        );
+        assert_eq!(
+            document.block("p1.b2").unwrap().lines[0].text,
+            "Tenant pays rent monthly."
+        );
     }
 
     #[test]
