@@ -541,3 +541,236 @@ fn below_floor_dpi_is_resource_limit() {
     let (width, height) = ocr.sizes.lock().unwrap()[0];
     assert!(u64::from(width) * u64::from(height) <= MAX_PAGE_PIXELS);
 }
+
+/// A page the worker will cut on the way out - past the characters a page
+/// may carry, or past the document's - has no layout built for it: a
+/// layout repeats its text several times over.
+#[test]
+fn pages_the_worker_will_cut_have_no_layout_built() {
+    use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+
+    let full = "word ".repeat(MAX_PAGE_CHARS / 5);
+    let over = format!("{full}x");
+    let texts = [&over, &full, &full, &full, &full, &full];
+    let pages = texts
+        .iter()
+        .enumerate()
+        .map(|(index, text)| PdfPageInspection {
+            page_index: index,
+            ..page(text, 0.0)
+        })
+        .collect();
+    let (document, renders) = route(pages, Vec::new());
+    assert_eq!(renders, 0);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    // The first page is cut to a page's worth, which the document counts;
+    // three whole pages use the rest of it, and the pages after are cut.
+    assert_eq!(MAX_DOCUMENT_CHARS, 4 * MAX_PAGE_CHARS);
+    assert_eq!(built, [false, true, true, true, false, false]);
+}
+
+/// Scanned pages count against the document's characters too: a page the
+/// worker will cut keeps its text for the cut but lets its layout go.
+#[test]
+fn scanned_pages_past_the_documents_characters_keep_no_layout() {
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    let line = "word ".repeat(16);
+    let full = format!("{line}\n").repeat(MAX_PAGE_CHARS / (line.len() + 1));
+    let pages = (0..5)
+        .map(|index| PdfPageInspection {
+            page_index: index,
+            ..page("", 1.0)
+        })
+        .collect();
+    let readings = (0..5).map(|_| OcrResult::new(full.clone(), 91.0)).collect();
+    let (document, renders) = route(pages, readings);
+    assert_eq!(renders, 5);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(built, [true, true, true, true, false]);
+    assert!(
+        document
+            .pages
+            .iter()
+            .all(|page| page.source == PageSource::Ocr)
+    );
+}
+
+/// The document's characters are counted in page order whatever the route:
+/// a scan first keeps its layout, and the native page past the document's
+/// characters is the one without - as the worker cuts them on the way out.
+#[test]
+fn a_mixed_documents_characters_are_counted_in_page_order() {
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    let line = "word ".repeat(16);
+    let full = format!("{line}\n").repeat(MAX_PAGE_CHARS / (line.len() + 1));
+    let mut pages = vec![page("", 1.0)];
+    pages.extend((1..5).map(|index| PdfPageInspection {
+        page_index: index,
+        ..page(&full, 0.0)
+    }));
+    let mut readings = vec![OcrResult::new(full.clone(), 91.0)];
+    readings.extend((1..5).map(|_| OcrResult::new("", 0.0)));
+    let (document, renders) = route(pages, readings);
+    assert_eq!(renders, 1);
+    assert_eq!(document.pages[0].source, PageSource::Ocr);
+    let built = document
+        .pages
+        .iter()
+        .map(|page| page.layout.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(built, [true, true, true, true, false]);
+}
+
+/// A page routed to be read for its geometry whose text is longer than a
+/// page may carry is never read into runs: the worker would cut it and its
+/// layout on the way out. It is read as its text, without a layout.
+#[test]
+fn a_page_longer_than_a_page_may_carry_is_not_read_for_its_geometry() {
+    use intern_worker::layout::{NativePage, RouteSignals, TextRun};
+    use intern_worker::limits::MAX_PAGE_CHARS;
+
+    struct RefusesRuns(PdfPageInspection);
+    impl PdfBackend for RefusesRuns {
+        fn inspect(
+            &self,
+            _path: &Path,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+            Ok(vec![self.0.clone()])
+        }
+
+        fn render_within(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _max_pixels: u64,
+            _cancel: &CancellationToken,
+        ) -> Result<RenderedPage, ExtractionError> {
+            panic!("a text page was rendered")
+        }
+
+        fn page_runs(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _native: &NativePage,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<TextRun>, ExtractionError> {
+            panic!("the characters of a page the worker will cut were read")
+        }
+    }
+
+    let text = "word ".repeat(MAX_PAGE_CHARS / 5 + 1);
+    let inspection = PdfPageInspection {
+        native: Some(NativePage::default()),
+        // Two columns: the router sends it to be read for its geometry.
+        signals: Some(RouteSignals {
+            chars: 1_000,
+            columns: 2,
+            ..RouteSignals::default()
+        }),
+        ..page(&text, 0.0)
+    };
+    let document = extract_pdf(
+        Path::new("long.pdf"),
+        &RefusesRuns(inspection),
+        &FakeOcr {
+            results: Vec::new(),
+        },
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let page = &document.pages[0];
+    assert_eq!(page.text, text);
+    assert!(page.layout.is_none());
+}
+
+/// Pages routed to be read for their geometry past what the document's
+/// characters carry - counting the pages read as their text before them -
+/// are not read into runs while the document is planned: the worker would
+/// cut them, and a layout built for each would be held until then.
+#[test]
+fn pages_past_the_documents_characters_are_not_read_for_their_geometry() {
+    use intern_worker::layout::{NativePage, RouteSignals, TextRun};
+    use intern_worker::limits::{MAX_DOCUMENT_CHARS, MAX_PAGE_CHARS};
+
+    struct CountsRuns {
+        pages: Vec<PdfPageInspection>,
+        asked: AtomicUsize,
+    }
+    impl PdfBackend for CountsRuns {
+        fn inspect(
+            &self,
+            _path: &Path,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<PdfPageInspection>, ExtractionError> {
+            Ok(self.pages.clone())
+        }
+
+        fn render_within(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _max_pixels: u64,
+            _cancel: &CancellationToken,
+        ) -> Result<RenderedPage, ExtractionError> {
+            panic!("a text page was rendered")
+        }
+
+        fn page_runs(
+            &self,
+            _path: &Path,
+            _page_index: usize,
+            _native: &NativePage,
+            _cancel: &CancellationToken,
+        ) -> Result<Vec<TextRun>, ExtractionError> {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+    }
+
+    let text = "word ".repeat(MAX_PAGE_CHARS / 5);
+    let pages = (0..6)
+        .map(|index| PdfPageInspection {
+            page_index: index,
+            native: Some(NativePage::default()),
+            signals: Some(RouteSignals {
+                chars: 1_000,
+                columns: 2,
+                ..RouteSignals::default()
+            }),
+            ..page(&text, 0.0)
+        })
+        .collect();
+    let backend = CountsRuns {
+        pages,
+        asked: AtomicUsize::new(0),
+    };
+    let document = extract_pdf(
+        Path::new("long.pdf"),
+        &backend,
+        &FakeOcr {
+            results: Vec::new(),
+        },
+        &ResourceLimits::default(),
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    assert_eq!(document.pages.len(), 6);
+    assert_eq!(
+        backend.asked.load(Ordering::SeqCst),
+        MAX_DOCUMENT_CHARS / MAX_PAGE_CHARS,
+        "only the pages within the document's characters are read for their geometry"
+    );
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareDocuments } from './compare-worker-pages.mjs';
+import { compareDocuments, readWithWorker } from './compare-worker-pages.mjs';
 
 interface Page {
   page_number: number;
@@ -66,5 +66,11 @@ describe('compareDocuments', () => {
     expect(
       compareDocuments('a.pdf', parsed([page('x')]), parsed([page('x', 'fast')], ['LOW_OCR_CONFIDENCE'])).problems,
     ).toEqual(['a.pdf: warnings [] before, ["LOW_OCR_CONFIDENCE"] after']);
+  });
+});
+
+describe('readWithWorker', () => {
+  it('rejects instead of waiting on a worker that cannot run', async () => {
+    await expect(readWithWorker('/nonexistent/intern-worker', ['one.pdf'])).rejects.toThrow(/could not run/);
   });
 });

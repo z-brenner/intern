@@ -833,3 +833,131 @@ fn every_block_of_the_fixtures_is_found_in_its_page_text() {
         "no fixture page was checked"
     );
 }
+
+/// A page of more objects than the survey visits, every one a rule.
+#[cfg(feature = "native-pdfium")]
+fn many_objects_pdf() -> Vec<u8> {
+    let mut contents = String::from(
+        "BT /F1 12 Tf 54 740 Td (A page drawn with far more objects than any document needs.) Tj ET\n",
+    );
+    for index in 0..(intern_worker::layout::router::bounds::MAX_SURVEY_OBJECTS + 500) {
+        let y = 100 + (index % 600);
+        contents.push_str(&format!("54 {y} m 300 {y} l S\n"));
+    }
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
+/// A page whose only text is drawn in forms nested `depth` deep.
+#[cfg(feature = "native-pdfium")]
+fn nested_forms_pdf(depth: usize) -> Vec<u8> {
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /XObject << /Fm 6 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", b"/Fm Do"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    // Forms 6 .. 6 + depth - 1, each drawing the next; the last draws text.
+    for level in 0..depth {
+        let number = 6 + level;
+        if level + 1 < depth {
+            objects.push(stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << /Fm {} 0 R >> >>",
+                    number + 1
+                ),
+                b"/Fm Do",
+            ));
+        } else {
+            objects.push(stream(
+                "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >>",
+                b"BT /F1 12 Tf 54 740 Td (Text drawn in the innermost form.) Tj ET",
+            ));
+        }
+    }
+    pdf(&objects)
+}
+
+/// A page with more objects than the survey visits, or forms nested past
+/// its depth, is not measured: it keeps its text and is read on the fast
+/// route, and the walk over it stops at the bound.
+#[cfg(feature = "native-pdfium")]
+#[test]
+fn a_page_past_the_survey_bounds_is_read_as_its_text() {
+    use intern_worker::extract::{OcrResult, extract_pdf};
+    use intern_worker::layout::PageRoute;
+    use intern_worker::layout::router::bounds::MAX_FORM_DEPTH;
+    use intern_worker::limits::ResourceLimits;
+
+    struct NoOcr;
+    impl OcrBackend for NoOcr {
+        fn recognize(
+            &self,
+            _page: &RenderedPage,
+            _cancel: &CancellationToken,
+        ) -> Result<OcrResult, intern_worker::extract::ExtractionError> {
+            panic!("a text page was sent to OCR")
+        }
+    }
+
+    let Some(library_directory) = std::env::var_os("INTERN_PDFIUM_DIR") else {
+        return;
+    };
+    let _turn = pdfium_turn();
+    let directory = tempdir().unwrap();
+    let backend = PdfiumBackend::new(library_directory).unwrap();
+    let cancel = CancellationToken::new();
+    for (name, bytes, text) in [
+        ("many.pdf", many_objects_pdf(), "far more objects"),
+        (
+            "deep.pdf",
+            nested_forms_pdf(MAX_FORM_DEPTH + 4),
+            "innermost form",
+        ),
+    ] {
+        let path = directory.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let pages = backend.inspect(&path, &cancel).unwrap();
+        assert!(
+            pages[0].native.is_none(),
+            "{name}: the page is not measured"
+        );
+        let document =
+            extract_pdf(&path, &backend, &NoOcr, &ResourceLimits::default(), &cancel).unwrap();
+        let page = &document.pages[0];
+        assert!(page.text.contains(text), "{name}: {:?}", page.text);
+        assert_eq!(
+            page.layout.as_ref().unwrap().route,
+            PageRoute::Fast,
+            "{name}"
+        );
+    }
+
+    // Forms nested within the bound are followed as before.
+    let path = directory.path().join("shallow.pdf");
+    std::fs::write(&path, nested_forms_pdf(3)).unwrap();
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(
+        pages[0]
+            .native
+            .as_ref()
+            .is_some_and(|native| !native.segments.is_empty())
+    );
+}
