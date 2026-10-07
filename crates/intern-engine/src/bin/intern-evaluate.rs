@@ -699,14 +699,12 @@ impl EvidenceSettings {
         })
     }
 
+    /// The engine set to the pipeline asked for. The engine's own default is
+    /// the evidence pipeline, so a digest run must say so too.
     fn configure(&self, engine: Engine) -> Engine {
-        if self.pipeline == Pipeline::Evidence {
-            engine
-                .with_pipeline(Pipeline::Evidence)
-                .with_retrieval(self.retrieval.clone())
-        } else {
-            engine
-        }
+        engine
+            .with_pipeline(self.pipeline)
+            .with_retrieval(self.retrieval.clone())
     }
 
     /// The context the evidence pipeline fits prompts to: the one given,
@@ -1777,6 +1775,28 @@ mod tests {
 
     fn digest_settings() -> EvidenceSettings {
         EvidenceSettings::parse("new", &HashMap::new()).unwrap()
+    }
+
+    /// A live run reads with the engine `configure` returns, whose own
+    /// default is the evidence pipeline: a digest run that left it alone
+    /// would send evidence prompts under a digest label.
+    #[test]
+    fn every_pipeline_name_configures_the_engine_it_names() {
+        for (word, pipeline) in [
+            ("digest", Pipeline::Digest),
+            ("new", Pipeline::Digest),
+            ("legacy", Pipeline::Digest),
+            ("evidence", Pipeline::Evidence),
+        ] {
+            let engine = EvidenceSettings::parse(word, &HashMap::new())
+                .unwrap()
+                .configure(Engine::with_proposer(Box::new(FixedReply(
+                    ModelProposal::default(),
+                    None,
+                    None,
+                ))));
+            assert_eq!(engine.pipeline(), pipeline, "--pipeline {word}");
+        }
     }
 
     fn recording_with(prompt_sha256: Option<String>) -> Recording {

@@ -390,12 +390,14 @@ impl ModelClient {
 
 /// How probable the model found the tokens of its `document_date` and
 /// `parties` values, from the per-token probabilities a server reported -
-/// in an evidence-pipeline reply, its `date` and each party's `name`.
+/// in an evidence-pipeline reply, its `date` and each party's name.
 ///
 /// The grammar forces every key, quote, and bracket, and the model's raw
 /// probability for a forced token says nothing about the answer, so only
 /// tokens overlapping a value's own characters count: the inside of the date
-/// string or a party name, or a bare `null` or `[]`.
+/// string or a party name, or a bare `null` or `[]`. A compact fact,
+/// `[value, role, id]`, counts by its value alone: its role and id are
+/// answers of their own, not the date or the name.
 pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidence> {
     let mut text = Vec::new();
     let mut ranges = Vec::with_capacity(tokens.len());
@@ -408,13 +410,17 @@ pub(crate) fn token_confidence(tokens: &[TokenLogprob]) -> Option<TokenConfidenc
         ranges.push((start, text.len()));
     }
     let mut spans = Vec::new();
-    for key in [
-        &b"\"document_date\":"[..],
-        &b"\"parties\":"[..],
-        &b"\"date\":"[..],
-    ] {
+    for key in [&b"\"document_date\":"[..], &b"\"parties\":"[..]] {
         if let Some(at) = find(&text, key) {
             value_spans(&text, at + key.len(), &mut spans);
+        }
+    }
+    let date = &b"\"date\":"[..];
+    if let Some(at) = find(&text, date).map(|at| at + date.len()) {
+        if text.get(at) == Some(&b'[') {
+            fact_span(&text, at, &mut spans);
+        } else {
+            value_spans(&text, at, &mut spans);
         }
     }
     // An evidence-pipeline reply names each party in a `"name"` of its own.
@@ -452,7 +458,8 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// The byte spans of the JSON value starting at `at`: each string's inside,
-/// or the bare literal (`null`, `[]`) when there is no string.
+/// or the bare literal (`null`, `[]`) when there is no string. A list of
+/// compact facts (`[[name, role, id], ...]`) spans each fact's value.
 fn value_spans(text: &[u8], at: usize, spans: &mut Vec<(usize, usize)>) {
     let mut index = at;
     match text.get(index) {
@@ -465,8 +472,12 @@ fn value_spans(text: &[u8], at: usize, spans: &mut Vec<(usize, usize)>) {
                 spans.push((at, index + 1));
                 return;
             }
-            while text.get(index) == Some(&b'"') {
-                index = string_span(text, index, spans);
+            loop {
+                index = match text.get(index) {
+                    Some(b'"') => string_span(text, index, spans),
+                    Some(b'[') => fact_span(text, index, spans),
+                    _ => break,
+                };
                 if text.get(index) != Some(&b',') {
                     break;
                 }
@@ -487,19 +498,41 @@ fn value_spans(text: &[u8], at: usize, spans: &mut Vec<(usize, usize)>) {
 /// Records the inside of the string opening at `quote` and returns the index
 /// just past its closing quote.
 fn string_span(text: &[u8], quote: usize, spans: &mut Vec<(usize, usize)>) -> usize {
+    let (inside, next) = string_at(text, quote);
+    spans.push(inside);
+    next
+}
+
+/// The inside of the string opening at `quote`, and the index just past its
+/// closing quote.
+fn string_at(text: &[u8], quote: usize) -> ((usize, usize), usize) {
     let start = quote + 1;
     let mut index = start;
     while index < text.len() {
         match text[index] {
             b'\\' => index += 2,
-            b'"' => {
-                spans.push((start, index));
-                return index + 1;
-            }
+            b'"' => return ((start, index), index + 1),
             _ => index += 1,
         }
     }
-    spans.push((start, text.len()));
+    ((start, text.len()), text.len())
+}
+
+/// Records the value of the compact fact opening at `open`, `[value, role,
+/// id]`: the grammar writes the value first, and only its inside is the
+/// answer measured. Returns the index just past the fact's closing bracket.
+fn fact_span(text: &[u8], open: usize, spans: &mut Vec<(usize, usize)>) -> usize {
+    let mut index = open + 1;
+    if text.get(index) == Some(&b'"') {
+        index = string_span(text, index, spans);
+    }
+    while let Some(&byte) = text.get(index) {
+        match byte {
+            b'"' => index = string_at(text, index).1,
+            b']' => return index + 1,
+            _ => index += 1,
+        }
+    }
     text.len()
 }
 
@@ -2037,5 +2070,41 @@ mod tests {
         assert_eq!(confidence.tokens, 3);
         assert!(close(confidence.min, 0.4), "{confidence:?}");
         assert!(close(confidence.mean, 0.6), "{confidence:?}");
+    }
+
+    /// The compact reply the grammar writes states each fact as an array,
+    /// value first: the date and each party's name are read; the roles and
+    /// ids beside them, stable or ordinal, are not.
+    #[test]
+    fn token_confidence_reads_the_compact_replys_date_and_names() {
+        for (date_id, first_id, second_id) in
+            [(r#""p1.b2""#, r#""p1.b1""#, r#""p2.b3""#), ("4", "1", "7")]
+        {
+            let tokens = pieces(&[
+                (r#"{"type":["Invoice","p1.b1"],"date":[""#, 0.01),
+                ("2025-05-01", 0.8),
+                (r#"",""#, 0.02),
+                ("invoice", 0.1),
+                (r#"","#, 0.02),
+                (date_id, 0.15),
+                (r#"],"parties":[[""#, 0.02),
+                ("Acme", 0.6),
+                (r#"",""#, 0.03),
+                ("issuer", 0.05),
+                (r#"","#, 0.03),
+                (first_id, 0.07),
+                (r#"],[""#, 0.03),
+                ("Contoso", 0.4),
+                (r#"",""#, 0.03),
+                ("customer", 0.05),
+                (r#"","#, 0.03),
+                (second_id, 0.07),
+                (r#"]]}"#, 0.05),
+            ]);
+            let confidence = token_confidence(&tokens).unwrap();
+            assert_eq!(confidence.tokens, 3, "{date_id}: {confidence:?}");
+            assert!(close(confidence.min, 0.4), "{date_id}: {confidence:?}");
+            assert!(close(confidence.mean, 0.6), "{date_id}: {confidence:?}");
+        }
     }
 }
