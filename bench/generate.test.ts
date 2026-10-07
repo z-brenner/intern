@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -192,6 +192,49 @@ describe('InternBench corpus generator', () => {
   it('writes byte-identical files on every run', async () => {
     expect(again.manifest).toEqual(generated.manifest);
     expect(await inventory(second)).toEqual(await inventory(first));
+  });
+
+  it('rebuilds only the --only documents and keeps the rest of the corpus', async () => {
+    const corpus = await mkdtemp(join(tmpdir(), 'internbench-only-'));
+    try {
+      await cp(first, corpus, { recursive: true });
+      const rebuilt = await generateBench(corpus, { only: ['invoice-date-in-table'] });
+      expect(rebuilt.manifest.files.map((entry) => entry.file)).toEqual(['invoice-date-in-table.pdf']);
+      // Every other document is still there, and the manifest on disk is
+      // the full one again, not a list of the one document rebuilt.
+      expect(await inventory(corpus)).toEqual(await inventory(first));
+      expect(await readFile(join(corpus, 'manifest.json'), 'utf8')).toBe(await readFile(join(first, 'manifest.json'), 'utf8'));
+    } finally {
+      await rm(corpus, { recursive: true, force: true });
+    }
+  });
+
+  it('marks the manifest of a corpus that holds only some documents as partial', async () => {
+    const corpus = await mkdtemp(join(tmpdir(), 'internbench-partial-'));
+    try {
+      await generateBench(corpus, { only: ['invoice-date-in-table'] });
+      const manifest = JSON.parse(await readFile(join(corpus, 'manifest.json'), 'utf8'));
+      expect(manifest.partial).toBe(true);
+      expect(manifest.files.map((entry: { file: string }) => entry.file)).toEqual(['invoice-date-in-table.pdf']);
+      // A full build over it replaces the files it listed and drops the mark.
+      await generateBench(corpus);
+      expect(await inventory(corpus)).toEqual(await inventory(first));
+    } finally {
+      await rm(corpus, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('refuses to write into a directory that is not an earlier output', async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), 'internbench-elsewhere-'));
+    try {
+      await writeFile(join(elsewhere, 'notes.txt'), 'not a corpus');
+      await expect(generateBench(elsewhere, { only: ['invoice-date-in-table'] })).rejects.toThrow(/holds no InternBench manifest/);
+      await expect(generateBench(elsewhere)).rejects.toThrow(/holds no InternBench manifest/);
+      expect(await readdir(elsewhere)).toEqual(['notes.txt']);
+      await expect(generateBench(BENCH)).rejects.toThrow(/refusing to write the corpus/);
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it('produces exactly the reviewed gold', async () => {

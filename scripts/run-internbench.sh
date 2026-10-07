@@ -18,7 +18,9 @@
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
-#                       the default corpus is generated when it is missing)
+#                       the default corpus is generated again unless its manifest.json
+#                       is the committed bench/manifest.json, so a missing, partial
+#                       (--only) or out-of-date corpus is never run)
 #   MANIFEST            the generator's manifest (default: bench/manifest.json when present)
 #   OUT_DIR             where report.json, report.md, recording.json and the
 #                       server log go (default: target/internbench)
@@ -62,7 +64,7 @@ if [ -z "${INTERN_BENCH:-}" ]; then
   (cd "$REPO" && cargo build --release --locked -p intern-bench)
   INTERN_BENCH="${CARGO_TARGET_DIR:-$REPO/target}/release/intern-bench"
 fi
-if [ "$CORPUS" = "$REPO/bench/generated" ] && [ ! -f "$CORPUS/manifest.json" ]; then
+if [ "$CORPUS" = "$REPO/bench/generated" ] && ! cmp -s "$CORPUS/manifest.json" "$REPO/bench/manifest.json"; then
   (cd "$REPO" && node bench/generate.mjs)
 fi
 mkdir -p "$OUT_DIR"

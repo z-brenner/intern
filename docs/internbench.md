@@ -47,6 +47,15 @@ timestamps, a fixed zlib level, and no clock or locale. Run on the pinned
 Node it reproduces both files byte for byte, which
 `bench/generate.test.ts` checks in CI.
 
+`--only id,id` rebuilds just those documents and leaves the others' files
+in place; the output's `manifest.json` then says `"partial": true` unless it
+still lists every document. `--out DIR` writes somewhere else. A full build
+replaces the files the directory's earlier `manifest.json` lists and removes
+nothing else, and the generator refuses a directory that is not empty and
+holds no InternBench manifest. `scripts/run-internbench.sh` generates the
+default corpus again whenever `bench/generated/manifest.json` is not the
+committed `bench/manifest.json`.
+
 | Group | Documents |
 | --- | --- |
 | Digital PDFs | one-page notice; invoices with the date in a header table and with the issuer only in the layout; account statement with 25+ transaction dates; purchase order; master services agreement; second amendment; SOW issued under an MSA, effective date on page 3 of 5; notice of default; offer letter; prior authorization; explanation of benefits; promissory note; capital call; engagement letter; letterhead-only letter; two-column lease; row-interleaved two-column declarations page; 8-page annual-report excerpt; vendor registration form; change order; board minutes with ~20 names; museum condition report; aircraft maintenance record; assignment of lease |
