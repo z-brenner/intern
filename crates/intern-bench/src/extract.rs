@@ -274,6 +274,11 @@ mod tests {
             "extraction alone names nothing, so nothing is a rate"
         );
         assert!(record.readiness.is_none());
+        assert_eq!(
+            crate::report::summarize([&record]).review_rate,
+            None,
+            "nothing was named, so nothing was sent to review"
+        );
         assert_eq!(timing::get(&record.timings, "worker_total_ms"), Some(12.5));
 
         // Today's worker: the same text, no layouts. Everything but the

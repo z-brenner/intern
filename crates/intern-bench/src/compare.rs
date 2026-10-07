@@ -259,6 +259,7 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
     let completed = aligned
         .iter()
         .filter(|(was, now)| was.status == COMPLETED && now.status == COMPLETED)
+        .filter(|(was, now)| was.readiness.is_some() && now.readiness.is_some())
         .collect::<Vec<_>>();
     let review_rate = |pick: fn(&(DocumentRecord, DocumentRecord)) -> &DocumentRecord| {
         (!completed.is_empty()).then(|| {
@@ -723,68 +724,74 @@ pub fn render(comparison: &Comparison) -> String {
     }
     let _ = writeln!(out);
 
-    let _ = writeln!(out, "## Safety counts\n");
-    let _ = writeln!(out, "| Count | Before | After | Change |");
-    let _ = writeln!(out, "| --- | ---: | ---: | ---: |");
-    for delta in &comparison.counts {
-        let show = |value: Option<f64>| {
-            value.map_or_else(
+    // Two extract-only runs name nothing: there are no safety counts and
+    // no flips of a name's scores, only the extraction scores above and
+    // their movements below.
+    let extraction = comparison.before.mode == "extract" && comparison.after.mode == "extract";
+    if !extraction {
+        let _ = writeln!(out, "## Safety counts\n");
+        let _ = writeln!(out, "| Count | Before | After | Change |");
+        let _ = writeln!(out, "| --- | ---: | ---: | ---: |");
+        for delta in &comparison.counts {
+            let show = |value: Option<f64>| {
+                value.map_or_else(
+                    || "–".to_owned(),
+                    |value| {
+                        if delta.metric.ends_with("_rate") {
+                            percent(value)
+                        } else {
+                            format!("{value:.0}")
+                        }
+                    },
+                )
+            };
+            let change = delta.delta.map_or_else(
                 || "–".to_owned(),
                 |value| {
-                    if delta.metric.ends_with("_rate") {
-                        percent(value)
+                    let shown = if delta.metric.ends_with("_rate") {
+                        signed(round(value * 100.0, 1), " pts")
                     } else {
-                        format!("{value:.0}")
-                    }
+                        signed(value, "")
+                    };
+                    format!("{shown}{}", verdict(&delta.metric, value))
                 },
-            )
-        };
-        let change = delta.delta.map_or_else(
-            || "–".to_owned(),
-            |value| {
-                let shown = if delta.metric.ends_with("_rate") {
-                    signed(round(value * 100.0, 1), " pts")
-                } else {
-                    signed(value, "")
-                };
-                format!("{shown}{}", verdict(&delta.metric, value))
-            },
-        );
-        let _ = writeln!(
-            out,
-            "| {} | {} | {} | {change} |",
-            delta.metric,
-            show(delta.before),
-            show(delta.after)
-        );
-    }
-    let _ = writeln!(out);
-
-    let flips = |out: &mut String, title: &str, flips: &[Flip]| {
-        let mut by_document: Vec<(&str, Vec<&str>)> = Vec::new();
-        for flip in flips {
-            match by_document.iter_mut().find(|(id, _)| *id == flip.id) {
-                Some((_, scores)) => scores.push(&flip.score),
-                None => by_document.push((&flip.id, vec![&flip.score])),
-            }
-        }
-        let _ = writeln!(
-            out,
-            "## {title}: {} score(s) in {} document(s)\n",
-            flips.len(),
-            by_document.len()
-        );
-        if flips.is_empty() {
-            let _ = writeln!(out, "None.\n");
-            return;
-        }
-        for (id, scores) in by_document {
-            let _ = writeln!(out, "- **{id}**: {}", scores.join(", "));
+            );
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {change} |",
+                delta.metric,
+                show(delta.before),
+                show(delta.after)
+            );
         }
         let _ = writeln!(out);
-    };
-    flips(&mut out, "Broken", &comparison.broken);
-    flips(&mut out, "Fixed", &comparison.fixed);
+
+        let flips = |out: &mut String, title: &str, flips: &[Flip]| {
+            let mut by_document: Vec<(&str, Vec<&str>)> = Vec::new();
+            for flip in flips {
+                match by_document.iter_mut().find(|(id, _)| *id == flip.id) {
+                    Some((_, scores)) => scores.push(&flip.score),
+                    None => by_document.push((&flip.id, vec![&flip.score])),
+                }
+            }
+            let _ = writeln!(
+                out,
+                "## {title}: {} score(s) in {} document(s)\n",
+                flips.len(),
+                by_document.len()
+            );
+            if flips.is_empty() {
+                let _ = writeln!(out, "None.\n");
+                return;
+            }
+            for (id, scores) in by_document {
+                let _ = writeln!(out, "- **{id}**: {}", scores.join(", "));
+            }
+            let _ = writeln!(out);
+        };
+        flips(&mut out, "Broken", &comparison.broken);
+        flips(&mut out, "Fixed", &comparison.fixed);
+    }
     let moved = |out: &mut String, title: &str, flips: &[Flip]| {
         if flips.is_empty() {
             return;
@@ -1239,6 +1246,10 @@ mod tests {
         assert!(
             rendered.contains("| a | `table_row_accuracy` | 50.0% | 25.0% |"),
             "{rendered}"
+        );
+        assert!(
+            !rendered.contains("## Safety counts") && !rendered.contains("review_rate"),
+            "two extract-only runs name nothing: {rendered}"
         );
         // Within the error rate's tolerance: not listed.
         assert!(

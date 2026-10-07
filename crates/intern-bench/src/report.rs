@@ -158,7 +158,8 @@ pub struct Summary {
     pub scored: usize,
     pub completed: usize,
     pub statuses: BTreeMap<String, usize>,
-    /// Of the completed documents, the fraction sent to review.
+    /// Of the completed documents that were named, the fraction sent to
+    /// review; none for an extract-only run, which names nothing.
     #[serde(default)]
     pub review_rate: Option<f64>,
     /// Unsupported description claims over all claims.
@@ -180,12 +181,16 @@ pub struct Summary {
 pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> Summary {
     let mut summary = Summary::default();
     let mut reviewed = 0;
+    // Completed documents that were routed at all: an extract-only record
+    // names nothing and is neither ready nor sent to review.
+    let mut routed = 0;
     let mut fractions: BTreeMap<String, (f64, usize)> = BTreeMap::new();
     for record in records {
         summary.documents += 1;
         *summary.statuses.entry(record.status.clone()).or_insert(0) += 1;
         if record.status == COMPLETED {
             summary.completed += 1;
+            routed += usize::from(record.readiness.is_some());
             if record.readiness.as_deref() == Some("needs_review") {
                 reviewed += 1;
             }
@@ -239,8 +244,7 @@ pub fn summarize<'a>(records: impl IntoIterator<Item = &'a DocumentRecord>) -> S
             )
         })
         .collect();
-    summary.review_rate =
-        (summary.completed > 0).then(|| round(reviewed as f64 / summary.completed as f64, 4));
+    summary.review_rate = (routed > 0).then(|| round(reviewed as f64 / routed as f64, 4));
     summary.unsupported_fact_rate = (summary.counts.claims > 0).then(|| {
         round(
             summary.counts.unsupported_claims as f64 / summary.counts.claims as f64,
