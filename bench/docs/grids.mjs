@@ -156,10 +156,39 @@ export function priceListUnruled() {
   });
 }
 
-/// A caption over its value, as invoice templates print header facts.
+/// Marks the last thing drawn as part of the fill: what an application
+/// wrote onto a printed template, after it.
+function filled(page) {
+  page.items[page.items.length - 1].layer = 'fill';
+}
+
+/// The page as a filled-in template is written: the template first (its
+/// rules, boxes and captions), then everything filled in, in the order it
+/// was entered. A reader that follows the content stream meets every
+/// caption before any value.
+function flattenFill(page) {
+  page.items = [...page.items.filter((item) => item.layer !== 'fill'), ...page.items.filter((item) => item.layer === 'fill')];
+  for (const item of page.items) delete item.layer;
+}
+
+/// A boxed field whose value is part of the fill.
+function filledBox(page, x, y, w, h, label, value, options) {
+  fieldBox(page, x, y, w, h, label, value, options);
+  if (value) filled(page);
+}
+
+/// A check box whose X, when checked, is part of the fill.
+function filledCheck(page, x, y, caption, checked, options) {
+  checkBox(page, x, y, caption, checked, options);
+  if (checked) page.items[page.items.length - 2].layer = 'fill';
+}
+
+/// A caption over its value, as invoice templates print header facts; the
+/// value is part of the fill.
 function captioned(page, x, y, caption, value, { size = 10, face = 'sans' } = {}) {
   page.text(x, y, caption, { face: 'sans-bold', size: 6.5, grey: 0.4 });
   page.text(x, y + 13, value, { face, size });
+  filled(page);
 }
 
 export function invoiceLabelAbove() {
@@ -185,7 +214,10 @@ export function invoiceLabelAbove() {
   const header = [['INVOICE NUMBER', number], ['INVOICE DATE', numericDate(invoiceDate)], ['CUSTOMER NO.', 'C-2291'], ['TERMS', 'Net 30'], ['DUE DATE', numericDate(dueDate)]];
   header.forEach(([caption, value], index) => captioned(page, 62 + index * 100, 110, caption, value));
   captioned(page, 54, 156, 'BILL TO', customer, { face: 'sans-bold' });
-  ['Attn: Accounts Payable', '908 Mill Pond Road, Suite 4', 'Larchmont, OR 97370'].forEach((line, index) => page.text(54, 182 + index * 12, line, { size: 9.5 }));
+  ['Attn: Accounts Payable', '908 Mill Pond Road, Suite 4', 'Larchmont, OR 97370'].forEach((line, index) => {
+    page.text(54, 182 + index * 12, line, { size: 9.5 });
+    filled(page);
+  });
   captioned(page, 330, 156, 'INSTALLED AT', '908 Mill Pond Road, front elevation');
   captioned(page, 330, 196, 'INSTALLATION DATE', numericDate(installed));
   const flow = new Flow({ face: 'sans', fontSize: 9, margins: { top: 54, bottom: 60, left: 54, right: 54 } });
@@ -202,6 +234,7 @@ export function invoiceLabelAbove() {
     y += 28;
   }
   page.text(54, y + 10, `Please pay by ${longDate(dueDate)}. Make checks payable to ${issuer}, or pay by ACH to the account on your vendor file.`, { size: 8.5 });
+  flattenFill(page);
   const { bytes, text } = digitalPdf([page]);
   return result({
     id,
@@ -213,7 +246,7 @@ export function invoiceLabelAbove() {
     textLayer: 'native',
     pages: 1,
     categories: ['invoice', 'key_value', 'competing_dates', 'layout_parties'],
-    notes: `Five header facts in a shaded band, each under a small grey caption, so a line-by-line reading gives five captions and then five values and leaves the reader to pair them by position. The invoice date (${numericDate(invoiceDate)}) is the second; the due date (${numericDate(dueDate)}) and the installation date (${numericDate(installed)}) are traps. The issuer is named only in the letterhead; the customer, in bold under BILL TO, is the trap.`,
+    notes: `Five header facts in a shaded band, each under a small grey caption, so a line-by-line reading gives five captions and then five values and leaves the reader to pair them by position. The billing system printed the invoice template first and filled it in after, so the content stream holds every caption before any value. The invoice date (${numericDate(invoiceDate)}) is the second; the due date (${numericDate(dueDate)}) and the installation date (${numericDate(installed)}) are traps. The issuer is named only in the letterhead; the customer, in bold under BILL TO, is the trap.`,
     structure: structure({
       keyValues: [...header, ['BILL TO', customer], ['INSTALLATION DATE', numericDate(installed)], ['TOTAL DUE', money(priced.total)]],
       routes: { 1: 'layout' },
@@ -326,6 +359,7 @@ export function invoiceBoxedGrid() {
       page.rect(x, y, 92, 20, { fill: 0.9, stroke: 0.2, width: 0.6 });
       page.text(x + 5, y + 13.5, label, { face: 'sans-bold', size: 8.5 });
       page.text(x + 98, y + 13.5, value, { size: 9.5 });
+      filled(page);
     });
     y += 20;
   }
@@ -339,7 +373,10 @@ export function invoiceBoxedGrid() {
     page.rect(x, y, 258, 72, { fill: null, stroke: 0.2, width: 0.6 });
     page.rect(x, y, 258, 15, { fill: 0.9, stroke: 0.2, width: 0.6 });
     page.text(x + 5, y + 11, label, { face: 'sans-bold', size: 8.5 });
-    lines.forEach((line, row) => page.text(x + 5, y + 28 + row * 12, line, { size: 9.5, face: row === 0 ? 'sans-bold' : 'sans' }));
+    lines.forEach((line, row) => {
+      page.text(x + 5, y + 28 + row * 12, line, { size: 9.5, face: row === 0 ? 'sans-bold' : 'sans' });
+      filled(page);
+    });
   });
   const priced = priceLines([
     { description: 'Replace dental vacuum pump check valve and union', quantity: 1, unit: 28600 },
@@ -357,6 +394,7 @@ export function invoiceBoxedGrid() {
   page.text(311, flow.y + 17.5, 'Balance Due', { face: 'sans-bold', size: 9.5 });
   page.textRight(559, flow.y + 17.5, money(priced.total), { face: 'sans-bold', size: 10 });
   page.text(48, flow.y + 50, 'Thank you. A 1.5% monthly charge applies to balances unpaid after the due date. Warranty on parts: one year; labor: 90 days.', { size: 8.5 });
+  flattenFill(page);
   const { bytes, text } = digitalPdf([page]);
   return result({
     id,
@@ -368,7 +406,7 @@ export function invoiceBoxedGrid() {
     textLayer: 'native',
     pages: 1,
     categories: ['invoice', 'key_value', 'competing_dates', 'layout_parties'],
-    notes: `Header facts in a grid of bordered boxes, two labelled values to a row, and the bill-to and service addresses in two boxes side by side, so their lines are read across each other. The invoice date (${numericDate(invoiceDate)}) shares a row with the invoice number; the service date (${numericDate(serviceDate)}) and due date (${numericDate(dueDate)}) are traps. From the plumber; the dental studio is the customer, named in bold in both address boxes.`,
+    notes: `Header facts in a grid of bordered boxes, two labelled values to a row, and the bill-to and service addresses in two boxes side by side, so their lines are read across each other. The grid is a printed template filled in afterwards: the content stream holds every label before any value. The invoice date (${numericDate(invoiceDate)}) shares a row with the invoice number; the service date (${numericDate(serviceDate)}) and due date (${numericDate(dueDate)}) are traps. From the plumber; the dental studio is the customer, named in bold in both address boxes.`,
     structure: structure({
       keyValues: [...grid.flat(), ['Bill To', customer], ['Service Address', 'Ravensby Dental Studio - Suite 200'], ['Balance Due', money(priced.total)]],
       tables: [[['Work performed', 'Qty', 'Rate', 'Amount'], ...priced.rows.map((row) => [row.description, String(row.quantity), amount(row.unit), amount(row.total)])]],
@@ -416,12 +454,12 @@ export function benefitsChangeForm() {
   const fields = [['Employee name', employee, 300], ['Employee ID', 'WK-0417', 232]];
   let x = 40;
   for (const [label, value, width] of fields) {
-    fieldBox(page, x, y, width, 26, label, value, { face: 'sans', size: 10 });
+    filledBox(page, x, y, width, 26, label, value, { face: 'sans', size: 10 });
     x += width;
   }
   y += 26;
-  fieldBox(page, 40, y, 300, 26, 'Department', 'Brewhouse operations', { face: 'sans', size: 10 });
-  fieldBox(page, 340, y, 232, 26, 'Date of hire', numericDate('2021-03-08'), { face: 'sans', size: 10 });
+  filledBox(page, 40, y, 300, 26, 'Department', 'Brewhouse operations', { face: 'sans', size: 10 });
+  filledBox(page, 340, y, 232, 26, 'Date of hire', numericDate('2021-03-08'), { face: 'sans', size: 10 });
   y += 32;
   const groups = [
     ['SECTION 2 - REASON FOR CHANGE', [['Marriage', true], ['Birth or adoption', false], ['Divorce', false], ['Loss of other coverage', false], ['Spouse gained coverage', false], ['Other', false]]],
@@ -431,23 +469,24 @@ export function benefitsChangeForm() {
   ];
   for (const [title, options] of groups) {
     y = bar(y, title);
-    options.forEach(([caption, checked], index) => checkBox(page, 50 + (index % 3) * 176, y + 16 + Math.floor(index / 3) * 15, caption, checked, { size: 9 }));
+    options.forEach(([caption, checked], index) => filledCheck(page, 50 + (index % 3) * 176, y + 16 + Math.floor(index / 3) * 15, caption, checked, { size: 9 }));
     y += 16 + Math.ceil(options.length / 3) * 15;
   }
   y = bar(y + 2, 'SECTION 6 - EVENT AND DEPENDENTS');
-  fieldBox(page, 40, y, 180, 26, 'Date of qualifying event', numericDate(event), { face: 'sans', size: 10 });
-  fieldBox(page, 220, y, 180, 26, 'Requested effective date', numericDate(effective), { face: 'sans', size: 10 });
-  fieldBox(page, 400, y, 172, 26, 'Number of dependents added', '1', { face: 'sans', size: 10 });
+  filledBox(page, 40, y, 180, 26, 'Date of qualifying event', numericDate(event), { face: 'sans', size: 10 });
+  filledBox(page, 220, y, 180, 26, 'Requested effective date', numericDate(effective), { face: 'sans', size: 10 });
+  filledBox(page, 400, y, 172, 26, 'Number of dependents added', '1', { face: 'sans', size: 10 });
   y += 26;
-  fieldBox(page, 40, y, 300, 26, 'Spouse name', spouse, { face: 'sans', size: 10 });
-  fieldBox(page, 340, y, 232, 26, 'Spouse date of birth', numericDate(spouseBirth), { face: 'sans', size: 10 });
+  filledBox(page, 40, y, 300, 26, 'Spouse name', spouse, { face: 'sans', size: 10 });
+  filledBox(page, 340, y, 232, 26, 'Spouse date of birth', numericDate(spouseBirth), { face: 'sans', size: 10 });
   y += 32;
   y = bar(y, 'SECTION 7 - SIGNATURE');
   page.textBlock(44, y + 12, 524, 'I certify that the information above is true and that a qualifying event occurred. I authorize payroll deductions for the coverage elected. I will provide a copy of the marriage certificate within 30 days.', { size: 8 });
   y += 30;
-  fieldBox(page, 40, y, 300, 30, 'Employee signature', `/s/ ${employee}`, { face: 'serif', size: 11 });
-  fieldBox(page, 340, y, 232, 30, 'Date signed', numericDate(signed), { face: 'sans', size: 10 });
+  filledBox(page, 40, y, 300, 30, 'Employee signature', `/s/ ${employee}`, { face: 'serif', size: 11 });
+  filledBox(page, 340, y, 232, 30, 'Date signed', numericDate(signed), { face: 'sans', size: 10 });
   page.text(40, 768, 'HR-BEN-7 (Rev. 01/2026)', { size: 7, grey: 0.35 });
+  flattenFill(page);
   const { bytes, text } = digitalPdf([page]);
   const boxes = [['Employee name', employee], ['Employee ID', 'WK-0417'], ['Department', 'Brewhouse operations'], ['Date of qualifying event', numericDate(event)], ['Requested effective date', numericDate(effective)], ['Spouse name', spouse], ['Date signed', numericDate(signed)]];
   return result({
@@ -460,7 +499,7 @@ export function benefitsChangeForm() {
     textLayer: 'native',
     pages: 1,
     categories: ['form', 'hr', 'key_value', 'competing_dates'],
-    notes: `Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. Dated by the signature box (${numericDate(signed)}); the event date (${numericDate(event)}), the requested effective date (${numericDate(effective)}), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.`,
+    notes: `Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. It is a fillable form flattened after it was completed: the content stream holds the whole blank form, then every entry and every X, so only the geometry puts an X beside its option. Dated by the signature box (${numericDate(signed)}); the event date (${numericDate(event)}), the requested effective date (${numericDate(effective)}), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.`,
     structure: structure({
       // Each group of boxes is a table of two columns, the mark and the
       // option: a chosen option keeps its X on its line.
@@ -515,7 +554,7 @@ export function lossNoticeBoxedFields() {
   for (const row of rows) {
     let x = 40;
     for (const [label, value, width] of row) {
-      fieldBox(page, x, y, width, 30, label, value, { face: 'sans', size: 9.5, labelSize: 7 });
+      filledBox(page, x, y, width, 30, label, value, { face: 'sans', size: 9.5, labelSize: 7 });
       x += width;
     }
     y += 30;
@@ -523,6 +562,7 @@ export function lossNoticeBoxedFields() {
   y += 12;
   page.textBlock(40, y, 532, 'The insured must protect the property from further damage, keep records of repair costs, and allow the company to inspect the damaged property before it is discarded. This notice does not confirm coverage; the company will respond in writing within 15 days.', { size: 8.5 });
   page.text(40, 768, 'PLN-2 (Rev. 03/2025)', { size: 7, grey: 0.35 });
+  flattenFill(page);
   const { bytes, text } = digitalPdf([page]);
   return result({
     id,
@@ -534,7 +574,7 @@ export function lossNoticeBoxedFields() {
     textLayer: 'native',
     pages: 1,
     categories: ['form', 'key_value', 'competing_dates', 'layout_parties'],
-    notes: `Every fact is a value in a bordered box under a small caption, two to four boxes to a row, so a line-by-line reading strings the captions of a row together and the values after them. The notice is dated by its report date (${numericDate(reported)}, top right); the date of loss (${numericDate(loss)}) and the policy period (${numericDate(periodStart)} to ${numericDate(periodEnd)}) are traps. The insured gives notice to the insurer; the agency is not a party.`,
+    notes: `Every fact is a value in a bordered box under a small caption, two to four boxes to a row, so a line-by-line reading strings the captions of a row together and the values after them. Filled in online and flattened: the content stream holds every caption, then every value. The notice is dated by its report date (${numericDate(reported)}, top right); the date of loss (${numericDate(loss)}) and the policy period (${numericDate(periodStart)} to ${numericDate(periodEnd)}) are traps. The insured gives notice to the insurer; the agency is not a party.`,
     structure: structure({
       keyValues: rows.flat().map(([label, value]) => [label, value]),
       routes: { 1: 'layout' },

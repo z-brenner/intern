@@ -31,9 +31,9 @@
 //!   The score is the share of rows found, over every table.
 //! * `table_cell_recall`: the share of the gold's non-empty cells found in
 //!   their table's *region*: the lines from the first one holding any cell
-//!   of the table's first row to the last one, from there on, holding any
-//!   cell of its last row (a table split over two pages spans the break).
-//!   With neither anchor found the region is the whole text. Cells are
+//!   of the table's first row (the first line, if none does) to the last
+//!   one, from there on, holding any cell of its last row (the last line,
+//!   if none does); a table split over two pages spans the break. Cells are
 //!   counted with their multiplicity: a value the table prints three times
 //!   must be found three times, without overlap.
 //! * `kv_accuracy`: a labelled value is found when a line holds the label

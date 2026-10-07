@@ -35,12 +35,19 @@ A run answers four questions per document, and per group of documents:
 
 For scanned documents it also scores OCR itself, against the exact text
 drawn on each page: character and word error rates, and whether the dates,
-names and identifiers on the page survived.
+names and identifiers on the page survived. Where the page's layout says
+something plainly - the order its columns are read in, its tables, its
+labelled values, the route each page should take - it scores whether the
+text Intern reads keeps it ([Structure scores](#structure-scores)).
+
+Extraction can also be measured on its own, without a model
+([Extract-only](#extract-only)): fast enough to run on every change to the
+parser worker.
 
 ## The corpus
 
-`bench/generate.mjs` builds 52 documents into `bench/generated/`
-(gitignored, about 7 MB, about 9 s). The reviewed answers are in
+`bench/generate.mjs` builds 72 documents into `bench/generated/`
+(gitignored, about 8 MB, about 11 s). The reviewed answers are in
 `bench/gold.json`, and a SHA-256 of every file is in `bench/manifest.json`.
 Both are committed. The generator is deterministic: fixed seeds, fixed
 timestamps, a fixed zlib level, and no clock or locale. Run on the pinned
@@ -65,11 +72,14 @@ when any selected document's bytes disagree with it or it does not list one.
 | Long, information-dense PDFs | 10-page data processing addendum (20+ sub-processors); 25-page asset purchase agreement; 50-page credit agreement dated only by the definition of "Closing Date" on page 10; 100-page annual report dated on page 41, under the auditors' report, and again only in a later note |
 | Office, sheets, mail, text | separation agreement, demand letter, written consent (`.docx`); quarterly business review, launch plan (`.pptx`); payroll register with a date serial cell, harvest log (`.xlsx`); AP aging (`.csv`); approval email quoting an older message (`.eml`); hearing notice (`.txt`) |
 | Scans | clean 2- and 10-page image-only PDFs; a 25-page 200-DPI lease; a mixed PDF whose signature page is scanned; rotated 90° and 180°; 3° skew; 100 DPI; speckle noise and blur; faint uneven light; an invisible OCR text layer full of OCR errors; a two-frame TIFF fax; a scanned intake form |
+| Layout and OCR (`"recording": "pending"`) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organisations and identifiers |
 
 Every document carries category tags (`multi_column`, `date_in_table`,
-`referenced_agreement`, `middle_fact`, `pages_50`, ...), and every report is
-also sliced by tag. The tests prove that the corpus covers the required
-categories, that every gold string occurs in the text the document carries,
+`referenced_agreement`, `middle_fact`, `pages_50`, `key_value`,
+`stream_order`, `rotated_page`, `image_region`, `ocr_critical_fields`, ...),
+and every report is also sliced by tag. The tests prove that the corpus
+covers the required categories, that every gold string occurs in the text
+the document carries,
 and that the long documents are information-dense rather than padded:
 almost every page is distinct after digits are masked, and five-word
 phrases rarely repeat.
@@ -101,7 +111,33 @@ Each entry in `bench/gold.json` gives the document's `kind`, `format`,
   names its parties
 
 A scanned document also has `ocr_truth`: the exact text of each scanned page,
-and the dates, names and identifiers on it.
+and the dates, names and identifiers on it. A digital page with a pasted
+scan in it has the whole page's text, top to bottom, the scan's included.
+
+A document whose layout plainly says something also has a `structure`
+block, every part optional:
+
+* `reading_order`: distinctive phrases in the order a person reads them,
+  each printed exactly once. Most are the last words of one line and the
+  first of the next (`readingSnippets` in `bench/docs/common.mjs`), so a
+  reading that puts anything between those two lines loses the phrase.
+* `tables`: each table's rows, header first, each a list of cells as
+  printed (`""` for a blank cell). A check-box group is a table of two
+  columns, the mark (`X` or blank) and the option.
+* `key_values`: `{key, value}` pairs, the label as printed without its
+  colon.
+* `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
+  only for the pages where the route is not a judgement call.
+
+Twenty-eight documents have one: the twenty added for it, and the two-column
+lease, the interleaved declarations page, both header-table invoices, the
+purchase order, the vendor registration form, the change order and the
+scanned intake form. Adding or changing a `structure` block changes no
+recorded document's other scores.
+
+A document added before anyone recorded it says `"recording": "pending"`.
+Replay leaves it unscored (and a baseline may not hold it); extract-only
+reads it like any other.
 
 To change an answer, edit the builder in `bench/docs/`, review the
 regenerated document, and run
@@ -176,6 +212,46 @@ reports the recording's timings and says so (`timings_source: recorded`).
 It cannot measure a change to extraction or to the prompt; those need a
 live run.
 
+### Extract-only
+
+```sh
+cargo build --release --locked -p intern-worker --features windows-native
+INTERN_RUNTIME_DIR=/path/to/runtime \
+  cargo run --release --locked -p intern-bench -- run --extract-only \
+  --worker target/release/intern-worker --corpus bench/generated \
+  --gold bench/gold.json --manifest bench/manifest.json \
+  --output extract.json --markdown extract.md
+```
+
+The parser worker alone, no endpoint, no model, no recording. Each document
+goes through `SupervisedWorker` exactly as a live run sends it - the same
+timeouts, the worker started on a throwaway text document first
+(`--no-warmup` skips that), its stages timed by the worker itself
+(`extract_timed`) - and is scored on what extraction alone decides: OCR
+against the drawn text, the [structure scores](#structure-scores), and
+`digest_recall`, the share of the gold's date and party evidence in the
+digest the engine would build from the text. A document is `completed` when
+the worker read it and `extraction_failed` when it did not; a failure is a
+miss on every score its gold defines (0 for each accuracy, an error rate of
+1, every structure item missed). Documents whose recording is pending are
+read like any other: extraction needs no reply.
+
+The run refuses a corpus that lacks a selected document or, given
+`--manifest`, holds bytes the manifest does not vouch for. `--only`,
+`--baseline`, `--write-baseline` and `--latency-gate` work as for the other
+modes; an extract-only run writes and is held to an extract-only baseline
+(see [Gates](#gates)). The report gives the run's wall time. Over all 72
+documents on the shared 4-core development container it is about 45 s with
+the routing worker and about 70 s with the one before it, which read a
+PDF's scanned pages one at a time; Tesseract takes nearly all of it (the
+25-page scanned lease alone 14 s), and the 52 documents that are not scans
+take under a second together. It can be run on every change to the worker,
+or with `--only` on the documents a change touches.
+
+The scoring is `extract::extraction_record`, a pure function of the gold,
+what the worker returned and the timings; the worker loop around it only
+feeds it.
+
 ### Comparing two runs
 
 ```sh
@@ -187,10 +263,13 @@ computed again over the documents both runs scored, and each score over the
 documents that have it in both, so a subset run, a document added since or
 one that went stale moves no figure; the comparison says when the two runs
 cover different documents or gold. It lists every document that flipped on
-every score (fixed or broken). Latency, as the change in p50 and p95 of
-every stage, is compared over the documents both runs completed, and only
-between two live runs: a replay reports its recording's timings, so a
-comparison involving one shows no latency change and says why. Each side
+every score (fixed or broken), and every extraction score (structure, OCR,
+digest recall) that moved further than the extract-only gate tolerates,
+worse or better. Latency, as the change in p50 and p95 of every stage, is
+compared over the documents both runs completed, and only between two runs
+that measured their timings (live or extract-only): a replay reports its
+recording's timings, so a comparison involving one shows no latency change
+and says why. Each side
 names its machine and, for a replay, its recording. `intern-bench report
 --input report.json --markdown report.md` re-renders a report's Markdown.
 
@@ -202,21 +281,38 @@ names its machine and, for a replay, its recording. `intern-bench report
   fractional score as a mean, plus counts of unsafe-ready, trap-date,
   forbidden-party and unsupported-claim outcomes.
 * `groups`: the same summary sliced by `kind`, `text_layer`, `format`, page
-  bucket and category.
+  bucket, route class and category.
 * `latency`: p50, p90, p95, max and mean of every timing, overall and by
-  page bucket, kind and text layer, over the documents that completed (a
-  failed document's time is only how long it took to fail).
-* `ocr`, `memory`, and one record per document holding the name, the
+  page bucket, kind, text layer and route class, over the documents that
+  completed (a failed document's time is only how long it took to fail). A
+  document's route class is the most expensive route any of its pages took
+  - `ocr`, then `ocr_regions`, then `layout`, then `fast` - or `unrouted`
+  when the worker sent no layouts (every worker before the router, and every
+  recording made with one).
+* `ocr`: OCR figures per scanned document and pooled.
+* `structure`: the structure figures per document and pooled by item
+  (absent when no document has a structure block).
+* `routes`: pages per route, documents per route class, and the confusion
+  of expected route against the route taken (absent when no page came with
+  a layout and nothing expects a route).
+* `wall_ms`: the whole run, worker start included (live and extract-only).
+* `memory`, and one record per document holding the name, the
   description, the review reasons, the scores, the claims checked, the traps
-  sprung and the timings.
+  sprung, the structure items missed, the route each page took and the
+  timings.
 
 Keys are sorted and floats rounded, so two runs diff cleanly.
 
 `report.md` is the same report for a person. It opens with a scorecard and a
-safety table, then the per-group tables, OCR, the stage-by-stage latency
-table with tokens per second, memory, and **Misses**. Misses lists every
-wrong filename with the expected name, the trap it sprang and why, and
-whether it was filed without review.
+safety table, then the per-group tables, OCR, structure and routes, the
+stage-by-stage latency table with tokens per second, memory, and
+**Misses**. Misses lists every wrong filename with the expected name, the
+trap it sprang and why, and whether it was filed without review. An
+extract-only report opens instead with an extraction scorecard (each score
+pooled by item and as a mean per document), then structure, routes, OCR,
+the worker's time by route class, page count and kind with its stages, and
+Misses: the documents the worker failed on and every structure item not
+found.
 
 ### Scores
 
@@ -243,6 +339,43 @@ it: every document for most scores, and for the date role, the relation word
 and the party's role, the documents whose answer gave them something to
 judge. A document that failed is a miss on every score its reviewed answer
 would be judged on, those three included.
+
+### Structure scores
+
+Each is computed over the page text the engine receives - the text the
+digest and the prompt are built from - never over the worker's blocks, so a
+worker that sends no layouts is scored on the same footing as one that does.
+Only `route_correct` reads the layouts. The code is
+`crates/intern-bench/src/structure.rs`.
+
+Text is compared normalised: every run of whitespace one space, typographic
+quotes straight, dashes hyphens. Case counts. A gold string is found only
+where it stands on its own: one that begins or ends with a letter or digit
+may not continue a word there, and one that begins or ends with a digit may
+not continue a number (`4` is not found in `14`, `1,4` or `4.5`). The text
+is read as *lines*: each page's text split at line breaks, in page order,
+normalised, blank lines dropped; a table row linearised as `| a | b |` is
+one line.
+
+| Score | Exact definition |
+| --- | --- |
+| `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalised). A pair of consecutive gold snippets is in order when both are found and the first starts before the second. The score is the share of the n − 1 pairs in order; a snippet not found breaks both pairs it belongs to. |
+| `table_row_accuracy` | A gold row (its non-empty cells) is found when one line holds every cell in order, each starting after the end of the one before. The share of rows found, over every table of the document. |
+| `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding any cell of the table's first row (or the first line, if none does) to the last one, from there on, holding any cell of its last row (or the last line, if none does). A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
+| `kv_accuracy` | A labelled value is found when a line holds the label and, after it, the value; or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label in a cell and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
+| `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all. |
+
+Every count behind them is in the record (`structure`), so a corpus figure
+pools items rather than averaging documents: the report's `structure`
+aggregate divides found items by gold items over every document. The
+`reading_order`, `table_row`, `kv` and route scores move by whole items; the
+OCR error rates are the only continuous extraction scores.
+
+Two consequences worth knowing. A table cell that wraps, read on the fast
+route (the native text gives each line of a row in turn), is not one
+contiguous string, so neither its row nor the cell is found; that is
+deliberate, since the engine sees the cell broken too. And a label printed
+more than once is credited if any occurrence carries its value.
 
 ### Timings
 
@@ -298,6 +431,22 @@ scored some from stale replies, never writes a baseline.
   A stage the baseline measured for such a document and the run did not
   (a worker that reports no timings) fails the gate rather than shrinking
   its sample. Use it only between runs on the same machine.
+* **Extract-only is its own mode.** Its baseline (`"mode": "extract"`) also
+  keeps each document's fractional extraction scores, and a run is held to
+  it document by document, as replay is. Extraction is deterministic for one
+  worker build on one machine - two runs over the corpus produce the same
+  scores, routes and texts - so a fall is a real change. Every structure
+  score, OCR's date, name and identifier accuracy and `digest_recall` count
+  whole items, so any fall fails. The error rates are the only continuous
+  scores: `ocr_cer` (and `ocr_cer_ci`) may rise by 0.005 and `ocr_wer` by
+  0.01 before a document regresses - about three characters of the
+  smallest scanned page in the corpus (some 600 drawn), a page read in
+  another line order or by another Tesseract build, while the date, name
+  and identifier accuracies still catch any critical field lost.
+  `ocr_mean_confidence` is reported, never gated. A status that changes
+  fails as in replay, and latency is gated only with `--latency-gate`, over
+  the worker's stages. An extract-only run is never held to a live or
+  replay baseline, nor the other way round.
 
 A regression exits 2. There are deliberately no absolute thresholds:
 the baseline is what Intern does today, and the gates stop it getting

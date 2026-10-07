@@ -8381,7 +8381,7 @@
         "competing_dates",
         "layout_parties"
       ],
-      "notes": "Five header facts in a shaded band, each under a small grey caption, so a line-by-line reading gives five captions and then five values and leaves the reader to pair them by position. The invoice date (05/11/2026) is the second; the due date (06/10/2026) and the installation date (05/06/2026) are traps. The issuer is named only in the letterhead; the customer, in bold under BILL TO, is the trap.",
+      "notes": "Five header facts in a shaded band, each under a small grey caption, so a line-by-line reading gives five captions and then five values and leaves the reader to pair them by position. The billing system printed the invoice template first and filled it in after, so the content stream holds every caption before any value. The invoice date (05/11/2026) is the second; the due date (06/10/2026) and the installation date (05/06/2026) are traps. The issuer is named only in the letterhead; the customer, in bold under BILL TO, is the trap.",
       "gold": {
         "document_type": "Invoice",
         "acceptable_types": [],
@@ -8686,7 +8686,7 @@
         "competing_dates",
         "layout_parties"
       ],
-      "notes": "Header facts in a grid of bordered boxes, two labelled values to a row, and the bill-to and service addresses in two boxes side by side, so their lines are read across each other. The invoice date (07/09/2026) shares a row with the invoice number; the service date (07/02/2026) and due date (07/24/2026) are traps. From the plumber; the dental studio is the customer, named in bold in both address boxes.",
+      "notes": "Header facts in a grid of bordered boxes, two labelled values to a row, and the bill-to and service addresses in two boxes side by side, so their lines are read across each other. The grid is a printed template filled in afterwards: the content stream holds every label before any value. The invoice date (07/09/2026) shares a row with the invoice number; the service date (07/02/2026) and due date (07/24/2026) are traps. From the plumber; the dental studio is the customer, named in bold in both address boxes.",
       "gold": {
         "document_type": "Invoice",
         "acceptable_types": [
@@ -8868,7 +8868,7 @@
         "key_value",
         "competing_dates"
       ],
-      "notes": "Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. Dated by the signature box (06/29/2026); the event date (06/20/2026), the requested effective date (07/01/2026), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.",
+      "notes": "Four groups of check boxes, three to a row, with an X drawn in the boxes chosen (marriage; Silver PPO; employee and spouse; dental and vision), and boxed fields with captions over their values. It is a fillable form flattened after it was completed: the content stream holds the whole blank form, then every entry and every X, so only the geometry puts an X beside its option. Dated by the signature box (06/29/2026); the event date (06/20/2026), the requested effective date (07/01/2026), the hire date and the spouse's date of birth are traps. The employee completes it for the employer.",
       "gold": {
         "document_type": "Benefits Enrollment Change Form",
         "acceptable_types": [
@@ -9111,7 +9111,7 @@
         "competing_dates",
         "layout_parties"
       ],
-      "notes": "Every fact is a value in a bordered box under a small caption, two to four boxes to a row, so a line-by-line reading strings the captions of a row together and the values after them. The notice is dated by its report date (02/16/2026, top right); the date of loss (02/14/2026) and the policy period (09/01/2025 to 09/01/2026) are traps. The insured gives notice to the insurer; the agency is not a party.",
+      "notes": "Every fact is a value in a bordered box under a small caption, two to four boxes to a row, so a line-by-line reading strings the captions of a row together and the values after them. Filled in online and flattened: the content stream holds every caption, then every value. The notice is dated by its report date (02/16/2026, top right); the date of loss (02/14/2026) and the policy period (09/01/2025 to 09/01/2026) are traps. The insured gives notice to the insurer; the agency is not a party.",
       "gold": {
         "document_type": "Property Loss Notice",
         "acceptable_types": [

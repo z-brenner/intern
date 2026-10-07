@@ -307,8 +307,8 @@
     },
     {
       "file": "invoice-label-above.pdf",
-      "size": 2140,
-      "sha256": "bc5c216332548ba3886b35c4514ffdb1ae7eea7a2e630f4b03823202fd198801"
+      "size": 2138,
+      "sha256": "cafc70b95a65845dd7fcccea8d7e87a66647818f0f0fdd6b1c95dcaa94509fcc"
     },
     {
       "file": "invoice-right-aligned.pdf",
@@ -317,18 +317,18 @@
     },
     {
       "file": "invoice-boxed-grid.pdf",
-      "size": 2306,
-      "sha256": "db58e4bdb68735258e9e581a1225f3e9c48d6c58b2064b428d78b55f9005fca9"
+      "size": 2303,
+      "sha256": "4ff0f1d97a15b3d598fed2f366b7beb9fa3f278a54d605defee1d4e1dcef1f2c"
     },
     {
       "file": "benefits-change-checkbox-form.pdf",
-      "size": 2322,
-      "sha256": "c9b22a259cf4f170b59ea6da6e81ca44596cba3faf6122b598266d9f07a492ab"
+      "size": 2319,
+      "sha256": "9c5e4e74b015331e73bd09b1b3f9c769aa36d8a1e8922e0d0f94d6f186b073d8"
     },
     {
       "file": "loss-notice-boxed-fields.pdf",
-      "size": 2098,
-      "sha256": "c7ab3428fc1f80209ca5423087426d11ecdff1555a5b7983d6c2661d0c45d332"
+      "size": 2089,
+      "sha256": "1313b64f8950fe05d3ff3c89f91b5c6e5b7f2ef2a4c815172b033254b7cae4c8"
     },
     {
       "file": "scan-rotated-page-in-pdf.pdf",

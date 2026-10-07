@@ -470,7 +470,7 @@ fn structure(out: &mut String, report: &Report) {
     );
     let _ = writeln!(
         out,
-        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line, in order. Table cells: cells found in their table's lines. Key-values: values after their label on its line, or alone on the next. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
+        "Measured over the page text the engine receives. Reading order: consecutive gold snippets found in order. Table rows: rows whose cells are all on one line, in order. Table cells: cells found in their table's lines. Key-values: values after their label on its line, alone on the next line, or in the cell under it in a linearised table. Routes: pages whose layout took the expected route, judged only when the worker sends layouts. See `docs/internbench.md` for the exact rules.\n"
     );
 }
 
@@ -633,7 +633,7 @@ fn extraction_time(out: &mut String, report: &Report) {
     }
     let _ = writeln!(
         out,
-        "Over the documents that completed. Wall is the runner's clock around the request; worker is the worker's own total. A document's route class is the most expensive route any of its pages took (ocr > ocr_regions > layout > fast), or `unrouted` when the worker sent no layouts.\n"
+        "Over the documents that completed. Wall is the runner's clock around the request; worker is the worker's own total. OCR is summed over the pages, so when the worker reads pages in parallel it can exceed the total. A document's route class is the most expensive route any of its pages took (ocr > ocr_regions > layout > fast), or `unrouted` when the worker sent no layouts.\n"
     );
 }
 
