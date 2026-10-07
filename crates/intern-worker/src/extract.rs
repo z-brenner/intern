@@ -2197,11 +2197,15 @@ pub fn extract_image(
     cancel: &CancellationToken,
 ) -> Result<ExtractedDocument, ExtractionError> {
     cancel.check()?;
+    let frames = later_frames(path, limits.max_page_count.saturating_sub(1));
+    // A TIFF that opens with a thumbnail has its first page further on.
     let image = cancel.timed(
         |timings| &mut timings.image_decode_micros,
-        || load_oriented_image(path, limits),
+        || match frames.first {
+            Some(directory) => decode_tiff_frame(path, directory, limits),
+            None => load_oriented_image(path, limits),
+        },
     )?;
-    let frames = later_frames(path, limits.max_page_count.saturating_sub(1));
     let page_count = 1 + frames.directories.len();
     let rendered = RenderedPage::new(0, image);
     cancel.report_progress("ocr", 0, Some(page_count));
@@ -2284,9 +2288,12 @@ pub fn extract_image(
 }
 
 /// The frames of an image file after its first: where each one's image file
-/// directory is, and whether there were more than the limit allowed.
+/// directory is, and whether there were more than the limit allowed. And,
+/// when the file's first directory is a reduced-resolution copy, where the
+/// first page's own directory is: that page is read in its place.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct LaterFrames {
+    first: Option<u64>,
     directories: Vec<u64>,
     beyond_limit: bool,
 }
@@ -2295,7 +2302,9 @@ struct LaterFrames {
 /// chain of image file directories without decoding anything.
 ///
 /// A reduced-resolution copy of a page (`NewSubfileType` bit 0) is not a
-/// page of its own and is passed over. Anything that does not read as a
+/// page of its own and is passed over, the file's first directory included:
+/// a file that opens with a thumbnail has its first page where the first
+/// full-resolution directory is. Anything that does not read as a
 /// TIFF holds one image by construction, and a chain that cannot be
 /// followed, or that loops, ends where it stops making sense: the frames
 /// read up to there are still the document's pages.
@@ -2310,7 +2319,7 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
     };
     let mut seen = std::collections::HashSet::new();
     let mut next = format.first;
-    let mut first = true;
+    let mut first_page_found = false;
     // A chain can be no longer than the file has room for directories.
     while next != 0 && seen.insert(next) {
         if seen.len() > MAX_TIFF_DIRECTORIES {
@@ -2322,14 +2331,20 @@ fn later_frames(path: &Path, limit: usize) -> LaterFrames {
         let Some(directory) = format.directory(&mut file, next) else {
             break;
         };
-        if !first && !directory.reduced_resolution {
-            if frames.directories.len() == limit {
-                frames.beyond_limit = true;
-                break;
+        if !directory.reduced_resolution {
+            if !first_page_found {
+                first_page_found = true;
+                if next != format.first {
+                    frames.first = Some(next);
+                }
+            } else {
+                if frames.directories.len() == limit {
+                    frames.beyond_limit = true;
+                    break;
+                }
+                frames.directories.push(next);
             }
-            frames.directories.push(next);
         }
-        first = false;
         next = directory.next;
     }
     frames
@@ -2733,6 +2748,29 @@ mod tiff_chains {
         let frames = later_frames(file.path(), 10);
         assert!(frames.directories.is_empty());
         assert!(frames.beyond_limit, "pages may lie past the bound");
+    }
+
+    /// A file that opens with a thumbnail of its first page: the thumbnail
+    /// is passed over, the page after it is read in its place, and is not
+    /// read again as a later page.
+    #[test]
+    fn a_thumbnail_first_is_passed_over_for_the_page_after_it() {
+        const DIRECTORY: u64 = 2 + 12 + 4;
+        let file = chain(&[true, false, false], None);
+        let frames = later_frames(file.path(), 10);
+        assert_eq!(frames.first, Some(8 + DIRECTORY));
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        let plain = chain(&[false, true, false], None);
+        let frames = later_frames(plain.path(), 10);
+        assert_eq!(frames.first, None, "the first directory is the first page");
+        assert_eq!(frames.directories, vec![8 + 2 * DIRECTORY]);
+
+        // Thumbnails only: the first directory is still read, as before.
+        let thumbnails = chain(&[true, true], None);
+        let frames = later_frames(thumbnails.path(), 10);
+        assert_eq!(frames.first, None);
+        assert!(frames.directories.is_empty());
     }
 
     #[test]

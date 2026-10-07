@@ -859,6 +859,38 @@ fn many_objects_pdf() -> Vec<u8> {
     pdf(&objects)
 }
 
+/// A page whose first objects are invisible text - somebody's OCR layer -
+/// and whose visible text is drawn only after more objects than the survey
+/// visits.
+#[cfg(feature = "native-pdfium")]
+fn hidden_layer_then_many_objects_pdf() -> Vec<u8> {
+    let mut contents = String::new();
+    for line in 0..10 {
+        let y = 700 - line * 14;
+        contents.push_str(&format!(
+            "BT 3 Tr /F1 12 Tf 54 {y} Td (Hidden layer line {line}.) Tj ET\n"
+        ));
+    }
+    for index in 0..(intern_worker::layout::router::bounds::MAX_SURVEY_OBJECTS + 500) {
+        let y = 100 + (index % 400);
+        contents.push_str(&format!("54 {y} m 300 {y} l S\n"));
+    }
+    contents.push_str("BT 0 Tr /F1 12 Tf 54 60 Td (The visible text of the page.) Tj ET\n");
+    let objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        concat!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ",
+            "/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        )
+        .as_bytes()
+        .to_vec(),
+        stream("", contents.as_bytes()),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    pdf(&objects)
+}
+
 /// A page whose only text is drawn in forms nested `depth` deep.
 #[cfg(feature = "native-pdfium")]
 fn nested_forms_pdf(depth: usize) -> Vec<u8> {
@@ -949,6 +981,16 @@ fn a_page_past_the_survey_bounds_is_read_as_its_text() {
             "{name}"
         );
     }
+
+    // What the walk counted before it stopped is part of the page, not a
+    // share of it: an invisible layer among the first objects says nothing
+    // about the page, which is routed on its text.
+    let path = directory.path().join("hidden.pdf");
+    std::fs::write(&path, hidden_layer_then_many_objects_pdf()).unwrap();
+    let pages = backend.inspect(&path, &cancel).unwrap();
+    assert!(pages[0].native.is_none());
+    let signals = pages[0].signals.unwrap();
+    assert_eq!((signals.invisible, signals.segments), (0, 0), "{signals:?}");
 
     // Forms nested within the bound are followed as before.
     let path = directory.path().join("shallow.pdf");

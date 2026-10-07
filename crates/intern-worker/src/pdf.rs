@@ -754,9 +754,16 @@ impl PdfiumBackend {
                 // geometry seen only in part.
                 let measured = !survey.incomplete;
                 if !measured {
+                    // What was counted before the walk stopped is a part of
+                    // the page, not a share of it: routed on its text alone.
+                    // The image area seen is kept - a lower bound on the
+                    // page's, it can only make a page with no text to read
+                    // less likely to be taken for a scan.
                     survey.text_boxes.clear();
                     survey.images.clear();
                     survey.rulings.clear();
+                    survey.text_objects = 0;
+                    survey.invisible_text_objects = 0;
                 }
                 let page_area = page.width().value.abs() * page.height().value.abs();
                 let image_coverage = if page_area <= f32::EPSILON {
