@@ -28,7 +28,7 @@ impl DocumentClass {
     /// The class of a validated document type. Families whose names contain
     /// other families' words are tested first: an addendum is an amendment
     /// before it is an agreement, a statement of work an agreement and not
-    /// a statement, a policy's declarations a record and not a policy.
+    /// a statement.
     pub fn of(document_type: Option<&str>) -> Self {
         let Some(document_type) = document_type else {
             return Self::Unknown;
@@ -79,7 +79,6 @@ impl DocumentClass {
             "promissory note",
             "release",
             "waiver",
-            "policy",
         ]) {
             Self::Agreement
         } else if has(&["email", "e-mail"]) {
@@ -111,6 +110,8 @@ impl DocumentClass {
             "summary",
             "agenda",
             "statement",
+            // An insurance policy is issued to the insured, who it is for.
+            "policy",
         ]) {
             Self::Record
         } else {
