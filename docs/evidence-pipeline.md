@@ -151,7 +151,10 @@ The other checks:
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);
   - a defined term (`("Tenant")`, `, as Lender`);
-  - a page-one letterhead, for an issuer or a sender;
+  - a page-one letterhead, for an issuer or a sender, that opens its line
+    and, in a letter that greets someone (`Dear`), stands before the
+    dateline: the inside address after it is never the letterhead;
+  - `Presented by` or `Prepared by`, for a sender;
   - the issuer and customer cues on the same line.
 
   A role nothing supports never decides how the parties read in the
@@ -170,17 +173,25 @@ The other checks:
   document's name (`Re: Residential Lease Agreement dated ...`), and must
   name a kind of document. A type the document does not state never
   reaches the name or the description: a title of the same kind stands in,
-  for review (`TYPE_INFERRED`), or the type is unsupported.
+  for review (`TYPE_INFERRED`), or the type is unsupported. A title set in
+  capitals that OCR scattered (`DElIvery RECeIPt DR-771`) and the kind a
+  letter's `Re:` line opens with (`Re: Offer of Employment - ...`) are
+  titles too.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organisation's name. A name
   that is the end of an organisation a unit names (`MANUFACTURING LLC` of
   `EMBer POSt MANUFACtURInG LLC`) is completed to it. Capitals OCR
   scattered are read as capitals. A first name on its own is unsupported.
+  A name keeps what stands before an address that runs on to its city
+  (`John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402`).
 - **Who is a party.** Someone named only on a `cc:` line is copied in, and
   someone who signs for an organisation among the parties (a name, a job
   title, then the organisation) acts for it: both stay on record, with role
-  other, and neither is ever a filename's party.
+  other, and neither is ever a filename's party. A notice or a letter
+  whose reply names no one it is addressed to takes as its addressee the
+  name its first page's `To:` field opens with; an `Attn:` line names the
+  person who reads it for the addressee and never does.
 - **Roles** a party keeps are the ones the document supports: the reply's,
   else the one the document's wording gives, else none
   (`ValidatedParty::proposed_role` keeps what the reply said).
@@ -269,13 +280,19 @@ Values, not labels:
 
 - **The subject** is a value. A labelled field gives its value (`Project:
   Aurora Catalog Project`); a field that names a party (`Bill to ...`), a
-  subject that only repeats the type or names a party or the identifier, is
-  left out. A run of capitalised words the document never states as one
+  subject that only repeats the type or names a party or the identifier, or
+  says nothing the type's and the parties' words do not (`retail` for
+  Quartz Meadow Retail LLC), is left out. A run of capitalised words the document never states as one
   phrase is written in lower case.
 - **The amount** reads with the label the document gives it: `totalling
   $1,248.00` for an issued document's total, `annual fee of $96,000` for a
   labelled one, beside the subject it is the price of (`for ... ($312,500)`)
-  or `for $X` otherwise.
+  or `for $X` otherwise. A table row's amount is labelled by the nearest
+  cell before it that holds no amount (`| | | Order Total (USD) |
+  $84,438.00 |`, `| Base rent | $1,845.00 | $1,965.00 |`), or by its
+  header when it stands alone; with no labelled amount, a non-issued
+  document is for the amount its first-page title states (`$350,000,000
+  Senior Secured Credit Facilities`).
 - **The identifier** stands after the type when it is on the type's title
   line (`Invoice INV-2048 from ...`), and reads with its label elsewhere
   (`policy KC-WC-7710345`). An identifier without a digit is not a number.
