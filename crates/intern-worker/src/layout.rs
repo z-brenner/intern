@@ -732,6 +732,39 @@ pub fn regions_page(
     })
 }
 
+/// How many text objects past the current one a character is looked for
+/// in. An object that holds no characters - an empty string, a run of
+/// spaces, text drawn off the page - comes between two that do, and
+/// looking only at the very next one stalled on it for the rest of the
+/// page. Four is more such objects in a row than the corpus has anywhere,
+/// and few enough that a character is not matched to a box far ahead in
+/// the stream by chance.
+const SEGMENT_LOOKAHEAD: usize = 4;
+
+/// The text object a character centred at `center` belongs to, when it is
+/// not the current one: the first of the next [`SEGMENT_LOOKAHEAD`] objects
+/// whose box (with a point to spare) holds it. None while the current one
+/// holds it, or when none of those does.
+#[cfg_attr(not(feature = "native-pdfium"), allow(dead_code))]
+pub(crate) fn next_segment(
+    segments: &[[u32; 4]],
+    current: usize,
+    center: (f64, f64),
+) -> Option<usize> {
+    let inside = |segment: &[u32; 4]| {
+        center.0 >= f64::from(segment[0]) - 10.0
+            && center.0 <= f64::from(segment[2]) + 10.0
+            && center.1 >= f64::from(segment[1]) - 10.0
+            && center.1 <= f64::from(segment[3]) + 10.0
+    };
+    // Still inside the current object, or past the last one.
+    if segments.get(current).is_none_or(inside) {
+        return None;
+    }
+    let end = segments.len().min(current + 1 + SEGMENT_LOOKAHEAD);
+    (current + 1..end).find(|index| inside(&segments[*index]))
+}
+
 /// The union of boxes, if there are any.
 pub(crate) fn union(boxes: impl IntoIterator<Item = [u32; 4]>) -> Option<[u32; 4]> {
     boxes.into_iter().reduce(|left, right| {
@@ -902,6 +935,36 @@ mod tests {
         assert!(value["blocks"][0].get("fields").is_none());
         let back: PageLayout = serde_json::from_value(value).unwrap();
         assert_eq!(back, layout);
+    }
+
+    /// A text object with no characters between two that have them no
+    /// longer stalls the tracker: the next character is found two objects
+    /// on, and starts a cell of its own.
+    #[test]
+    fn the_character_tracker_looks_past_an_object_with_no_characters() {
+        let segments = [
+            [540, 1000, 1500, 1100],
+            // Nothing is drawn from this one.
+            [4000, 7000, 4100, 7100],
+            [1700, 1000, 2600, 1100],
+        ];
+
+        // Inside the current object: no change.
+        assert_eq!(next_segment(&segments, 0, (1000.0, 1050.0)), None);
+        // Past the empty object to the one that holds it.
+        assert_eq!(next_segment(&segments, 0, (2000.0, 1050.0)), Some(2));
+        // Nowhere near: left where it was.
+        assert_eq!(next_segment(&segments, 0, (3000.0, 5000.0)), None);
+        // Past the last object there is nothing to move to.
+        assert_eq!(next_segment(&segments, 2, (100.0, 100.0)), None);
+        // No further than the lookahead.
+        let mut far = vec![[540, 1000, 1500, 1100]];
+        far.extend(std::iter::repeat_n(
+            [4000, 7000, 4100, 7100],
+            SEGMENT_LOOKAHEAD,
+        ));
+        far.push([1700, 1000, 2600, 1100]);
+        assert_eq!(next_segment(&far, 0, (2000.0, 1050.0)), None);
     }
 
     #[test]

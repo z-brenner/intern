@@ -473,22 +473,13 @@ fn character_runs(
         }
         let height = bbox[3] - bbox[1];
         // Segments are PDFium's text objects in the order their characters
-        // come, so a character outside the current one and inside the next
-        // starts the next: a piece of text the producer placed on its own.
+        // come, so a character outside the current one and inside one of the
+        // next few starts it: a piece of text the producer placed on its
+        // own.
         let center = ((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0);
-        let inside = |segment: &[u32; 4]| {
-            center.0 >= f64::from(segment[0]) - 10.0
-                && center.0 <= f64::from(segment[2]) + 10.0
-                && center.1 >= f64::from(segment[1]) - 10.0
-                && center.1 <= f64::from(segment[3]) + 10.0
-        };
         let mut new_object = false;
-        if segments
-            .get(segment)
-            .is_some_and(|current| !inside(current))
-            && segments.get(segment + 1).is_some_and(inside)
-        {
-            segment += 1;
+        if let Some(next) = crate::layout::next_segment(segments, segment, center) {
+            segment = next;
             new_object = true;
         }
         let joins = current.as_ref().is_some_and(|run| {
