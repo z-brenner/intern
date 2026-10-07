@@ -633,20 +633,47 @@ pub fn ocr_layout(
 
 /// Images on a page that may hold text of their own: large, and with no
 /// native text over them. In the page's frame, largest first.
+///
+/// An image a quarter or more of which lies under a larger one already
+/// kept is left out: what lies under both would be read twice and merged
+/// into the page twice - a scan drawn with its own copy over it, a soft
+/// mask, a thumbnail on its full-size image. A quarter of the smallest
+/// region the router asks for is still several lines of text; images that
+/// merely touch, or a stamp over a corner of a scan, overlap far less, and
+/// both are read.
 pub fn text_regions(native: &NativePage) -> Vec<[u32; 4]> {
     const MAX_REGIONS: usize = 4;
     let page = f64::from(native.width) * f64::from(native.height);
-    let mut regions = native
+    let area = |image: &[u32; 4]| {
+        u64::from(image[2].saturating_sub(image[0])) * u64::from(image[3].saturating_sub(image[1]))
+    };
+    let mut candidates = native
         .images
         .iter()
         .copied()
         .filter(|image| router::is_text_region(native, image, page))
         .collect::<Vec<_>>();
-    regions.sort_by_key(|image| {
-        std::cmp::Reverse(u64::from(image[2] - image[0]) * u64::from(image[3] - image[1]))
-    });
-    regions.dedup();
-    regions.truncate(MAX_REGIONS);
+    candidates.sort_by_key(|image| std::cmp::Reverse(area(image)));
+    let mut regions: Vec<[u32; 4]> = Vec::new();
+    for candidate in candidates {
+        let read_already = regions.iter().any(|kept| {
+            let overlap = [
+                kept[0].max(candidate[0]),
+                kept[1].max(candidate[1]),
+                kept[2].min(candidate[2]),
+                kept[3].min(candidate[3]),
+            ];
+            overlap[2] > overlap[0]
+                && overlap[3] > overlap[1]
+                && area(&overlap) * 4 >= area(&candidate)
+        });
+        if !read_already {
+            regions.push(candidate);
+        }
+        if regions.len() == MAX_REGIONS {
+            break;
+        }
+    }
     regions
 }
 
@@ -965,6 +992,34 @@ mod tests {
         ));
         far.push([1700, 1000, 2600, 1100]);
         assert_eq!(next_segment(&far, 0, (2000.0, 1050.0)), None);
+    }
+
+    /// Overlapping images are read once; images apart, or barely touching,
+    /// are each read.
+    #[test]
+    fn an_image_mostly_under_another_is_not_read_again() {
+        let page = |images: Vec<[u32; 4]>| NativePage {
+            width: 6120,
+            height: 7920,
+            segments: vec![[540, 400, 5580, 500]],
+            images,
+            ..NativePage::default()
+        };
+        let scan = [540, 4000, 5580, 7000];
+
+        // The same scan drawn twice, and a copy a little smaller over it.
+        assert_eq!(text_regions(&page(vec![scan, scan])), [scan]);
+        assert_eq!(
+            text_regions(&page(vec![[600, 4100, 5500, 6900], scan])),
+            [scan]
+        );
+        // Two scans side by side, sharing an edge strip.
+        let left = [540, 4000, 3100, 7000];
+        let right = [3000, 4000, 5580, 7000];
+        assert_eq!(text_regions(&page(vec![left, right])).len(), 2);
+        // Most of the smaller one under the larger: read once.
+        let lower = [540, 5500, 5580, 7400];
+        assert_eq!(text_regions(&page(vec![scan, lower])), [scan]);
     }
 
     #[test]
