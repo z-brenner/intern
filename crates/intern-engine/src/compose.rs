@@ -275,6 +275,13 @@ pub fn relation_from_roles(
             Some(_) => false,
         })
     };
+    // The party a class's default reads with: the first the document names
+    // that no role sets aside as a bystander.
+    let unassigned = || {
+        parties
+            .iter()
+            .find(|party| party.supported_role().is_none())
+    };
     let unresolved = || Relation {
         relation: PartyRelation::None,
         parties: vec![first.name.clone()],
@@ -375,6 +382,13 @@ pub fn relation_from_roles(
                     basis: "notice: two sides".into(),
                 };
             }
+            // A notice naming one party, whose role nothing settles, is
+            // for that party: a loss notice for the insured.
+            if let [only] = parties
+                && only.supported_role().is_none()
+            {
+                return one(PartyRelation::For, only, "the one party, by default");
+            }
             unresolved()
         }
         DocumentClass::Letter => {
@@ -430,7 +444,13 @@ pub fn relation_from_roles(
             if let Some(party) = with(&[PartyRole::Issuer, PartyRole::Sender]) {
                 return one(PartyRelation::From, party, "the issuer");
             }
-            unresolved()
+            // A record whose roles settle nothing is kept for the party it
+            // first names: a maintenance record for the aircraft's owner,
+            // a certificate for the insured.
+            match unassigned() {
+                Some(party) => one(PartyRelation::For, party, "the first party, by default"),
+                None => unresolved(),
+            }
         }
         DocumentClass::Form => {
             if let Some(relation) = sides() {
@@ -449,7 +469,12 @@ pub fn relation_from_roles(
             if let Some(party) = counterpart(false) {
                 return one(PartyRelation::For, party, "the provider's counterpart");
             }
-            unresolved()
+            // A form whose roles settle nothing is the filing of the party
+            // it first names.
+            match unassigned() {
+                Some(party) => one(PartyRelation::For, party, "the filer, by default"),
+                None => unresolved(),
+            }
         }
         DocumentClass::Unknown => {
             for (a, b) in BILATERAL {
@@ -484,6 +509,9 @@ pub struct DescriptionFacts<'a> {
     pub relation: Option<&'a Relation>,
     /// Every validated party, in first-appearance order.
     pub parties: &'a [CastMember],
+    /// The name a customer field gives ("Bill To: ..."), as the document
+    /// writes it: who an issued document is to, when no party says.
+    pub billed_to: Option<&'a str>,
     pub subject: Option<&'a str>,
     /// The identifier and the word its label gives it: `("invoice",
     /// "INV-10438")`.
@@ -616,6 +644,20 @@ fn compose(
     };
     let issuer_side = || other(PROVIDER);
     let receiving_side = || other(RECEIVING);
+    // The one other party, whatever role the document gives it: an issued
+    // document's customer, a notice's or a letter's other side.
+    let lone_other = || {
+        let others = facts
+            .parties
+            .iter()
+            .filter(|party| !named.contains(&party.name))
+            .collect::<Vec<_>>();
+        match others.as_slice() {
+            [only] => Some(clean(&only.name)),
+            _ => None,
+        }
+        .filter(|_| keep(Part::SecondParty))
+    };
 
     let in_title = facts.identifier_in_title && keep(Part::Identifier);
     let mut text = match facts.identifier {
@@ -646,7 +688,13 @@ fn compose(
                 && let Some(first) = &first
             {
                 text.push_str(&format!(" from {first}"));
-                if let Some(customer) = receiving_side() {
+                let billed = || {
+                    facts
+                        .billed_to
+                        .map(clean)
+                        .filter(|name: &String| name != first && keep(Part::SecondParty))
+                };
+                if let Some(customer) = receiving_side().or_else(lone_other).or_else(billed) {
                     text.push_str(&format!(" to {customer}"));
                 }
             } else if let Some(first) = &first {
@@ -671,12 +719,12 @@ fn compose(
                     if let Some(first) = &first {
                         text.push_str(&format!(" from {first}"));
                     }
-                    if let Some(to) = receiving_side() {
+                    if let Some(to) = receiving_side().or_else(lone_other) {
                         text.push_str(&format!(" to {to}"));
                     }
                 }
                 PartyRelation::For | PartyRelation::To => {
-                    if let Some(from) = issuer_side() {
+                    if let Some(from) = issuer_side().or_else(lone_other) {
                         text.push_str(&format!(" from {from}"));
                     }
                     if let Some(first) = &first {
@@ -742,6 +790,11 @@ fn compose(
         _ => {
             if let Some(first) = &first {
                 text.push_str(&format!(" {} {first}", word_for(joining)));
+                if joining == PartyRelation::None
+                    && let Some(second) = lone_other()
+                {
+                    text.push_str(&format!(" and {second}"));
+                }
             }
             if let Some(subject) = &subject {
                 tail.push(format!(" concerning {subject}"));

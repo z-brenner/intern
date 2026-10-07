@@ -15,67 +15,96 @@ DocumentSource ─▶ index ─▶ retrieve ─▶ prompt + grammar ─▶ one i
 retrieval. This page covers the parts after them: the reply, its
 validation, and the filename and description composed from it.
 
-## The reply: facts, each with the ids that state it
-
-The prompt (`prompt::build_evidence_prompt`) is laid out like this:
-
-1. The fixed instructions (`EVIDENCE_INSTRUCTIONS`). They are byte-identical
-   for every document, and nothing about the document comes before them.
-2. One line that says whether the whole document follows or only excerpts.
-3. The evidence lines, each written `[handle] text`.
+## The reply: facts, each with the id of its line
 
 The model never writes the description or the filename. It gives facts
-only, and with each fact the ids of the lines that state it:
+only, and with each fact the id of the line that states it. The reply has
+two forms (`prompt::ReplyForm`).
+
+### The compact reply (the default)
+
+```json
+{"type":["Invoice","p1.b2"],"date":["2025-05-01","invoice","p1.b4.f1"],
+ "parties":[["Halvorsen Fixture Works LLC","issuer","p1.b1"],
+            ["Quillon Ridge Bakery, Inc.","customer","p1.b6.f1"]],
+ "subject":["display shelving","p1.b7"],"amount":"p1.b9.r2"}
+```
+
+- **Each fact is an array with its id last**: the type, the date with its
+  role, up to three parties with their roles, and optionally a subject.
+  `amount` is the id of the line that states the main amount; the amount
+  itself is read from that line (a table row's last amount, a field's, or
+  the one after "total", "due" or "sum"). An absent type or date is `null`.
+- **No confidence, no review flag, no identifier, no key facts.** In the
+  96 live replies of the first form the reply's own confidence was 0.9 and
+  its `needs_review` false every time, so neither gated anything; offered
+  as an optional `"review":true`, the flag was raised on 5 of 19 fixtures
+  the gold expects ready. 14 of 77 identifiers were an id written back. The
+  identifier is read from the document instead: the number after the type
+  on its title line (`PACKING SLIP PS-311`), or a field labelled as that
+  kind of document's number (`Invoice No.:`, `Policy Number`).
+- **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 450
+  tokens with the model's tokenizer) and the user turn is the document
+  alone: one line that says whether the whole document follows or only
+  excerpts, then the evidence lines, each written `[handle] text`.
+  llama-server keeps a hybrid model's cache only at checkpoints - the start
+  of the last user message, and a few tokens before the end of the prompt -
+  so instructions at the head of the user turn were prefilled afresh for
+  every document (`cached_tokens` 46). In the system turn they are the same
+  prefix for every document, before the user message's checkpoint, and are
+  read once. `ModelRequest::system` carries the turn; a request's identity
+  covers it.
+- **Strings start with a letter or a digit** (or any non-ASCII character),
+  so a value is never a placeholder such as `..`, which the first compact
+  run copied from its skeleton as the type of 11 of 19 fixtures. Strings are
+  bounded: 80 characters for a type or a name, 60 for the subject.
+
+### The fields reply (`--reply-form facts`)
+
+The form the first live recordings were made with: named fields and id
+lists, a subject, an identifier, up to two key facts, a confidence and a
+review flag, after instructions at the head of the user turn
+(`EVIDENCE_INSTRUCTIONS`). It keeps its prompt version (`6134f0168dcf`), so
+those recordings still replay.
 
 ```json
 {"type":"Invoice","type_ids":["p1.b2"],"date":"2025-05-01","date_role":"invoice",
  "date_ids":["p1.b4.f1"],"parties":[{"name":"Halvorsen Fixture Works LLC","role":"issuer",
- "ids":["p1.b1"]},{"name":"Quillon Ridge Bakery, Inc.","role":"customer","ids":["p1.b6.f1"]}],
- "subject":"display shelving","subject_ids":["p1.b7"],"identifier":"INV-10438",
- "identifier_ids":["p1.b3.f1"],"confidence":0.9,"needs_review":false}
+ "ids":["p1.b1"]}],"subject":"display shelving","subject_ids":["p1.b7"],
+ "identifier":"INV-10438","identifier_ids":["p1.b3.f1"],"confidence":0.9,"needs_review":false}
 ```
 
-- **Ids, not quotes.** The model cites a line by its handle. It never copies
-  a line back. The engine dereferences each id to the line's own text.
+`FieldOrder::EvidenceFirst` puts each fact's ids before it in this form.
+Given the ids first, the model in the first live run answered the empty
+list - and with it no type, no date and no parties - on every document
+whose handles were quoted ids; fact first is the default.
+
+### Both forms
+
+- **Ids, not quotes.** The model cites a line by its handle and never copies
+  it back. The engine dereferences each id to the line's own text.
 - **A grammar per request** (`prompt::evidence_grammar`). An id can only be
   one of the handles the prompt shows, so the local model cannot cite a
-  line it was not shown. A fact always cites at least one id, and an absent
-  fact cites none. The handles are written as a prefix tree: as one flat
-  alternation, a long document's hundreds of handles cut generation to
-  about one token a second in the first live run.
-- **Fact first** (`FieldOrder::FactFirst`, the default). Given the ids
-  first, the model in the first live run answered the empty list - and with
-  it no type, no date and no parties - on every document whose handles were
-  quoted ids. Stating a fact and then having to cite at least one line for
-  it leaves no such way out. `FieldOrder::EvidenceFirst` is kept so the two
-  can be measured.
-- **Optional facts are left out, not written as null.** The subject, the
-  identifier and the key facts appear only when the lines state them.
-- **Caps.** At most 3 parties and 2 key facts. At most 3 ids per fact, and
-  2 for a party, the identifier or a key fact. Strings are bounded:
-  80 characters for a type, a name or a fact, 100 for the subject and 40
-  for the identifier. `StringLimits::Unbounded` drops the string bounds if
-  bounded repetition ever costs generation speed.
+  line it was not shown. The handles are written as a prefix tree: as one
+  flat alternation, a long document's hundreds of handles cut generation to
+  about one token a second.
 - **Roles.** A party's role is one of client, contractor, employer,
   employee, buyer, seller, landlord, tenant, issuer, recipient, vendor,
   customer, borrower, lender, licensor, licensee, sender, addressee, or
-  other. The prompt tells the model to answer "other" when the lines do
-  not say. An invoice lists both its issuer and its customer.
-- **The subject** covers the project or matter and the transaction. These
-  are not separate fields, which keeps the reply and the grammar small.
+  other.
 - **Id styles.** Handles are either the units' stable ids (`p3.b7.r2`,
   the default) or numbers local to the prompt (`IdStyle::Ordinal`).
   Either way, only stable ids are ever stored.
 
 A hosted model receives the same prompt with no grammar, and its reply is
-read leniently (`client::facts_from_text`). The reader accepts either
-`type` or `document_type`, one id or a list, and numbers or strings. An id
+read leniently (`client::facts_from_text`): either form, one id or a list,
+numbers or strings, an array's parts told apart by what they are. An id
 the prompt did not show is set aside (`ModelFacts::unknown_evidence`),
 counted, and is never evidence.
 
-A request with its own grammar is identified by `prompt ‖ \0 ‖ grammar`.
-A digest-pipeline request is identified by its prompt alone, as before, so
-its recordings stay valid.
+A request with its own grammar is identified by `prompt ‖ \0 ‖ grammar`,
+and its own system turn after that. A digest-pipeline request is
+identified by its prompt alone, as before, so its recordings stay valid.
 
 ## Validation: what the model was shown, and the whole document
 
@@ -125,9 +154,36 @@ The other checks:
   document's own wording gives it does (`ValidatedParty::document_role`):
   `Resident:` before the name makes a tenant, `Owner:` a landlord,
   `("Lender")` after it a lender.
-- **Everything else** applies as in the digest pipeline: confidence, the
-  model's own request for review, parser warnings, barely readable pages,
-  and the token-confidence gate.
+- **No value.** A placeholder (`..`, `null`) or an evidence id written
+  where a value belongs (`p1.b1`) is no value: neither accepted nor sent to
+  review as an unsupported claim.
+- **The type** is the document's own phrase. When the reply cites a title
+  line that names the same kind of document, the line's phrase is the type
+  ("Loan Notice" citing `NOTICE OF DEFAULT AND RESERVATION OF RIGHTS` is a
+  Notice of Default and Reservation of Rights). Otherwise the reply's words
+  must be stated whole somewhere in the context, and not as another
+  document's name (`Re: Residential Lease Agreement dated ...`), and must
+  name a kind of document. A type the document does not state never
+  reaches the name or the description: a title of the same kind stands in,
+  for review (`TYPE_INFERRED`), or the type is unsupported.
+- **Names.** A party's name loses a field's label, a street address or a
+  second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
+  Finch Properties Llc`); a legal form ends an organisation's name. A name
+  that is the end of an organisation a unit names (`MANUFACTURING LLC` of
+  `EMBer POSt MANUFACtURInG LLC`) is completed to it. Capitals OCR
+  scattered are read as capitals. A first name on its own is unsupported.
+- **Who is a party.** Someone named only on a `cc:` line is copied in, and
+  someone who signs for an organisation among the parties (a name, a job
+  title, then the organisation) acts for it: both stay on record, with role
+  other, and neither is ever a filename's party.
+- **Roles** a party keeps are the ones the document supports: the reply's,
+  else the one the document's wording gives, else none
+  (`ValidatedParty::proposed_role` keeps what the reply said).
+- **The date.** An agreement's or a form's signed-on date yields to the one
+  effective or start date both views agree on.
+- **Everything else** applies as in the digest pipeline: the model's own
+  request for review (a hosted reply can still make one), parser warnings,
+  barely readable pages, and the token-confidence gate.
 
 The evidence a reviewer sees, in `Evidence` and in `ValidatedFacts::evidence`,
 is always a line of the document, dereferenced by the engine. The UI's
@@ -170,13 +226,13 @@ order the document first names them.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name; then the side opposite a supported customer. The customer alone is never the filename's party |
+| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that names no one takes the one organisation at the head of the first page as the issuer |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
 | Record | one party: `for` it if it is the party the record is about, else `from` it. Two or more: `for` the party it is about; else `to` the recipient; else `for` the provider's counterpart; else `from` the issuer |
-| Form | `for` the filer (issuer or sender, then employee, tenant, vendor or customer) |
-| Unknown | `between` a bilateral pair; else `from` the issuer; else `to` the addressee |
+| Form | `between` the two parties the document names "by and between"; else `for` the filer (issuer or sender, then employee, tenant, vendor or customer) |
+| Unknown | `between` a bilateral pair, or the two named "by and between"; else `from` the issuer; else `to` the addressee |
 
 "The party it is about" means a client, customer, tenant, employee,
 borrower, licensee or buyer. When nothing settles the relation, the first
@@ -204,17 +260,28 @@ document's own spellings:
 | Record | `{type} for {party} covering {subject}, prepared by {issuer}.` |
 | Form | `{type} for {filer} submitted to {counterparty} regarding {subject}.` |
 
-Some parts are optional:
+Values, not labels:
 
-- **The amount** is used for issued documents. Elsewhere it is used only
-  when labelled as a principal, commitment, price, rent or premium.
-- **A key fact** that is not an amount stands in for a missing subject.
-- **Repetition.** A subject or an identifier that only repeats the type is
-  left out, and an identifier without a digit is not a number. An
-  identifier in a table reads with its column's header (`invoice
-  INV-20417`).
+- **The subject** is a value. A labelled field gives its value (`Project:
+  Aurora Catalog Project`); a field that names a party (`Bill to ...`), a
+  subject that only repeats the type or names a party or the identifier, is
+  left out. A run of capitalised words the document never states as one
+  phrase is written in lower case.
+- **The amount** reads with the label the document gives it: `totalling
+  $1,248.00` for an issued document's total, `annual fee of $96,000` for a
+  labelled one, beside the subject it is the price of (`for ... ($312,500)`)
+  or `for $X` otherwise.
+- **The identifier** stands after the type when it is on the type's title
+  line (`Invoice INV-2048 from ...`), and reads with its label elsewhere
+  (`policy KC-WC-7710345`). An identifier without a digit is not a number.
+- **A key fact** of the fields reply that is not an amount stands in for a
+  missing subject.
+- **The type** is the document's whole title; a compound title too long for
+  the filename to name both parties keeps its first kind there
+  ("Settlement Agreement" of "Settlement Agreement and Mutual Release")
+  before the filename drops a party.
 - **Too long.** A sentence over 42 words drops parts in a fixed order: the
-  amount, the identifier, the preparer, the subject's tail, the subject,
+  preparer, the identifier, the subject's tail, the amount, the subject,
   then the second party. It is never cut mid-phrase.
 - **Too short.** A sentence under six words gets the date as the document
   writes it.
@@ -227,7 +294,7 @@ the filename and the folder only.
 
 | Tool | Flags |
 | --- | --- |
-| `intern-bench run` | `--pipeline digest\|evidence` `--id-style stable\|ordinal` `--retrieval-tier auto\|whole\|small\|normal\|dense` `--field-order fact-first\|evidence-first` `--string-limits bounded\|unbounded` `--context-tokens N` |
+| `intern-bench run` | `--pipeline digest\|evidence` `--id-style stable\|ordinal` `--retrieval-tier auto\|whole\|small\|normal\|dense` `--reply-form compact\|facts` `--field-order fact-first\|evidence-first` (fields reply only) `--string-limits bounded\|unbounded` `--context-tokens N` |
 | `intern-evaluate` | the same flags; `--pipeline new` (the default) and `legacy` keep their meaning |
 
 A recording made with the evidence pipeline carries extra fields in its

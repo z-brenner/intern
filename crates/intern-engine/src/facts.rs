@@ -655,23 +655,54 @@ pub fn validate_facts_at(
         }
     }
     let class = DocumentClass::of(document_type.as_deref());
-    // An issued document whose reply said what it is but named no one: the
-    // one organisation at the head of its first page, before any customer,
-    // is its issuer.
+    // An issued document whose reply said what it is but named no one
+    // who could have issued it - no one, or only parties a customer cue
+    // labels - takes as its issuer the one organisation at the head of its
+    // first page, before any customer.
+    let customer_only = parties.iter().all(|party| {
+        party.copied
+            || party.signatory
+            || labelled_role(scope, &party.name) == Some(PartyRole::Customer)
+            || party
+                .role
+                .is_some_and(|role| RECEIVING_ROLES.contains(&role))
+    });
     if class == DocumentClass::Issued
         && proposed_type.is_some()
         && type_supported
-        && parties.is_empty()
+        && customer_only
         && let Some((name, unit)) = header_organisation(scope)
+        && !parties
+            .iter()
+            .any(|party| normalize_loosely(&party.name) == normalize_loosely(&name))
     {
-        parties.push(ValidatedParty {
-            name: display_name(&name),
-            role: Some(PartyRole::Issuer),
-            document_role: Some(PartyRole::Issuer),
-            support: Support::Context,
-            evidence: vec![unit.id.clone()],
-            ..ValidatedParty::default()
-        });
+        let line = unit
+            .text
+            .lines()
+            .find(|line| normalize_loosely(line).contains(&normalize_loosely(&name)))
+            .unwrap_or(&unit.text)
+            .trim()
+            .to_owned();
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(line),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        parties.insert(
+            0,
+            ValidatedParty {
+                name: display_name(&name),
+                role: Some(PartyRole::Issuer),
+                document_role: Some(PartyRole::Issuer),
+                support: Support::Context,
+                evidence: vec![unit.id.clone()],
+                ..ValidatedParty::default()
+            },
+        );
     }
     // Who the filename and the description can name: everyone but the
     // people copied and those who sign for a party, each with the role the
@@ -705,8 +736,19 @@ pub fn validate_facts_at(
         if found.support == Support::Unsupported {
             push(&mut reasons, ReviewReason::DescriptionUnsupported);
         } else {
+            // Grounded in the units it cites, or - when the reply cited the
+            // wrong line - in one unit of the context that holds every one
+            // of its words.
             let cited = scope.cited_units(&facts.subject_evidence);
-            if subject_is_grounded(value, &scope.view(&cited)) {
+            let words_of_subject = significant_words(value);
+            let held_whole = !words_of_subject.is_empty()
+                && scope.context_units().any(|unit| {
+                    let view = scope.view(&[unit]);
+                    words_of_subject
+                        .iter()
+                        .all(|word| digest_contains(&view, word))
+                });
+            if subject_is_grounded(value, &scope.view(&cited)) || held_whole {
                 remember(&found, &mut references);
                 subject = Some(value.to_owned());
             }
@@ -797,13 +839,35 @@ pub fn validate_facts_at(
             && money_in(value).is_none())
         .then(|| value.to_owned())
     };
-    let subject = subject.as_deref().and_then(says_something);
+    // With no subject from the reply, a field that names one: the premises
+    // a lease lets, the position an offer makes, the project.
+    let subject = subject
+        .as_deref()
+        .and_then(says_something)
+        .map(|value| unstated_names_lowered(&value, scope))
+        .or_else(|| field_subject(scope).and_then(|value| says_something(&value)));
     // The amount: a key fact's, or the one the line a compact reply cited
     // for it states.
     let mut amount = key_facts.iter().zip(&key_units).find_map(|(fact, unit)| {
         let money = money_in(fact)?;
         Some((amount_label_of(fact, *unit, money), money.to_owned()))
     });
+    // The amount the document labels as its total, or as what the
+    // document is for: read from the document, not the reply.
+    if amount.is_none()
+        && let Some(read) = document_amount(scope, class)
+    {
+        remember(
+            &Found {
+                support: Support::Context,
+                unit: Some(read.unit),
+                line: Some(read.line.clone()),
+                miscited: 0,
+            },
+            &mut references,
+        );
+        amount = Some((read.label, read.money));
+    }
     if !facts.amount_evidence.is_empty() {
         let cited = scope.cited_units(&facts.amount_evidence);
         match cited
@@ -848,6 +912,9 @@ pub fn validate_facts_at(
         .as_deref()
         .zip(date_line.as_deref())
         .and_then(|(date, line)| surface_form(date, line));
+    let billed_to = (class == DocumentClass::Issued)
+        .then(|| customer_field(scope))
+        .flatten();
     let composed = describe(&DescriptionFacts {
         class,
         document_type: type_title.as_deref().or(document_type.as_deref()),
@@ -863,6 +930,7 @@ pub fn validate_facts_at(
             .map(|(label, money)| (label.as_deref(), money.as_str())),
         other_fact: other_fact.as_deref(),
         date_surface: date_surface.as_deref(),
+        billed_to: billed_to.as_deref(),
     });
     let description = validate_description(&composed, context, &mut reasons);
 
@@ -1066,6 +1134,41 @@ fn title_lines(unit: &EvidenceUnit) -> Vec<String> {
 /// reply's words where a unit states them whole, not as another document's
 /// name, else a title of the document with the same kind.
 fn read_type<'a>(scope: &ValidationScope<'a>, cited: &[String], value: &str) -> TypeReading<'a> {
+    let reading = read_type_words(scope, cited, value);
+    // A bare kind - "Agreement", "Minutes", "Declaration" - is the
+    // document's title when a title of the same kind says more: "Seed
+    // Production and Supply Agreement", "Commercial Package Policy
+    // Declarations".
+    let value_words = words(value);
+    if let ([head], TypeReading::Stated { found }) = (value_words.as_slice(), &reading)
+        && let Some((phrase, unit, line)) = title_units(scope).find_map(|unit| {
+            title_lines(unit).into_iter().find_map(|line| {
+                let phrase = title_phrase(&line, head)?;
+                (title_like(unit, &line) && words(&phrase).len() > 1)
+                    .then(|| (phrase, unit, line.trim().to_owned()))
+            })
+        })
+    {
+        let _ = found;
+        return TypeReading::Title {
+            phrase,
+            found: Found {
+                support: Support::Context,
+                unit: Some(unit),
+                line: Some(line),
+                miscited: 0,
+            },
+        };
+    }
+    reading
+}
+
+/// [`read_type`] before a bare kind is read as the document's title.
+fn read_type_words<'a>(
+    scope: &ValidationScope<'a>,
+    cited: &[String],
+    value: &str,
+) -> TypeReading<'a> {
     let value_words = words(value);
     let Some(head) = head_noun(&value_words).map(str::to_owned) else {
         return TypeReading::Unsupported;
@@ -1774,6 +1877,51 @@ fn completed_name(scope: &ValidationScope<'_>, name: &str) -> Option<String> {
     })
 }
 
+/// A subject with any run of capitalised words the document does not state
+/// as one phrase written in lower case: "Credit Union Merger", put together
+/// from a notice that writes "credit union" and "merger" apart, reads as
+/// "credit union merger" - words of the document, not a name it never gives.
+/// A run it states ("Aurora Catalog Project") and an initialism keep their
+/// capitals.
+fn unstated_names_lowered(subject: &str, scope: &ValidationScope<'_>) -> String {
+    let tokens = subject.split(' ').collect::<Vec<_>>();
+    let capitalised = |token: &str| {
+        let core = token.trim_matches(|character: char| !character.is_alphanumeric());
+        core.chars().next().is_some_and(char::is_uppercase)
+            && !(core.chars().count() <= 4 && core.chars().all(|c| !c.is_lowercase()))
+    };
+    let stated = |run: &[&str]| {
+        let wanted = words(&run.join(" "));
+        scope.context_units().any(|unit| {
+            unit.text
+                .lines()
+                .any(|line| !phrase_positions(&words(line), &wanted).is_empty())
+        })
+    };
+    let mut lowered = tokens
+        .iter()
+        .map(|token| (*token).to_owned())
+        .collect::<Vec<_>>();
+    let mut at = 0;
+    while at < tokens.len() {
+        if !capitalised(tokens[at]) {
+            at += 1;
+            continue;
+        }
+        let mut end = at + 1;
+        while end < tokens.len() && capitalised(tokens[end]) {
+            end += 1;
+        }
+        if end - at >= 2 && !stated(&tokens[at..end]) {
+            for token in &mut lowered[at..end] {
+                *token = token.to_lowercase();
+            }
+        }
+        at = end;
+    }
+    lowered.join(" ")
+}
+
 /// Whether a name is one capitalised word and nothing else - "Rowan",
 /// "Priya" - the way a note names a person by first name. An initialism
 /// ("IBM") or a word ending an organisation's name is not one.
@@ -1791,6 +1939,94 @@ fn is_first_name_alone(name: &str) -> bool {
             .all(|character| character.is_alphabetic() || character == '-' || character == '\'')
         && !all_capitals
         && !crate::cues::ORGANISATION_ENDINGS.contains(&word.to_lowercase().as_str())
+}
+
+/// The roles of the side a document is sent or billed to.
+const RECEIVING_ROLES: &[PartyRole] = &[
+    PartyRole::Customer,
+    PartyRole::Recipient,
+    PartyRole::Client,
+    PartyRole::Buyer,
+    PartyRole::Addressee,
+];
+
+/// The organisation a customer field names - "Bill To: Ferncastle
+/// Veterinary Hospital", a "SOLD TO" line over it - as the document writes
+/// it.
+fn customer_field(scope: &ValidationScope<'_>) -> Option<String> {
+    scope.context_units().find_map(|unit| {
+        let labelled = unit
+            .label
+            .as_deref()
+            .is_some_and(|label| has_cue(&normalize_loosely(label), CUSTOMER_CUES))
+            || unit
+                .text
+                .lines()
+                .next()
+                .is_some_and(|line| has_cue(&normalize_loosely(line), CUSTOMER_CUES));
+        if !labelled {
+            return None;
+        }
+        let organisation = unit.features.organisations.first()?;
+        written_span(unit, organisation)
+    })
+}
+
+/// Labels a field's value is what a document is about under.
+const SUBJECT_FIELDS: &[&str] = &[
+    "premises",
+    "leased premises",
+    "property",
+    "property address",
+    "suite",
+    "unit",
+    "apartment",
+    "position",
+    "job title",
+    "project",
+    "project name",
+    "aircraft",
+    "vessel",
+    "equipment",
+    "services",
+    "scope of work",
+    "description of work",
+    "matter",
+];
+
+/// The value of the first field of the context labelled as what the
+/// document is about, cut to eight words.
+fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
+    scope.context_units().find_map(|unit| {
+        let label = normalize(unit.label.as_deref()?);
+        let label = label.trim().trim_end_matches([':', '.']).trim();
+        if !SUBJECT_FIELDS.contains(&label) {
+            return None;
+        }
+        let value = match unit.kind {
+            UnitKind::Field => label_and_value(&unit.text).map(|(_, value)| value.to_owned())?,
+            UnitKind::TableRow => {
+                let cells = unit
+                    .text
+                    .trim()
+                    .trim_matches('|')
+                    .split('|')
+                    .map(str::trim)
+                    .collect::<Vec<_>>();
+                match cells.as_slice() {
+                    [_, value] => (*value).to_owned(),
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        let value = value
+            .split_whitespace()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" ");
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 /// Whether a name is an organisation's: it ends on a legal form or an
@@ -2075,6 +2311,156 @@ fn amount_in(unit: &EvidenceUnit) -> Option<(String, String)> {
     Some((pick.1.clone(), pick.2.clone()))
 }
 
+/// An amount the document states with a label that says what it is.
+struct ReadAmount<'a> {
+    label: Option<String>,
+    money: String,
+    line: String,
+    unit: &'a EvidenceUnit,
+}
+
+/// Labels that say an amount is what a document is for: a price, a fee,
+/// rent, a salary, a principal.
+const AMOUNT_LABELS: &[&str] = &[
+    "purchase price",
+    "principal",
+    "settlement payment",
+    "base salary",
+    "salary",
+    "base rent",
+    "monthly rent",
+    "rent",
+    "annual fee",
+    "fixed fee",
+    "fee",
+    "retainer",
+    "premium",
+    "commitment",
+    "price",
+    "sum",
+    "deposit",
+];
+
+/// Labels that say an amount is a document's total.
+const TOTAL_LABELS: &[&str] = &[
+    "total",
+    "amount due",
+    "balance due",
+    "total due",
+    "grand total",
+    "amount payable",
+    "new balance",
+    "balance",
+    "net amount",
+    "net payment",
+];
+
+/// The amount the document labels as its total (an issued document's
+/// last labelled total) or, for any other kind, the first amount labelled
+/// as what the document is for (a price, a fee, rent, a salary, a
+/// principal) or as its total: in a field, a two-cell row, or the words
+/// just before it on a line. `None` when no amount is labelled so.
+fn document_amount<'a>(
+    scope: &ValidationScope<'a>,
+    class: DocumentClass,
+) -> Option<ReadAmount<'a>> {
+    let named = |label: &str, labels: &[&str]| {
+        let lowered = normalize(label);
+        labels
+            .iter()
+            .find(|word| crate::evidence::contains_whole(&lowered, word))
+            .map(|word| (*word).to_owned())
+    };
+    let mut found: Vec<(bool, ReadAmount<'a>)> = Vec::new();
+    for unit in scope.context_units() {
+        let candidates: Vec<(String, String, String)> = match unit.kind {
+            UnitKind::Field => unit
+                .label
+                .clone()
+                .zip(money_in(&unit.text).map(str::to_owned))
+                .map(|(label, money)| vec![(label, money, unit.text.trim().to_owned())])
+                .unwrap_or_default(),
+            UnitKind::TableRow => {
+                let cells = unit
+                    .text
+                    .trim()
+                    .trim_matches('|')
+                    .split('|')
+                    .map(str::trim)
+                    .collect::<Vec<_>>();
+                let money = cells.iter().rev().find_map(|cell| money_in(cell));
+                match (cells.first(), money) {
+                    (Some(label), Some(money))
+                        if !label.chars().any(|c| c.is_ascii_digit()) && !label.contains(money) =>
+                    {
+                        vec![(
+                            (*label).to_owned(),
+                            money.to_owned(),
+                            unit.text.trim().to_owned(),
+                        )]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            _ => unit
+                .text
+                .lines()
+                .flat_map(|line| {
+                    let mut out = Vec::new();
+                    let mut offset = 0;
+                    while let Some(money) = money_in(&line[offset..]) {
+                        let at = offset + line[offset..].find(money).unwrap_or(0);
+                        let before = window_back(line, at, 48);
+                        out.push((before.to_owned(), money.to_owned(), line.trim().to_owned()));
+                        offset = at + money.len();
+                    }
+                    out
+                })
+                .collect(),
+        };
+        for (label, money, line) in candidates {
+            if let Some(total) = named(&label, TOTAL_LABELS) {
+                found.push((
+                    true,
+                    ReadAmount {
+                        label: Some(total),
+                        money,
+                        line,
+                        unit,
+                    },
+                ));
+            } else if let Some(kind) = named(&label, AMOUNT_LABELS) {
+                let label = if matches!(unit.kind, UnitKind::Field | UnitKind::TableRow) {
+                    label.trim().trim_end_matches([':', '.']).to_lowercase()
+                } else {
+                    kind
+                };
+                found.push((
+                    false,
+                    ReadAmount {
+                        label: Some(label),
+                        money,
+                        line,
+                        unit,
+                    },
+                ));
+            }
+        }
+    }
+    if class == DocumentClass::Issued {
+        let (_, read) = found.into_iter().rfind(|(total, _)| *total)?;
+        return Some(ReadAmount {
+            label: None,
+            ..read
+        });
+    }
+    let index = found
+        .iter()
+        .position(|(total, _)| !*total)
+        .or_else(|| (!found.is_empty()).then_some(0))?;
+    Some(found.swap_remove(index).1)
+}
+
 /// An identifier the document gives itself, read without the reply.
 struct ReadIdentifier<'a> {
     value: String,
@@ -2150,11 +2536,12 @@ fn read_identifier<'a>(
             unit,
         });
     }
+    // A field labelled as this kind's number; else, on the first page, any
+    // field labelled as a number that is not a phone's, a tax id's or a
+    // page's.
     let kinds = identifier_labels(&head);
-    if kinds.is_empty() {
-        return None;
-    }
-    scope.context_units().find_map(|unit| {
+    let first_page = scope.context_units().map(|unit| unit.page).min()?;
+    let labelled = |unit: &'a EvidenceUnit, own_kind: bool| -> Option<ReadIdentifier<'a>> {
         let label = unit.label.as_deref()?;
         let label_words = words(label);
         let names_kind = label_words
@@ -2164,7 +2551,29 @@ fn read_identifier<'a>(
             || label_words
                 .iter()
                 .any(|word| NUMBER_WORDS.contains(&word.as_str()));
-        if !(names_kind && names_number) {
+        let not_a_reference = label_words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "phone"
+                    | "tel"
+                    | "telephone"
+                    | "fax"
+                    | "tax"
+                    | "ein"
+                    | "tin"
+                    | "ssn"
+                    | "routing"
+                    | "zip"
+                    | "postal"
+                    | "page"
+                    | "vat"
+                    | "license"
+                    | "licence"
+                    | "npi"
+                    | "dea"
+            )
+        });
+        if !names_number || not_a_reference || (own_kind && !names_kind) {
             return None;
         }
         let value = match unit.kind {
@@ -2176,9 +2585,10 @@ fn read_identifier<'a>(
                 .nth(1)?
                 .trim()
                 .to_owned(),
-            _ => label_and_value(&unit.text)
+            UnitKind::Field => label_and_value(&unit.text)
                 .map(|(_, value)| value.to_owned())
                 .unwrap_or_else(|| unit.text.clone()),
+            _ => return None,
         };
         let token = value
             .split_whitespace()
@@ -2192,7 +2602,102 @@ fn read_identifier<'a>(
             line: unit.text.trim().to_owned(),
             unit,
         })
-    })
+    };
+    // A line that labels this kind's number and gives it after the label,
+    // or on the next line; a table whose column is so labelled.
+    let on_a_line = || {
+        scope.context_units().find_map(|unit| {
+            let lines = unit.text.lines().collect::<Vec<_>>();
+            lines.iter().enumerate().find_map(|(index, line)| {
+                let tokens = line.split_whitespace().collect::<Vec<_>>();
+                let at = (0..tokens.len()).find(|&at| {
+                    let here = words(tokens[at]);
+                    here.iter().any(|word| kinds.contains(&word.as_str()))
+                        && tokens[at + 1..]
+                            .iter()
+                            .take(2)
+                            .chain(std::iter::once(&tokens[at]))
+                            .any(|token| {
+                                token.contains('#')
+                                    || words(token)
+                                        .iter()
+                                        .any(|word| NUMBER_WORDS.contains(&word.as_str()))
+                            })
+                })?;
+                let after = tokens[at + 1..]
+                    .iter()
+                    .find(|token| {
+                        let token_words = words(token);
+                        !(token_words.is_empty()
+                            || token_words
+                                .iter()
+                                .all(|word| NUMBER_WORDS.contains(&word.as_str())))
+                    })
+                    .copied()
+                    .or_else(|| {
+                        lines
+                            .get(index + 1)
+                            .and_then(|next| next.split_whitespace().next())
+                    })?;
+                looks_like_identifier(after).then(|| ReadIdentifier {
+                    value: after
+                        .trim_matches(|character: char| !character.is_alphanumeric())
+                        .to_owned(),
+                    word: identifier_word(Some(&tokens[at..].join(" "))),
+                    line: line.trim().to_owned(),
+                    unit,
+                })
+            })
+        })
+    };
+    let in_a_column = || {
+        scope.context_units().find_map(|unit| {
+            if unit.kind != UnitKind::TableRow {
+                return None;
+            }
+            let header = unit
+                .table_header
+                .and_then(|ordinal| scope.index.units().get(ordinal as usize))?;
+            let cells = |text: &str| {
+                text.trim()
+                    .trim_matches('|')
+                    .split('|')
+                    .map(|cell| cell.trim().to_owned())
+                    .collect::<Vec<_>>()
+            };
+            let column = cells(&header.text).iter().position(|label| {
+                let label_words = words(label);
+                label_words
+                    .iter()
+                    .any(|word| kinds.contains(&word.as_str()))
+                    && (label.contains('#')
+                        || label_words
+                            .iter()
+                            .any(|word| NUMBER_WORDS.contains(&word.as_str())))
+            })?;
+            let cell = cells(&unit.text).into_iter().nth(column)?;
+            let token = cell.split_whitespace().next()?.to_owned();
+            looks_like_identifier(&token).then(|| ReadIdentifier {
+                value: token
+                    .trim_matches(|character: char| !character.is_alphanumeric())
+                    .to_owned(),
+                word: identifier_word(cells(&header.text).get(column).map(String::as_str)),
+                line: unit.text.trim().to_owned(),
+                unit,
+            })
+        })
+    };
+    scope
+        .context_units()
+        .find_map(|unit| (!kinds.is_empty()).then(|| labelled(unit, true)).flatten())
+        .or_else(|| (!kinds.is_empty()).then(on_a_line).flatten())
+        .or_else(|| (!kinds.is_empty()).then(in_a_column).flatten())
+        .or_else(|| {
+            scope
+                .context_units()
+                .filter(|unit| unit.page == first_page)
+                .find_map(|unit| labelled(unit, false))
+        })
 }
 
 /// The number that follows a type on its title line, past a "No." or a
@@ -2926,7 +3431,7 @@ Dated May 12, 2026";
         assert_eq!(
             outcome.proposal.description,
             "Notice of Rent Increase from Cresthaven Court Holdings LLC to Imogen Castellanos \
-             regarding rent for Apartment 4C."
+             regarding rent for Apartment 4C, rent of $1,965.00."
         );
         // Swapped roles: the document states neither, so neither decides
         // anything - the document's own words do.
@@ -2979,24 +3484,49 @@ Dated May 12, 2026";
     /// An invoice that names only its customer names no one: the bill-to
     /// company is never the party an invoice is filed under.
     #[test]
-    fn an_invoice_naming_only_its_customer_files_under_no_party() {
+    fn an_invoice_naming_only_its_customer_files_under_its_header_never_its_customer() {
         let index = index_of(INVOICE);
         let mut facts = invoice_facts(&index);
         facts.parties.remove(0);
         let outcome = check(facts, &whole(&index), &index);
+        // The customer is never the filename's party; the organisation at
+        // the head of the page, before the "Bill To", issued it.
+        assert_eq!(
+            outcome.proposal.parties,
+            vec!["Halvorsen Fixture Works LLC"],
+            "{:?}",
+            outcome.proposal
+        );
+        assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
+        assert!(!outcome.proposal.evidence.parties.is_empty());
+        assert!(
+            outcome.proposal.description.starts_with(
+                "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc."
+            ),
+            "{}",
+            outcome.proposal.description
+        );
+        // With no header organisation before the customer, no one.
+        let text = "INVOICE\n\nBill To: Quillon Ridge Bakery, Inc.\n\nTotal: $10.00";
+        let index = index_of(text);
+        let outcome = check(
+            ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(&index, "INVOICE")],
+                parties: vec![party(
+                    "Quillon Ridge Bakery, Inc.",
+                    Some(PartyRole::Customer),
+                    &[id_of(&index, "Bill To")],
+                )],
+                ..ModelFacts::default()
+            },
+            &whole(&index),
+            &index,
+        );
         assert!(
             outcome.proposal.parties.is_empty(),
             "{:?}",
             outcome.proposal
-        );
-        assert_eq!(outcome.proposal.party_relation, PartyRelation::None);
-        assert!(
-            outcome
-                .proposal
-                .description
-                .starts_with("Invoice to Quillon Ridge Bakery, Inc. for display shelving"),
-            "{}",
-            outcome.proposal.description
         );
     }
 
@@ -3055,9 +3585,21 @@ Dated May 12, 2026";
     /// for it, is supported - and not written down: the description says
     /// only what its evidence shows.
     #[test]
-    fn a_subject_its_cited_units_do_not_hold_stays_out_of_the_description() {
+    fn a_subject_no_one_unit_holds_stays_out_of_the_description() {
+        // Cited wrongly, but one unit holds all its words: grounded there.
         let index = index_of(INVOICE);
         let mut facts = invoice_facts(&index);
+        facts.subject_evidence = vec![id_of(&index, "Invoice No.")];
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(
+            outcome.proposal.description.contains("shelving"),
+            "{}",
+            outcome.proposal.description
+        );
+        // Its words only scattered over several units: no unit states it,
+        // and it stays out.
+        let mut facts = invoice_facts(&index);
+        facts.subject = Some("bakery fixture shelving remittance".into());
         facts.subject_evidence = vec![id_of(&index, "Invoice No.")];
         let outcome = check(facts, &whole(&index), &index);
         assert_eq!(
@@ -3373,35 +3915,55 @@ between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.";
     }
 
     #[test]
-    fn a_compact_replys_amount_is_read_from_the_line_it_cites() {
+    fn an_amount_is_the_one_the_document_labels() {
         const LETTER: &str = "DEMAND FOR PAYMENT\n\nJuly 8, 2026\n\n\
 To: Highmeadow Orchard Supply Co.\n\n\
 Interest accrued through the date of this letter is $1,287.40, for a total now due of \
-$28,703.00.\n\n| Charge | Before | Now |\n| Base rent | $1,845.00 | $1,965.00 |";
-        let reply = |index: &EvidenceIndex, cited: &str| ModelFacts {
-            document_type: Some("Demand for Payment".into()),
+$28,703.00.";
+        let reply = |index: &EvidenceIndex, kind: &str| ModelFacts {
+            document_type: Some(kind.into()),
             type_evidence: vec![id_of(index, "DEMAND")],
             document_date: Some("2026-07-08".into()),
             date_evidence: vec![id_of(index, "July 8")],
-            amount_evidence: vec![id_of(index, cited)],
             ..ModelFacts::default()
         };
-        let (outcome, _) = facts_for(LETTER, |index| reply(index, "total now due"));
+        let (outcome, _) = facts_for(LETTER, |index| reply(index, "Demand for Payment"));
         let description = &outcome.proposal.description;
         assert!(description.contains("$28,703.00"), "{description}");
         assert!(!description.contains("$1,287.40"), "{description}");
-        assert_eq!(
-            outcome.facts.as_ref().unwrap().support.amount,
-            Support::Cited
-        );
-        let (outcome, _) = facts_for(LETTER, |index| reply(index, "Base rent"));
+        // An issued document's amount is its last labelled total, not a
+        // line item or a subtotal.
+        const INVOICE: &str = "INVOICE INV-7\n\nInvoice date: May 1, 2025\n\n\
+| Item | Amount |\n| Shelving | $1,000.00 |\n| Subtotal | $1,000.00 |\n| Tax | $80.00 |\n\
+| Total | $1,080.00 |";
+        let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            ..ModelFacts::default()
+        });
         let description = &outcome.proposal.description;
+        assert!(description.contains("totalling $1,080.00"), "{description}");
+        // A line a hosted reply cites for the amount stands in when the
+        // document labels none; a line with no amount gives none and is no
+        // claim either.
+        const NOTE: &str = "MEMO\n\nJuly 8, 2026\n\nWe paid $500.00 on Friday.\n\nThanks.";
+        let (outcome, _) = facts_for(NOTE, |index| ModelFacts {
+            document_type: Some("Memo".into()),
+            type_evidence: vec![id_of(index, "MEMO")],
+            amount_evidence: vec![id_of(index, "We paid")],
+            ..ModelFacts::default()
+        });
         assert!(
-            description.contains("base rent of $1,965.00"),
-            "{description}"
+            outcome.proposal.description.contains("$500.00"),
+            "{}",
+            outcome.proposal.description
         );
-        // A line with no amount on it gives none, and is no claim either.
-        let (outcome, _) = facts_for(LETTER, |index| reply(index, "To: Highmeadow"));
+        let (outcome, _) = facts_for(NOTE, |index| ModelFacts {
+            document_type: Some("Memo".into()),
+            type_evidence: vec![id_of(index, "MEMO")],
+            amount_evidence: vec![id_of(index, "Thanks")],
+            ..ModelFacts::default()
+        });
         assert!(!outcome.proposal.description.contains('$'));
         let facts = outcome.facts.unwrap();
         assert_eq!(facts.support.amount, Support::Unsupported);
@@ -3523,5 +4085,32 @@ Ship to: Larkspur Bistro LLC";
         });
         assert_eq!(outcome.proposal.party_relation, PartyRelation::From);
         assert_eq!(outcome.proposal.parties, vec!["QUARTZ MEADOW RETAIL LLC"]);
+    }
+
+    #[test]
+    fn a_subject_names_only_what_the_document_names() {
+        const NOTICE: &str = "NOTICE OF SPECIAL MEETING OF MEMBERS\n\nDated August 3, 2026\n\n\
+Members will vote on a plan to merge the credit union into Ironbridge Community Credit Union. \
+The merger needs a majority of votes cast.";
+        let reply = |index: &EvidenceIndex, subject: &str| ModelFacts {
+            document_type: Some("Notice of Special Meeting of Members".into()),
+            type_evidence: vec![id_of(index, "NOTICE OF")],
+            document_date: Some("2026-08-03".into()),
+            date_evidence: vec![id_of(index, "Dated")],
+            subject: Some(subject.into()),
+            subject_evidence: vec![id_of(index, "Members will")],
+            ..ModelFacts::default()
+        };
+        let (outcome, _) = facts_for(NOTICE, |index| reply(index, "Credit Union Merger"));
+        let description = &outcome.proposal.description;
+        assert!(description.contains("credit union merger"), "{description}");
+        let (outcome, _) = facts_for(NOTICE, |index| {
+            reply(index, "merger with Ironbridge Community Credit Union")
+        });
+        let description = &outcome.proposal.description;
+        assert!(
+            description.contains("Ironbridge Community Credit Union"),
+            "{description}"
+        );
     }
 }
