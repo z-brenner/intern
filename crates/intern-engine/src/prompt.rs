@@ -254,7 +254,7 @@ date: the ONE date that defines THIS document. Never a due date, deadline, renew
 parties: at most 3, full names as written: first who it is to or about (To:, Dear, Bill to), then who sent or issued it. A first name on its own is never a party. Leave out anyone copied (cc), lawyers, signatories who are not parties and people merely mentioned. An invoice, order or slip lists its issuer, named at its top, and its customer.
 role: client, contractor, employer, employee, buyer, seller, landlord, tenant, issuer, recipient, vendor, customer, borrower, lender, licensor, licensee, sender, addressee; other when the lines do not say.
 
-subject: at most 8 words: the work, goods, premises, position or matter.
+subject: at most 8 words, as the lines word it: the specific work, goods, premises, position or matter, never the type again.
 Leave out what the lines do not state."#,
     "\n\n",
     r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id]}"#

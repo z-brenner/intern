@@ -47,8 +47,8 @@ two forms (`prompt::ReplyForm`).
   identifier is read from the document instead: the number after the type
   on its title line (`PACKING SLIP PS-311`), or a field labelled as that
   kind of document's number (`Invoice No.:`, `Policy Number`).
-- **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 418
-  tokens with the model's tokenizer; 460 with the shared opening line)
+- **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 430
+  tokens with the model's tokenizer; 472 with the shared opening line)
   and the user turn is the document alone: one line that says whether
   the whole document follows or only excerpts, then the evidence lines,
   each written `[handle] text`.
