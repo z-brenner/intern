@@ -53,10 +53,10 @@
 //!   (a value after another label is that label's); or when a line holds
 //!   the label and nothing else (colons, bars, dashes and full stops
 //!   aside) and the next line holds the value; or when a table row
-//!   (`| … |`) holds the label in a cell and the next line, also a table
-//!   row, holds the value in the cell of the same column - a label set
-//!   over its value, linearised as a table. The score is the share of
-//!   pairs found.
+//!   (`| … |`) holds the label as a whole cell (`CONTRACT DATE` is not the
+//!   cell of `DATE`) and the next line, also a table row, holds the value
+//!   in the cell of the same column - a label set over its value,
+//!   linearised as a table. The score is the share of pairs found.
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
@@ -395,16 +395,18 @@ fn table_cells(line: &str) -> Option<Vec<&str>> {
     Some(inner.split('|').map(str::trim).collect())
 }
 
-/// Whether a table row holds the label in one cell and the next line, a
-/// row of the same table, holds the value in the cell below it: how a
-/// table linearises labels set over their values.
+/// Whether a table row holds the label as one whole cell (a colon after it
+/// aside) and the next line, a row of the same table, holds the value in
+/// the cell below it: how a table linearises labels set over their values.
+/// A cell that only contains the label - `CONTRACT DATE` for `DATE` - is
+/// another label.
 fn below_in_table(lines: &[String], key: &str, value: &str) -> bool {
     lines.windows(2).any(|pair| {
         let (Some(labels), Some(values)) = (table_cells(&pair[0]), table_cells(&pair[1])) else {
             return false;
         };
         labels.iter().enumerate().any(|(column, cell)| {
-            find_bounded(cell, key, 0).is_some()
+            cell.strip_suffix(':').unwrap_or(cell).trim_end() == key
                 && values
                     .get(column)
                     .is_some_and(|below| find_bounded(below, value, 0).is_some())
@@ -1087,6 +1089,25 @@ mod tests {
             &source(&["| Invoice Date | Due Date |\n| 04/03/2026 | 03/04/2026 |"]),
         );
         assert_eq!(shifted.key_values_found, 0);
+        // A label over its value is a whole cell: the date under "CONTRACT
+        // DATE" is not the date under "DATE".
+        let truth = StructureTruth {
+            key_values: vec![KeyValueTruth {
+                key: "DATE".into(),
+                value: "05/07/2026".into(),
+            }],
+            ..StructureTruth::default()
+        };
+        let contract = measure(
+            &truth,
+            &source(&["| CHANGE ORDER NUMBER | CONTRACT DATE |\n| 006 | 05/07/2026 |"]),
+        );
+        assert_eq!(contract.key_values_found, 0);
+        let own = measure(
+            &truth,
+            &source(&["| CHANGE ORDER NUMBER | DATE: |\n| 006 | 05/07/2026 |"]),
+        );
+        assert_eq!(own.key_values_found, 1);
     }
 
     #[test]

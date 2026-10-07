@@ -14,6 +14,7 @@ import { Rng } from './lib/rng.mjs';
 import { textWidth, unsupportedCharacters } from './lib/fonts.mjs';
 import { wrap } from './lib/layout.mjs';
 import { addDays, fromDays, isRealDate, toDays } from './lib/format.mjs';
+import { result } from './docs/common.mjs';
 
 const BENCH = dirname(fileURLToPath(import.meta.url));
 
@@ -508,6 +509,16 @@ describe('InternBench structure gold and the documents added for it', () => {
     for (const document of withStructure.filter((entry) => entry.text_layer === 'scan')) {
       for (const route of Object.values(document.structure!.expected_routes ?? {})) expect(route, document.id).toBe('ocr');
     }
+  });
+
+  it('refuses a labelled value printed under two occurrences of its label', () => {
+    // A change order's DATE box and the architect's signature DATE box,
+    // both dated the same day: the scorer could credit either.
+    const text = ['CONTRACT DATE\n01/15/2025\nDATE\n05/07/2026\nARCHITECT\nDATE\n05/07/2026'];
+    const structure = { key_values: [{ key: 'DATE', value: '05/07/2026' }] };
+    expect(() => result({ id: 'twice', files: [], text, structure })).toThrow('the value "05/07/2026" is printed under 2 occurrences of the label "DATE"');
+    const changeOrder = documents.find((document) => document.id === 'change-order-form')!;
+    expect((changeOrder.structure!.key_values ?? []).map((pair) => pair.key)).not.toContain('DATE');
   });
 
   it('writes one meeting notice three ways: the same runs, in three content-stream orders', async () => {
