@@ -141,9 +141,9 @@ fn extract_path(
     };
     let reading = Instant::now();
     let document = read_with(reader, path, &limits, &cancel);
-    // PDFium's reader times loading the format apart from analysing pages;
-    // every other reader reads in one call, so its time less the stages it
-    // reported is its parse.
+    // PDFium's reader times binding the library and loading the format
+    // apart from analysing pages; every other reader reads in one call, so
+    // its time less the stages it reported is its parse.
     if reader != Reader::Pdf {
         let reader_micros = micros_since(reading);
         cancel.record(|timings| timings.attribute_remainder_to_parse(reader_micros));
@@ -167,7 +167,13 @@ fn read_with(
         Reader::Eml => intern_worker::email::extract_eml(path, limits, cancel),
         Reader::Msg => intern_worker::email::extract_msg(path, limits, cancel),
         Reader::Text => extract_text(path, limits, cancel),
-        Reader::Pdf => extract_pdf(path, &pdf_backend()?, &LAZY_OCR, limits, cancel),
+        Reader::Pdf => {
+            // Binding PDFium - the first PDF a worker process reads loads and
+            // initialises the library - is part of reading the format, so it
+            // is charged to parse rather than left in no stage.
+            let backend = cancel.timed(|timings| &mut timings.parse_micros, pdf_backend)?;
+            extract_pdf(path, &backend, &LAZY_OCR, limits, cancel)
+        }
         Reader::Image => extract_image(path, &LAZY_OCR, limits, cancel),
     }
 }

@@ -499,7 +499,9 @@ pub struct ExtractedDocument {
     pub optional_image: Option<VisionImage>,
     /// Where the extraction's time went. Readers leave this empty: the
     /// protocol fills it from the request's token once the reader returns,
-    /// and a document without it is sent exactly as it always was.
+    /// so every parsed document the worker sends carries it. Only a host
+    /// that knows the field accepts it (see the host's `WorkerDocument`);
+    /// the worker and the host ship together.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timings: Option<ExtractionTimings>,
 }

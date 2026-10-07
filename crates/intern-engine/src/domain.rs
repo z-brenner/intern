@@ -361,8 +361,12 @@ pub struct AnalysisTelemetry {
 /// llama-server reports this with every reply. Its prefill counts only the
 /// tokens it had to evaluate: a prompt that begins as the previous one did
 /// reuses that prefix from the slot's cache, and the reused tokens cost
-/// nothing. That is why the fixed instructions in front of every document
-/// are cheap after the first.
+/// nothing. The system turn is always reused. The user turn's fixed
+/// instructions are reused only when the previous document was likewise
+/// condensed or complete: `build_prompt` puts the sentence saying which in
+/// front of them, so a complete document after a condensed one, or the
+/// reverse, evaluates the whole instruction block again and `cached_tokens`
+/// falls (see docs/pipeline-bottlenecks.md, Latency item 2).
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelTimings {
