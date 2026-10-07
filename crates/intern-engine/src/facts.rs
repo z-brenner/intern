@@ -556,6 +556,13 @@ pub fn validate_facts_at(
         };
         let trimmed = trim_name(written);
         let name = trimmed.as_str();
+        // A first name on its own is never a party: one word, not an
+        // initialism, with nothing that makes it an organisation.
+        if is_first_name_alone(name) {
+            support.parties.push(Support::Unsupported);
+            parties_supported = false;
+            continue;
+        }
         let loose = normalize_loosely(name);
         let normalized = normalize(name);
         let found = find(
@@ -1164,9 +1171,14 @@ fn title_of(scope: &ValidationScope<'_>) -> Option<(String, String)> {
             if !title_like(unit, &line) || !(unit.kind == UnitKind::Heading || in_capitals(&line)) {
                 return None;
             }
-            let line_words = words(&line);
-            let head = head_noun(&line_words).filter(|head| names_a_kind(head))?;
-            title_phrase(&line, head).map(|phrase| (phrase, line.trim().to_owned()))
+            // The longest title any kind word on the line heads: "Lease
+            // Agreement", not "Lease"; "Packing Slip", whatever follows.
+            words(&line)
+                .iter()
+                .filter(|word| names_a_kind(word))
+                .filter_map(|word| title_phrase(&line, word))
+                .max_by_key(|phrase| phrase.split_whitespace().count())
+                .map(|phrase| (phrase, line.trim().to_owned()))
         })
     })
 }
@@ -1686,6 +1698,25 @@ fn cue_issuer(
         (PartyRelation::From, [issuer]) => cast.iter().position(|party| party.name == *issuer),
         _ => None,
     }
+}
+
+/// Whether a name is one capitalised word and nothing else - "Rowan",
+/// "Priya" - the way a note names a person by first name. An initialism
+/// ("IBM") or a word ending an organisation's name is not one.
+fn is_first_name_alone(name: &str) -> bool {
+    let mut parts = name.split_whitespace();
+    let (Some(word), None) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    let letters = word.chars().filter(|character| character.is_alphabetic());
+    let all_capitals = word.chars().filter(|c| c.is_alphabetic()).count() > 1
+        && letters.clone().all(char::is_uppercase);
+    word.chars().next().is_some_and(char::is_uppercase)
+        && word
+            .chars()
+            .all(|character| character.is_alphabetic() || character == '-' || character == '\'')
+        && !all_capitals
+        && !crate::cues::ORGANISATION_ENDINGS.contains(&word.to_lowercase().as_str())
 }
 
 /// Wording that copies someone in on a document rather than addressing it

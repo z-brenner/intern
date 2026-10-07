@@ -256,9 +256,9 @@ role: client, contractor, employer, employee, buyer, seller, landlord, tenant, i
 
 subject: at most 8 words: the work, goods, premises, position or matter.
 amount: the id of the line with its main amount.
-Leave out what the lines do not state. Add "review":true only if the document contradicts itself."#,
+Leave out what the lines do not state."#,
     "\n\n",
-    r#"{"type":["..",id],"date":["YYYY-MM-DD","role",id],"parties":[["name","role",id]],"subject":["..",id],"amount":id}"#
+    r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id],"amount":id}"#
 );
 
 /// The instructions for `order`.
@@ -456,7 +456,14 @@ pub fn evidence_grammar<'a>(
         StringLimits::Unbounded => format!("{name} ::= \"\\\"\" char+ \"\\\"\"\n"),
     };
     if shape.form == ReplyForm::Compact {
-        return compact_grammar(&words, &string);
+        let compact_string = |name: &str, limit: usize| match shape.limits {
+            StringLimits::Bounded => format!(
+                "{name} ::= \"\\\"\" first char{{0,{}}} \"\\\"\"\n",
+                limit - 1
+            ),
+            StringLimits::Unbounded => format!("{name} ::= \"\\\"\" first char* \"\\\"\"\n"),
+        };
+        return compact_grammar(&words, &compact_string);
     }
     let fact_first = shape.order == FieldOrder::FactFirst;
     let mut grammar = String::new();
@@ -561,20 +568,19 @@ pub fn evidence_grammar<'a>(
 
 /// The grammar of a [`ReplyForm::Compact`] reply: a type and its id, a
 /// date, its role and its id, up to three parties each with a role and an
-/// id, and optionally a subject and its id, the id of the amount's line and
-/// a review request. Each fact is an array with its id last, so a fact is
+/// id, and optionally a subject and its id and the id of the amount's line. Each fact is an array with its id last, so a fact is
 /// never stated without the line it stands on; an absent type or date is
 /// `null`. `words` are the ids as the reply writes them.
 fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> String {
     let mut grammar = String::new();
     if words.is_empty() {
         grammar.push_str(concat!(
-            r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]" review? "}""#,
+            r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]}""#,
             "\n",
         ));
     } else {
         grammar.push_str(concat!(
-            r#"root ::= "{" type "," date "," parties subject? amount? review? "}""#,
+            r#"root ::= "{" type "," date "," parties subject? amount? "}""#,
             "\n",
             r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
             "\n",
@@ -597,10 +603,16 @@ fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> 
         grammar.push_str(&string("s60", MAX_COMPACT_SUBJECT_CHARACTERS));
         grammar.push_str(&string("s80", MAX_NAME_CHARACTERS));
         grammar.push_str(CHAR_RULE);
+        grammar.push_str(FIRST_RULE);
     }
-    grammar.push_str(concat!(r#"review ::= ",\"review\":true""#, "\n"));
     grammar
 }
+
+/// The first character of a compact reply's string: a letter or a digit,
+/// so a value is never a placeholder (".."), a quote or punctuation alone.
+/// Everything outside ASCII is let through: names are written in every
+/// script.
+const FIRST_RULE: &str = concat!(r#"first ::= [^\x00-\x2F\x3A-\x40\x5B-\x60\x7B-\x7F]"#, "\n");
 
 /// The date's shape, tighter than the digest grammar's.
 const ISO_RULE: &str = concat!(
@@ -1143,25 +1155,34 @@ mod tests {
 
         #[test]
         fn the_evidence_grammar_has_no_due_role_and_every_party_role() {
-            let grammar = evidence_grammar(["p1.b1"], IdStyle::Stable, ReplyShape::default());
-            assert!(!grammar.contains("\\\"due\\\""));
-            for role in DateRole::ALL {
-                assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
-            }
-            for role in PartyRole::ALL {
-                assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
-            }
-            assert!(grammar.contains("char{1,80}"));
-            let unbounded = evidence_grammar(
-                ["p1.b1"],
-                IdStyle::Stable,
-                ReplyShape {
-                    limits: StringLimits::Unbounded,
+            for (form, bounded, unbounded) in [
+                (ReplyForm::Facts, "char{1,80}", "char+"),
+                (ReplyForm::Compact, "first char{0,79}", "first char*"),
+            ] {
+                let shape = ReplyShape {
+                    form,
                     ..ReplyShape::default()
-                },
-            );
-            assert!(!unbounded.contains("char{"));
-            assert!(unbounded.contains("char+"));
+                };
+                let grammar = evidence_grammar(["p1.b1"], IdStyle::Stable, shape);
+                assert!(!grammar.contains("\\\"due\\\""));
+                for role in DateRole::ALL {
+                    assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
+                }
+                for role in PartyRole::ALL {
+                    assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
+                }
+                assert!(grammar.contains(bounded), "{form:?}");
+                let open = evidence_grammar(
+                    ["p1.b1"],
+                    IdStyle::Stable,
+                    ReplyShape {
+                        limits: StringLimits::Unbounded,
+                        ..shape
+                    },
+                );
+                assert!(!open.contains("char{"));
+                assert!(open.contains(unbounded), "{form:?}");
+            }
         }
 
         /// With nothing shown nothing can be cited, so nothing can be
@@ -1304,13 +1325,17 @@ mod tests {
                 "(To:, Dear, Bill to)",
                 "An invoice, order or slip lists its issuer, named at its top, and its customer",
                 "other when the lines do not say",
-                "\"review\":true only if the document contradicts itself",
+                "Leave out what the lines do not state",
             ] {
                 assert!(prompt.contains(rule), "{rule}");
             }
             assert!(prompt.ends_with(
-                r#"{"type":["..",id],"date":["YYYY-MM-DD","role",id],"parties":[["name","role",id]],"subject":["..",id],"amount":id}"#
+                r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id],"amount":id}"#
             ));
+            assert!(
+                !prompt.contains("\"..\""),
+                "no placeholder a reply could copy"
+            );
             // 450 of the model's tokens; the estimate runs a little high.
             let estimate = crate::engine::estimated_prompt_tokens(prompt);
             assert!(estimate < 560, "{estimate}");
@@ -1325,30 +1350,32 @@ mod tests {
                 r#"date ::= "\"date\":" ( "null" | "[" iso "," drole "," id "]" )"#,
                 r#"party ::= "[" s80 "," prole "," id "]""#,
                 r#"amount ::= ",\"amount\":" id"#,
-                r#"review ::= ",\"review\":true""#,
+                r#"s80 ::= "\"" first char{0,79} "\"""#,
             ] {
                 assert!(grammar.contains(rule), "{rule}\n{grammar}");
             }
-            for absent in ["confidence", "identifier", "facts", "ids ::=", "conf ::="] {
+            for absent in [
+                "confidence",
+                "review",
+                "identifier",
+                "facts",
+                "ids ::=",
+                "conf ::=",
+            ] {
                 assert!(!grammar.contains(absent), "{absent}");
             }
             assert!(!grammar.contains("\\\"due\\\""));
             let empty =
                 evidence_grammar(std::iter::empty(), IdStyle::Stable, ReplyShape::default());
             assert!(!empty.contains("id ::="));
-            assert!(
-                empty.contains(
-                    r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]" review? "}""#
-                )
-            );
+            assert!(empty.contains(r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]}""#));
             // The longest compact reply is far inside the reply budget.
             let id = "\"p100.b100.r100\"";
             let s = |n: usize| format!("\"{}\"", "9".repeat(n));
             let party = format!("[{},\"addressee\",{id}]", s(80));
             let worst = format!(
                 "{{\"type\":[{},{id}],\"date\":[\"2026-12-31\",\"termination\",{id}],\
-                 \"parties\":[{party},{party},{party}],\"subject\":[{},{id}],\"amount\":{id},\
-                 \"review\":true}}",
+                 \"parties\":[{party},{party},{party}],\"subject\":[{},{id}],\"amount\":{id}}}",
                 s(80),
                 s(60)
             );

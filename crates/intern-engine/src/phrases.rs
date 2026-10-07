@@ -98,9 +98,11 @@ pub(crate) fn names_a_kind(word: &str) -> bool {
 pub(crate) fn head_noun(words: &[String]) -> Option<&str> {
     let by_kind = words.iter().enumerate().find(|(at, word)| {
         names_a_kind(word)
-            && words
-                .get(at + 1)
-                .is_none_or(|next| CONNECTORS.contains(&next.as_str()))
+            && words.get(at + 1).is_none_or(|next| {
+                CONNECTORS.contains(&next.as_str())
+                    || TITLE_STOPS.contains(&next.as_str())
+                    || next.chars().any(|character| character.is_ascii_digit())
+            })
     });
     if let Some((_, word)) = by_kind {
         return Some(word.as_str());
@@ -672,6 +674,14 @@ mod tests {
         );
         assert_eq!(head_noun(&w("Order Form")), Some("form"));
         assert_eq!(head_noun(&w("Lease Agreement")), Some("agreement"));
+        assert_eq!(
+            head_noun(&w("LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024")),
+            Some("agreement")
+        );
+        assert_eq!(
+            head_noun(&w("MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1")),
+            Some("journal")
+        );
         assert_eq!(
             head_noun(&w("Assignment and Assumption of Lease")),
             Some("assignment")
