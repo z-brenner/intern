@@ -36,6 +36,15 @@ Every reader produces one:
 | PDF, scanned page; images | `ocr` | the OCR engine's lines (Tesseract's TSV lines today) |
 | Office (Markdown), sheets, CSV, email, text | `fast` | the text's own structure: Markdown headings, blank lines, `\|` table rows, list markers, `Key: value` lines, short lines in capitals; no boxes |
 
+Running headers and footers are marked across the document on every route:
+a short block at the top or bottom of a page whose text, figures aside,
+heads or foots at least a quarter of the pages (two at the least, three
+words or more), or that is only a page number, becomes `page_header` or
+`page_footer`. Only its kind changes; the text and ids stay. On InternBench
+that marks the annual reports' running titles and page numbers and the
+agreements' `Page 2 of 10` footers, and leaves a first page's letterhead
+alone.
+
 A page past the protocol's layout budget (16 MiB of serialised layouts per
 document, a page whose text was cut) is sent without one, and the engine's
 `structured()` segments it from its text with the same id scheme, using the
@@ -312,3 +321,6 @@ whose pixels nothing reads, is a 256-pixel grey thumbnail.
   15% and the synthetic page above.
 * A heading inside a table that is neither larger, bold, nor capitalised
   stays a row of the table.
+* Running blocks are found by repetition: the corpus's synthetic 100-page
+  journal, whose every page is a title, a date and one line
+  `Fictional observation 042`, has that line marked a footer.
