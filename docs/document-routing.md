@@ -4,8 +4,8 @@ Every page the parser worker sends now carries two things: the text the
 engine has always read, and a **layout** — the same page as blocks in the
 order a person reads them, each with a stable id. This page explains how a
 PDF page is routed to the reader that builds them, what the router measures,
-where each threshold comes from, what it costs, and what was checked to show
-that easy documents read exactly as before.
+where each threshold comes from, what it costs, and what was checked of what
+easy documents read.
 
 The code is `crates/intern-worker/src/layout.rs` (the representation),
 `layout/router.rs` (signals and thresholds), `layout/geometry.rs` (the
@@ -33,7 +33,7 @@ Every reader produces one:
 | Reader | Route | Blocks from |
 | --- | --- | --- |
 | PDF, text page | `fast` / `layout` / `ocr_regions` | see below |
-| PDF, scanned page; images | `ocr` | the OCR engine's lines (Tesseract's TSV lines today) |
+| PDF, scanned page; images | `ocr` | the OCR engine's lines (PP-OCR's where its runtime is installed, Tesseract's TSV lines otherwise) |
 | Office (Markdown), sheets, CSV, email, text | `fast` | the text's own structure: Markdown headings, blank lines, `\|` table rows, list markers, `Key: value` lines, short lines in capitals; no boxes |
 
 Running headers and footers are marked across the document on every route:
@@ -69,13 +69,28 @@ over while inspection already has the page open:
   with its value; on InternBench's 72 documents, reading the blocks instead
   took labelled values from 90.5% to 99.3%, with table rows (98.2%), reading
   order (100%) and every date, name and identifier the same. A reading with
-  no lines keeps the engine's text.
+  no lines keeps the engine's text. OCR measures a line's height by its
+  letters, not its type size - a heading in capitals measures smaller than
+  the prose under it - so on these pages a line over another is taken for
+  a form's caption over its value only if its text reads as one: not a
+  part's heading (`ARTICLE 4 - …`), not over a numbered clause (`4.1 …`),
+  not a line that holds a label already or over one that opens with one
+  (`By:`, `Title:`), and not a name - a person's, a firm's, a title - unless
+  a word of it names a field (`Member ID`, `Invoice Date`). Otherwise the
+  page text would gain colons the document does not have
+  (`Palisade Tower Partners LLC: By: …`).
 * **`ocr_regions`** — trustworthy native text with an image of at least 15%
   of the page that no text overlaps (a pasted scan of a signature block, a
   stamped certificate). The page is rendered once, the regions cropped and
   read by OCR, and lines read at confidence ≥ 50 (regions at mean ≥ 60) are
   placed into the page's geometry and analysed with its native text. The page
-  text is the blocks' linearisation.
+  text is the blocks' linearisation. At most four regions are read, largest
+  first, and an image a quarter or more of which lies under a larger region
+  already chosen is not read again - a scan drawn with a copy over it, a
+  thumbnail on its full-size image - since what lies under both would be
+  merged into the page twice. A quarter of the smallest region the router
+  asks for is still several lines of text; images that only touch, or a
+  stamp over a corner of a scan, overlap far less and are both read.
 * **`layout`** — side-by-side flows, table rows, grids of labelled values, or
   overprinted text: the page's characters are read into runs (characters on
   one baseline with no wide gap) and the page is rebuilt from their geometry —
@@ -85,14 +100,30 @@ over while inspection already has the page open:
   position. The page text is the blocks' linearisation: blocks separated by a
   blank line, tables as `| a | b |` rows (which the distiller already treats
   as tables), labelled values as `Key: value` lines.
-* **`fast`** — everything else. The page text is **exactly**
-  `page.text().all()`, byte for byte as before, and blocks are built cheaply
-  from that text; a line gets a box when the page's text objects fall into
+* **`fast`** — everything else. The page text is **exactly** what PDFium
+  reads for the page: `page.text().all()`, except on a page turned a quarter
+  by `/Rotate`, whose text is the text inside the page's size as drawn
+  (`inside_rect`). PDFium bounds `all()` by the size as displayed while the
+  characters sit where they were drawn, so a landscape sheet stored as a
+  portrait one lost every character past the displayed width. Blocks are
+  built cheaply from that text, and each block's text is an exact stretch
+  of the page text - from its first line's start to its last line's end,
+  `\r\n` line ends and all - so a block can always be found in the page
+  it came from. A line gets a box when the page's text objects fall into
   exactly as many lines as its text has, and is left without one otherwise.
 
 Only the `layout` and `ocr_regions` routes read characters one by one
 (four PDFium calls per character), which is why the router decides from
-cheaper signals first.
+cheaper signals first. Inspection reads them while it has the page open,
+as long as the runs it holds for the document stay under 100,000
+(`MAX_DOCUMENT_RUNS`, 15 times the corpus's largest document); a page past
+that has its characters read when it is read - once it is planned, or, for
+an `ocr_regions` page, once its regions' readings are back - one page at a
+time, at the cost of loading the page again (0.74 ms a page, median,
+contended). Reading every page that way doubled the analysis time of the
+layout-heavy documents (the annual report's 47 ms to 99 ms); reading
+nothing ahead at all would hold no bound. A page with more runs than the
+analysis takes on (below) has none read past that.
 
 ## Signals
 
@@ -104,8 +135,8 @@ from the page text.
 | Signal | What it is |
 | --- | --- |
 | `chars` | Non-whitespace, non-control, non-replacement characters of the native text. |
-| `segments` | Text objects (PDFium's runs of one style), with their boxes, in content-stream order. A form XObject's text counts as one box where the form is drawn. |
-| `image_coverage` | Per mille of the page covered by images (as before). |
+| `segments` | Text objects (PDFium's runs of one style), with their boxes, in content-stream order. A form XObject's text objects count one by one, each placed where the form draws it: the form's matrix, composed down any nesting of forms. |
+| `image_coverage` | Per mille of the page covered by image objects, each at the size it is drawn, inside forms too. A form holding an image counts as that image, not as the form's box: a page wrapped in one form with a logo inside is a text page with a logo. |
 | `replacement` | Per mille of non-whitespace characters that are U+FFFD. |
 | `invisible` | Per mille of text objects drawn in render mode 3 — how an OCR layer sits under a scan. |
 | `garbage` | Per mille of words that look like OCR errors: a digit between letters (`Ca1der`), a confusable letter among digits (`2O26`, `$69.9O`), a word starting `0`/`1` then letters (`0strander`), case flipping inside a word. Identifiers are judged part by part, so `INV-2026-0042` is clean. |
@@ -116,7 +147,7 @@ from the page text.
 | `key_value_grid` | Text lines holding two or more labels (`Invoice No: 4471   Date: May 1`, `Name: …   Name: …` across signature blocks). |
 | `overlap` | Per mille of segments covering half of another — overprinted text. |
 | `font_sizes` | Distinct segment heights to the half point. Diagnostic. |
-| `rulings` | Thin path objects (and the sides of stroked rectangles): rules. |
+| `rulings` | Thin path objects (and the sides of stroked rectangles): rules, inside forms too, placed where the form draws them. |
 | `image_region` | Per mille of the page in the largest image that text overlaps by at most a tenth of its area. |
 | `rotation` | The page's `/Rotate`. Boxes are turned into the displayed frame. |
 
@@ -188,25 +219,39 @@ the assignment and services agreement).
 Per page, over all 414: 211 fast, 160 layout, 43 OCR (every scanned page,
 plus the corrupted invoice's re-read), and the synthetic page `ocr_regions`.
 
-## The fast route reads exactly as before
+## What the fast route keeps
 
 `scripts/compare-worker-pages.mjs --before OLD --after NEW FILE…` runs two
 worker builds over the same files and fails if any page the new one read on
 the fast route differs from the old one's in text, source, OCR confidence or
-page-image flag, or if a document's outcome, page count, warnings or
-truncation changed. Run with a worker built from the commit before this work
-(`9cd57a2`) against the final one:
+page-image flag, or if a document's outcome, page count, warnings,
+truncation or page image changed. It was run with a worker built from the
+commit before layouts (`9cd57a2`) against one built from `1ff92d8`, with the
+same runtime (PDFium and Tesseract, and PP-OCR, which only the new worker
+reads scans with):
 
-* Every file that is not a scan - InternBench's 40 and the corpus's 15
-  readable ones, every format (PDF, Office, sheets, CSV, email, text) -
-  **228 of 228 fast-route pages byte-identical**, with warnings, truncation
-  and page-image presence unchanged.
-* The corpus's encrypted, malformed, lock-file and unsupported inputs fail
-  with the same code and message.
-* 18 scanned and mixed files (31 pages): every page OCR read before reads
-  byte-identical, at the same confidence, with the same warnings; the fast
-  pages of the mixed documents are identical. (The 25-page scanned lease was
-  left out of these runs for time.)
+* InternBench's 72 documents, every format: **102 of 102 fast-route pages
+  byte-identical**, beside 174 pages read on the layout route, 53 by OCR
+  and one `ocr_regions` page.
+* The 21 generated fixtures (`fixtures/generated`): **133 of 133 fast-route
+  pages byte-identical**, beside 6 OCR pages; the encrypted and malformed
+  inputs fail as they did.
+* What it reports is OCR's, as expected: the two-frame fax TIFF reads both
+  frames (one before), and PP-OCR reads three scans at a confidence on the
+  other side of the warning threshold from Tesseract's, so the
+  low-confidence warning and the page image come or go with it
+  (`scan-noisy-statement.pdf`, `mixed-signature.pdf`,
+  `rotated-low-resolution-scan.png`). OCR page text is not compared: it is
+  now the blocks' linearisation, and PP-OCR's.
+
+The fast route's text is what PDFium reads, as above: `page.text().all()`,
+or the text inside the size as drawn on a page turned a quarter (no page of
+either set is both turned a quarter and on the fast route). What changed on
+it is its blocks: each block's text is now the stretch of the page text it
+came from, `\r\n` line ends and all, where it was its lines joined with
+`\n`. Over both sets, every block of every page, on every route, is found
+in its page's text in order; at `6f2bca9` that held on 17 of InternBench's
+102 fast pages.
 
 The existing corpus replay gate (`intern-evaluate --replay`) reads the
 recorded extractions, which carry no layout, so its prompts are unchanged by
@@ -305,8 +350,12 @@ Scanned documents (one run each; Tesseract 5.3.4):
 A PDF's scanned pages are rendered one at a time (PDFium is not
 thread-safe; inspection and rendering share one open document) and read by
 a pool of OCR workers through a bounded queue: as many as the engine offers
-(`OcrBackend::concurrency`; for Tesseract half the logical cores, at most
-four). Pages are put back in order and every order-dependent decision (which
+(`OcrBackend::concurrency`; for PP-OCR its configured workers, for Tesseract
+half the logical cores, at most four). Rendering never runs further ahead
+of OCR than the queue allows: the rendered pages held at once are the one
+being rendered, at most `MAX_QUEUED_RENDERED_PAGES` (one) waiting, and one
+per worker being read - six with four workers, about 450 MB at the
+25-megapixel cap, and three with one. Pages are put back in order and every order-dependent decision (which
 page becomes the page image, warning order, which error is reported) is the
 one a sequential read makes; reading with one worker gives the same
 document. Tesseract is started with `OMP_THREAD_LIMIT=1`: a Tesseract built
@@ -314,12 +363,50 @@ with OpenMP starts a thread per core in every process, and two pages at once
 then took 128 s instead of 1.5 s on this machine. The optional page image,
 whose pixels nothing reads, is a 256-pixel grey thumbnail.
 
+## What a page may cost at most
+
+The router and the layout analysis compare text with the text around it,
+so a page built to be slow - thousands of one-character runs on a line,
+tens of thousands of text objects, a page hundreds of inches wide - could
+keep them busy for minutes. Each step is held to a bound
+(`layout::router::bounds`) many times what any page of InternBench's 72
+documents or the generated fixtures has. The calibration, rerun over their
+442 pages (68 PDFs), measured the largest of each:
+
+| Bound | Value | Largest measured |
+| --- | ---: | --- |
+| Text objects a page's survey keeps (`MAX_SEGMENTS`) | 5,000 | 226 (the ruled inspection log) |
+| Images a page's survey keeps, the largest first (`MAX_IMAGES`) | 64 | 1 |
+| Rules a page's survey keeps (`MAX_RULINGS`) | 2,000 | 300 (the inspection log) |
+| Runs a page's layout is built from (`MAX_RUNS`) | 4,000 | 226 |
+| Runs on one line, within five points down the page (`MAX_RUNS_PER_LINE`) | 250 | 8 |
+| Runs inspection reads ahead for a document (`MAX_DOCUMENT_RUNS`) | 100,000 | 6,735 (the 100-page annual report) |
+| Candidate gutters one region of a page tries (`MAX_GUTTER_CANDIDATES`) | 64 | 7 gutters on a page |
+| Bands of whitespace counted in one part of a page (`MAX_GUTTERS`) | 64 | 7 |
+| Points across a part of a page searched for gutters (`MAX_WIDTH_POINTS`) | 15,000 | a PDF page is at most 14,400 |
+
+A page past a bound keeps its text and is read on the fast route. A page
+with more text objects than the survey keeps is measured for no structure;
+one with more runs than the analysis takes on has its characters read no
+further than that and no geometry layout. Rows are built checking each run
+only against the runs that start near it, two rows' free stretches
+intersect in one pass, and gutter coverage is counted from where cells
+start and end, so the rest grows about linearly with the runs. Between the
+regions of a page the analysis asks whether the request was canceled or its
+time is up; if so it stops, and the document fails as out of time rather
+than coming back half-read.
+
+On the calibration's pages (contended): the geometry analysis takes 64 µs
+a page at the median and 524 µs at the most; the signals 222 µs at the
+most; reading a page's characters 0.74 ms at the median.
+
 ## Known limits
 
-* Only the OCR engine's lines are geometry on scanned pages; a PP-OCR
-  backend that fills `OcrResult::lines` in upright page pixels gets the same
-  analysis. OCR page text stays the engine's own text (Tesseract's, exactly
-  as before); the blocks are built from the same words.
+* Only the OCR engine's lines are geometry on scanned pages (PP-OCR and
+  Tesseract both fill `OcrResult::lines` in upright page pixels). An OCR
+  page's text is its blocks' linearisation, built from those lines; a
+  reading with no lines, or with more than the analysis takes on, keeps
+  the engine's own text.
 * Tables are found from alignment and rules, not from a model; borderless
   tables whose columns never line up (the corpus invoice) stay on the fast
   route as lines.
