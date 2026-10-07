@@ -895,8 +895,7 @@ fn components(
                 position: flag(position.first_page, 5)
                     + flag(position.closing, 10)
                     + flag(position.early && !features.money.is_empty(), 20),
-                features: flag(features.money_labelled, 60)
-                    + features.money.len().min(2) as i64 * 25,
+                features: flag(features.money_labelled, 60) + flag(!features.money.is_empty(), 25),
             }
         }
     };
