@@ -246,14 +246,15 @@ impl<W: Write> EventSink for JsonLineSink<'_, W> {
 /// empty, so page numbers still mean what they meant.
 ///
 /// A page's layout repeats its text - in its blocks, again in their lines,
-/// again in table cells - so it has a budget of its own: a page whose text
-/// was cut loses its layout, which no longer describes it, and once the
-/// document's layouts have used [`MAX_LAYOUT_CHARS`] the pages after that
-/// go without one. The host builds those pages' blocks from their text.
+/// again in table cells - and adds a box and an id to each, so it has a
+/// budget of its own, in the bytes it is written as: a page whose text was
+/// cut loses its layout, which no longer describes it, and a page whose
+/// layout would take the document's layouts past [`MAX_LAYOUT_BYTES`] goes
+/// without one. The host builds those pages' blocks from their text.
 fn bound_page_text(document: &mut ExtractedDocument) {
     let mut truncated = false;
     let mut remaining = MAX_DOCUMENT_CHARS;
-    let mut layout_remaining = MAX_LAYOUT_CHARS;
+    let mut layout_remaining = MAX_LAYOUT_BYTES;
     for page in &mut document.pages {
         let allowed = MAX_PAGE_CHARS.min(remaining);
         let kept = match page.text.char_indices().nth(allowed) {
@@ -267,12 +268,11 @@ fn bound_page_text(document: &mut ExtractedDocument) {
         };
         remaining -= kept;
         if let Some(layout) = &page.layout {
-            let characters = layout_characters(layout);
-            if characters > layout_remaining {
+            let bytes = serialized_len(layout);
+            if bytes > layout_remaining {
                 page.layout = None;
-                layout_remaining = 0;
             } else {
-                layout_remaining -= characters;
+                layout_remaining -= bytes;
             }
         }
     }
@@ -287,37 +287,31 @@ fn bound_page_text(document: &mut ExtractedDocument) {
     }
 }
 
-/// The most characters every page's layout together may carry: as much
-/// again as the document's text.
-pub const MAX_LAYOUT_CHARS: usize = MAX_DOCUMENT_CHARS;
+/// The most bytes every page's layout together may be written as. The host
+/// refuses a response line longer than 64 MiB; the text of a document at
+/// its character cap can take half of that, and this keeps the layouts
+/// well inside the rest. A dense hundred-page report's layouts are a few
+/// megabytes.
+pub const MAX_LAYOUT_BYTES: usize = 16 * 1024 * 1024;
 
-/// Characters a layout carries, counting each place it repeats its text.
-fn layout_characters(layout: &PageLayout) -> usize {
-    layout
-        .blocks
-        .iter()
-        .map(|block| {
-            block.text.len()
-                + block
-                    .lines
-                    .iter()
-                    .map(|line| line.text.len())
-                    .sum::<usize>()
-                + block.table.as_ref().map_or(0, |table| {
-                    table
-                        .rows
-                        .iter()
-                        .flat_map(|row| &row.cells)
-                        .map(|cell| cell.text.len())
-                        .sum()
-                })
-                + block
-                    .fields
-                    .iter()
-                    .map(|field| field.key.len() + field.value.len())
-                    .sum::<usize>()
-        })
-        .sum()
+/// How many bytes a layout is written as, without writing it anywhere.
+fn serialized_len(layout: &PageLayout) -> usize {
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    match serde_json::to_writer(&mut counter, layout) {
+        Ok(()) => counter.0,
+        // A layout that cannot be written is never sent.
+        Err(_) => usize::MAX,
+    }
 }
 
 #[allow(clippy::result_large_err)]

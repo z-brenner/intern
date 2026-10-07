@@ -467,6 +467,71 @@ fn a_page_longer_than_the_cap_is_truncated_before_it_is_emitted() {
     assert_eq!(pages[1]["layout"]["blocks"][0]["id"], "p2.b1");
 }
 
+/// Layouts have a budget of their own, in the bytes they are written as: a
+/// page whose layout would pass it goes without one, and the pages around
+/// it keep theirs. The text is not cut, and the document is not truncated.
+#[test]
+fn a_layout_past_the_layout_budget_is_left_out_and_its_page_kept() {
+    use intern_worker::layout::{BlockKind, LayoutBlock, PageLayout, TextSource};
+    use intern_worker::protocol::MAX_LAYOUT_BYTES;
+
+    let output = SignalingWriter::default();
+    let captured = output.clone();
+    let reader = TerminalGatedReader {
+        chunks: vec![
+            parse_line("dense", "dense.txt"),
+            joined_lines([shutdown_line()]),
+        ],
+        next: 0,
+        output,
+        first_terminal: b"\"type\":\"parsed\"",
+    };
+
+    run_concurrent_worker(reader, captured.clone(), Vec::new(), |_path, _cancel| {
+        let text_page = |number: usize| {
+            intern_worker::extract::ExtractedPage::of_text(
+                number,
+                format!("Page {number}."),
+                intern_worker::extract::PageSource::Text,
+            )
+        };
+        let mut dense = text_page(2);
+        let mut block = LayoutBlock::new(
+            BlockKind::Paragraph,
+            "x".repeat(MAX_LAYOUT_BYTES),
+            TextSource::Native,
+        );
+        block.id = "p2.b1".to_owned();
+        dense.layout = Some(PageLayout {
+            blocks: vec![block],
+            ..PageLayout::default()
+        });
+        Ok(ExtractedDocument {
+            pages: vec![text_page(1), dense, text_page(3)],
+            warnings: vec![],
+            truncated: false,
+            optional_image: None,
+            timings: None,
+        })
+    })
+    .unwrap();
+
+    let (bytes, _) = &*captured.0;
+    let bytes = bytes.lock().unwrap().clone();
+    let parsed = String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"]["type"] == "parsed")
+        .unwrap();
+    let pages = &parsed["event"]["document"]["pages"];
+    assert_eq!(pages[0]["layout"]["blocks"][0]["id"], "p1.b1");
+    assert!(pages[1].get("layout").is_none());
+    assert_eq!(pages[1]["text"], "Page 2.");
+    assert_eq!(pages[2]["layout"]["blocks"][0]["id"], "p3.b1");
+    assert_eq!(parsed["event"]["document"]["truncated"], false);
+}
+
 /// A parsed document says where its extraction's time went: what the
 /// readers recorded on the request's token, and the wall time of the whole
 /// extraction, which the protocol takes itself.
