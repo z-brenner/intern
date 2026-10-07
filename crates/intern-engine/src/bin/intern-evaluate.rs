@@ -48,10 +48,7 @@
 //! `--pipeline digest` (or `new`) the digest pipeline, which a hosted model
 //! still reads through. For the evidence pipeline `--id-style
 //! stable|ordinal` and `--retrieval-tier auto|whole|small|normal|dense` say
-//! how its evidence is chosen and named, `--reply-form compact|facts`,
-//! `--field-order fact-first|evidence-first` and `--string-limits
-//! bounded|unbounded` how its reply is shaped (`facts` is the form the
-//! first live recordings were made with), and `--context-tokens N` the
+//! how its evidence is chosen and named, and `--context-tokens N` the
 //! server's context when it is not the app's. A recording says which
 //! pipeline, retrieval and prompt made it, and is replayed only through the
 //! same pipeline.
@@ -76,10 +73,7 @@ use intern_engine::{
         legacy_validate,
     },
     naming::windows_name_key,
-    prompt::{
-        FieldOrder, ReplyForm, ReplyShape, SYSTEM_INSTRUCTION, StringLimits,
-        evidence_prompt_version,
-    },
+    prompt::{SYSTEM_INSTRUCTION, evidence_prompt_version},
     retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -654,7 +648,6 @@ fn evidence_record(
 struct EvidenceSettings {
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
-    shape: ReplyShape,
     context_tokens: Option<usize>,
 }
 
@@ -679,20 +672,6 @@ impl EvidenceSettings {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
         }
-        let mut shape = ReplyShape::default();
-        if let Some(word) = arguments.get("reply-form") {
-            shape.form = ReplyForm::parse(word)
-                .ok_or_else(|| format!("--reply-form is compact or facts, not {word}"))?;
-        }
-        if let Some(word) = arguments.get("field-order") {
-            shape.order = FieldOrder::parse(word).ok_or_else(|| {
-                format!("--field-order is fact-first or evidence-first, not {word}")
-            })?;
-        }
-        if let Some(word) = arguments.get("string-limits") {
-            shape.limits = StringLimits::parse(word)
-                .ok_or_else(|| format!("--string-limits is bounded or unbounded, not {word}"))?;
-        }
         let context_tokens = arguments
             .get("context-tokens")
             .map(|value| {
@@ -704,29 +683,18 @@ impl EvidenceSettings {
             })
             .transpose()?;
         if pipeline == Pipeline::Digest
-            && [
-                "id-style",
-                "retrieval-tier",
-                "reply-form",
-                "field-order",
-                "string-limits",
-                "context-tokens",
-            ]
-            .iter()
-            .any(|key| arguments.contains_key(*key))
+            && ["id-style", "retrieval-tier", "context-tokens"]
+                .iter()
+                .any(|key| arguments.contains_key(*key))
         {
             return Err(
-                "--id-style, --retrieval-tier, --reply-form, --field-order, --string-limits and --context-tokens are for --pipeline evidence"
+                "--id-style, --retrieval-tier and --context-tokens are for --pipeline evidence"
                     .to_owned(),
             );
-        }
-        if shape.form == ReplyForm::Compact && arguments.contains_key("field-order") {
-            return Err("--field-order is for --reply-form facts".to_owned());
         }
         Ok(Self {
             pipeline,
             retrieval,
-            shape,
             context_tokens,
         })
     }
@@ -736,7 +704,6 @@ impl EvidenceSettings {
             engine
                 .with_pipeline(Pipeline::Evidence)
                 .with_retrieval(self.retrieval.clone())
-                .with_reply_shape(self.shape)
         } else {
             engine
         }
@@ -762,7 +729,7 @@ impl EvidenceSettings {
     }
 
     fn header_prompt_version(&self) -> Option<String> {
-        self.evidence().then(|| evidence_prompt_version(self.shape))
+        self.evidence().then(|| evidence_prompt_version())
     }
 
     /// Refuses a recording of the other pipeline, and says when the

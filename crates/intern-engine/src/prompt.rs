@@ -131,99 +131,7 @@ JSON only."#
     )
 }
 
-/// Which comes first in each part of an evidence-pipeline reply: the fact,
-/// or the ids of the lines that state it.
-///
-/// [`FieldOrder::FactFirst`] is the default. The first live run of the
-/// evidence pipeline showed a small model, given the ids first, answering
-/// the empty list - and with it no type, no date and no parties - on every
-/// document whose handles were quoted ids; stating the fact first and then
-/// being held to cite at least one line for it leaves no such way out.
-/// [`FieldOrder::EvidenceFirst`] is kept to be measured against it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum FieldOrder {
-    #[default]
-    FactFirst,
-    EvidenceFirst,
-}
-
-impl FieldOrder {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::FactFirst => "fact-first",
-            Self::EvidenceFirst => "evidence-first",
-        }
-    }
-
-    pub fn parse(word: &str) -> Option<Self> {
-        match word.trim() {
-            "fact-first" => Some(Self::FactFirst),
-            "evidence-first" => Some(Self::EvidenceFirst),
-            _ => None,
-        }
-    }
-}
-
-/// The rules both orders' instructions share.
-macro_rules! evidence_rules {
-    () => {
-        r#"
-
-type: what the document is. Use the document's own words for it, whole. Never "Document", "Agreement" or "Letter" alone. Never substitute a label the document does not contain.
-
-date: the ONE date that defines THIS document. Never a due date, deadline, renewal, return-by or end date. A signed-on date loses to a stated effective date. A date this document is "issued under", "pursuant to", "dated as of" or "as amended by" belongs to that OTHER document.
-date_role names which kind of date it is:
-  effective -> ONLY a stated effective or start date
-  execution -> a signed-on date, if nothing else
-  notice -> a notice given or taking effect
-  termination -> a termination taking effect
-  amendment -> an amendment's own date
-  invoice -> an invoice's own date
-  filing -> a filing or certificate date
-  issuance -> a report, minutes, email or slip was itself written or put out
-  other -> none of these
-
-parties: at most 3, full names as written. A first name on its own is never a party. Leave out lawyers copied, signatories who are not parties, people merely mentioned and exhibit-only companies. An invoice lists its issuer and its customer.
-role: client, contractor, employer, employee, buyer, seller, landlord, tenant, issuer, recipient, vendor, customer, borrower, lender, licensor, licensee, sender, addressee; other when the lines do not say.
-
-subject: at most 12 words naming the work, goods, premises, loan, project or matter. identifier: the document's own number. facts: at most 2, like an amount due. Omit what the lines do not state. needs_review: true only if the document contradicts itself.
-"#
-    };
-}
-
-/// The instructions every evidence-pipeline prompt begins with
-/// ([`FieldOrder::FactFirst`]; [`EVIDENCE_FIRST_INSTRUCTIONS`] for the other
-/// order).
-///
-/// Byte-identical for every document and first in the user turn, so the
-/// server can reuse it from its cache, and short, because on a hybrid model
-/// the cache reuses little (docs/pipeline-bottlenecks.md) and every token of
-/// it is prefill: under half the digest prompt's instructions. It asks for
-/// facts only: what the document is, its date, its parties and their roles,
-/// its subject, its number and at most two key facts, each with the ids of
-/// the evidence lines that state it. The filename and the description are
-/// composed from the validated facts ([`crate::compose`]), so neither is the
-/// model's to write.
-///
-/// It keeps every rule the digest prompt's tests pin, except one changed by
-/// design: an invoice lists its issuer and its customer, each with a role,
-/// and the relation table keeps only the issuer in the filename.
-pub const EVIDENCE_INSTRUCTIONS: &str = concat!(
-    "Give each fact, then the [id]s of the lines below that state it. Cite only ids that appear below. Never copy a line.",
-    evidence_rules!(),
-    "\n",
-    r#"{"type":"..","type_ids":[id],"date":"YYYY-MM-DD","date_role":"..","date_ids":[id],"parties":[{"name":"..","role":"..","ids":[id]}],"subject":"..","subject_ids":[id],"identifier":"..","identifier_ids":[id],"facts":[{"fact":"..","ids":[id]}],"confidence":0.9,"needs_review":false}"#
-);
-
-/// [`EVIDENCE_INSTRUCTIONS`] for [`FieldOrder::EvidenceFirst`].
-pub const EVIDENCE_FIRST_INSTRUCTIONS: &str = concat!(
-    "Give each fact after the [id]s of the lines below that state it. Cite only ids that appear below. Never copy a line.",
-    evidence_rules!(),
-    "\n",
-    r#"{"type_ids":[id],"type":"..","date_ids":[id],"date":"YYYY-MM-DD","date_role":"..","parties":[{"ids":[id],"name":"..","role":".."}],"subject_ids":[id],"subject":"..","identifier_ids":[id],"identifier":"..","facts":[{"ids":[id],"fact":".."}],"confidence":0.9,"needs_review":false}"#
-);
-
-/// The instructions of a [`ReplyForm::Compact`] reply: its facts as short
+/// The instructions of an evidence-pipeline reply: its facts as short
 /// arrays, each with the id of the line that states it - a type, a date and
 /// its role, up to three parties and their roles, a subject. Everything else
 /// the description needs - an amount, a number - is read from the document
@@ -260,108 +168,13 @@ Leave out what the lines do not state."#,
     r#"{"type":[type,id],"date":["YYYY-MM-DD",role,id],"parties":[[name,role,id]],"subject":[subject,id]}"#
 );
 
-/// The instructions for `order`.
-pub const fn evidence_instructions(order: FieldOrder) -> &'static str {
-    match order {
-        FieldOrder::FactFirst => EVIDENCE_INSTRUCTIONS,
-        FieldOrder::EvidenceFirst => EVIDENCE_FIRST_INSTRUCTIONS,
-    }
-}
-
-/// How long the strings of an evidence-pipeline reply may be.
-///
-/// Bounded repetition expands into a rule per character in llama.cpp's
-/// grammar engine; [`StringLimits::Unbounded`] is the fallback if that ever
-/// costs generation speed, with the reply then capped by `max_tokens` alone.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum StringLimits {
-    #[default]
-    Bounded,
-    Unbounded,
-}
-
-impl StringLimits {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Bounded => "bounded",
-            Self::Unbounded => "unbounded",
-        }
-    }
-
-    pub fn parse(word: &str) -> Option<Self> {
-        match word.trim() {
-            "bounded" => Some(Self::Bounded),
-            "unbounded" => Some(Self::Unbounded),
-            _ => None,
-        }
-    }
-}
-
-/// How an evidence-pipeline reply is written.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum ReplyForm {
-    /// Short arrays of facts and the ids of their lines, after instructions
-    /// in the system turn ([`COMPACT_INSTRUCTIONS`]).
-    #[default]
-    Compact,
-    /// Named fields and id lists, with a subject, an identifier, key facts,
-    /// a confidence and a review flag, after instructions at the head of the
-    /// user turn ([`EVIDENCE_INSTRUCTIONS`]): the form first recorded live.
-    Facts,
-}
-
-impl ReplyForm {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Compact => "compact",
-            Self::Facts => "facts",
-        }
-    }
-
-    pub fn parse(word: &str) -> Option<Self> {
-        match word.trim() {
-            "compact" => Some(Self::Compact),
-            "facts" => Some(Self::Facts),
-            _ => None,
-        }
-    }
-}
-
-/// How an evidence-pipeline reply is shaped: its form, the order of its
-/// fields (in [`ReplyForm::Facts`]) and whether its strings are bounded.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ReplyShape {
-    pub form: ReplyForm,
-    pub order: FieldOrder,
-    pub limits: StringLimits,
-}
-
-/// Longest type, party name or key fact, in characters.
+/// Longest type or party name, in characters.
 pub const MAX_NAME_CHARACTERS: usize = 80;
-/// Longest subject, in characters (about 12 words).
-pub const MAX_SUBJECT_CHARACTERS: usize = 100;
-/// Longest identifier, in characters.
-pub const MAX_IDENTIFIER_CHARACTERS: usize = 40;
-/// Longest subject of a [`ReplyForm::Compact`] reply (about 8 words).
-pub const MAX_COMPACT_SUBJECT_CHARACTERS: usize = 60;
-
-/// Builds the user turn for one document's evidence: the fixed
-/// instructions, one line saying how much of the document follows, and the
-/// evidence lines between delimiters.
-pub fn build_evidence_prompt(
-    index: &EvidenceIndex,
-    context: &EvidenceContext,
-    order: FieldOrder,
-) -> String {
-    format!(
-        "{}\n\n{}",
-        evidence_instructions(order),
-        evidence_block(index, context)
-    )
-}
+/// Longest subject, in characters (about 8 words).
+pub const MAX_SUBJECT_CHARACTERS: usize = 60;
 
 /// One line saying how much of the document follows, and the evidence
-/// lines between delimiters.
+/// lines between delimiters: the user turn of an evidence-pipeline request.
 fn evidence_block(index: &EvidenceIndex, context: &EvidenceContext) -> String {
     let pages = index.page_count().max(1);
     let scope = if context.tier == Tier::Whole {
@@ -375,23 +188,16 @@ fn evidence_block(index: &EvidenceIndex, context: &EvidenceContext) -> String {
     )
 }
 
-/// The system turn of an evidence-pipeline request: for a
-/// [`ReplyForm::Compact`] reply, the system instruction and the fixed
-/// instructions; `None` for the form that keeps the system instruction
-/// alone.
-pub fn evidence_system(shape: ReplyShape) -> Option<String> {
-    (shape.form == ReplyForm::Compact)
-        .then(|| format!("{SYSTEM_INSTRUCTION}\n\n{COMPACT_INSTRUCTIONS}"))
+/// The system turn of an evidence-pipeline request: the system instruction
+/// and the fixed instructions, the same for every document.
+pub fn evidence_system() -> String {
+    format!("{SYSTEM_INSTRUCTION}\n\n{COMPACT_INSTRUCTIONS}")
 }
 
 /// The request for one document's evidence: its prompt, the grammar that
 /// lets the reply cite exactly the handles the prompt shows, and the map
 /// from those handles back to the units' stable ids.
-pub fn build_evidence_request(
-    index: &EvidenceIndex,
-    context: &EvidenceContext,
-    shape: ReplyShape,
-) -> ModelRequest {
+pub fn build_evidence_request(index: &EvidenceIndex, context: &EvidenceContext) -> ModelRequest {
     let units = index.units();
     let handles = context
         .handles
@@ -410,15 +216,10 @@ pub fn build_evidence_request(
     let grammar = evidence_grammar(
         context.handles.iter().map(|(handle, _)| handle.as_str()),
         style,
-        shape,
     );
-    let prompt = match shape.form {
-        ReplyForm::Compact => evidence_block(index, context),
-        ReplyForm::Facts => build_evidence_prompt(index, context, shape.order),
-    };
     ModelRequest {
-        prompt,
-        system: evidence_system(shape),
+        prompt: evidence_block(index, context),
+        system: Some(evidence_system()),
         grammar: Some(grammar),
         evidence: Some(EvidenceHandles::new(handles)),
     }
@@ -426,23 +227,17 @@ pub fn build_evidence_request(
 
 /// The grammar for one evidence-pipeline reply.
 ///
-/// Each fact is coupled to its evidence: a fact always cites at least one
-/// id and an absent fact cites none. An id can only be one of `handles` - a
-/// quoted string for [`IdStyle::Stable`], a bare number for
-/// [`IdStyle::Ordinal`] - so a local model cannot cite a line it was not
-/// shown. The handles are written as a prefix tree, so however many there
-/// are, the grammar engine follows only the few that share what the model
-/// has written so far. Optional facts are left out rather than written as
-/// null, a reply carries at most three parties, two key facts and three
-/// ids per fact (two for a party, the identifier and a key fact), and with
-/// [`StringLimits::Bounded`] every string has a ceiling. The date's shape is
-/// tighter than the digest grammar's; the calendar check still runs on what
-/// it lets through.
-pub fn evidence_grammar<'a>(
-    handles: impl IntoIterator<Item = &'a str>,
-    style: IdStyle,
-    shape: ReplyShape,
-) -> String {
+/// Each fact is coupled to its evidence: a fact is an array with the id of
+/// its line last, and an absent type or date is `null`. An id can only be
+/// one of `handles` - a quoted string for [`IdStyle::Stable`], a bare
+/// number for [`IdStyle::Ordinal`] - so a local model cannot cite a line it
+/// was not shown. The handles are written as a prefix tree, so however many
+/// there are, the grammar engine follows only the few that share what the
+/// model has written so far. A reply carries at most three parties, and
+/// every string has a ceiling and starts with a letter or a digit. The
+/// date's shape is tighter than the digest grammar's; the calendar check
+/// still runs on what it lets through.
+pub fn evidence_grammar<'a>(handles: impl IntoIterator<Item = &'a str>, style: IdStyle) -> String {
     let words = handles
         .into_iter()
         .map(|handle| match style {
@@ -450,122 +245,16 @@ pub fn evidence_grammar<'a>(
             IdStyle::Ordinal => handle.to_owned(),
         })
         .collect::<Vec<_>>();
-    let string = |name: &str, limit: usize| match shape.limits {
-        StringLimits::Bounded => format!("{name} ::= \"\\\"\" char{{1,{limit}}} \"\\\"\"\n"),
-        StringLimits::Unbounded => format!("{name} ::= \"\\\"\" char+ \"\\\"\"\n"),
+    let string = |name: &str, limit: usize| {
+        format!(
+            "{name} ::= \"\\\"\" first char{{0,{}}} \"\\\"\"\n",
+            limit - 1
+        )
     };
-    if shape.form == ReplyForm::Compact {
-        let compact_string = |name: &str, limit: usize| match shape.limits {
-            StringLimits::Bounded => format!(
-                "{name} ::= \"\\\"\" first char{{0,{}}} \"\\\"\"\n",
-                limit - 1
-            ),
-            StringLimits::Unbounded => format!("{name} ::= \"\\\"\" first char* \"\\\"\"\n"),
-        };
-        return compact_grammar(&words, &compact_string);
-    }
-    let fact_first = shape.order == FieldOrder::FactFirst;
-    let mut grammar = String::new();
-    if words.is_empty() {
-        // Nothing was shown, so nothing can be cited and nothing stated.
-        grammar.push_str(if fact_first {
-            concat!(
-                r#"root ::= "{\"type\":null,\"type_ids\":[],\"date\":null,\"date_role\":null,\"date_ids\":[],\"parties\":[],\"confidence\":" conf ",\"needs_review\":" bool "}""#,
-                "\n"
-            )
-        } else {
-            concat!(
-                r#"root ::= "{\"type_ids\":[],\"type\":null,\"date_ids\":[],\"date\":null,\"date_role\":null,\"parties\":[],\"confidence\":" conf ",\"needs_review\":" bool "}""#,
-                "\n"
-            )
-        });
-    } else {
-        grammar.push_str(concat!(
-            r#"root ::= "{" type "," date "," parties subject? ident? facts? ",\"confidence\":" conf ",\"needs_review\":" bool "}""#,
-            "\n",
-            r#"parties ::= "\"parties\":[" ( party ( "," party ( "," party )? )? )? "]""#,
-            "\n",
-            r#"facts ::= ",\"facts\":[" fact ( "," fact )? "]""#,
-            "\n",
-            r#"ids ::= "[" id ( "," id ( "," id )? )? "]""#,
-            "\n",
-            r#"ids2 ::= "[" id ( "," id )? "]""#,
-            "\n",
-        ));
-        grammar.push_str(if fact_first {
-            concat!(
-                r#"type ::= "\"type\":" ( "null,\"type_ids\":[]" | s80 ",\"type_ids\":" ids )"#,
-                "\n",
-                r#"date ::= "\"date\":" ( "null,\"date_role\":null,\"date_ids\":[]" | iso ",\"date_role\":" drole ",\"date_ids\":" ids )"#,
-                "\n",
-                r#"party ::= "{\"name\":" s80 ",\"role\":" prole ",\"ids\":" ids2 "}""#,
-                "\n",
-                r#"subject ::= ",\"subject\":" s100 ",\"subject_ids\":" ids"#,
-                "\n",
-                r#"ident ::= ",\"identifier\":" s40 ",\"identifier_ids\":" ids2"#,
-                "\n",
-                r#"fact ::= "{\"fact\":" s80 ",\"ids\":" ids2 "}""#,
-                "\n",
-            )
-        } else {
-            concat!(
-                r#"type ::= "\"type_ids\":" ( "[]" ",\"type\":null" | ids ",\"type\":" s80 )"#,
-                "\n",
-                r#"date ::= "\"date_ids\":" ( "[]" ",\"date\":null,\"date_role\":null" | ids ",\"date\":" iso ",\"date_role\":" drole )"#,
-                "\n",
-                r#"party ::= "{\"ids\":" ids2 ",\"name\":" s80 ",\"role\":" prole "}""#,
-                "\n",
-                r#"subject ::= ",\"subject_ids\":" ids ",\"subject\":" s100"#,
-                "\n",
-                r#"ident ::= ",\"identifier_ids\":" ids2 ",\"identifier\":" s40"#,
-                "\n",
-                r#"fact ::= "{\"ids\":" ids2 ",\"fact\":" s80 "}""#,
-                "\n",
-            )
-        });
-        grammar.push_str("id ::= ");
-        grammar.push_str(&prefix_tree(words.iter().map(String::as_str).collect()));
-        grammar.push('\n');
-        grammar.push_str(concat!(
-            r#"iso ::= "\"" [12] [0-9] [0-9] [0-9] "-" ( "0" [1-9] | "1" [0-2] ) "-" ( "0" [1-9] | [12] [0-9] | "3" [01] ) "\"""#,
-            "\n"
-        ));
-        grammar.push_str("drole ::= ");
-        grammar.push_str(
-            &DateRole::ALL
-                .iter()
-                .map(|role| gbnf_literal(&format!("\"{}\"", role.as_str())))
-                .collect::<Vec<_>>()
-                .join(" | "),
-        );
-        grammar.push('\n');
-        grammar.push_str("prole ::= ");
-        grammar.push_str(
-            &PartyRole::ALL
-                .iter()
-                .map(|role| gbnf_literal(&format!("\"{}\"", role.as_str())))
-                .collect::<Vec<_>>()
-                .join(" | "),
-        );
-        grammar.push('\n');
-        grammar.push_str(&string("s40", MAX_IDENTIFIER_CHARACTERS));
-        grammar.push_str(&string("s80", MAX_NAME_CHARACTERS));
-        grammar.push_str(&string("s100", MAX_SUBJECT_CHARACTERS));
-        grammar.push_str(concat!(
-            r#"char ::= [^"\\\x00-\x1F\x7F] | "\\" ( ["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] )"#,
-            "\n"
-        ));
-    }
-    grammar.push_str(concat!(
-        r#"conf ::= "0" | "1" | "0." [0-9] [0-9]? | "1.0""#,
-        "\n",
-        r#"bool ::= "true" | "false""#,
-        "\n"
-    ));
-    grammar
+    compact_grammar(&words, &string)
 }
 
-/// The grammar of a [`ReplyForm::Compact`] reply: a type and its id, a
+/// The grammar of an evidence-pipeline reply: a type and its id, a
 /// date, its role and its id, up to three parties each with a role and an
 /// id, and optionally a subject and its id. Each fact is an array with its id last, so a fact is
 /// never stated without the line it stands on; an absent type or date is
@@ -597,7 +286,7 @@ fn compact_grammar(words: &[String], string: &dyn Fn(&str, usize) -> String) -> 
         grammar.push('\n');
         grammar.push_str(ISO_RULE);
         grammar.push_str(&role_rules());
-        grammar.push_str(&string("s60", MAX_COMPACT_SUBJECT_CHARACTERS));
+        grammar.push_str(&string("s60", MAX_SUBJECT_CHARACTERS));
         grammar.push_str(&string("s80", MAX_NAME_CHARACTERS));
         grammar.push_str(CHAR_RULE);
         grammar.push_str(FIRST_RULE);
@@ -707,19 +396,16 @@ fn common_prefix<'a>(words: &[&'a str]) -> &'a str {
 /// A short fingerprint of the evidence prompt's fixed parts - the
 /// instructions and the grammar's shape - for a recording to say which
 /// prompt its replies answer.
-pub fn evidence_prompt_version(shape: ReplyShape) -> String {
+pub fn evidence_prompt_version() -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    match evidence_system(shape) {
-        Some(system) => hasher.update(system.as_bytes()),
-        None => hasher.update(evidence_instructions(shape.order).as_bytes()),
-    }
+    hasher.update(evidence_system().as_bytes());
     for (handles, style) in [
         (["p1.b1", "p1.b2"], IdStyle::Stable),
         (["1", "2"], IdStyle::Ordinal),
     ] {
         hasher.update([0_u8]);
-        hasher.update(evidence_grammar(handles, style, shape).as_bytes());
+        hasher.update(evidence_grammar(handles, style).as_bytes());
     }
     format!("{:x}", hasher.finalize())[..12].to_owned()
 }
@@ -850,36 +536,6 @@ mod tests {
         use crate::domain::{DocumentSource, PageOrigin, SourcePage};
         use crate::index::EvidenceIndex;
         use crate::retrieve::{RetrievalConfig, retrieve};
-
-        fn request_for(
-            source: &DocumentSource,
-            style: IdStyle,
-            order: FieldOrder,
-        ) -> (ModelRequest, Vec<String>) {
-            let config = RetrievalConfig {
-                id_style: style,
-                ..RetrievalConfig::default()
-            };
-            let index = EvidenceIndex::build_with(source, config.index_options());
-            let context = retrieve(&index, &config, 100);
-            let handles = context
-                .handles
-                .iter()
-                .map(|(handle, _)| handle.clone())
-                .collect();
-            (
-                build_evidence_request(
-                    &index,
-                    &context,
-                    ReplyShape {
-                        form: ReplyForm::Facts,
-                        order,
-                        limits: StringLimits::Bounded,
-                    },
-                ),
-                handles,
-            )
-        }
 
         fn invoice() -> DocumentSource {
             DocumentSource::from_pages(vec![
@@ -1016,7 +672,7 @@ mod tests {
         #[test]
         fn the_grammar_lets_a_reply_cite_exactly_the_handles_the_prompt_shows() {
             for style in [IdStyle::Stable, IdStyle::Ordinal] {
-                let (request, handles) = request_for(&invoice(), style, FieldOrder::FactFirst);
+                let (request, handles) = request_for(&invoice(), style);
                 let grammar = request.grammar.as_deref().unwrap();
                 let mut cited = grammar_ids(grammar);
                 let mut shown = prompt_handles(&request.prompt);
@@ -1047,93 +703,9 @@ mod tests {
             }
         }
 
-        #[test]
-        fn the_fixed_instructions_come_first_and_are_the_same_for_every_document() {
-            let documents = [
-                invoice(),
-                source_from_text(
-                    "NOTICE OF TERMINATION\n\nDated March 3, 2026.\nTo: Imogen Castellanos",
-                ),
-                source_from_text("This section restates the obligations in full. ".repeat(900)),
-            ];
-            for (style, order) in [
-                (IdStyle::Stable, FieldOrder::FactFirst),
-                (IdStyle::Ordinal, FieldOrder::FactFirst),
-                (IdStyle::Stable, FieldOrder::EvidenceFirst),
-            ] {
-                let instructions = evidence_instructions(order);
-                for document in &documents {
-                    let (request, _) = request_for(document, style, order);
-                    assert!(
-                        request.prompt.starts_with(instructions),
-                        "nothing particular to a document comes before the instructions"
-                    );
-                    assert!(request.prompt.ends_with("JSON only."));
-                    let rest = &request.prompt[instructions.len()..];
-                    assert!(
-                        rest.starts_with("\n\nThe whole ")
-                            || rest.starts_with("\n\nExcerpts from a "),
-                        "{rest}"
-                    );
-                }
-            }
-        }
-
-        /// The digest prompt's pinned rules, carried over; the invoice rule
-        /// changed by design.
-        #[test]
-        fn the_instructions_keep_every_rule_the_digest_prompt_pins() {
-            for order in [FieldOrder::FactFirst, FieldOrder::EvidenceFirst] {
-                instructions_keep_every_rule(evidence_instructions(order));
-            }
-            assert!(EVIDENCE_INSTRUCTIONS.starts_with("Give each fact, then the [id]s"));
-            assert!(EVIDENCE_FIRST_INSTRUCTIONS.starts_with("Give each fact after the [id]s"));
-            assert!(EVIDENCE_INSTRUCTIONS.contains("\n\nsubject: "));
-            assert!(EVIDENCE_INSTRUCTIONS.contains("itself.\n\n{\"type\":"));
-        }
-
-        fn instructions_keep_every_rule(prompt: &str) {
-            assert!(prompt.contains("date_role names which kind of date"));
-            for role in DateRole::ALL {
-                assert!(
-                    prompt.contains(&format!("\n  {} ->", role.as_str())),
-                    "role {} is not explained",
-                    role.as_str()
-                );
-            }
-            assert!(prompt.contains("\"date_role\":\"..\""));
-            assert!(!prompt.contains("\"date_role\":\"effective\""));
-            assert!(prompt.contains("\"role\":\"..\""));
-            assert!(prompt.contains("A first name on its own is never a party"));
-            assert!(prompt.contains("Use the document's own words for it, whole"));
-            assert!(prompt.contains("Never substitute a label the document does not contain"));
-            assert!(!prompt.contains("anything simply issued"));
-            assert!(prompt.contains("was itself written or"));
-            assert!(prompt.contains("belongs to that OTHER document"));
-            for wording in [
-                "\"issued under\"",
-                "\"pursuant to\"",
-                "\"dated as of\"",
-                "\"as amended by\"",
-            ] {
-                assert!(prompt.contains(wording), "{wording}");
-            }
-            assert!(prompt.contains("Never a due date, deadline, renewal, return-by or end date"));
-            assert!(prompt.contains("A signed-on date loses to a stated effective date"));
-            assert!(prompt.contains("signatories who are not parties"));
-            assert!(prompt.contains("An invoice lists its issuer and its customer"));
-            assert!(!prompt.contains("exactly ONE party"));
-            assert!(prompt.contains("Cite only ids that appear below. Never copy a line."));
-            assert!(prompt.contains("needs_review: true only if the document contradicts itself"));
-            for role in PartyRole::ALL {
-                assert!(prompt.contains(role.as_str()), "{}", role.as_str());
-            }
-            assert!(prompt.contains("other when the lines do not say"));
-        }
-
         /// Shorter than the digest prompt's instructions by more than half:
-        /// on a hybrid model the cache reuses little of it, so every token
-        /// of it is prefill.
+        /// on a hybrid model the cache reuses little of a user turn, and the
+        /// system turn they live in is prefilled once.
         #[test]
         fn the_instructions_are_far_shorter_than_the_digest_prompts() {
             let digest = crate::distill::distill(
@@ -1143,7 +715,7 @@ mod tests {
             let digest_instructions =
                 crate::engine::estimated_prompt_tokens(&build_prompt(&digest));
             let evidence_instructions =
-                crate::engine::estimated_prompt_tokens(EVIDENCE_INSTRUCTIONS);
+                crate::engine::estimated_prompt_tokens(COMPACT_INSTRUCTIONS);
             assert!(
                 evidence_instructions * 2 < digest_instructions,
                 "{evidence_instructions} against {digest_instructions}"
@@ -1152,86 +724,19 @@ mod tests {
 
         #[test]
         fn the_evidence_grammar_has_no_due_role_and_every_party_role() {
-            for (form, bounded, unbounded) in [
-                (ReplyForm::Facts, "char{1,80}", "char+"),
-                (ReplyForm::Compact, "first char{0,79}", "first char*"),
-            ] {
-                let shape = ReplyShape {
-                    form,
-                    ..ReplyShape::default()
-                };
-                let grammar = evidence_grammar(["p1.b1"], IdStyle::Stable, shape);
-                assert!(!grammar.contains("\\\"due\\\""));
-                for role in DateRole::ALL {
-                    assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
-                }
-                for role in PartyRole::ALL {
-                    assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
-                }
-                assert!(grammar.contains(bounded), "{form:?}");
-                let open = evidence_grammar(
-                    ["p1.b1"],
-                    IdStyle::Stable,
-                    ReplyShape {
-                        limits: StringLimits::Unbounded,
-                        ..shape
-                    },
-                );
-                assert!(!open.contains("char{"));
-                assert!(open.contains(unbounded), "{form:?}");
+            let grammar = evidence_grammar(["p1.b1"], IdStyle::Stable);
+            assert!(!grammar.contains("\\\"due\\\""));
+            for role in DateRole::ALL {
+                assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
             }
-        }
-
-        /// With nothing shown nothing can be cited, so nothing can be
-        /// stated: the reply is all nulls.
-        #[test]
-        fn a_prompt_with_no_evidence_has_a_grammar_that_cites_nothing() {
-            for order in [FieldOrder::FactFirst, FieldOrder::EvidenceFirst] {
-                let shape = ReplyShape {
-                    order,
-                    ..ReplyShape::default()
-                };
-                let grammar = evidence_grammar(std::iter::empty(), IdStyle::Stable, shape);
-                assert!(!grammar.contains("id ::="));
-                assert!(grammar.contains("\\\"type\\\":null"));
-                assert!(!grammar.contains("ids ::="));
-                assert!(!grammar.contains("party ::="));
+            for role in PartyRole::ALL {
+                assert!(grammar.contains(&format!("\\\"{}\\\"", role.as_str())));
             }
+            assert!(grammar.contains("first char{0,79}"));
+            assert!(grammar.contains("first char{0,59}"));
         }
 
-        /// The caps bound the longest reply the grammar allows well inside
-        /// the reply budget the prompt is fitted with.
-        #[test]
-        fn the_evidence_grammar_bounds_the_reply() {
-            let id = "\"p100.b100.r100\"";
-            let ids3 = format!("[{id},{id},{id}]");
-            let ids2 = format!("[{id},{id}]");
-            let s = |n: usize| format!("\"{}\"", "9".repeat(n));
-            let party = format!(
-                "{{\"ids\":{ids2},\"name\":{},\"role\":\"addressee\"}}",
-                s(80)
-            );
-            let fact = format!("{{\"ids\":{ids2},\"fact\":{}}}", s(80));
-            let worst = format!(
-                "{{\"type_ids\":{ids3},\"type\":{},\"date_ids\":{ids3},\"date\":\"2026-12-31\",\
-                 \"date_role\":\"termination\",\"parties\":[{party},{party},{party}],\
-                 \"subject_ids\":{ids3},\"subject\":{},\"identifier_ids\":{ids2},\"identifier\":{},\
-                 \"facts\":[{fact},{fact}],\"confidence\":0.99,\"needs_review\":false}}",
-                s(80),
-                s(100),
-                s(40)
-            );
-            let tokens = crate::engine::estimated_prompt_tokens(&worst);
-            assert!(
-                tokens < crate::client::MAX_REPLY_TOKENS as usize,
-                "{tokens}"
-            );
-        }
-
-        fn compact_request_for(
-            source: &DocumentSource,
-            style: IdStyle,
-        ) -> (ModelRequest, Vec<String>) {
+        fn request_for(source: &DocumentSource, style: IdStyle) -> (ModelRequest, Vec<String>) {
             let config = RetrievalConfig {
                 id_style: style,
                 ..RetrievalConfig::default()
@@ -1243,10 +748,7 @@ mod tests {
                 .iter()
                 .map(|(handle, _)| handle.clone())
                 .collect();
-            (
-                build_evidence_request(&index, &context, ReplyShape::default()),
-                handles,
-            )
+            (build_evidence_request(&index, &context), handles)
         }
 
         /// The compact reply's instructions are the system turn, the same
@@ -1255,7 +757,6 @@ mod tests {
         /// lines it shows.
         #[test]
         fn a_compact_request_keeps_its_instructions_in_the_system_turn() {
-            assert_eq!(ReplyShape::default().form, ReplyForm::Compact);
             let documents = [
                 invoice(),
                 source_from_text(
@@ -1266,7 +767,7 @@ mod tests {
             let mut systems = Vec::new();
             for document in &documents {
                 for style in [IdStyle::Stable, IdStyle::Ordinal] {
-                    let (request, handles) = compact_request_for(document, style);
+                    let (request, handles) = request_for(document, style);
                     let system = request.system.clone().expect("a system turn");
                     assert!(system.starts_with(SYSTEM_INSTRUCTION));
                     assert!(system.ends_with(COMPACT_INSTRUCTIONS));
@@ -1340,8 +841,7 @@ mod tests {
 
         #[test]
         fn the_compact_grammar_states_each_fact_with_one_id_and_nothing_else() {
-            let grammar =
-                evidence_grammar(["p1.b1", "p1.b2"], IdStyle::Stable, ReplyShape::default());
+            let grammar = evidence_grammar(["p1.b1", "p1.b2"], IdStyle::Stable);
             for rule in [
                 r#"type ::= "\"type\":" ( "null" | "[" s80 "," id "]" )"#,
                 r#"date ::= "\"date\":" ( "null" | "[" iso "," drole "," id "]" )"#,
@@ -1362,8 +862,7 @@ mod tests {
                 assert!(!grammar.contains(absent), "{absent}");
             }
             assert!(!grammar.contains("\\\"due\\\""));
-            let empty =
-                evidence_grammar(std::iter::empty(), IdStyle::Stable, ReplyShape::default());
+            let empty = evidence_grammar(std::iter::empty(), IdStyle::Stable);
             assert!(!empty.contains("id ::="));
             assert!(empty.contains(r#"root ::= "{\"type\":null,\"date\":null,\"parties\":[]}""#));
             // The longest compact reply is far inside the reply budget.
@@ -1383,20 +882,13 @@ mod tests {
             );
         }
 
+        /// The recordings of record (`bench/recording.json`,
+        /// `fixtures/corpus-recording.json`) were made with this prompt. A
+        /// change to the instructions or the grammar changes it, and makes
+        /// every recorded reply stale: record again with the change.
         #[test]
-        fn the_form_first_recorded_keeps_its_prompt_version() {
-            // The 22520ea live recordings were made with this version; a
-            // replay of them must still find it.
-            let facts = ReplyShape {
-                form: ReplyForm::Facts,
-                ..ReplyShape::default()
-            };
-            assert_eq!(evidence_prompt_version(facts), "6134f0168dcf");
-            assert_ne!(
-                evidence_prompt_version(ReplyShape::default()),
-                "6134f0168dcf"
-            );
-            assert_eq!(evidence_system(facts), None);
+        fn the_recordings_of_record_answer_this_prompt() {
+            assert_eq!(evidence_prompt_version(), "4425663a8a9e");
         }
     }
 }

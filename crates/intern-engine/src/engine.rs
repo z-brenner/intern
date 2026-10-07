@@ -38,7 +38,7 @@ use crate::facts::{ValidationScope, validate_facts};
 use crate::fingerprint::{self, source_fingerprint};
 use crate::index::EvidenceIndex;
 use crate::naming::compose_filename;
-use crate::prompt::{ReplyShape, build_evidence_request};
+use crate::prompt::build_evidence_request;
 use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
 use crate::validate::validate;
 
@@ -118,7 +118,6 @@ pub struct Engine {
     min_token_confidence: Option<f32>,
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
-    reply_shape: ReplyShape,
 }
 
 impl Engine {
@@ -135,7 +134,6 @@ impl Engine {
             min_token_confidence: None,
             pipeline: Pipeline::default(),
             retrieval: RetrievalConfig::default(),
-            reply_shape: ReplyShape::default(),
         }
     }
 
@@ -157,17 +155,6 @@ impl Engine {
 
     pub fn retrieval(&self) -> &RetrievalConfig {
         &self.retrieval
-    }
-
-    /// How the evidence pipeline's reply is shaped: which comes first,
-    /// a fact or its evidence ids, and whether its strings are bounded.
-    pub fn with_reply_shape(mut self, shape: ReplyShape) -> Self {
-        self.reply_shape = shape;
-        self
-    }
-
-    pub fn reply_shape(&self) -> ReplyShape {
-        self.reply_shape
     }
 
     /// Routes a proposal to review when the model's least probable date or
@@ -389,7 +376,7 @@ impl Engine {
         let mut context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
         let mut retrieval_micros = micros_since(retrieval_started);
         let prompt_started = Instant::now();
-        let mut request = build_evidence_request(&index, &context, self.reply_shape);
+        let mut request = build_evidence_request(&index, &context);
         let mut prompt_micros = micros_since(prompt_started);
         let mut refits = 0_u32;
         if let Some(context_tokens) = self.client.context_tokens() {
@@ -412,7 +399,7 @@ impl Engine {
                 context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
                 retrieval_micros = retrieval_micros.saturating_add(micros_since(started));
                 let started = Instant::now();
-                request = build_evidence_request(&index, &context, self.reply_shape);
+                request = build_evidence_request(&index, &context);
                 prompt_micros = prompt_micros.saturating_add(micros_since(started));
                 refits += 1;
             }

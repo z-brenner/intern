@@ -32,9 +32,7 @@ use intern_engine::domain::{
 use intern_engine::evidence::{date_match_positions, normalize};
 use intern_engine::facts::{ValidationScope, validate_facts_at};
 use intern_engine::index::EvidenceIndex;
-use intern_engine::prompt::{
-    FieldOrder, ReplyForm, ReplyShape, StringLimits, build_evidence_request,
-};
+use intern_engine::prompt::build_evidence_request;
 use intern_engine::retrieve::{
     IdStyle, RetrievalConfig, Strategy, Tier, prepare_evidence, retrieve,
 };
@@ -366,12 +364,7 @@ fn validate_a_random_reply(
     index: &EvidenceIndex,
     context: &intern_engine::retrieve::EvidenceContext,
 ) {
-    let shape = ReplyShape {
-        form: [ReplyForm::Compact, ReplyForm::Facts][rng.below(2)],
-        order: [FieldOrder::FactFirst, FieldOrder::EvidenceFirst][rng.below(2)],
-        limits: [StringLimits::Bounded, StringLimits::Unbounded][rng.below(2)],
-    };
-    let request = build_evidence_request(index, context, shape);
+    let request = build_evidence_request(index, context);
     let grammar = request.grammar.as_deref().expect("a grammar");
     let handles = context
         .handles

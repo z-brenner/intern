@@ -29,7 +29,7 @@ use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
 /// reply cut off mid-string. Transport only: [`ModelRequest::sha256`] covers
 /// the prompt and a grammar particular to the request, never this, so
 /// recordings stay valid. An evidence-pipeline reply is capped by its
-/// grammar far below it (see `the_evidence_grammar_bounds_the_reply`).
+/// grammar far below it (see `the_compact_grammar_states_each_fact_with_one_id_and_nothing_else`).
 pub(crate) const MAX_REPLY_TOKENS: u32 = 1_024;
 
 /// How much of a reply body is worth reading. A reply is a short JSON object;
@@ -633,7 +633,7 @@ pub(crate) fn facts_from_text(
         .ok_or(AttemptError(EngineErrorCode::ModelResponseInvalid))
 }
 
-/// A compact reply ([`crate::prompt::ReplyForm::Compact`]) read into the
+/// A compact reply ([`crate::prompt::COMPACT_INSTRUCTIONS`]) read into the
 /// same shape as a fields reply, or `None` for a reply that is not one: a
 /// fact is an array of its value - a date with its role, a party with its
 /// role - and the ids of its lines, `amount` the id of the amount's line,
