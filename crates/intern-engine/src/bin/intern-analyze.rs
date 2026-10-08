@@ -19,8 +19,8 @@
 use std::{collections::HashMap, env, fs, path::Path, process, time::Instant};
 
 use intern_engine::{
-    DigestBudget, DocumentExtractor, DocumentSource, Engine, ModelClient, ModelRequest, Pipeline,
-    SupervisedWorker,
+    DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineErrorCode, ModelClient,
+    Pipeline, SupervisedWorker,
     distill::distill,
     domain::{AnalysisTelemetry, PageOrigin, SourcePage},
     engine::finish,
@@ -167,11 +167,21 @@ fn run_current(
     let engine = Engine::new(client)
         .with_pipeline(Pipeline::Digest)
         .with_budget(budget);
-    let distill_started = Instant::now();
-    let digest = engine.distill(source);
-    let distill_micros = u64::try_from(distill_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    let request = ModelRequest::from_digest(&digest);
-    match engine.analyze_digest(source, &digest, distill_micros, extension, &[]) {
+    // Fitted to the model's context and retried at half the size, as the app
+    // reads a document; the request reported is the one that was answered.
+    let prepared = engine.prepare_digest(source);
+    let (result, request) = match engine.analyze_prepared_digest(source, &prepared, extension, &[])
+    {
+        Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+            let halved = engine.refit_digest_halved(source, &prepared);
+            (
+                engine.analyze_prepared_digest(source, &halved, extension, &[]),
+                halved.request,
+            )
+        }
+        result => (result, prepared.request),
+    };
+    match result {
         Ok(analysis) => Ok(json!({
             "pipeline": "new",
             "ok": true,

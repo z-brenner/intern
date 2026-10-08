@@ -46,7 +46,7 @@
 //! `--pipeline evidence` (the default) runs the evidence pipeline
 //! ([`Pipeline::Evidence`]), live or from a recording made with it;
 //! `--pipeline digest` (or `new`) the digest pipeline, which a hosted model
-//! still reads through. For the evidence pipeline `--id-style
+//! reads through. For the evidence pipeline `--id-style
 //! stable|ordinal` and `--retrieval-tier auto|whole|small|normal|dense` say
 //! how its evidence is chosen and named, and `--context-tokens N` the
 //! server's context when it is not the app's. A recording says which
@@ -64,8 +64,8 @@ use std::{
 
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineResult, Evidence, ModelClient,
-    ModelProposal, ModelRequest, PageImage, PartyRelation, Pipeline, Proposer, ProposerReply,
-    SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
+    ModelProposal, ModelRequest, PageImage, PartyRelation, Pipeline, PreparedDigest, Proposer,
+    ProposerReply, SupervisedWorker, TokenConfidence, ValidatedProposal, compose_filename,
     distill::DocumentDigest,
     domain::{DocumentAnalysis, ProposalStatus},
     error::EngineErrorCode,
@@ -416,15 +416,10 @@ fn evaluate_one(
         );
     }
 
-    let distill_started = Instant::now();
-    let digest = live.engine.distill(&source);
-    let distill_micros = u64::try_from(distill_started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    let prompt_sha256 = ModelRequest::from_digest(&digest).sha256();
-    let record = match live
-        .engine
-        .analyze_digest(&source, &digest, distill_micros, extension, &[])
-    {
-        Ok(analysis) => completed_record(fixture, &analysis, &digest, extraction_millis),
+    let (result, prepared) = analyze_digest_live(live.engine, &source, extension);
+    let prompt_sha256 = prepared.request.sha256();
+    let record = match result {
+        Ok(analysis) => completed_record(fixture, &analysis, &prepared.digest, extraction_millis),
         Err(error) => json!({
             "file": name,
             "status": "model_failed",
@@ -510,8 +505,53 @@ fn replay_one(
             settings,
         );
     }
-    let digest = intern_engine::distill(&source, budget);
-    let prompt_sha256 = ModelRequest::from_digest(&digest).sha256();
+    replay_digest(
+        fixture,
+        name,
+        &source,
+        extension,
+        recorded,
+        budget,
+        allow_stale,
+        min_token_confidence,
+        settings,
+    )
+}
+
+/// One fixture through the digest pipeline, from the recording. The digest
+/// is fitted to the context the live run's model reported, as the app fits
+/// it, and a recording made when the model refused the first prompt as too
+/// large answers the half-size one the engine sent next.
+#[allow(clippy::too_many_arguments)]
+fn replay_digest(
+    fixture: &Value,
+    name: &str,
+    source: &DocumentSource,
+    extension: &str,
+    recorded: &RecordedFixture,
+    budget: DigestBudget,
+    allow_stale: bool,
+    min_token_confidence: Option<f32>,
+    settings: &EvidenceSettings,
+) -> Value {
+    let context = settings.context();
+    // Preparing reads only the model's context, never its reply.
+    let preparer = settings
+        .configure(Engine::with_proposer(Box::new(FixedReply(
+            ModelProposal::default(),
+            None,
+            context,
+        ))))
+        .with_budget(budget);
+    let mut prepared = preparer.prepare_digest(source);
+    let mut prompt_sha256 = prepared.request.sha256();
+    if recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str()) {
+        let halved = preparer.refit_digest_halved(source, &prepared);
+        if recorded.prompt_sha256.as_deref() == Some(halved.request.sha256().as_str()) {
+            prompt_sha256 = halved.request.sha256();
+            prepared = halved;
+        }
+    }
     let stale = recorded.prompt_sha256.as_deref() != Some(prompt_sha256.as_str());
     if stale && !allow_stale {
         return json!({
@@ -527,7 +567,7 @@ fn replay_one(
         Some(RecordedReply::Proposed {
             proposal,
             token_confidence,
-        }) => FixedReply(proposal.clone(), *token_confidence, None),
+        }) => FixedReply(proposal.clone(), *token_confidence, context),
         Some(RecordedReply::Failed { code }) => {
             return json!({"file": name, "status": "model_failed", "error": code, "readiness": null, "replayed": true, "stale": stale});
         }
@@ -536,12 +576,14 @@ fn replay_one(
         }
     };
     let engine = with_gate(
-        Engine::with_proposer(Box::new(reply)).with_budget(budget),
+        settings
+            .configure(Engine::with_proposer(Box::new(reply)))
+            .with_budget(budget),
         min_token_confidence,
     );
-    match engine.analyze_digest(&source, &digest, 0, extension, &[]) {
+    match engine.analyze_prepared_digest(source, &prepared, extension, &[]) {
         Ok(analysis) => {
-            let mut record = completed_record(fixture, &analysis, &digest, 0);
+            let mut record = completed_record(fixture, &analysis, &prepared.digest, 0);
             if let Some(object) = record.as_object_mut() {
                 object.insert("replayed".into(), json!(true));
                 object.insert("stale".into(), json!(stale));
@@ -644,8 +686,9 @@ fn evidence_record(
     record
 }
 
-/// How the evidence pipeline is configured for a run, from the command
-/// line. Inert for the digest and legacy pipelines.
+/// How a run's pipeline is configured, from the command line. The
+/// retrieval is the evidence pipeline's alone; the context is the one both
+/// pipelines fit their prompts to.
 struct EvidenceSettings {
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
@@ -711,8 +754,8 @@ impl EvidenceSettings {
             .with_retrieval(self.retrieval.clone())
     }
 
-    /// The context the evidence pipeline fits prompts to: the one given,
-    /// or the local server's.
+    /// The context prompts are fitted to: the one given (the evidence
+    /// pipeline's alone), or the local server's.
     fn context(&self) -> Option<usize> {
         self.context_tokens
             .or(Some(intern_engine::server::CONTEXT_TOKENS as usize))
@@ -828,6 +871,29 @@ fn analyze_evidence_live(
             }
         }
         result => (result, Some(prepared.request.sha256())),
+    }
+}
+
+/// One document through the digest pipeline as the app reads it, and the
+/// prepared digest whose prompt was answered last. A model that says the
+/// prompt did not fit is asked once more at half the size, as
+/// [`Engine::analyze`] does; the recording keeps that second prompt and its
+/// answer.
+fn analyze_digest_live(
+    engine: &Engine,
+    source: &DocumentSource,
+    extension: &str,
+) -> (EngineResult<DocumentAnalysis>, PreparedDigest) {
+    let prepared = engine.prepare_digest(source);
+    match engine.analyze_prepared_digest(source, &prepared, extension, &[]) {
+        Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+            let halved = engine.refit_digest_halved(source, &prepared);
+            (
+                engine.analyze_prepared_digest(source, &halved, extension, &[]),
+                halved,
+            )
+        }
+        result => (result, prepared),
     }
 }
 
@@ -1077,9 +1143,8 @@ impl Proposer for RecordingProposer {
 }
 
 /// The reply a replay hands the engine in the model's place.
-/// A recorded reply, and the context the recording's model reported - the
-/// evidence pipeline fits its prompts to it, so replay must report the
-/// same. `None` is the digest pipeline's replay, which fits nothing.
+/// A recorded reply, and the context the recording's model reported - both
+/// pipelines fit their prompts to it, so replay must report the same.
 struct FixedReply(ModelProposal, Option<TokenConfidence>, Option<usize>);
 
 impl Proposer for FixedReply {
@@ -1913,6 +1978,117 @@ mod tests {
             "party_relation": "from",
             "expected_readiness": "ready",
         })
+    }
+
+    /// A statement inside the character budget whose digits overflow the
+    /// local context: the digest the app sends it is fitted, not plain.
+    fn digit_dense_source() -> DocumentSource {
+        let mut text = String::from("ACCOUNT STATEMENT\n\nStatement date: January 31, 2026\n\n");
+        let mut line = 0_u32;
+        while text.chars().count() < 11_500 {
+            text.push_str(&format!(
+                "{:02}/01/2026 {:010} {:>9}.{:02}\n",
+                line % 28 + 1,
+                7_340_000_000_u64 + u64::from(line) * 7_919,
+                (line * 7_573) % 100_000,
+                line % 100,
+            ));
+            line += 1;
+        }
+        source_from_text(text)
+    }
+
+    fn recorded_digest(source: &DocumentSource, prompt_sha256: String) -> RecordedFixture {
+        RecordedFixture {
+            file: "statement.txt".into(),
+            sha256: None,
+            extraction: RecordedExtraction::Parsed {
+                source: source.clone(),
+            },
+            prompt_sha256: Some(prompt_sha256),
+            reply: Some(RecordedReply::Proposed {
+                proposal: ModelProposal::default(),
+                token_confidence: None,
+            }),
+        }
+    }
+
+    fn replay_statement(source: &DocumentSource, recorded: &RecordedFixture) -> Value {
+        replay_digest(
+            &json!({"file": "statement.txt"}),
+            "statement.txt",
+            source,
+            "txt",
+            recorded,
+            DigestBudget::default(),
+            false,
+            None,
+            &digest_settings(),
+        )
+    }
+
+    /// A live digest run reads a document the way the app does: a prompt the
+    /// model says is too large is sent again at half the size, and the run
+    /// keeps the prompt that was answered.
+    #[test]
+    fn a_digest_prompt_the_model_finds_too_large_is_asked_again_at_half_size() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let engine = Engine::with_proposer(Box::new(TooLargeOnce(Arc::clone(&prompts))))
+            .with_pipeline(Pipeline::Digest);
+        let (result, prepared) = analyze_digest_live(&engine, &ledger_source(), "txt");
+        assert!(
+            result.is_ok(),
+            "{:?}",
+            result.err().map(|error| error.code())
+        );
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 2);
+        assert_ne!(prompts[0], prompts[1]);
+        assert_eq!(prepared.request.sha256(), prompts[1]);
+        assert_eq!(prepared.redistillations, 1);
+    }
+
+    /// A digest the live run fitted to the local context replays as current:
+    /// replay fits it to the same context. A plain digest of the same
+    /// document is another prompt, and stale.
+    #[test]
+    fn a_fitted_digest_recording_replays_as_current() {
+        let source = digit_dense_source();
+        let preparer = digest_settings().configure(Engine::with_proposer(Box::new(FixedReply(
+            ModelProposal::default(),
+            None,
+            digest_settings().context(),
+        ))));
+        let fitted = preparer.prepare_digest(&source);
+        assert!(fitted.redistillations > 0, "the statement must overflow");
+        let plain =
+            ModelRequest::from_digest(&intern_engine::distill(&source, DigestBudget::default()))
+                .sha256();
+        assert_ne!(fitted.request.sha256(), plain);
+        let current = replay_statement(&source, &recorded_digest(&source, fitted.request.sha256()));
+        assert_eq!(current["stale"], json!(false), "{current}");
+        let refused = replay_statement(&source, &recorded_digest(&source, plain));
+        assert_eq!(refused["status"], json!("stale_prompt"));
+    }
+
+    /// A recording of the half-size retry replays as current too.
+    #[test]
+    fn a_recording_of_the_half_digest_retry_replays_as_current() {
+        let source = ledger_source();
+        let preparer = digest_settings().configure(Engine::with_proposer(Box::new(FixedReply(
+            ModelProposal::default(),
+            None,
+            digest_settings().context(),
+        ))));
+        let full = preparer.prepare_digest(&source);
+        let halved = preparer.refit_digest_halved(&source, &full);
+        assert_ne!(full.request.sha256(), halved.request.sha256());
+        for prompt_sha256 in [full.request.sha256(), halved.request.sha256()] {
+            let record = replay_statement(&source, &recorded_digest(&source, prompt_sha256));
+            assert_eq!(record["stale"], json!(false), "{record}");
+        }
+        let other = replay_statement(&source, &recorded_digest(&source, "0".repeat(64)));
+        assert_eq!(other["status"], json!("stale_prompt"));
     }
 
     fn digest_settings() -> EvidenceSettings {

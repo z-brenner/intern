@@ -9,8 +9,8 @@
 //! that cite those units by id, and composes the filename and description
 //! from the facts validation accepts. [`Pipeline::Digest`] reads a distilled
 //! digest of the whole document instead and has the model write the
-//! description; a hosted model still reads that way (see
-//! [`crate::hosted`]), and `--pipeline digest` measures it.
+//! description; a hosted model reads that way (see [`crate::hosted`]),
+//! and `--pipeline digest` measures it.
 //!
 //! Everything above this line (extraction, OCR) and everything below it (the
 //! queue, the file operations, the UI) is somebody else's problem. That is what
@@ -112,6 +112,21 @@ pub struct PreparedEvidence {
     pub prompt_micros: u64,
 }
 
+/// A document's digest, fitted to the model's context, and the request that
+/// carries it: everything [`Engine::analyze_prepared_digest`] needs besides
+/// the model.
+pub struct PreparedDigest {
+    pub digest: DocumentDigest,
+    pub request: ModelRequest,
+    /// The budget the digest was distilled at: the engine's, or the
+    /// condensed one fitting chose.
+    pub budget: DigestBudget,
+    /// Distillations after the first: to fit the context, and after the
+    /// model said the prompt did not fit.
+    pub redistillations: u32,
+    pub distill_micros: u64,
+}
+
 pub struct Engine {
     client: Box<dyn Proposer>,
     budget: DigestBudget,
@@ -203,6 +218,24 @@ impl Engine {
         if self.pipeline == Pipeline::Evidence {
             return self.analyze_evidence(source, extension, existing_names);
         }
+        let prepared = self.prepare_digest(source);
+        match self.analyze_prepared_digest(source, &prepared, extension, existing_names) {
+            // The estimate is an estimate. The server counts exactly, and
+            // when it says the prompt did not fit, half as much document
+            // is sent once more rather than the same prompt again.
+            Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
+                let halved = self.refit_digest_halved(source, &prepared);
+                self.analyze_prepared_digest(source, &halved, extension, existing_names)
+            }
+            result => result,
+        }
+    }
+
+    /// Distills a document and fits the digest to the model's context, as
+    /// [`Engine::analyze`] does: for a model with a context, a prompt
+    /// estimated not to fit is distilled again at a smaller budget, at most
+    /// twice; a model without one is sent the digest whole.
+    pub fn prepare_digest(&self, source: &DocumentSource) -> PreparedDigest {
         let distill_started = Instant::now();
         let mut budget = self.budget;
         let mut digest = distill(source, budget);
@@ -222,23 +255,55 @@ impl Engine {
             }
         }
         let distill_micros = micros_since(distill_started);
-        let result =
-            match self.analyze_digest(source, &digest, distill_micros, extension, existing_names) {
-                // The estimate is an estimate. The server counts exactly, and
-                // when it says the prompt did not fit, half as much document
-                // is sent once more rather than the same prompt again.
-                Err(error) if error.code() == EngineErrorCode::ModelInputTooLarge => {
-                    let redistill_started = Instant::now();
-                    let digest = distill(source, condensed(sent_characters(&digest, budget) / 2));
-                    let distill_micros =
-                        distill_micros.saturating_add(micros_since(redistill_started));
-                    redistillations += 1;
-                    self.analyze_digest(source, &digest, distill_micros, extension, existing_names)
-                }
-                result => result,
-            };
-        result.map(|mut analysis| {
-            analysis.telemetry.redistillations = redistillations;
+        PreparedDigest {
+            request: ModelRequest::from_digest(&digest),
+            digest,
+            budget,
+            redistillations,
+            distill_micros,
+        }
+    }
+
+    /// The digest distilled again at half the characters the prepared one
+    /// carried: what the engine sends a model that said the prompt did not
+    /// fit. Its time includes the first preparation's.
+    pub fn refit_digest_halved(
+        &self,
+        source: &DocumentSource,
+        prepared: &PreparedDigest,
+    ) -> PreparedDigest {
+        let started = Instant::now();
+        let budget = condensed(sent_characters(&prepared.digest, prepared.budget) / 2);
+        let digest = distill(source, budget);
+        PreparedDigest {
+            request: ModelRequest::from_digest(&digest),
+            digest,
+            budget,
+            redistillations: prepared.redistillations + 1,
+            distill_micros: prepared
+                .distill_micros
+                .saturating_add(micros_since(started)),
+        }
+    }
+
+    /// Runs inference, validation, and naming over a prepared digest, and
+    /// counts the distillations it took.
+    pub fn analyze_prepared_digest(
+        &self,
+        source: &DocumentSource,
+        prepared: &PreparedDigest,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> EngineResult<DocumentAnalysis> {
+        self.analyze_digest(
+            source,
+            &prepared.digest,
+            prepared.distill_micros,
+            extension,
+            existing_names,
+        )
+        .map(|mut analysis| {
+            analysis.telemetry.redistillations = prepared.redistillations;
             analysis
         })
     }
@@ -298,10 +363,6 @@ impl Engine {
             analysis.telemetry.naming_micros = micros_since(naming_started);
             analysis
         })
-    }
-
-    pub fn distill(&self, source: &DocumentSource) -> DocumentDigest {
-        distill(source, self.budget)
     }
 
     /// The checks that follow validation in both pipelines: a page that
@@ -1443,5 +1504,62 @@ mod tests {
             prepared.scale_pct
         );
         assert!(prepared.scale_pct < 100, "{}", prepared.scale_pct);
+    }
+
+    /// The digest a caller prepares is the one [`Engine::analyze`] sends:
+    /// fitted to the local context when it would overflow, as it is.
+    #[test]
+    fn a_prepared_digest_is_the_prompt_analyze_sends() {
+        for (source, fitted) in [
+            (digit_dense_statement(), true),
+            (
+                source_from_text(
+                    "CONSULTING AGREEMENT\n\nThis Agreement is effective as of April 1, 2026.\n\
+                     It is made between Acme Corporation and the consultant for advisory services.",
+                ),
+                false,
+            ),
+        ] {
+            let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
+            let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)))
+                .with_pipeline(Pipeline::Digest);
+            let prepared = engine.prepare_digest(&source);
+            let analysis = engine.analyze(&source, "pdf", &[]).unwrap();
+            assert_eq!(recording.prompts(), vec![prepared.request.prompt.clone()]);
+            assert_eq!(analysis.telemetry.redistillations, prepared.redistillations);
+            assert_eq!(prepared.redistillations > 0, fitted);
+        }
+    }
+
+    /// The half-size digest a caller refits is the one [`Engine::analyze`]
+    /// sends after the model says the prompt did not fit, one more
+    /// distillation and all the time it took.
+    #[test]
+    fn a_half_digest_refit_is_the_retry_analyze_sends() {
+        let source = digit_dense_statement();
+        let recovering = std::sync::Arc::new(Recording::new(vec![
+            Err(crate::error::EngineErrorCode::ModelInputTooLarge),
+            Ok(()),
+        ]));
+        let engine = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recovering)))
+            .with_pipeline(Pipeline::Digest);
+        let mut prepared = engine.prepare_digest(&source);
+        let analysis = engine.analyze(&source, "pdf", &[]).unwrap();
+        prepared.distill_micros = 5_000_000;
+        let halved = engine.refit_digest_halved(&source, &prepared);
+        assert_eq!(
+            recovering.prompts(),
+            vec![
+                prepared.request.prompt.clone(),
+                halved.request.prompt.clone()
+            ]
+        );
+        assert_eq!(halved.redistillations, prepared.redistillations + 1);
+        assert_eq!(analysis.telemetry.redistillations, halved.redistillations);
+        assert!(
+            halved.distill_micros >= 5_000_000,
+            "{}",
+            halved.distill_micros
+        );
     }
 }
