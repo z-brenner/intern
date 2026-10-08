@@ -138,11 +138,12 @@ The other checks:
   the key facts are checked the way a description's claims are. One that
   is not supported is left out of the description and sends the document
   to review (`DESCRIPTION_UNSUPPORTED`).
-- **Subject wording.** A subject is written into the description only when
-  at least 60% of its significant words are in the units it cites, or when
-  one unit of the context holds all of them: a subject the reply cited to
-  the wrong line is not lost. Words scattered over several units keep it
-  out, and nothing outside the document can pass.
+- **Subject wording.** A subject is written into the description when at
+  least 60% of its significant words are in the units it cites; the rest are
+  not checked. A subject that fails that, as one the reply cited to the
+  wrong line does, is written when one unit of the context holds every one
+  of its significant words. Words scattered over several units do not
+  qualify it, and this fallback admits no word the context does not state.
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);

@@ -31,9 +31,9 @@ the reviewed fixes, to carry the context measurements: every score is
 unchanged.
 
 The phase 3 scorecard, from the two reports (replayed scores; timings and
-tokens as recorded on that machine, which `compare` does not compare
-between replays, except `index_ms` and `retrieval_ms`, which the replay
-measures):
+tokens as recorded on that machine, all but `index_ms` and `retrieval_ms`,
+which each replay measures; `compare` compares no timings between
+replays):
 
 | Figure | Digest (before) | Evidence (after) |
 | --- | ---: | ---: |
@@ -67,8 +67,10 @@ p50 25 and p95 59, from an index of `index_units` p50 28 and p95 1,339.
 Indexing took p50 4.2 ms and retrieval 0.05 ms on the replaying machine.
 In the digest pipeline's report the same keys measure the context
 retrieval would build from the same text, not anything the digest pipeline
-sent, so the two reports' figures are nearly equal by construction and are
-not a before and after.
+sent, so they are not a before and after: document by document the two
+reports' values are nearly equal by construction. Its distributions leave
+out the one document its run failed, the 100-page report, so its p95 and
+maximum are lower.
 
 ## The phase 2 runs
 

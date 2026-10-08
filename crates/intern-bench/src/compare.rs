@@ -19,7 +19,8 @@
 //! Latency is compared, as each stage's p50 and p95 change in per cent, over
 //! the documents both runs completed, and only between two runs that
 //! measured their timings. A replay reports its recording's timings, taken
-//! on another run's machine; a difference involving one is not a measured
+//! on another run's machine (all but `index_ms` and `retrieval_ms`, which
+//! the replay measures); a difference involving one is not a measured
 //! change, so it is not shown as one.
 
 use std::{collections::BTreeSet, fmt::Write as _};
@@ -590,9 +591,9 @@ pub fn compare(before: &Report, after: &Report) -> Comparison {
                 && recorded(&comparison.after)
                 && comparison.before.recording_sha256 == comparison.after.recording_sha256
             {
-                "Both runs replay the same recording: their timings are the recording's, identical by construction, and say nothing about this change's latency. Latency is not compared.".to_owned()
+                "Both runs replay the same recording: their timings are the recording's, identical by construction (all but `index_ms` and `retrieval_ms`, which each replay measures), and say nothing about this change's latency. Latency is not compared.".to_owned()
             } else {
-                "A replayed run reports its recording's timings, taken when and where the recording was made, not measured by that run; a difference involving one is not a measured change. Latency is not compared: compare two live runs made on the same machine.".to_owned()
+                "A replayed run reports its recording's timings, taken when and where the recording was made, not measured by that run (all but `index_ms` and `retrieval_ms`, which it measures); a difference involving one is not a measured change. Latency is not compared: compare two live runs made on the same machine.".to_owned()
             },
         );
     } else {
@@ -909,7 +910,7 @@ pub fn render(comparison: &Comparison) -> String {
         if side.timings_source == "recorded" {
             let _ = write!(
                 line,
-                " · timings recorded{}{}, not measured",
+                " · timings recorded{}{}, not measured but for `index_ms` and `retrieval_ms`",
                 side.recording_sha256
                     .as_deref()
                     .map(|sha| format!(" (recording `{}`", &sha[..sha.len().min(12)]))

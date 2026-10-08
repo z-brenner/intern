@@ -120,7 +120,8 @@ pub struct DocumentRecord {
     pub prompt_sha256: Vec<String>,
     #[serde(default)]
     pub timings: Timings,
-    /// Replay: the timings are the recording's, not measured now.
+    /// Replay: the timings are the recording's, not measured now - all but
+    /// `index_ms` and `retrieval_ms`, which the context measurements take.
     #[serde(default)]
     pub timings_recorded: bool,
     #[serde(default)]
