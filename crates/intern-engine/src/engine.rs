@@ -275,14 +275,17 @@ impl Engine {
         let started = Instant::now();
         let budget = condensed(sent_characters(&prepared.digest, prepared.budget) / 2);
         let digest = distill(source, budget);
+        // Timed before the request is built, as the first preparation is:
+        // building the prompt is the analysis's to time.
+        let distill_micros = prepared
+            .distill_micros
+            .saturating_add(micros_since(started));
         PreparedDigest {
             request: ModelRequest::from_digest(&digest),
             digest,
             budget,
             redistillations: prepared.redistillations + 1,
-            distill_micros: prepared
-                .distill_micros
-                .saturating_add(micros_since(started)),
+            distill_micros,
         }
     }
 
