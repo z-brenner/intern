@@ -1,12 +1,12 @@
 # InternBench: replay run
 
-- **Run:** 2026-10-07T18:03:15Z · commit `50bc017991`
+- **Run:** 2026-10-08T17:18:01Z · commit `f7ee8de2b2`
 - **Machine:** Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS)
 - **Model:** `intern-local` · 1.28 GB · sha256 `aaf42c8b7c3c`
 - **Corpus:** 77 documents · 76 completed · 1 model_failed · gold `0d03c75723`
-- **Recording:** made 2026-10-07T05:45:28Z at commit `bd48e987d5` · sha256 `5efea19aea`
+- **Recording:** made 2026-10-07T05:45:28Z at commit `bd48e987d5` · sha256 `1874e95a47`
 
-> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run.
+> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run, except `index_ms` and `retrieval_ms`, which this run measures from the recorded text.
 
 ## Scorecard
 
@@ -293,6 +293,8 @@ Pages the gold gives a route for, by the route they should take and the one they
 | `generation_ms` | 76 | 10.69 s | 16.18 s | 24.08 s |
 | `validation_ms` | 76 | 12.5 ms | 52.0 ms | 74.7 ms |
 | `naming_ms` | 76 | 1.0 ms | 7.7 ms | 11.5 ms |
+| `index_ms` | 76 | 4.1 ms | 100.5 ms | 160.5 ms |
+| `retrieval_ms` | 76 | 0.05 ms | 5.4 ms | 9.6 ms |
 
 Over the 76 documents that completed. The other 1 (failed, or not scored) are left out: a failed document's time is how long it took to fail.
 
@@ -313,6 +315,9 @@ Over the 76 documents that completed. The other 1 (failed, or not scored) are le
 | `worker_ocr_passes` | 76 | 0 | 2 | 25 |
 | `worker_orientation_passes` | 76 | 0 | 2 | 25 |
 | `worker_rendered_pixels` | 76 | 0 | 16830000 | 210375000 |
+| `index_units` | 76 | 27 | 732 | 2236 |
+| `context_units` | 76 | 25 | 59 | 68 |
+| `context_tokens` | 76 | 850 | 1915 | 2023 |
 
 ## Memory
 

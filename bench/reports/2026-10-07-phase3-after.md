@@ -1,12 +1,12 @@
 # InternBench: replay run
 
-- **Run:** 2026-10-07T18:03:20Z · commit `50bc017991`
+- **Run:** 2026-10-08T17:18:06Z · commit `f7ee8de2b2`
 - **Machine:** Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS)
 - **Model:** `intern-local` · 1.28 GB · sha256 `aaf42c8b7c3c`
 - **Corpus:** 77 documents · 77 completed · gold `0d03c75723`
 - **Recording:** made 2026-10-07T16:54:53Z at commit `902c7fe65c` · sha256 `bb64876b23`
 
-> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run.
+> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run, except `index_ms` and `retrieval_ms`, which this run measures from the recorded text.
 
 ## Scorecard
 
@@ -293,6 +293,8 @@ Pages the gold gives a route for, by the route they should take and the one they
 | `generation_ms` | 77 | 6.53 s | 8.82 s | 9.71 s |
 | `validation_ms` | 77 | 26.2 ms | 304.2 ms | 614.3 ms |
 | `naming_ms` | 77 | 0.94 ms | 15.6 ms | 19.9 ms |
+| `index_ms` | 77 | 4.2 ms | 125.9 ms | 570.4 ms |
+| `retrieval_ms` | 77 | 0.05 ms | 5.7 ms | 14.2 ms |
 
 | Measure | Docs | p50 | p95 | Max |
 | --- | ---: | ---: | ---: | ---: |
@@ -311,6 +313,9 @@ Pages the gold gives a route for, by the route they should take and the one they
 | `worker_ocr_passes` | 77 | 0 | 2 | 25 |
 | `worker_orientation_passes` | 77 | 0 | 2 | 25 |
 | `worker_rendered_pixels` | 77 | 0 | 16830000 | 210375000 |
+| `index_units` | 77 | 28 | 1339 | 3806 |
+| `context_units` | 77 | 25 | 59 | 68 |
+| `context_tokens` | 77 | 876 | 1915 | 2022 |
 
 ## Memory
 

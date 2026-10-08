@@ -1,7 +1,7 @@
 # InternBench comparison
 
-- **Before:** replay run 2026-10-07T18:03:15Z at `50bc01799155a24213b4e25f614681f978935337` (77 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `5efea19aeacc`, made 2026-10-07T05:45:28Z), not measured
-- **After:** replay run 2026-10-07T18:03:20Z at `50bc01799155a24213b4e25f614681f978935337` (77 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `bb64876b233b`, made 2026-10-07T16:54:53Z), not measured
+- **Before:** replay run 2026-10-08T17:18:01Z at `f7ee8de2b25a3bb5e65048497c202ff1d20ec289` (77 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `1874e95a476a`, made 2026-10-07T05:45:28Z), not measured but for `index_ms` and `retrieval_ms`
+- **After:** replay run 2026-10-08T17:18:06Z at `f7ee8de2b25a3bb5e65048497c202ff1d20ec289` (77 documents) on Intel(R) Xeon(R) Processor @ 2.10GHz, 4 logical cores, 15.7 GB RAM, linux (Ubuntu 24.04.4 LTS) · timings recorded (recording `bb64876b233b`, made 2026-10-07T16:54:53Z), not measured but for `index_ms` and `retrieval_ms`
 - **Compared:** every score, rate and count over the 77 documents both runs scored (completed, or failed and scored as a miss), each score over the documents that have it in both runs; latency over the 76 both completed.
 
 ## Phase 3 scorecard
@@ -249,5 +249,5 @@ Over the documents both runs scored; a slice's accuracy over its documents. Late
 
 ## Latency
 
-A replayed run reports its recording's timings, taken when and where the recording was made, not measured by that run; a difference involving one is not a measured change. Latency is not compared: compare two live runs made on the same machine.
+A replayed run reports its recording's timings, taken when and where the recording was made, not measured by that run (all but `index_ms` and `retrieval_ms`, which it measures); a difference involving one is not a measured change. Latency is not compared: compare two live runs made on the same machine.
 

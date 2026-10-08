@@ -58,7 +58,7 @@ pub mod worker;
 pub use client::{EvidenceHandles, ModelClient, ModelRequest, Proposer, ProposerReply};
 pub use distill::{DigestBudget, DocumentDigest, distill, source_from_text};
 pub use domain::*;
-pub use engine::{Engine, Pipeline, PreparedEvidence, estimated_prompt_tokens};
+pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_prompt_tokens};
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};

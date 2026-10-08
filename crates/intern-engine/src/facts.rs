@@ -1511,7 +1511,8 @@ fn mentions_any(view: &ScopeView, words: &[String]) -> bool {
 }
 
 /// Whether enough of a subject's significant words are in its cited units
-/// to write it into the description.
+/// to write it into the description. A subject that fails this is still
+/// written when one unit of the context holds all of them.
 fn subject_is_grounded(subject: &str, cited: &ScopeView) -> bool {
     if cited.is_empty() {
         return false;
@@ -3859,9 +3860,10 @@ Dated May 12, 2026";
         assert_eq!(outcome.facts.as_ref().unwrap().subject, None);
     }
 
-    /// A subject the document states, but not in the units the reply cited
-    /// for it, is supported - and not written down: the description says
-    /// only what its evidence shows.
+    /// A subject cited to the wrong line is written into the description
+    /// when one unit the model was shown holds all its words. One whose
+    /// words are only scattered over several units is supported - and not
+    /// written down: no one unit states it.
     #[test]
     fn a_subject_no_one_unit_holds_stays_out_of_the_description() {
         // Cited wrongly, but one unit holds all its words: grounded there.

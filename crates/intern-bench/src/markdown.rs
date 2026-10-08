@@ -163,12 +163,12 @@ fn header(out: &mut String, report: &Report) {
         if stale == 0 {
             let _ = writeln!(
                 out,
-                "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run."
+                "\n> Replay: every score is this code's, but timings and memory are the recording's, taken on the machine above - not measured by this run, except `index_ms` and `retrieval_ms`, which this run measures from the recorded text."
             );
         } else {
             let _ = writeln!(
                 out,
-                "\n> Replay: every score is this code's except those of the {stale} document(s) scored from replies to prompts the engine no longer builds (`--allow-stale`, marked in Misses), which do not measure this code. Timings and memory are the recording's, taken on the machine above - not measured by this run."
+                "\n> Replay: every score is this code's except those of the {stale} document(s) scored from replies to prompts the engine no longer builds (`--allow-stale`, marked in Misses), which do not measure this code. Timings and memory are the recording's, taken on the machine above - not measured by this run, except `index_ms` and `retrieval_ms`, which this run measures from the recorded text."
             );
         }
     }

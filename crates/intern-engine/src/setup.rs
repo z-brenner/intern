@@ -123,10 +123,10 @@ where
 /// A document the installed model must be able to file correctly before Intern
 /// will use it.
 ///
-/// The probe exercises the shipping path end to end - distillation, the real
-/// prompt, the grammar, evidence validation, and naming - so a model that
-/// installs but cannot actually do the job is caught at setup rather than on
-/// the user's first document.
+/// The probe exercises the shipping path end to end - the evidence index and
+/// retrieval, the real prompt, the grammar, fact validation, and naming - so
+/// a model that installs but cannot actually do the job is caught at setup
+/// rather than on the user's first document.
 pub struct SemanticProbe {
     pub document: DocumentSource,
     expected_marker: &'static str,

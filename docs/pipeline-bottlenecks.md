@@ -451,6 +451,36 @@ is unchanged:
 * `scanned-lease.pdf` and `mixed-signature.pdf` expect review although both
   are read and named right.
 
+### Decisions
+
+The maintainer confirmed four decisions on 2026-10-08.
+
+* **A hosted model stays on the digest pipeline**
+  (`HostedClient::engine` in `hosted.rs`). The evidence pipeline was
+  measured and tuned on the local model only. A hosted model moves to it
+  only after it is measured on InternBench.
+* **The release gate's 90% description-specificity floor counts the
+  documents Intern names, not the whole corpus**
+  (`GATES.descriptionSpecific` and `descriptionSpecificWhenNamed` in
+  `scripts/validate-model-evaluation.mjs`, since `50bc017`). Over the whole
+  corpus, an honest short description of a scan sent to review ("Document
+  from Harbor Comet Repairs LLC.") failed it, and the digest pipeline passed
+  it with an invented one ("a notice of termination issued by Harbor Comet
+  Repairs LLC on July 15, 2024", for a work order of 2025-07-16). It works
+  the way the named-date guarantee does.
+* **A subject the reply cited to the wrong line is written when one unit
+  holds it** (`validate_facts_at`, `subject_is_grounded` and
+  `SUBJECT_OVERLAP` in `facts.rs`). One unit of the context the model was
+  shown must hold all of the subject's significant words; words scattered
+  over several units keep it out of the description. A wrong id does not
+  cost the description a subject the document states whole, and nothing
+  outside the document can pass.
+* **The setup probe needs the model's own reply to name the calibration
+  notice's addressee** (`validate_semantic_probe` and `TEXT_MARKER` in
+  `setup.rs`). The evidence pipeline reads an addressee from a notice's
+  `To:` field when a reply names none, and quotes the lines a reply cites,
+  so neither proves the model read the notice.
+
 ## The highest-value changes
 
 Ranked by what the measurements say they are worth, as the baseline showed

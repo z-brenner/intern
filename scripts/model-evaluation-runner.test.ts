@@ -25,7 +25,9 @@ it('the evaluator drives the shipping extraction, distillation, and validation p
   const source = await readFile('crates/intern-engine/src/bin/intern-evaluate.rs', 'utf8');
   expect(source).toContain('SupervisedWorker');
   expect(source).toContain('Engine::new');
-  expect(source).toContain('analyze_digest');
+  // The digest pipeline is fitted and retried as the app's engine does it.
+  expect(source).toContain('prepare_digest');
+  expect(source).toContain('refit_digest_halved');
   // Scoring must compare against the reviewed corpus, including the traps.
   expect(source).toContain('forbidden_dates');
   expect(source).toContain('forbidden_parties');

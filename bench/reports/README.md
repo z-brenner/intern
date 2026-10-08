@@ -9,7 +9,7 @@ Each pair is one report: the Markdown is for reading, the JSON for
 | `2026-10-07-phase2-before` | All 72 documents through the reader as it was before document routing and PP-OCR (Tesseract, page text as the PDF gives it), recorded live and replayed against the current gold and scorer. |
 | `2026-10-07-phase2-after` | The same 72 documents through the routing reader with PP-OCR, replayed from today's `bench/recording.json`, the recording of record since. |
 | `2026-10-07-phase2-compare` | `intern-bench compare` of the two: what document routing, layout and PP-OCR changed, document by document. |
-| `2026-10-07-phase3-before` | All 77 documents through the digest pipeline, as Intern read them before phase 3: the phase 2 recording of record plus the five long documents, replayed with `--pipeline digest`. |
+| `2026-10-07-phase3-before` | All 77 documents through the digest pipeline, as Intern read them before phase 3: the phase 2 recording of record plus the five long documents, replayed from `bench/recording-digest.json` with `--pipeline digest`. |
 | `2026-10-07-phase3-after` | The same 77 documents through the evidence pipeline, the default since, replayed from today's `bench/recording.json`. |
 | `2026-10-07-phase3-compare` | `intern-bench compare` of the two, with the phase 3 scorecard: what retrieval, the facts reply and validation changed, document by document. |
 
@@ -18,16 +18,22 @@ Each pair is one report: the Markdown is for reading, the JSON for
 "Before" is the digest pipeline's recording: the phase 2 recording of
 record (72 documents, recorded live at `bd48e98`, eight scans again at
 `ad6e661`) and the five long documents added for retrieval, recorded live
-at `22520ea`. "After" is the evidence pipeline's recording of record, all
+at `22520ea`, committed as `bench/recording-digest.json` (written
+compacted; its documents and header equal the uncompacted copy the reports
+first cited, sha256 `5efea19a`). "After" is the evidence pipeline's
+recording of record, all
 77 documents recorded live at `902c7fe` with the stable ids, the compact
 reply and its instructions in the system turn. Every recording was made on
 the same otherwise idle 4-core Xeon, the pinned model at 4 threads with an
 8,192-token context, with the routing reader and PP-OCR. Both were replayed
-at `50bc017` with the same scorer and gold.
+at `50bc017` with the same scorer and gold, and again at `f7ee8de`, after
+the reviewed fixes, to carry the context measurements: every score is
+unchanged.
 
 The phase 3 scorecard, from the two reports (replayed scores; timings and
-tokens as recorded on that machine, which `compare` does not compare
-between replays):
+tokens as recorded on that machine, all but `index_ms` and `retrieval_ms`,
+which each replay measures; `compare` compares no timings between
+replays):
 
 | Figure | Digest (before) | Evidence (after) |
 | --- | ---: | ---: |
@@ -53,6 +59,18 @@ runs, not as a measured gain. The digest pipeline's run failed one
 document (`watershed-monitoring-report-100p`, a reply cut off at the token
 cap), counted as a miss. `docs/pipeline-bottlenecks.md` (Phase 3:
 measured) reads these reports.
+
+Both reports also carry what the evidence context holds and costs. In the
+evidence pipeline's report it is the context its prompt carried at full
+retrieval scale: `context_tokens` p50 876 and p95 1,915, `context_units`
+p50 25 and p95 59, from an index of `index_units` p50 28 and p95 1,339.
+Indexing took p50 4.2 ms and retrieval 0.05 ms on the replaying machine.
+In the digest pipeline's report the same keys measure the context
+retrieval would build from the same text, not anything the digest pipeline
+sent, so they are not a before and after: document by document the two
+reports' values are nearly equal by construction. Its distributions leave
+out the one document its run failed, the 100-page report, so its p95 and
+maximum are lower.
 
 ## The phase 2 runs
 

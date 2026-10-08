@@ -26,6 +26,9 @@ import { pathToFileURL } from 'node:url';
  * being named. `dateCorrectWhenNamed` is the gate that expresses the actual
  * promise, and it is absolute.
  *
+ * `descriptionSpecific` is a floor on the documents Intern named, not on the
+ * whole corpus, for the reason `descriptionSpecificWhenNamed` gives.
+ *
  * `maximumReviewRate` is the one ceiling here, and it is the only number in this
  * list that is not a correctness measure. It exists to catch a system that has
  * become uselessly timid, sending everything to a human. It is deliberately NOT
