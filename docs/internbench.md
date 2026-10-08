@@ -237,7 +237,9 @@ through: the document is scored from the reply the recorded run ended on,
 marked `"stale": true`, and the report says those scores do not measure this
 code. A `stale_fixture` or `unrecorded` document always fails the run and
 has to be recorded again (see [Working with it](#working-with-it)). Replay
-reports the recording's timings and says so (`timings_source: recorded`).
+reports the recording's timings and says so (`timings_source: recorded`),
+except `index_ms` and `retrieval_ms`, which it measures from the recorded
+text.
 It cannot measure a change to extraction or to the prompt; those need a
 live run.
 
@@ -569,10 +571,11 @@ live from `902c7fe`. A live run writes them (`--record`,
 them; replay and the gates read them. A recording keeps its header indented
 and each document compact on a line of its own, its layouts without their
 lines or cell boxes, so the 77 documents fit in 6.5 MB and a review still
-sees which documents a re-recording changed. The digest pipeline's last
-recording of record, of 72 documents, is `bench/recording.json` at
-`79e8bba`; the phase 3 "before" report was made from it with the five long
-documents, recorded live through the digest pipeline, added.
+sees which documents a re-recording changed. The digest pipeline's
+recording of record is `bench/recording-digest.json`: the 72 documents of
+`bench/recording.json` at `79e8bba` with the five long documents, recorded
+live through the digest pipeline, added. The phase 3 "before" report
+replays it with `--pipeline digest`.
 
 For a change to anything after the model (validation, inference, naming,
 house style), replay against `bench/recording.json`, and check the
