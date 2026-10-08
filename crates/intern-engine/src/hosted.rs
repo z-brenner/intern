@@ -4,13 +4,13 @@
 //! ([`HostedClient::engine`]): the distillation of the whole file, the
 //! digest prompt, the same evidence checks on the reply, the same naming.
 //! The evidence pipeline the local model reads by default was measured and
-//! tuned on the local model alone. The reply reader already accepts an
-//! evidence reply from a hosted model, without a grammar, for the day one
-//! is measured. What changes is where the prompt goes. The
-//! local server never leaves `127.0.0.1`; this client sends the distilled
-//! text of every document to whoever runs the endpoint, and that is the whole
-//! reason it is off unless a person turns it on, supplies a key, and is told
-//! in Settings what it means.
+//! tuned on the local model alone, and a hosted model moves to it only after
+//! it is measured on InternBench. The reply reader already accepts an
+//! evidence reply from a hosted model, without a grammar. What changes is
+//! where the prompt goes. The local server never leaves `127.0.0.1`; this
+//! client sends the distilled text of every document to whoever runs the
+//! endpoint, and that is the whole reason it is off unless a person turns it
+//! on, supplies a key, and is told in Settings what it means.
 //!
 //! Two wire formats cover nearly every service: Anthropic's Messages API, and
 //! the chat-completions shape that OpenAI defined and most other providers
@@ -320,8 +320,8 @@ impl HostedClient {
 
     /// The engine a hosted model reads documents through: the digest
     /// pipeline. The evidence pipeline, the local model's default, was
-    /// measured and tuned on the local model alone; a hosted model keeps
-    /// the pipeline it was checked against until it is measured too.
+    /// measured and tuned on the local model alone; a hosted model moves to
+    /// it only after it is measured on InternBench.
     pub fn engine(&self) -> Engine {
         Engine::with_proposer(Box::new(self.clone())).with_pipeline(Pipeline::Digest)
     }
@@ -1047,6 +1047,13 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(Proposer::context_tokens(&remote), None);
+    }
+
+    /// The digest pipeline, until a hosted model is measured on InternBench.
+    #[test]
+    fn a_hosted_model_reads_through_the_digest_pipeline() {
+        let client = HostedClient::new(config(HostedProvider::Anthropic, "", "")).unwrap();
+        assert_eq!(client.engine().pipeline(), Pipeline::Digest);
     }
 
     /// The whole path, against a service that answers 429: the wait it named

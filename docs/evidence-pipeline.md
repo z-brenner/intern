@@ -93,8 +93,8 @@ became the recordings of record.
   the default) or numbers local to the prompt (`IdStyle::Ordinal`).
   Either way, only stable ids are ever stored.
 
-A model answering without the grammar - a hosted one, the day one reads
-through this pipeline - has its reply read leniently
+A model answering without the grammar - a hosted one, if one moves to this
+pipeline after it is measured on InternBench - has its reply read leniently
 (`client::facts_from_text`): compact arrays or named fields, one id or a
 list, numbers or strings, an array's parts told apart by what they are. An id
 the prompt did not show is set aside (`ModelFacts::unknown_evidence`),
@@ -139,7 +139,10 @@ The other checks:
   is not supported is left out of the description and sends the document
   to review (`DESCRIPTION_UNSUPPORTED`).
 - **Subject wording.** A subject is written into the description only when
-  at least 60% of its words are in the units it cites.
+  at least 60% of its significant words are in the units it cites, or when
+  one unit of the context holds all of them: a subject the reply cited to
+  the wrong line is not lost. Words scattered over several units keep it
+  out, and nothing outside the document can pass.
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);

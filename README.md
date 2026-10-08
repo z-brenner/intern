@@ -461,9 +461,11 @@ keyed by lockfiles and the runtime asset manifest.
 
 `scripts/run-model-evaluation.ps1` scores the whole gold corpus through the
 shipping pipeline with the exact pinned model and real inference, and
-`scripts/validate-model-evaluation.mjs` gates on date, type, party, and
-description accuracy, on never filing a document under a date the corpus marks
-as a trap, and on the review rate. Publishing is a deliberate
+`scripts/validate-model-evaluation.mjs` gates on date, type, and party
+accuracy, on description specificity, on never filing a document under a date
+the corpus marks as a trap, and on the review rate. Specificity is held over the
+documents Intern names, as the date is, so a scan sent to review with a short,
+honest description does not fail it. Publishing is a deliberate
 `workflow_dispatch` against a chosen main commit, never a side effect of
 merging; the release job still refuses any commit but the one it was dispatched
 for, and a preflight refuses in seconds a commit whose sign-off, release notes,

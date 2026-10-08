@@ -32,7 +32,7 @@ pipeline made it and is replayed only through that one:
 `fixtures/corpus-recording.json` and `corpus-baseline.json` are the evidence
 pipeline's, recorded live from `902c7fe`, and
 `fixtures/corpus-recording-digest.json` and `corpus-baseline-digest.json`
-the digest pipeline's, which a hosted model still reads through. CI replays
+the digest pipeline's, which a hosted model reads through. CI replays
 both:
 
 ```text

@@ -32,7 +32,7 @@ retrieval, [`evidence-pipeline.md`](evidence-pipeline.md) the reply, its
 validation and composition, and `docs/pipeline-bottlenecks.md` (Phase 3:
 measured) what it changed.
 
-The digest pipeline before it is still in the engine: a hosted model reads
+The digest pipeline before it stays in the engine: a hosted model reads
 through it (see [A hosted model](#a-hosted-model)), and `--pipeline digest`
 measures it. It distills the whole document into a verbatim digest under a
 character budget, asks for one reply that quotes its evidence and writes the
@@ -770,6 +770,13 @@ earlier went on loading the model for an app that could not run. Until then
 the model is held, so the queue cannot hand a document to a server that has
 not started.
 
+The semantic self-test sends a calibration notice (`setup::semantic_probes`)
+through the pipeline documents take. It passes only when the result carries
+the notice's date and names its addressee, and the model's own reply names
+the addressee too, as a party or in its description. The evidence pipeline
+reads an addressee from a notice's `To:` field when a reply names none, and
+quotes the lines a reply cites, so neither proves the model read the notice.
+
 Starts and stops are serialized, and every deliberate stop - a cancel, a hosted
 model chosen, shutdown - moves a generation counter before it stops anything.
 A cancel interrupts a request by restarting the server under it, and that
@@ -806,8 +813,8 @@ client both implement it, and the distillation, prompt, validation, and naming
 on either side do not know which answered. A hosted model reads through the
 digest pipeline (`HostedClient::engine`): the evidence pipeline the local
 model reads by default was measured and tuned on the local model alone, and
-a hosted model keeps the pipeline it was checked against until it is
-measured too.
+a hosted model moves to it only after it is measured on InternBench. That is
+a decision, recorded in `docs/pipeline-bottlenecks.md` (Phase 3: measured).
 
 The hosted client speaks two wire formats — Anthropic's Messages API, and the
 chat-completions shape OpenAI defined and most providers and local servers
@@ -880,12 +887,13 @@ proxy out of the path for an address on this machine, because a proxy would
 otherwise receive in cleartext the key and the document text that plain HTTP
 was allowed for on the grounds that neither leaves the machine. A service on
 the internet is still reached through the proxy. **Test connection** sends the same
-calibration document setup uses to check the local model, so a wrong key,
-model name, or address is found before a real document is sent. It sends to
-the address on screen rather than the saved one, so a new address can be
-tried before it is saved — but a key that was already on the machine goes
-only to the address the settings name. Typing the key is what admits a new
-address, and nobody can type a key they do not have.
+calibration document setup uses to check the local model, and holds the
+answer to the same checks, so a wrong key, model name, or address is found
+before a real document is sent. It sends to the address on screen rather than
+the saved one, so a new address can be tried before it is saved — but a key
+that was already on the machine goes only to the address the settings name.
+Typing the key is what admits a new address, and nobody can type a key they
+do not have.
 
 ### The same document twice
 
