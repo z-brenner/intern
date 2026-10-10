@@ -809,12 +809,12 @@ pub fn validate_facts_at(
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
-    // key fact must pass the word check ([`every_word_stated`]). Invisible
-    // characters are taken out of both first, so the text checked is the
-    // text written.
+    // key fact must pass the word check ([`every_word_stated`]). Stray
+    // invisible characters are taken out of both first; every check reads
+    // them through [`normalize`], which ignores the rest as well.
     let stated_words = StatedWords::of(scope);
     let mut subject = None;
-    let reply_subject = facts.subject.as_deref().map(without_invisibles);
+    let reply_subject = facts.subject.as_deref().map(without_stray_invisibles);
     if let Some(value) = content(reply_subject.as_deref(), scope) {
         let found = claims_found(scope, &facts.subject_evidence, value);
         support.subject = found.support;
@@ -877,7 +877,7 @@ pub fn validate_facts_at(
     let mut key_facts = Vec::new();
     let mut key_units = Vec::new();
     for fact in &facts.key_facts {
-        let text = without_invisibles(&fact.fact);
+        let text = without_stray_invisibles(&fact.fact);
         let Some(value) = content(Some(text.as_str()), scope) else {
             continue;
         };
@@ -1497,9 +1497,12 @@ fn titled(value: &str) -> String {
 /// A stated type's value with each mark in it - a character that is no
 /// letter, digit or space, and no accent on a kept letter - kept where the
 /// line that states the type holds it too, compared through [`normalize`],
-/// and a space otherwise; an invisible character is left out. "Invoice ✓✓"
-/// or "Invoice ✔️" on an `INVOICE` line is `Invoice`; "Owner's Statement"
-/// on `OWNER’S STATEMENT` or `OWNER´S STATEMENT` keeps its apostrophe. The
+/// and a space otherwise. A mark at either end decorates the type rather
+/// than spelling it and is left out, but for a bracket closing one the
+/// type opens. A stray invisible character is left out; one a script
+/// spells with ([`spells`]) is kept. "Invoice ✓✓", "Invoice ✔️" or
+/// "Invoice ###" on an `INVOICE` line is `Invoice`; "Owner's Statement" on
+/// `OWNER’S STATEMENT` or `OWNER´S STATEMENT` keeps its apostrophe. The
 /// reply's words and their casing are left as written; [`titled`] cases an
 /// all-lower-case reply afterwards.
 fn marks_its_line_holds(value: &str, line: &str) -> String {
@@ -1507,9 +1510,8 @@ fn marks_its_line_holds(value: &str, line: &str) -> String {
     // a backtick.
     let line = normalize(&line.replace(['\u{b4}', '`'], "'"));
     let mut after_letter = false;
-    let kept = value
+    let kept = without_stray_invisibles(value)
         .chars()
-        .filter(|character| !is_invisible(*character))
         .map(|character| {
             let mark = normalize(&character.to_string());
             // An accent written apart from its letter stays with a kept
@@ -1518,12 +1520,22 @@ fn marks_its_line_holds(value: &str, line: &str) -> String {
             let held = character.is_alphanumeric()
                 || character.is_whitespace()
                 || accent
+                || spells(character)
                 || (!mark.is_empty() && line.contains(&mark));
             after_letter = character.is_alphanumeric() || accent;
             if held { character } else { ' ' }
         })
         .collect::<String>();
-    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+    let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    let opens = kept.contains(['(', '[']);
+    let edge = |character: char| {
+        !(character.is_alphanumeric() || is_combining_mark(character) || spells(character))
+    };
+    kept.trim_start_matches(edge)
+        .trim_end_matches(|character: char| {
+            edge(character) && !(opens && matches!(character, ')' | ']'))
+        })
+        .to_owned()
 }
 
 /// Whether every word of `value` is a word of the document's type:
@@ -1674,12 +1686,21 @@ impl StatedWords {
     }
 }
 
-/// `text` without invisible characters ([`is_invisible`]): a subject or a
-/// key fact is checked and written without them.
-fn without_invisibles(text: &str) -> String {
+/// `text` without its stray invisible characters ([`is_invisible`]) - a
+/// soft hyphen, a zero-width space - but those a script spells with
+/// ([`spells`]): a subject or a key fact is written without them. Every
+/// check reads it through [`normalize`], which ignores all of them.
+fn without_stray_invisibles(text: &str) -> String {
     text.chars()
-        .filter(|character| !is_invisible(*character))
+        .filter(|character| !is_invisible(*character) || spells(*character))
         .collect()
+}
+
+/// Whether an invisible character is part of how text is spelled: a
+/// zero-width non-joiner or joiner, which Persian, Indic scripts and emoji
+/// spell with, or a direction mark or embedding.
+fn spells(character: char) -> bool {
+    matches!(character, '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}')
 }
 
 /// The words of a subject or a key fact the context must state: [`words`]'
@@ -1779,7 +1800,13 @@ fn money_stated(scope: &ValidationScope<'_>, money: &str) -> bool {
     let number = &rest[..number_end];
     let scale = scale_at(&rest[number_end..]);
     scope.context_units().any(|unit| {
-        let text = unit.text.as_str();
+        // Read without invisible characters, as every other check reads.
+        let text = unit
+            .text
+            .chars()
+            .filter(|character| !is_invisible(*character))
+            .collect::<String>();
+        let text = text.as_str();
         text.match_indices(number).any(|(at, _)| {
             let before = &text[..at];
             let after = &text[at + number.len()..];
@@ -4548,6 +4575,34 @@ Display shelving for the bakery counter, $1,248.00\n\nWalnut finish, refrigerate
         );
     }
 
+    /// A zero-width non-joiner is part of how Persian spells a word: it is
+    /// ignored when the subject is checked, and kept in what is written.
+    #[test]
+    fn a_joiner_a_script_spells_with_stays_in_the_subject() {
+        const CARPETS: &str = "Kavir Textile Trading LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+فرش\u{200c}های دستباف, $1,248.00";
+        let subject = "فرش\u{200c}های دستباف";
+        let (outcome, _) = facts_for(CARPETS, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            subject: Some(subject.into()),
+            subject_evidence: vec![id_of(index, "$1,248.00")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().subject.as_deref(),
+            Some(subject)
+        );
+        assert!(
+            outcome.proposal.description.contains(subject),
+            "{:?}",
+            outcome.proposal.description
+        );
+    }
+
     /// A percent sign is checked as a currency symbol is: a lease that
     /// charges "$25" never states "25%".
     #[test]
@@ -4861,6 +4916,19 @@ Arrangement fee on a facility of $5.2 million: 1,248.00 USD";
             let support = &outcome.facts.as_ref().unwrap().support.key_facts;
             assert_eq!(support[0] != Support::Unsupported, stated, "{fact}");
         }
+        // An invisible character inside the document's amount hides
+        // nothing: the reply's plain copy of it is stated.
+        const SPACED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,\u{200b}248.00";
+        let outcome = with_key_facts(SPACED, &[("$1,248.00", Some("Total"))]);
+        assert!(
+            !outcome
+                .reasons
+                .contains(&ReviewReason::DescriptionUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.facts.as_ref().unwrap().key_facts, vec!["$1,248.00"]);
     }
 
     /// A stated type is written in the reply's words, but for a mark the
@@ -4925,6 +4993,24 @@ All invoices are payable within 30 days.";
             filename,
             "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf"
         );
+        // A mark the line holds once is no licence to decorate the type with
+        // it, at either end.
+        const NUMBERED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+Invoice Date: May 1, 2025\n\nAll invoices #123 are payable within 30 days.";
+        for reply in ["Invoice ###", "## Invoice", "# Invoice #"] {
+            let (outcome, _) = facts_for(NUMBERED, |index| ModelFacts {
+                document_type: Some(reply.into()),
+                type_evidence: vec![id_of(index, "All invoices")],
+                document_date: Some("2025-05-01".into()),
+                date_evidence: vec![id_of(index, "Invoice Date")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Invoice"),
+                "{reply}"
+            );
+        }
         // A mark the line holds is kept, compared through normalizing: the
         // reply's straight apostrophe for the line's curly one, or for the
         // acute accent or backtick OCR reads one as; a bracket for a

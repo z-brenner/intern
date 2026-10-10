@@ -164,8 +164,11 @@ The other checks:
     `$25` does not state `25%`. A currency code (`USD`) is a word.
   - Invisible characters (a zero-width space, a soft hyphen, a direction
     mark) are ignored by this check and by every other that reads text
-    through `evidence::normalize`. They are taken out of the subject and
-    the key fact before the check, and out of what is written.
+    through `evidence::normalize`, and by the check of a key fact's
+    amount. A stray one (a soft hyphen, a zero-width space) is also taken
+    out of what is written. A zero-width joiner or non-joiner and a
+    direction mark are kept there: Persian, Indic scripts and emoji spell
+    with them.
   - Word order is not checked. A subject of stated words can still
     misstate how they relate.
 - **Subject wording.** A subject that passes the word check is written
@@ -204,9 +207,12 @@ The other checks:
   name a kind of document. The type is then written in the reply's
   words, title-cased when the reply wrote it all in lower case. A mark (a
   character that is no letter, digit or space, and no accent on a kept
-  letter) is kept only when the line that states the type holds it too.
-  An invisible character is left out. `Invoice ✓✓` or `Invoice ✔️` on an
-  `INVOICE` line is written `Invoice`. `Owner's Statement` on `OWNER’S
+  letter) is kept only when the line that states the type holds it too,
+  and never at either end of the type, but for a bracket closing one the
+  type opens (`Non-Disclosure Agreement (NDA)`). A stray invisible
+  character is left out. `Invoice ✓✓` or `Invoice ✔️` on an `INVOICE`
+  line is written `Invoice`, and so is `Invoice ###` on a line that holds
+  `#123`. `Owner's Statement` on `OWNER’S
   STATEMENT` keeps its apostrophe, and on `OWNER´S STATEMENT` too: an
   acute accent or a backtick on the line counts as an apostrophe. A type
   the document does not state never reaches the name or the description:
