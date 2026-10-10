@@ -79,7 +79,9 @@ pub fn normalize(value: &str) -> String {
 /// Whether a character is invisible: a soft hyphen, a zero-width space or
 /// joiner, a direction mark, embedding or isolate (the Arabic letter mark
 /// among them), a word joiner, a byte order mark. PDF and web text carry
-/// them inside words and names.
+/// them inside words and names. The invisible operators (U+2061 to U+2064:
+/// invisible times, plus, separator, function application) are not among
+/// them: they mean something, and "2", invisible times, "3" is not "23".
 pub(crate) fn is_invisible(character: char) -> bool {
     matches!(
         character,
@@ -88,7 +90,7 @@ pub(crate) fn is_invisible(character: char) -> bool {
             | '\u{180e}'
             | '\u{200b}'..='\u{200f}'
             | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
+            | '\u{2060}'
             | '\u{2066}'..='\u{2069}'
             | '\u{feff}'
     )
@@ -1059,6 +1061,8 @@ mod invisible_tests {
         ] {
             assert_eq!(normalize(written), "quillon ridge bakery", "{written:?}");
         }
+        // An invisible operator means something: two times three is no 23.
+        assert_ne!(normalize("2\u{2062}3"), "23");
     }
 }
 

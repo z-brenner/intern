@@ -1648,7 +1648,7 @@ impl StatedWords {
                 .context_units()
                 .map(|unit| {
                     let mut stated = words(&unit.text);
-                    stated.extend(words(&unit.text.replace("-\n", "")));
+                    stated.extend(words(&unit.text.replace("-\r\n", "").replace("-\n", "")));
                     (normalize(&unit.text), stated)
                 })
                 .collect(),
@@ -4664,11 +4664,17 @@ Q4 shelving service, 3 visits, $360.00";
         const QUOTED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
 Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
 Supply and installation of refrigerated dis-\nplay shelving for the bakery counter, as quoted.";
-        for subject in [
-            "refrigerated display shelving for the bakery counter",
-            "refrigerated display shelving",
+        // A line break a PDF writes as "\r\n".
+        let crlf = QUOTED.replace("dis-\n", "dis-\r\n");
+        for (text, subject) in [
+            (
+                QUOTED,
+                "refrigerated display shelving for the bakery counter",
+            ),
+            (QUOTED, "refrigerated display shelving"),
+            (crlf.as_str(), "refrigerated display shelving"),
         ] {
-            let (outcome, _) = facts_for(QUOTED, |index| ModelFacts {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
                 document_type: Some("Invoice".into()),
                 type_evidence: vec![id_of(index, "INVOICE")],
                 document_date: Some("2025-05-01".into()),
