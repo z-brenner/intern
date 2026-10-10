@@ -473,8 +473,15 @@ The maintainer confirmed four decisions on 2026-10-08.
   `SUBJECT_OVERLAP` in `facts.rs`). One unit of the context the model was
   shown must hold all of the subject's significant words; words scattered
   over several units keep it out of the description. A wrong id does not
-  cost the description a subject the document states whole, and nothing
-  outside the document can pass.
+  cost the description a subject the document states whole. Every subject,
+  cited rightly or not, must also pass the word check
+  (`every_word_stated`): each word stated in some unit of the context, a
+  plural's "s" aside, each number whole, and each currency symbol and
+  percent sign. Single letters and the articles, prepositions and
+  conjunctions in `GLUE_WORDS` need not be stated. The check catches a
+  model's honest mistakes, such as an added word or a misremembered
+  number. It is no defence against text crafted to pass it, and it does
+  not check word order.
 * **The setup probe needs the model's own reply to name the calibration
   notice's addressee** (`validate_semantic_probe` and `TEXT_MARKER` in
   `setup.rs`). The evidence pipeline reads an addressee from a notice's

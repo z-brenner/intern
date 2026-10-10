@@ -109,9 +109,10 @@ identified by its prompt alone, as before, so its recordings stay valid.
 `facts::ValidationScope` reads a reply against two views of the document.
 
 - **context**: the units the prompt carried. A fact is accepted only if
-  the context states it, the same way the digest pipeline accepts only
-  what its digest states. A fact the document states only outside the
-  excerpts is not accepted, because the model could not have read it.
+  the context states it: a type, a date, a name or an identifier whole,
+  and a subject or a key fact word by word, as the word check below
+  says. A fact the document states only outside the excerpts is not
+  accepted, because the model could not have read it.
 - **document**: every unit. The guards that turn a date away run over both
   views, and either one firing is enough:
   - the date belongs to another document;
@@ -138,12 +139,44 @@ The other checks:
   the key facts are checked the way a description's claims are. One that
   is not supported is left out of the description and sends the document
   to review (`DESCRIPTION_UNSUPPORTED`).
-- **Subject wording.** A subject is written into the description when at
-  least 60% of its significant words are in the units it cites; the rest are
-  not checked. A subject that fails that, as one the reply cited to the
-  wrong line does, is written when one unit of the context holds every one
-  of its significant words. Words scattered over several units do not
-  qualify it, and this fallback admits no word the context does not state.
+- **The words of a subject or a key fact** (`every_word_stated` in
+  `facts.rs`). This check catches a model's honest mistakes: a word, a
+  number or a symbol it adds, swaps or misremembers. It is no defence
+  against text crafted to pass it. Whoever writes the document already
+  decides what the context states, so crafted text gains nothing.
+  - Each word must be stated in some unit of the context, as a whole word
+    in any case. A plural's "s" may be there or not for a word over three
+    letters. Words are split at every mark that is not a letter or a
+    digit, so `shelving/Cryogenic` is two words. A word a unit hyphenates
+    across a line break (`dis-` then `play`) is stated whole as well.
+  - Single letters and the glue words need not be stated. The glue words
+    are a short list of articles, prepositions and conjunctions
+    (`GLUE_WORDS`: `a`, `the`, `of`, `for`, `to`, `with`, ...). Every
+    other word must be, `not`, `all` and `under` among them.
+  - A contracted negation is checked whole. `can't` must be stated as
+    `can't`, not as `can` and a single letter.
+  - Each number is checked whole: digits joined by single commas or
+    points, such as `1,248.00`. Some unit must state it as a whole
+    number, not as part of a longer one. `248` is not stated by
+    `$1,248.00`; `10438` is stated by `INV-10438`.
+  - Each currency symbol in `CURRENCY_SYMBOLS` (`$`, `€`, `£`, ...) and
+    each percent sign (`%`, `‰`) must be stated in some unit. A stated
+    `$25` does not state `25%`. A currency code (`USD`) is a word.
+  - Invisible characters (a zero-width space, a soft hyphen, a direction
+    mark) are ignored by this check and by every other that reads text
+    through `evidence::normalize`. They are taken out of the subject and
+    the key fact before the check, and out of what is written.
+  - Word order is not checked. A subject of stated words can still
+    misstate how they relate.
+- **Subject wording.** A subject that passes the word check is written
+  into the description when at least 60% of its distinct significant
+  words are in the units it cites. A subject that fails that, as one the
+  reply cited to the wrong line does, is written when one unit of the
+  context holds every one of its significant words. Words scattered over
+  several units do not qualify it.
+
+  A subject that fails either rule is left out without a review: it is
+  optional, and never in the filename.
 - **Roles.** A role is supported when the document states it next to the
   name:
   - a label (`Bill To:`, `Landlord:`, `| Tenant |`, `Dear`);
@@ -168,12 +201,19 @@ The other checks:
   Notice of Default and Reservation of Rights). Otherwise the reply's words
   must be stated whole somewhere in the context, and not as another
   document's name (`Re: Residential Lease Agreement dated ...`), and must
-  name a kind of document. A type the document does not state never
-  reaches the name or the description: a title of the same kind stands in,
-  for review (`TYPE_INFERRED`), or the type is unsupported. A title set in
-  capitals that OCR scattered (`DElIvery RECeIPt DR-771`) and the kind a
-  letter's `Re:` line opens with (`Re: Offer of Employment - ...`) are
-  titles too.
+  name a kind of document. The type is then written in the reply's
+  words, title-cased when the reply wrote it all in lower case. A mark (a
+  character that is no letter, digit or space, and no accent on a kept
+  letter) is kept only when the line that states the type holds it too.
+  An invisible character is left out. `Invoice ✓✓` or `Invoice ✔️` on an
+  `INVOICE` line is written `Invoice`. `Owner's Statement` on `OWNER’S
+  STATEMENT` keeps its apostrophe, and on `OWNER´S STATEMENT` too: an
+  acute accent or a backtick on the line counts as an apostrophe. A type
+  the document does not state never reaches the name or the description:
+  a title of the same kind stands in, for review (`TYPE_INFERRED`), or
+  the type is unsupported. A title set in capitals that OCR scattered
+  (`DElIvery RECeIPt DR-771`) and the kind a letter's `Re:` line opens
+  with (`Re: Offer of Employment - ...`) are titles too.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
   Finch Properties Llc`); a legal form ends an organisation's name. A name
@@ -293,7 +333,20 @@ Values, not labels:
 - **The identifier** stands after the type when it is on the type's title
   line (`Invoice INV-2048 from ...`), and reads with its label elsewhere
   (`policy KC-WC-7710345`). An identifier without a digit is not a number.
-- **A key fact** a reply in named fields gives, if it is not an amount,
+- **A key fact** comes only from a reply in named fields. The compact reply
+  the local model writes has none. A key fact is held to the subject's word
+  check. One that fails it is left out without a review, so it neither
+  stands in for the subject nor labels an amount. An amount read as one,
+  with `$`, `€`, `£`, `¥` or a currency code before the number
+  (`$1,248.00`, `USD 1,248.00`), must be stated as the context writes it:
+  the same number standing on its own (`$248.00` is not stated by
+  `$1,248.00`, nor `$1,248` by `$1,248.00`), the same currency symbol or
+  code beside it, and the same scale word (`million`) after it, or none.
+  A key fact whose amount is not stated so is an unsupported claim
+  (`DESCRIPTION_UNSUPPORTED`), and the document's own amount stands. Any
+  other amount, such as `1,248.00 USD`, is not read as one. It is held
+  only to the word check: its number stated whole, and its symbol or code
+  stated somewhere in the context. A key fact with no amount read in it
   stands in for a missing subject.
 - **The type** is the document's whole title; a compound title too long for
   the filename to name both parties keeps its first kind there
