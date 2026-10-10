@@ -1645,7 +1645,7 @@ impl StatedWords {
                 .context_units()
                 .map(|unit| {
                     let mut stated = words(&unit.text);
-                    stated.extend(words(&unit.text.replace("-\r\n", "").replace("-\n", "")));
+                    stated.extend(words(&joined_across_line_breaks(&unit.text)));
                     (normalize(&unit.text), stated)
                 })
                 .collect(),
@@ -1681,6 +1681,27 @@ impl StatedWords {
     fn whole(&self, text: &str) -> bool {
         self.0.iter().any(|(unit, _)| contains_whole(unit, text))
     }
+}
+
+/// `text` with each word it hyphenates across a line break joined: a
+/// hyphen - a plain one, a soft one (U+00AD, as PDFs mark a break), or
+/// U+2010 or U+2011 - right before "\n" or "\r\n" is taken out with the
+/// break. "dis-\nplay" reads "display".
+fn joined_across_line_breaks(text: &str) -> String {
+    let mut joined = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if matches!(character, '-' | '\u{ad}' | '\u{2010}' | '\u{2011}') {
+            let mut ahead = characters.clone();
+            ahead.next_if_eq(&'\r');
+            if ahead.next_if_eq(&'\n').is_some() {
+                characters = ahead;
+                continue;
+            }
+        }
+        joined.push(character);
+    }
+    joined
 }
 
 /// `text` without its stray invisible characters ([`is_invisible`]) - a
@@ -4722,8 +4743,11 @@ Q4 shelving service, 3 visits, $360.00";
         const QUOTED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
 Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
 Supply and installation of refrigerated dis-\nplay shelving for the bakery counter, as quoted.";
-        // A line break a PDF writes as "\r\n".
+        // A line break a PDF writes as "\r\n", and the soft or typographic
+        // hyphen it marks the break with.
         let crlf = QUOTED.replace("dis-\n", "dis-\r\n");
+        let soft = QUOTED.replace("dis-\n", "dis\u{ad}\n");
+        let typographic = QUOTED.replace("dis-\n", "dis\u{2010}\r\n");
         for (text, subject) in [
             (
                 QUOTED,
@@ -4731,6 +4755,8 @@ Supply and installation of refrigerated dis-\nplay shelving for the bakery count
             ),
             (QUOTED, "refrigerated display shelving"),
             (crlf.as_str(), "refrigerated display shelving"),
+            (soft.as_str(), "refrigerated display shelving"),
+            (typographic.as_str(), "refrigerated display shelving"),
         ] {
             let (outcome, _) = facts_for(text, |index| ModelFacts {
                 document_type: Some("Invoice".into()),
