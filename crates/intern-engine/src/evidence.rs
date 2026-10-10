@@ -48,8 +48,11 @@ impl Segments for DocumentDigest {
 
 /// Folds case, normalizes Unicode, unifies quote characters, and collapses
 /// whitespace so that a quote survives PDF and OCR typography differences.
+/// Invisible characters ([`is_invisible`]) are left out, so one neither
+/// splits a word nor keeps a quote from matching it.
 pub fn normalize(value: &str) -> String {
-    let normalized = value.nfkc().case_fold().map(|character| match character {
+    let visible = value.chars().filter(|character| !is_invisible(*character));
+    let normalized = visible.nfkc().case_fold().map(|character| match character {
         '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{2032}' => '\'',
         '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' | '\u{2033}' => '"',
         '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
@@ -71,6 +74,21 @@ pub fn normalize(value: &str) -> String {
         }
     }
     result
+}
+
+/// Whether a character is invisible: a soft hyphen, a zero-width space or
+/// joiner, a direction mark, a word joiner, a byte order mark. PDF and web
+/// text carry them inside words.
+pub(crate) fn is_invisible(character: char) -> bool {
+    matches!(
+        character,
+        '\u{ad}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{feff}'
+    )
 }
 
 /// True when `excerpt` appears verbatim inside a single kept block.
