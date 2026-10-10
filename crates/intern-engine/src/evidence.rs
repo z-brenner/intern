@@ -48,8 +48,11 @@ impl Segments for DocumentDigest {
 
 /// Folds case, normalizes Unicode, unifies quote characters, and collapses
 /// whitespace so that a quote survives PDF and OCR typography differences.
+/// Invisible characters ([`is_invisible`]) are left out, so one neither
+/// splits a word nor keeps a quote from matching it.
 pub fn normalize(value: &str) -> String {
-    let normalized = value.nfkc().case_fold().map(|character| match character {
+    let visible = value.chars().filter(|character| !is_invisible(*character));
+    let normalized = visible.nfkc().case_fold().map(|character| match character {
         '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}' | '\u{2032}' => '\'',
         '\u{201c}' | '\u{201d}' | '\u{201e}' | '\u{201f}' | '\u{2033}' => '"',
         '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
@@ -71,6 +74,26 @@ pub fn normalize(value: &str) -> String {
         }
     }
     result
+}
+
+/// Whether a character is invisible: a soft hyphen, a zero-width space or
+/// joiner, a direction mark, embedding or isolate (the Arabic letter mark
+/// among them), a word joiner, a byte order mark. PDF and web text carry
+/// them inside words and names. The invisible operators (U+2061 to U+2064:
+/// invisible times, plus, separator, function application) are not among
+/// them: they mean something, and "2", invisible times, "3" is not "23".
+pub(crate) fn is_invisible(character: char) -> bool {
+    matches!(
+        character,
+        '\u{ad}'
+            | '\u{61c}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+    )
 }
 
 /// True when `excerpt` appears verbatim inside a single kept block.
@@ -1018,6 +1041,28 @@ fn numeric_reading(token: &NumericDate<'_>, order: Option<NumericOrder>) -> Opti
         },
         (Some(only), None) | (None, Some(only)) => Some(only),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod invisible_tests {
+    use super::normalize;
+
+    /// A direction mark, isolate or zero-width character between or inside
+    /// words is no text: a plain copy of the words matches.
+    #[test]
+    fn invisible_characters_are_not_read() {
+        for written in [
+            "Quillon Ridge\u{2069} Bakery",
+            "\u{2068}Quillon Ridge Bakery\u{2069}",
+            "Quillon\u{61c} Ridge Bakery",
+            "Quillon Ri\u{200b}dge Ba\u{ad}kery",
+            "Quillon Ridge\u{200e} Bakery",
+        ] {
+            assert_eq!(normalize(written), "quillon ridge bakery", "{written:?}");
+        }
+        // An invisible operator means something: two times three is no 23.
+        assert_ne!(normalize("2\u{2062}3"), "23");
     }
 }
 

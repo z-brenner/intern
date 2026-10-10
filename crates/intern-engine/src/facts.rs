@@ -7,9 +7,10 @@
 //! two views of the document ([`ValidationScope`]):
 //!
 //! * **context**: the units the prompt carried. A fact is accepted only if
-//!   it is stated here, exactly as the digest pipeline accepts only what its
-//!   digest states. A fact the document states outside the excerpts is not
-//!   accepted: the model could not have read it.
+//!   it is stated here: a type, a date, a name or an identifier whole, and
+//!   a subject or a key fact word by word ([`every_word_stated`]). A fact
+//!   the document states outside the excerpts is not accepted: the model
+//!   could not have read it.
 //! * **document**: every unit. The guards that turn a stated date away - it
 //!   is another document's date, it is a deadline, its day and month could
 //!   be either way round - run over both views, and either one firing is
@@ -24,8 +25,23 @@
 //!
 //! What a reviewer sees as evidence is dereferenced text: a line of the unit
 //! that supports the fact, never anything the model wrote.
+//!
+//! The check of a subject's or a key fact's words ([`every_word_stated`])
+//! guards against a model's honest mistakes: a word, a number or a symbol
+//! it adds, swaps or misremembers. It is no defence against text crafted
+//! to slip past it, and need not be one: whoever writes the document
+//! already decides what the context states. Each word must be stated in
+//! some unit, a plural's "s" aside; single letters and the glue words
+//! ([`GLUE_WORDS`]) need not be. A contracted negation ("can't") is
+//! checked whole. Each number must be stated whole: "248" is not stated by
+//! "$1,248.00". Each currency symbol and percent sign must be stated.
+//! Invisible characters are ignored by this check and by every other that
+//! reads text through [`normalize`]. Word order is not checked, so a
+//! subject of stated words can still misstate how they relate.
 
 use std::collections::BTreeSet;
+
+use unicode_normalization::char::is_combining_mark;
 
 use crate::compose::{
     CastMember, DescriptionFacts, Relation, RelationCues, amount_label, describe, identifier_word,
@@ -40,15 +56,15 @@ use crate::domain::{
 };
 use crate::evidence::{
     Segments, contains_whole, date_match_positions, digest_contains, digest_contains_date,
-    digest_contains_loosely, extract_stated_dates, normalize, normalize_loosely, numeric_dates,
-    stated_dates,
+    digest_contains_loosely, extract_stated_dates, is_invisible, normalize, normalize_loosely,
+    numeric_dates, stated_dates,
 };
 use crate::index::{EvidenceIndex, EvidenceUnit, UnitKind};
 use crate::infer::{infer_date_role, repair_issued_relation};
 use crate::phrases::{
     has_a_kind, head_noun, is_placeholder, is_reference, label_and_value, names_a_kind,
-    opens_with_party_label, phrase_positions, subject_value, tidy_case, title_phrase, trim_name,
-    words,
+    opens_with_party_label, phrase_positions, same_word, subject_value, tidy_case, title_phrase,
+    trim_name, words,
 };
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
@@ -57,9 +73,26 @@ use crate::validate::{
     reading_is_unsettled, validate_description, year_is_plausible,
 };
 
-/// Share of a subject's significant words its cited units must hold for it
-/// to be written into the description.
+/// Share of a subject's distinct significant words its cited units must
+/// hold for it to be written into the description. It must also pass the
+/// word check against the whole context ([`every_word_stated`]).
 const SUBJECT_OVERLAP: f32 = 0.6;
+/// The words a subject or a key fact may hold that the context need not
+/// state: articles, prepositions and conjunctions, which join the words
+/// that say something.
+const GLUE_WORDS: &[&str] = &[
+    "a", "an", "the", "of", "and", "or", "for", "to", "in", "on", "at", "by", "with", "from", "as",
+    "per", "via", "into", "re",
+];
+/// The currency symbols a subject or a key fact may write only where the
+/// context writes them too. Every symbol [`money_in`] reads is here.
+const CURRENCY_SYMBOLS: &[char] = &[
+    '$', '\u{20ac}', '\u{a3}', '\u{a5}', '\u{20b9}', '\u{20a9}', '\u{20bd}', '\u{a2}', '\u{20ba}',
+    '\u{20aa}', '\u{20ab}', '\u{e3f}', '\u{20a6}', '\u{20b1}', '\u{20b4}', '\u{20a1}',
+];
+/// The percent and per-mille signs, checked as the currency symbols are: a
+/// stated "$25" is not "25%".
+const PERCENT_SIGNS: &[char] = &['%', '\u{2030}'];
 /// How far after a party's name a defined term may stand: `("Tenant")`,
 /// `(the "Borrower")`, `, as Lender`.
 const DEFINED_TERM_REACH: usize = 60;
@@ -329,7 +362,8 @@ pub fn validate_facts_at(
     scope: &ValidationScope<'_>,
     current_year: i32,
 ) -> ValidationOutcome {
-    let facts = candidate.facts.as_deref().cloned().unwrap_or_default();
+    let facts =
+        without_stray_invisibles_in(candidate.facts.as_deref().cloned().unwrap_or_default());
     complete_candidate(&mut candidate, &facts, scope);
     let original = candidate.clone();
     let context = scope.context();
@@ -352,9 +386,10 @@ pub fn validate_facts_at(
 
     // The type: the document's own title phrase where the reply cited its
     // title, else the reply's words where the document states them whole
-    // and not as another document's name. A type the document does not
-    // state is never written; the title, if one names the same kind of
-    // document, stands in for review.
+    // and not as another document's name, each of its marks kept only
+    // where that line holds it. A type the document does not state is
+    // never written; the title, if one names the same kind of document,
+    // stands in for review.
     let mut type_line = None;
     let mut type_title = None;
     let proposed_type = content(facts.document_type.as_deref(), scope);
@@ -372,8 +407,9 @@ pub fn validate_facts_at(
                 support.document_type = found.support;
                 support.miscited_ids += found.miscited;
                 remember(&found, &mut references);
+                let kept = marks_its_line_holds(value, found.line.as_deref().unwrap_or_default());
                 type_line = found.line.clone();
-                (Some(titled(value)), true)
+                (Some(titled(&kept)), true)
             }
             TypeReading::Retitled { phrase, line } => {
                 support.document_type = Support::Unsupported;
@@ -773,7 +809,9 @@ pub fn validate_facts_at(
     let relation = relation_from_roles(class, document_type.as_deref(), &cast, cues);
 
     // The subject, the identifier and the key facts: every number and name
-    // in them must be in what the model was shown.
+    // in them must be in what the model was shown, and the subject and a
+    // key fact must pass the word check ([`every_word_stated`]).
+    let stated_words = StatedWords::of(scope);
     let mut subject = None;
     if let Some(value) = content(facts.subject.as_deref(), scope) {
         let found = claims_found(scope, &facts.subject_evidence, value);
@@ -782,9 +820,11 @@ pub fn validate_facts_at(
         if found.support == Support::Unsupported {
             push(&mut reasons, ReviewReason::DescriptionUnsupported);
         } else {
-            // Grounded in the units it cites, or - when the reply cited the
-            // wrong line - in one unit of the context that holds every one
-            // of its words.
+            // Passing the word check ([`every_word_stated`]), and grounded
+            // in the units it cites, or - when the reply cited the wrong
+            // line - in one unit of the context that holds every one of its
+            // significant words. A subject that fails either is left out
+            // without a review: it is optional, and never in the filename.
             let cited = scope.cited_units(&facts.subject_evidence);
             let words_of_subject = significant_words(value);
             let held_whole = !words_of_subject.is_empty()
@@ -794,7 +834,9 @@ pub fn validate_facts_at(
                         .iter()
                         .all(|word| digest_contains(&view, word))
                 });
-            if subject_is_grounded(value, &scope.view(&cited)) || held_whole {
+            if every_word_stated(value, &stated_words)
+                && (subject_is_grounded(value, &scope.view(&cited)) || held_whole)
+            {
                 remember(&found, &mut references);
                 subject = Some(value.to_owned());
             }
@@ -823,18 +865,31 @@ pub fn validate_facts_at(
             identifier_line = found.line.clone();
         }
     }
+    // A key fact - only a reply in named fields gives them - is accepted
+    // when its claims are supported, every amount [`money_in`] reads in it
+    // (a currency before the number) is stated as the context writes it,
+    // and it passes the word check ([`every_word_stated`]). Such an amount
+    // stated otherwise is an unsupported claim; failing the word check
+    // alone leaves it out, without a review. Any other amount, such as
+    // "1,248.00 USD", is held to the word check only.
     let mut key_facts = Vec::new();
     let mut key_units = Vec::new();
     for fact in &facts.key_facts {
         let Some(value) = content(Some(fact.fact.as_str()), scope) else {
             continue;
         };
-        let found = claims_found(scope, &fact.evidence, value);
+        let mut found = claims_found(scope, &fact.evidence, value);
+        if amounts_in(value)
+            .into_iter()
+            .any(|money| !money_stated(scope, money))
+        {
+            found.support = Support::Unsupported;
+        }
         support.key_facts.push(found.support);
         support.miscited_ids += found.miscited;
         if found.support == Support::Unsupported {
             push(&mut reasons, ReviewReason::DescriptionUnsupported);
-        } else {
+        } else if every_word_stated(value, &stated_words) {
             remember(&found, &mut references);
             key_facts.push(value.to_owned());
             key_units.push(found.unit);
@@ -1436,6 +1491,50 @@ fn titled(value: &str) -> String {
         .join(" ")
 }
 
+/// A stated type's value with each mark in it - a character that is no
+/// letter, digit or space, and no accent on a kept letter - kept where the
+/// line that states the type holds it too, compared through [`normalize`],
+/// and a space otherwise. A mark at either end decorates the type rather
+/// than spelling it and is left out, but for a bracket closing one the
+/// type opens. A stray invisible character is left out; one a script
+/// spells with ([`spells`]) is kept. "Invoice ✓✓", "Invoice ✔️" or
+/// "Invoice ###" on an `INVOICE` line is `Invoice`; "Owner's Statement" on
+/// `OWNER’S STATEMENT` or `OWNER´S STATEMENT` keeps its apostrophe. The
+/// reply's words and their casing are left as written; [`titled`] cases an
+/// all-lower-case reply afterwards.
+fn marks_its_line_holds(value: &str, line: &str) -> String {
+    // OCR and European keyboards write an apostrophe as an acute accent or
+    // a backtick.
+    let line = normalize(&line.replace(['\u{b4}', '`'], "'"));
+    let mut after_letter = false;
+    let kept = without_stray_invisibles(value)
+        .chars()
+        .map(|character| {
+            let mark = normalize(&character.to_string());
+            // An accent written apart from its letter stays with a kept
+            // letter; the variation selector after a dropped "✔" goes.
+            let accent = is_combining_mark(character) && after_letter;
+            let held = character.is_alphanumeric()
+                || character.is_whitespace()
+                || accent
+                || spells(character)
+                || (!mark.is_empty() && line.contains(&mark));
+            after_letter = character.is_alphanumeric() || accent;
+            if held { character } else { ' ' }
+        })
+        .collect::<String>();
+    let kept = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    let opens = kept.contains(['(', '[']);
+    let edge = |character: char| {
+        !(character.is_alphanumeric() || is_combining_mark(character) || spells(character))
+    };
+    kept.trim_start_matches(edge)
+        .trim_end_matches(|character: char| {
+            edge(character) && !(opens && matches!(character, ')' | ']'))
+        })
+        .to_owned()
+}
+
 /// Whether every word of `value` is a word of the document's type:
 /// "Credit Agreement" for a Credit Agreement.
 fn repeats(value: &str, document_type: Option<&str>) -> bool {
@@ -1511,13 +1610,18 @@ fn mentions_any(view: &ScopeView, words: &[String]) -> bool {
 }
 
 /// Whether enough of a subject's significant words are in its cited units
-/// to write it into the description. A subject that fails this is still
-/// written when one unit of the context holds all of them.
+/// to write it into the description: each distinct word counted once, so
+/// a stated word said twice does not make up for one never stated. A
+/// subject that fails this is still written when one unit of the context
+/// holds all of them. Either way, it must also pass the word check
+/// ([`every_word_stated`]).
 fn subject_is_grounded(subject: &str, cited: &ScopeView) -> bool {
     if cited.is_empty() {
         return false;
     }
-    let words = significant_words(subject);
+    let words = significant_words(subject)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
     if words.is_empty() {
         return false;
     }
@@ -1526,6 +1630,293 @@ fn subject_is_grounded(subject: &str, cited: &ScopeView) -> bool {
         .filter(|word| digest_contains(cited, word))
         .count();
     held as f32 >= words.len() as f32 * SUBJECT_OVERLAP
+}
+
+/// What each unit of the context states, for the check of a subject's or
+/// a key fact's words: its text through [`normalize`], and the words
+/// [`words`] reads from it. A word the unit hyphenates across a line break
+/// ("dis-\nplay") is read whole as well as split.
+struct StatedWords(Vec<(String, Vec<String>)>);
+
+impl StatedWords {
+    fn of(scope: &ValidationScope<'_>) -> Self {
+        Self(
+            scope
+                .context_units()
+                .map(|unit| {
+                    let mut stated = words(&unit.text);
+                    stated.extend(words(&joined_across_line_breaks(&unit.text)));
+                    (normalize(&unit.text), stated)
+                })
+                .collect(),
+        )
+    }
+
+    /// Whether some unit states `word`: whole, in any case, a plural's "s"
+    /// aside ([`same_word`]).
+    fn word(&self, word: &str) -> bool {
+        self.0
+            .iter()
+            .any(|(_, unit)| unit.iter().any(|written| same_word(written, word)))
+    }
+
+    /// Whether some unit states `number` as a whole number, not the start
+    /// or the end of a longer one ([`continues_number`]): "248" is not
+    /// stated by "$1,248.00", and "10438" is by "INV-10438".
+    fn number(&self, number: &str) -> bool {
+        self.0.iter().any(|(text, _)| {
+            text.match_indices(number).any(|(at, _)| {
+                !continues_number(text[..at].chars().rev())
+                    && !continues_number(text[at + number.len()..].chars())
+            })
+        })
+    }
+
+    /// Whether some unit writes `symbol`.
+    fn symbol(&self, symbol: char) -> bool {
+        self.0.iter().any(|(text, _)| text.contains(symbol))
+    }
+
+    /// Whether some unit writes `text` whole ([`contains_whole`]).
+    fn whole(&self, text: &str) -> bool {
+        self.0.iter().any(|(unit, _)| contains_whole(unit, text))
+    }
+}
+
+/// `text` with each word it hyphenates across a line break joined: a
+/// hyphen - a plain one, a soft one (U+00AD, as PDFs mark a break), or
+/// U+2010 or U+2011 - right before "\n" or "\r\n" is taken out with the
+/// break. "dis-\nplay" reads "display".
+fn joined_across_line_breaks(text: &str) -> String {
+    let mut joined = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if matches!(character, '-' | '\u{ad}' | '\u{2010}' | '\u{2011}') {
+            let mut ahead = characters.clone();
+            ahead.next_if_eq(&'\r');
+            if ahead.next_if_eq(&'\n').is_some() {
+                characters = ahead;
+                continue;
+            }
+        }
+        joined.push(character);
+    }
+    joined
+}
+
+/// `text` without its stray invisible characters ([`is_invisible`]) - a
+/// soft hyphen, a zero-width space - but those a script spells with
+/// ([`spells`]). Every check reads text through [`normalize`], which
+/// ignores all of them.
+fn without_stray_invisibles(text: &str) -> String {
+    text.chars()
+        .filter(|character| !is_invisible(*character) || spells(*character))
+        .collect()
+}
+
+/// A reply's facts with the stray invisible characters taken out of every
+/// value a check compares through [`normalize`] and a name or description
+/// may write: the type, the date, each party's name, the subject, the
+/// identifier, each key fact. A check that ignores a zero-width space must
+/// not let one through into what is written.
+fn without_stray_invisibles_in(mut facts: ModelFacts) -> ModelFacts {
+    let clean = |value: &mut Option<String>| {
+        if let Some(text) = value {
+            *text = without_stray_invisibles(text);
+        }
+    };
+    clean(&mut facts.document_type);
+    clean(&mut facts.document_date);
+    clean(&mut facts.subject);
+    clean(&mut facts.identifier);
+    for party in &mut facts.parties {
+        party.name = without_stray_invisibles(&party.name);
+    }
+    for fact in &mut facts.key_facts {
+        fact.fact = without_stray_invisibles(&fact.fact);
+    }
+    facts
+}
+
+/// Whether an invisible character is part of how text is spelled: a
+/// zero-width non-joiner or joiner, which Persian, Indic scripts and emoji
+/// spell with, or a direction mark, embedding or isolate.
+fn spells(character: char) -> bool {
+    matches!(
+        character,
+        '\u{61c}' | '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// The words of a subject or a key fact the context must state: [`words`]'
+/// words of it - split at every mark that is not a letter or a digit, so
+/// "shelving/Cryogenic" is two words - but the glue words ([`GLUE_WORDS`]),
+/// single letters ("Dock C") and numbers, which are checked whole
+/// ([`numbers_in`]). A word of letters and digits ("4c", "Q4") is a word.
+fn checked_words(value: &str) -> Vec<String> {
+    words(value)
+        .into_iter()
+        .filter(|word| {
+            let single_letter = word.chars().count() == 1 && word.chars().all(char::is_alphabetic);
+            let number = word.chars().all(|character| character.is_ascii_digit());
+            !single_letter && !number && !GLUE_WORDS.contains(&word.as_str())
+        })
+        .collect()
+}
+
+/// The numbers `text` writes, read through [`normalize`]: each a longest
+/// run of digits joined by single commas or points between digits -
+/// "1,248.00", "2026", "4.5".
+fn numbers_in(text: &str) -> Vec<String> {
+    let text = normalize(text).chars().collect::<Vec<_>>();
+    let mut numbers = Vec::new();
+    let mut number = String::new();
+    for (at, &character) in text.iter().enumerate() {
+        let joins = matches!(character, ',' | '.')
+            && !number.is_empty()
+            && text.get(at + 1).is_some_and(char::is_ascii_digit);
+        if character.is_ascii_digit() || joins {
+            number.push(character);
+        } else if !number.is_empty() {
+            numbers.push(std::mem::take(&mut number));
+        }
+    }
+    if !number.is_empty() {
+        numbers.push(number);
+    }
+    numbers
+}
+
+/// Whether the context states what a subject or a key fact says, each
+/// part in some unit: every word that must be stated ([`checked_words`]),
+/// every contracted negation whole ("can't", whose "t" alone is a single
+/// letter), every number whole ([`numbers_in`]) and every currency symbol
+/// and percent sign ([`CURRENCY_SYMBOLS`], [`PERCENT_SIGNS`]). Where the
+/// parts stand, and in what order, is not checked.
+fn every_word_stated(value: &str, stated: &StatedWords) -> bool {
+    let normalized = normalize(value);
+    let mut negations = normalized
+        .split(|character: char| !character.is_alphanumeric() && character != '\'')
+        .map(|token| token.trim_matches('\''))
+        .filter(|token| token.ends_with("n't"));
+    checked_words(value).iter().all(|word| stated.word(word))
+        && negations.all(|negation| stated.whole(negation))
+        && numbers_in(value).iter().all(|number| stated.number(number))
+        && normalized
+            .chars()
+            .filter(|character| {
+                CURRENCY_SYMBOLS.contains(character) || PERCENT_SIGNS.contains(character)
+            })
+            .all(|symbol| stated.symbol(symbol))
+}
+
+/// Every amount of money a reply's text states ([`money_in`]), in order.
+fn amounts_in(text: &str) -> Vec<&str> {
+    let mut amounts = Vec::new();
+    let mut offset = 0;
+    while let Some(money) = text.get(offset..).and_then(money_in) {
+        let at = offset + text[offset..].find(money).unwrap_or(0);
+        amounts.push(money);
+        offset = at + money.len();
+    }
+    amounts
+}
+
+/// Words that scale an amount: "$5.2 million".
+const SCALE_WORDS: &[&str] = &["thousand", "million", "billion"];
+
+/// Whether a unit of the context states an amount a reply wrote as it is
+/// written: the same number standing on its own - never the end or the
+/// start of a longer one ("$248.00" is not stated by "$1,248.00", "$1,248"
+/// not by "$1,248.00") - with the reply's currency symbol or code written
+/// beside it and the same scale word after it, or none on either side.
+fn money_stated(scope: &ValidationScope<'_>, money: &str) -> bool {
+    let Some(digits_at) = money.find(|character: char| character.is_ascii_digit()) else {
+        return false;
+    };
+    let currency = money[..digits_at].trim();
+    if currency.is_empty() {
+        return false;
+    }
+    let rest = &money[digits_at..];
+    let number_end = rest
+        .find(|character: char| !(character.is_ascii_digit() || matches!(character, ',' | '.')))
+        .unwrap_or(rest.len());
+    let number = &rest[..number_end];
+    let scale = scale_at(&rest[number_end..]);
+    scope.context_units().any(|unit| {
+        // Read without invisible characters, as every other check reads.
+        let text = unit
+            .text
+            .chars()
+            .filter(|character| !is_invisible(*character))
+            .collect::<String>();
+        let text = text.as_str();
+        text.match_indices(number).any(|(at, _)| {
+            let before = &text[..at];
+            let after = &text[at + number.len()..];
+            let written_scale = scale_at(after);
+            let after_scale = written_scale.map_or(after, |word| &after.trim_start()[word.len()..]);
+            !continues_number(before.chars().rev())
+                && !continues_number(after.chars())
+                && written_scale == scale
+                && (currency_before(before, currency) || currency_after(after_scale, currency))
+        })
+    })
+}
+
+/// Whether the characters next to a number, read away from it, carry the
+/// number on: a digit, or a separator with a digit beyond it.
+fn continues_number(mut beside: impl Iterator<Item = char>) -> bool {
+    match beside.next() {
+        Some(character) if character.is_ascii_digit() => true,
+        Some(',' | '.') => beside.next().is_some_and(|next| next.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+/// The scale word right after a number, as [`SCALE_WORDS`] lists it.
+fn scale_at(after: &str) -> Option<&'static str> {
+    let tail = after.trim_start();
+    SCALE_WORDS.iter().copied().find(|word| {
+        tail.get(..word.len())
+            .is_some_and(|written| written.eq_ignore_ascii_case(word))
+            && !tail[word.len()..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric)
+    })
+}
+
+/// Whether `currency` is written right before a number, spaces aside, and
+/// not as the end of a longer word.
+fn currency_before(before: &str, currency: &str) -> bool {
+    let before = before.trim_end();
+    let Some(at) = before.len().checked_sub(currency.len()) else {
+        return false;
+    };
+    before
+        .get(at..)
+        .is_some_and(|written| written.eq_ignore_ascii_case(currency))
+        && !(currency.chars().all(char::is_alphabetic)
+            && before[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric))
+}
+
+/// Whether `currency` is written right after a number (and its scale),
+/// spaces aside, and not as the start of a longer word.
+fn currency_after(after: &str, currency: &str) -> bool {
+    let after = after.trim_start();
+    after
+        .get(..currency.len())
+        .is_some_and(|written| written.eq_ignore_ascii_case(currency))
+        && !(currency.chars().all(char::is_alphabetic)
+            && after[currency.len()..]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric))
 }
 
 /// The first unit of the document that names `name`.
@@ -3839,8 +4230,10 @@ Dated May 12, 2026";
     }
 
     /// A subject's names and numbers are claims, checked as a written
-    /// description's are; one the document does not contain is never
-    /// written into the description.
+    /// description's are: one the context does not contain sends the
+    /// document to review, and the subject is never written into the
+    /// description. A word that is no claim must still be stated, and keeps
+    /// the subject out without a review when it is not.
     #[test]
     fn an_invented_subject_is_flagged_and_left_out() {
         let index = index_of(INVOICE);
@@ -3861,9 +4254,13 @@ Dated May 12, 2026";
     }
 
     /// A subject cited to the wrong line is written into the description
-    /// when one unit the model was shown holds all its words. One whose
-    /// words are only scattered over several units is supported - and not
-    /// written down: no one unit states it.
+    /// when one unit the model was shown holds all its words. One that no
+    /// unit holds whole is supported - its claims are - and not written
+    /// down. The second subject here is kept out twice over: its words are
+    /// scattered over several units, and one of them ("remittance"; the
+    /// document writes "Remit") is stated nowhere. Words that are all
+    /// stated but scattered are tested on their own in
+    /// `a_subject_of_stated_words_still_needs_its_cited_share_each_word_counted_once`.
     #[test]
     fn a_subject_no_one_unit_holds_stays_out_of_the_description() {
         // Cited wrongly, but one unit holds all its words: grounded there.
@@ -3876,8 +4273,8 @@ Dated May 12, 2026";
             "{}",
             outcome.proposal.description
         );
-        // Its words only scattered over several units: no unit states it,
-        // and it stays out.
+        // No unit holds its words whole, and one is stated nowhere: it
+        // stays out, without a review.
         let mut facts = invoice_facts(&index);
         facts.subject = Some("bakery fixture shelving remittance".into());
         facts.subject_evidence = vec![id_of(&index, "Invoice No.")];
@@ -3892,6 +4289,870 @@ Dated May 12, 2026";
             !outcome.proposal.description.contains("shelving"),
             "{}",
             outcome.proposal.description
+        );
+    }
+
+    /// The description `invoice_facts` gives with no subject.
+    const INVOICE_WITHOUT_SUBJECT: &str = "Invoice from Halvorsen Fixture Works LLC to Quillon \
+                                           Ridge Bakery, Inc., invoice INV-10438, totalling \
+                                           $1,248.00.";
+
+    /// `invoice_facts` with another subject, cited to the first unit
+    /// holding each needle and checked against all of [`INVOICE`]: the
+    /// outcome, which must be ready, and the subject kept.
+    fn with_subject(subject: &str, cited: &[&str]) -> (ValidationOutcome, Option<String>) {
+        let index = index_of(INVOICE);
+        let mut facts = invoice_facts(&index);
+        facts.subject = Some(subject.into());
+        facts.subject_evidence = cited.iter().map(|needle| id_of(&index, needle)).collect();
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{subject}: {:?}",
+            outcome.reasons
+        );
+        let kept = outcome
+            .facts
+            .as_ref()
+            .and_then(|facts| facts.subject.clone());
+        (outcome, kept)
+    }
+
+    /// Every word of a subject but glue words and single letters must be
+    /// stated somewhere in what the model was shown. A word in lower case
+    /// is no claim, so the share of cited words was all that held one
+    /// back: 60% let one invented word in five through. It stays out now,
+    /// without a review - the subject is optional and never in the
+    /// filename.
+    #[test]
+    fn a_subject_with_a_word_the_context_never_states_stays_out_of_the_description() {
+        for (invented, cited) in [
+            // Four of five significant words cited.
+            (
+                "refrigerated display shelving for the bakery counter",
+                &["Display shelving"][..],
+            ),
+            // Three of five: exactly 60%.
+            (
+                "refrigerated walnut shelving for the bakery counter",
+                &["Display shelving"],
+            ),
+            // Three of five, across the two units it cites.
+            (
+                "Brackenridge refrigerated walnut bakery counter",
+                &["Quay Street", "Display shelving"],
+            ),
+        ] {
+            let (outcome, kept) = with_subject(invented, cited);
+            assert_eq!(kept, None, "{invented}");
+            assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        }
+        // A label's own word padded the share before the label was taken
+        // off what was written.
+        let text = "Halvorsen Fixture Works LLC\n\nINVOICE\n\nInvoice No.: INV-10438\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Description: display shelving for the bakery counter\n\nTotal due: $1,248.00";
+        let (outcome, _) = facts_for(text, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            subject: Some("Description: cryogenic walnut display shelving".into()),
+            subject_evidence: vec![id_of(index, "Description:")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.facts.as_ref().unwrap().subject, None);
+        assert!(
+            !outcome.proposal.description.contains("cryogenic"),
+            "{}",
+            outcome.proposal.description
+        );
+        // Every word stated: written, as before.
+        let (_, kept) = with_subject(
+            "display shelving for the bakery counter",
+            &["Display shelving"],
+        );
+        assert_eq!(
+            kept.as_deref(),
+            Some("display shelving for the bakery counter")
+        );
+    }
+
+    /// A subject's words are split at every mark that is not a letter or a
+    /// digit and checked one by one: a capital glued after a slash, or
+    /// inside a word, is no claim a sentence's check sees.
+    #[test]
+    fn a_word_glued_to_another_in_a_subject_is_checked_on_its_own() {
+        for glued in [
+            "display shelving/Cryogenic for the bakery counter",
+            "eFrost display shelving for the bakery counter",
+        ] {
+            let (outcome, kept) = with_subject(glued, &["Display shelving"]);
+            assert_eq!(kept, None, "{glued}");
+            assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        }
+        // Each part stated, even in different units: written.
+        const LAB_INVOICE: &str = "Ferncastle Veterinary Laboratory LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nComplete blood count, canine, $48.00\n\n\
+Feline panel, $52.00\n\nTotal: $100.00";
+        let (outcome, _) = facts_for(LAB_INVOICE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            subject: Some("Complete blood count, canine/feline".into()),
+            subject_evidence: vec![id_of(index, "Complete blood")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().subject.as_deref(),
+            Some("Complete blood count, canine/feline")
+        );
+        assert!(
+            outcome.proposal.description.contains("canine/feline"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A number in a subject must be stated whole, by a unit that does not
+    /// carry it on either side: "48" and "248" are not stated by
+    /// "$1,248.00", and a two-digit number is too short for a sentence's
+    /// claims check to see. "10438" is stated by "INV-10438".
+    #[test]
+    fn a_subject_with_a_number_the_context_never_states_stays_out_of_the_description() {
+        for invented in [
+            "48 display shelving for the bakery counter",
+            "248 display shelving for the bakery counter",
+            "2 display shelving for the bakery counter",
+        ] {
+            let (outcome, kept) = with_subject(invented, &["Display shelving"]);
+            assert_eq!(kept, None, "{invented}");
+            assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        }
+        let stated = "display shelving for the bakery counter on invoice 10438";
+        let (_, kept) = with_subject(stated, &["Display shelving"]);
+        assert_eq!(kept.as_deref(), Some(stated));
+    }
+
+    /// A negation is an ordinary word: kept when the context states it,
+    /// in any unit, and keeping a subject out when it does not.
+    #[test]
+    fn an_unstated_negation_keeps_a_subject_out() {
+        const ORDERED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\nPO No 4471\n\n\
+Display shelving for the bakery counter, $1,248.00";
+        let reply = |index: &EvidenceIndex, subject: &str| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            subject: Some(subject.into()),
+            subject_evidence: vec![id_of(index, "PO No"), id_of(index, "Display shelving")],
+            ..ModelFacts::default()
+        };
+        // The document never says "not".
+        let (outcome, _) = facts_for(ORDERED, |index| {
+            reply(index, "display shelving not for the bakery counter")
+        });
+        assert_eq!(outcome.facts.as_ref().unwrap().subject, None);
+        assert!(
+            !outcome.proposal.description.contains(" not "),
+            "{}",
+            outcome.proposal.description
+        );
+        // It says "No", in a unit of its own: written.
+        let stated = "display shelving for the bakery counter, PO No 4471";
+        let (outcome, _) = facts_for(ORDERED, |index| reply(index, stated));
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().subject.as_deref(),
+            Some(stated)
+        );
+        // A contracted negation is checked whole, not as "can" and a
+        // single letter: the lease says "can", never "can't".
+        for (subject, written) in [
+            ("tenant can't keep one cat in the apartment", false),
+            ("tenant can\u{2019}t keep one cat in the apartment", false),
+            ("tenant can keep one cat in the apartment", true),
+        ] {
+            let outcome = lease_outcome(Some(subject), &[]);
+            let kept = outcome.facts.as_ref().unwrap().subject.as_deref();
+            assert_eq!(kept, written.then_some(subject), "{subject}");
+        }
+        let outcome = lease_outcome(None, &["Tenant can't keep one cat in the apartment"]);
+        assert!(outcome.facts.as_ref().unwrap().key_facts.is_empty());
+        assert!(
+            !outcome.proposal.description.contains("can't"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A lease that lets its tenant keep a cat and charges a late fee in
+    /// dollars. It never writes "can't" or a percent sign.
+    const PET_LEASE: &str = "Corvane Holdings LLC\n\nRESIDENTIAL LEASE\n\n\
+Lease Date: June 1, 2025\n\nTenant: Delphine Okonkwo-Reyes\n\n\
+Tenant can keep one cat in the apartment.\n\nLate fee: $25 after the fifth day.";
+
+    /// A reply about [`PET_LEASE`] with this subject and these key facts,
+    /// each cited to the cat's and the late fee's units.
+    fn lease_outcome(subject: Option<&str>, key_facts: &[&str]) -> ValidationOutcome {
+        facts_for(PET_LEASE, |index| {
+            let cited = vec![id_of(index, "Tenant can"), id_of(index, "Late fee")];
+            ModelFacts {
+                document_type: Some("Residential Lease".into()),
+                type_evidence: vec![id_of(index, "RESIDENTIAL")],
+                subject: subject.map(str::to_owned),
+                subject_evidence: cited.clone(),
+                key_facts: key_facts
+                    .iter()
+                    .map(|fact| KeyFact {
+                        fact: (*fact).into(),
+                        evidence: cited.clone(),
+                    })
+                    .collect(),
+                ..ModelFacts::default()
+            }
+        })
+        .0
+    }
+
+    /// A word the document states only outside the units the model was
+    /// shown keeps a subject out: the model could not have read it there.
+    #[test]
+    fn a_subject_with_a_word_stated_only_outside_the_context_stays_out() {
+        const FINISHED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Display shelving for the bakery counter, $1,248.00\n\nWalnut finish, refrigerated base.";
+        let index = index_of(FINISHED);
+        let facts = ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(&index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(&index, "Invoice Date")],
+            subject: Some("refrigerated display shelving for the bakery counter".into()),
+            subject_evidence: vec![id_of(&index, "Display shelving")],
+            ..ModelFacts::default()
+        };
+        // The whole document shown: written.
+        let outcome = check(facts.clone(), &whole(&index), &index);
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().subject.as_deref(),
+            Some("refrigerated display shelving for the bakery counter")
+        );
+        // The unit that says "refrigerated" not shown: left out.
+        let shown = context_of(&index, |unit| !unit.text.contains("Walnut"));
+        let outcome = check(facts, &shown, &index);
+        assert_eq!(outcome.facts.as_ref().unwrap().subject, None);
+        assert!(
+            !outcome.proposal.description.contains("refrigerated"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// Only the glue words and single letters need not be stated. Other
+    /// short common words - "all", "other", "under" - say something, and
+    /// keep a subject out when the context never writes them.
+    #[test]
+    fn a_common_word_that_is_no_glue_word_must_be_stated() {
+        for invented in [
+            "all display shelving for the bakery counter",
+            "other display shelving for the bakery counter",
+            "display shelving under the bakery counter",
+        ] {
+            let (outcome, kept) = with_subject(invented, &["Display shelving"]);
+            assert_eq!(kept, None, "{invented}");
+            assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        }
+    }
+
+    /// A currency symbol the context never writes keeps a subject and a
+    /// key fact out, wherever it stands: "1,248.00 €" in a document of
+    /// dollars.
+    #[test]
+    fn a_currency_symbol_the_context_never_writes_keeps_a_subject_and_a_key_fact_out() {
+        let (outcome, kept) = with_subject(
+            "display shelving for the bakery counter, 1,248.00 \u{20ac}",
+            &["Display shelving"],
+        );
+        assert_eq!(kept, None);
+        assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        let outcome = with_key_facts(INVOICE, &[("1,248.00 \u{20ac}", Some("Display shelving"))]);
+        assert!(outcome.facts.as_ref().unwrap().key_facts.is_empty());
+        assert!(
+            !outcome.proposal.description.contains('\u{20ac}'),
+            "{}",
+            outcome.proposal.description
+        );
+        // The symbol the document writes: kept.
+        let outcome = with_key_facts(INVOICE, &[("$1,248.00", Some("Display shelving"))]);
+        assert_eq!(outcome.facts.as_ref().unwrap().key_facts, vec!["$1,248.00"]);
+    }
+
+    /// An invisible character neither splits a word nor hides one: the
+    /// word is checked whole, and written without it.
+    #[test]
+    fn an_invisible_character_in_a_subject_is_taken_out_before_it_is_checked() {
+        // "net" and "work" are each stated; "network" is not.
+        let (outcome, kept) = with_subject(
+            "net\u{200b}work display shelving for the bakery counter",
+            &["Display shelving"],
+        );
+        assert_eq!(kept, None);
+        assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        let (outcome, kept) = with_subject(
+            "dis\u{200b}play shelving for the bakery counter",
+            &["Display shelving"],
+        );
+        assert_eq!(
+            kept.as_deref(),
+            Some("display shelving for the bakery counter")
+        );
+        assert!(
+            outcome
+                .proposal
+                .description
+                .contains(" for display shelving for the bakery counter,"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A zero-width non-joiner is part of how Persian spells a word: it is
+    /// ignored when the subject is checked, and kept in what is written.
+    #[test]
+    fn a_joiner_a_script_spells_with_stays_in_the_subject() {
+        const CARPETS: &str = "Kavir Textile Trading LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+فرش\u{200c}های دستباف, $1,248.00";
+        let subject = "فرش\u{200c}های دستباف";
+        let (outcome, _) = facts_for(CARPETS, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            subject: Some(subject.into()),
+            subject_evidence: vec![id_of(index, "$1,248.00")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.facts.as_ref().unwrap().subject.as_deref(),
+            Some(subject)
+        );
+        assert!(
+            outcome.proposal.description.contains(subject),
+            "{:?}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A party's name or an identifier the reply wrote with a stray
+    /// invisible character matches the document's plain text, and is
+    /// written as the document writes it, without the character.
+    #[test]
+    fn a_stray_invisible_character_in_a_name_or_an_identifier_is_not_written() {
+        let index = index_of(INVOICE);
+        let mut facts = invoice_facts(&index);
+        facts.parties[0].name = "Halvorsen\u{200b} Fixture Works LLC".into();
+        facts.identifier = Some("INV-\u{200b}10438".into());
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let validated = outcome.facts.as_ref().unwrap();
+        assert_eq!(validated.identifier.as_deref(), Some("INV-10438"));
+        assert_eq!(
+            outcome.proposal.parties.first().map(String::as_str),
+            Some("Halvorsen Fixture Works LLC")
+        );
+        assert!(
+            !outcome.proposal.description.contains('\u{200b}'),
+            "{:?}",
+            outcome.proposal.description
+        );
+        assert!(
+            outcome
+                .proposal
+                .description
+                .starts_with("Invoice from Halvorsen Fixture Works LLC"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A percent sign is checked as a currency symbol is: a lease that
+    /// charges "$25" never states "25%".
+    #[test]
+    fn a_percent_sign_the_context_never_writes_keeps_a_subject_and_a_key_fact_out() {
+        let outcome = lease_outcome(Some("one cat, late fee 25%"), &["Late fee: 25%"]);
+        let facts = outcome.facts.as_ref().unwrap();
+        assert_eq!(facts.subject, None);
+        assert!(facts.key_facts.is_empty(), "{:?}", facts.key_facts);
+        assert!(
+            !outcome.proposal.description.contains('%'),
+            "{}",
+            outcome.proposal.description
+        );
+        // Without the sign, or with the lease's own "$": kept.
+        let outcome = lease_outcome(Some("one cat, late fee 25"), &["Late fee: $25"]);
+        let facts = outcome.facts.as_ref().unwrap();
+        assert_eq!(facts.subject.as_deref(), Some("one cat, late fee 25"));
+        assert_eq!(facts.key_facts, vec!["Late fee: $25"]);
+    }
+
+    /// A word of letters and digits is a word, checked whole: "Q3" is not
+    /// stated by a document that writes "Q4" and "3".
+    #[test]
+    fn a_word_of_letters_and_digits_is_checked_as_a_word() {
+        const SERVICED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Q4 shelving service, 3 visits, $360.00";
+        for (subject, written) in [
+            ("Q3 shelving service visits", false),
+            ("Q4 shelving service visits", true),
+        ] {
+            let (outcome, _) = facts_for(SERVICED, |index| ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(index, "INVOICE")],
+                document_date: Some("2025-05-01".into()),
+                date_evidence: vec![id_of(index, "Invoice Date")],
+                subject: Some(subject.into()),
+                subject_evidence: vec![id_of(index, "Q4")],
+                ..ModelFacts::default()
+            });
+            let kept = outcome.facts.as_ref().unwrap().subject.as_deref();
+            assert_eq!(kept.is_some(), written, "{subject}: {kept:?}");
+            assert_eq!(
+                outcome.proposal.description.contains(subject),
+                written,
+                "{}",
+                outcome.proposal.description
+            );
+        }
+    }
+
+    /// A word the document hyphenates across a line break, as justified
+    /// PDF text and OCR do, is stated whole: "display" for "dis-\nplay".
+    #[test]
+    fn a_word_hyphenated_across_a_line_break_is_stated_whole() {
+        const QUOTED: &str = "Halvorsen Fixture Works LLC\n\nINVOICE\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Supply and installation of refrigerated dis-\nplay shelving for the bakery counter, as quoted.";
+        // A line break a PDF writes as "\r\n", and the soft or typographic
+        // hyphen it marks the break with.
+        let crlf = QUOTED.replace("dis-\n", "dis-\r\n");
+        let soft = QUOTED.replace("dis-\n", "dis\u{ad}\n");
+        let typographic = QUOTED.replace("dis-\n", "dis\u{2010}\r\n");
+        for (text, subject) in [
+            (
+                QUOTED,
+                "refrigerated display shelving for the bakery counter",
+            ),
+            (QUOTED, "refrigerated display shelving"),
+            (crlf.as_str(), "refrigerated display shelving"),
+            (soft.as_str(), "refrigerated display shelving"),
+            (typographic.as_str(), "refrigerated display shelving"),
+        ] {
+            let (outcome, _) = facts_for(text, |index| ModelFacts {
+                document_type: Some("Invoice".into()),
+                type_evidence: vec![id_of(index, "INVOICE")],
+                document_date: Some("2025-05-01".into()),
+                date_evidence: vec![id_of(index, "Invoice Date")],
+                subject: Some(subject.into()),
+                subject_evidence: vec![id_of(index, "Supply and")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.facts.as_ref().unwrap().subject.as_deref(),
+                Some(subject)
+            );
+        }
+    }
+
+    /// An invisible character the document holds inside a word is ignored
+    /// wherever a subject is checked: a subject that leaves it out or
+    /// copies it is written, without it, and the proposal stays ready.
+    #[test]
+    fn an_invisible_character_in_the_document_neither_splits_nor_hides_a_word() {
+        const MARKED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brack\u{ad}enridge\n\n\
+INVOICE\n\nInvoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Dis\u{ad}play shelving for the bak\u{ad}ery counter, $1,248.00";
+        for invisible in ["\u{ad}", "\u{200b}"] {
+            let text = MARKED.replace('\u{ad}', invisible);
+            for (subject, written) in [
+                (
+                    "display shelving for the bakery counter".to_owned(),
+                    "display shelving for the bakery counter",
+                ),
+                (format!("dis{invisible}play shelving"), "display shelving"),
+                (
+                    format!("Brack{invisible}enridge display shelving"),
+                    "Brackenridge display shelving",
+                ),
+            ] {
+                let (outcome, _) = facts_for(&text, |index| ModelFacts {
+                    document_type: Some("Invoice".into()),
+                    type_evidence: vec![id_of(index, "INVOICE")],
+                    document_date: Some("2025-05-01".into()),
+                    date_role: Some(DateRole::Invoice),
+                    date_evidence: vec![id_of(index, "Invoice Date")],
+                    parties: vec![
+                        party(
+                            "Halvorsen Fixture Works LLC",
+                            Some(PartyRole::Issuer),
+                            &[id_of(index, "Halvorsen")],
+                        ),
+                        party(
+                            "Quillon Ridge Bakery, Inc.",
+                            Some(PartyRole::Customer),
+                            &[id_of(index, "Bill To")],
+                        ),
+                    ],
+                    subject: Some(subject.clone()),
+                    subject_evidence: vec![id_of(index, "shelving"), id_of(index, "Quay")],
+                    ..ModelFacts::default()
+                });
+                assert_eq!(
+                    outcome.status,
+                    ProposalStatus::Ready,
+                    "{subject:?}: {:?}",
+                    outcome.reasons
+                );
+                assert_eq!(
+                    outcome.facts.as_ref().unwrap().subject.as_deref(),
+                    Some(written),
+                    "{subject:?}"
+                );
+                assert!(
+                    outcome.proposal.description.contains(written),
+                    "{}",
+                    outcome.proposal.description
+                );
+            }
+        }
+    }
+
+    /// A subject whose every word is stated still needs the share of its
+    /// cited units, or one unit holding it whole. Each distinct word counts
+    /// once: saying a stated word again does not make up for words the
+    /// cited units do not hold.
+    #[test]
+    fn a_subject_of_stated_words_still_needs_its_cited_share_each_word_counted_once() {
+        // quay, street, counter, shelving: two of four in the cited unit.
+        // Counted with its repeats, four of six passed.
+        let (outcome, kept) = with_subject(
+            "quay street counter shelving, counter to counter",
+            &["Display shelving"],
+        );
+        assert_eq!(kept, None);
+        assert_eq!(outcome.proposal.description, INVOICE_WITHOUT_SUBJECT);
+        // Every word stated, but cited wrongly and held by no one unit.
+        let (_, kept) = with_subject("bakery fixture shelving", &["Invoice No."]);
+        assert_eq!(kept, None);
+    }
+
+    /// A reply that names an invoice and these key facts, each cited to
+    /// the first unit holding its needle, about all of `text`.
+    fn with_key_facts(text: &str, key_facts: &[(&str, Option<&str>)]) -> ValidationOutcome {
+        facts_for(text, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "INVOICE")],
+            key_facts: key_facts
+                .iter()
+                .map(|(fact, cited)| KeyFact {
+                    fact: (*fact).into(),
+                    evidence: cited
+                        .map(|needle| vec![id_of(index, needle)])
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            ..ModelFacts::default()
+        })
+        .0
+    }
+
+    /// A key fact - only a reply in named fields gives them - is held to
+    /// the subject's word check. One that fails it is left out, so it
+    /// neither stands in for the subject nor labels an amount.
+    #[test]
+    fn a_key_fact_with_a_word_the_context_never_states_is_left_out() {
+        let shelving = Some("Display shelving");
+        for (facts, invented) in [
+            // In the subject's place, with one stated word in four.
+            (
+                vec![
+                    ("refrigerated cryogenic walnut shelving", shelving),
+                    ("$1,248.00", shelving),
+                ],
+                "refrigerated",
+            ),
+            // Words too short for a claim.
+            (vec![("6 ft", shelving), ("$1,248.00", shelving)], "6 ft"),
+            // Its only stated word a number.
+            (
+                vec![
+                    ("2025 cryogenic walnut refrigeration", Some("Invoice Date")),
+                    ("$1,248.00", shelving),
+                ],
+                "walnut",
+            ),
+            // As an amount's label: before a colon, beside the amount.
+            (
+                vec![("cryogenic shelving: $1,248.00", shelving)],
+                "cryogenic",
+            ),
+            (
+                vec![("$1,248.00 cryogenic shelving", shelving)],
+                "cryogenic",
+            ),
+            (vec![("cryogenic walnut: $1,248.00", shelving)], "walnut"),
+        ] {
+            let outcome = with_key_facts(INVOICE, &facts);
+            // Left out on its words alone: no review.
+            assert!(
+                !outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{facts:?}: {:?}",
+                outcome.reasons
+            );
+            let description = &outcome.proposal.description;
+            assert!(!description.contains(invented), "{description}");
+            let kept = &outcome.facts.as_ref().unwrap().key_facts;
+            assert!(kept.iter().all(|fact| !fact.contains(invented)), "{kept:?}");
+        }
+        // Every word stated: it labels the amount.
+        let outcome = with_key_facts(INVOICE, &[("$1,248.00 display shelving", shelving)]);
+        assert!(
+            outcome
+                .proposal
+                .description
+                .contains("display shelving of $1,248.00"),
+            "{}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A key fact's amount must be stated as the context writes it: the
+    /// same number on its own, its currency beside it, its scale after
+    /// it. One that is not is an unsupported claim, sends the document to
+    /// review and never takes the place of the document's own total.
+    #[test]
+    fn a_key_fact_amount_is_accepted_only_as_the_context_writes_it() {
+        const TOTALLED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.00";
+        let unclaimed = with_key_facts(TOTALLED, &[]).proposal.description;
+        assert!(unclaimed.contains("totalling $1,248.00"), "{unclaimed}");
+        for (fact, cited) in [
+            ("$48", Some("Total")),
+            ("$7", None),
+            // The end of a longer number, or its start.
+            ("$248.00", Some("Total")),
+            ("$1,248", Some("Total")),
+            // Another currency, or a scale the document does not write.
+            ("USD 1,248.00", Some("Total")),
+            ("\u{20ac}1,248.00", Some("Total")),
+            ("$1,248.00 million", Some("Total")),
+        ] {
+            let outcome = with_key_facts(TOTALLED, &[(fact, cited)]);
+            let facts = outcome.facts.as_ref().unwrap();
+            assert_eq!(
+                facts.support.key_facts,
+                vec![Support::Unsupported],
+                "{fact}"
+            );
+            assert!(facts.key_facts.is_empty(), "{fact}");
+            assert!(
+                outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{fact}"
+            );
+            // The document's own total stands.
+            assert_eq!(outcome.proposal.description, unclaimed, "{fact}");
+        }
+        for fact in ["$1,248.00", "Total: $1,248.00"] {
+            let outcome = with_key_facts(TOTALLED, &[(fact, Some("Total"))]);
+            assert!(
+                !outcome
+                    .reasons
+                    .contains(&ReviewReason::DescriptionUnsupported),
+                "{fact}: {:?}",
+                outcome.reasons
+            );
+            assert_eq!(outcome.facts.as_ref().unwrap().key_facts, vec![fact]);
+        }
+        // A code the document writes, but not beside the number.
+        const CODED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+All amounts are in USD.\n\nTotal: $1,248.00";
+        for (fact, stated) in [("USD 1,248.00", false), ("$1,248.00", true)] {
+            let outcome = with_key_facts(CODED, &[(fact, Some("Total"))]);
+            let support = &outcome.facts.as_ref().unwrap().support.key_facts;
+            assert_eq!(support[0] != Support::Unsupported, stated, "{fact}");
+        }
+        // A currency written after the number is beside it; a scale must
+        // be the document's.
+        const SCALED: &str = "Corriveau Capital LLC\n\nINVOICE\n\n\
+Arrangement fee on a facility of $5.2 million: 1,248.00 USD";
+        for (fact, stated) in [
+            ("USD 1,248.00", true),
+            ("$5.2 million", true),
+            ("$5.2", false),
+            ("$5.2 billion", false),
+        ] {
+            let outcome = with_key_facts(SCALED, &[(fact, Some("Arrangement"))]);
+            let support = &outcome.facts.as_ref().unwrap().support.key_facts;
+            assert_eq!(support[0] != Support::Unsupported, stated, "{fact}");
+        }
+        // An invisible character inside the document's amount hides
+        // nothing: the reply's plain copy of it is stated.
+        const SPACED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,\u{200b}248.00";
+        let outcome = with_key_facts(SPACED, &[("$1,248.00", Some("Total"))]);
+        assert!(
+            !outcome
+                .reasons
+                .contains(&ReviewReason::DescriptionUnsupported),
+            "{:?}",
+            outcome.reasons
+        );
+        assert_eq!(outcome.facts.as_ref().unwrap().key_facts, vec!["$1,248.00"]);
+    }
+
+    /// A stated type is written in the reply's words, but for a mark the
+    /// line that states it does not hold: "Invoice ✓✓" or "Invoice ✔️" on
+    /// an `INVOICE` line is written "Invoice". The reply's words are kept,
+    /// and its casing unless it is all lower case.
+    #[test]
+    fn a_stated_type_keeps_only_the_marks_its_line_holds() {
+        let index = index_of(INVOICE);
+        for (reply, written) in [
+            ("Invoice \u{2713}\u{2713}", "Invoice"),
+            // A check mark in emoji form: its variation selector goes with it.
+            ("Invoice \u{2714}\u{fe0f}", "Invoice"),
+            ("invoice \u{2714}\u{fe0f}", "Invoice"),
+            ("Invoice!!", "Invoice"),
+            ("In\u{200b}voice", "Invoice"),
+            ("Invoice", "Invoice"),
+            ("invoice", "Invoice"),
+            ("INVOICE", "INVOICE"),
+        ] {
+            let mut facts = invoice_facts(&index);
+            facts.document_type = Some(reply.into());
+            facts.type_evidence = Vec::new();
+            let outcome = check(facts, &whole(&index), &index);
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some(written),
+                "{reply}"
+            );
+            let filename = crate::naming::compose_filename(&outcome.proposal, "pdf", &[]).value;
+            assert!(
+                filename.starts_with(&format!("2025-05-01 {written} from")),
+                "{filename}"
+            );
+            for text in [&filename, &outcome.proposal.description] {
+                assert!(
+                    !text.contains(['\u{2713}', '\u{2714}', '\u{fe0f}', '\u{200b}', '!']),
+                    "{text:?}"
+                );
+            }
+        }
+        // The reply's singular stands where its line writes a plural.
+        const PAYABLE: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
+Display shelving for the bakery counter, $1,248.00\n\n\
+All invoices are payable within 30 days.";
+        let (outcome, _) = facts_for(PAYABLE, |index| ModelFacts {
+            document_type: Some("Invoice".into()),
+            type_evidence: vec![id_of(index, "All invoices")],
+            document_date: Some("2025-05-01".into()),
+            date_evidence: vec![id_of(index, "Invoice Date")],
+            parties: vec![party(
+                "Halvorsen Fixture Works LLC",
+                Some(PartyRole::Issuer),
+                &[id_of(index, "Halvorsen Fixture Works LLC")],
+            )],
+            ..ModelFacts::default()
+        });
+        assert_eq!(outcome.proposal.document_type.as_deref(), Some("Invoice"));
+        let filename = crate::naming::compose_filename(&outcome.proposal, "pdf", &[]).value;
+        assert_eq!(
+            filename,
+            "2025-05-01 Invoice from Halvorsen Fixture Works LLC.pdf"
+        );
+        // A mark the line holds once is no licence to decorate the type with
+        // it, at either end.
+        const NUMBERED: &str = "Halvorsen Fixture Works LLC\n12 Quay Street, Brackenridge\n\n\
+Invoice Date: May 1, 2025\n\nAll invoices #123 are payable within 30 days.";
+        for reply in ["Invoice ###", "## Invoice", "# Invoice #"] {
+            let (outcome, _) = facts_for(NUMBERED, |index| ModelFacts {
+                document_type: Some(reply.into()),
+                type_evidence: vec![id_of(index, "All invoices")],
+                document_date: Some("2025-05-01".into()),
+                date_evidence: vec![id_of(index, "Invoice Date")],
+                ..ModelFacts::default()
+            });
+            assert_eq!(
+                outcome.proposal.document_type.as_deref(),
+                Some("Invoice"),
+                "{reply}"
+            );
+        }
+        // A mark the line holds is kept, compared through normalizing: the
+        // reply's straight apostrophe for the line's curly one, or for the
+        // acute accent or backtick OCR reads one as; a bracket for a
+        // bracket. An accent on a kept letter stays with it.
+        for (text, reply) in [
+            (
+                "Larkspur Property Management LLC\n\nOWNER\u{2019}S STATEMENT\n\n\
+Statement Date: June 30, 2025\n\nOwner: Delphine Okonkwo-Reyes",
+                "Owner's Statement",
+            ),
+            (
+                "Larkspur Property Management LLC\n\nOWNER\u{b4}S STATEMENT\n\n\
+Statement Date: June 30, 2025\n\nOwner: Delphine Okonkwo-Reyes",
+                "Owner's Statement",
+            ),
+            (
+                "Larkspur Property Management LLC\n\nOWNER`S STATEMENT\n\n\
+Statement Date: June 30, 2025\n\nOwner: Delphine Okonkwo-Reyes",
+                "Owner's Statement",
+            ),
+            (
+                "CAF\u{c9} SUPPLY AGREEMENT\n\nThis Agreement is made on March 3, 2026 \
+between Corvane Analytics Inc. and Larkhaven Seed Company.",
+                "Cafe\u{301} Supply Agreement",
+            ),
+            (
+                "NON-DISCLOSURE AGREEMENT (NDA)\n\nThis Agreement is made on March 3, 2026 \
+between Corvane Analytics Inc. and Larkhaven Seed Company.",
+                "Non-Disclosure Agreement (NDA)",
+            ),
+        ] {
+            let (outcome, _) = facts_for(text, |_| ModelFacts {
+                document_type: Some(reply.into()),
+                ..ModelFacts::default()
+            });
+            assert_eq!(outcome.proposal.document_type.as_deref(), Some(reply));
+        }
+        const NOTICE: &str = "Basalt Commercial Credit Corp.\n\nOctober 14, 2025\n\n\
+NOTICE OF DEFAULT AND RESERVATION OF RIGHTS\n\n\
+Glasswing Ceramics LLC is in default under the Loan Agreement dated March 3, 2023.";
+        let (outcome, _) = facts_for(NOTICE, |index| ModelFacts {
+            document_type: Some("Notice-of-Default \u{2713}".into()),
+            document_date: Some("2025-10-14".into()),
+            date_evidence: vec![id_of(index, "October 14")],
+            ..ModelFacts::default()
+        });
+        assert_eq!(
+            outcome.proposal.document_type.as_deref(),
+            Some("Notice of Default")
         );
     }
 

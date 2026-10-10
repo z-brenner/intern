@@ -2,8 +2,9 @@
 //! and its one-sentence description, built from validated facts.
 //!
 //! The evidence pipeline asks the model for facts only - what the document
-//! is, its parties and their roles, its subject, its number, a key fact or
-//! two - and everything stylistic is decided here, by rules a test can pin:
+//! is, its date, its parties and their roles, and its subject; a reply in
+//! named fields may add its number and a key fact or two - and everything
+//! stylistic is decided here, by rules a test can pin:
 //!
 //! * [`DocumentClass::of`] sorts a validated type into a class.
 //! * [`relation_from_roles`] picks the filename's parties and the word that
@@ -522,7 +523,9 @@ pub struct DescriptionFacts<'a> {
     /// An amount worth stating, and the label the document gives it:
     /// `(Some("annual fee"), "$96,000")`.
     pub amount: Option<(Option<&'a str>, &'a str)>,
-    /// A key fact that is not an amount; it stands in for an absent subject.
+    /// A key fact that is not an amount, held to the word check of what
+    /// the model was shown (`every_word_stated` in `facts.rs`); it stands
+    /// in for an absent subject.
     pub other_fact: Option<&'a str>,
     /// The date as the document writes it, for a description too short
     /// without it.

@@ -35,8 +35,9 @@ pub(crate) fn phrase_positions(text: &[String], phrase: &[String]) -> Vec<usize>
         .collect()
 }
 
-/// The same word, a plural's "s" aside: "Minutes" states "minute".
-fn same_word(word: &str, wanted: &str) -> bool {
+/// The same word, a plural's "s" aside: "Minutes" states "minute". The
+/// plural is allowed either way for a wanted word over three letters.
+pub(crate) fn same_word(word: &str, wanted: &str) -> bool {
     word == wanted
         || (wanted.len() > 3
             && (word.strip_suffix('s') == Some(wanted) || wanted.strip_suffix('s') == Some(word)))
