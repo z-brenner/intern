@@ -1698,9 +1698,12 @@ fn without_stray_invisibles(text: &str) -> String {
 
 /// Whether an invisible character is part of how text is spelled: a
 /// zero-width non-joiner or joiner, which Persian, Indic scripts and emoji
-/// spell with, or a direction mark or embedding.
+/// spell with, or a direction mark, embedding or isolate.
 fn spells(character: char) -> bool {
-    matches!(character, '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}')
+    matches!(
+        character,
+        '\u{61c}' | '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 /// The words of a subject or a key fact the context must state: [`words`]'

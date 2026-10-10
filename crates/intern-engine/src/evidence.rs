@@ -77,16 +77,19 @@ pub fn normalize(value: &str) -> String {
 }
 
 /// Whether a character is invisible: a soft hyphen, a zero-width space or
-/// joiner, a direction mark, a word joiner, a byte order mark. PDF and web
-/// text carry them inside words.
+/// joiner, a direction mark, embedding or isolate (the Arabic letter mark
+/// among them), a word joiner, a byte order mark. PDF and web text carry
+/// them inside words and names.
 pub(crate) fn is_invisible(character: char) -> bool {
     matches!(
         character,
         '\u{ad}'
+            | '\u{61c}'
             | '\u{180e}'
             | '\u{200b}'..='\u{200f}'
             | '\u{202a}'..='\u{202e}'
             | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
             | '\u{feff}'
     )
 }
@@ -1036,6 +1039,26 @@ fn numeric_reading(token: &NumericDate<'_>, order: Option<NumericOrder>) -> Opti
         },
         (Some(only), None) | (None, Some(only)) => Some(only),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod invisible_tests {
+    use super::normalize;
+
+    /// A direction mark, isolate or zero-width character between or inside
+    /// words is no text: a plain copy of the words matches.
+    #[test]
+    fn invisible_characters_are_not_read() {
+        for written in [
+            "Quillon Ridge\u{2069} Bakery",
+            "\u{2068}Quillon Ridge Bakery\u{2069}",
+            "Quillon\u{61c} Ridge Bakery",
+            "Quillon Ri\u{200b}dge Ba\u{ad}kery",
+            "Quillon Ridge\u{200e} Bakery",
+        ] {
+            assert_eq!(normalize(written), "quillon ridge bakery", "{written:?}");
+        }
     }
 }
 
