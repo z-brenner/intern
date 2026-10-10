@@ -165,10 +165,12 @@ The other checks:
   - Invisible characters (a zero-width space, a soft hyphen, a direction
     mark) are ignored by this check and by every other that reads text
     through `evidence::normalize`, and by the check of a key fact's
-    amount. A stray one (a soft hyphen, a zero-width space) is also taken
-    out of what is written. A zero-width joiner or non-joiner and a
-    direction mark are kept there: Persian, Indic scripts and emoji spell
-    with them.
+    amount. A stray one (a soft hyphen, a zero-width space) is taken out
+    of every value the reply gives - the type, each party's name, the
+    subject, the identifier, each key fact - before it is checked, so a
+    check that ignores it never lets it into what is written. A
+    zero-width joiner or non-joiner and a direction mark are kept:
+    Persian, Indic scripts and emoji spell with them.
   - Word order is not checked. A subject of stated words can still
     misstate how they relate.
 - **Subject wording.** A subject that passes the word check is written

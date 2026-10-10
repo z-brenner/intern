@@ -362,7 +362,8 @@ pub fn validate_facts_at(
     scope: &ValidationScope<'_>,
     current_year: i32,
 ) -> ValidationOutcome {
-    let facts = candidate.facts.as_deref().cloned().unwrap_or_default();
+    let facts =
+        without_stray_invisibles_in(candidate.facts.as_deref().cloned().unwrap_or_default());
     complete_candidate(&mut candidate, &facts, scope);
     let original = candidate.clone();
     let context = scope.context();
@@ -809,13 +810,10 @@ pub fn validate_facts_at(
 
     // The subject, the identifier and the key facts: every number and name
     // in them must be in what the model was shown, and the subject and a
-    // key fact must pass the word check ([`every_word_stated`]). Stray
-    // invisible characters are taken out of both first; every check reads
-    // them through [`normalize`], which ignores the rest as well.
+    // key fact must pass the word check ([`every_word_stated`]).
     let stated_words = StatedWords::of(scope);
     let mut subject = None;
-    let reply_subject = facts.subject.as_deref().map(without_stray_invisibles);
-    if let Some(value) = content(reply_subject.as_deref(), scope) {
+    if let Some(value) = content(facts.subject.as_deref(), scope) {
         let found = claims_found(scope, &facts.subject_evidence, value);
         support.subject = found.support;
         support.miscited_ids += found.miscited;
@@ -877,8 +875,7 @@ pub fn validate_facts_at(
     let mut key_facts = Vec::new();
     let mut key_units = Vec::new();
     for fact in &facts.key_facts {
-        let text = without_stray_invisibles(&fact.fact);
-        let Some(value) = content(Some(text.as_str()), scope) else {
+        let Some(value) = content(Some(fact.fact.as_str()), scope) else {
             continue;
         };
         let mut found = claims_found(scope, &fact.evidence, value);
@@ -1688,12 +1685,36 @@ impl StatedWords {
 
 /// `text` without its stray invisible characters ([`is_invisible`]) - a
 /// soft hyphen, a zero-width space - but those a script spells with
-/// ([`spells`]): a subject or a key fact is written without them. Every
-/// check reads it through [`normalize`], which ignores all of them.
+/// ([`spells`]). Every check reads text through [`normalize`], which
+/// ignores all of them.
 fn without_stray_invisibles(text: &str) -> String {
     text.chars()
         .filter(|character| !is_invisible(*character) || spells(*character))
         .collect()
+}
+
+/// A reply's facts with the stray invisible characters taken out of every
+/// value a check compares through [`normalize`] and a name or description
+/// may write: the type, the date, each party's name, the subject, the
+/// identifier, each key fact. A check that ignores a zero-width space must
+/// not let one through into what is written.
+fn without_stray_invisibles_in(mut facts: ModelFacts) -> ModelFacts {
+    let clean = |value: &mut Option<String>| {
+        if let Some(text) = value {
+            *text = without_stray_invisibles(text);
+        }
+    };
+    clean(&mut facts.document_type);
+    clean(&mut facts.document_date);
+    clean(&mut facts.subject);
+    clean(&mut facts.identifier);
+    for party in &mut facts.parties {
+        party.name = without_stray_invisibles(&party.name);
+    }
+    for fact in &mut facts.key_facts {
+        fact.fact = without_stray_invisibles(&fact.fact);
+    }
+    facts
 }
 
 /// Whether an invisible character is part of how text is spelled: a
@@ -4602,6 +4623,43 @@ Invoice Date: May 1, 2025\n\nBill To: Quillon Ridge Bakery, Inc.\n\n\
         assert!(
             outcome.proposal.description.contains(subject),
             "{:?}",
+            outcome.proposal.description
+        );
+    }
+
+    /// A party's name or an identifier the reply wrote with a stray
+    /// invisible character matches the document's plain text, and is
+    /// written as the document writes it, without the character.
+    #[test]
+    fn a_stray_invisible_character_in_a_name_or_an_identifier_is_not_written() {
+        let index = index_of(INVOICE);
+        let mut facts = invoice_facts(&index);
+        facts.parties[0].name = "Halvorsen\u{200b} Fixture Works LLC".into();
+        facts.identifier = Some("INV-\u{200b}10438".into());
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.status,
+            ProposalStatus::Ready,
+            "{:?}",
+            outcome.reasons
+        );
+        let validated = outcome.facts.as_ref().unwrap();
+        assert_eq!(validated.identifier.as_deref(), Some("INV-10438"));
+        assert_eq!(
+            outcome.proposal.parties.first().map(String::as_str),
+            Some("Halvorsen Fixture Works LLC")
+        );
+        assert!(
+            !outcome.proposal.description.contains('\u{200b}'),
+            "{:?}",
+            outcome.proposal.description
+        );
+        assert!(
+            outcome
+                .proposal
+                .description
+                .starts_with("Invoice from Halvorsen Fixture Works LLC"),
+            "{}",
             outcome.proposal.description
         );
     }
