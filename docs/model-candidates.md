@@ -157,6 +157,110 @@ the reviewed date in `fixtures/expected.json` appear among the top-k candidates.
 If recall is below 100% on the text fixtures, the pre-extractor would cap
 accuracy, and there is no point wiring it in.
 
+### GLiNER2 candidate recall, measured 2026-10-01
+
+**Verdict: don't build it now. The corpus is too small and too easy to justify
+it.** On every value that is literally present in the text, GLiNER2 base found
+the reviewed answer: 23 of 23 party names and 14 of 14 dates. But the incumbent
+already gets every one of those fixtures right, so the corpus leaves the
+pre-extractor nothing to fix. All six misses are OCR-garbled fixtures where the
+reviewed value is not in the text at all. No span extractor can return those
+values, and the incumbent fails them too. Look at this again once the corpus has
+documents where the incumbent picks the wrong party from text that contains the
+right one.
+
+| `fastino/gliner2-base-v1`, threshold 0.5 (library default) | Parties | Dates |
+| --- | --- | --- |
+| Recall over all labelled values | 92.0% (23/25 names; 14/16 docs had every party) | 77.8% (14/18 docs) |
+| Recall over values literally in the text | **100% (23/23)** | **100% (14/14)** |
+| Candidates per document, mean / max | 5.8 / 27 | 2.0 / 7 |
+| Same at threshold 0.3 | recall unchanged, 8.2 / 54 | unchanged |
+| Same at threshold 0.1 | recall unchanged, 14.9 / 88 | unchanged |
+| Alternate labels, threshold 0.5 | recall unchanged, 3.3 / 16 | unchanged |
+
+*Recall over all labelled values* uses the evaluator's lenient
+`party_matches`: punctuation-insensitive containment either way. Strict recall
+needs the full normalised name, and it came out identical, so the hits are
+whole names, not fragments. A date candidate is a GLiNER2 `date` span that
+dateutil parses to a full day. It is a hit when it equals `document_date` or
+one of the `acceptable_dates`. A value counts as *in the text* when the
+normalised party name is a substring of the normalised text, or when the date
+is written out in full (month name, ISO, or `m/d/yyyy`) somewhere in the text.
+
+**Misses (identical for both label sets at every threshold):**
+
+| Fixture | Field | Why |
+| --- | --- | --- |
+| `scanned-lease.pdf` | party | OCR reads `LEDAR FINCH PROPERTIES LLC`. GLiNER2 returned that span, but it is not `Cedar Finch Properties LLC` |
+| `scanned-lease.pdf` | date | OCR reads `SEPTEMBER 1 24h24`. GLiNER2 returned `SEPTEMBER 1`, which has no year |
+| `rotated-low-resolution-scan.png` | party | OCR reads `PINE ECHO COURTERS LLC` |
+| `rotated-low-resolution-scan.png` | date | OCR reads `JUNE 12 2a25`. The span returned was `JUNE 12` |
+| `document-image.png` | date | OCR reads `JULY 14 2625`, which parses to the wrong year |
+| `document-image.tiff` | date | OCR reads `JULY 16 26275` |
+
+The incumbent's baseline (`fixtures/corpus-baseline.json`) has
+`parties_correct` false on the first two fixtures and `date_correct` false on
+all four. GLiNER2 matches the incumbent fixture for fixture: it gets nothing
+the incumbent misses and misses nothing the incumbent gets.
+
+**What the numbers do not show.**
+
+* **The sample is small.** There are 19 documents with text and labels. Only 23
+  party names and 14 dates are actually present in the text. One miss would
+  move party recall by about 4 points and date recall by about 7. A perfect 23/23
+  only bounds true recall above roughly 87% (rule of three, 95% confidence), and
+  14/14 only above roughly 79%. That means this run cannot confirm the 95% gate.
+  It can only fail to reject it.
+* **Candidate sets on long documents are large.** The three long fixtures carry
+  23 to 27 organisation and person spans at the default threshold. Most of them
+  are clause boilerplate and people mentioned in passing. `ambiguous-note.pdf`
+  has no reviewed parties but still gets 4 candidates. A choose-from-list prompt
+  would hand the model those distractors.
+* **Dates gain nothing over a regex.** The full-date regex used for the
+  "in the text" oracle finds the same 14 dates. GLiNER2's date spans bring no
+  information that a deterministic scan of the text does not already have.
+* **It ran on the raw text, not the digest.** The run used the page text the
+  engine sees before distillation, not the `distill` digest this section's
+  protocol names. That is an upper bound on recall. On long documents the digest
+  would cut candidate counts, and it could also drop a party.
+* **The cost is not small.** The model is 0.83 GB of safetensors. Peak resident
+  memory was about 2.0 GB under PyTorch. ONNX would be lower but was not
+  measured. On this CPU the median document took 0.26 s. The longest, the
+  29,311-character `statement-of-work.pdf`, took 14.3 s, and model load took
+  about 6 s warm (42 s on first download). Shipping it also means a new runtime
+  (ONNX Runtime or a Python sidecar).
+* **`fastino/gliner2-large-v1` was not run.** It is 1.86 GiB, over the size
+  budget for this check, and the base model missed nothing a span extractor
+  could reach.
+
+**Setup.** Labels were fixed before the first run. The primary set was
+`organization`, `person`, `date`, the plain types this section names. The
+alternate set, `company`, `person`, `contracting party`, `date`,
+`document date`, `effective date`, was run as a sensitivity check. It found the
+same values with fewer party candidates (3.3 mean, 16 max), so label phrasing
+mostly changes how much noise comes back. Inference used
+`extract_entities_long` with 256-word windows and a 64-word overlap. Spans were
+extracted once at threshold 0.1 and then filtered offline at 0.3 and 0.5.
+
+Versions: gliner2 2.0.0, torch 2.14.1+cpu, Python 3.12.10, Windows 11, model
+revision `f9634218e535`.
+
+```powershell
+python -m venv $env:TEMP\g2venv
+& $env:TEMP\g2venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+& $env:TEMP\g2venv\Scripts\python -m pip install "gliner2[local]" python-dateutil psutil
+& $env:TEMP\g2venv\Scripts\python scripts\gliner2-candidate-recall.py --labels primary --out gliner2-primary.json
+& $env:TEMP\g2venv\Scripts\python scripts\gliner2-candidate-recall.py --labels alternate --out gliner2-alternate.json
+```
+
+`pip install gliner2` on its own installs only the API client. The local model
+needs the `[local]` extra and a torch wheel.
+
+No other labelled text corpus is committed. `docs/qa/model-evaluation.json`
+has labels and proposals but no document text, and
+`fixtures/corpus-recording-confidence.json` holds the same 21 fixtures
+recorded on another machine.
+
 ## Evaluation protocol for any candidate
 
 Every candidate is held to the same procedure:
