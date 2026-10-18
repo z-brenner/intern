@@ -189,5 +189,24 @@
     "windows_build_log_sha256": "309e0401c6777dd9c0fb67820953ab9e3e140f6e509254291c19d5b34a9b3a6d",
     "collector_log_sha256": "e7d5f53826385ebadae75415b515820f4c3559c7606d16cf470623f6cdeca48c"
   },
-  "note": "Windows GNU release binaries bound by frozen plan files. Rust source unchanged since tested build; documentation/data added afterward. VM/runtime/model binaries, Defender logs and guest disks are not published here."
+  "note": "Windows GNU release binaries bound by frozen plan files. Rust source unchanged since tested build; documentation/data added afterward. VM/runtime/model binaries, Defender logs and guest disks are not published here. Post-build Cargo command-selection correction is recorded separately below; original tested-build hashes are preserved.",
+  "post_build_changes": [
+    {
+      "path": "crates/intern-bench/Cargo.toml",
+      "tested_build_sha256": "d00073a06fdc15f2d89659f490c32c9f2d8609f8c6345529b9ffcb2575c25c80",
+      "published_sha256": "0cf50dc076f50439c4ac568cb2b12291fb82a575fbd43ed5656dcb951deaea5a",
+      "change": "Add default-run=\"intern-bench\" after hosted CI reproduced ambiguous cargo run; noRustbehavior,prompt,modelsettingsorWindowsruntimechange",
+      "independent_review": "Approved; Cargo default selection only, no Windows/model rerun required",
+      "validation": {
+        "exact_ci_command_reproduced_before_fix_exit": 101,
+        "after_fix_exit": 0,
+        "recorded_cases_replayed": 77,
+        "baseline_passed": true,
+        "regressions": 0,
+        "report_sha256": "ec226882209261ae4bdb59ba153b22f1a20e7e6ec4695af09b30c423d6abff8d",
+        "log_sha256": "ab7d1d021cc7883f7d431e28edc46c4fec8628c9e888d6548c1d9feadc0f2cec",
+        "bounded_resources": "3GiBcap,2CPUs,zeroSwap;actual1GiBpeak/95.291s"
+      }
+    }
+  ]
 }

@@ -1,5 +1,6 @@
 [package]
 name = "intern-bench"
+default-run = "intern-bench"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
