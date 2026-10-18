@@ -600,6 +600,8 @@ fn a_live_run_refuses_documents_the_manifest_disagrees_with_or_lacks() {
         // document reaches the worker.
         options.mode = Mode::Live {
             options: LiveOptions {
+                #[cfg(feature = "benchmark-transport")]
+                benchmark_transport: None,
                 worker: bench.path("no-such-worker"),
                 endpoint: "http://127.0.0.1:9/v1/chat/completions".into(),
                 api_key: "unused".into(),

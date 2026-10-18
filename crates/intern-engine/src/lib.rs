@@ -83,3 +83,6 @@ pub use worker::{
 /// from an analysis stored under 1, and none refuses a field it does not
 /// know, so a version-1 reader still reads a version-2 analysis.
 pub const ENGINE_CONTRACT_VERSION: u32 = 2;
+
+#[cfg(feature = "benchmark-transport")]
+pub mod benchmark_transport;

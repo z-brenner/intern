@@ -48,3 +48,6 @@ pub mod score;
 pub mod stats;
 pub mod structure;
 pub mod timing;
+
+#[cfg(feature = "benchmark-transport")]
+pub mod qualification;

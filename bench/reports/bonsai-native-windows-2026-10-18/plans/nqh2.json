@@ -1,0 +1,1279 @@
+{
+  "schema_version": 1,
+  "run_id": "nqh2",
+  "files": [
+    {
+      "path": "bench/corpus/account-statement.pdf",
+      "sha256": "2bf45f7f2030c59c5fc04130a1ec2937b5e17ec663337187b1eedccb3a177a47"
+    },
+    {
+      "path": "bench/corpus/agreement-two-column-footnotes.pdf",
+      "sha256": "a83f8c4cc53809787511b1f6b81b430b50a0675a8b84e040ac9ddec61521a97c"
+    },
+    {
+      "path": "bench/corpus/aircraft-maintenance-log.pdf",
+      "sha256": "79da2247e7cd50dcdac983c6bdeef5892927290395153fe3a54643200d282d7c"
+    },
+    {
+      "path": "bench/corpus/annual-report-100p.pdf",
+      "sha256": "ca0b552f107f1bb3c99599736a6acd2255e52935b43f0f5d8a027fc57297b861"
+    },
+    {
+      "path": "bench/corpus/annual-report-excerpt-8p.pdf",
+      "sha256": "1d6d727166705128e005ef5dac3a4582aa840b0276cbbdc54b9efb1e7f0655e5"
+    },
+    {
+      "path": "bench/corpus/ap-aging-report.csv",
+      "sha256": "872e5341b40628c289012ceeb3e2efafe007619cfc65a5a508e953077f120e0a"
+    },
+    {
+      "path": "bench/corpus/asset-purchase-agreement-25p.pdf",
+      "sha256": "90279f96b2abb91e85b92096d848d0cf7314cd649d9e6fd9a893f1a47fce15a0"
+    },
+    {
+      "path": "bench/corpus/assignment-assumption.pdf",
+      "sha256": "df3f81c7cea358c424efb5d3b81436f535e868c1c5eacd14000e3a18bf395314"
+    },
+    {
+      "path": "bench/corpus/benefits-change-checkbox-form.pdf",
+      "sha256": "9c5e4e74b015331e73bd09b1b3f9c769aa36d8a1e8922e0d0f94d6f186b073d8"
+    },
+    {
+      "path": "bench/corpus/board-minutes.pdf",
+      "sha256": "9959e99d7be43568329a9cf35b7dbfc8a4a53c4bab1dbec4a2388290a01f0dad"
+    },
+    {
+      "path": "bench/corpus/board-resolution.docx",
+      "sha256": "1c77bf5291186e4e91dc80f1c0fc848b6951651abade93ef7a89ce836537951b"
+    },
+    {
+      "path": "bench/corpus/capital-call-notice.pdf",
+      "sha256": "8b216de59aba76099d7fcaecc0255245575c02fd1eb61f29734824af6157c5fb"
+    },
+    {
+      "path": "bench/corpus/change-order-form.pdf",
+      "sha256": "549e31d678ba54fccada8da8e7ed225ab05c01038b43e84c04c06569b2b16dd9"
+    },
+    {
+      "path": "bench/corpus/court-hearing-notice.txt",
+      "sha256": "3298bfe710df0ca95ee782efaf56b2325f8b8f2c33bb707d96d1cae5d4e4aa46"
+    },
+    {
+      "path": "bench/corpus/credit-agreement-50p.pdf",
+      "sha256": "670a021344d2adc2514de1536bc40706f01ff81c318a808c2f8e84fdb45616ce"
+    },
+    {
+      "path": "bench/corpus/data-processing-agreement-10p.pdf",
+      "sha256": "a2035c4d055ea128622c2288d5ee4290dd70937961609bb290bc7d9a5634cfa5"
+    },
+    {
+      "path": "bench/corpus/declarations-interleaved.pdf",
+      "sha256": "9a6a4e4e6d4b08d69c72ec627a06ddabf4da152b83ef5f6bf0007e5e45a705fe"
+    },
+    {
+      "path": "bench/corpus/demand-letter.docx",
+      "sha256": "4726c36c1a466b5dbc3ba450a813981772a560852d9446499f590ab45937086a"
+    },
+    {
+      "path": "bench/corpus/email-approval-thread.eml",
+      "sha256": "3a00721b9519dc2f1bf06cb247fe03adb2a54646a6f8b4faa32f1ff2c4ec07e3"
+    },
+    {
+      "path": "bench/corpus/engagement-letter.pdf",
+      "sha256": "4946571cc5182b2d8536715145986d5a052b5c21c0024efd3d58d750c1800906"
+    },
+    {
+      "path": "bench/corpus/explanation-of-benefits.pdf",
+      "sha256": "05d72b7f56a05548f6ecf6019e401ce028cb0b1e14f02b9043f8101834796051"
+    },
+    {
+      "path": "bench/corpus/field-condition-report.pdf",
+      "sha256": "0271c576ab27c2090dd53af42f5864aca37c888dff8490d331a0eedbd6fb53ff"
+    },
+    {
+      "path": "bench/corpus/harvest-log.xlsx",
+      "sha256": "cf456906088ddb5c40110b73b6d82ed500fb5464df1fdac7cf7b198f138a4be8"
+    },
+    {
+      "path": "bench/corpus/industrial-lease-dated-in-schedule-25p.pdf",
+      "sha256": "b6e31f46c4f68e5edd1d3c8fdd12937efc1dafb725bd66f6b355e8f3ca539497"
+    },
+    {
+      "path": "bench/corpus/inspection-log-ruled-2p.pdf",
+      "sha256": "478a0a6921741e80a3590d59a1cf86f769550f2b0ab2675c97261b5708c64ca5"
+    },
+    {
+      "path": "bench/corpus/invoice-boxed-grid.pdf",
+      "sha256": "4ff0f1d97a15b3d598fed2f366b7beb9fa3f278a54d605defee1d4e1dcef1f2c"
+    },
+    {
+      "path": "bench/corpus/invoice-date-in-table.pdf",
+      "sha256": "e4eef3d4f414478affca757bc462bb9f50db0542a998b3ee029fdb1eda847ae0"
+    },
+    {
+      "path": "bench/corpus/invoice-label-above.pdf",
+      "sha256": "cafc70b95a65845dd7fcccea8d7e87a66647818f0f0fdd6b1c95dcaa94509fcc"
+    },
+    {
+      "path": "bench/corpus/invoice-layout-only.pdf",
+      "sha256": "791cb0456e476577956780b01ffea307e5d4d4a2f85ef23cd43701d5827e4653"
+    },
+    {
+      "path": "bench/corpus/invoice-right-aligned.pdf",
+      "sha256": "0278e8e7eb5a1990e044534950a6d97d3ed2b189dffea24ca483616396729144"
+    },
+    {
+      "path": "bench/corpus/lease-two-column.pdf",
+      "sha256": "2d7f5c871d633c8f2069dbaa715fa5086a8fbce45ece3a92d9ac5abf7d4c7463"
+    },
+    {
+      "path": "bench/corpus/letterhead-letter.pdf",
+      "sha256": "08cda0c7b8b6b5deb4a7538c8972dc7f7835f2e20a8aa7dbe722085d95860145"
+    },
+    {
+      "path": "bench/corpus/loss-notice-boxed-fields.pdf",
+      "sha256": "1313b64f8950fe05d3ff3c89f91b5c6e5b7f2ef2a4c815172b033254b7cae4c8"
+    },
+    {
+      "path": "bench/corpus/manifest.json",
+      "sha256": "a80399ce67f3ca444c753fbdc51e4ce0a8d8464486ead189e282d8c6220ac571"
+    },
+    {
+      "path": "bench/corpus/meeting-notice-columns.pdf",
+      "sha256": "9ffd2768889e86b0e30095ef66a95d773da45db1d44524d53c364ec7122f0943"
+    },
+    {
+      "path": "bench/corpus/meeting-notice-interleaved.pdf",
+      "sha256": "b4f3110cdc28413e2ef79cd95e1f4ccc36f2b179818d4bac4cde7ca2f294a496"
+    },
+    {
+      "path": "bench/corpus/meeting-notice-reversed.pdf",
+      "sha256": "db407b44e9ac9f2223e08b0b0bcd80faae35c308f45d5585e450dede9fa7bd77"
+    },
+    {
+      "path": "bench/corpus/mixed-signature-region.pdf",
+      "sha256": "7be50d58e3575f499e03d53ff1ef2642a9700cab7b36eac80f6c935e84a101d5"
+    },
+    {
+      "path": "bench/corpus/msa-effective-date-in-definitions-12p.pdf",
+      "sha256": "773ecbc12efc3d29bb0591fc1a1cecf8e80cab6379aaef6606bdb4eff26b7f56"
+    },
+    {
+      "path": "bench/corpus/newsletter-three-column.pdf",
+      "sha256": "2c887302e972588a57db0b7018a4173be4d8fcfcc1bc92bd65aa78f603ed160b"
+    },
+    {
+      "path": "bench/corpus/notice-of-default.pdf",
+      "sha256": "4e66bb867781983b811f5d1d797e2c05cf2b3e55ab85a972495f978e1a6b5aec"
+    },
+    {
+      "path": "bench/corpus/notice-rent-increase.pdf",
+      "sha256": "d4a48e6c2f1c9309787bbc3268866f03438fb1b6ccdbe2025fd47c1d800ff65b"
+    },
+    {
+      "path": "bench/corpus/ocr-corrupted-invoice.pdf",
+      "sha256": "4fc6039f8ce87ed0dc73202b8119229005cd1492977dc0e2a2222897289c0654"
+    },
+    {
+      "path": "bench/corpus/offer-letter.pdf",
+      "sha256": "71d768e178492f5f26b968e7dd5595249e39dbc32a96db32a1f329e9035f2640"
+    },
+    {
+      "path": "bench/corpus/payroll-register.xlsx",
+      "sha256": "dfdeef7b08b0173e16f6b7f039570b58f8549f92617cf12fb61ec384fe2f51a2"
+    },
+    {
+      "path": "bench/corpus/price-list-unruled.pdf",
+      "sha256": "5dc09b9d2e30b169b85ca818b31649f8d3b78a4c104a788201c1951b88923dac"
+    },
+    {
+      "path": "bench/corpus/prior-authorization.pdf",
+      "sha256": "0ee26bb6121908233651381bbc5aed2fd30ebb61ac9072b6527c19cfdf186b6c"
+    },
+    {
+      "path": "bench/corpus/product-launch-plan.pptx",
+      "sha256": "f41ebcc5c7f635fdbf33351b32c83a7487ce676d4a3111742916df7147dd9bd6"
+    },
+    {
+      "path": "bench/corpus/promissory-note.pdf",
+      "sha256": "6a8e6fe5767b03dbcdf12b625542877f9966c568ca917321f3be048ee6081411"
+    },
+    {
+      "path": "bench/corpus/property-policy-declarations-mid-60p.pdf",
+      "sha256": "252db71561d11162e29f05a80f5fa7edf7b3b6a0c2e36ee35665c088ca24bb4a"
+    },
+    {
+      "path": "bench/corpus/purchase-order.pdf",
+      "sha256": "7b086c1e1dddea3c6a1284bffaaa866a259ba865e93f9bc8d8a5cfc8b71312df"
+    },
+    {
+      "path": "bench/corpus/quarterly-business-review.pptx",
+      "sha256": "3a16bb7ee099dc1d2a679891b5af539797859d980ddc3d9c57a6b7dd6e47c8a0"
+    },
+    {
+      "path": "bench/corpus/rate-confirmation-rotated.pdf",
+      "sha256": "70855077c126f4123cd5e2803c44c10bfdc06e9909568ab5d3f066b700bc46ee"
+    },
+    {
+      "path": "bench/corpus/scan-agreement-10p.pdf",
+      "sha256": "ca398c847707f40f714d3073e7b8802f7e615ca0f3873ad14b4e6714276ed101"
+    },
+    {
+      "path": "bench/corpus/scan-bill-of-lading.pdf",
+      "sha256": "8d90522be0e5666009c73a18b8bb72e94d05b9269f863e0efcb1eed6951ffe47"
+    },
+    {
+      "path": "bench/corpus/scan-cancellation-notice-150dpi.pdf",
+      "sha256": "26f6b1a81f9186d7aee726ef75bfa6d2e0fab0de0319d26b1c1ae1f90cf41428"
+    },
+    {
+      "path": "bench/corpus/scan-certificate-of-insurance.pdf",
+      "sha256": "909413ffedb6851a847356b9919529d6430176652e8b3c555f9fa1efb8400375"
+    },
+    {
+      "path": "bench/corpus/scan-clean-lease-2p.pdf",
+      "sha256": "f5c4a8b61982fae3d9091541a0ca09147f14bbddb0c31ce101cc74992768367b"
+    },
+    {
+      "path": "bench/corpus/scan-faint-letter.png",
+      "sha256": "8d1ce3f9581eb0b83657ba159845681d551e5d6d55b1eaad4cc0332affc418b3"
+    },
+    {
+      "path": "bench/corpus/scan-fax-two-frames.tiff",
+      "sha256": "fcc9a64d8333da651ad7c1a3ce41adbb2a525eae6d65fdca3e2cca133177e22c"
+    },
+    {
+      "path": "bench/corpus/scan-lease-25p.pdf",
+      "sha256": "140b940419067964000f2f84363ed4fde0d828d2450c8ede74418414491731c3"
+    },
+    {
+      "path": "bench/corpus/scan-low-res-receipt.png",
+      "sha256": "f12041cb610bdf65dbe12fe52f10bb018975b6aff4dd31255db5d5c70a37bea6"
+    },
+    {
+      "path": "bench/corpus/scan-mixed-amendment.pdf",
+      "sha256": "fa4bc3275404a1a969ab0d707c87226965e3803a9bdb6fb3ac266a2ca443f835"
+    },
+    {
+      "path": "bench/corpus/scan-mixed-middle-page.pdf",
+      "sha256": "22d7bc5f08899ea1345ca6f4c98092b70a3ebbf623dcd85d5402adcfc7e4c578"
+    },
+    {
+      "path": "bench/corpus/scan-noisy-statement.pdf",
+      "sha256": "0f9c5367f5313b5cc22f567f04caa4311589ee59ac81bfe786011d4312961f37"
+    },
+    {
+      "path": "bench/corpus/scan-patient-intake-form.png",
+      "sha256": "d54b80b71aa477bf62f78ba80b945ede5f56bed449dcee3b204a07be70ad569b"
+    },
+    {
+      "path": "bench/corpus/scan-remittance-advice-120dpi.png",
+      "sha256": "35367bbdd6b1cd84bbf68585f7270d0cd3fd3eac6189c2dedb52d5b35266b4bf"
+    },
+    {
+      "path": "bench/corpus/scan-rotated-90-invoice.png",
+      "sha256": "bc76c9620d4d7c0555e5ed3d2f0f7274af55bdb39ba6c526dfe3ef068d2d0039"
+    },
+    {
+      "path": "bench/corpus/scan-rotated-page-in-pdf.pdf",
+      "sha256": "f4649078a13a307a3b12b6cf70b7533848acef985035eb222344230557831116"
+    },
+    {
+      "path": "bench/corpus/scan-skewed-notice.tiff",
+      "sha256": "771780b13265bf1e70c3b6239c83860e4efca33369379855cd9ef390064e2c81"
+    },
+    {
+      "path": "bench/corpus/scan-upside-down-po.pdf",
+      "sha256": "59198bcf7c4633fb52d809567cd844d27f88bda5e3fc881e1b104ad65c7e40cb"
+    },
+    {
+      "path": "bench/corpus/second-amendment.pdf",
+      "sha256": "a923528c8c735143420679d15be5a2599c9aa5907c63648f2dd397e4d6d670fa"
+    },
+    {
+      "path": "bench/corpus/separation-agreement.docx",
+      "sha256": "3ac87b8810ed368d5df90f182706e611aff7ea18835fedf99c03cd086e985d01"
+    },
+    {
+      "path": "bench/corpus/services-agreement.pdf",
+      "sha256": "c2fa2df766498705eecd0f3a8085201e5af10dafadf7075ce155e599cfad16ef"
+    },
+    {
+      "path": "bench/corpus/sow-under-msa-5p.pdf",
+      "sha256": "2a7aaa1804d98188ab90a5eb269ea3a6a435304cf72dde8a6ec35bf5e3b11041"
+    },
+    {
+      "path": "bench/corpus/term-loan-parties-apart-40p.pdf",
+      "sha256": "cd2f0f7ed55a8d0a0e79d4b5f88606b726e22e56e73e41be1f0332e4494d2566"
+    },
+    {
+      "path": "bench/corpus/vendor-registration-form.pdf",
+      "sha256": "63d5da056162767969f168c7bace920f81e334739d5bdb91fc153496b4f2dd14"
+    },
+    {
+      "path": "bench/corpus/watershed-monitoring-report-100p.pdf",
+      "sha256": "13b83950c3520c90ff07d499fcb4a44c524aed15da7722676ac31e9289f1b3bd"
+    },
+    {
+      "path": "bench/gold.json",
+      "sha256": "0d03c7572388d15cddeaf8177ae1a546429e809c40ef46caff187f3eb0f36cbf"
+    },
+    {
+      "path": "bench/manifest.json",
+      "sha256": "a80399ce67f3ca444c753fbdc51e4ce0a8d8464486ead189e282d8c6220ac571"
+    },
+    {
+      "path": "empty-profile.json",
+      "sha256": "61600e5912f22f7566b4371b4d0e0b89747ffbde3853f6435b63a441c5655a1a"
+    },
+    {
+      "path": "intern-bench.exe",
+      "sha256": "fc097a0eaa5968f7b985c8ad2094497400ed5c6f1423d3ed00282083a77e8828"
+    },
+    {
+      "path": "intern-qualify.exe",
+      "sha256": "89194e8d9fd102b1de667eaca3adc8d37d2b56d332316b225417bb2c24bae88a"
+    },
+    {
+      "path": "n2b1.json",
+      "sha256": "308ab1c7a88274f7004c389dca1a813d24624a7623032069c8b0844dc854e637"
+    },
+    {
+      "path": "n2b2.json",
+      "sha256": "30bf475527b6963021fa1e8fd9b9df4949369724777dc2c2543c248848d3210a"
+    },
+    {
+      "path": "n2b3.json",
+      "sha256": "df824f57e2947acaee980d4a7e2d7dba98256edf1b288ad8217f7ca1aa80a26d"
+    },
+    {
+      "path": "n2b4.json",
+      "sha256": "6ae72ac34a954d1b93361c554b4ebd434661173b731a922afed8106bb190a1bf"
+    },
+    {
+      "path": "prism/concrt140.dll",
+      "sha256": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376"
+    },
+    {
+      "path": "prism/ggml-base.dll",
+      "sha256": "a815d3085fb74d62bfac75ba02ebc0ac708d8f69ef8f5346c48ede27ba37f279"
+    },
+    {
+      "path": "prism/ggml-cpu-alderlake.dll",
+      "sha256": "08160e547646c899c9304211828fb3568057e1eab0ad3f7895534ddb697e9040"
+    },
+    {
+      "path": "prism/ggml-cpu-cannonlake.dll",
+      "sha256": "71ec58ed0feaf9c49b1d2249b159f44f77d7bbc657ae511e9018ccedd8e9b8be"
+    },
+    {
+      "path": "prism/ggml-cpu-cascadelake.dll",
+      "sha256": "dd6c09981a174b6efa9b14d61ae1074f9e7cd6815d7f4df06b74b1a26f16547c"
+    },
+    {
+      "path": "prism/ggml-cpu-cooperlake.dll",
+      "sha256": "dc6e1622ce55dbfae31afca354137d516967a7b84738e7cf099e691f9df208b8"
+    },
+    {
+      "path": "prism/ggml-cpu-haswell.dll",
+      "sha256": "50d2b9a4314a73eb7b166ef9d1612b593d92d4df48b8b36eb35d5eeca47be060"
+    },
+    {
+      "path": "prism/ggml-cpu-icelake.dll",
+      "sha256": "5cf0f642a894922d8a67ef562274e0a29d4bb5c0355a3ce3c1ff1aa6ee616cee"
+    },
+    {
+      "path": "prism/ggml-cpu-ivybridge.dll",
+      "sha256": "3d0bcbdc35f13d0fe63d75e845b05b44227f3f14ec8e717f634795532da4d728"
+    },
+    {
+      "path": "prism/ggml-cpu-piledriver.dll",
+      "sha256": "9187fcdca4e91d1abd14dd39b298fecb78b8758e01183c707ca2b91e0e9799cc"
+    },
+    {
+      "path": "prism/ggml-cpu-sandybridge.dll",
+      "sha256": "4eb92ba9e35064185af21a31a1fc76dffdd526970d63d3df96d9633325021ac1"
+    },
+    {
+      "path": "prism/ggml-cpu-sapphirerapids.dll",
+      "sha256": "4be486c35e60adfe4cd3790e61fa69030db4b8d1f04405331e0b629765edae34"
+    },
+    {
+      "path": "prism/ggml-cpu-skylakex.dll",
+      "sha256": "81e835c60b73ad797a143f311ed2d6ded43b1a498039bb21c13cd0d691105ecf"
+    },
+    {
+      "path": "prism/ggml-cpu-sse42.dll",
+      "sha256": "26b69f50b4d00f13424ba1b4c0488c1dd5277f44fd2100cc1f3970d52f27e839"
+    },
+    {
+      "path": "prism/ggml-cpu-ssse3.dll",
+      "sha256": "de06e504c26165afbf962a0141e5bf925d9face6c31992c0e048376c03d09c3e"
+    },
+    {
+      "path": "prism/ggml-cpu-x64.dll",
+      "sha256": "6c95b86670c2058aa1fc853b1fa604f20fac585250babf17d2c40202080e5757"
+    },
+    {
+      "path": "prism/ggml-cpu-zen4.dll",
+      "sha256": "27c194d2165204fc93af83de8e5bce20dc57c9603efc52c05d01169983778380"
+    },
+    {
+      "path": "prism/ggml-rpc-server.exe",
+      "sha256": "2bc2c1ea323b115caca127bcabefad376a5b3e2d256a69c34ae6a734d41ad062"
+    },
+    {
+      "path": "prism/ggml-rpc.dll",
+      "sha256": "1550b4325789791d9e470a323bdb21c6c9937e050cc5e552afda66c24d205be9"
+    },
+    {
+      "path": "prism/ggml.dll",
+      "sha256": "5c88fd75e3e70fcd8feba685625033f2b422a08d9c55446d47853527cfeebd4f"
+    },
+    {
+      "path": "prism/libomp140.x86_64.dll",
+      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+    },
+    {
+      "path": "prism/llama-batched-bench-impl.dll",
+      "sha256": "d81fc1257af76e35c774a1e83f0f7e595da4121644a128b37f5936b99aeb2283"
+    },
+    {
+      "path": "prism/llama-batched-bench.exe",
+      "sha256": "26c9c24d0c758827425eec024e61697df251e5e8544233348658440d220f6ec2"
+    },
+    {
+      "path": "prism/llama-batched.exe",
+      "sha256": "576990d8cbcb5072882f0ca3f40b7f9d0cc742ebaa0cd4b84f7a6cfe8daf0dd6"
+    },
+    {
+      "path": "prism/llama-bench-impl.dll",
+      "sha256": "3ef1749fcc52e9e1b9f30884fd7b50fd6cf4ec5323340c007cb4ec3d63122bb0"
+    },
+    {
+      "path": "prism/llama-bench.exe",
+      "sha256": "87b1123fb1bca95991df74bcd2663e6555329f2046670cb3cbfa95044287afe3"
+    },
+    {
+      "path": "prism/llama-cli-impl.dll",
+      "sha256": "281ea871397f09bebd2d1cc3da164059be899fce82e02a231460897bf1991a8e"
+    },
+    {
+      "path": "prism/llama-cli.exe",
+      "sha256": "5316da9e11db7e5431fe0842e46e8ab9c7daa888aad5de31c55913030b443fc1"
+    },
+    {
+      "path": "prism/llama-common.dll",
+      "sha256": "e2e3c4a9c9d9d81ec8b86c640cc1ffc982902e085fa002370f43a99f4312e439"
+    },
+    {
+      "path": "prism/llama-completion-impl.dll",
+      "sha256": "85a9808cdca9a735447cac59acc48b8b5018c4c887dbc1696232ccda1a12d376"
+    },
+    {
+      "path": "prism/llama-completion.exe",
+      "sha256": "b828938be7b025ddba50b0d0d7cd64cf53f260667abd118853538e8e791b29c2"
+    },
+    {
+      "path": "prism/llama-debug.exe",
+      "sha256": "ea743e1d35f1aee12d6be9e531ceb1c9bd381d57cc44598f26ba17a6e117eebd"
+    },
+    {
+      "path": "prism/llama-diffusion-cli.exe",
+      "sha256": "1d0da9b3e1d77d385222f3012798d7d2bed49796437fa566b9b797c0859e89bc"
+    },
+    {
+      "path": "prism/llama-embedding.exe",
+      "sha256": "9f54c0a01916c35f07e600f6dca0776caafb714d05f6ecbd784a083f4c7cdd92"
+    },
+    {
+      "path": "prism/llama-eval-callback.exe",
+      "sha256": "bf30a96307ede9dad94d762b4e4b4a96ba475a469d172c36465981bfa7c04a84"
+    },
+    {
+      "path": "prism/llama-finetune.exe",
+      "sha256": "3fceb8a3aaab05ffce057a4866a14cdbb0dd8e8d416bf87cb24ad23d1dca85ed"
+    },
+    {
+      "path": "prism/llama-fit-params-impl.dll",
+      "sha256": "df02287b55c42f4d1081c7181132fe1d58084552f79cd17f739a0b46af029e3b"
+    },
+    {
+      "path": "prism/llama-fit-params.exe",
+      "sha256": "1cf6b0520ca0bf0dcabdedc274aedd225ca0a664d4d19e408e1aecb50b097165"
+    },
+    {
+      "path": "prism/llama-gemma3-cli.exe",
+      "sha256": "7d255ccd41236c4c375923540c49bcb6afb74959b5a4fb7b98e9843650b6e7ab"
+    },
+    {
+      "path": "prism/llama-gen-docs.exe",
+      "sha256": "1b76c2904411708869dcbe4b8f6b177590886a9253d1bef6b3046e6234da046a"
+    },
+    {
+      "path": "prism/llama-gguf-hash.exe",
+      "sha256": "64d4a97b83c391336f72171137d8498e11a879958e59b433f053a0407790b443"
+    },
+    {
+      "path": "prism/llama-gguf-split.exe",
+      "sha256": "037d9d54c0efffa519432ceac33ad5aeaf933174f96060c7fe6540490cbae36e"
+    },
+    {
+      "path": "prism/llama-gguf.exe",
+      "sha256": "6cb03699a23d0e8982f3caefed4ea2588105b9bb8731e4848698db1897371b5d"
+    },
+    {
+      "path": "prism/llama-idle.exe",
+      "sha256": "2b072792e37d1e873f5dd3bfe04c18a257614a28a0a4e3daee1d2da7f0b6af48"
+    },
+    {
+      "path": "prism/llama-imatrix.exe",
+      "sha256": "64234fb26d78674ac43ece407b5845e04f4ccca25c90d4eea8fe496e0f772ab6"
+    },
+    {
+      "path": "prism/llama-kv-mean-center.exe",
+      "sha256": "adc2d4c74bfda509e770f24428e0768b40959e1ffab1aee5830d211248f0ca95"
+    },
+    {
+      "path": "prism/llama-llava-cli.exe",
+      "sha256": "7d255ccd41236c4c375923540c49bcb6afb74959b5a4fb7b98e9843650b6e7ab"
+    },
+    {
+      "path": "prism/llama-lookahead.exe",
+      "sha256": "f949feb62ee569e871450d3690f47345900b716ffbfbdda31c94c0dab2389590"
+    },
+    {
+      "path": "prism/llama-lookup-create.exe",
+      "sha256": "0ce3b9593bf4150134ff72fe33cfee0e84e202703089e653e4d90acb46ddd7f7"
+    },
+    {
+      "path": "prism/llama-lookup-merge.exe",
+      "sha256": "3e3830fe535d69e3c743eba5e1e263db95400a3b1050930505275093d78716b0"
+    },
+    {
+      "path": "prism/llama-lookup-stats.exe",
+      "sha256": "c37f5110697c200229388c04eea2f3f692266555f02cff5b989952d847205163"
+    },
+    {
+      "path": "prism/llama-lookup.exe",
+      "sha256": "a3f98d575ab3ee6807c93ed705f2395e44532e2b956ead5476a589f3fe77db22"
+    },
+    {
+      "path": "prism/llama-minicpmv-cli.exe",
+      "sha256": "7d255ccd41236c4c375923540c49bcb6afb74959b5a4fb7b98e9843650b6e7ab"
+    },
+    {
+      "path": "prism/llama-mtmd-cli.exe",
+      "sha256": "2ef0ee45ed0cce5275a31295b87c5ddf8ede9bc61e79c33283f4aca73df1d5f0"
+    },
+    {
+      "path": "prism/llama-mtmd-debug.exe",
+      "sha256": "88fcd6d4518c09707845b60986998ff1b5f32af04250ed335ff2eb8632d2a6eb"
+    },
+    {
+      "path": "prism/llama-mtp-export.exe",
+      "sha256": "b5b065d58185d50170a1d4f8513f4656939019c82bbb37b5fb672a2646267ffb"
+    },
+    {
+      "path": "prism/llama-parallel.exe",
+      "sha256": "857f17733f705fda3663ee0b167a6f9addd082fd4e6badfe23f7507b680c0932"
+    },
+    {
+      "path": "prism/llama-passkey.exe",
+      "sha256": "459ea4031054c615b249d9adf86d1445fdf26e59f79c29dbafccf5b01e39c315"
+    },
+    {
+      "path": "prism/llama-perplexity-impl.dll",
+      "sha256": "8230d3712b4de342e088d9601b1b2cca6a16a673725bf9b83474466c22c25080"
+    },
+    {
+      "path": "prism/llama-perplexity.exe",
+      "sha256": "4f57df245d624c9f9e68555bca67b1a4fd9a425dc8b2636ea6b2d661aad539fd"
+    },
+    {
+      "path": "prism/llama-quantize-impl.dll",
+      "sha256": "ed9d2d9d5b103f6ae7dac7bff6d415283122f7e260e930462600ec29e90f2248"
+    },
+    {
+      "path": "prism/llama-quantize.exe",
+      "sha256": "d198bf9071a9de205f40801f2c3e2197c04d7a5bdd8ebbe6b8e740fed1d1fe5f"
+    },
+    {
+      "path": "prism/llama-qwen2vl-cli.exe",
+      "sha256": "7d255ccd41236c4c375923540c49bcb6afb74959b5a4fb7b98e9843650b6e7ab"
+    },
+    {
+      "path": "prism/llama-results.exe",
+      "sha256": "b11d328e7e5f97ccb3a29a4af46f4d7d975324687d1af36115a3c5df23461357"
+    },
+    {
+      "path": "prism/llama-retrieval.exe",
+      "sha256": "32101d8cc0a4a6eb037f5fccaf38b01210e5057c1e4b195a1f5ea512162ffa17"
+    },
+    {
+      "path": "prism/llama-rs-rollback-multi.exe",
+      "sha256": "d3b938657e482ce34294f8073a92d83e320f4f5154ea50f77b8291f07c30634e"
+    },
+    {
+      "path": "prism/llama-rs-rollback.exe",
+      "sha256": "903fcc205e52c3758764a32d781a34ffe5aba6cf95e57ae653557adcc316a7d4"
+    },
+    {
+      "path": "prism/llama-server-impl.dll",
+      "sha256": "d8bd26a0803413ae85ab74940e1088403a333daaadfd4d0a3e851c7cc3e0eec6"
+    },
+    {
+      "path": "prism/llama-server.exe",
+      "sha256": "42373a44d8847f014337eb152094d44692ddd690d45a0b2c8f13e16244b5ff4b"
+    },
+    {
+      "path": "prism/llama-simple-chat.exe",
+      "sha256": "8f4c05488c1f9d7b5f4927e50d908ee8ee3c7a364677ee2d3f23a6c9c0f7df5e"
+    },
+    {
+      "path": "prism/llama-simple.exe",
+      "sha256": "c9bac5717052a0e2ba7ebaae059da0e0edf151adcb91e7cd5b1bb3de74cb5550"
+    },
+    {
+      "path": "prism/llama-speculative-simple.exe",
+      "sha256": "397f27c67c379c7d82413eb7582d35391181a10ee6293a9ec09214882683aac2"
+    },
+    {
+      "path": "prism/llama-speculative.exe",
+      "sha256": "f4472646fccd4661ab68e0cbeef5fb4dd8bb24ee1b90d7e8dff76d1e1529412c"
+    },
+    {
+      "path": "prism/llama-tokenize.exe",
+      "sha256": "32d40dbbac9ffec1750ef32a0a40dd4899c072a3ab950fcbc971ebf8decb64a6"
+    },
+    {
+      "path": "prism/llama-tts.exe",
+      "sha256": "f28896b0a7fe233611fa76e14dc69072d83c9787dcf1642fa45c41387a4d89ed"
+    },
+    {
+      "path": "prism/llama.dll",
+      "sha256": "83fee7eed177e0a22c5c27afca34d56c908d1e58ded928ef38c81869407ed9e9"
+    },
+    {
+      "path": "prism/llama.exe",
+      "sha256": "08869cc9f87920761270794f5269309e3e68ef084eeab185416fef4924a3369c"
+    },
+    {
+      "path": "prism/msvcp140.dll",
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    {
+      "path": "prism/msvcp140_1.dll",
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    },
+    {
+      "path": "prism/msvcp140_2.dll",
+      "sha256": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9"
+    },
+    {
+      "path": "prism/msvcp140_atomic_wait.dll",
+      "sha256": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479"
+    },
+    {
+      "path": "prism/msvcp140_codecvt_ids.dll",
+      "sha256": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18"
+    },
+    {
+      "path": "prism/mtmd.dll",
+      "sha256": "5638529f04ecb3d1067917b6fe4f128e03eb2cca70f5c87d9d94aef3d5536b5f"
+    },
+    {
+      "path": "prism/vcamp140.dll",
+      "sha256": "52af68f35476bd03d7b97752b01bef358ffdda568d150057d6ce809f77c4f704"
+    },
+    {
+      "path": "prism/vccorlib140.dll",
+      "sha256": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd"
+    },
+    {
+      "path": "prism/vcomp140.dll",
+      "sha256": "55aba23cdcd6484fbb06f4155b8ca75adfce7a881f10afd0c49457165e677164"
+    },
+    {
+      "path": "prism/vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "path": "prism/vcruntime140_1.dll",
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+    },
+    {
+      "path": "prism/vcruntime140_threads.dll",
+      "sha256": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    {
+      "path": "profile.json",
+      "sha256": "ab3aad736cb2383810546e965ab4955a1be25092c7eb52245fda22f9a61eb44b"
+    },
+    {
+      "path": "qwen/concrt140.dll",
+      "sha256": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376"
+    },
+    {
+      "path": "qwen/ggml-base.dll",
+      "sha256": "3cd92915170b5f20479401ca500ab76f3710bd473a5afcd07ab02a986271dbfb"
+    },
+    {
+      "path": "qwen/ggml-cpu-alderlake.dll",
+      "sha256": "c4e5ddefa92ef792e3a3cbf175b89d70779953f2e7324efe4daf831db9fca7b6"
+    },
+    {
+      "path": "qwen/ggml-cpu-cannonlake.dll",
+      "sha256": "478205fe2cba8d7efdadd9c4497820bb49faf7e84ec0d49b3bf0bc98203e9c81"
+    },
+    {
+      "path": "qwen/ggml-cpu-cascadelake.dll",
+      "sha256": "607ff1cc804b643269776ec7d8190c5c704c39bfb70fb5d2e2f6c1dbee8bdb9d"
+    },
+    {
+      "path": "qwen/ggml-cpu-cooperlake.dll",
+      "sha256": "f16b9556554bcc99d91ba0e02f124b79616110da802d9a6a22ca5f23cf9cc00e"
+    },
+    {
+      "path": "qwen/ggml-cpu-haswell.dll",
+      "sha256": "9da3ab2ead302dd58d3f585ecbc37d319e422d195a24beffe3d3eb537eeb161f"
+    },
+    {
+      "path": "qwen/ggml-cpu-icelake.dll",
+      "sha256": "48ab34bf7b91e9f58c232bbf371ca454b1cb1a90d3309e47dd93bfec5d7ae8d3"
+    },
+    {
+      "path": "qwen/ggml-cpu-ivybridge.dll",
+      "sha256": "74f238602dfb6c45db16f6b15d670eaf09ca2a327294a499b9e443f5ca5b07a5"
+    },
+    {
+      "path": "qwen/ggml-cpu-piledriver.dll",
+      "sha256": "cf1b9bc8c2af08a08bb7b07d2336fb4731870ee907a138056d5299556d7b3ece"
+    },
+    {
+      "path": "qwen/ggml-cpu-sandybridge.dll",
+      "sha256": "c4e4b3311df82a9286b097cec459f964131645a3d532b61d4d5602627f2ee287"
+    },
+    {
+      "path": "qwen/ggml-cpu-sapphirerapids.dll",
+      "sha256": "be529af0136c361dff3f3f40052b425270fe0c37afe582478fbdcd21bb0fa329"
+    },
+    {
+      "path": "qwen/ggml-cpu-skylakex.dll",
+      "sha256": "680aafc1e84da65623b58ed1e71423717903470c16289ded3716c566e2b9dd05"
+    },
+    {
+      "path": "qwen/ggml-cpu-sse42.dll",
+      "sha256": "e392813a76989cb97e507f29f505edeccc56ab08e945a04102224a7207cda302"
+    },
+    {
+      "path": "qwen/ggml-cpu-x64.dll",
+      "sha256": "e2a3b4d37e67ae01c0cc026e60b53d07937d716a2a27bd918a947cc83da4fb53"
+    },
+    {
+      "path": "qwen/ggml-cpu-zen4.dll",
+      "sha256": "6a6b6e4e2485106cbcb608b94b6271745a734ef4e13c92ed15492a780ef9aa7a"
+    },
+    {
+      "path": "qwen/ggml-rpc-server.exe",
+      "sha256": "4f04005a82114c0c85e08aac22120f8d428e9a48253e324a0ebfcd6e435c1ee0"
+    },
+    {
+      "path": "qwen/ggml-rpc.dll",
+      "sha256": "1fa9d1ed6635be8bfa43c5f229ac7c2117d26fd8bc690a2ce89fdc68637b4c20"
+    },
+    {
+      "path": "qwen/ggml.dll",
+      "sha256": "dd5dec303ea67b4d7e39d244d91f33794ce5cbd0b05f1eebf49707716b6527df"
+    },
+    {
+      "path": "qwen/libomp140.x86_64.dll",
+      "sha256": "4a20c1e5c115c29771a12324513eb109badac72180f79481527ad79d996ffb33"
+    },
+    {
+      "path": "qwen/llama-batched-bench-impl.dll",
+      "sha256": "66c2739f628fc33af9478f37a4fc47ac07285a20ddcf4fb11e3a376a084034cd"
+    },
+    {
+      "path": "qwen/llama-batched-bench.exe",
+      "sha256": "64055f0d4c6276ceff85633511b259ad19508e395c6c0e524dfbaf6b21af616d"
+    },
+    {
+      "path": "qwen/llama-bench-impl.dll",
+      "sha256": "3a3cda61f118e245fb48496b18b760d4e24e0a0d2330a26407ad7c57f5aa9940"
+    },
+    {
+      "path": "qwen/llama-bench.exe",
+      "sha256": "14c6570cf4756443c3d9b705c34b17748f385ceba2a05c16987d824651e0ef84"
+    },
+    {
+      "path": "qwen/llama-cli-impl.dll",
+      "sha256": "24479d9c8fae16b2d8c60ebee215776a9cc394ab4ddd80ed377bcf73cfedc2b4"
+    },
+    {
+      "path": "qwen/llama-cli.exe",
+      "sha256": "352880d0ed0285074f54462e67855a3e03a024ed507c224cb295d675b8d3f625"
+    },
+    {
+      "path": "qwen/llama-common.dll",
+      "sha256": "44afbb183edd45511f4deddcc6a6c53d14999a1bda9b2caa8348619d1e0a107b"
+    },
+    {
+      "path": "qwen/llama-completion-impl.dll",
+      "sha256": "537f0750203da6771e6aeb98fa27511a415292f04f7b23a219b75f02bbc40285"
+    },
+    {
+      "path": "qwen/llama-completion.exe",
+      "sha256": "920ce5de26ab0d8dc90de0ee334492e9c07d10c529bda8b60685a7f8961afa09"
+    },
+    {
+      "path": "qwen/llama-fit-params-impl.dll",
+      "sha256": "db261b7e0caae8fde7e93ffd371ed39c04152b2278a6a70ba776ec8aca385ba3"
+    },
+    {
+      "path": "qwen/llama-fit-params.exe",
+      "sha256": "9be00c24b03da5748b1a613c7c0f5b8841458e481112dc03db56aca0c01d8a91"
+    },
+    {
+      "path": "qwen/llama-gemma3-cli.exe",
+      "sha256": "42c1687fe30eb281cb98a40649860f1ac612bfc9acfac77e4b2fd3324f71a9bd"
+    },
+    {
+      "path": "qwen/llama-gguf-split.exe",
+      "sha256": "418d78ffbc7606bad569dde7663194a8012d19ef0e7acda60d98e7bdd1d988e2"
+    },
+    {
+      "path": "qwen/llama-imatrix.exe",
+      "sha256": "3119869848914554a3715c17ec37d8d28b8e4c7b22bba03d4a7f5f4c0f251e05"
+    },
+    {
+      "path": "qwen/llama-llava-cli.exe",
+      "sha256": "42c1687fe30eb281cb98a40649860f1ac612bfc9acfac77e4b2fd3324f71a9bd"
+    },
+    {
+      "path": "qwen/llama-minicpmv-cli.exe",
+      "sha256": "42c1687fe30eb281cb98a40649860f1ac612bfc9acfac77e4b2fd3324f71a9bd"
+    },
+    {
+      "path": "qwen/llama-mtmd-cli.exe",
+      "sha256": "baa744a64ba1997ce031a5870a9ae3127ecd75da5a189f415f1514fe6e3937a9"
+    },
+    {
+      "path": "qwen/llama-mtmd-debug.exe",
+      "sha256": "9d145f03740a3e5f56ce8f44ebc07a123dc524a642003422dc00e6ca02ccad61"
+    },
+    {
+      "path": "qwen/llama-perplexity-impl.dll",
+      "sha256": "86b75ff06d1d9199852db87596fad9391688b3d2f7eecdd546d439d8c08173bb"
+    },
+    {
+      "path": "qwen/llama-perplexity.exe",
+      "sha256": "6df43f36c01720963b17fe26e69274abb0f7d010503fb9ccce8f87a02b3fe3b7"
+    },
+    {
+      "path": "qwen/llama-quantize-impl.dll",
+      "sha256": "24a3686a2f7b3eb1ddc5f4e96f8997a1d37aa78b6e8a3d4f6fc28c51fc27536e"
+    },
+    {
+      "path": "qwen/llama-quantize.exe",
+      "sha256": "5afe8877ea2e3391125a581dfb4a7ecb8b4c7131afbffc90c030ab45e7a77d64"
+    },
+    {
+      "path": "qwen/llama-qwen2vl-cli.exe",
+      "sha256": "42c1687fe30eb281cb98a40649860f1ac612bfc9acfac77e4b2fd3324f71a9bd"
+    },
+    {
+      "path": "qwen/llama-results.exe",
+      "sha256": "a791b458e670ada931e4cebb992f9852de2884c4049cae951e09e6a273114591"
+    },
+    {
+      "path": "qwen/llama-server-impl.dll",
+      "sha256": "3bf93a16c1f733d6aaba93df90c15a127af8c3e45bd974c8ed7c74585c77d4ab"
+    },
+    {
+      "path": "qwen/llama-server.exe",
+      "sha256": "c65955724e82ae7c166c71dc448b6bf54637057eb1e677f2087fdac4adf32f11"
+    },
+    {
+      "path": "qwen/llama-template-analysis.exe",
+      "sha256": "71a2a6eae88cd4a0afdcefa0d089332e881d8d09ed12f8611ce372313112c254"
+    },
+    {
+      "path": "qwen/llama-tokenize.exe",
+      "sha256": "e1f8f5b859676e5391ba293434ce6c717ae6cae16dbcb54b07cb95d90bf26c99"
+    },
+    {
+      "path": "qwen/llama-tts.exe",
+      "sha256": "cd8516b4920de66e7d863020a9555d22812e0de3d02290fa885eb82b2a85f674"
+    },
+    {
+      "path": "qwen/llama.dll",
+      "sha256": "4a587d89d56157b0a6e3eef7bc9bf6c4c885d02d15a5bd47e04ddb8f2cf6bead"
+    },
+    {
+      "path": "qwen/llama.exe",
+      "sha256": "3cb09adb0006a1397b6bf3bf398f3a3d9bdcef672e4dd30a239010d116da2e35"
+    },
+    {
+      "path": "qwen/msvcp140.dll",
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    {
+      "path": "qwen/msvcp140_1.dll",
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    },
+    {
+      "path": "qwen/msvcp140_2.dll",
+      "sha256": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9"
+    },
+    {
+      "path": "qwen/msvcp140_atomic_wait.dll",
+      "sha256": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479"
+    },
+    {
+      "path": "qwen/msvcp140_codecvt_ids.dll",
+      "sha256": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18"
+    },
+    {
+      "path": "qwen/mtmd.dll",
+      "sha256": "7621691a2d7c97f4e544f40be3f69ced8de43afde4cfd2b98e226209f46f7bec"
+    },
+    {
+      "path": "qwen/vcamp140.dll",
+      "sha256": "52af68f35476bd03d7b97752b01bef358ffdda568d150057d6ce809f77c4f704"
+    },
+    {
+      "path": "qwen/vccorlib140.dll",
+      "sha256": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd"
+    },
+    {
+      "path": "qwen/vcomp140.dll",
+      "sha256": "55aba23cdcd6484fbb06f4155b8ca75adfce7a881f10afd0c49457165e677164"
+    },
+    {
+      "path": "qwen/vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "path": "qwen/vcruntime140_1.dll",
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+    },
+    {
+      "path": "qwen/vcruntime140_threads.dll",
+      "sha256": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    {
+      "path": "runtime/archive.dll",
+      "sha256": "059510039fa7ae99e365553750d39f52713c0c312aebb947d70beb9f08a6a94b"
+    },
+    {
+      "path": "runtime/bz2.dll",
+      "sha256": "b422c5a6fc464b9f4d034196db0fb60a6693bba84229cc22a75c9684669e4232"
+    },
+    {
+      "path": "runtime/concrt140.dll",
+      "sha256": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376"
+    },
+    {
+      "path": "runtime/gif.dll",
+      "sha256": "a3528f2d17bccf067d286036286b0f376b687f76f8359a129657356363019272"
+    },
+    {
+      "path": "runtime/intern-worker.exe",
+      "sha256": "e090ea57f5808402ed203f13113ad790f8ede35555dee6df9b67f7539d41840f"
+    },
+    {
+      "path": "runtime/jpeg62.dll",
+      "sha256": "7e0d9dde8d48c49e4a620d6a0463959d3a60734e4c0cb28d88b9d80b7a21d236"
+    },
+    {
+      "path": "runtime/legacy.dll",
+      "sha256": "fa50b97dbdc82f68b9c99dd8f500c8527ce8cc2b04f1628b9e9c07a8ab66cf14"
+    },
+    {
+      "path": "runtime/leptonica-1.87.0.dll",
+      "sha256": "80c402eec0cdb1176078ecac4a777b6d2a4548d7dda1aa39f320264b6d2cca42"
+    },
+    {
+      "path": "runtime/libcrypto-3-x64.dll",
+      "sha256": "d99b98faf7a7fabda9948e3ecc9d9361b130623f5b8260206edaa947939b867f"
+    },
+    {
+      "path": "runtime/libcurl.dll",
+      "sha256": "959c60cbfa1e167032164f1ac0482e30e577b2a90da7f2392a8eb871a85e5ea8"
+    },
+    {
+      "path": "runtime/liblzma.dll",
+      "sha256": "fcf29cc9eba249bc1f42e67ed26468a9bdc4e992a0b01783b90ca119a9bf2665"
+    },
+    {
+      "path": "runtime/libpng16.dll",
+      "sha256": "c7d96bf3f637f371f8b72686f1151f0da00666922cf13ac6f39068352540495a"
+    },
+    {
+      "path": "runtime/libsharpyuv.dll",
+      "sha256": "02563af9a20ecb6f6d07a602044ed87ea96aa1c523be90c828eee192192ab7be"
+    },
+    {
+      "path": "runtime/libssl-3-x64.dll",
+      "sha256": "926ff6ff01c94ede0e30533cf72e114c58138410326c7eb437973e6e7ba02083"
+    },
+    {
+      "path": "runtime/libwebp.dll",
+      "sha256": "00743b1bf1334e1bfc129557ab9cae0469d3dcfc9f225e72ec3fb132b61891a7"
+    },
+    {
+      "path": "runtime/libwebpdecoder.dll",
+      "sha256": "95f5e45f85aafccc039ea8f454fb0f4f61afd39c243221b0bc1335f7776a3f87"
+    },
+    {
+      "path": "runtime/libwebpdemux.dll",
+      "sha256": "1dccce055084942c8880040990c841bd26296a1fd0f92e956415849d3a7aadd7"
+    },
+    {
+      "path": "runtime/libwebpmux.dll",
+      "sha256": "5c5081c0686bfe269bf7b596745eaed1dd2fbd6ad89c463998775fa8561b09e7"
+    },
+    {
+      "path": "runtime/licenses/PDFium-LICENSE.txt",
+      "sha256": "8854f4388f1ca13b3ad9baa42e95f5546b4c0b17109c159256d3eca7be39b09b"
+    },
+    {
+      "path": "runtime/licenses/tessdata-Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/bzip2.txt",
+      "sha256": "c6dbbf828498be844a89eaa3b84adbab3199e342eb5cb2ed2f0d4ba7ec0f38a3"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/curl.txt",
+      "sha256": "543457a53893d439ac029f115c15940c0921ce1b919db501bbad266e2a4d1059"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/giflib.txt",
+      "sha256": "ed5d90cb4a041bddad679470a071302ab05ae5d0ec2cf8f9c97ad7b2708751e6"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/leptonica.txt",
+      "sha256": "87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/libarchive.txt",
+      "sha256": "30e556b3959e3985d66efefec5eaac51d4995053caa1d3cffe6eb916f146f229"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/libjpeg-turbo.txt",
+      "sha256": "ba6bceebcba0fdd35488477c2cca8c4632ce82c74dbfbc87d886ce6fc4433579"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/liblzma.txt",
+      "sha256": "616a3ad264ce29b8f1cb97e53037b139d406899ca8d1f799651e17bfa09830b8"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/libpng.txt",
+      "sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/libwebp.txt",
+      "sha256": "050b5ba2c8eb0bd3b996e12ef79312a1c62237f2de1b3c609843f00bb74744f3"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/lz4.txt",
+      "sha256": "8b58c446121a109ccf32edc094bba3010a3d85e4ee3702950db55e4d3e87736c"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/openjpeg.txt",
+      "sha256": "a6af136f3e15038a666b61f376612a07d9a4e48cb7c01adbf3e33b3f14ab49b6"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/openssl.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/tesseract.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/tiff.txt",
+      "sha256": "0e27c2382d7b8147972bbb746e04059a1152c8d0fda9d03ef1399d1a433c4ade"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/vcpkg-cmake-config.txt",
+      "sha256": "04b60f99a43bfd7fefdc8364b24aac704a2160cef969b75ba6a38b62dc4c4b70"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/vcpkg-cmake-get-vars.txt",
+      "sha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/vcpkg-cmake.txt",
+      "sha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/zlib.txt",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "path": "runtime/licenses/vcpkg/zstd.txt",
+      "sha256": "434dca949c6da7c500413aef694539fe37f867dd1a94d83d4ed1d260194e2660"
+    },
+    {
+      "path": "runtime/licenses/vcpkg-LICENSE.txt",
+      "sha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460"
+    },
+    {
+      "path": "runtime/lz4.dll",
+      "sha256": "329e91c04122a0d0dfbb15a4b3499915679b4f861f1c057100c810eda7262a43"
+    },
+    {
+      "path": "runtime/msvcp140.dll",
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    {
+      "path": "runtime/msvcp140_1.dll",
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    },
+    {
+      "path": "runtime/msvcp140_2.dll",
+      "sha256": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9"
+    },
+    {
+      "path": "runtime/msvcp140_atomic_wait.dll",
+      "sha256": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479"
+    },
+    {
+      "path": "runtime/msvcp140_codecvt_ids.dll",
+      "sha256": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18"
+    },
+    {
+      "path": "runtime/mtmd.dll",
+      "sha256": "7621691a2d7c97f4e544f40be3f69ced8de43afde4cfd2b98e226209f46f7bec"
+    },
+    {
+      "path": "runtime/ocr-models/page-orientation.onnx",
+      "sha256": "af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92"
+    },
+    {
+      "path": "runtime/ocr-models/text-detection.onnx",
+      "sha256": "a431985659dc921974177a95adcfbb90fd9e51989a5e04d70d0b75f597b6e61d"
+    },
+    {
+      "path": "runtime/ocr-models/text-recognition.onnx",
+      "sha256": "b5f833dfc5d0eb71da397b4efa06ebeee9b431b690a47d6af40d77d8eabc557f"
+    },
+    {
+      "path": "runtime/onnxruntime.dll",
+      "sha256": "7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da"
+    },
+    {
+      "path": "runtime/openjp2.dll",
+      "sha256": "936a5520d90e9fb224b2b4c8d3111be1a27b1ab00f476e2895d8737794d30389"
+    },
+    {
+      "path": "runtime/pdfium.dll",
+      "sha256": "79d4676b656cfb1abcea88f9ade3b4b0826c5200382db5f4ec72a636c598c118"
+    },
+    {
+      "path": "runtime/resources/THIRD_PARTY_NOTICES.md",
+      "sha256": "e1b8919a10d17c475d1323b7a3493f6ca2ab9d23c266506e613af868ca1bd3d1"
+    },
+    {
+      "path": "runtime/resources/model-manifest.json",
+      "sha256": "175dd4de50db9d4833af539752bf7b3a2a10c43f6e0ec334b558c13471ed4827"
+    },
+    {
+      "path": "runtime/resources/runtime-assets.json",
+      "sha256": "122dc10232bde7525484c8ade2f6c03280ddfd9814566c0bcceb9a77258aa334"
+    },
+    {
+      "path": "runtime/resources/sharepoint-deployment.json",
+      "sha256": "f84dd9dfef9f0055368a9f85a9b1781c0ef0e07d207aa6a6a26877d02a38a53e"
+    },
+    {
+      "path": "runtime/tessdata/eng.traineddata",
+      "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+    },
+    {
+      "path": "runtime/tessdata/osd.traineddata",
+      "sha256": "9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff"
+    },
+    {
+      "path": "runtime/tesseract.exe",
+      "sha256": "e44b954db67dd0e702a612b0f9725888909041bfecdcdf3ca45473b5115e0756"
+    },
+    {
+      "path": "runtime/tesseract55.dll",
+      "sha256": "3742401b9bec41410f7d7bc5cbccb4014bf6aed9bce22c3daeef965fdc5b0922"
+    },
+    {
+      "path": "runtime/tiff.dll",
+      "sha256": "f22ee339bd9a30c4559e366a02fed8daabfc5f0502c6241c1d3227d04abeae4a"
+    },
+    {
+      "path": "runtime/turbojpeg.dll",
+      "sha256": "887b6ef526bac89a7489c68f10736e5c8829e31beab4842158e7b3d569a31d2a"
+    },
+    {
+      "path": "runtime/vcamp140.dll",
+      "sha256": "52af68f35476bd03d7b97752b01bef358ffdda568d150057d6ce809f77c4f704"
+    },
+    {
+      "path": "runtime/vccorlib140.dll",
+      "sha256": "19839407c3fdbc824e5bce189bf68ddf8097f12ec28b757797ffa0415c144ddd"
+    },
+    {
+      "path": "runtime/vcomp140.dll",
+      "sha256": "55aba23cdcd6484fbb06f4155b8ca75adfce7a881f10afd0c49457165e677164"
+    },
+    {
+      "path": "runtime/vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "path": "runtime/vcruntime140_1.dll",
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+    },
+    {
+      "path": "runtime/vcruntime140_threads.dll",
+      "sha256": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    {
+      "path": "runtime/z.dll",
+      "sha256": "9536dfee6b4089f152c7ef8af96fc2573f3d04ddc0866a141d7d823986da1e68"
+    },
+    {
+      "path": "runtime/zstd.dll",
+      "sha256": "ab6228fe848165182610661868205c3e7a1d96e76a8e84314bac82ba97fab9b7"
+    },
+    {
+      "path": "smoke.json",
+      "sha256": "b91a7323db9469944472dd78bca50e0b0f8a124d151be996b4ab8403f463ae95"
+    },
+    {
+      "path": "smoke2.json",
+      "sha256": "266946ad1ffba75b67a103b9b498c5a917d936f1781ed8694234110a300fd2d7"
+    },
+    {
+      "path": "qwen-profile-17.json",
+      "sha256": "aede492f99e065651c1e44f52557e5704cb0ca463a901271afdd29ee0ba44a22"
+    }
+  ],
+  "server": "qwen/llama-server.exe",
+  "bench": "intern-bench.exe",
+  "worker": "runtime/intern-worker.exe",
+  "corpus": "bench/corpus",
+  "gold": "bench/gold.json",
+  "manifest": "bench/manifest.json",
+  "model_sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+  "cases": [
+    {
+      "id": "separation-agreement",
+      "profile": "qwen-profile-17.json"
+    },
+    {
+      "id": "scan-agreement-10p",
+      "profile": "qwen-profile-17.json"
+    }
+  ]
+}
