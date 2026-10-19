@@ -5,7 +5,7 @@ This follow-up fixes two deterministic composition defects exposed by the native
 ## Resulting behavior
 
 - Field subjects keep their complete source value. A numeric subject is kept intact or omitted as a whole when the existing 42-word budget cannot accommodate it; a word boundary no longer severs a measurement, range or condition.
-- A secondary sender or recipient requires a supported role, or an existing explicit billing field. A sole other validated party can appear in an optional “also naming …” clause. Its presence alone never establishes “from” or “to”.
+- For issued documents, notices, letters and emails, a secondary sender or recipient requires a supported role or an existing explicit billing field. Otherwise, a sole other validated party can appear in an optional “also naming …” clause that asserts no direction. Other document classes retain their existing templates.
 - Supported recipients remain directed. Filename selection, prompts, model choices, downloads and runtime lifecycle are unchanged.
 
 For example, the published scan lease summary now keeps “14,860 rentable square feet” instead of ending at “rentable square”. The capital-call summary no longer describes the general partner as a recipient merely because it is the one other named party. An organization with only an `Other` role is named neutrally rather than assumed to be a notice's sender.
