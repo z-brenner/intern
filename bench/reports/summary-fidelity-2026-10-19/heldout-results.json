@@ -1,0 +1,149 @@
+{
+  "scope": "Synthetic deterministic summary fidelity held-outs; no external model or service calls.",
+  "base_commit": "6173151e0309f3f31b927e883175e0b607dfe335",
+  "suite": {
+    "path": "crates/intern-engine/tests/fidelity/heldout.rs",
+    "sha256": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1",
+    "test_count": 16,
+    "frozen_at_utc": "2026-10-19T18:51:53.960848+00:00",
+    "freeze_intact": true
+  },
+  "methodology": [
+    "Authored and hand-checked independently before production changes. Expected quantities and source relationships derive from synthetic documents.",
+    "Fifteen tests use real indexing, retrieval, fact validation and description composition. One directly checks composition when a proposed party role is explicitly unsupported.",
+    "Tests cover physical units, numeric ranges, multiword units, Unicode decimal numerals, both fallback and shortening boundaries, incomplete measurement sources, explicit recipient controls, and unsupported secondary directions.",
+    "A mentioned quantity must remain complete. Omission of a whole optional quantity or subject is allowed. No invented unit is allowed when the source omits it.",
+    "Explicit source sender/recipient controls must preserve direction. Co-issuers, co-senders, observers and referenced parties cannot acquire unsupported directed roles. Neutral wording is accepted when routing is unproved.",
+    "Every test checks the 42-word maximum. Tests avoid requiring identical stylistic full sentences.",
+    "Baseline and candidate binaries used identical immutable tests, one test thread, and no external services. Gold answers and per-case outcomes stayed outside the implementation loop until candidate freeze; first candidate run passed all sixteen."
+  ],
+  "candidate_frozen_at_utc": "2026-10-19T18:58:40.162943+00:00",
+  "candidate_source_hashes": {
+    "crates/intern-engine/src/facts.rs": "391a2e3a6bd0599911539a5bb54db9bb86614423985ac85106214dad35a26d1b",
+    "crates/intern-engine/src/compose.rs": "6956413fce2a83d4b94db26af9a1352b7aab6a72230e46a0b1eb0c0c87d5d77c",
+    "crates/intern-engine/tests/fidelity/public.rs": "1a5655874f1d7d37ff31223c78baf31635787a3d02e9f0427570fcf504791fbe",
+    "crates/intern-engine/tests/fidelity/heldout.rs": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1"
+  },
+  "platform": {
+    "system": "Linux",
+    "release": "7.0.0-38-generic",
+    "machine": "x86_64",
+    "libc": [
+      "glibc",
+      "2.43"
+    ],
+    "execution": "Native Rust test binaries on Linux; single test thread; no VM or GPU."
+  },
+  "baseline": {
+    "run_at_utc": "2026-10-19T18:56:28.789957+00:00",
+    "binary": "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/baseline-engine-tests",
+    "binary_sha256": "321acdf16d1b2bc4c52ed22c53445774116dbd440a8f453727886d6bc1a7e8b4",
+    "source_sha256": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1",
+    "freeze_intact": true,
+    "command": [
+      "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/baseline-engine-tests",
+      "heldout_fidelity_",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit_code": 101,
+    "passed": 4,
+    "failed": 12,
+    "ignored": 0
+  },
+  "candidate": {
+    "run_at_utc": "2026-10-19T18:59:01.912548+00:00",
+    "binary": "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/candidate-engine-tests",
+    "binary_sha256": "9391855806ae12a87dc28386d1b5914f35ee16ce5101d728683e5dd97259ae43",
+    "candidate_freeze_manifest_sha256": "6ec17a5e3df1ed7008d893824534acd822aa6d5636a04d8a140588c8b698fba2",
+    "source_sha256": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1",
+    "freeze_intact": true,
+    "command": [
+      "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/candidate-engine-tests",
+      "heldout_fidelity_",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0
+  },
+  "comparison": {
+    "test_count": 16,
+    "baseline_passed": 4,
+    "baseline_failed": 12,
+    "candidate_passed": 16,
+    "candidate_failed": 0,
+    "freeze_intact": true,
+    "candidate_binary_verified": true,
+    "gate_passed": true
+  },
+  "logs": {
+    "heldout-baseline.stdout.txt": {
+      "bytes": 2491,
+      "sha256": "3c001b452484c458e5f25b79d28ff6ee36789edf35aac5a858d85c851aa61689"
+    },
+    "heldout-baseline.stderr.txt": {
+      "bytes": 3794,
+      "sha256": "571dfa77548cafef7c3201c1832ca79af1c9d482c06faa7d62efacf253a06bec"
+    },
+    "heldout-candidate.stdout.txt": {
+      "bytes": 1488,
+      "sha256": "701be2a0acd81c6691ebc59be2568343f4249f4fe9b98602b4d39b690e281a67"
+    },
+    "heldout-candidate.stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "limitations": [
+    "These 16 deliberately targeted synthetic tests are regression controls, not a statistical estimate of accuracy on real documents or a model benchmark.",
+    "Long numeric subjects may be omitted entirely to satisfy the word budget; passing establishes absence of partial quantities rather than guaranteed retention of every fact.",
+    "Only the supplied already-compiled binaries were executed by the independent evaluator. Build provenance and broader test coverage belong to the parent run evidence."
+  ],
+  "final_refinement_regression_recheck": {
+    "classification": "Regression recheck after v1 unseen gate; not an additional unseen evaluation.",
+    "reason": "Public-corpus refinement retains a sole otherwise unclassified party with neutral also-naming wording instead of directional inference.",
+    "run_at_utc": "2026-10-19T19:06:00.172719+00:00",
+    "binary": "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/final-engine-tests",
+    "binary_sha256": "a25655691ab690131d73daf301b501bcd7351dd1832c9075ddecd8520a185e09",
+    "source_sha256": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1",
+    "source_hashes": {
+      "crates/intern-engine/src/facts.rs": "3192d88ce08b8a702d712450faf28cc45524ad7b3c69852b534786265a95cc64",
+      "crates/intern-engine/src/compose.rs": "5554090a1cffa4eeb824c95a405d91419da2100563166ecbafa009edf839c9c1",
+      "crates/intern-engine/tests/fidelity/public.rs": "1a5655874f1d7d37ff31223c78baf31635787a3d02e9f0427570fcf504791fbe",
+      "crates/intern-engine/tests/fidelity/heldout.rs": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1"
+    },
+    "freeze_intact": true,
+    "binary_and_sources_unchanged_during_run": true,
+    "command": [
+      "/tmp/intern-fidelity-20261019-xqhomm2_/evidence/final-engine-tests",
+      "heldout_fidelity_",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "exit_code": 0,
+    "passed": 16,
+    "failed": 0,
+    "ignored": 0,
+    "platform": "Linux-7.0.0-38-generic-x86_64-with-glibc2.43",
+    "no_additional_unseen_claim": true,
+    "gate_passed": true,
+    "logs": {
+      "heldout-final-refinement.stdout.txt": {
+        "bytes": 1488,
+        "sha256": "9a023d57576d5283d8ee68e029cb60889a548fc6eeca28118fd8b93a33660f5a"
+      },
+      "heldout-final-refinement.stderr.txt": {
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "limitations": [
+      "The held-out suite was released after the successful v1 gate. This later run is a regression recheck and provides no new unseen-test claim.",
+      "The synthetic regression scope and permitted omission of whole optional numeric subjects remain unchanged.",
+      "No compilation, model call or private user-document access was performed by the independent evaluator for this recheck."
+    ]
+  }
+}

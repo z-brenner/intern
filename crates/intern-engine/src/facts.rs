@@ -2541,7 +2541,8 @@ const SUBJECT_FIELDS: &[&str] = &[
 ];
 
 /// The value of the first field of the context labelled as what the
-/// document is about, cut to eight words.
+/// document is about. Keep the complete value: a word limit can sever a
+/// quantity from its unit or qualifier. Composition budgets the whole phrase.
 fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
     scope.context_units().find_map(|unit| {
         let label = normalize(unit.label.as_deref()?);
@@ -2566,11 +2567,7 @@ fn field_subject(scope: &ValidationScope<'_>) -> Option<String> {
             }
             _ => return None,
         };
-        let value = value
-            .split_whitespace()
-            .take(8)
-            .collect::<Vec<_>>()
-            .join(" ");
+        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
         (!value.is_empty()).then_some(value)
     })
 }
@@ -3617,6 +3614,9 @@ mod tests {
     use crate::retrieve::{RetrievalConfig, Tier, retrieve};
 
     const YEAR: i32 = 2026;
+
+    include!("../tests/fidelity/public.rs");
+    include!("../tests/fidelity/heldout.rs");
 
     fn index_of(text: &str) -> EvidenceIndex {
         EvidenceIndex::build(&source_from_text(text))
@@ -5350,9 +5350,11 @@ Sincerely, Harriet Voss, Vice President of People Operations Northstar Lantern W
         };
         let (outcome, _) = facts_for(NOTICE, reply);
         assert_eq!(outcome.proposal.parties, vec!["John Smith"]);
+        // The organization is validated as Other, not as the sender. Its
+        // being the only remaining party cannot establish a direction.
         assert_eq!(
             outcome.proposal.description,
-            "Notice of Termination from Northstar Lantern Works LLC to John Smith."
+            "Notice of Termination to John Smith, also naming Northstar Lantern Works LLC."
         );
         let facts = outcome.facts.expect("facts");
         assert_eq!(facts.parties[0].role, Some(PartyRole::Addressee));

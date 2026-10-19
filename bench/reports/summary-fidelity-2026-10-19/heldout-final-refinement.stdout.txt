@@ -1,0 +1,21 @@
+
+running 16 tests
+test facts::tests::heldout_fidelity_composer_does_not_use_unsupported_recipient_role ... ok
+test facts::tests::heldout_fidelity_field_does_not_leave_partial_area_unit ... ok
+test facts::tests::heldout_fidelity_field_handles_unicode_decimal_digits_atomically ... ok
+test facts::tests::heldout_fidelity_field_keeps_flow_denominator ... ok
+test facts::tests::heldout_fidelity_field_keeps_pressure_unit_with_value ... ok
+test facts::tests::heldout_fidelity_field_preserves_entire_temperature_range ... ok
+test facts::tests::heldout_fidelity_incomplete_source_does_not_supply_a_unit ... ok
+test facts::tests::heldout_fidelity_invoice_retains_stated_billing_direction ... ok
+test facts::tests::heldout_fidelity_letter_observer_is_not_invented_as_sender ... ok
+test facts::tests::heldout_fidelity_letter_retains_explicit_sender_and_addressee ... ok
+test facts::tests::heldout_fidelity_long_subject_drops_or_keeps_complete_pressure ... ok
+test facts::tests::heldout_fidelity_long_subject_never_keeps_one_end_of_range ... ok
+test facts::tests::heldout_fidelity_notice_referenced_party_is_not_addressee ... ok
+test facts::tests::heldout_fidelity_two_invoice_issuers_are_not_customer_and_vendor ... ok
+test facts::tests::heldout_fidelity_two_memo_senders_are_not_each_others_addressee ... ok
+test facts::tests::heldout_fidelity_unlabelled_email_parties_allow_neutral_summary ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 368 filtered out; finished in 0.14s
+
