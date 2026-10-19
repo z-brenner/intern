@@ -1,0 +1,32 @@
+{
+  "frozen_utc": "2026-10-18T06:10:28.172888+00:00",
+  "model": "qwen",
+  "selected": "fewshot-greedy",
+  "profile_files": [
+    {
+      "seed": 17,
+      "name": "qwen-profile-17.json",
+      "sha256": "aede492f99e065651c1e44f52557e5704cb0ca463a901271afdd29ee0ba44a22"
+    }
+  ],
+  "calibration_sha256": "a0ce213cff5e140c2d43b8231bff509fbbee46aa34ca6a3a641fcbccb1192145",
+  "selection_policy_sha256": "3a20a184f676b1dd9e312aae13b3de31641d25b948b9a1d79c5fbca80d379008",
+  "application_budget_policy_sha256": "308b9eed892c5b1c61c4030866299775ea619a9eab923fcb59c98f412183cad4",
+  "heldout_plan_sha256": "b7bcd233696084032f63e16670349df25ce8780292dabc4ba8639b2ecce5f0f7",
+  "context_tokens": 8192,
+  "threads": 2,
+  "slots": 1,
+  "cache_ram_mib": 64,
+  "gpu_layers": 0,
+  "settings": {
+    "cache_prompt": true,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "max_tokens": 1024,
+    "seed": 17,
+    "temperature": 0,
+    "top_k": 1
+  },
+  "warning": "Calibration value/shape selection does not establish semantic role/citation quality or production acceptance; independent audits and matched held-outs required."
+}

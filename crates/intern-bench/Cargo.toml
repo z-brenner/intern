@@ -1,5 +1,6 @@
 [package]
 name = "intern-bench"
+default-run = "intern-bench"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +13,17 @@ path = "src/lib.rs"
 name = "intern-bench"
 path = "src/main.rs"
 
+[[bin]]
+name = "intern-qualify"
+path = "src/bin/intern-qualify.rs"
+required-features = ["benchmark-transport"]
+
+[features]
+benchmark-transport = ["intern-engine/benchmark-transport", "dep:rand", "dep:reqwest", "dep:windows-sys"]
+
 [dependencies]
+rand = { version = "=0.8.5", optional = true }
+reqwest = { version = "=0.12.15", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 intern-engine = { path = "../intern-engine" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
@@ -20,3 +31,6 @@ sha2 = "=0.10.9"
 
 [dev-dependencies]
 tempfile = "=3.23.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", optional = true, features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_ToolHelp"] }

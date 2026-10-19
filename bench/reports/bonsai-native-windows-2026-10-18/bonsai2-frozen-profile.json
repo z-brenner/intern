@@ -1,0 +1,26 @@
+{
+  "label": "bonsai2-fewshot-greedy",
+  "selection": "Calibration-only candidate for matched held-out testing, not a production recommendation. Neutral Dispatch Note schema example fixes type copying and fills source-party names/date values on all three calibration documents. Both vendor few-shot seeds also fix titles/dates/names, but do not resolve role errors; greedy chosen for repeatability, not on held-out outcomes. Original prompt, grammar and decoding preserved except the single synthetic user/assistant demonstration.",
+  "model_id": "prism-ml/Ternary-Bonsai-2-2B-gguf",
+  "model_revision": "683f7be2629342a50987627b40881e54761a2430",
+  "model_sha256": "d5f01a4ecaf49239653308ee732ad1a0c5f802c0ddb997549fc7b694c8b45928",
+  "runtime": "prism-b10777-e3de715 Windows CPU",
+  "settings": {
+    "temperature": 0,
+    "top_k": 1,
+    "max_tokens": 1024,
+    "cache_prompt": true,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "seed": 17
+  },
+  "context_tokens": 8192,
+  "threads": 2,
+  "slots": 1,
+  "cache_ram_mib": 64,
+  "prompt_file": "fewshot-prompt.json",
+  "known_calibration_role_errors": true,
+  "heldout_plan_sha256": "b7bcd233696084032f63e16670349df25ce8780292dabc4ba8639b2ecce5f0f7",
+  "frozen_utc": "2026-10-17T17:42:03.332284+00:00"
+}

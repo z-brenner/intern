@@ -85,6 +85,8 @@ const RUN_KEYS: &[&str] = &[
     "id-style",
     "retrieval-tier",
     "context-tokens",
+    "bench-profile",
+    "wire-output",
 ];
 
 fn main() {
@@ -200,6 +202,10 @@ fn dispatch(arguments: &[String]) -> Result<i32, String> {
 }
 
 fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
+    #[cfg(not(feature = "benchmark-transport"))]
+    if values.contains_key("bench-profile") || values.contains_key("wire-output") {
+        return Err("benchmark transport feature is not enabled".into());
+    }
     let path = |key: &str| values.get(key).map(PathBuf::from);
     let replay = values.get("replay");
     let extract_only = values.contains_key("extract-only");
@@ -217,6 +223,8 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "model-path",
                 "no-warmup",
                 "server-pid",
+                "bench-profile",
+                "wire-output",
             ],
             "--replay",
         )?;
@@ -238,6 +246,8 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "allow-stale",
                 "pipeline",
                 "context-tokens",
+                "bench-profile",
+                "wire-output",
             ],
             "--extract-only",
         )?;
@@ -253,6 +263,12 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
         }
         Mode::Live {
             options: LiveOptions {
+                #[cfg(feature = "benchmark-transport")]
+                benchmark_transport: match (path("bench-profile"), path("wire-output")) {
+                    (Some(p), Some(o)) => Some((p, o)),
+                    (None, None) => None,
+                    _ => return Err("--bench-profile and --wire-output go together".into()),
+                },
                 worker: PathBuf::from(required(values, "worker")?),
                 endpoint: required(values, "endpoint")?.to_owned(),
                 api_key: required(values, "api-key")?.to_owned(),

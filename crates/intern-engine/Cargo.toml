@@ -16,6 +16,9 @@ path = "src/bin/intern-analyze.rs"
 name = "intern-evaluate"
 path = "src/bin/intern-evaluate.rs"
 
+[features]
+benchmark-transport = []
+
 [dependencies]
 base64 = "=0.22.1"
 # A hosted service's Retry-After may be an HTTP-date. Already built for

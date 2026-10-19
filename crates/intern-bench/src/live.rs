@@ -39,6 +39,8 @@ use crate::{
 
 pub struct LiveOptions {
     pub worker: PathBuf,
+    #[cfg(feature = "benchmark-transport")]
+    pub benchmark_transport: Option<(PathBuf, PathBuf)>,
     pub endpoint: String,
     pub api_key: String,
     pub model_id: String,
@@ -79,6 +81,15 @@ pub fn run(
     .map_err(|error| format!("model client: {error}"))?;
     let client = match settings.context_tokens {
         Some(tokens) => client.with_context_tokens(tokens),
+        None => client,
+    };
+    #[cfg(feature = "benchmark-transport")]
+    let client = match &options.benchmark_transport {
+        Some((profile, output)) => client
+            .with_benchmark_transport(
+                intern_engine::benchmark_transport::BenchmarkTransport::load(profile, output)?,
+            )
+            .map_err(|e| format!("benchmark transport: {e}"))?,
         None => client,
     };
     let log = ExchangeLog::default();

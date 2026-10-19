@@ -44,6 +44,10 @@ Extraction can also be measured on its own, without a model
 ([Extract-only](#extract-only)): fast enough to run on every change to the
 parser worker.
 
+For opt-in request/profile capture and a bounded native Windows qualification runner,
+see [Native model qualification](native-model-qualification.md). These tools are
+behind the `benchmark-transport` Cargo feature and are not enabled by the app.
+
 ## The corpus
 
 `bench/generate.mjs` builds 77 documents into `bench/generated/`

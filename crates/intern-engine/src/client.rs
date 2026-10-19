@@ -228,6 +228,8 @@ pub struct ModelClient {
     http: Client,
     token_confidence: bool,
     context_tokens: usize,
+    #[cfg(feature = "benchmark-transport")]
+    benchmark_transport: Option<crate::benchmark_transport::BenchmarkTransport>,
 }
 
 impl Proposer for ModelClient {
@@ -286,9 +288,29 @@ impl ModelClient {
             api_key: api_key.into(),
             model_id: model_id.into(),
             http,
+            #[cfg(feature = "benchmark-transport")]
+            benchmark_transport: None,
             token_confidence: false,
             context_tokens: crate::server::CONTEXT_TOKENS as usize,
         })
+    }
+
+    /// Laboratory-only transport; desktop builds do not enable this feature.
+    #[cfg(feature = "benchmark-transport")]
+    pub fn with_benchmark_transport(
+        mut self,
+        transport: crate::benchmark_transport::BenchmarkTransport,
+    ) -> EngineResult<Self> {
+        self.http = Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(150))
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .tls_built_in_native_certs(false)
+            .build()
+            .map_err(|_| request_failed())?;
+        self.benchmark_transport = Some(transport);
+        Ok(self)
     }
 
     /// The context the server was started with, for a server started with
@@ -347,25 +369,65 @@ impl ModelClient {
         &self,
         request: &ModelRequest,
     ) -> Result<ProposerReply, AttemptError> {
-        let response = self
+        let body = self.completion_request(request);
+        #[cfg(feature = "benchmark-transport")]
+        let capture = match &self.benchmark_transport {
+            Some(t) => Some(
+                t.prepare(&body, &request.sha256())
+                    .map_err(|_| AttemptError(EngineErrorCode::ModelRequestFailed))?,
+            ),
+            None => None,
+        };
+        let builder = self
             .http
             .post(self.endpoint.clone())
-            .bearer_auth(&self.api_key)
-            .json(&self.completion_request(request))
-            .send()
-            .map_err(|_| AttemptError(EngineErrorCode::ModelRequestFailed))?;
+            .bearer_auth(&self.api_key);
+        #[cfg(feature = "benchmark-transport")]
+        let builder = match &capture {
+            Some((wire, _)) => builder
+                .header("Content-Type", "application/json")
+                .body(wire.clone()),
+            None => builder.json(&body),
+        };
+        #[cfg(not(feature = "benchmark-transport"))]
+        let builder = builder.json(&body);
+        let started = std::time::Instant::now();
+        let response = builder.send().map_err(|_| {
+            #[cfg(feature = "benchmark-transport")]
+            if let (Some(t), Some((_, id))) = (&self.benchmark_transport, &capture) {
+                let _ = t.failed(*id, "local HTTP request failed");
+            }
+            AttemptError(EngineErrorCode::ModelRequestFailed)
+        })?;
         let status = response.status();
         if !status.is_success() {
             // A prompt too long for the context window is the document's
             // problem, not the server's: restarting the server and sending
             // the same prompt again only ends in the same 400.
             let body = read_error_body(response);
+            #[cfg(feature = "benchmark-transport")]
+            if let (Some(t), Some((_, id))) = (&self.benchmark_transport, &capture) {
+                t.response(*id, status.as_u16(), &body, started.elapsed().as_secs_f64())
+                    .map_err(|_| AttemptError(EngineErrorCode::ModelRequestFailed))?;
+            }
             if status == reqwest::StatusCode::BAD_REQUEST && is_context_overflow(&body) {
                 return Err(AttemptError(EngineErrorCode::ModelInputTooLarge));
             }
             return Err(AttemptError(EngineErrorCode::ModelRequestFailed));
         }
         let bytes = read_capped(response, EngineErrorCode::ModelResponseInvalid)?;
+        #[cfg(feature = "benchmark-transport")]
+        if let (Some(t), Some((_, id))) = (&self.benchmark_transport, &capture) {
+            t.response(
+                *id,
+                status.as_u16(),
+                &bytes,
+                started.elapsed().as_secs_f64(),
+            )
+            .map_err(|_| AttemptError(EngineErrorCode::ModelRequestFailed))?;
+        }
+        #[cfg(not(feature = "benchmark-transport"))]
+        let _ = started;
         let completion: ChatCompletion = serde_json::from_slice(&bytes)
             .map_err(|_| AttemptError(EngineErrorCode::ModelResponseInvalid))?;
         let token_confidence = completion.token_confidence();
