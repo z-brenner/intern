@@ -1,0 +1,32 @@
+{
+  "base": "6173151e0309f3f31b927e883175e0b607dfe335",
+  "test_command": "cargo test --offline --locked -p intern-engine -p intern-bench --all-targets --features intern-bench/benchmark-transport -- --test-threads=2",
+  "test_result": {
+    "passed": 560,
+    "failed": 0,
+    "ignored": 3
+  },
+  "limits": {
+    "memory_max_bytes": 3221225472,
+    "memory_swap_max_bytes": 0,
+    "cpu_quota_percent": 200
+  },
+  "format": "cargo fmt --all -- --check: passed",
+  "local_toolchain": "rustc 1.98.1",
+  "strict_local_clippy": "failed on pre-existing newer-toolchain warnings in unchanged code; logs preserved outside repository",
+  "compat_clippy": "passed with -D warnings plus command-line-only exceptions below; no source or CI lint policy changed",
+  "compat_lint_exceptions": [
+    "clippy::while_let_loop",
+    "clippy::cloned_ref_to_slice_refs",
+    "clippy::manual_is_multiple_of",
+    "clippy::chunks_exact_to_as_chunks"
+  ],
+  "strict_ci_toolchain": "1.88.0, unchanged strict CI workflow; see PR checks for exact head result",
+  "source_sha256": {
+    "crates/intern-engine/src/compose.rs": "5554090a1cffa4eeb824c95a405d91419da2100563166ecbafa009edf839c9c1",
+    "crates/intern-engine/src/facts.rs": "3192d88ce08b8a702d712450faf28cc45524ad7b3c69852b534786265a95cc64",
+    "crates/intern-engine/tests/fidelity/public.rs": "1a5655874f1d7d37ff31223c78baf31635787a3d02e9f0427570fcf504791fbe",
+    "crates/intern-engine/tests/fidelity/heldout.rs": "18edd9c460c0085c4c266756efbff1177cc640a68e84102f4de08384abe7cce1"
+  },
+  "local_windows_vm": "not run; MemAvailable below unchanged 12GiB guard and root disk full; hosted Windows CI is separate evidence"
+}

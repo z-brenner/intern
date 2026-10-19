@@ -1,0 +1,37 @@
+
+thread 'facts::tests::heldout_fidelity_composer_does_not_use_unsupported_recipient_role' (2921277) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:274:5:
+unsupported role caused a recipient assertion: Email from Indigo Plain LLC to Juniper Crest Ltd. about equipment survey arrangements.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'facts::tests::heldout_fidelity_field_does_not_leave_partial_area_unit' (2921278) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "240 square meters" if mentioned: Inspection Report covering inspection of warehouse loading platform measuring 240 square.
+
+thread 'facts::tests::heldout_fidelity_field_handles_unicode_decimal_digits_atomically' (2921279) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "٣٧ degrees Celsius" if mentioned: Inspection Report covering replacement of laboratory chamber temperature sensor rated ٣٧.
+
+thread 'facts::tests::heldout_fidelity_field_keeps_flow_denominator' (2921280) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "62 litres per minute" if mentioned: Inspection Report covering replacement coolant pump maximum flow rated 62 litres.
+
+thread 'facts::tests::heldout_fidelity_field_keeps_pressure_unit_with_value' (2921281) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "85 kilopascals" if mentioned: Inspection Report covering replacement of high pressure transfer valve rated 85.
+
+thread 'facts::tests::heldout_fidelity_field_preserves_entire_temperature_range' (2921282) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "15 to 35 degrees Celsius" if mentioned: Inspection Report covering replacement of cooling loop sensor rated for 15.
+
+thread 'facts::tests::heldout_fidelity_letter_observer_is_not_invented_as_sender' (2921288) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:210:5:
+observer became the sender: Letter from Fjord Signal Ltd. to Elm Horizon LLC regarding vibration monitoring.
+
+thread 'facts::tests::heldout_fidelity_long_subject_drops_or_keeps_complete_pressure' (2921290) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "180 kilopascals" if mentioned: Inspection Report covering verification of chamber operating pressure 180.
+
+thread 'facts::tests::heldout_fidelity_long_subject_never_keeps_one_end_of_range' (2921303) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:26:9:
+quantity was partially restated; expected "12 to 18 degrees Celsius" if mentioned: Inspection Report covering verification of chamber operating temperature 12.
+
+thread 'facts::tests::heldout_fidelity_notice_referenced_party_is_not_addressee' (2921315) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:238:5:
+reference publisher became a recipient: Notice from Glen Lantern LLC to Haze Works Ltd. regarding auxiliary lifting frame.
+
+thread 'facts::tests::heldout_fidelity_two_invoice_issuers_are_not_customer_and_vendor' (2921328) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:150:5:
+a joint issuer became the recipient: Invoice from Alder Current Ltd. to Blue Quarry LLC for joint equipment inspection.
+
+thread 'facts::tests::heldout_fidelity_two_memo_senders_are_not_each_others_addressee' (2921329) panicked at crates/intern-engine/src/../tests/fidelity/heldout.rs:178:5:
+a co-sender became the recipient: Memorandum from Cobalt Field LLC to Dune Basin Ltd. regarding joint reservoir survey.

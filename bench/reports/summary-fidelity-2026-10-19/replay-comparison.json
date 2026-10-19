@@ -1,0 +1,858 @@
+{
+  "schema_version": 1,
+  "base_commit": "6173151e0309f3f31b927e883175e0b607dfe335",
+  "platform": "native Linux on zgbrenner-pc; Intel Core i5-13400F",
+  "toolchain": "rustc 1.98.1 (installed stable); debug profile, debug info and incremental disabled",
+  "method": "Three serial 77-document replay replicates per binary. /usr/bin/time wall/RSS measure this host; embedded model/OCR/machine timings in replay reports are historical and excluded from this comparison. Diagnostic, not production latency or statistical speed evidence. Other desktop activity and intermittent bounded test compilation remained possible.",
+  "command": "intern-bench run --corpus bench/generated --gold bench/gold.json --manifest bench/manifest.json --replay bench/recording.json --baseline bench/baseline.json --output REPORT.json",
+  "input_hashes": {
+    "Cargo.lock": "36be4d6a59a94e046c43f1402ba8da6960d786cee83c9220196f6f29ad2dc034",
+    "bench/gold.json": "0d03c7572388d15cddeaf8177ae1a546429e809c40ef46caff187f3eb0f36cbf",
+    "bench/manifest.json": "a80399ce67f3ca444c753fbdc51e4ce0a8d8464486ead189e282d8c6220ac571",
+    "bench/recording.json": "bb64876b233bcaa38e091ae486848a2545ed396e81625137f38c660fd9b63961"
+  },
+  "binary_hashes": {
+    "baseline-intern-bench": "db41e1d737fdce21cf2c242de6467890e75409d575d6dd8492876894a0ba7dcd",
+    "final-intern-bench": "608255c6f48cc298217032b06651a1a4f0e96e0436373eedf4562b4cd6d7b120"
+  },
+  "baseline_replicates": [
+    {
+      "replicate": 1,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.97,
+        "peak_rss_kib": 45912,
+        "exit_status": 0
+      }
+    },
+    {
+      "replicate": 2,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.97,
+        "peak_rss_kib": 45748,
+        "exit_status": 0
+      }
+    },
+    {
+      "replicate": 3,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.94,
+        "peak_rss_kib": 45564,
+        "exit_status": 0
+      }
+    }
+  ],
+  "final_replicates": [
+    {
+      "replicate": 1,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.44,
+        "peak_rss_kib": 45724,
+        "exit_status": 0
+      }
+    },
+    {
+      "replicate": 2,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.45,
+        "peak_rss_kib": 46004,
+        "exit_status": 0
+      }
+    },
+    {
+      "replicate": 3,
+      "exit": 0,
+      "timing": {
+        "wall_seconds": 63.5,
+        "peak_rss_kib": 45568,
+        "exit_status": 0
+      }
+    }
+  ],
+  "baseline_summary": {
+    "completed": 77,
+    "counts": {
+      "claims": 290,
+      "forbidden_descriptions": 0,
+      "forbidden_parties": 8,
+      "spurious_parties": 9,
+      "trap_dates": 1,
+      "unsafe_ready": 15,
+      "unsupported_claims": 0
+    },
+    "documents": 77,
+    "means": {
+      "cited_support_rate": {
+        "mean": 0.7571,
+        "total_docs": 77
+      },
+      "context_date_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_fact_recall": {
+        "mean": 0.9848,
+        "total_docs": 77
+      },
+      "context_party_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_subject_recall": {
+        "mean": 0.9675,
+        "total_docs": 77
+      },
+      "context_type_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "description_completeness": {
+        "mean": 0.5368,
+        "total_docs": 77
+      },
+      "description_specificity": {
+        "mean": 0.9394,
+        "total_docs": 77
+      },
+      "digest_recall": {
+        "mean": 0.9935,
+        "total_docs": 77
+      },
+      "evidence_recall": {
+        "mean": 0.6602,
+        "total_docs": 77
+      },
+      "kv_accuracy": {
+        "mean": 0.9913,
+        "total_docs": 23
+      },
+      "ocr_cer": {
+        "mean": 0.0502,
+        "total_docs": 19
+      },
+      "ocr_cer_ci": {
+        "mean": 0.0493,
+        "total_docs": 19
+      },
+      "ocr_date_accuracy": {
+        "mean": 1.0,
+        "total_docs": 18
+      },
+      "ocr_identifier_accuracy": {
+        "mean": 1.0,
+        "total_docs": 16
+      },
+      "ocr_mean_confidence": {
+        "mean": 97.5167,
+        "total_docs": 18
+      },
+      "ocr_name_accuracy": {
+        "mean": 1.0,
+        "total_docs": 18
+      },
+      "ocr_wer": {
+        "mean": 0.0536,
+        "total_docs": 19
+      },
+      "prompt_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "reading_order_accuracy": {
+        "mean": 0.7485,
+        "total_docs": 13
+      },
+      "route_correct": {
+        "mean": 1.0,
+        "total_docs": 28
+      },
+      "table_cell_recall": {
+        "mean": 0.9944,
+        "total_docs": 17
+      },
+      "table_row_accuracy": {
+        "mean": 0.9681,
+        "total_docs": 17
+      }
+    },
+    "rates": {
+      "date_correct": {
+        "correct": 75,
+        "rate": 0.974,
+        "total": 77
+      },
+      "date_exact": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "date_forbidden": {
+        "correct": 1,
+        "rate": 0.013,
+        "total": 77
+      },
+      "date_present": {
+        "correct": 76,
+        "rate": 0.987,
+        "total": 77
+      },
+      "date_role_correct": {
+        "correct": 42,
+        "rate": 0.5676,
+        "total": 74
+      },
+      "description_complete": {
+        "correct": 21,
+        "rate": 0.2727,
+        "total": 77
+      },
+      "description_factual": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "description_specific": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "filename_correct": {
+        "correct": 54,
+        "rate": 0.7013,
+        "total": 77
+      },
+      "needless_review": {
+        "correct": 2,
+        "rate": 0.0377,
+        "total": 53
+      },
+      "parties_correct": {
+        "correct": 67,
+        "rate": 0.8701,
+        "total": 77
+      },
+      "party_forbidden": {
+        "correct": 8,
+        "rate": 0.1039,
+        "total": 77
+      },
+      "party_role_correct": {
+        "correct": 57,
+        "rate": 0.8769,
+        "total": 65
+      },
+      "readiness_match": {
+        "correct": 44,
+        "rate": 0.7719,
+        "total": 57
+      },
+      "ready": {
+        "correct": 65,
+        "rate": 0.8442,
+        "total": 77
+      },
+      "relation_correct": {
+        "correct": 61,
+        "rate": 0.8133,
+        "total": 75
+      },
+      "type_correct": {
+        "correct": 72,
+        "rate": 0.9351,
+        "total": 77
+      },
+      "type_present": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "unsafe_ready": {
+        "correct": 15,
+        "rate": 0.1948,
+        "total": 77
+      },
+      "unsupported_fact_doc": {
+        "correct": 9,
+        "rate": 0.1169,
+        "total": 77
+      }
+    },
+    "review_rate": 0.1558,
+    "scored": 77,
+    "statuses": {
+      "completed": 77
+    },
+    "sums": {
+      "description_claims": {
+        "sum": 290,
+        "total_docs": 77
+      },
+      "description_unsupported": {
+        "sum": 0,
+        "total_docs": 77
+      },
+      "facts_proposed": {
+        "sum": 380,
+        "total_docs": 77
+      },
+      "facts_unsupported": {
+        "sum": 10,
+        "total_docs": 77
+      },
+      "miscited_ids": {
+        "sum": 89,
+        "total_docs": 77
+      },
+      "parties_expected": {
+        "sum": 99,
+        "total_docs": 77
+      },
+      "parties_matched": {
+        "sum": 87,
+        "total_docs": 77
+      },
+      "parties_spurious": {
+        "sum": 9,
+        "total_docs": 77
+      },
+      "unknown_ids": {
+        "sum": 0,
+        "total_docs": 77
+      }
+    },
+    "unsupported_fact_rate": 0.0
+  },
+  "final_summary": {
+    "completed": 77,
+    "counts": {
+      "claims": 298,
+      "forbidden_descriptions": 0,
+      "forbidden_parties": 8,
+      "spurious_parties": 9,
+      "trap_dates": 1,
+      "unsafe_ready": 15,
+      "unsupported_claims": 0
+    },
+    "documents": 77,
+    "means": {
+      "cited_support_rate": {
+        "mean": 0.7571,
+        "total_docs": 77
+      },
+      "context_date_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_fact_recall": {
+        "mean": 0.9848,
+        "total_docs": 77
+      },
+      "context_party_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "context_subject_recall": {
+        "mean": 0.9675,
+        "total_docs": 77
+      },
+      "context_type_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "description_completeness": {
+        "mean": 0.5476,
+        "total_docs": 77
+      },
+      "description_specificity": {
+        "mean": 0.9394,
+        "total_docs": 77
+      },
+      "digest_recall": {
+        "mean": 0.9935,
+        "total_docs": 77
+      },
+      "evidence_recall": {
+        "mean": 0.6602,
+        "total_docs": 77
+      },
+      "kv_accuracy": {
+        "mean": 0.9913,
+        "total_docs": 23
+      },
+      "ocr_cer": {
+        "mean": 0.0502,
+        "total_docs": 19
+      },
+      "ocr_cer_ci": {
+        "mean": 0.0493,
+        "total_docs": 19
+      },
+      "ocr_date_accuracy": {
+        "mean": 1.0,
+        "total_docs": 18
+      },
+      "ocr_identifier_accuracy": {
+        "mean": 1.0,
+        "total_docs": 16
+      },
+      "ocr_mean_confidence": {
+        "mean": 97.5167,
+        "total_docs": 18
+      },
+      "ocr_name_accuracy": {
+        "mean": 1.0,
+        "total_docs": 18
+      },
+      "ocr_wer": {
+        "mean": 0.0536,
+        "total_docs": 19
+      },
+      "prompt_recall": {
+        "mean": 1.0,
+        "total_docs": 77
+      },
+      "reading_order_accuracy": {
+        "mean": 0.7485,
+        "total_docs": 13
+      },
+      "route_correct": {
+        "mean": 1.0,
+        "total_docs": 28
+      },
+      "table_cell_recall": {
+        "mean": 0.9944,
+        "total_docs": 17
+      },
+      "table_row_accuracy": {
+        "mean": 0.9681,
+        "total_docs": 17
+      }
+    },
+    "rates": {
+      "date_correct": {
+        "correct": 75,
+        "rate": 0.974,
+        "total": 77
+      },
+      "date_exact": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "date_forbidden": {
+        "correct": 1,
+        "rate": 0.013,
+        "total": 77
+      },
+      "date_present": {
+        "correct": 76,
+        "rate": 0.987,
+        "total": 77
+      },
+      "date_role_correct": {
+        "correct": 42,
+        "rate": 0.5676,
+        "total": 74
+      },
+      "description_complete": {
+        "correct": 23,
+        "rate": 0.2987,
+        "total": 77
+      },
+      "description_factual": {
+        "correct": 77,
+        "rate": 1.0,
+        "total": 77
+      },
+      "description_specific": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "filename_correct": {
+        "correct": 54,
+        "rate": 0.7013,
+        "total": 77
+      },
+      "needless_review": {
+        "correct": 2,
+        "rate": 0.0377,
+        "total": 53
+      },
+      "parties_correct": {
+        "correct": 67,
+        "rate": 0.8701,
+        "total": 77
+      },
+      "party_forbidden": {
+        "correct": 8,
+        "rate": 0.1039,
+        "total": 77
+      },
+      "party_role_correct": {
+        "correct": 57,
+        "rate": 0.8769,
+        "total": 65
+      },
+      "readiness_match": {
+        "correct": 44,
+        "rate": 0.7719,
+        "total": 57
+      },
+      "ready": {
+        "correct": 65,
+        "rate": 0.8442,
+        "total": 77
+      },
+      "relation_correct": {
+        "correct": 61,
+        "rate": 0.8133,
+        "total": 75
+      },
+      "type_correct": {
+        "correct": 72,
+        "rate": 0.9351,
+        "total": 77
+      },
+      "type_present": {
+        "correct": 74,
+        "rate": 0.961,
+        "total": 77
+      },
+      "unsafe_ready": {
+        "correct": 15,
+        "rate": 0.1948,
+        "total": 77
+      },
+      "unsupported_fact_doc": {
+        "correct": 9,
+        "rate": 0.1169,
+        "total": 77
+      }
+    },
+    "review_rate": 0.1558,
+    "scored": 77,
+    "statuses": {
+      "completed": 77
+    },
+    "sums": {
+      "description_claims": {
+        "sum": 298,
+        "total_docs": 77
+      },
+      "description_unsupported": {
+        "sum": 0,
+        "total_docs": 77
+      },
+      "facts_proposed": {
+        "sum": 380,
+        "total_docs": 77
+      },
+      "facts_unsupported": {
+        "sum": 10,
+        "total_docs": 77
+      },
+      "miscited_ids": {
+        "sum": 89,
+        "total_docs": 77
+      },
+      "parties_expected": {
+        "sum": 99,
+        "total_docs": 77
+      },
+      "parties_matched": {
+        "sum": 87,
+        "total_docs": 77
+      },
+      "parties_spurious": {
+        "sum": 9,
+        "total_docs": 77
+      },
+      "unknown_ids": {
+        "sum": 0,
+        "total_docs": 77
+      }
+    },
+    "unsupported_fact_rate": 0.0
+  },
+  "gate": {
+    "aggregate": [
+      {
+        "baseline": 0.974,
+        "current": 0.974,
+        "limit": 0.961,
+        "metric": "date_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.961,
+        "current": 0.961,
+        "limit": 0.9481,
+        "metric": "date_exact",
+        "regressed": false
+      },
+      {
+        "baseline": 0.013,
+        "current": 0.013,
+        "limit": 0.026,
+        "metric": "date_forbidden",
+        "regressed": false
+      },
+      {
+        "baseline": 0.987,
+        "current": 0.987,
+        "limit": 0.974,
+        "metric": "date_present",
+        "regressed": false
+      },
+      {
+        "baseline": 0.5676,
+        "current": 0.5676,
+        "limit": 0.5541,
+        "metric": "date_role_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.2727,
+        "current": 0.2987,
+        "limit": 0.2597,
+        "metric": "description_complete",
+        "regressed": false
+      },
+      {
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 0.987,
+        "metric": "description_factual",
+        "regressed": false
+      },
+      {
+        "baseline": 0.961,
+        "current": 0.961,
+        "limit": 0.9481,
+        "metric": "description_specific",
+        "regressed": false
+      },
+      {
+        "baseline": 0.7013,
+        "current": 0.7013,
+        "limit": 0.6883,
+        "metric": "filename_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.0377,
+        "current": 0.0377,
+        "limit": 0.0566,
+        "metric": "needless_review",
+        "regressed": false
+      },
+      {
+        "baseline": 0.8701,
+        "current": 0.8701,
+        "limit": 0.8571,
+        "metric": "parties_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.1039,
+        "current": 0.1039,
+        "limit": 0.1169,
+        "metric": "party_forbidden",
+        "regressed": false
+      },
+      {
+        "baseline": 0.8769,
+        "current": 0.8769,
+        "limit": 0.8615,
+        "metric": "party_role_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.7719,
+        "current": 0.7719,
+        "limit": 0.7544,
+        "metric": "readiness_match",
+        "regressed": false
+      },
+      {
+        "baseline": 0.8133,
+        "current": 0.8133,
+        "limit": 0.8,
+        "metric": "relation_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.9351,
+        "current": 0.9351,
+        "limit": 0.9221,
+        "metric": "type_correct",
+        "regressed": false
+      },
+      {
+        "baseline": 0.961,
+        "current": 0.961,
+        "limit": 0.9481,
+        "metric": "type_present",
+        "regressed": false
+      },
+      {
+        "baseline": 0.1948,
+        "current": 0.1948,
+        "limit": 0.2078,
+        "metric": "unsafe_ready",
+        "regressed": false
+      },
+      {
+        "baseline": 0.1169,
+        "current": 0.1169,
+        "limit": 0.1299,
+        "metric": "unsupported_fact_doc",
+        "regressed": false
+      },
+      {
+        "baseline": 1.0,
+        "current": 1.0,
+        "limit": 1.0,
+        "metric": "trap_date_count",
+        "regressed": false
+      },
+      {
+        "baseline": 8.0,
+        "current": 8.0,
+        "limit": 8.0,
+        "metric": "forbidden_party_count",
+        "regressed": false
+      },
+      {
+        "baseline": 15.0,
+        "current": 15.0,
+        "limit": 15.0,
+        "metric": "unsafe_ready_count",
+        "regressed": false
+      }
+    ],
+    "baseline_mode": "replay",
+    "document_improvements": [
+      "lease-two-column: description_complete was false, now true",
+      "industrial-lease-dated-in-schedule-25p: description_complete was false, now true"
+    ],
+    "document_regressions": [],
+    "failures": [],
+    "gates": [
+      "documents"
+    ],
+    "latency": [],
+    "missing": [],
+    "new": [],
+    "passed": true,
+    "pending": []
+  },
+  "unchanged_filenames": 77,
+  "unchanged_prompts": 77,
+  "changed_descriptions": [
+    {
+      "id": "account-statement",
+      "before": "Statement from Kingsfold Community Bank to Pennywhistle Print Works LLC, totalling $180,677.49.",
+      "after": "Statement from Kingsfold Community Bank, totalling $180,677.49, also naming Pennywhistle Print Works LLC.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "capital-call-notice",
+      "before": "Capital Call Notice from Ravensmoor Growth Partners III, L.P. to Ravensmoor Growth GP III, LLC regarding Capital contribution, no. RGP3-0148, capital commitment of $5,000,000.00.",
+      "after": "Capital Call Notice from Ravensmoor Growth Partners III, L.P. regarding Capital contribution, no. RGP3-0148, capital commitment of $5,000,000.00, also naming Ravensmoor Growth GP III, LLC.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "lease-two-column",
+      "before": "Retail Lease between Oakhaven Retail Properties LLC and Sorrel & Thistle Tea House LLC for Suite 108, approximately 2,140 rentable square feet, Oakhaven, base rent of $34.00.",
+      "after": "Retail Lease between Oakhaven Retail Properties LLC and Sorrel & Thistle Tea House LLC for Suite 108, approximately 2,140 rentable square feet, Oakhaven Commons, 1800 Lamplighter Drive, Briarport, NC 27519, base rent of $34.00.",
+      "complete_before": false,
+      "complete_after": true
+    },
+    {
+      "id": "scan-noisy-statement",
+      "before": "Statement of Account from Brindle Paper & Janitorial Supply to Copper Flats Dental Group PLLC for Dental Group account balance, totalling $809.95.",
+      "after": "Statement of Account from Brindle Paper & Janitorial Supply for Dental Group account balance, totalling $809.95, also naming Copper Flats Dental Group PLLC.",
+      "complete_before": true,
+      "complete_after": true
+    },
+    {
+      "id": "scan-faint-letter",
+      "before": "Letter of Resignation from Mireille Saltonstall to Dr. Rufus Pemberton regarding lead veterinary technician.",
+      "after": "Letter of Resignation from Mireille Saltonstall regarding lead veterinary technician, also naming Dr. Rufus Pemberton.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "scan-lease-25p",
+      "before": "Office Lease between Palisade Tower Partners LLC and Fennel Court Software Inc. for Suite 400, fourth floor, approximately 14,860 rentable square, security deposit of $24,250.00.",
+      "after": "Office Lease between Palisade Tower Partners LLC and Fennel Court Software Inc. for Suite 400, fourth floor, approximately 14,860 rentable square feet, security deposit of $24,250.00.",
+      "complete_before": true,
+      "complete_after": true
+    },
+    {
+      "id": "meeting-notice-columns",
+      "before": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union to Corinne Abernethy-Vale regarding merger of credit unions.",
+      "after": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union regarding merger of credit unions, also naming Corinne Abernethy-Vale.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "meeting-notice-interleaved",
+      "before": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union to Corinne Abernethy-Vale regarding merger of credit unions.",
+      "after": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union regarding merger of credit unions, also naming Corinne Abernethy-Vale.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "meeting-notice-reversed",
+      "before": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union to Corinne Abernethy-Vale regarding merger of credit unions.",
+      "after": "Notice of Special Meeting of Members from Larchmont Valley Federal Credit Union regarding merger of credit unions, also naming Corinne Abernethy-Vale.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "rate-confirmation-rotated",
+      "before": "Carrier Rate Confirmation from Copperline Freight Brokerage LLC to Halden Ridge Trucking Inc. for 53' reefer, set at 34 F, no. CFB-260608-117, totalling $3,168.00.",
+      "after": "Carrier Rate Confirmation from Copperline Freight Brokerage LLC for 53' reefer, set at 34 F, no. CFB-260608-117, totalling $3,168.00, also naming Halden Ridge Trucking Inc.",
+      "complete_before": true,
+      "complete_after": true
+    },
+    {
+      "id": "invoice-label-above",
+      "before": "Invoice from Quarrystone Signs & Graphics to Bellhaven Physical Therapy PLLC for Illuminated channel letters, invoice QSG-10482, totalling $9,603.06.",
+      "after": "Invoice from Quarrystone Signs & Graphics for Illuminated channel letters, invoice QSG-10482, totalling $9,603.06, also naming Bellhaven Physical Therapy PLLC.",
+      "complete_before": true,
+      "complete_after": true
+    },
+    {
+      "id": "invoice-boxed-grid",
+      "before": "Service Invoice from Whitlock & Sons Plumbing LLC to Amara Ellingsworth, invoice 88-2041, totalling $1,257.00.",
+      "after": "Service Invoice from Whitlock & Sons Plumbing LLC, invoice 88-2041, totalling $1,257.00, also naming Amara Ellingsworth.",
+      "complete_before": false,
+      "complete_after": false
+    },
+    {
+      "id": "industrial-lease-dated-in-schedule-25p",
+      "before": "Industrial Lease between Ardent Quay Industrial Properties LP and Moss & Lanyard Distribution Inc. for Building 7, Ardent Quay Logistics Park, 2200 Wharfside, base rent of $14.00.",
+      "after": "Industrial Lease between Ardent Quay Industrial Properties LP and Moss & Lanyard Distribution Inc. for Building 7, Ardent Quay Logistics Park, 2200 Wharfside Parkway, Port Ellery, Maryland 21226; approximately 312,480 square feet, base rent of $14.00.",
+      "complete_before": false,
+      "complete_after": true
+    }
+  ]
+}

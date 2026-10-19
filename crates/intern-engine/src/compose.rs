@@ -641,14 +641,16 @@ fn compose(
             .parties
             .iter()
             .filter(|party| !named.contains(&party.name))
-            .find(|party| party.role.is_some_and(|role| roles.contains(&role)))
+            .find(|party| {
+                party.role_supported && party.role.is_some_and(|role| roles.contains(&role))
+            })
             .map(|party| clean(&party.name))
             .filter(|_| keep(Part::SecondParty))
     };
     let issuer_side = || other(PROVIDER);
     let receiving_side = || other(RECEIVING);
-    // The one other party, whatever role the document gives it: an issued
-    // document's customer, a notice's or a letter's other side.
+    // An otherwise unclassified party can be mentioned neutrally, but its
+    // presence alone never establishes who sent or received the document.
     let lone_other = || {
         let others = facts
             .parties
@@ -668,6 +670,7 @@ fn compose(
         _ => kind,
     };
     let mut tail: Vec<String> = Vec::new();
+    let mut neutral_party = None;
     match (facts.class, joining) {
         (_, PartyRelation::Between) => {
             text.push_str(&format!(
@@ -697,8 +700,10 @@ fn compose(
                         .map(clean)
                         .filter(|name: &String| name != first && keep(Part::SecondParty))
                 };
-                if let Some(customer) = receiving_side().or_else(lone_other).or_else(billed) {
+                if let Some(customer) = receiving_side().or_else(billed) {
                     text.push_str(&format!(" to {customer}"));
+                } else {
+                    neutral_party = lone_other();
                 }
             } else if let Some(first) = &first {
                 text.push_str(&format!(" {} {first}", word_for(joining)));
@@ -722,13 +727,17 @@ fn compose(
                     if let Some(first) = &first {
                         text.push_str(&format!(" from {first}"));
                     }
-                    if let Some(to) = receiving_side().or_else(lone_other) {
+                    if let Some(to) = receiving_side() {
                         text.push_str(&format!(" to {to}"));
+                    } else {
+                        neutral_party = lone_other();
                     }
                 }
                 PartyRelation::For | PartyRelation::To => {
-                    if let Some(from) = issuer_side().or_else(lone_other) {
+                    if let Some(from) = issuer_side() {
                         text.push_str(&format!(" from {from}"));
+                    } else {
+                        neutral_party = lone_other();
                     }
                     if let Some(first) = &first {
                         text.push_str(&format!(" to {first}"));
@@ -827,6 +836,11 @@ fn compose(
             None => text.push_str(&format!(", for {amount}")),
             Some(label) => text.push_str(&format!(", {label} of {amount}")),
         }
+    }
+    // Retain a sole other validated name without assigning a direction.
+    // Like a directed secondary party, this clause is optional in the budget.
+    if let Some(name) = neutral_party {
+        text.push_str(&format!(", also naming {name}"));
     }
     if dated && let Some(date) = facts.date_surface {
         text.push_str(&format!(", dated {}", clean(date)));
@@ -1037,9 +1051,14 @@ fn is_ordinary_capitalised(word: &str) -> bool {
     starts_upper && rest_lower && ORDINARY_OPENERS.contains(&word.to_lowercase().as_str())
 }
 
-/// At most `most` words of a phrase, never ending on a word that needs one
-/// after it.
+/// Shorten an ordinary subject without leaving a dangling function word.
+/// Numeric subjects stay intact: cutting at a word boundary can drop a unit,
+/// the end of a range, or a condition. The budget loop can omit the whole
+/// subject if it does not fit.
 fn shorten(phrase: &str, most: usize) -> String {
+    if phrase.chars().any(char::is_numeric) {
+        return phrase.to_owned();
+    }
     let mut words = phrase.split_whitespace().take(most).collect::<Vec<_>>();
     while words.len() > 1
         && words.last().is_some_and(|word| {
@@ -1218,6 +1237,101 @@ mod tests {
                 role_supported: role.is_some(),
             })
             .collect()
+    }
+
+    #[test]
+    fn fidelity_public_coissuer_is_not_a_recipient() {
+        for class in [
+            DocumentClass::Issued,
+            DocumentClass::Notice,
+            DocumentClass::Letter,
+            DocumentClass::Email,
+        ] {
+            for role in [Some(PartyRole::Issuer), None] {
+                let parties = cast(&[("Ash Fund", Some(PartyRole::Issuer)), ("Elm GP", role)]);
+                let relation = Relation {
+                    relation: PartyRelation::From,
+                    parties: vec!["Ash Fund".into()],
+                    basis: "issuer label".into(),
+                };
+                let description = describe(&DescriptionFacts {
+                    class,
+                    document_type: Some("Capital Call Notice"),
+                    relation: Some(&relation),
+                    parties: &parties,
+                    subject: Some("the next capital contribution"),
+                    ..DescriptionFacts::default()
+                });
+                assert!(!description.contains("to Elm GP"), "{description}");
+                assert!(description.contains("from Ash Fund"), "{description}");
+                assert!(
+                    description.contains("Elm GP"),
+                    "named parties remain useful: {description}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fidelity_public_a_supported_recipient_is_preserved() {
+        let parties = cast(&[
+            ("Ash Fund", Some(PartyRole::Issuer)),
+            ("Elm LP", Some(PartyRole::Recipient)),
+        ]);
+        let relation = Relation {
+            relation: PartyRelation::From,
+            parties: vec!["Ash Fund".into()],
+            basis: "issuer label".into(),
+        };
+        let description = describe(&DescriptionFacts {
+            class: DocumentClass::Notice,
+            document_type: Some("Capital Call Notice"),
+            relation: Some(&relation),
+            parties: &parties,
+            subject: Some("the next capital contribution"),
+            ..DescriptionFacts::default()
+        });
+        assert!(
+            description.contains("from Ash Fund to Elm LP"),
+            "{description}"
+        );
+    }
+
+    #[test]
+    fn fidelity_public_long_quantity_is_complete_or_omitted() {
+        let parties = cast(&[
+            (
+                "Ash Commercial Property Holdings of the Northern Valley Region LLC",
+                Some(PartyRole::Landlord),
+            ),
+            (
+                "Elm Office Services and Management of the Eastern Harbour District Inc.",
+                Some(PartyRole::Tenant),
+            ),
+        ]);
+        let relation = relation_from_roles(
+            DocumentClass::Agreement,
+            Some("Office Lease"),
+            &parties,
+            RelationCues::default(),
+        );
+        let quantity = "approximately 14,860 rentable square feet of office space on the fourth floor under the attached detailed construction plans";
+        let description = describe(&DescriptionFacts {
+            class: DocumentClass::Agreement,
+            document_type: Some("Office Lease"),
+            relation: Some(&relation),
+            parties: &parties,
+            subject: Some(quantity),
+            ..DescriptionFacts::default()
+        });
+        assert!(
+            description.split_whitespace().count() <= MAX_DESCRIPTION_WORDS,
+            "{description}"
+        );
+        assert!(
+            !description.contains("14,860") || description.contains(quantity),
+            "{description}"
+        );
     }
 
     #[test]
