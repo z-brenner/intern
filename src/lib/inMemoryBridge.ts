@@ -1,9 +1,10 @@
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, LegacyModel, LocalModelId, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { filenameExtension, leadingDate, validateFilename, validateLeafFilename } from './filenames';
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
+import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS, PINNED_MODEL_BYTES } from './localModels';
 import { humanizeReason } from './reasons';
 import type { QueueBridgeEvent } from './tauriBridge';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
@@ -16,8 +17,8 @@ const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
 /** A filename as Windows compares two in one folder, as pipeline.rs name_key does: regardless of case and of trailing dots and spaces. */
 const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
 
-/** Exact size of the single pinned model file this build downloads. */
-export const PINNED_MODEL_BYTES = 1_280_835_840;
+/** Exact sizes of the local model files this build pins; the default's is the one downloaded unless a person chooses the other. */
+export { PINNED_MODEL_BYTES, PINNED_SMALL_MODEL_BYTES } from './localModels';
 
 const seedItems: QueueItem[] = [
   { id: 'employment', originalFilename: 'Employment Agreement - John Smith.pdf', status: 'ready', proposedFilename: '2024-04-12 Employment Agreement with John Smith.pdf', confidence: 0.98 },
@@ -110,6 +111,13 @@ export interface InMemoryBridgeOptions {
   /** Settings already saved, such as an earlier release's manual intake folders. */
   settings?: Partial<AppSettings>;
   setup?: Partial<SetupState>;
+  /**
+   * Local models already in the model folder. Defaults to the chosen one
+   * when setup starts out ready, and to none otherwise.
+   */
+  installedModels?: LocalModelId[];
+  /** The model file an earlier version left behind, for the cleanup offer. */
+  legacyModel?: LegacyModel;
   /** A hosted-model key already in the (fake) credential store. */
   hostedKey?: string;
   /** Spellings already learned from review. */
@@ -268,10 +276,33 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     recordedDescriptions += 1;
     lastRecordedAt = Math.floor(Date.now() / 1000);
   };
-  // The pinned model's exact size from src-tauri/resources/model-manifest.json.
-  // The previous value, 3_278_329_184, was a model plus a vision projector that
+  // The chosen local model, kept in the settings as the backend keeps it,
+  // and the exact size of its file from src-tauri/resources/model-manifest.json.
+  // An older value, 3_278_329_184, was a model plus a vision projector that
   // this pipeline does not download.
-  let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
+  let localModel: LocalModelId = settings.localModel ?? options.setup?.localModel ?? DEFAULT_LOCAL_MODEL;
+  settings = { ...settings, localModel };
+  const modelBytes = (id: LocalModelId) => LOCAL_MODELS.find((model) => model.id === id)?.bytes ?? PINNED_MODEL_BYTES;
+  let setup: SetupState = { state: 'ready', downloadedBytes: modelBytes(localModel), totalBytes: modelBytes(localModel), ...options.setup };
+  const installed = new Set<LocalModelId>(options.installedModels ?? (setup.state === 'ready' ? [localModel] : []));
+  // What a model not chosen had downloaded so far, kept as the backend keeps
+  // a partial file, so switching back resumes it.
+  const partial = new Map<LocalModelId, number>();
+  let legacyModel: LegacyModel | null = options.legacyModel ? { ...options.legacyModel } : null;
+  // Mirrors set_local_model: the running model is stopped, and the other
+  // starts if it is installed; otherwise setup waits for a download that
+  // only a person starts.
+  const switchLocalModel = (next: LocalModelId) => {
+    if (setup.state === 'downloading') throw { code: 'SETUP_BUSY', message: 'a model setup operation is already active' };
+    settings = { ...settings, localModel: next };
+    if (next === localModel) return;
+    if (setup.state !== 'ready' && setup.downloadedBytes > 0) partial.set(localModel, setup.downloadedBytes);
+    localModel = next;
+    const totalBytes = modelBytes(next);
+    setup = installed.has(next)
+      ? { state: 'ready', downloadedBytes: totalBytes, totalBytes }
+      : { state: 'required', downloadedBytes: partial.get(next) ?? 0, totalBytes };
+  };
   // Without a deployment the demo opens straight into the app; pass 0 to walk
   // folder setup instead.
   let completedOnboardingVersion = options.completedOnboardingVersion ?? (options.sharePoint === 'fake' ? 0 : 1);
@@ -409,7 +440,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     });
   };
   renameWaiting();
-  const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
+  const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; installed.add(localModel); partial.delete(localModel); setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
   // Mirrors the backend's partial add: what it would leave out is reported by
   // name, everything else is queued, and a path already queued says so.
   const addSelections = (files: FileSelection[], report: AddReport) => {
@@ -561,8 +592,13 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       }
       settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
       renameWaiting();
+      // Like settings_save: the rest of the save stands, and the local
+      // model's answer to a change of model - SETUP_BUSY - comes after it.
+      const chosen = next.localModel ?? DEFAULT_LOCAL_MODEL;
+      settings = { ...settings, localModel };
+      if (chosen !== localModel) switchLocalModel(chosen);
     },
-    getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
+    getSetup: async () => ({ ...setup, localModel, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
     getOnboarding: async (): Promise<OnboardingStatus> => ({
       currentVersion: 1,
       completedVersion: completedOnboardingVersion,
@@ -601,9 +637,25 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       downloadTimer = undefined;
       setup = { ...setup, state: 'required', error: 'MODEL_DOWNLOAD_CANCELED' };
     },
-    setupChooseExisting: async () => {
+    // The backend tells the two models apart by the file's size; here the
+    // file's name stands in for it. A copy of the model not chosen becomes
+    // the chosen one, as it does there.
+    setupChooseExisting: async (files) => {
       if (setup.state === 'downloading') throw { code: 'SETUP_BUSY', message: 'a model setup operation is already active' };
+      const name = files.modelPath.split(/[\\/]/).at(-1);
+      const match = LOCAL_MODELS.find((model) => model.file === name);
+      if (match && match.id !== localModel) switchLocalModel(match.id);
+      installed.add(localModel);
+      partial.delete(localModel);
       setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes, error: undefined };
+    },
+    getLocalModels: async () => LOCAL_MODELS.map((model) => ({ ...model, selected: model.id === localModel, installed: installed.has(model.id), default: model.id === DEFAULT_LOCAL_MODEL })),
+    setLocalModel: async (model) => { switchLocalModel(model); },
+    getLegacyModel: async () => legacyModel ? { ...legacyModel } : null,
+    // The backend checks the file is exactly the old model before deleting it.
+    removeLegacyModel: async () => {
+      if (!legacyModel) throw { code: 'LEGACY_MODEL_NOT_FOUND', message: 'the previous model file is not in Intern\'s model folder' };
+      legacyModel = null;
     },
     // Mirrors the backend: clearing history deletes terminal queue rows and,
     // through cascade, the receipts the history view lists.

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { DesktopBridge, SelectionBoundary } from '../../lib/bridge';
 import type { SetupEventSource } from '../../lib/tauriBridge';
-import type { SetupState } from '../../types';
+import { formatBytes } from '../../lib/format';
+import { knownModels } from '../../lib/localModels';
+import type { LocalModelId, LocalModelOption, SetupState } from '../../types';
 
 /**
  * The local model's setup state and actions, shared by the standalone setup
@@ -13,14 +15,27 @@ import type { SetupState } from '../../types';
  */
 export function useModelSetup(bridge: DesktopBridge, selection: SelectionBoundary | undefined, { initial, pending }: { initial?: SetupState; pending?: Promise<SetupState> } = {}) {
   const [setup, setSetup] = useState<SetupState | undefined>(initial);
-  const [setupAction, setSetupAction] = useState<'start' | 'cancel' | 'choose'>();
+  const [setupAction, setSetupAction] = useState<'start' | 'cancel' | 'choose' | 'switch'>();
   const [setupError, setSetupError] = useState('');
+  // The local models and which is chosen. A bridge that cannot say leaves
+  // this undefined, and the screens fall back to the pinned sizes.
+  const [models, setModels] = useState<LocalModelOption[]>();
+  const readModels = async () => {
+    try { setModels(await bridge.getLocalModels()); } catch { /* The choice is offered from the pinned facts instead. */ }
+  };
 
   useEffect(() => {
     let active = true;
     void (pending ?? bridge.getSetup()).then((next) => { if (active) setSetup(next); }).catch((error) => { if (active) setSetupError(describeSetupError(error)); });
     return () => { active = false; };
   }, [bridge, pending]);
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve().then(() => bridge.getLocalModels())
+      .then((next) => { if (active) setModels(next); })
+      .catch(() => { /* The choice is offered from the pinned facts instead. */ });
+    return () => { active = false; };
+  }, [bridge]);
   useEffect(() => {
     const source = bridge as DesktopBridge & Partial<SetupEventSource>;
     if (!source.subscribeSetup) return;
@@ -50,7 +65,7 @@ export function useModelSetup(bridge: DesktopBridge, selection: SelectionBoundar
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [bridge, setup?.state]);
 
-  const runSetupAction = async (action: 'start' | 'cancel' | 'choose', run: () => Promise<boolean | void>) => {
+  const runSetupAction = async (action: 'start' | 'cancel' | 'choose' | 'switch', run: () => Promise<boolean | void>) => {
     if (setupAction) return;
     setSetupAction(action);
     setSetupError('');
@@ -58,9 +73,12 @@ export function useModelSetup(bridge: DesktopBridge, selection: SelectionBoundar
       if (await run() === false) return;
       setSetup(await bridge.getSetup());
     } catch (error) {
-      setSetupError(describeSetupError(error));
+      setSetupError(describeSetupError(error, models));
     } finally {
       setSetupAction(undefined);
+      // Choosing a file can change which model is chosen, and any of these
+      // can change which is installed.
+      if (action !== 'cancel') void readModels();
     }
   };
 
@@ -69,9 +87,22 @@ export function useModelSetup(bridge: DesktopBridge, selection: SelectionBoundar
     setSetup,
     busy: setupAction !== undefined,
     /** The operation's own failure, or the failure the setup state reports. */
-    operationError: setupError || (setup?.state === 'failed' ? describeSetupError(setup.error) : undefined),
+    operationError: setupError || (setup?.state === 'failed' ? describeSetupError(setup.error, models) : undefined),
     canChooseExisting: Boolean(selection),
+    /** The local models, from the backend; undefined until it answers, or if it cannot. */
+    models,
+    /** The chosen local model: the backend's word, else the setup state's, else the default. */
+    localModel: models?.find((model) => model.selected)?.id ?? setup?.localModel ?? 'bonsai-4b',
     start: () => void runSetupAction('start', () => bridge.startModelDownload()),
+    /**
+     * Choose the other local model and download it: the click that chooses
+     * it is the consent to the download. A model already installed just
+     * starts, with nothing to download.
+     */
+    switchModel: (model: LocalModelId) => void runSetupAction('switch', async () => {
+      await bridge.setLocalModel(model);
+      if ((await bridge.getSetup()).state !== 'ready') await bridge.startModelDownload();
+    }),
     cancel: () => void runSetupAction('cancel', () => bridge.setupCancel()),
     chooseExisting: () => void runSetupAction('choose', async () => {
       const files = await selection?.pickExistingModelFiles();
@@ -93,7 +124,8 @@ export function modelReady(setup: SetupState | undefined) {
  */
 const LOG_FOLDER = '%LOCALAPPDATA%\\com.intern.app\\logs';
 
-export function describeSetupError(error: unknown) {
+/** `models` names the files a chosen file can be; without it, the pinned ones. */
+export function describeSetupError(error: unknown, models?: LocalModelOption[]) {
   const code = typeof error === 'string'
     ? error
     : typeof error === 'object' && error && 'code' in error && typeof error.code === 'string'
@@ -102,14 +134,14 @@ export function describeSetupError(error: unknown) {
   switch (code) {
     case 'SETUP_BUSY': return 'Another model setup operation is already active. Wait for it to finish or cancel it. (SETUP_BUSY)';
     // These used to name files this build does not use: "the matching Q4 or Q8
-    // model and mmproj GGUF files", and an "image self-test". Intern pins one
-    // model file and has no vision projector, so the advice sent people looking
-    // for something that does not exist. Name the file the manifest actually
-    // pins instead.
+    // model and mmproj GGUF files", and an "image self-test". Intern has no
+    // vision projector, so the advice sent people looking for something that
+    // does not exist. Name the files the manifest actually pins instead -
+    // either is accepted, and the backend tells which by its size.
     case 'MODEL_FILE_INVALID':
-    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match the model Intern pins. Choose the exact Qwen3.5-2B-Q4_K_M.gguf file, or let Intern download it. (MODEL_FILE_INVALID)';
+    case 'MODEL_MANIFEST_INVALID': return `The selected file did not match either model Intern pins. Choose ${knownModels(models).map((model) => `${model.file} (${formatBytes(model.bytes)})`).join(' or ')}, or let Intern download one. (MODEL_FILE_INVALID)`;
     // The runtime failures below happen after the model file has passed its
-    // checksum, so a fresh download re-hashes the same 1.2 GB and fails the
+    // checksum, so a fresh download re-hashes the same file and fails the
     // same way. They point at the runtime's own log instead.
     case 'MODEL_SELF_TEST_FAILED': return `Intern installed the model, but its local self-test failed. The model file itself checked out, so downloading it again will not help; what the model runtime reported is in llama-server.log in ${LOG_FOLDER}. (MODEL_SELF_TEST_FAILED)`;
     case 'MODEL_SERVER_START_FAILED': return `The local model is installed, but its runtime would not start on this computer. Security software blocking one of its files is a common cause; the reason is in llama-server.log in ${LOG_FOLDER}. Downloading the model again will not fix this. (MODEL_SERVER_START_FAILED)`;

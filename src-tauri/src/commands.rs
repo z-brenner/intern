@@ -14,9 +14,9 @@ use intern_core::{
 use intern_engine::HouseRule;
 use intern_engine::{
     DocumentAnalysis, DocumentSource, Engine, EngineErrorCode, LlamaServer, ModelClient, ModelFile,
-    ModelManifest, ServerOptions, SupervisedWorker, prepare_worker_temp_root,
+    ModelManifest, SelectedModel, ServerOptions, SupervisedWorker, prepare_worker_temp_root,
 };
-use intern_queue::{LearnedRule, ModelSource};
+use intern_queue::{LearnedRule, LocalModel, ModelSource};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -232,6 +232,31 @@ pub struct SetupStateDto {
     /// Whether a hosted model is chosen and configured, which lets documents
     /// be processed whatever the local model's state.
     hosted_model_ready: bool,
+    /// The local model variant this state is about (`bonsai-4b`, `bonsai-2b`):
+    /// the one setup downloads, verifies and runs.
+    local_model: String,
+}
+
+/// One local model a person can choose, for the setup screen and Settings.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalModelDto {
+    id: String,
+    label: String,
+    file: String,
+    bytes: u64,
+    selected: bool,
+    /// The file is in the model folder at its pinned size. Metadata only.
+    installed: bool,
+    default: bool,
+}
+
+/// The model file an earlier Intern downloaded, which this one no longer uses.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyModelDto {
+    file: String,
+    bytes: u64,
 }
 
 struct TauriPipelineEvents {
@@ -297,7 +322,7 @@ impl PipelineEventSink for TauriPipelineEvents {
 /// What brings a local model runtime up: in production llama-server and a
 /// client for it, under test a fake that counts its launches.
 trait RuntimeLauncher: Send + Sync {
-    fn launch(&self, manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError>;
+    fn launch(&self, model: &SelectedModel) -> Result<LaunchedRuntime, CommandError>;
 }
 
 /// A runtime that has started and answered its health check.
@@ -329,8 +354,8 @@ impl RuntimeLauncher for LlamaLauncher {
     /// or loaded. Essentially every business document carries usable text, and a
     /// projector for this model is 668,227,264 bytes - 637 MiB - which every
     /// user would download and hold resident for a path almost nothing takes.
-    fn launch(&self, manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError> {
-        let model = manifest.model().ok_or_else(|| CommandError {
+    fn launch(&self, selected: &SelectedModel) -> Result<LaunchedRuntime, CommandError> {
+        let model = selected.model().ok_or_else(|| CommandError {
             code: "MODEL_MANIFEST_INVALID".into(),
             message: "model manifest names no text model".into(),
         })?;
@@ -343,7 +368,7 @@ impl RuntimeLauncher for LlamaLauncher {
         let client = ModelClient::new(
             &server.completion_endpoint(),
             server.api_key().to_owned(),
-            manifest.served_model_name.clone(),
+            selected.served_model_name.clone(),
         )?;
         Ok(LaunchedRuntime {
             process: Box::new(server),
@@ -367,8 +392,21 @@ struct VerifiedFile {
 }
 
 /// Where a model that passed its digest and its self-test says so, beside the
-/// model itself.
-const VERIFICATION_STAMP: &str = ".verified.json";
+/// model itself: one stamp per variant (`.verified-bonsai-4b.json`), so
+/// switching between them does not read either file again.
+const VERIFICATION_STAMP_PREFIX: &str = ".verified-";
+/// The single stamp an Intern that pinned one model (Qwen3.5-2B) wrote. Its
+/// pin is no variant's, so it never vouches for anything; it is removed with
+/// that model.
+const LEGACY_VERIFICATION_STAMP: &str = ".verified.json";
+
+/// The model file Intern pinned before Bonsai: unsloth Qwen3.5-2B Q4_K_M.
+/// An update leaves it in the model folder; it is removed only when the
+/// person asks, and only if it is exactly this file.
+const LEGACY_MODEL_NAME: &str = "Qwen3.5-2B-Q4_K_M.gguf";
+const LEGACY_MODEL_SIZE: u64 = 1_280_835_840;
+const LEGACY_MODEL_SHA256: &str =
+    "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223";
 const VERIFICATION_STAMP_SCHEMA: u32 = 1;
 
 /// What a launch needs to know to trust the installed model without reading
@@ -447,6 +485,9 @@ struct RuntimeModel {
     executable: PathBuf,
     model_directory: PathBuf,
     manifest: ModelManifest,
+    /// The variant that is installed, verified and run. Changed only under
+    /// `lifecycle`, with no server running ([`RuntimeModel::select_variant`]).
+    selected: Mutex<SelectedModel>,
     app_version: String,
     launcher: Arc<dyn RuntimeLauncher>,
     validate: Box<FileValidator>,
@@ -467,19 +508,30 @@ struct RuntimeModel {
 }
 
 impl RuntimeModel {
-    fn new(executable: PathBuf, model_directory: PathBuf, manifest: ModelManifest) -> Self {
+    fn new(
+        executable: PathBuf,
+        model_directory: PathBuf,
+        manifest: ModelManifest,
+        local_model: LocalModel,
+    ) -> Self {
         let launcher = Arc::new(LlamaLauncher {
             executable: executable.clone(),
             model_directory: model_directory.clone(),
         });
-        Self::with_parts(
+        let runtime = Self::with_parts(
             executable,
             model_directory,
             manifest,
             launcher,
             Box::new(validate_selected_file),
             env!("CARGO_PKG_VERSION").to_owned(),
-        )
+        );
+        let selected = runtime.manifest.select_or_default(local_model.as_str());
+        *runtime
+            .selected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = selected;
+        runtime
     }
 
     fn with_parts(
@@ -493,6 +545,7 @@ impl RuntimeModel {
         Self {
             executable,
             model_directory,
+            selected: Mutex::new(manifest.default_model()),
             manifest,
             app_version,
             launcher,
@@ -507,18 +560,125 @@ impl RuntimeModel {
         }
     }
 
-    fn manifest(&self) -> &ModelManifest {
+    /// The selected variant, resolved: the files setup installs and the model
+    /// the server loads.
+    fn manifest(&self) -> SelectedModel {
+        self.selected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Every variant this build pins.
+    fn variants(&self) -> &ModelManifest {
         &self.manifest
+    }
+
+    /// Makes `selected` the variant that is installed and run.
+    ///
+    /// Callers hold the model first ([`RuntimeModel::hold`]), so the server is
+    /// already stopped and a request under way is handed back to the queue
+    /// rather than failed; this then waits for any start in progress, stops
+    /// whatever it left running, and swaps the variant with nothing resident.
+    /// One server, one model, at a time: the other variant is loaded only by
+    /// a start after this returns. Says whether anything changed.
+    fn select_variant(&self, selected: SelectedModel) -> Result<bool, CommandError> {
+        let _lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| process_state_unavailable())?;
+        if self.manifest().variant == selected.variant {
+            return Ok(false);
+        }
+        self.stop_runtime().map_err(|error| CommandError {
+            code: error.code,
+            message: "the local model could not be stopped".into(),
+        })?;
+        *self
+            .selected
+            .lock()
+            .map_err(|_| model_state_unavailable())? = selected;
+        // What this session verified was the other variant's file.
+        *self.verified_slot() = None;
+        Ok(true)
+    }
+
+    /// Every variant, and whether each is installed and selected.
+    fn local_models(&self) -> Vec<LocalModelDto> {
+        let selected = self.manifest().variant;
+        self.manifest
+            .variants
+            .iter()
+            .filter_map(|variant| {
+                let resolved = self.manifest.select(&variant.id)?;
+                let model = resolved.model()?;
+                Some(LocalModelDto {
+                    id: variant.id.clone(),
+                    label: variant.label.clone(),
+                    file: model.name.clone(),
+                    bytes: resolved.total_bytes(),
+                    selected: variant.id == selected,
+                    installed: self.installed_quick(&resolved),
+                    default: variant.id == self.manifest.default,
+                })
+            })
+            .collect()
+    }
+
+    /// The previous pinned model, if an earlier Intern left it in the model
+    /// folder at its exact size. Metadata only.
+    fn legacy_model(&self) -> Option<LegacyModelDto> {
+        std::fs::metadata(self.model_directory.join(LEGACY_MODEL_NAME))
+            .ok()
+            .filter(|metadata| metadata.is_file() && metadata.len() == LEGACY_MODEL_SIZE)
+            .map(|metadata| LegacyModelDto {
+                file: LEGACY_MODEL_NAME.into(),
+                bytes: metadata.len(),
+            })
+    }
+
+    /// Deletes the previous pinned model, and its old verification stamp,
+    /// once it is known to be exactly that file: its size and its SHA-256
+    /// both match the old pin, so nothing a person put there under the same
+    /// name is ever removed. Reads the whole file; runs off the UI thread.
+    fn remove_legacy_model(&self) -> Result<(), CommandError> {
+        let path = self.model_directory.join(LEGACY_MODEL_NAME);
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| CommandError {
+            code: "LEGACY_MODEL_NOT_FOUND".into(),
+            message: "the previous model file is not in Intern's model folder".into(),
+        })?;
+        let mismatch = || CommandError {
+            code: "LEGACY_MODEL_MISMATCH".into(),
+            message: "the file is not the previous model Intern downloaded, so it was left alone"
+                .into(),
+        };
+        if !metadata.is_file() || metadata.len() != LEGACY_MODEL_SIZE {
+            return Err(mismatch());
+        }
+        let legacy = ModelFile {
+            name: LEGACY_MODEL_NAME.into(),
+            role: intern_engine::ModelRole::Model,
+            url: String::new(),
+            size: LEGACY_MODEL_SIZE,
+            sha256: LEGACY_MODEL_SHA256.into(),
+        };
+        (self.validate)(&path, &legacy).map_err(|_| mismatch())?;
+        std::fs::remove_file(&path).map_err(|_| CommandError {
+            code: "LEGACY_MODEL_REMOVE_FAILED".into(),
+            message: "the previous model file could not be removed".into(),
+        })?;
+        let _ = std::fs::remove_file(self.model_directory.join(LEGACY_VERIFICATION_STAMP));
+        Ok(())
     }
 
     /// Whether the manifest's files are in place at the size it pins.
     ///
     /// Metadata only, never a byte of the file. Launch asks this inside
     /// Tauri's setup hook, before the window paints, and used to answer it by
-    /// hashing all 1.19 GiB - twice, so an office laptop without SHA
+    /// hashing the whole model (1.19 GiB then) - twice, so an office laptop without SHA
     /// instructions showed a white rectangle for five seconds or more at
     /// every sign-in. The digest is checked on the setup thread instead.
-    fn installed_quick(&self, manifest: &ModelManifest) -> bool {
+    fn installed_quick(&self, manifest: &SelectedModel) -> bool {
         manifest.files.iter().all(|file| {
             safe_model_name(&file.name)
                 && std::fs::metadata(self.model_directory.join(&file.name))
@@ -550,7 +710,8 @@ impl RuntimeModel {
     }
 
     fn model_file_state(&self) -> Option<VerifiedFile> {
-        let model = self.manifest.model()?;
+        let selected = self.manifest();
+        let model = selected.model()?;
         let path = self.model_directory.join(&model.name);
         let metadata = std::fs::metadata(&path).ok()?;
         Some(VerifiedFile {
@@ -582,7 +743,7 @@ impl RuntimeModel {
             return Ok(());
         }
         *self.verified_slot() = None;
-        for file in &self.manifest.files {
+        for file in &self.manifest().files {
             if !safe_model_name(&file.name) {
                 return Err(CommandError {
                     code: "MODEL_FILE_INVALID".into(),
@@ -598,14 +759,17 @@ impl RuntimeModel {
     }
 
     fn stamp_path(&self) -> PathBuf {
-        self.model_directory.join(VERIFICATION_STAMP)
+        self.model_directory.join(format!(
+            "{VERIFICATION_STAMP_PREFIX}{}.json",
+            self.manifest().variant
+        ))
     }
 
     /// The stamp the files and server on disk would earn now, or `None` when
     /// something it records cannot be read.
     fn current_stamp(&self) -> Option<VerificationStamp> {
-        let files = self
-            .manifest
+        let selected = self.manifest();
+        let files = selected
             .files
             .iter()
             .map(|file| {
@@ -655,7 +819,7 @@ impl RuntimeModel {
             return Ok(Launch::Held);
         }
         let current = self.model_file_state();
-        if !self.installed_quick(&self.manifest)
+        if !self.installed_quick(&self.manifest())
             || current.is_none()
             || *self.verified_slot() != current
         {
@@ -681,7 +845,7 @@ impl RuntimeModel {
                 message: "local model process is already running".into(),
             });
         }
-        let launched = self.launcher.launch(&self.manifest)?;
+        let launched = self.launcher.launch(&self.manifest())?;
         let mut server = self
             .server
             .lock()
@@ -729,8 +893,9 @@ impl RuntimeModel {
             return Ok(());
         }
         let stamp = self.current_stamp();
-        let stamped =
-            stamp.is_some() && self.installed_quick(&self.manifest) && self.stored_stamp() == stamp;
+        let stamped = stamp.is_some()
+            && self.installed_quick(&self.manifest())
+            && self.stored_stamp() == stamp;
         if stamped {
             self.remember_verified();
         } else {
@@ -1008,7 +1173,7 @@ impl AnalyzerBoundary for RuntimeModel {
 /// How often a download may tell the window how far it has got.
 ///
 /// Every network chunk used to reach the webview as its own event - tens of
-/// thousands over 1.19 GiB, each a React state update - on exactly the slow
+/// thousands over a model download, each a React state update - on exactly the slow
 /// laptops where the download already takes longest.
 struct ProgressThrottle {
     last: Option<std::time::Instant>,
@@ -1082,7 +1247,8 @@ impl SetupManager {
     /// `installed` is `RuntimeModel::installed_quick`, asked once by launch:
     /// whether the files are there, not whether they are right.
     fn new(publish: SetupPublisher, runtime: Arc<RuntimeModel>, installed: bool) -> Self {
-        let total_bytes = runtime.manifest().total_bytes();
+        let selected = runtime.manifest();
+        let total_bytes = selected.total_bytes();
         let state = SetupStateDto {
             state: if installed {
                 SetupStatus::Ready
@@ -1093,6 +1259,7 @@ impl SetupManager {
             total_bytes,
             error: None,
             hosted_model_ready: false,
+            local_model: selected.variant,
         };
         Self {
             publish,
@@ -1151,7 +1318,7 @@ impl SetupManager {
     /// Whether the local model needs no setup: it is running, or it is
     /// installed and held while a hosted model is chosen. A held model is not
     /// ready for the queue, but it is installed, and setting it up again
-    /// would fetch or copy 1.19 GiB that is already on disk.
+    /// would fetch or copy up to 1.07 GiB that is already on disk.
     fn setup_complete(&self) -> bool {
         self.local_ready.load(Ordering::SeqCst)
             || (self.runtime.is_held()
@@ -1183,7 +1350,7 @@ impl SetupManager {
     /// Starts and verifies a model that is already installed, on the setup
     /// thread.
     ///
-    /// Verification loads 1.19 GiB into llama-server, waits for it to answer
+    /// Verification loads the model (up to 1.07 GiB) into llama-server, waits for it to answer
     /// its health check, and - unless the verification stamp vouches for the
     /// model - hashes it and runs a real inference through it. Launch used to
     /// do that inline in Tauri's setup hook, which runs before the window
@@ -1212,8 +1379,9 @@ impl SetupManager {
 
     /// Follows a change of model in Settings.
     ///
-    /// Choosing a hosted model stops the local one: it holds 1.3-2.6 GB for
-    /// as long as it runs, and nothing would ask it anything. Choosing the
+    /// Choosing a hosted model stops the local one: it holds about 1-2 GB
+    /// (Bonsai 2B 0.94 GB, 4B 1.96 GB at peak) for as long as it runs, and
+    /// nothing would ask it anything. Choosing the
     /// local model again starts and verifies it like a launch does, and the
     /// queue waits until that finishes. A setup operation already running is
     /// reported as SETUP_BUSY.
@@ -1235,7 +1403,7 @@ impl SetupManager {
             }
             (ModelSource::Hosted, ModelSource::Local) => {
                 self.runtime.release();
-                if self.runtime.installed_quick(self.runtime.manifest()) {
+                if self.runtime.installed_quick(&self.runtime.manifest()) {
                     self.start_operation(SetupSource::Installed)
                 } else {
                     Ok(())
@@ -1243,6 +1411,84 @@ impl SetupManager {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Follows a change of local model variant: from Settings, from the
+    /// setup screen's "use the smaller model", or from a chosen file that is
+    /// the other variant.
+    ///
+    /// Through the same hold, stop and start a change of model source takes:
+    /// the local model is held (the server stops, and a document it was
+    /// reading goes back to the queue), the variant is swapped with nothing
+    /// resident, and - when the local model is the one chosen - released
+    /// again. An installed variant is then started and verified like a
+    /// launch; one that is not becomes `required`, and waits for a person to
+    /// ask for its download. Nothing here downloads. A setup operation
+    /// already running is reported as SETUP_BUSY and nothing changes.
+    fn local_model_changed(
+        self: &Arc<Self>,
+        to: LocalModel,
+        source: ModelSource,
+    ) -> Result<(), CommandError> {
+        let selected = self
+            .runtime
+            .variants()
+            .select(to.as_str())
+            .ok_or_else(|| CommandError {
+                code: "MODEL_MANIFEST_INVALID".into(),
+                message: "model manifest has no such local model".into(),
+            })?;
+        if selected.variant == self.runtime.manifest().variant {
+            return Ok(());
+        }
+        // Held for the swap, so no download, install or verified start of
+        // the other variant can run under it.
+        self.operation.begin()?;
+        let switched = self.switch_variant(selected, source);
+        self.operation.finish();
+        switched?;
+        if source == ModelSource::Local && self.runtime.installed_quick(&self.runtime.manifest()) {
+            self.start_operation(SetupSource::Installed)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn switch_variant(
+        &self,
+        selected: SelectedModel,
+        source: ModelSource,
+    ) -> Result<(), CommandError> {
+        // Held even when the stop fails, as a change to a hosted model is:
+        // the queue must not send the old variant anything more.
+        let stopped = self.runtime.hold();
+        self.hold_local_model();
+        let swapped = self.runtime.select_variant(selected);
+        if source == ModelSource::Local {
+            self.runtime.release();
+        }
+        stopped.map_err(|error| CommandError {
+            code: error.code,
+            message: "the local model could not be stopped".into(),
+        })?;
+        swapped?;
+        let selected = self.runtime.manifest();
+        let installed = self.runtime.installed_quick(&selected);
+        let total_bytes = selected.total_bytes();
+        if let Ok(mut current) = self.state.lock() {
+            current.state = if installed {
+                SetupStatus::Ready
+            } else {
+                SetupStatus::Required
+            };
+            current.downloaded_bytes = if installed { total_bytes } else { 0 };
+            current.total_bytes = total_bytes;
+            current.error = None;
+            current.local_model = selected.variant;
+            current.hosted_model_ready = self.hosted_active.load(Ordering::SeqCst);
+            (self.publish)(&current);
+        }
+        Ok(())
     }
 
     fn start_operation(self: &Arc<Self>, source: SetupSource) -> Result<(), CommandError> {
@@ -1351,7 +1597,7 @@ impl SetupManager {
             }
             SetupSource::Existing(selection) => {
                 install_existing_model_files(
-                    manifest,
+                    &manifest,
                     &selection,
                     &self.runtime.model_directory,
                     &SystemDiskSpace,
@@ -1411,8 +1657,8 @@ impl SetupManager {
 /// name rather than by whether a model file happens to be installed.
 ///
 /// A person who had chosen a hosted model still got the local one loaded and
-/// self-tested at every launch, and resident for the rest of the day: 1.3 to
-/// 2.6 GB on an 8 GB laptop for a model nothing would ask anything. Nothing
+/// self-tested at every launch, and resident for the rest of the day: one to
+/// two gigabytes on an 8 GB laptop for a model nothing would ask anything. Nothing
 /// here reads the model file; the setup thread does that.
 ///
 /// An installed local model is held, not started, and the flag returned says
@@ -1428,7 +1674,7 @@ fn launch_local_model(
     runtime: Arc<RuntimeModel>,
     source: ModelSource,
 ) -> (Arc<SetupManager>, bool) {
-    let installed = runtime.installed_quick(runtime.manifest());
+    let installed = runtime.installed_quick(&runtime.manifest());
     let setup = Arc::new(SetupManager::new(publish, Arc::clone(&runtime), installed));
     let verify = match source {
         ModelSource::Hosted => {
@@ -1448,7 +1694,7 @@ fn model_ready(local_ready: bool, hosted_active: bool) -> bool {
     local_ready || hosted_active
 }
 
-/// A dropped connection partway through 1.19 GiB is ordinary on an unreliable
+/// A dropped connection partway through a model download is ordinary on an unreliable
 /// network and says nothing about whether the download can succeed - only
 /// that this attempt did not. Each retry calls the same resumable download
 /// again, so it picks the partial file back up rather than starting over; a
@@ -1538,7 +1784,7 @@ enum SetupSource {
 /// A download or an install has bytes to move and no model to run, so the
 /// setup screen takes the window. Verifying a model that is already installed
 /// is not a download and must not look like one: the screen would offer to
-/// fetch 1.19 GiB that is already on disk.
+/// fetch a model that is already on disk.
 fn setup_progress_status(source: &SetupSource) -> Option<SetupStatus> {
     match source {
         SetupSource::Download | SetupSource::Existing(_) => Some(SetupStatus::Downloading),
@@ -1800,11 +2046,6 @@ impl AppState {
             "llama-server"
         };
         let model_directory = data.join("models");
-        let runtime = Arc::new(RuntimeModel::new(
-            executable_directory.join(server_name),
-            model_directory,
-            ModelManifest::embedded()?,
-        ));
         let settings = SettingsStore::new(data.join("settings.json"));
         // Defaults are how the window opens on a settings file nothing can
         // read - Settings is where a person repairs it, and the defaults keep
@@ -1813,6 +2054,14 @@ impl AppState {
         // the file is left exactly as it is until somebody deliberately saves,
         // and `intake_status_dto` reports the trouble to the interface.
         let startup_settings = settings.load().unwrap_or_default();
+        // The variant the settings name - Bonsai 4B unless the person chose
+        // the smaller one - and only that variant is ever installed or run.
+        let runtime = Arc::new(RuntimeModel::new(
+            executable_directory.join(server_name),
+            model_directory,
+            ModelManifest::embedded()?,
+            startup_settings.local_model,
+        ));
         // An installed local model is held here and verified only once
         // nothing below can fail (see `launch_local_model`).
         let (setup, verify_model) = launch_local_model(
@@ -2694,7 +2943,7 @@ pub fn queue_resume(state: State<'_, AppState>) -> Result<(), CommandError> {
 /// Stops the document being analysed.
 ///
 /// Blocking: cancelling the local model kills llama-server and starts it
-/// again, which reloads 1.19 GiB and waits for the new process to answer, so
+/// again, which reloads the model and waits for the new process to answer, so
 /// this cannot run on the thread WebView2 delivers invokes on.
 #[tauri::command]
 pub async fn queue_cancel(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
@@ -3030,6 +3279,10 @@ pub(crate) trait SettingsRuntime {
     /// Stops the local model when a hosted one is chosen, and starts and
     /// verifies it again when it is chosen back.
     fn model_source_changed(&self, from: ModelSource, to: ModelSource) -> Result<(), CommandError>;
+    /// Unloads the local model variant that runs and loads the one now
+    /// chosen, when `source` is local and it is installed; otherwise only
+    /// records which variant setup is about.
+    fn local_model_changed(&self, to: LocalModel, source: ModelSource) -> Result<(), CommandError>;
     fn schedule(&self) -> Result<(), CommandError>;
     fn sync_tray(&self, run_in_background: bool);
     /// `first_look` asks the new watcher to take the first look at what is
@@ -3092,6 +3345,10 @@ impl SettingsRuntime for AppState {
 
     fn model_source_changed(&self, from: ModelSource, to: ModelSource) -> Result<(), CommandError> {
         self.setup.model_source_changed(from, to)
+    }
+
+    fn local_model_changed(&self, to: LocalModel, source: ModelSource) -> Result<(), CommandError> {
+        self.setup.local_model_changed(to, source)
     }
 
     fn schedule(&self) -> Result<(), CommandError> {
@@ -3239,6 +3496,19 @@ fn save_settings_with_microsoft_protection(
         |enabled| state.set_autostart(enabled),
     )?;
     state.refresh_hosted_active(&settings);
+    // The variant first, so a save that also chooses the local model again
+    // starts the variant it names rather than the one before it. Its answer,
+    // like the model source's, is reported once the rest is applied.
+    let local_changed = if previous.local_model != settings.local_model {
+        // The source the variant runs under is the one before this save
+        // when that save also changes it: model_source_changed below
+        // releases or holds the model as it always has.
+        let changed = state.local_model_changed(settings.local_model, previous.model_source);
+        state.schedule()?;
+        changed
+    } else {
+        Ok(())
+    };
     // The settings are saved whatever the local model makes of the change,
     // so its answer - SETUP_BUSY, say - is reported once the rest of the
     // save has been applied rather than in place of it.
@@ -3273,7 +3543,7 @@ fn save_settings_with_microsoft_protection(
     let renamed = state.own_names_changed(&settings.our_names);
     // Like the model's answer, the rename's is reported only once every
     // other part of the save has been applied.
-    source_changed.and(renamed)
+    local_changed.and(source_changed).and(renamed)
 }
 
 fn sharepoint_activation_in_progress() -> CommandError {
@@ -3383,6 +3653,12 @@ fn restore_settings_unlocked(
         failures.push(error);
     }
     runtime.refresh_hosted_active(previous);
+    if let Some(current) = current.as_ref()
+        && current.local_model != previous.local_model
+        && let Err(error) = runtime.local_model_changed(previous.local_model, current.model_source)
+    {
+        failures.push(error);
+    }
     if let Some(current) = current.as_ref()
         && current.model_source != previous.model_source
         && let Err(error) =
@@ -3757,15 +4033,92 @@ pub fn setup_cancel(state: State<'_, AppState>) -> Result<(), CommandError> {
     state.setup.cancel()
 }
 
+/// A model file a person already has, installed instead of downloading.
+///
+/// Matched to a variant by its size first - the variants differ - and then
+/// hashed against that variant alone while it is copied in. A file that is
+/// the other variant than the one selected selects it: picking that exact
+/// pinned file is the choice. Anything else is MODEL_FILE_INVALID.
 #[tauri::command]
 pub fn setup_choose_existing(
     files: ExistingModelFilesDto,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
     let model_path = canonical_model_file(Path::new(&files.model_path))?;
+    let invalid = || CommandError {
+        code: "MODEL_FILE_INVALID".into(),
+        message: "the selected file is not a model Intern pins".into(),
+    };
+    let size = std::fs::metadata(&model_path).map_err(|_| invalid())?.len();
+    let variant = state
+        .setup
+        .runtime
+        .variants()
+        .variant_with_size(size)
+        .ok_or_else(invalid)?;
+    let local = LocalModel::from_variant(&variant.variant).ok_or_else(invalid)?;
+    choose_local_model(&state, local)?;
     state
         .setup
         .choose_existing(ExistingModelSelection { model_path })
+}
+
+/// The local model variants this build pins, and which is selected.
+#[tauri::command]
+pub fn local_models(state: State<'_, AppState>) -> Result<Vec<LocalModelDto>, CommandError> {
+    Ok(state.setup.runtime.local_models())
+}
+
+/// Chooses the local model variant, from the setup screen. Saved like the
+/// same choice in Settings, and applied the same way: it never downloads.
+#[tauri::command]
+pub fn set_local_model(model: String, state: State<'_, AppState>) -> Result<(), CommandError> {
+    let local = LocalModel::from_variant(&model).ok_or_else(|| CommandError {
+        code: "MODEL_MANIFEST_INVALID".into(),
+        message: "no such local model".into(),
+    })?;
+    choose_local_model(&state, local)
+}
+
+/// Saves `local` as the chosen variant, under the settings gate, and applies
+/// it. A settings file that cannot be read is left alone rather than
+/// rewritten from defaults.
+fn choose_local_model(state: &AppState, local: LocalModel) -> Result<(), CommandError> {
+    let source = {
+        let _gate = state
+            .settings_gate
+            .lock()
+            .map_err(|_| settings_gate_unavailable())?;
+        if state.sharepoint_activation.load(Ordering::SeqCst) {
+            return Err(sharepoint_activation_in_progress());
+        }
+        let mut settings = state.settings.load().map_err(CommandError::from)?;
+        if settings.local_model != local {
+            settings.local_model = local;
+            state.settings.save(&settings).map_err(CommandError::from)?;
+        }
+        settings.model_source
+    };
+    state.setup.local_model_changed(local, source)
+}
+
+/// The model file an earlier Intern downloaded and this one no longer uses,
+/// if it is still in the model folder.
+#[tauri::command]
+pub fn legacy_model_get(
+    state: State<'_, AppState>,
+) -> Result<Option<LegacyModelDto>, CommandError> {
+    Ok(state.setup.runtime.legacy_model())
+}
+
+/// Removes that file, when the person asks: never otherwise. Blocking, since
+/// it is hashed first.
+#[tauri::command]
+pub async fn legacy_model_remove(state: State<'_, AppState>) -> Result<(), CommandError> {
+    let runtime = Arc::clone(&state.setup.runtime);
+    tauri::async_runtime::spawn_blocking(move || runtime.remove_legacy_model())
+        .await
+        .map_err(|_| background_task_failed("removing the previous model"))?
 }
 
 /// Blocking: one delete over the whole finished history, and a database
@@ -6017,15 +6370,15 @@ mod runtime_tests {
     use intern_engine::{
         DateRole, DocumentSource, Engine, EngineError, EngineErrorCode, EngineResult, Evidence,
         ModelFacts, ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyFact,
-        PartyRelation, PartyRole, Proposer, download::CancellationToken,
+        PartyRelation, PartyRole, Proposer, SelectedModel, download::CancellationToken,
         setup::ExistingModelSelection,
     };
     use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
 
     use super::{
-        CommandError, LaunchedRuntime, ProgressThrottle, RuntimeLauncher, RuntimeModel,
-        RuntimeProcess, SetupManager, SetupStateDto, SetupStatus, VERIFICATION_STAMP,
-        launch_local_model,
+        CommandError, LEGACY_MODEL_NAME, LEGACY_MODEL_SIZE, LEGACY_VERIFICATION_STAMP,
+        LaunchedRuntime, ProgressThrottle, RuntimeLauncher, RuntimeModel, RuntimeProcess,
+        SetupManager, SetupStateDto, SetupStatus, launch_local_model,
     };
 
     /// Bytes chosen once and hashed offline; the digest below is theirs, so
@@ -6204,7 +6557,7 @@ mod runtime_tests {
     }
 
     impl RuntimeLauncher for FakeLauncher {
-        fn launch(&self, _manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError> {
+        fn launch(&self, _model: &SelectedModel) -> Result<LaunchedRuntime, CommandError> {
             let gate = self.rig.launch_gate.lock().unwrap().clone();
             if let Some(gate) = gate {
                 gate.pass();
@@ -6277,20 +6630,44 @@ mod runtime_tests {
         }
     }
 
+    /// Two variants, as the real manifest has: `test` (the default, the
+    /// install's `model.gguf`) and `small`, which an install has only when a
+    /// test writes it.
     fn manifest() -> ModelManifest {
         ModelManifest {
-            schema_version: 2,
-            model_id: "test-model".into(),
+            schema_version: 3,
             served_model_name: "intern-local".into(),
-            files: vec![ModelFile {
-                name: "model.gguf".into(),
-                role: ModelRole::Model,
-                url: "https://example.invalid/model.gguf".into(),
-                size: MODEL_BYTES.len() as u64,
-                sha256: MODEL_SHA256.into(),
-            }],
+            default: "test".into(),
+            variants: vec![
+                intern_engine::ModelVariant {
+                    id: "test".into(),
+                    model_id: "test-model".into(),
+                    label: "Test".into(),
+                    files: vec![ModelFile {
+                        name: "model.gguf".into(),
+                        role: ModelRole::Model,
+                        url: "https://example.invalid/model.gguf".into(),
+                        size: MODEL_BYTES.len() as u64,
+                        sha256: MODEL_SHA256.into(),
+                    }],
+                },
+                intern_engine::ModelVariant {
+                    id: "small".into(),
+                    model_id: "small-model".into(),
+                    label: "Small".into(),
+                    files: vec![ModelFile {
+                        name: "small.gguf".into(),
+                        role: ModelRole::Model,
+                        url: "https://example.invalid/small.gguf".into(),
+                        size: SMALL_MODEL_BYTES.len() as u64,
+                        sha256: MODEL_SHA256.into(),
+                    }],
+                },
+            ],
         }
     }
+
+    const SMALL_MODEL_BYTES: &[u8] = b"small";
 
     /// A scratch data folder with the model and a server binary installed,
     /// removed when the test ends.
@@ -6314,7 +6691,7 @@ mod runtime_tests {
         }
 
         fn stamp(&self) -> PathBuf {
-            self.root.join("models").join(VERIFICATION_STAMP)
+            self.root.join("models").join(".verified-test.json")
         }
 
         /// Moves the model's last-modified time, as a replaced file would.
@@ -6429,7 +6806,7 @@ mod runtime_tests {
         // for a launch whose verification has not happened yet.
         let rig = Rig::new();
         let runtime = install.runtime(&rig, "1.0.0");
-        assert!(runtime.installed_quick(runtime.manifest()));
+        assert!(runtime.installed_quick(&runtime.manifest()));
         let _setup =
             SetupManager::new(Box::new(|_: &SetupStateDto| {}), Arc::clone(&runtime), true);
         assert_eq!(rig.hash_count(), 0);
@@ -6437,8 +6814,151 @@ mod runtime_tests {
         // A file of the wrong size is not installed, and finding that out
         // reads nothing either.
         std::fs::write(install.model(), b"short").unwrap();
-        assert!(!runtime.installed_quick(runtime.manifest()));
+        assert!(!runtime.installed_quick(&runtime.manifest()));
         assert_eq!(rig.hash_count(), 0);
+    }
+
+    /// Switching variant goes through hold, stop and start: the running
+    /// server is stopped before anything else, one server at most is ever
+    /// resident, a variant that is not installed waits for a download it
+    /// never starts by itself, and switching back starts the installed one
+    /// from its own stamp without reading it again.
+    #[test]
+    fn switching_variant_unloads_before_loading_and_never_downloads() {
+        let install = Install::new("variant-switch");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert!(runtime.running());
+        assert_eq!(runtime.manifest().variant, "test");
+        while states.try_recv().is_ok() {}
+
+        let small = runtime.variants().select("small").unwrap();
+        setup.switch_variant(small, ModelSource::Local).unwrap();
+        assert!(!runtime.running(), "the old variant is unloaded");
+        assert_eq!(rig.stops.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.manifest().variant, "small");
+        let state = setup.get().unwrap();
+        assert_eq!(
+            state.state,
+            SetupStatus::Required,
+            "not installed: wait for a click"
+        );
+        assert_eq!(state.total_bytes, SMALL_MODEL_BYTES.len() as u64);
+        assert_eq!(state.local_model, "small");
+        assert!(!setup.model_ready.load(Ordering::SeqCst));
+        assert!(
+            !runtime.is_held(),
+            "the local model is still the chosen one"
+        );
+        assert_eq!(rig.launches(), 1, "nothing was started for the new variant");
+
+        // Back to the installed variant: started from its own stamp.
+        let test = runtime.variants().select("test").unwrap();
+        setup.switch_variant(test, ModelSource::Local).unwrap();
+        assert_eq!(setup.get().unwrap().state, SetupStatus::Ready);
+        setup
+            .start_operation(super::SetupSource::Installed)
+            .unwrap();
+        settle(&setup);
+        assert!(runtime.running());
+        assert_eq!(rig.launches(), 2);
+        assert_eq!(
+            rig.most_alive.load(Ordering::SeqCst),
+            1,
+            "never two servers"
+        );
+        assert_eq!(
+            rig.hash_count(),
+            1,
+            "the stamp vouched for the file the second time"
+        );
+
+        // Under a hosted model the variant changes and nothing starts.
+        setup
+            .model_source_changed(ModelSource::Local, ModelSource::Hosted)
+            .unwrap();
+        let small = runtime.variants().select("small").unwrap();
+        setup.switch_variant(small, ModelSource::Hosted).unwrap();
+        assert!(runtime.is_held());
+        assert!(!runtime.running());
+        assert_eq!(rig.launches(), 2);
+    }
+
+    /// One stamp per variant, so neither vouches for the other's file.
+    #[test]
+    fn each_variant_has_its_own_stamp() {
+        let install = Install::new("variant-stamps");
+        let runtime = install.runtime(&Rig::new(), "1.0.0");
+        verified(&runtime);
+        assert!(install.stamp().is_file());
+        runtime.hold().unwrap();
+        let small = runtime.variants().select("small").unwrap();
+        assert!(runtime.select_variant(small).unwrap());
+        assert_eq!(
+            runtime.stamp_path(),
+            install.root.join("models").join(".verified-small.json")
+        );
+        assert!(runtime.stored_stamp().is_none());
+    }
+
+    #[test]
+    fn local_models_lists_every_variant_and_which_is_installed() {
+        let install = Install::new("variant-list");
+        let runtime = install.runtime(&Rig::new(), "1.0.0");
+        let models = runtime.local_models();
+        let ids = models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids, ["test", "small"]);
+        assert!(models[0].selected && models[0].installed && models[0].default);
+        assert!(!models[1].selected && !models[1].installed && !models[1].default);
+        assert_eq!(models[1].file, "small.gguf");
+    }
+
+    /// The previous model is offered for removal only at its exact size, is
+    /// removed only when asked and only after its digest is checked, and
+    /// takes its old stamp with it.
+    #[test]
+    fn the_previous_model_is_removed_only_when_asked_and_only_if_it_is_that_file() {
+        let install = Install::new("legacy-model");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let legacy = install.root.join("models").join(LEGACY_MODEL_NAME);
+        let stamp = install.root.join("models").join(LEGACY_VERIFICATION_STAMP);
+        assert!(runtime.legacy_model().is_none());
+        assert_eq!(
+            runtime.remove_legacy_model().unwrap_err().code,
+            "LEGACY_MODEL_NOT_FOUND"
+        );
+
+        // Same name, another file: never offered, never removed.
+        std::fs::write(&legacy, b"somebody else's file").unwrap();
+        assert!(runtime.legacy_model().is_none());
+        assert_eq!(
+            runtime.remove_legacy_model().unwrap_err().code,
+            "LEGACY_MODEL_MISMATCH"
+        );
+        assert!(legacy.is_file());
+        assert_eq!(
+            rig.hash_count(),
+            0,
+            "a wrong size is refused before reading"
+        );
+
+        // The exact size (sparse): offered, and removed with its stamp once
+        // the digest check (the rig's validator) passes.
+        std::fs::File::create(&legacy)
+            .unwrap()
+            .set_len(LEGACY_MODEL_SIZE)
+            .unwrap();
+        std::fs::write(&stamp, b"{}").unwrap();
+        let offered = runtime.legacy_model().unwrap();
+        assert_eq!(offered.bytes, LEGACY_MODEL_SIZE);
+        runtime.remove_legacy_model().unwrap();
+        assert_eq!(rig.hash_count(), 1);
+        assert!(!legacy.exists());
+        assert!(!stamp.exists());
+        assert!(install.model().is_file(), "the current model is untouched");
     }
 
     #[test]
@@ -7273,7 +7793,13 @@ mod runtime_tests {
             return;
         };
         let manifest = ModelManifest::embedded().unwrap();
-        let name = manifest.model().unwrap().name.clone();
+        // The variant INTERN_LIVE_MODEL is, by its size: either Bonsai.
+        let size = std::fs::metadata(&model).unwrap().len();
+        let variant = manifest
+            .variant_with_size(size)
+            .expect("INTERN_LIVE_MODEL is not the size of a pinned variant");
+        let local = intern_queue::LocalModel::from_variant(&variant.variant).unwrap();
+        let name = variant.model().unwrap().name.clone();
         // The model is linked into a scratch folder of its own, so the
         // verification stamp is written there and nowhere shared.
         let directory = std::env::temp_dir().join(format!("intern-live-{}", std::process::id()));
@@ -7284,8 +7810,9 @@ mod runtime_tests {
             PathBuf::from(server),
             directory.clone(),
             manifest,
+            local,
         ));
-        assert!(runtime.installed_quick(runtime.manifest()));
+        assert!(runtime.installed_quick(&runtime.manifest()));
         assert_eq!(servers(), Vec::<u32>::new(), "a server was already running");
 
         runtime
@@ -8263,7 +8790,9 @@ pub(crate) mod test_runtime {
         },
     };
 
-    use intern_queue::{AppSettings, ModelSource, SettingsStore, paths::canonical_folder};
+    use intern_queue::{
+        AppSettings, LocalModel, ModelSource, SettingsStore, paths::canonical_folder,
+    };
 
     use super::{CommandError, ManagedSharePoint, SettingsRuntime, managed_sharepoint_for};
     use crate::microsoft_intake::MicrosoftIntake;
@@ -8300,6 +8829,8 @@ pub(crate) mod test_runtime {
         pub intake_restarts: Mutex<Vec<bool>>,
         /// Every change of model the runtime was told about, in order.
         pub source_changes: Mutex<Vec<(ModelSource, ModelSource)>>,
+        /// Every change of local model variant, with the source it ran under.
+        pub local_changes: Mutex<Vec<(LocalModel, ModelSource)>>,
         /// The local model answers a change of model the way it does while
         /// another setup operation runs.
         pub setup_busy: AtomicBool,
@@ -8322,6 +8853,7 @@ pub(crate) mod test_runtime {
                 fail_own_names: AtomicBool::new(false),
                 intake_restarts: Mutex::new(Vec::new()),
                 source_changes: Mutex::new(Vec::new()),
+                local_changes: Mutex::new(Vec::new()),
                 setup_busy: AtomicBool::new(false),
                 gate: Mutex::new(()),
                 activation: AtomicBool::new(false),
@@ -8406,6 +8938,21 @@ pub(crate) mod test_runtime {
             to: ModelSource,
         ) -> Result<(), CommandError> {
             self.source_changes.lock().unwrap().push((from, to));
+            if self.setup_busy.load(Ordering::SeqCst) {
+                return Err(Self::injected(
+                    "SETUP_BUSY",
+                    "a model setup operation is already active",
+                ));
+            }
+            Ok(())
+        }
+
+        fn local_model_changed(
+            &self,
+            to: LocalModel,
+            source: ModelSource,
+        ) -> Result<(), CommandError> {
+            self.local_changes.lock().unwrap().push((to, source));
             if self.setup_busy.load(Ordering::SeqCst) {
                 return Err(Self::injected(
                     "SETUP_BUSY",

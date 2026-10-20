@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SUPPORT_LINKS } from './bridge';
-import { createInMemoryBridge } from './inMemoryBridge';
+import { PINNED_MODEL_BYTES, PINNED_SMALL_MODEL_BYTES, createInMemoryBridge } from './inMemoryBridge';
 import { humanizeReason } from './reasons';
 import type { QueueItem } from '../types';
 
@@ -394,5 +394,59 @@ describe('createInMemoryBridge update switch', () => {
     await bridge.saveSettings({ ...await bridge.getSettings(), skipUpdateChecks: false });
     expect((await bridge.getSettings()).skipUpdateChecks).toBe(false);
     expect((await createInMemoryBridge({ settings: { skipUpdateChecks: true } }).getSettings()).skipUpdateChecks).toBe(true);
+  });
+});
+
+describe('createInMemoryBridge local models', () => {
+  it('starts on the default model, installed when setup is ready', async () => {
+    const bridge = createInMemoryBridge();
+    expect(await bridge.getSetup()).toMatchObject({ state: 'ready', totalBytes: PINNED_MODEL_BYTES, localModel: 'bonsai-4b' });
+    expect((await bridge.getSettings()).localModel).toBe('bonsai-4b');
+    expect(await bridge.getLocalModels()).toEqual([
+      { id: 'bonsai-4b', label: 'Bonsai 4B', file: 'Ternary-Bonsai-2-4B-PQ2_0.gguf', bytes: PINNED_MODEL_BYTES, selected: true, installed: true, default: true },
+      { id: 'bonsai-2b', label: 'Bonsai 2B', file: 'Ternary-Bonsai-2-2B-PQ2_0.gguf', bytes: PINNED_SMALL_MODEL_BYTES, selected: false, installed: false, default: false },
+    ]);
+  });
+
+  it('switches to a model not yet downloaded without downloading it, and resumes a partial one on the way back', async () => {
+    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 1000, totalBytes: PINNED_MODEL_BYTES } });
+    await bridge.setLocalModel('bonsai-2b');
+    expect(await bridge.getSetup()).toMatchObject({ state: 'required', downloadedBytes: 0, totalBytes: PINNED_SMALL_MODEL_BYTES, localModel: 'bonsai-2b' });
+    expect((await bridge.getSettings()).localModel).toBe('bonsai-2b');
+    await bridge.setLocalModel('bonsai-4b');
+    expect(await bridge.getSetup()).toMatchObject({ state: 'required', downloadedBytes: 1000, totalBytes: PINNED_MODEL_BYTES });
+  });
+
+  it('starts an installed model at once, and saving settings switches the same way', async () => {
+    const bridge = createInMemoryBridge({ installedModels: ['bonsai-4b', 'bonsai-2b'] });
+    await bridge.saveSettings({ ...await bridge.getSettings(), localModel: 'bonsai-2b' });
+    expect(await bridge.getSetup()).toMatchObject({ state: 'ready', totalBytes: PINNED_SMALL_MODEL_BYTES, localModel: 'bonsai-2b' });
+    expect((await bridge.getLocalModels()).find((model) => model.selected)?.id).toBe('bonsai-2b');
+  });
+
+  it('refuses a switch while a download runs', async () => {
+    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES }, downloadIntervalMs: 60_000 });
+    await bridge.startModelDownload();
+    await expect(bridge.setLocalModel('bonsai-2b')).rejects.toMatchObject({ code: 'SETUP_BUSY' });
+    await expect(bridge.saveSettings({ ...await bridge.getSettings(), localModel: 'bonsai-2b' })).rejects.toMatchObject({ code: 'SETUP_BUSY' });
+    expect((await bridge.getSetup()).localModel).toBe('bonsai-4b');
+    await bridge.setupCancel();
+  });
+
+  it('marks a finished download installed', async () => {
+    const bridge = createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES }, downloadIntervalMs: 1, downloadStepBytes: PINNED_MODEL_BYTES });
+    await bridge.setLocalModel('bonsai-2b');
+    await bridge.startModelDownload();
+    await vi.waitFor(async () => expect((await bridge.getSetup()).state).toBe('ready'));
+    expect((await bridge.getLocalModels()).find((model) => model.id === 'bonsai-2b')).toMatchObject({ selected: true, installed: true });
+  });
+
+  it('removes the previous model once, and only the one it reports', async () => {
+    expect(await createInMemoryBridge().getLegacyModel()).toBeNull();
+    const bridge = createInMemoryBridge({ legacyModel: { file: 'Qwen3.5-2B-Q4_K_M.gguf', bytes: 1_280_835_840 } });
+    expect(await bridge.getLegacyModel()).toEqual({ file: 'Qwen3.5-2B-Q4_K_M.gguf', bytes: 1_280_835_840 });
+    await bridge.removeLegacyModel();
+    expect(await bridge.getLegacyModel()).toBeNull();
+    await expect(bridge.removeLegacyModel()).rejects.toMatchObject({ code: 'LEGACY_MODEL_NOT_FOUND' });
   });
 });

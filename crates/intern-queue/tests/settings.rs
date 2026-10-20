@@ -1,7 +1,9 @@
 use std::fs;
 
 use intern_engine::HostedProvider;
-use intern_queue::settings::{AppSettings, DestinationLayout, ModelSource, SettingsStore};
+use intern_queue::settings::{
+    AppSettings, DestinationLayout, LocalModel, ModelSource, SettingsStore,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -35,6 +37,7 @@ fn settings_saved_before_the_intake_fields_existed_load_with_defaults() {
             skip_update_checks: false,
             record_descriptions: false,
             model_source: ModelSource::Local,
+            local_model: LocalModel::Bonsai4b,
             hosted_provider: HostedProvider::Anthropic,
             hosted_base_url: String::new(),
             hosted_model: String::new(),
@@ -66,6 +69,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         skip_update_checks: true,
         record_descriptions: true,
         model_source: ModelSource::Hosted,
+        local_model: LocalModel::Bonsai2b,
         hosted_provider: HostedProvider::OpenAiCompatible,
         hosted_base_url: "https://gateway.example.com/v1".into(),
         hosted_model: "filing-model".into(),
@@ -88,6 +92,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         "\"destinationLayout\": \"year_type\"",
         "\"ourNames\": [",
         "\"modelSource\": \"hosted\"",
+        "\"localModel\": \"bonsai-2b\"",
         "\"hostedProvider\": \"openai_compatible\"",
         "\"hostedBaseUrl\": \"https://gateway.example.com/v1\"",
         "\"hostedModel\": \"filing-model\"",
@@ -177,4 +182,40 @@ fn a_field_the_reader_requires_and_the_file_does_not_have_is_reported() {
     assert_eq!(loaded.settings.destination, "");
     assert!(loaded.settings.automatic_rename);
     assert_eq!(loaded.unreadable, ["destination"]);
+}
+
+/// A settings file from before there was a choice of local model loads with
+/// the default, Bonsai 4B; a value this build does not know is defaulted and
+/// named, and costs nothing else.
+#[test]
+fn the_local_model_defaults_to_bonsai_4b_and_an_unknown_one_is_named() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    fs::write(
+        &path,
+        br#"{ "destination": "/out", "modelSource": "local" }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        SettingsStore::new(&path).load().unwrap().local_model,
+        LocalModel::Bonsai4b
+    );
+
+    fs::write(
+        &path,
+        br#"{ "destination": "/out", "localModel": "qwen3.5-2b", "intakeEnabled": true }"#,
+    )
+    .unwrap();
+    let loaded = SettingsStore::new(&path).load_with_report().unwrap();
+    assert_eq!(loaded.settings.local_model, LocalModel::Bonsai4b);
+    assert!(loaded.settings.intake_enabled);
+    assert_eq!(loaded.unreadable, ["localModel"]);
+
+    for model in LocalModel::ALL {
+        assert_eq!(LocalModel::from_variant(model.as_str()), Some(model));
+        assert_eq!(
+            serde_json::to_value(model).unwrap(),
+            serde_json::json!(model.as_str())
+        );
+    }
 }

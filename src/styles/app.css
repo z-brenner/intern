@@ -322,10 +322,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .settings-dialog textarea { display: block; width: 100%; min-height: 64px; margin-top: 6px; padding: 9px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: 14px; font-weight: 400; line-height: 1.45; resize: vertical; }
 .settings-dialog .check-label { display: flex; align-items: center; gap: 10px; min-height: 26px; margin: 8px 0; font-size: 14px; font-weight: 400; }
 .check-label input[type=checkbox], .check-label input[type=radio] { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
-.hosted-model { margin: 4px 0 0 24px; padding: 14px 16px 6px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.hosted-model, .local-model { margin: 4px 0 0 24px; padding: 14px 16px 6px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .privacy-warning { margin: 0 0 14px; padding: 10px 12px; border-left: 3px solid var(--review); border-radius: var(--radius-sm); background: var(--surface-subtle); font-size: 13px; line-height: 1.5; color: var(--text); }
 .private.hosted i { background: var(--review); box-shadow: 0 0 0 3px rgba(181, 121, 12, .16); }
 .setup-alternative { margin: 18px 0 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
+.legacy-model { margin-top: 14px; font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.legacy-model p { margin: 0 0 8px; }
 .link-button { border: 0; padding: 0; background: transparent; color: var(--accent); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .link-button:disabled { color: var(--text-muted); cursor: default; }
 .check-label:has(input:disabled) { color: var(--text-muted); }

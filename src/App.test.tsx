@@ -187,10 +187,10 @@ const alpha9Settings: AppSettings = {
 /*
   The same file as this build reads it back: every saved value as it was, and
   each field added since alpha.9 at the default the backend's serde gives it -
-  the organisation's names as the empty list, which names nobody, and the
-  update switch as checks on.
+  the organisation's names as the empty list, which names nobody, the
+  update switch as checks on, and the local model as the default one.
 */
-const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false };
+const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false, localModel: 'bonsai-4b' };
 const alpha9Items: QueueItem[] = [
   { id: 'alpha9-filed', originalFilename: 'scan-0001.pdf', status: 'completed', proposedFilename: '2025-03-04 Invoice from Northwind.pdf', confidence: 0.94, undoable: true },
   { id: 'alpha9-review', originalFilename: 'scan-0002.pdf', status: 'review', proposedFilename: '2025-03-05 Lease Amendment.pdf', confidence: 0.61 },

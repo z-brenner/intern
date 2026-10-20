@@ -25,19 +25,20 @@ describe('status labels', () => {
 
 describe('download sizes', () => {
   const MiB = 1024 ** 2;
-  const total = 1_280_835_840;
+  // The default local model's file.
+  const total = 1_146_465_120;
 
   it('bytes and eta are human readable', () => {
-    expect(formatBytes(total)).toBe('1.19 GiB');
+    expect(formatBytes(total)).toBe('1.07 GiB');
     expect(formatBytes(393 * MiB)).toBe('393 MiB');
     expect(formatBytes(2048)).toBe('2 KiB');
     expect(formatBytes(300)).toBe('300 bytes');
     expect(formatBytes(1)).toBe('1 byte');
     expect(formatBytes(0)).toBe('0 bytes');
 
-    // 30 MiB over 10 s is 3 MiB/s; 828 MiB left is about 4.6 minutes.
+    // 30 MiB over 10 s is 3 MiB/s; 700 MiB left is about 3.9 minutes.
     const steady = [{ at: 0, bytes: 363 * MiB }, { at: 5_000, bytes: 378 * MiB }, { at: 10_000, bytes: 393 * MiB }];
-    expect(eta(steady, total)).toBe('about 5 min left');
+    expect(eta(steady, total)).toBe('about 4 min left');
     expect(eta([{ at: 0, bytes: 0 }, { at: 10_000, bytes: total - 10 * MiB }], total)).toBe('less than a minute left');
     expect(eta([{ at: 0, bytes: 0 }, { at: 60_000, bytes: 4 * MiB }], total)).toBe('about 5 hours left');
     expect(eta([{ at: 0, bytes: 0 }, { at: 60_000, bytes: 10 * MiB }], total)).toBe('about 2 hours left');

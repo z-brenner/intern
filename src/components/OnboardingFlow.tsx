@@ -9,6 +9,7 @@ import type { SharePointProblem } from '../features/sharepoint/sharePointProblem
 import { modelReady, useModelSetup } from '../features/setup/useModelSetup';
 import type { AppSettings, SetupState, SharePointSetupStatus } from '../types';
 import { DownloadProgress } from './DownloadProgress';
+import { LegacyModelNotice, LowMemoryHint, ModelSwitchOption } from './LocalModelChoice';
 import { SettingsDialog } from './SettingsDialog';
 
 /** How often the sync step asks the backend to rescan OneDrive's registered libraries. */
@@ -131,6 +132,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
   return <>
     <h1 ref={heading} tabIndex={-1}>Get the local model</h1>
     <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}.</p>
+    {setup && !downloading && <LowMemoryHint chosen={model.localModel} where="under “Other ways to get the model”" />}
     {!setup && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Checking the local model…</p>}
     {operationError && <p className="onboarding-alert" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Download canceled. Your progress was saved.</p>}
@@ -144,6 +146,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
     <details className="onboarding-advanced">
       <summary>Other ways to get the model</summary>
       <p>For support or special setups. Most people should download the model above.</p>
+      <ModelSwitchOption chosen={model.localModel} models={model.models} disabled={downloading || busy || !setup} onSwitch={model.switchModel} actionsClassName="onboarding-actions" />
       <div className="onboarding-actions">
         <button type="button" onClick={model.chooseExisting} disabled={downloading || busy || !model.canChooseExisting}>Choose existing model files</button>
       </div>
@@ -152,6 +155,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
         <button type="button" ref={hostedTrigger} onClick={() => setHostedOpen(true)} disabled={downloading || busy || !settings}>Use a hosted model instead</button>
       </div>
     </details>
+    <LegacyModelNotice bridge={bridge} className="onboarding-advanced" actionsClassName="onboarding-actions" />
     {hostedOpen && settings && <SettingsDialog hideSharePointConnection settings={settings} bridge={bridge} selection={selection} onClose={closeHosted} onSave={async (next) => { await bridge.saveSettings(next); setSettings(next); closeHosted(); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={(onProgress) => bridge.installUpdate(onProgress)} />}
   </>;
 }

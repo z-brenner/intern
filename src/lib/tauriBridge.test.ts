@@ -209,6 +209,29 @@ describe('TauriBridge', () => {
     ]);
   });
 
+  it('maps the local model commands', async () => {
+    const models = [{ id: 'bonsai-4b', label: 'Bonsai 4B', file: 'Ternary-Bonsai-2-4B-PQ2_0.gguf', bytes: 1146465120, selected: true, installed: true, default: true }];
+    const fake = fakeTransport({ local_models: models, legacy_model_get: { file: 'Qwen3.5-2B-Q4_K_M.gguf', bytes: 1280835840 } });
+    const bridge = new TauriBridge(fake.transport);
+
+    expect(await bridge.getLocalModels()).toEqual(models);
+    await bridge.setLocalModel('bonsai-2b');
+    expect(await bridge.getLegacyModel()).toEqual({ file: 'Qwen3.5-2B-Q4_K_M.gguf', bytes: 1280835840 });
+    await bridge.removeLegacyModel();
+
+    expect(fake.calls).toEqual([
+      { command: 'local_models', args: undefined },
+      { command: 'set_local_model', args: { model: 'bonsai-2b' } },
+      { command: 'legacy_model_get', args: undefined },
+      { command: 'legacy_model_remove', args: undefined },
+    ]);
+  });
+
+  it('reads no previous model as null', async () => {
+    const bridge = new TauriBridge(fakeTransport({ legacy_model_get: null }).transport);
+    expect(await bridge.getLegacyModel()).toBeNull();
+  });
+
   // The review menu, Open and Show in folder name an item by id and nothing
   // else; which file that is stays the backend's decision.
   it('reanalyze_open_reveal_invoke_expected_commands', async () => {

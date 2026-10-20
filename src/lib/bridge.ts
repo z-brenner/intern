@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, LegacyModel, LocalModelId, LocalModelOption, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -109,7 +109,28 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   completeOnboarding(): Promise<void>;
   startModelDownload(): Promise<void>;
   setupCancel(): Promise<void>;
+  /**
+   * Install a model file already on this computer. The backend tells which
+   * local model it is by its size and checks it against that one only; a
+   * copy of the model not currently chosen becomes the chosen one.
+   */
   setupChooseExisting(files: ExistingModelFiles): Promise<void>;
+  /** The local models this build pins: their sizes, and which is chosen and installed. */
+  getLocalModels(): Promise<LocalModelOption[]>;
+  /**
+   * Choose the local model. The one running is stopped first; the other
+   * starts if it is installed, and otherwise setup waits for a person to
+   * download it. Never downloads anything by itself. Rejected with
+   * SETUP_BUSY while a download or a check is running.
+   */
+  setLocalModel(model: LocalModelId): Promise<void>;
+  /** The model file an earlier version of Intern left in its model folder, or null. Reads metadata only. */
+  getLegacyModel(): Promise<LegacyModel | null>;
+  /**
+   * Delete that file, once the backend has checked it is exactly the old
+   * model. Only ever called from a person's click.
+   */
+  removeLegacyModel(): Promise<void>;
   clearHistory(): Promise<void>;
   /** Finished rename/undo operations, newest first (capped at 500). */
   historyList(): Promise<HistoryEntry[]>;

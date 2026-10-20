@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import type { ExistingModelFiles, SelectionBoundary } from '../../lib/bridge';
-import { PINNED_MODEL_BYTES, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { PINNED_MODEL_BYTES, PINNED_SMALL_MODEL_BYTES, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { LOCAL_MODELS } from '../../lib/localModels';
 import type { SetupState } from '../../types';
 // The manifest the installer ships and the backend reads. Importing the real
 // file is the point: it is what makes the assertion below a drift guard rather
@@ -57,40 +58,47 @@ describe('setup and queue controls', () => {
       const bridge = { ...createInMemoryBridge(), getSetup: async () => ({ ...setup }), subscribeSetup: async (next: typeof listener) => { listener = next; return () => {}; } };
       vi.setSystemTime(0);
       render(<App bridge={bridge} />);
-      expect(await screen.findByText('363 MiB of 1.19 GiB · 29%')).toBeVisible();
+      expect(await screen.findByText('363 MiB of 1.07 GiB · 33%')).toBeVisible();
       // The first state can show before the screen has subscribed to the
       // ones after it; on a busy runner that left `listener` unset.
       await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
 
-      // Three megabytes a second, by the samples, with 828 MiB still to come.
+      // Three megabytes a second, by the samples, with 700 MiB still to come.
       for (const [at, mib] of [[5_000, 378], [10_000, 393]] as const) {
         vi.setSystemTime(at);
         setup = { ...setup, downloadedBytes: mib * MiB };
         act(() => listener({ ...setup }));
       }
 
-      expect(await screen.findByText('393 MiB of 1.19 GiB · 32% · about 5 min left')).toBeVisible();
+      expect(await screen.findByText('393 MiB of 1.07 GiB · 35% · about 4 min left')).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
   });
 
   it('quotes the download size the manifest will actually fetch, not a hardcoded one', async () => {
-    const total = modelManifest.files.reduce((sum, file) => sum + file.size, 0);
+    const variantBytes = (id: string) => modelManifest.variants.find((variant) => variant.id === id)!.files.reduce((sum, file) => sum + file.size, 0);
+    const total = variantBytes(modelManifest.default);
 
     // The setup screen is the first thing a new user sees, and it used to
     // announce a hardcoded "approximately 3.27 GB" - a model plus a vision
-    // projector from an earlier design - for a download that is one 1.19 GiB
-    // file. Both halves are pinned here: the demo total must equal the shipped
-    // manifest, and the screen must render whatever total it is given.
+    // projector from an earlier design - for a download that is one file.
+    // Both halves are pinned here: the demo totals must equal the shipped
+    // manifest's, the default's and the smaller one's, and the screen must
+    // render whatever total it is given.
+    expect(modelManifest.default).toBe('bonsai-4b');
     expect(PINNED_MODEL_BYTES).toBe(total);
+    expect(PINNED_SMALL_MODEL_BYTES).toBe(variantBytes('bonsai-2b'));
+    expect(LOCAL_MODELS.map(({ id, label, file, bytes }) => ({ id, label, file, bytes }))).toEqual(modelManifest.variants.map((variant) => ({
+      id: variant.id, label: variant.label, file: variant.files[0].name, bytes: variantBytes(variant.id),
+    })));
 
     render(<App
       bridge={createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: total } })}
       selection={setupSelection(async () => undefined)}
     />);
 
-    expect(await screen.findByText(/Download 1\.19 GiB of model files/i)).toBeVisible();
+    expect(await screen.findByText(/Download 1\.07 GiB of model files/i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });
 
@@ -238,7 +246,7 @@ describe('setup and queue controls', () => {
   });
 
   it.each([
-    ['MODEL_FILE_INVALID', /did not match the model Intern pins/i],
+    ['MODEL_FILE_INVALID', /did not match either model Intern pins/i],
     ['MODEL_SELF_TEST_FAILED', /local self-test failed/i],
     ['MODEL_SERVER_START_FAILED', /runtime would not start on this computer/i],
     ['MODEL_SERVER_UNHEALTHY', /did not become ready in time/i],
@@ -252,7 +260,7 @@ describe('setup and queue controls', () => {
 
   // A runtime that will not start, will not become ready, or answers its
   // self-test wrongly is running a model file that already passed its
-  // checksum. These used to show a raw code, or advise downloading 1.2 GB
+  // checksum. These used to show a raw code, or advise downloading the model
   // again; they name the log that says what happened instead.
   it.each(['MODEL_SELF_TEST_FAILED', 'MODEL_SERVER_START_FAILED', 'MODEL_SERVER_UNHEALTHY'])('points a %s runtime failure at its log, not at a download', async (error) => {
     render(<App bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: 300, error } })} selection={setupSelection(async () => modelFiles)} />);
@@ -268,8 +276,8 @@ describe('setup and queue controls', () => {
   // file and starts the server with --no-mmproj, so that advice named files that
   // do not exist. The names it does use must stay tied to the shipped manifest.
   it('never asks for model files this build does not use', async () => {
-    const names = modelManifest.files.map((file) => file.name);
-    expect(names).toEqual(['Qwen3.5-2B-Q4_K_M.gguf']);
+    const names = modelManifest.variants.flatMap((variant) => variant.files.map((file) => file.name));
+    expect(names).toEqual(['Ternary-Bonsai-2-4B-PQ2_0.gguf', 'Ternary-Bonsai-2-2B-PQ2_0.gguf']);
 
     for (const error of ['MODEL_FILE_INVALID', 'MODEL_SELF_TEST_FAILED']) {
       const { unmount } = render(<App

@@ -173,6 +173,27 @@ describe('guided onboarding steps', () => {
     await expectFocused(await screen.findByRole('heading', { name: 'Connect your Microsoft account' }, { timeout: 3000 }));
   });
 
+  it('offers the smaller model and the previous model\'s removal on the model step, and does neither by itself', async () => {
+    const bridge = enabledBridge({}, { setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES }, downloadIntervalMs: 60_000, legacyModel: { file: 'Qwen3.5-2B-Q4_K_M.gguf', bytes: 1_280_835_840 } });
+    const setLocalModel = vi.spyOn(bridge, 'setLocalModel');
+    const removeLegacyModel = vi.spyOn(bridge, 'removeLegacyModel');
+    render(<App bridge={bridge} />);
+
+    await begin();
+    await screen.findByRole('heading', { name: 'Get the local model' });
+    expect(screen.getByText(/It downloads once \(1\.07 GiB\)/)).toBeVisible();
+    const legacy = await screen.findByRole('group', { name: 'Previous model' });
+    expect(within(legacy).getByRole('button', { name: 'Remove the previous model (1.19 GiB)' })).toBeVisible();
+    expect(removeLegacyModel).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Other ways to get the model'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use the smaller model (493 MiB) instead' }));
+
+    await waitFor(() => expect(setLocalModel).toHaveBeenCalledWith('bonsai-2b'));
+    expect(await screen.findByText('0 bytes of 493 MiB · 0%')).toBeVisible();
+    expect(removeLegacyModel).not.toHaveBeenCalled();
+  });
+
   it('offers the hosted model without the SharePoint connection card before Microsoft is connected', async () => {
     render(<App bridge={enabledBridge({}, { setup: { state: 'required', downloadedBytes: 0, totalBytes: PINNED_MODEL_BYTES } })} />);
 
