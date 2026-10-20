@@ -184,7 +184,7 @@ pinned model.
 ```sh
 cargo build --release --locked -p intern-worker --features windows-native
 cargo build --release --locked -p intern-bench
-MODEL=/path/to/Qwen3.5-2B-Q4_K_M.gguf LLAMA_SERVER=/path/to/llama-server \
+MODEL=/path/to/Ternary-Bonsai-2-4B-PQ2_0.gguf LLAMA_SERVER=/path/to/llama-server \
 INTERN_RUNTIME_DIR=/path/to/runtime THREADS=4 \
   scripts/run-internbench.sh target/internbench -- --baseline bench/baseline.json
 ```

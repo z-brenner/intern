@@ -322,7 +322,8 @@ taste: prefill on the target machine runs at about 160 tokens/second, so every
 1,000 characters of budget costs about 1.5 seconds of wall clock on every
 document. A larger budget buys nothing on the corpus and costs seconds per file.
 
-"Roughly 3,000 tokens" holds for prose. Qwen's tokenizer reads every digit, and
+"Roughly 3,000 tokens" holds for prose. The Qwen3.5 tokenizer (which Bonsai, a
+Qwen3.5 derivative, keeps) reads every digit, and
 every CJK, Hangul, or Kana character, as a token of its own, so a bank statement
 or a Chinese contract inside the character budget can come to 8,000 tokens or
 more and no longer fit the 8,192-token context. Before a prompt is sent the
@@ -686,8 +687,9 @@ named as it was keeps whatever the reviewer had typed.
 
 | | |
 | --- | --- |
-| Model | Qwen3.5-2B-Instruct, Q4_K_M GGUF (1.19 GiB) |
-| Runtime | llama.cpp `b10361`, CPU only |
+| Model | Prism ML Ternary Bonsai 2 4B, PQ2_0 GGUF (1.07 GiB), by default; Ternary Bonsai 2 2B, PQ2_0 (493 MiB), when chosen. One variant is installed and resident at a time. See [the model choice](model-bakeoff.md#bonsai-2-the-production-model) |
+| Runtime | PrismML's llama.cpp fork, `prism-b10777-e3de715`, CPU only, 64 MiB prompt cache, no `config.ini` |
+| Request | the evidence prompt with one fixed worked example (a fictional dispatch note), greedy, seed 17, thinking off, 1,024-token cap |
 | Context | 8,192 tokens |
 | Threads | half the logical processors, clamped to 2–12 |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
@@ -961,8 +963,8 @@ ordinary applications running:
 | Distillation | 0.3 ms to 9 ms |
 | Median document, end to end | 12.4-27.7 s across four runs of the same corpus on the same machine |
 | 29,000-character contract | 42 s |
-| Peak model process memory | 2,470-2,590 MB |
-| First-run download | 1.19 GiB, the text model and nothing else |
+| Peak model process memory | 2,470-2,590 MB (Qwen3.5-2B, before Bonsai; Bonsai's measured Windows peaks are 1.96 GB for 4B and 0.94 GB for 2B, docs/bonsai-native-windows-evaluation.md) |
+| First-run download | 1.07 GiB (Bonsai 4B) or 493 MiB (Bonsai 2B), the text model and nothing else |
 
 Quote the latency as a range. Four runs of the same corpus on this machine gave
 medians of 12.4, 16.6, 19.6, and 27.7 seconds depending on what else was

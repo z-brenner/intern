@@ -1,5 +1,9 @@
 # Model candidates after the bake-off
 
+> Superseded: Intern now ships Prism ML's Ternary Bonsai 2 (4B by default, 2B
+> on request); see [the model choice](model-bakeoff.md#bonsai-2-the-production-model).
+> This page is the earlier, Qwen-era plan and is kept as it was.
+
 [The bake-off](model-bakeoff.md) chose Qwen3.5-2B Q4_K_M behind a GBNF grammar.
 This page covers what is worth trying next, what has already been built, and how
 each candidate has to be measured before it ships. The numbers here come from the

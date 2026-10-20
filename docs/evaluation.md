@@ -30,10 +30,11 @@ The evaluator runs the evidence pipeline, the default, unless asked for
 another (`--pipeline digest`, or `legacy` live). A recording says which
 pipeline made it and is replayed only through that one:
 `fixtures/corpus-recording.json` and `corpus-baseline.json` are the evidence
-pipeline's, recorded live from `902c7fe`, and
-`fixtures/corpus-recording-digest.json` and `corpus-baseline-digest.json`
-the digest pipeline's, which a hosted model reads through. CI replays
-both:
+pipeline's, recorded live with Bonsai 4B (the default local model) from
+`2cdc8a2`, and `fixtures/corpus-recording-digest.json` and
+`corpus-baseline-digest.json` the digest pipeline's, which a hosted model
+reads through (it was recorded with the earlier Qwen3.5-2B local model, and
+stays so: no prompt a hosted model reads has changed). CI replays both:
 
 ```text
 intern-evaluate ... --replay fixtures/corpus-recording.json --baseline fixtures/corpus-baseline.json
@@ -56,6 +57,19 @@ the prompt from the recorded text and compares the hash with the one recorded:
   marked `"stale": true` and CI never uses this flag.
 * **The fixture bytes changed** (the generator was edited without
   re-recording): `stale_fixture`, same treatment.
+
+Replay also checks *which model* answered. An evidence-pipeline recording
+carries a `model` header - the GGUF's file name, size and SHA-256, written
+by `--model-path` on the live run that recorded it - and replay refuses one
+whose model is not a variant `src-tauri/resources/model-manifest.json` pins,
+or that names none. Replies from a model Intern no longer ships would
+otherwise keep the gate green forever, because nothing else in a prompt hash
+says which model answered it. The digest pipeline's recording is not held to
+this. InternBench applies the same check to `bench/recording.json`.
+
+The prompt identity includes the evidence pipeline's worked example (the
+few-shot profile the Bonsai evaluation selected), so changing the example
+stales the recordings as a change to the instructions does.
 
 So: a change to `facts.rs`, `compose.rs`, `validate.rs`, `evidence.rs`,
 `infer.rs`, `house_style.rs`, or `naming.rs` is measured for free. A change
@@ -125,7 +139,7 @@ cargo build --locked -p intern-worker --release --features windows-native
 Copy-Item target\release\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe
 ./scripts/stage-windows-runtime.ps1 -Destination C:\intern-stage
 npm run fixtures
-./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-2B-Q4_K_M.gguf"
+./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Ternary-Bonsai-2-4B-PQ2_0.gguf"
 ```
 
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
@@ -141,7 +155,15 @@ report's summary in `docs/model-bakeoff.md`.
 ## Recording elsewhere
 
 The engine and the worker are portable; only the packaged runtime is not. The
-committed recordings were made on Linux with the same pinned model and a
+committed evidence recordings (`fixtures/corpus-recording.json`,
+`bench/recording.json`) were made on Linux x86-64 with Bonsai 4B and PrismML's
+own ubuntu-x64 release of the pinned fork
+(`llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz`, SHA-256
+`3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713`), 2 threads
+as in the native evaluation, a 64 MiB prompt cache, the routing worker with
+PP-OCR and no Tesseract installed; llama.cpp is not bit-identical across
+machines or thread counts, so a Windows recording may differ in a reply or
+two. The earlier recordings were made on Linux with the then-pinned model and a
 llama.cpp CPU build from source; the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer
