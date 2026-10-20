@@ -6,8 +6,8 @@ use crate::download::{CancellationToken, DiskSpace, SetupProgress, install_selec
 use crate::error::{
     EngineError as ModelError, EngineErrorCode as ModelErrorCode, EngineResult as ModelResult,
 };
-use crate::manifest::SelectedModel;
 use crate::manifest::ModelRole;
+use crate::manifest::SelectedModel;
 
 /// A phrase that appears nowhere except the calibration document, so a model
 /// that echoes it has actually read the text it was given.

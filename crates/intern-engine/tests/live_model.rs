@@ -52,7 +52,10 @@ fn the_pinned_model_passes_the_setup_self_test() {
 
     let started = Instant::now();
     let server = LlamaServer::start(&server, &model, None, &ServerOptions::default()).unwrap();
-    eprintln!("server healthy after {:.1} s", started.elapsed().as_secs_f64());
+    eprintln!(
+        "server healthy after {:.1} s",
+        started.elapsed().as_secs_f64()
+    );
     let client = ModelClient::new(
         &server.completion_endpoint(),
         server.api_key().to_owned(),
@@ -67,11 +70,11 @@ fn the_pinned_model_passes_the_setup_self_test() {
         eprintln!(
             "probe answered in {:.1} s: {} ({:?})",
             started.elapsed().as_secs_f64(),
-            analysis.proposal.filename,
+            analysis.filename,
             analysis.proposal.document_date,
         );
         if validate_semantic_probe(&probe, &analysis).is_err() {
-            failures.push(analysis.proposal.filename.clone());
+            failures.push(analysis.filename.clone());
         }
     }
     server.stop().unwrap();

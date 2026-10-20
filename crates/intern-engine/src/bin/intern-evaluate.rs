@@ -2279,7 +2279,10 @@ mod tests {
             "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
         ));
         let error = settings.check(&recording).unwrap_err();
-        assert!(error.contains("not a model model-manifest.json pins"), "{error}");
+        assert!(
+            error.contains("not a model model-manifest.json pins"),
+            "{error}"
+        );
 
         // The right digest with the wrong length is not the pinned file.
         recording.model = Some(recorded_model(

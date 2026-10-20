@@ -571,7 +571,10 @@ mod tests {
             ["PATH", "LLAMA_ARG_TEMP_INTERN_TEST"].map(std::ffi::OsString::from),
         );
 
-        assert!(!home.join("llama.cpp").exists(), "a planted config is removed");
+        assert!(
+            !home.join("llama.cpp").exists(),
+            "a planted config is removed"
+        );
         let envs = command
             .get_envs()
             .map(|(name, value)| {

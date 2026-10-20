@@ -387,6 +387,11 @@ mod tests {
             "schema_version": 1,
             "context_tokens": intern_engine::server::CONTEXT_TOKENS,
             "budget_characters": crate::replay::current_budget().max_characters,
+            "model": {
+                "id": "intern-local",
+                "size_bytes": BONSAI_4B_BYTES,
+                "sha256": BONSAI_4B_SHA256,
+            },
             "documents": [],
         });
         let header = serde_json::to_value(header).unwrap();
@@ -394,6 +399,43 @@ mod tests {
             value[key] = field.clone();
         }
         serde_json::from_value(value).unwrap()
+    }
+
+    const BONSAI_4B_BYTES: u64 = 1_146_465_120;
+    const BONSAI_4B_SHA256: &str =
+        "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409";
+
+    /// An evidence recording must name a model the manifest pins: the Qwen
+    /// model Intern shipped before, a recording that names none, or the
+    /// right digest at the wrong size are refused; the digest pipeline's
+    /// recording is not held to it.
+    #[test]
+    fn an_evidence_recording_must_name_a_pinned_model() {
+        let evidence = EngineSettings::default();
+        let mut recorded = recording(&evidence.header());
+        assert_eq!(configuration_change(&recorded, &evidence), Ok(None));
+
+        recorded.model.sha256 =
+            Some("aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223".into());
+        recorded.model.size_bytes = Some(1_280_835_840);
+        let refused = configuration_change(&recorded, &evidence).unwrap_err();
+        assert!(refused.contains("does not pin"), "{refused}");
+
+        recorded.model.sha256 = Some(BONSAI_4B_SHA256.into());
+        recorded.model.size_bytes = Some(1);
+        assert!(configuration_change(&recorded, &evidence).is_err());
+
+        recorded.model.sha256 = None;
+        let refused = configuration_change(&recorded, &evidence).unwrap_err();
+        assert!(refused.contains("--model-path"), "{refused}");
+
+        let digest = EngineSettings {
+            pipeline: Pipeline::Digest,
+            ..EngineSettings::default()
+        };
+        let mut digest_recording = recording(&PipelineHeader::default());
+        digest_recording.model = Default::default();
+        assert_eq!(configuration_change(&digest_recording, &digest), Ok(None));
     }
 
     /// A recording is replayed through the pipeline that made it; a changed
