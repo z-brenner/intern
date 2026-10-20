@@ -1,0 +1,2884 @@
+{
+  "baseline": {
+    "improvements": [
+      "multi-date-invoice.pdf: readiness_match was false, now true",
+      "document-image.tiff: description_specific was false, now true"
+    ],
+    "new": [],
+    "pending": [],
+    "regressions": [
+      "scanned-lease.pdf: filename_correct was true, now false",
+      "meeting-minutes.md: filename_correct was true, now false",
+      "meeting-minutes.md: parties_correct was true, now false",
+      "rotated-low-resolution-scan.png: filename_correct was true, now false",
+      "long-document-100-pages.pdf: parties_correct was true, now false",
+      "document-image.jpg: filename_correct was true, now false"
+    ]
+  },
+  "budget_characters": 12000,
+  "mode": "live",
+  "model_id": "intern-local",
+  "pipeline": "evidence",
+  "records": [
+    {
+      "description": "Employment Agreement between Northstar Lantern Works LLC. and Mira Vale.",
+      "digest_characters": 222,
+      "extraction_millis": 41,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "EMPLOYMENT AGREEMENT"
+          },
+          {
+            "id": "p1.b2.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Effective date: February 14, 2025"
+          },
+          {
+            "id": "p1.b2.f2",
+            "page": 1,
+            "source": "native",
+            "text": "Employer: Northstar Lantern Works LLC"
+          },
+          {
+            "id": "p1.b2.f3",
+            "page": 1,
+            "source": "native",
+            "text": "Employee: Mira Vale"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b2.f2"
+            ],
+            "name": "Northstar Lantern Works LLC.",
+            "proposed_role": "employer",
+            "role": "employer",
+            "role_support": "context",
+            "support": "context"
+          },
+          {
+            "evidence": [
+              "p1.b2.f3"
+            ],
+            "name": "Mira Vale.",
+            "proposed_role": "employee",
+            "role": "employee",
+            "role_support": "cited",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "context",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "employment-agreement.pdf",
+      "filename": "2025-02-14 Employment Agreement between Northstar Lantern Works LLC and Mira Vale.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "Employment Agreement between Northstar Lantern Works LLC. and Mira Vale.",
+        "document_date": "2025-02-14",
+        "document_type": "Employment Agreement",
+        "evidence": {
+          "date": "Effective date: February 14, 2025",
+          "document_type": "EMPLOYMENT AGREEMENT",
+          "parties": [
+            "Employer: Northstar Lantern Works LLC",
+            "Employee: Mira Vale"
+          ]
+        },
+        "parties": [
+          "Northstar Lantern Works LLC.",
+          "Mira Vale."
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 174,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.2758620977401733,
+        "contextTier": "whole",
+        "contextUnits": 5,
+        "digestCharacters": 222,
+        "distillMicros": 705,
+        "estimatedPromptTokens": 813,
+        "indexMicros": 699,
+        "indexUnits": 5,
+        "inferenceMillis": 36187,
+        "model": {
+          "cachedTokens": 0,
+          "generatedTokens": 81,
+          "generationMicros": 10339357,
+          "prefillMicros": 25838236,
+          "promptTokens": 753
+        },
+        "namingMicros": 146,
+        "promptCharacters": 2701,
+        "promptMicros": 21,
+        "redistillations": 0,
+        "retrievalMicros": 6,
+        "sourceCharacters": 174,
+        "validationMicros": 7278
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc for Property 47 JUniper LOOP.",
+      "digest_characters": 133,
+      "extraction_millis": 1093,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "confidence": 96,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024"
+          },
+          {
+            "confidence": 96,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "EFFECTIVE SEPTEMBER 1 2024"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "Cedar Finch Properties Llc"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "Orion Glass Studio inc"
+          },
+          {
+            "confidence": 68,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "PrOperty 47 JUniper LOOP"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Cedar Finch Properties Llc",
+            "proposed_role": "landlord",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Orion Glass Studio inc",
+            "proposed_role": "tenant",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": "Property 47 JUniper LOOP",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "scanned-lease.pdf",
+      "filename": "2024-09-01 Lease Agreement Effective September 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024 between Cedar Finch Properties Llc and Orion Glass Studio inc for Property 47 JUniper LOOP.",
+        "document_date": "2024-09-01",
+        "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+        "evidence": {
+          "date": "EFFECTIVE SEPTEMBER 1 2024",
+          "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+          "parties": [
+            "Cedar Finch Properties Llc",
+            "Orion Glass Studio inc"
+          ]
+        },
+        "parties": [
+          "Cedar Finch Properties Llc",
+          "Orion Glass Studio inc"
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": false,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 118,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.1271185874938965,
+        "contextTier": "whole",
+        "contextUnits": 2,
+        "digestCharacters": 133,
+        "distillMicros": 397,
+        "estimatedPromptTokens": 776,
+        "indexMicros": 393,
+        "indexUnits": 2,
+        "inferenceMillis": 12832,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 94,
+          "generationMicros": 10325088,
+          "prefillMicros": 2503269,
+          "promptTokens": 85
+        },
+        "namingMicros": 146,
+        "promptCharacters": 2612,
+        "promptMicros": 13,
+        "redistillations": 0,
+        "retrievalMicros": 4,
+        "sourceCharacters": 118,
+        "validationMicros": 6931
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "SERVICES AGREEMENT between Lumen Kite Cooperative and Solstice Index LLC for Aurora Catalog Project.",
+      "digest_characters": 241,
+      "extraction_millis": 1082,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "SERVICES AGREEMENT"
+          },
+          {
+            "confidence": 77,
+            "id": "p2.b3",
+            "page": 2,
+            "source": "ocr",
+            "text": "JANUARY 8 2025"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Lumen Kite Cooperative and Solstice Index LLC"
+          },
+          {
+            "confidence": 65,
+            "id": "p2.b2",
+            "page": 2,
+            "source": "ocr",
+            "text": "Solstice index Llc"
+          },
+          {
+            "id": "p1.b3.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Project: Aurora Catalog Project"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Lumen Kite Cooperative",
+            "proposed_role": "client",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p2.b2"
+            ],
+            "name": "Solstice Index LLC",
+            "proposed_role": "contractor",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": "Aurora Catalog Project",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "mixed-signature.pdf",
+      "filename": "2025-01-08 Services Agreement between Lumen Kite Cooperative and Solstice Index LLC.pdf",
+      "pages": 2,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "SERVICES AGREEMENT between Lumen Kite Cooperative and Solstice Index LLC for Aurora Catalog Project.",
+        "document_date": "2025-01-08",
+        "document_type": "SERVICES AGREEMENT",
+        "evidence": {
+          "date": "JANUARY 8 2025",
+          "document_type": "SERVICES AGREEMENT",
+          "parties": [
+            "Lumen Kite Cooperative and Solstice Index LLC",
+            "Lumen Kite Cooperative and Solstice Index LLC"
+          ]
+        },
+        "parties": [
+          "Lumen Kite Cooperative",
+          "Solstice Index LLC"
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": false,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 194,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.2422680854797363,
+        "contextTier": "whole",
+        "contextUnits": 6,
+        "digestCharacters": 241,
+        "distillMicros": 1274,
+        "estimatedPromptTokens": 815,
+        "indexMicros": 1265,
+        "indexUnits": 6,
+        "inferenceMillis": 17754,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 80,
+          "generationMicros": 12291020,
+          "prefillMicros": 5458178,
+          "promptTokens": 131
+        },
+        "namingMicros": 278,
+        "promptCharacters": 2720,
+        "promptMicros": 27,
+        "redistillations": 0,
+        "retrievalMicros": 9,
+        "sourceCharacters": 194,
+        "validationMicros": 14460
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Mutual Non-Disclosure Agreement between Fable Harbor Labs LLC and Copper Wren Design Inc. for Project Marigold.",
+      "digest_characters": 310,
+      "extraction_millis": 5,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "# Mutual Non-Disclosure Agreement"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Effective March 3, 2025 between Fable Harbor Labs LLC and Copper Wren Design Inc."
+          },
+          {
+            "id": "p1.b3.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Confidential purpose: Project Marigold.[^1]"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Fable Harbor Labs LLC",
+            "proposed_role": "contractor",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Copper Wren Design Inc.",
+            "proposed_role": "contractor",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": "Project Marigold",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "nda.docx",
+      "filename": "2025-03-03 Mutual Non-Disclosure Agreement between Fable Harbor Labs LLC and Copper Wren Design Inc.docx",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "Mutual Non-Disclosure Agreement between Fable Harbor Labs LLC and Copper Wren Design Inc. for Project Marigold.",
+        "document_date": "2025-03-03",
+        "document_type": "Mutual Non-Disclosure Agreement",
+        "evidence": {
+          "date": "Effective March 3, 2025 between Fable Harbor Labs LLC and Copper Wren Design Inc.",
+          "document_type": "# Mutual Non-Disclosure Agreement",
+          "parties": [
+            "Effective March 3, 2025 between Fable Harbor Labs LLC and Copper Wren Design Inc.",
+            "Effective March 3, 2025 between Fable Harbor Labs LLC and Copper Wren Design Inc."
+          ]
+        },
+        "parties": [
+          "Fable Harbor Labs LLC",
+          "Copper Wren Design Inc."
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 274,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.1313868761062622,
+        "contextTier": "whole",
+        "contextUnits": 6,
+        "digestCharacters": 310,
+        "distillMicros": 602,
+        "estimatedPromptTokens": 834,
+        "indexMicros": 594,
+        "indexUnits": 6,
+        "inferenceMillis": 17155,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 88,
+          "generationMicros": 10329873,
+          "prefillMicros": 6819252,
+          "promptTokens": 143
+        },
+        "namingMicros": 235,
+        "promptCharacters": 2789,
+        "promptMicros": 18,
+        "redistillations": 0,
+        "retrievalMicros": 8,
+        "sourceCharacters": 274,
+        "validationMicros": 8381
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Invoice INV-2048 from Nimbus Orchard Supply Co. to Atlas Threadworks LLC, totalling $1,248.00.",
+      "digest_characters": 190,
+      "extraction_millis": 1,
+      "facts": {
+        "document_class": "issued",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "INVOICE INV-2048"
+          },
+          {
+            "id": "p1.b2.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Invoice date: April 30, 2025"
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Nimbus Orchard Supply Co."
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Bill to Atlas Threadworks LLC"
+          },
+          {
+            "id": "p1.b4.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Total: $1,248.00"
+          }
+        ],
+        "identifier": "INV-2048",
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Nimbus Orchard Supply Co.",
+            "proposed_role": "issuer",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Atlas Threadworks LLC",
+            "proposed_role": "customer",
+            "role": "customer",
+            "role_support": "cited",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "issued: the issuer's cues",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "multi-date-invoice.pdf",
+      "filename": "2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "invoice",
+        "description": "Invoice INV-2048 from Nimbus Orchard Supply Co. to Atlas Threadworks LLC, totalling $1,248.00.",
+        "document_date": "2025-04-30",
+        "document_type": "Invoice",
+        "evidence": {
+          "date": "Invoice date: April 30, 2025",
+          "document_type": "INVOICE INV-2048",
+          "parties": [
+            "Nimbus Orchard Supply Co."
+          ]
+        },
+        "parties": [
+          "Nimbus Orchard Supply Co."
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 146,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.3013699054718018,
+        "contextTier": "whole",
+        "contextUnits": 5,
+        "digestCharacters": 190,
+        "distillMicros": 833,
+        "estimatedPromptTokens": 809,
+        "indexMicros": 825,
+        "indexUnits": 5,
+        "inferenceMillis": 32729,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 73,
+          "generationMicros": 22933278,
+          "prefillMicros": 9791790,
+          "promptTokens": 130
+        },
+        "namingMicros": 328,
+        "promptCharacters": 2669,
+        "promptMicros": 23,
+        "redistillations": 0,
+        "retrievalMicros": 8,
+        "sourceCharacters": 146,
+        "validationMicros": 9313
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Quarterly Operations Review from The Fictional Meridian Committee covering inventory, safety, and the next quarterly plan.",
+      "digest_characters": 165,
+      "extraction_millis": 0,
+      "facts": {
+        "document_class": "record",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "# Quarterly Operations Review"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "**Date:** May 7, 2025"
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "The Fictional Meridian Committee reviewed inventory, safety, and the next quarterly plan."
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "The Fictional Meridian Committee",
+            "proposed_role": "recipient",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "record: one party",
+        "subject": "inventory, safety, and the next quarterly plan",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "meeting-minutes.md",
+      "filename": "2025-05-07 Quarterly Operations Review from The Fictional Meridian Committee.md",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "issuance",
+        "description": "Quarterly Operations Review from The Fictional Meridian Committee covering inventory, safety, and the next quarterly plan.",
+        "document_date": "2025-05-07",
+        "document_type": "Quarterly Operations Review",
+        "evidence": {
+          "date": "**Date:** May 7, 2025",
+          "document_type": "# Quarterly Operations Review",
+          "parties": [
+            "The Fictional Meridian Committee reviewed inventory, safety, and the next quarterly plan."
+          ]
+        },
+        "parties": [
+          "The Fictional Meridian Committee"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": false,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": false,
+        "parties_expected": 0,
+        "parties_matched": 0,
+        "parties_spurious": 1,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": false,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 144,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.1458333730697632,
+        "contextTier": "whole",
+        "contextUnits": 3,
+        "digestCharacters": 165,
+        "distillMicros": 438,
+        "estimatedPromptTokens": 785,
+        "indexMicros": 432,
+        "indexUnits": 3,
+        "inferenceMillis": 16132,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 70,
+          "generationMicros": 11949673,
+          "prefillMicros": 4175529,
+          "promptTokens": 89
+        },
+        "namingMicros": 80,
+        "promptCharacters": 2644,
+        "promptMicros": 23,
+        "redistillations": 0,
+        "retrievalMicros": 6,
+        "sourceCharacters": 144,
+        "validationMicros": 3769
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "DElIvery RECeIPt DR-771 from Pine Echo Couriers Llc to Violet cartography Studio.",
+      "digest_characters": 110,
+      "extraction_millis": 2067,
+      "facts": {
+        "document_class": "issued",
+        "evidence": [
+          {
+            "confidence": 60,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "DElIvery RECeIPt DR-771"
+          },
+          {
+            "confidence": 92,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "JUNE 12 2025."
+          },
+          {
+            "confidence": 70,
+            "id": "p1.b3",
+            "page": 1,
+            "source": "ocr",
+            "text": "Pine Echo Couriers Llc"
+          },
+          {
+            "confidence": 70,
+            "id": "p1.b3",
+            "page": 1,
+            "source": "ocr",
+            "text": "Violet cartography Studio"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Pine Echo Couriers Llc",
+            "proposed_role": "vendor",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Violet cartography Studio",
+            "proposed_role": "customer",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "issued: the issuer",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "rotated-low-resolution-scan.png",
+      "filename": "2025-06-12 DElIvery RECeIPt DR-771 from Pine Echo Couriers Llc.png",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "execution",
+        "description": "DElIvery RECeIPt DR-771 from Pine Echo Couriers Llc to Violet cartography Studio.",
+        "document_date": "2025-06-12",
+        "document_type": "DElIvery RECeIPt DR-771",
+        "evidence": {
+          "date": "JUNE 12 2025.",
+          "document_type": "DElIvery RECeIPt DR-771",
+          "parties": [
+            "Pine Echo Couriers Llc"
+          ]
+        },
+        "parties": [
+          "Pine Echo Couriers Llc"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "needs_review",
+      "review_reasons": [
+        "parser_warning"
+      ],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": false,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": false,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 88,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.25,
+        "contextTier": "whole",
+        "contextUnits": 3,
+        "digestCharacters": 110,
+        "distillMicros": 523,
+        "estimatedPromptTokens": 772,
+        "indexMicros": 518,
+        "indexUnits": 3,
+        "inferenceMillis": 14677,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 97,
+          "generationMicros": 11199242,
+          "prefillMicros": 3471916,
+          "promptTokens": 90
+        },
+        "namingMicros": 141,
+        "promptCharacters": 2589,
+        "promptMicros": 21,
+        "redistillations": 0,
+        "retrievalMicros": 5,
+        "sourceCharacters": 88,
+        "validationMicros": 5736
+      },
+      "token_confidence": null
+    },
+    {
+      "extraction_millis": 0,
+      "file": "encrypted.pdf",
+      "parser_error": "PASSWORD_PROTECTED",
+      "readiness": "failed",
+      "scores": {
+        "expected_error": true
+      },
+      "status": "expected_error"
+    },
+    {
+      "extraction_millis": 0,
+      "file": "malformed.pdf",
+      "parser_error": "PARSE_FAILED",
+      "readiness": "failed",
+      "scores": {
+        "expected_error": true
+      },
+      "status": "expected_error"
+    },
+    {
+      "description": "Moonlit Archive Project Journal from Fictional observation 001.",
+      "digest_characters": 120,
+      "extraction_millis": 7,
+      "facts": {
+        "document_class": "record",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1"
+          },
+          {
+            "id": "p1.b2.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Journal date: July 1, 2025"
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Fictional observation 001"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Fictional observation 001",
+            "proposed_role": "other",
+            "role": "issuer",
+            "role_support": "absent",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "record: one party",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "long-document-100-pages.pdf",
+      "filename": "2025-07-01 Moonlit Archive Project Journal from Fictional observation 001.pdf",
+      "pages": 100,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "issuance",
+        "description": "Moonlit Archive Project Journal from Fictional observation 001.",
+        "document_date": "2025-07-01",
+        "document_type": "Moonlit Archive Project Journal",
+        "evidence": {
+          "date": "Journal date: July 1, 2025",
+          "document_type": "MOONLIT ARCHIVE PROJECT JOURNAL - PAGE 1",
+          "parties": [
+            "Fictional observation 001"
+          ]
+        },
+        "parties": [
+          "Fictional observation 001"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": false,
+        "parties_expected": 0,
+        "parties_matched": 0,
+        "parties_spurious": 1,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": false,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 9592,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 0.01251042541116476,
+        "contextTier": "whole",
+        "contextUnits": 3,
+        "digestCharacters": 120,
+        "distillMicros": 22766,
+        "estimatedPromptTokens": 778,
+        "indexMicros": 22761,
+        "indexUnits": 300,
+        "inferenceMillis": 10986,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 71,
+          "generationMicros": 7819291,
+          "prefillMicros": 3161632,
+          "promptTokens": 92
+        },
+        "namingMicros": 577,
+        "promptCharacters": 2601,
+        "promptMicros": 14,
+        "redistillations": 0,
+        "retrievalMicros": 5,
+        "sourceCharacters": 9592,
+        "validationMicros": 3645
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Purchase Order PO-310 from EMBER POST MANUFACTURING LLC.",
+      "digest_characters": 92,
+      "extraction_millis": 1296,
+      "facts": {
+        "document_class": "issued",
+        "evidence": [
+          {
+            "confidence": 94,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "PURCHASE ORDER PO-310"
+          },
+          {
+            "confidence": 60,
+            "id": "p1.b3",
+            "page": 1,
+            "source": "ocr",
+            "text": "EMBer POSt MANUFACtURInG LLC"
+          }
+        ],
+        "identifier": "PO-310",
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "EMBER POST MANUFACTURING LLC",
+            "proposed_role": "buyer",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "issued: the issuer",
+        "subject": null,
+        "support": {
+          "document_date": "unsupported",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "cited"
+          ],
+          "subject": "absent",
+          "unknown_ids": 0
+        }
+      },
+      "file": "document-image.png",
+      "filename": "Purchase Order from Ember Post Manufacturing LLC.png",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": null,
+        "description": "Purchase Order PO-310 from EMBER POST MANUFACTURING LLC.",
+        "document_date": null,
+        "document_type": "Purchase Order",
+        "evidence": {
+          "date": null,
+          "document_type": "PURCHASE ORDER PO-310",
+          "parties": [
+            "EMBer POSt MANUFACtURInG LLC"
+          ]
+        },
+        "parties": [
+          "EMBER POST MANUFACTURING LLC"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "needs_review",
+      "review_reasons": [
+        "date_unsupported",
+        "parser_warning"
+      ],
+      "scores": {
+        "date_correct": false,
+        "date_exact": false,
+        "date_forbidden": false,
+        "date_present": false,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": false,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 70,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.3142857551574707,
+        "contextTier": "whole",
+        "contextUnits": 3,
+        "digestCharacters": 92,
+        "distillMicros": 205,
+        "estimatedPromptTokens": 766,
+        "indexMicros": 199,
+        "indexUnits": 3,
+        "inferenceMillis": 9436,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 58,
+          "generationMicros": 6727170,
+          "prefillMicros": 2705254,
+          "promptTokens": 90
+        },
+        "namingMicros": 16,
+        "promptCharacters": 2571,
+        "promptMicros": 21,
+        "redistillations": 0,
+        "retrievalMicros": 6,
+        "sourceCharacters": 70,
+        "validationMicros": 805
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "PACKING SLIP PS-311 from Quartz Meadow Retail LLC.",
+      "digest_characters": 78,
+      "extraction_millis": 320,
+      "facts": {
+        "document_class": "issued",
+        "evidence": [
+          {
+            "confidence": 100,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "PACKING SLIP PS-311"
+          },
+          {
+            "confidence": 100,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "DATE JULY 15 2025"
+          },
+          {
+            "confidence": 100,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "QUARTZ MEADOW RETAIL LLC"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Quartz Meadow Retail LLC",
+            "proposed_role": "recipient",
+            "role": "issuer",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "issued: the issuer",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "document-image.jpg",
+      "filename": "2025-07-15 Packing Slip PS-311 from Quartz Meadow Retail LLC.jpg",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "issuance",
+        "description": "PACKING SLIP PS-311 from Quartz Meadow Retail LLC.",
+        "document_date": "2025-07-15",
+        "document_type": "PACKING SLIP PS-311",
+        "evidence": {
+          "date": "DATE JULY 15 2025",
+          "document_type": "PACKING SLIP PS-311",
+          "parties": [
+            "QUARTZ MEADOW RETAIL LLC"
+          ]
+        },
+        "parties": [
+          "Quartz Meadow Retail LLC"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "needs_review",
+      "review_reasons": [
+        "parser_warning"
+      ],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": false,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 63,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.2380952835083008,
+        "contextTier": "whole",
+        "contextUnits": 2,
+        "digestCharacters": 78,
+        "distillMicros": 436,
+        "estimatedPromptTokens": 762,
+        "indexMicros": 432,
+        "indexUnits": 2,
+        "inferenceMillis": 10460,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 74,
+          "generationMicros": 8109169,
+          "prefillMicros": 2345062,
+          "promptTokens": 78
+        },
+        "namingMicros": 110,
+        "promptCharacters": 2557,
+        "promptMicros": 19,
+        "redistillations": 0,
+        "retrievalMicros": 4,
+        "sourceCharacters": 63,
+        "validationMicros": 4486
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Document from HARBOR COMET REPAIRS LLC concerning DATE.",
+      "digest_characters": 53,
+      "extraction_millis": 1439,
+      "facts": {
+        "document_class": "unknown",
+        "evidence": [
+          {
+            "confidence": 97,
+            "id": "p1.b2",
+            "page": 1,
+            "source": "ocr",
+            "text": "HARBOR COMET REPAIRS LLC"
+          },
+          {
+            "confidence": 51,
+            "id": "p1.b1",
+            "page": 1,
+            "source": "ocr",
+            "text": "DATE JULY.15"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "issuer",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "HARBOR COMET REPAIRS LLC",
+            "proposed_role": "other",
+            "role": "issuer",
+            "role_support": "absent",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "unknown: the issuer",
+        "subject": "DATE",
+        "support": {
+          "document_date": "unsupported",
+          "document_type": "unsupported",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "document-image.tiff",
+      "filename": "Document from Harbor Comet Repairs LLC.tiff",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": null,
+        "description": "Document from HARBOR COMET REPAIRS LLC concerning DATE.",
+        "document_date": null,
+        "document_type": null,
+        "evidence": {
+          "date": null,
+          "document_type": null,
+          "parties": [
+            "HARBOR COMET REPAIRS LLC"
+          ]
+        },
+        "parties": [
+          "HARBOR COMET REPAIRS LLC"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "needs_review",
+      "review_reasons": [
+        "type_unsupported",
+        "date_unsupported",
+        "parser_warning"
+      ],
+      "scores": {
+        "date_correct": false,
+        "date_exact": false,
+        "date_forbidden": false,
+        "date_present": false,
+        "description_covers_facts": false,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": false,
+        "relation_correct": true,
+        "type_correct": false,
+        "type_present": false
+      },
+      "source_characters": 38,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.394736886024475,
+        "contextTier": "whole",
+        "contextUnits": 2,
+        "digestCharacters": 53,
+        "distillMicros": 159,
+        "estimatedPromptTokens": 750,
+        "indexMicros": 154,
+        "indexUnits": 2,
+        "inferenceMillis": 9967,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 62,
+          "generationMicros": 7627070,
+          "prefillMicros": 2333619,
+          "promptTokens": 65
+        },
+        "namingMicros": 17,
+        "promptCharacters": 2532,
+        "promptMicros": 24,
+        "redistillations": 0,
+        "retrievalMicros": 5,
+        "sourceCharacters": 38,
+        "validationMicros": 993
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+      "digest_characters": 2981,
+      "extraction_millis": 11,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "STATEMENT OF WORK NO. 4"
+          },
+          {
+            "id": "p14.b1",
+            "page": 14,
+            "source": "native",
+            "text": "Executed on April 9, 2026."
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "This Statement of Work (\"SOW\") is entered into by and between Ridgeline Cartography LLC, a Delaware limited liability company (\"Provider\"), and Contoso Worldwide, Inc., a California corporation (\"Client\"). Capitalized terms used but not defined in this SOW have the meanings given to them in the Master Services Agreement dated June 2, 2023 between the same parties."
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Contoso Worldwide, Inc., a California corporation (\"Client\")."
+          },
+          {
+            "id": "p1.b4.f4",
+            "page": 1,
+            "source": "native",
+            "text": "Reference: SOW-2026-004"
+          },
+          {
+            "id": "p8.b12",
+            "page": 8,
+            "source": "native",
+            "text": "Client will pay Provider a fixed fee of $248,000 for the services"
+          }
+        ],
+        "identifier": "SOW-2026-004",
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Ridgeline Cartography LLC",
+            "proposed_role": "client",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "context"
+          },
+          {
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Contoso Worldwide, Inc.",
+            "proposed_role": "client",
+            "role": "client",
+            "role_support": "context",
+            "support": "context"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "context",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 3,
+          "parties": [
+            "context",
+            "context"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "statement-of-work.pdf",
+      "filename": "2026-04-01 Statement of Work between Ridgeline Cartography LLC and Contoso Worldwide, Inc.pdf",
+      "pages": 14,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "STATEMENT OF WORK between Ridgeline Cartography LLC and Contoso Worldwide, Inc., reference SOW-2026-004, fixed fee of $248,000.",
+        "document_date": "2026-04-01",
+        "document_type": "STATEMENT OF WORK",
+        "evidence": {
+          "date": "This Statement of Work is effective as of April 1, 2026 and continues",
+          "document_type": "STATEMENT OF WORK NO. 4",
+          "parties": [
+            "This Statement of Work (\"SOW\") is entered into by and between Ridgeline Cartography LLC, a Delaware limited liability company (\"Provider\"), and Contoso Worldwide, Inc., a California corporation (\"Client\"). Capitalized terms used but not defined in this SOW have the meanings given to them in the Master Services Agreement dated June 2, 2023 between the same parties.",
+            "This Statement of Work (\"SOW\") is entered into by and between Ridgeline Cartography LLC, a Delaware limited liability company (\"Provider\"), and Contoso Worldwide, Inc., a California corporation (\"Client\"). Capitalized terms used but not defined in this SOW have the meanings given to them in the Master Services Agreement dated June 2, 2023 between the same parties."
+          ]
+        },
+        "parties": [
+          "Ridgeline Cartography LLC",
+          "Contoso Worldwide, Inc."
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 29285,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 0.10179272294044495,
+        "contextTier": "dense",
+        "contextUnits": 27,
+        "digestCharacters": 2981,
+        "distillMicros": 47750,
+        "estimatedPromptTokens": 1690,
+        "indexMicros": 47009,
+        "indexUnits": 142,
+        "inferenceMillis": 81741,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 84,
+          "generationMicros": 31364194,
+          "prefillMicros": 50370587,
+          "promptTokens": 859
+        },
+        "namingMicros": 3098,
+        "promptCharacters": 5466,
+        "promptMicros": 31,
+        "redistillations": 0,
+        "retrievalMicros": 741,
+        "sourceCharacters": 29285,
+        "validationMicros": 93716
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Notice of Termination from Northstar Lantern Works LLC to John Smith regarding termination of the Employment Agreement.",
+      "digest_characters": 1408,
+      "extraction_millis": 3,
+      "facts": {
+        "document_class": "notice",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "NOTICE OF TERMINATION"
+          },
+          {
+            "id": "p1.b3.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Date of this Notice: December 29, 2026"
+          },
+          {
+            "id": "p1.b4.f1",
+            "page": 1,
+            "source": "native",
+            "text": "To: John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402"
+          },
+          {
+            "id": "p1.b5",
+            "page": 1,
+            "source": "native",
+            "text": "Northstar Lantern Works LLC, 88 Harbour Street, Cedar Rapids, IA 52401"
+          },
+          {
+            "id": "p1.b6.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Re: Termination of the Employment Agreement dated March 3, 2024"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "recipient",
+            "evidence": [
+              "p1.b4.f1"
+            ],
+            "name": "John Smith",
+            "proposed_role": "employee",
+            "role": "recipient",
+            "role_support": "unsupported",
+            "support": "context"
+          },
+          {
+            "evidence": [
+              "p1.b5"
+            ],
+            "name": "Northstar Lantern Works LLC",
+            "proposed_role": "employer",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "notice: the recipient",
+        "subject": "Termination of the Employment Agreement",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "context",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "termination-notice.pdf",
+      "filename": "2026-12-29 Notice of Termination to John Smith.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "notice",
+        "description": "Notice of Termination from Northstar Lantern Works LLC to John Smith regarding termination of the Employment Agreement.",
+        "document_date": "2026-12-29",
+        "document_type": "Notice of Termination",
+        "evidence": {
+          "date": "Date of this Notice: December 29, 2026",
+          "document_type": "NOTICE OF TERMINATION",
+          "parties": [
+            "To: John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402"
+          ]
+        },
+        "parties": [
+          "John Smith"
+        ],
+        "party_relation": "to"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": false,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 1331,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.0578511953353882,
+        "contextTier": "whole",
+        "contextUnits": 11,
+        "digestCharacters": 1408,
+        "distillMicros": 5028,
+        "estimatedPromptTokens": 1193,
+        "indexMicros": 5002,
+        "indexUnits": 11,
+        "inferenceMillis": 90145,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 83,
+          "generationMicros": 34156661,
+          "prefillMicros": 55981336,
+          "promptTokens": 437
+        },
+        "namingMicros": 1304,
+        "promptCharacters": 3887,
+        "promptMicros": 36,
+        "redistillations": 0,
+        "retrievalMicros": 26,
+        "sourceCharacters": 1331,
+        "validationMicros": 22493
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "First Amendment to Consulting Agreement between Contoso Worldwide, Inc. and Jane Ellery for amends the Consulting Agreement, retainer of $9,500.",
+      "digest_characters": 3261,
+      "extraction_millis": 7,
+      "facts": {
+        "document_class": "amendment",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "FIRST AMENDMENT TO CONSULTING AGREEMENT"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "as of September 14, 2025, and amends the Consulting Agreement dated"
+          },
+          {
+            "id": "p2.b4",
+            "page": 2,
+            "source": "native",
+            "text": "CONTOSO WORLDWIDE, INC. By: /s/ R. Alvarado Title: General Counsel"
+          },
+          {
+            "id": "p2.b5.f1",
+            "page": 2,
+            "source": "native",
+            "text": "JANE ELLERY By: /s/ Jane Ellery"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "This First Amendment to Consulting Agreement (this \"Amendment\") is dated"
+          },
+          {
+            "id": "p1.b5",
+            "page": 1,
+            "source": "native",
+            "text": "monthly retainer of $9,500, payable in arrears within fifteen days after"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p2.b4"
+            ],
+            "name": "Contoso Worldwide, Inc.",
+            "proposed_role": "employer",
+            "role": "employer",
+            "role_support": "context",
+            "support": "cited"
+          },
+          {
+            "document_role": "contractor",
+            "evidence": [
+              "p2.b5.f1"
+            ],
+            "name": "Jane Ellery",
+            "proposed_role": "employee",
+            "role": "contractor",
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "amendment: the first two parties",
+        "subject": "amends the Consulting Agreement",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "consulting-amendment.pdf",
+      "filename": "2025-09-14 First Amendment to Consulting Agreement between Contoso Worldwide, Inc and Jane Ellery.pdf",
+      "pages": 2,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "amendment",
+        "description": "First Amendment to Consulting Agreement between Contoso Worldwide, Inc. and Jane Ellery for amends the Consulting Agreement, retainer of $9,500.",
+        "document_date": "2025-09-14",
+        "document_type": "First Amendment to Consulting Agreement",
+        "evidence": {
+          "date": "as of September 14, 2025, and amends the Consulting Agreement dated",
+          "document_type": "FIRST AMENDMENT TO CONSULTING AGREEMENT",
+          "parties": [
+            "CONTOSO WORLDWIDE, INC. By: /s/ R. Alvarado Title: General Counsel",
+            "JANE ELLERY By: /s/ Jane Ellery"
+          ]
+        },
+        "parties": [
+          "Contoso Worldwide, Inc.",
+          "Jane Ellery"
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 3182,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.0248271226882935,
+        "contextTier": "whole",
+        "contextUnits": 16,
+        "digestCharacters": 3261,
+        "distillMicros": 9538,
+        "estimatedPromptTokens": 1750,
+        "indexMicros": 9481,
+        "indexUnits": 16,
+        "inferenceMillis": 95455,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 83,
+          "generationMicros": 11465564,
+          "prefillMicros": 83979214,
+          "promptTokens": 846
+        },
+        "namingMicros": 1639,
+        "promptCharacters": 5740,
+        "promptMicros": 44,
+        "redistillations": 0,
+        "retrievalMicros": 57,
+        "sourceCharacters": 3182,
+        "validationMicros": 16099
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Invoice from Acme Corporation to Contoso Worldwide, Inc. for annual platform subscription, invoice INV-7741, totalling $56,700.",
+      "digest_characters": 767,
+      "extraction_millis": 1,
+      "facts": {
+        "document_class": "issued",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "INVOICE"
+          },
+          {
+            "id": "p1.b3.f2",
+            "page": 1,
+            "source": "native",
+            "text": "Invoice Date: January 5, 2026"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Acme Corporation, 500 Foundry Road, Providence, RI 02903"
+          },
+          {
+            "id": "p1.b4.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Bill To: Contoso Worldwide, Inc., Accounts Payable"
+          },
+          {
+            "id": "p1.b5",
+            "page": 1,
+            "source": "native",
+            "text": "Annual platform subscription, 2026 term 1 $42,000 $42,000"
+          },
+          {
+            "id": "p1.b3.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Invoice Number: INV-7741"
+          },
+          {
+            "id": "p1.b6.f3",
+            "page": 1,
+            "source": "native",
+            "text": "Total Due: $56,700"
+          }
+        ],
+        "identifier": "INV-7741",
+        "key_facts": [],
+        "parties": [
+          {
+            "document_role": "vendor",
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Acme Corporation",
+            "proposed_role": "buyer",
+            "role": "vendor",
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b4.f1"
+            ],
+            "name": "Contoso Worldwide, Inc.",
+            "proposed_role": "customer",
+            "role": "customer",
+            "role_support": "cited",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "issued: the vendor",
+        "subject": "Annual platform subscription",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "vendor-invoice.pdf",
+      "filename": "2026-01-05 Invoice from Acme Corporation.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "invoice",
+        "description": "Invoice from Acme Corporation to Contoso Worldwide, Inc. for annual platform subscription, invoice INV-7741, totalling $56,700.",
+        "document_date": "2026-01-05",
+        "document_type": "Invoice",
+        "evidence": {
+          "date": "Invoice Date: January 5, 2026",
+          "document_type": "INVOICE",
+          "parties": [
+            "Acme Corporation, 500 Foundry Road, Providence, RI 02903"
+          ]
+        },
+        "parties": [
+          "Acme Corporation"
+        ],
+        "party_relation": "from"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 1,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 641,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.1965678930282593,
+        "contextTier": "whole",
+        "contextUnits": 14,
+        "digestCharacters": 767,
+        "distillMicros": 1452,
+        "estimatedPromptTokens": 1038,
+        "indexMicros": 1434,
+        "indexUnits": 14,
+        "inferenceMillis": 29290,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 76,
+          "generationMicros": 11286300,
+          "prefillMicros": 17998945,
+          "promptTokens": 365
+        },
+        "namingMicros": 288,
+        "promptCharacters": 3246,
+        "promptMicros": 31,
+        "redistillations": 0,
+        "retrievalMicros": 18,
+        "sourceCharacters": 641,
+        "validationMicros": 16443
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc., totalling $312,500.",
+      "digest_characters": 1229,
+      "extraction_millis": 9,
+      "facts": {
+        "document_class": "agreement",
+        "evidence": [
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "This Settlement Agreement and Mutual Release (this \"Agreement\") is made"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "effective as of July 22, 2026, by and between Harborline Freight Systems"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "This Settlement Agreement and Mutual Release (this \"Agreement\") is made effective as of July 22, 2026, by and between Harborline Freight Systems LLC (\"Harborline\") and Quill and Vane Advisory Group, Inc. (\"Quill and Vane\"), each a \"Party\" and together the \"Parties.\""
+          },
+          {
+            "id": "p7.b9",
+            "page": 7,
+            "source": "native",
+            "text": "QUILL AND VANE ADVISORY GROUP, INC. By: /s/ L. Bergstrom"
+          },
+          {
+            "id": "p1.b5",
+            "page": 1,
+            "source": "native",
+            "text": "Harborline will pay Quill and Vane the sum of $312,500 in full and final"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Harborline Freight Systems LLC",
+            "proposed_role": "client",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "context"
+          },
+          {
+            "evidence": [
+              "p7.b9"
+            ],
+            "name": "Quill and Vane Advisory Group, Inc.",
+            "proposed_role": "contractor",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "agreement: the first two parties",
+        "subject": null,
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "context",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "settlement-agreement.pdf",
+      "filename": "2026-07-22 Settlement Agreement between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc.pdf",
+      "pages": 7,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE between Harborline Freight Systems LLC and Quill and Vane Advisory Group, Inc., totalling $312,500.",
+        "document_date": "2026-07-22",
+        "document_type": "SETTLEMENT AGREEMENT",
+        "evidence": {
+          "date": "effective as of July 22, 2026, by and between Harborline Freight Systems",
+          "document_type": "This Settlement Agreement and Mutual Release (this \"Agreement\") is made",
+          "parties": [
+            "This Settlement Agreement and Mutual Release (this \"Agreement\") is made effective as of July 22, 2026, by and between Harborline Freight Systems LLC (\"Harborline\") and Quill and Vane Advisory Group, Inc. (\"Quill and Vane\"), each a \"Party\" and together the \"Parties.\"",
+            "This Settlement Agreement and Mutual Release (this \"Agreement\") is made effective as of July 22, 2026, by and between Harborline Freight Systems LLC (\"Harborline\") and Quill and Vane Advisory Group, Inc. (\"Quill and Vane\"), each a \"Party\" and together the \"Parties.\""
+          ]
+        },
+        "parties": [
+          "Harborline Freight Systems LLC",
+          "Quill and Vane Advisory Group, Inc."
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 14837,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 0.08283345401287079,
+        "contextTier": "normal",
+        "contextUnits": 10,
+        "digestCharacters": 1229,
+        "distillMicros": 857124,
+        "estimatedPromptTokens": 1116,
+        "indexMicros": 853614,
+        "indexUnits": 71,
+        "inferenceMillis": 26469,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 87,
+          "generationMicros": 9375571,
+          "prefillMicros": 17086871,
+          "promptTokens": 385
+        },
+        "namingMicros": 1448,
+        "promptCharacters": 3713,
+        "promptMicros": 20,
+        "redistillations": 0,
+        "retrievalMicros": 3510,
+        "sourceCharacters": 14837,
+        "validationMicros": 19178
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Document concerning thing from last week.",
+      "digest_characters": 319,
+      "extraction_millis": 1,
+      "facts": {
+        "document_class": "unknown",
+        "evidence": [
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Talked with Rowan and Priya about the thing from last week. Still open."
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [],
+        "relation_basis": "no parties",
+        "subject": "thing from last week",
+        "support": {
+          "document_date": "unsupported",
+          "document_type": "unsupported",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 1,
+          "parties": [
+            "unsupported",
+            "unsupported",
+            "unsupported"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "ambiguous-note.pdf",
+      "filename": "Document.pdf",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": null,
+        "description": "Document concerning thing from last week.",
+        "document_date": null,
+        "document_type": null,
+        "evidence": {
+          "date": null,
+          "document_type": null,
+          "parties": []
+        },
+        "parties": [],
+        "party_relation": "none"
+      },
+      "readiness": "needs_review",
+      "review_reasons": [
+        "type_unsupported",
+        "date_unsupported",
+        "party_unsupported"
+      ],
+      "scores": {
+        "description_specific": false,
+        "parties_correct": true,
+        "parties_expected": 0,
+        "parties_matched": 0,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": false
+      },
+      "source_characters": 297,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.0740740299224854,
+        "contextTier": "whole",
+        "contextUnits": 3,
+        "digestCharacters": 319,
+        "distillMicros": 260,
+        "estimatedPromptTokens": 829,
+        "indexMicros": 255,
+        "indexUnits": 3,
+        "inferenceMillis": 24016,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 80,
+          "generationMicros": 19861965,
+          "prefillMicros": 4150061,
+          "promptTokens": 127
+        },
+        "namingMicros": 52,
+        "promptCharacters": 2798,
+        "promptMicros": 15,
+        "redistillations": 0,
+        "retrievalMicros": 5,
+        "sourceCharacters": 297,
+        "validationMicros": 1975
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Quarterly Business Review for Contoso Worldwide, Inc. covering Member map renewals across all chapters, prepared by Ridgeline Cartography LLC.",
+      "digest_characters": 453,
+      "extraction_millis": 8,
+      "facts": {
+        "document_class": "record",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "QUARTERLY BUSINESS REVIEW"
+          },
+          {
+            "id": "p1.b4",
+            "page": 1,
+            "source": "native",
+            "text": "Presented on May 21, 2026"
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "Prepared for Contoso Worldwide, Inc."
+          },
+          {
+            "id": "p1.b3",
+            "page": 1,
+            "source": "native",
+            "text": "Presented by Ridgeline Cartography LLC"
+          },
+          {
+            "id": "p1.b11.f1",
+            "page": 1,
+            "source": "native",
+            "text": "Contact: Dana Ruiz, Ridgeline Cartography LLC"
+          },
+          {
+            "id": "p1.b6",
+            "page": 1,
+            "source": "native",
+            "text": "Member map renewals across all chapters"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Contoso Worldwide, Inc.",
+            "proposed_role": "recipient",
+            "role": "recipient",
+            "role_support": "cited",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b3"
+            ],
+            "name": "Ridgeline Cartography LLC.",
+            "proposed_role": "sender",
+            "role": "sender",
+            "role_support": "cited",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b11.f1"
+            ],
+            "name": "Dana Ruiz",
+            "proposed_role": "recipient",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "record: the recipient",
+        "subject": "Member map renewals across all chapters",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "board-deck.pptx",
+      "filename": "2026-05-21 Quarterly Business Review to Contoso Worldwide, Inc.pptx",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "issuance",
+        "description": "Quarterly Business Review for Contoso Worldwide, Inc. covering Member map renewals across all chapters, prepared by Ridgeline Cartography LLC.",
+        "document_date": "2026-05-21",
+        "document_type": "Quarterly Business Review",
+        "evidence": {
+          "date": "Presented on May 21, 2026",
+          "document_type": "QUARTERLY BUSINESS REVIEW",
+          "parties": [
+            "Prepared for Contoso Worldwide, Inc."
+          ]
+        },
+        "parties": [
+          "Contoso Worldwide, Inc."
+        ],
+        "party_relation": "to"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": false,
+        "parties_correct": false,
+        "parties_expected": 2,
+        "parties_matched": 1,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": false,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 365,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.2410959005355835,
+        "contextTier": "whole",
+        "contextUnits": 11,
+        "digestCharacters": 453,
+        "distillMicros": 2388,
+        "estimatedPromptTokens": 898,
+        "indexMicros": 2372,
+        "indexUnits": 11,
+        "inferenceMillis": 21506,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 98,
+          "generationMicros": 11264623,
+          "prefillMicros": 10234021,
+          "promptTokens": 213
+        },
+        "namingMicros": 308,
+        "promptCharacters": 2932,
+        "promptMicros": 36,
+        "redistillations": 0,
+        "retrievalMicros": 16,
+        "sourceCharacters": 365,
+        "validationMicros": 3161
+      },
+      "token_confidence": null
+    },
+    {
+      "description": "Order Form between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. for Master Subscription Agreement, annual fee of $96,000.",
+      "digest_characters": 477,
+      "extraction_millis": 335,
+      "facts": {
+        "document_class": "form",
+        "evidence": [
+          {
+            "id": "p1.b1",
+            "page": 1,
+            "source": "native",
+            "text": "# Order Form"
+          },
+          {
+            "id": "p1.b4",
+            "page": 1,
+            "source": "native",
+            "text": "Signed on January 14, 2026 by authorized representatives of both parties."
+          },
+          {
+            "id": "p1.b2",
+            "page": 1,
+            "source": "native",
+            "text": "This Order Form is entered into by and between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. under the Master Subscription Agreement dated August 8, 2022."
+          },
+          {
+            "id": "p1.b3.r3",
+            "page": 1,
+            "source": "native",
+            "text": "| Annual Fee | $96,000 |"
+          }
+        ],
+        "identifier": null,
+        "key_facts": [],
+        "parties": [
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Tessellate Analytics Ltd.",
+            "proposed_role": "buyer",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          },
+          {
+            "evidence": [
+              "p1.b2"
+            ],
+            "name": "Contoso Worldwide, Inc.",
+            "proposed_role": "seller",
+            "role": null,
+            "role_support": "unsupported",
+            "support": "cited"
+          }
+        ],
+        "relation_basis": "form: by and between",
+        "subject": "Master Subscription Agreement",
+        "support": {
+          "document_date": "cited",
+          "document_type": "cited",
+          "identifier": "absent",
+          "key_facts": [],
+          "miscited_ids": 0,
+          "parties": [
+            "cited",
+            "cited"
+          ],
+          "subject": "cited",
+          "unknown_ids": 0
+        }
+      },
+      "file": "order-form.docx",
+      "filename": "2026-02-01 Order Form between Tessellate Analytics Ltd and Contoso Worldwide, Inc.docx",
+      "pages": 1,
+      "proposal": {
+        "confidence": 1.0,
+        "date_role": "effective",
+        "description": "Order Form between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. for Master Subscription Agreement, annual fee of $96,000.",
+        "document_date": "2026-02-01",
+        "document_type": "Order Form",
+        "evidence": {
+          "date": "| Subscription Start Date | February 1, 2026 |",
+          "document_type": "# Order Form",
+          "parties": [
+            "This Order Form is entered into by and between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. under the Master Subscription Agreement dated August 8, 2022.",
+            "This Order Form is entered into by and between Tessellate Analytics Ltd. and Contoso Worldwide, Inc. under the Master Subscription Agreement dated August 8, 2022."
+          ]
+        },
+        "parties": [
+          "Tessellate Analytics Ltd.",
+          "Contoso Worldwide, Inc."
+        ],
+        "party_relation": "between"
+      },
+      "readiness": "ready",
+      "review_reasons": [],
+      "scores": {
+        "date_correct": true,
+        "date_exact": true,
+        "date_forbidden": false,
+        "date_present": true,
+        "date_role_correct": true,
+        "description_covers_facts": true,
+        "description_specific": true,
+        "filename_correct": true,
+        "parties_correct": true,
+        "parties_expected": 2,
+        "parties_matched": 2,
+        "parties_spurious": 0,
+        "party_forbidden": false,
+        "readiness_match": true,
+        "ready": true,
+        "relation_correct": true,
+        "type_correct": true,
+        "type_present": true
+      },
+      "source_characters": 427,
+      "status": "completed",
+      "telemetry": {
+        "compressionRatio": 1.1170960664749146,
+        "contextTier": "whole",
+        "contextUnits": 7,
+        "digestCharacters": 477,
+        "distillMicros": 1422,
+        "estimatedPromptTokens": 900,
+        "indexMicros": 1410,
+        "indexUnits": 7,
+        "inferenceMillis": 14634,
+        "model": {
+          "cachedTokens": 628,
+          "generatedTokens": 74,
+          "generationMicros": 7835172,
+          "prefillMicros": 6793538,
+          "promptTokens": 202
+        },
+        "namingMicros": 447,
+        "promptCharacters": 2956,
+        "promptMicros": 25,
+        "redistillations": 0,
+        "retrievalMicros": 12,
+        "sourceCharacters": 427,
+        "validationMicros": 16630
+      },
+      "token_confidence": null
+    }
+  ],
+  "schema_version": 3,
+  "summary": {
+    "date_correct": {
+      "correct": 16,
+      "rate": 0.8888888888888888,
+      "total": 18
+    },
+    "date_exact": {
+      "correct": 16,
+      "rate": 0.8888888888888888,
+      "total": 18
+    },
+    "date_forbidden": {
+      "correct": 0,
+      "rate": 0.0,
+      "total": 18
+    },
+    "date_present": {
+      "correct": 16,
+      "rate": 0.8888888888888888,
+      "total": 18
+    },
+    "date_role_correct": {
+      "correct": 15,
+      "rate": 0.9375,
+      "total": 16
+    },
+    "description_covers_facts": {
+      "correct": 16,
+      "rate": 0.8888888888888888,
+      "total": 18
+    },
+    "description_specific": {
+      "correct": 18,
+      "rate": 0.9473684210526315,
+      "total": 19
+    },
+    "evaluated": 19,
+    "expected_error": {
+      "correct": 2,
+      "rate": 1.0,
+      "total": 2
+    },
+    "filename_correct": {
+      "correct": 9,
+      "rate": 0.5,
+      "total": 18
+    },
+    "inference_millis": {
+      "count": 19,
+      "max": 95455,
+      "mean": 30082,
+      "median": 17754,
+      "min": 9436
+    },
+    "parties_correct": {
+      "correct": 16,
+      "rate": 0.8421052631578947,
+      "total": 19
+    },
+    "party_forbidden": {
+      "correct": 0,
+      "rate": 0.0,
+      "total": 19
+    },
+    "pending": 0,
+    "readiness_match": {
+      "correct": 17,
+      "rate": 0.8947368421052632,
+      "total": 19
+    },
+    "ready": {
+      "correct": 14,
+      "rate": 0.7368421052631579,
+      "total": 19
+    },
+    "relation_correct": {
+      "correct": 14,
+      "rate": 0.7777777777777778,
+      "total": 18
+    },
+    "review_rate": 0.26315789473684215,
+    "statuses": {
+      "completed": 19,
+      "expected_error": 2
+    },
+    "total_millis": {
+      "count": 19,
+      "max": 95462,
+      "mean": 30489,
+      "median": 18836,
+      "min": 10732
+    },
+    "type_correct": {
+      "correct": 17,
+      "rate": 0.9444444444444444,
+      "total": 18
+    },
+    "type_present": {
+      "correct": 17,
+      "rate": 0.9444444444444444,
+      "total": 18
+    }
+  }
+}

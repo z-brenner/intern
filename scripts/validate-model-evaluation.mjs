@@ -12,17 +12,29 @@ import { pathToFileURL } from 'node:url';
  */
 /**
  * These are regression floors, not targets. Each sits at or just below what the
- * recorded run in `docs/qa/model-evaluation.json` actually achieved, so the gate
- * fails when the system gets worse rather than decorating it with a number it
- * has never met. Raise a floor when a change raises the measurement.
+ * recorded run of the shipping model actually achieved - the measured rate,
+ * rounded down to the 5-point step below it, as the Qwen floors were set - so
+ * the gate fails when the system gets worse rather than decorating it with a
+ * number it has never met. Raise a floor when a change raises the measurement.
+ *
+ * The recorded run is now Bonsai 4B, the default local model
+ * (`bench/reports/bonsai-default-2026-10-20/corpus-live-linux-bonsai-4b.json`):
+ * the whole corpus live on Linux x86-64 with PrismML's ubuntu build of the
+ * pinned llama.cpp fork, 2 threads, the request profile the app sends. It
+ * measured date 16/18 (88.9%), type 17/18 (94.4%), parties 16/19 (84.2%),
+ * every one of the 14 documents it named dated correctly and described
+ * specifically, no trap date or party, and 5 of 19 sent to review (26.3%).
+ * The Qwen floors these replace were 75% / 70% / 60% with a 60% review
+ * ceiling. The first Windows QA run is the recording of record; if it lands a
+ * floor lower, that is a decision to record here, not a floor to lower quietly.
  *
  * `maximumForbiddenDateRate` is the sharp one: filing a document under a date
  * the corpus marks as wrong is the failure this product exists to avoid, and the
  * measured rate is zero.
  *
- * `dateCorrect` is a floor on the whole corpus, measured at 76.5%. Every one of
- * the 13 text documents gets its date right; all four misses are scans whose
- * digits OCR corrupts, and each of those is correctly sent to review instead of
+ * `dateCorrect` is a floor on the whole corpus. Qwen measured 76.5%, Bonsai 4B
+ * 88.9%: every text document gets its date right; the two misses are scans
+ * whose digits OCR corrupts, and each is correctly sent to review instead of
  * being named. `dateCorrectWhenNamed` is the gate that expresses the actual
  * promise, and it is absolute.
  *
@@ -49,19 +61,22 @@ import { pathToFileURL } from 'node:url';
  * documents of slack while still catching a genuine collapse into timidity,
  * which on this corpus would be 12 of 18 or worse.
  *
+ * Bonsai 4B sends 5 of 19 to review (26.3%). The same two documents of slack
+ * puts the ceiling at 0.4: 7 of 19 passes, 8 of 19 does not.
+ *
  * This ceiling does not protect filename quality. `dateCorrectWhenNamed`,
  * `maximumForbiddenDateRate`, and the accuracy floors do, and none of them moved.
  */
 export const GATES = Object.freeze({
   minimumEvaluated: 8,
-  dateCorrect: 0.75,
+  dateCorrect: 0.85,
   dateCorrectWhenNamed: 1,
-  typeCorrect: 0.7,
-  partiesCorrect: 0.6,
+  typeCorrect: 0.9,
+  partiesCorrect: 0.8,
   descriptionSpecific: 0.9,
   maximumForbiddenDateRate: 0,
   maximumForbiddenPartyRate: 0.25,
-  maximumReviewRate: 0.6,
+  maximumReviewRate: 0.4,
 });
 
 /**
