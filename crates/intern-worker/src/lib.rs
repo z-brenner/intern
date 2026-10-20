@@ -5,6 +5,8 @@ pub mod indra;
 pub mod layout;
 pub mod limits;
 pub mod ocr;
+#[cfg(feature = "onnx-ocr")]
+mod onnx;
 pub mod paddle;
 pub mod panic_hook;
 pub mod pdf;
