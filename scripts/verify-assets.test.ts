@@ -153,74 +153,151 @@ describe('runtime asset verification', () => {
       expect(model.version).toMatch(/^[0-9a-f]{40}$/);
     }
     await expect(verifyRuntimeAssets(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), { requireExpectedPins: true }))
-      .resolves.toMatchObject({ verifiedDownloads: 10 });
+      .resolves.toMatchObject({ verifiedDownloads: 18 });
   });
 
-  it('refuses a bundle that carries only part of the OCR runtime', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'intern-assets-ocr-'));
-    await mkdir(join(root, 'licenses'));
-    await writeFile(join(root, 'licenses/notice.txt'), 'notice');
-    const license = { path: 'licenses/notice.txt', install_path: 'licenses/notice.txt', size: 6, sha256: createHash('sha256').update('notice').digest('hex') };
-    const entry = (installPath: string) => {
-      const bytes = Buffer.from(installPath);
-      return {
+  // Indra's files come from one commit of its model repository - the one the
+  // indra-ocr 1.1.2 package's v1.1.0 tag resolves to - and only the Latin
+  // set: not the multilingual recognizers, and not model.safetensors, which
+  // nothing reads.
+  it('pins Indra OCR to one model commit and its code licence to one source commit', async () => {
+    const manifest = JSON.parse(await readFile(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), 'utf8'));
+    const indra = manifest.downloads.filter((download: any) => download.id.startsWith('indra-') && download.id !== 'indra-license');
+    expect(indra.map((download: any) => download.url.split('/').pop()).sort())
+      .toEqual(['LICENSE', 'det.onnx', 'lm.npz', 'meta.json', 'order.onnx', 'orient.onnx', 'rec.onnx']);
+    for (const download of indra) {
+      expect(download.version).toBe('a1283c4b42a273c09480ad50e71461daff50fcc7');
+      expect(download.url).toMatch(/^https:\/\/huggingface\.co\/datalab-to\/indra-ocr\/resolve\/a1283c4b42a273c09480ad50e71461daff50fcc7\/[\w.]+$/);
+    }
+    const code = manifest.downloads.find((download: any) => download.id === 'indra-license');
+    expect(code.url).toBe('https://raw.githubusercontent.com/datalab-to/indra/0e96b93c6810f17cf8352acbb4487cc9e45b66d5/LICENSE');
+    expect(manifest.downloads.map((download: any) => download.url).join('\n')).not.toMatch(/safetensors|rec_cjk|rec_rtl|rec_world|script\.onnx|lm_cjk|lm_world/);
+  });
+
+  describe('a bundle with an OCR engine', () => {
+    const ocr = ['onnxruntime.dll', 'ocr-models/text-detection.onnx', 'ocr-models/text-recognition.onnx', 'ocr-models/page-orientation.onnx'];
+    const indra = ['indra-models/det.onnx', 'indra-models/orient.onnx', 'indra-models/rec.onnx', 'indra-models/order.onnx', 'indra-models/lm.npz', 'indra-models/meta.json'];
+    const indraDownloads: Record<string, string> = {
+      'indra-models/det.onnx': 'indra-detection',
+      'indra-models/orient.onnx': 'indra-orientation',
+      'indra-models/rec.onnx': 'indra-recognition',
+      'indra-models/order.onnx': 'indra-order',
+      'indra-models/lm.npz': 'indra-language-model',
+      'indra-models/meta.json': 'indra-meta',
+    };
+    const indraLicenses = ['licenses/indra-ocr-models-LICENSE.txt', 'licenses/indra-LICENSE.txt'];
+    const digest = (contents: string) => createHash('sha256').update(contents).digest('hex');
+
+    /**
+     * A root with every file staged as a stand-in whose contents are its own
+     * install path, and a manifest whose pins are those stand-ins' digests,
+     * as a real staging step's files are their pins.
+     */
+    async function stage() {
+      const root = await mkdtemp(join(tmpdir(), 'intern-assets-ocr-'));
+      for (const installPath of ['pdfium.dll', ...ocr, ...indra]) {
+        await mkdir(join(root, 'staged', installPath, '..'), { recursive: true });
+        await writeFile(join(root, 'staged', installPath), installPath);
+      }
+      await mkdir(join(root, 'licenses'));
+      for (const license of ['licenses/notice.txt', ...indraLicenses]) await writeFile(join(root, license), license);
+      const pinned = JSON.parse(await readFile(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), 'utf8'));
+      const releasePins = structuredClone(pinned.downloads);
+      const download = (id: string) => pinned.downloads.find((entry: any) => entry.id === id);
+      download('onnxruntime').extract.sha256 = digest('onnxruntime.dll');
+      download('ocr-text-detection').sha256 = digest('ocr-models/text-detection.onnx');
+      download('ocr-text-recognition').sha256 = digest('ocr-models/text-recognition.onnx');
+      download('ocr-page-orientation').sha256 = digest('ocr-models/page-orientation.onnx');
+      for (const [path, id] of Object.entries(indraDownloads)) download(id).sha256 = digest(path);
+      const manifestPath = join(root, 'runtime-assets.json');
+      const entry = (installPath: string) => ({
         path: `staged/${installPath}`,
         install_path: installPath,
         packages: [{ name: 'test-runtime', version: '1.0.0' }],
-        size: bytes.length,
-        sha256: createHash('sha256').update(bytes).digest('hex'),
-      };
-    };
-    const ocr = ['onnxruntime.dll', 'ocr-models/text-detection.onnx', 'ocr-models/text-recognition.onnx', 'ocr-models/page-orientation.onnx'];
-    for (const installPath of ['pdfium.dll', ...ocr]) {
-      await mkdir(join(root, 'staged', installPath, '..'), { recursive: true });
-      await writeFile(join(root, 'staged', installPath), installPath);
+        size: Buffer.byteLength(installPath),
+        sha256: digest(installPath),
+      });
+      const licenseEntry = (path: string) => ({ path, install_path: path, size: Buffer.byteLength(path), sha256: digest(path) });
+      const write = (files: string[], licenses = ['licenses/notice.txt', ...indraLicenses]) => writeFile(manifestPath, JSON.stringify({
+        ...pinned, bundled_files: files.map(entry), license_files: licenses.map(licenseEntry),
+      }));
+      return { root, manifestPath, pinned, releasePins, download, write };
     }
-    const pinned = JSON.parse(await readFile(join(process.cwd(), 'src-tauri/resources/runtime-assets.json'), 'utf8'));
-    // Each staged stand-in is what its download is pinned to, as a real
-    // staging step's files are.
-    const releasePins = structuredClone(pinned.downloads);
-    const digest = (installPath: string) => createHash('sha256').update(installPath).digest('hex');
-    const download = (id: string) => pinned.downloads.find((entry: any) => entry.id === id);
-    download('onnxruntime').extract.sha256 = digest('onnxruntime.dll');
-    download('ocr-text-detection').sha256 = digest('ocr-models/text-detection.onnx');
-    download('ocr-text-recognition').sha256 = digest('ocr-models/text-recognition.onnx');
-    download('ocr-page-orientation').sha256 = digest('ocr-models/page-orientation.onnx');
-    const manifestPath = join(root, 'runtime-assets.json');
-    const write = (files: string[]) => writeFile(manifestPath, JSON.stringify({
-      ...pinned, bundled_files: files.map(entry), license_files: [license],
-    }));
 
-    // The runtime without the recognizer: the worker would load it and fall
-    // back to Tesseract on every scan.
-    await write(['pdfium.dll', 'onnxruntime.dll', 'ocr-models/text-detection.onnx', 'ocr-models/page-orientation.onnx']);
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
-      .rejects.toThrow(/OCR runtime is incomplete: missing ocr-models\/text-recognition\.onnx/);
+    it('refuses a bundle that carries only part of the PP-OCR runtime', async () => {
+      const { root, manifestPath, pinned, releasePins, download, write } = await stage();
 
-    await write(['pdfium.dll', ...ocr]);
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
-      .resolves.toMatchObject({ verifiedFiles: 5 });
+      // The runtime without the recognizer: the worker would load it and fall
+      // back to Tesseract on every scan.
+      await write(['pdfium.dll', 'onnxruntime.dll', 'ocr-models/text-detection.onnx', 'ocr-models/page-orientation.onnx']);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/OCR runtime is incomplete: missing ocr-models\/text-recognition\.onnx/);
 
-    // The same files, but the DLL is not the one its download is pinned to:
-    // a file can match its own inventory line and still not be what ships.
-    const dllPin = download('onnxruntime').extract.sha256;
-    download('onnxruntime').extract.sha256 = 'b'.repeat(64);
-    await write(['pdfium.dll', ...ocr]);
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
-      .rejects.toThrow(/onnxruntime\.dll is not the pinned download/);
-    download('onnxruntime').extract.sha256 = dllPin;
+      await write(['pdfium.dll', ...ocr]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .resolves.toMatchObject({ verifiedFiles: 5 });
 
-    // An inventory from before PP-OCR is still a valid inventory...
-    pinned.downloads = releasePins;
-    await write(['pdfium.dll']);
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
-      .resolves.toMatchObject({ verifiedFiles: 1 });
-    // ...but not a release one, which is staged against pins that include it.
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
-      .rejects.toThrow(/OCR runtime is incomplete: missing onnxruntime\.dll/);
-    // And a release bundle's OCR files must be the pinned ones, not stand-ins.
-    await write(['pdfium.dll', ...ocr]);
-    await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
-      .rejects.toThrow(/is not the pinned download/);
+      // The same files, but the DLL is not the one its download is pinned to:
+      // a file can match its own inventory line and still not be what ships.
+      const dllPin = download('onnxruntime').extract.sha256;
+      download('onnxruntime').extract.sha256 = 'b'.repeat(64);
+      await write(['pdfium.dll', ...ocr]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/onnxruntime\.dll is not the pinned download/);
+      download('onnxruntime').extract.sha256 = dllPin;
+
+      // An inventory from before PP-OCR is still a valid inventory...
+      pinned.downloads = releasePins;
+      await write(['pdfium.dll']);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .resolves.toMatchObject({ verifiedFiles: 1 });
+      // ...but not a release one, which is staged against pins that include it.
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
+        .rejects.toThrow(/OCR runtime is incomplete: missing onnxruntime\.dll/);
+      // And a release bundle's OCR files must be the pinned ones, not stand-ins.
+      await write(['pdfium.dll', ...ocr, ...indra]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true, requireExpectedPins: true }))
+        .rejects.toThrow(/is not the pinned download/);
+    });
+
+    it('holds Indra OCR to all of its files, the shared runtime, and its licences', async () => {
+      const { root, manifestPath, write } = await stage();
+
+      await write(['pdfium.dll', ...ocr, ...indra]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .resolves.toMatchObject({ verifiedFiles: 11, verifiedLicenses: 3 });
+
+      // Without its language model the worker would report Indra incomplete
+      // on every install and read with PP-OCR.
+      await write(['pdfium.dll', ...ocr, ...indra.filter((path) => path !== 'indra-models/lm.npz')]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/Indra OCR runtime is incomplete: missing indra-models\/lm\.npz/);
+
+      // Indra runs on ONNX Runtime; its models alone read nothing.
+      await write(['pdfium.dll', ...indra]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/Indra OCR models need onnxruntime\.dll/);
+
+      // The weights' licence says a copy goes with them.
+      await write(['pdfium.dll', ...ocr, ...indra], ['licenses/notice.txt', 'licenses/indra-LICENSE.txt']);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/need their licences: missing licenses\/indra-ocr-models-LICENSE\.txt/);
+
+      // A bundle with PP-OCR and not Indra is a valid inventory. (A release
+      // one is staged against the real pins and must hold both engines; the
+      // stand-ins here cannot be the real downloads, so that is left to the
+      // release staging itself.)
+      await write(['pdfium.dll', ...ocr], ['licenses/notice.txt']);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .resolves.toMatchObject({ verifiedFiles: 5 });
+    });
+
+    it('refuses a bundled Indra file that is not its pinned download', async () => {
+      const { root, manifestPath, download, write } = await stage();
+      download('indra-meta').sha256 = 'c'.repeat(64);
+      await write(['pdfium.dll', ...ocr, ...indra]);
+      await expect(verifyRuntimeAssets(manifestPath, { root, requireBundled: true }))
+        .rejects.toThrow(/indra-models\/meta\.json is not the pinned download/);
+    });
   });
 });

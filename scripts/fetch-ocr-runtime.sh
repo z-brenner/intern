@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Stages ONNX Runtime and the PP-OCR models into a runtime directory on
-# Linux x86-64, for running the worker's PP-OCR engine and the OCR
-# benchmarks locally. Windows packages get the same models, and Microsoft's
-# Windows build of the same ONNX Runtime release, from
+# Stages ONNX Runtime, Indra OCR's models and the PP-OCR models into a
+# runtime directory on Linux x86-64, for running the worker's ONNX engines
+# and the OCR benchmarks locally. Windows packages get the same models, and
+# Microsoft's Windows build of the same ONNX Runtime release, from
 # scripts/fetch-windows-assets.ps1. See docs/ocr.md.
 #
 # Usage:
 #   scripts/fetch-ocr-runtime.sh RUNTIME_DIR [CACHE_DIR]
 #
-# RUNTIME_DIR receives libonnxruntime.so and ocr-models/*.onnx, which is
-# where the worker looks for them (alongside PDFium, Tesseract and tessdata,
-# which this does not fetch). Point INTERN_RUNTIME_DIR at it.
+# RUNTIME_DIR receives libonnxruntime.so, indra-models/ (det.onnx,
+# orient.onnx, rec.onnx, order.onnx, lm.npz, meta.json) and
+# ocr-models/*.onnx, which is where the worker looks for them (alongside
+# PDFium, Tesseract and tessdata, which this does not fetch), and
+# licenses/ the licences of Indra's weights and code. Point
+# INTERN_RUNTIME_DIR at it. Indra's weights are under their own licence;
+# read licenses/indra-ocr-models-LICENSE.txt before using them.
 #
 # The models are pinned by src-tauri/resources/runtime-assets.json - the
 # same URL, size and SHA-256 the Windows package uses. ONNX Runtime comes
@@ -108,30 +112,49 @@ if ! matches "$STAGE/libonnxruntime.so" "$ORT_LIBRARY_SIZE" "$ORT_LIBRARY_SHA256
   exit 1
 fi
 
-# The model pins, read from the manifest the Windows package is built from.
-mkdir -p "$STAGE/ocr-models"
-while IFS=$'\t' read -r id archive url size sha256; do
+# The model pins, read from the manifest the Windows package is built from,
+# each with the directory of the runtime it is staged in.
+mkdir -p "$STAGE/ocr-models" "$STAGE/indra-models" "$STAGE/licenses"
+while IFS=$'\t' read -r directory archive url size sha256; do
   fetch "$url" "$archive" "$size" "$sha256"
-  cp "$CACHE/$archive" "$STAGE/ocr-models/$archive"
+  cp "$CACHE/$archive" "$STAGE/$directory/$archive"
 done < <(node -e '
   const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  const wanted = ["ocr-text-detection", "ocr-text-recognition", "ocr-page-orientation"];
-  for (const id of wanted) {
+  const wanted = [
+    ["ocr-text-detection", "ocr-models"],
+    ["ocr-text-recognition", "ocr-models"],
+    ["ocr-page-orientation", "ocr-models"],
+    ["indra-detection", "indra-models"],
+    ["indra-orientation", "indra-models"],
+    ["indra-recognition", "indra-models"],
+    ["indra-order", "indra-models"],
+    ["indra-language-model", "indra-models"],
+    ["indra-meta", "indra-models"],
+    ["indra-ocr-models-license", "licenses"],
+    ["indra-license", "licenses"],
+  ];
+  for (const [id, directory] of wanted) {
     const pin = manifest.downloads.find((download) => download.id === id);
     if (!pin) { console.error(`runtime-assets.json has no ${id} pin`); process.exit(1); }
-    if (!/^[\w.-]+\.onnx$/.test(pin.archive)) { console.error(`unsafe archive name for ${id}`); process.exit(1); }
-    console.log([id, pin.archive, pin.url, pin.size, pin.sha256].join("\t"));
+    if (!/^[\w.-]+\.(onnx|npz|json|txt)$/.test(pin.archive)) { console.error(`unsafe archive name for ${id}`); process.exit(1); }
+    console.log([directory, pin.archive, pin.url, pin.size, pin.sha256].join("\t"));
   }
 ' "$MANIFEST")
 
 if [ "$(find "$STAGE/ocr-models" -name '*.onnx' | wc -l)" -ne 3 ]; then
-  echo "expected three OCR models to stage" >&2
+  echo "expected three PP-OCR models to stage" >&2
+  exit 1
+fi
+if [ "$(find "$STAGE/indra-models" -type f | wc -l)" -ne 6 ]; then
+  echo "expected six Indra OCR files to stage" >&2
   exit 1
 fi
 
-mkdir -p "$RUNTIME_DIR/ocr-models"
+mkdir -p "$RUNTIME_DIR/ocr-models" "$RUNTIME_DIR/indra-models" "$RUNTIME_DIR/licenses"
 install -m 0644 "$STAGE/libonnxruntime.so" "$RUNTIME_DIR/libonnxruntime.so"
-for model in "$STAGE"/ocr-models/*.onnx; do
-  install -m 0644 "$model" "$RUNTIME_DIR/ocr-models/$(basename "$model")"
+for directory in ocr-models indra-models licenses; do
+  for file in "$STAGE/$directory"/*; do
+    install -m 0644 "$file" "$RUNTIME_DIR/$directory/$(basename "$file")"
+  done
 done
-echo "Staged ONNX Runtime 1.30.0 and the PP-OCR models in $RUNTIME_DIR"
+echo "Staged ONNX Runtime 1.30.0, Indra OCR's models and the PP-OCR models in $RUNTIME_DIR"

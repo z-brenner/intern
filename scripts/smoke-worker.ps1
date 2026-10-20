@@ -33,6 +33,9 @@ $Start.RedirectStandardInput = $true
 $Start.RedirectStandardOutput = $true
 $Start.RedirectStandardError = $true
 $Start.Environment["INTERN_RUNTIME_DIR"] = $Runtime
+# The engine is the one the runtime selects, never one a runner's environment
+# asks for.
+[void]$Start.Environment.Remove("INTERN_OCR_ENGINE")
 $Process = [System.Diagnostics.Process]::new()
 $Process.StartInfo = $Start
 if (-not $Process.Start()) { throw "Failed to launch parser worker" }
@@ -167,16 +170,35 @@ try {
     $Process.StandardInput.Close()
     if (-not $Process.WaitForExit(10000)) { throw "Worker did not exit after shutdown" }
     if ($Process.ExitCode -ne 0) { throw "Worker exited with $($Process.ExitCode): $(Get-WorkerStderr)" }
-    # A runtime that carries ONNX Runtime and the OCR models reads scans with
-    # PP-OCR. If they do not load, the worker says so on stderr and reads with
-    # Tesseract instead - which passes every assertion above while shipping
-    # the engine the package was not built for.
+    # A runtime that carries ONNX Runtime and Indra's models reads scans with
+    # Indra OCR; one with ONNX Runtime and only PP-OCR's, with PP-OCR. An
+    # engine that does not load, or is missing a file, is reported on stderr
+    # as an OCR_ENGINE_FALLBACK line naming the engine given up on ("from")
+    # and the one read with instead ("to"), and the worker reads on - which
+    # passes every assertion above while shipping an engine the package was
+    # not built for. So any such line fails the smoke.
     if (-not $StderrTask.Wait(10000)) { throw "Worker stderr did not close after exit" }
-    $UsesPpOcr = Test-Path -LiteralPath (Join-Path $Runtime "onnxruntime.dll") -PathType Leaf
-    if ($UsesPpOcr -and $StderrTask.Result.Contains("OCR_ENGINE_FALLBACK")) {
-        throw "The runtime carries PP-OCR, but the worker fell back to Tesseract: $($StderrTask.Result)"
+    $HasOnnxRuntime = Test-Path -LiteralPath (Join-Path $Runtime "onnxruntime.dll") -PathType Leaf
+    $IndraFiles = @("det.onnx", "orient.onnx", "rec.onnx", "order.onnx", "lm.npz", "meta.json")
+    $StagedIndra = @($IndraFiles | Where-Object { Test-Path -LiteralPath (Join-Path $Runtime "indra-models/$_") -PathType Leaf })
+    if ($StagedIndra.Count -gt 0 -and $StagedIndra.Count -ne $IndraFiles.Count) {
+        throw "The runtime carries only part of Indra OCR: $($StagedIndra -join ', ') of $($IndraFiles -join ', ')"
     }
-    $OcrEngine = if ($UsesPpOcr) { "PP-OCR" } else { "Tesseract" }
+    $UsesIndra = $HasOnnxRuntime -and $StagedIndra.Count -eq $IndraFiles.Count
+    $UsesPpOcr = $HasOnnxRuntime -and -not $UsesIndra
+    $Warnings = @($StderrTask.Result -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | ForEach-Object {
+        try { $_ | ConvertFrom-Json } catch { $null }
+    } | Where-Object { $null -ne $_ -and $_.PSObject.Properties["code"] })
+    $Fallbacks = @($Warnings | Where-Object { $_.code -eq "OCR_ENGINE_FALLBACK" })
+    if ($HasOnnxRuntime -and ($Fallbacks.Count -gt 0 -or $StderrTask.Result.Contains("OCR_ENGINE_FALLBACK"))) {
+        $Described = ($Fallbacks | ForEach-Object { "$($_.from) -> $($_.to): $($_.message)" }) -join "; "
+        $Expected = if ($UsesIndra) { "Indra OCR" } else { "PP-OCR" }
+        throw "The runtime carries $Expected, but the worker fell back: $Described $($StderrTask.Result)"
+    }
+    if (@($Warnings | Where-Object { $_.code -eq "OCR_ENGINE_UNKNOWN" }).Count -gt 0) {
+        throw "The worker was given an OCR engine it does not know: $($StderrTask.Result)"
+    }
+    $OcrEngine = if ($UsesIndra) { "Indra OCR" } elseif ($UsesPpOcr) { "PP-OCR" } else { "Tesseract" }
     Write-Host "Package-shaped worker hello, native PDF, PDFium+$OcrEngine OCR, DOCX/image, and invalid-fixture smoke passed."
 }
 finally {
