@@ -41,8 +41,8 @@ use super::imgops;
 use super::lm::NgramLm;
 use super::meta::Meta;
 use super::page::{
-    DESKEW_MIN, ORIENT_MIN, VERTICAL, estimate_skew, orient_input, orientation_class, preview,
-    rotate_page, turn, unrotate_box,
+    DESKEW_MIN, ORIENT_MIN, VERTICAL, estimate_skew_threaded, orient_input, orientation_class,
+    preview, rotate_page, round_to, turn, unrotate_box,
 };
 use super::rec::{
     LineLm, LineOutputs, crop_geometry, crop_line, is_dark_line, pad_batch, read_line,
@@ -581,7 +581,9 @@ impl IndraOcr {
             |timings| &mut timings.ocr_encode_micros,
             || {
                 let small = preview(gray);
-                let angle = estimate_skew(&small);
+                // Scored on the page's threads, as the reference scores it on
+                // its pool; the angle is the same for any number.
+                let angle = estimate_skew_threaded(&small, self.budget.intra_threads.max(1));
                 (small, angle)
             },
         );
@@ -643,7 +645,7 @@ impl IndraOcr {
             return Err(error);
         }
         reading.rotation = 90 * k as u32;
-        reading.skew = (turned.skew * 100.0).round() / 100.0;
+        reading.skew = round_to(turned.skew, 2);
         if turned.skew != 0.0 {
             // Boxes back on the page as turned, before levelling.
             for line in &mut reading.lines {

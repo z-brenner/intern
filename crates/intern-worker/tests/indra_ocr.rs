@@ -313,19 +313,23 @@ fn gray_of(path: &Path) -> Gray {
 const BOX_TOLERANCE: f64 = 0.5;
 const CONF_TOLERANCE: f64 = 5e-3;
 
-fn assert_box_near(got: [f64; 4], want: &Value, what: &str) {
+/// The largest difference of any edge from the reference's.
+fn assert_box_near(got: [f64; 4], want: &Value, what: &str) -> f64 {
     let want: Vec<f64> = want
         .as_array()
         .unwrap()
         .iter()
         .map(|value| value.as_f64().unwrap())
         .collect();
+    let mut worst = 0.0_f64;
     for (got, want) in got.iter().zip(&want) {
         assert!(
             (got - want).abs() <= BOX_TOLERANCE,
             "{what}: box {got:?} against {want:?}"
         );
+        worst = worst.max((got - want).abs());
     }
+    worst
 }
 
 /// Compares a reading with the reference's JSON line for the page: every
@@ -354,10 +358,14 @@ fn assert_matches_reference(name: &str, reading: &PageReading, reference: &Value
         .map(|line| line["text"].as_str().unwrap())
         .collect();
     assert_eq!(got, want, "{name}: lines");
+    let (mut worst_box, mut worst_conf, mut exact) = (0.0_f64, 0.0_f64, 0);
     for (index, (line, expected)) in reading.lines.iter().zip(lines).enumerate() {
         let what = format!("{name} line {index} {:?}", line.text);
-        assert_box_near(line.bbox, &expected["box"], &what);
+        let off = assert_box_near(line.bbox, &expected["box"], &what);
         let conf = expected["conf"].as_f64().unwrap();
+        worst_box = worst_box.max(off);
+        worst_conf = worst_conf.max((line.conf - conf).abs());
+        exact += usize::from(off == 0.0 && line.conf == conf);
         assert!(
             (line.conf - conf).abs() <= CONF_TOLERANCE,
             "{what}: conf {} against {conf}",
@@ -370,8 +378,14 @@ fn assert_matches_reference(name: &str, reading: &PageReading, reference: &Value
         let what = format!("{name} block {index}");
         assert_eq!(block.class.label(), expected["label"], "{what}");
         assert_eq!(block.text, expected["text"].as_str().unwrap(), "{what}");
-        assert_box_near(block.bbox, &expected["bbox"], &what);
+        worst_box = worst_box.max(assert_box_near(block.bbox, &expected["bbox"], &what));
     }
+    eprintln!(
+        "{name}: {} lines and {} blocks as the reference's; {exact} lines exact to the \
+         reference's rounding; largest box difference {worst_box:.1} px, confidence {worst_conf:.4}",
+        lines.len(),
+        blocks.len()
+    );
     assert_eq!(
         reading.markdown,
         reference["markdown"].as_str().unwrap(),
