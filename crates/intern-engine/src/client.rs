@@ -695,7 +695,8 @@ pub(crate) fn read_error_body(body: impl std::io::Read) -> Vec<u8> {
 }
 
 /// Whether an error reply says the prompt did not fit the context window, in
-/// llama.cpp's words: the error type its server sends (b10361), and the
+/// llama.cpp's words: the error type its server sends (b10361, and the
+/// PrismML fork Intern now ships, prism-b10777-e3de715, word for word), and the
 /// sentence it and the servers built on it use.
 pub(crate) fn is_context_overflow(body: &[u8]) -> bool {
     let text = String::from_utf8_lossy(body);
@@ -1660,7 +1661,8 @@ mod tests {
     #[test]
     fn exceed_context_400_maps_to_input_too_large() {
         // The body b10361 sends, as a live server answered a prompt too long
-        // for its 8,192-token context.
+        // for its 8,192-token context. The Prism fork (prism-b10777-e3de715)
+        // was checked to send the same shape and type.
         let overflow = r#"{"error":{"code":400,"message":"request (9214 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9214,"n_ctx":8192}}"#;
         let server = scripted_server(vec![http_reply(
             "400 Bad Request",
@@ -1928,7 +1930,9 @@ mod tests {
         assert!(token_confidence(&[]).is_none());
     }
 
-    /// The server's own reply shape, trimmed from a live b10361 response.
+    /// The server's own reply shape, trimmed from a live b10361 response; the
+    /// Prism fork's replies decode the same way (the corpus and InternBench
+    /// recordings were made through it).
     #[test]
     fn token_confidence_is_read_from_the_servers_reply() {
         let completion: ChatCompletion = serde_json::from_str(

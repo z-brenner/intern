@@ -235,7 +235,7 @@ jobs:
           | pass | native ``generated_fixtures`` | 0 | $NativeTests native fixture tests |
           | pass | ``npm run tauri build -- --bundles nsis -- --locked`` | 0 | one NSIS installer |
           | pass | ``scripts/smoke-installer.ps1`` | 0 | install, packaged worker PDF/OCR, uninstall, user-data retention |
-          | pass | ``scripts/run-model-evaluation.ps1`` | 0 | $($Evaluation.summary.evaluated) documents scored on $($Evaluation.model_file); peak model RSS $([math]::Round($Evaluation.peak_model_rss_bytes / 1MB)) MB |
+          | pass | ``scripts/run-model-evaluation.ps1`` | 0 | $($Evaluation.summary.evaluated) documents scored on $($Evaluation.model_file) (variant $($Evaluation.model_variant)); peak model RSS $([math]::Round($Evaluation.peak_model_rss_bytes / 1MB)) MB |
           | pass | ``scripts/validate-model-evaluation.mjs`` | 0 | date/type/party/description accuracy and trap-date gates |
 
           This QA workflow has read-only repository permissions and does not tag, push, or publish.
