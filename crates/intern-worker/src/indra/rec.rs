@@ -64,8 +64,8 @@ pub fn token_positions(
     todo!("spec §6.5")
 }
 
-/// Tokens from class ids and their positions.
-pub fn id_tokens(ids: &[u32], xs: &[f64]) -> Vec<Token> {
-    let _ = (ids, xs);
+/// Tokens from class ids, their positions and their probabilities.
+pub fn id_tokens(ids: &[u32], xs: &[f64], ps: &[f32]) -> Vec<Token> {
+    let _ = (ids, xs, ps);
     todo!("spec §6.5")
 }

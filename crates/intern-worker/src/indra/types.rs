@@ -48,12 +48,16 @@ pub enum TokenKind {
     Char(String),
 }
 
-/// One emitted character of a line and the x position, in page pixels, of
-/// the time step that emitted it (spec §6.5).
+/// One emitted character of a line, the x position, in page pixels, of
+/// the time step that emitted it (spec §6.5), and the recognizer's
+/// probability of that character at that step. The probability is not in
+/// the reference package; Intern keeps it so a word can be scored by its
+/// least certain character, as every other engine's words are.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub x: f64,
+    pub p: f32,
 }
 
 /// The recognizer's reading of one line (spec §6.5): text is empty when
