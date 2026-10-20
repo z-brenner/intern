@@ -33,8 +33,12 @@
 //!
 //! Two texts are scored, with intern-bench's own OCR measure: the engine's
 //! (`OcrResult::text`) and the page's as the worker sends it (after the
-//! layout analysis). One row per document, then the totals, are printed as
-//! tab-separated values; `--dump` writes every page's texts as JSON.
+//! layout analysis). Amounts are counted on the page's text alone: every
+//! word drawn on an OCR'd page that is a sum with cents (`$4,417.20`,
+//! `369.60`), brackets and trailing punctuation aside, found as a word of
+//! the reading of the same page. One row per document, then the totals, are
+//! printed as tab-separated values; `--dump` writes every page's texts as
+//! JSON.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -260,6 +264,32 @@ fn percent(distance: usize, length: usize) -> String {
     }
 }
 
+/// A word as an amount of money with cents, or nothing: an optional `$`,
+/// digits in groups of three, a point and two digits. Brackets around it
+/// and punctuation after it are not part of it.
+fn amount(word: &str) -> Option<&str> {
+    let word = word
+        .trim_start_matches('(')
+        .trim_end_matches([')', '.', ',', ';', ':']);
+    let body = word.strip_prefix('$').unwrap_or(word);
+    let (whole, cents) = body.split_once('.')?;
+    let groups: Vec<&str> = whole.split(',').collect();
+    let digits = |part: &str| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit());
+    let grouped = groups.iter().all(|group| digits(group))
+        && groups[0].len() <= 3
+        && groups[1..].iter().all(|group| group.len() == 3);
+    (grouped && cents.len() == 2 && digits(cents)).then_some(word)
+}
+
+/// The amounts drawn in `truth` that `read` has as words, and how many
+/// there are.
+fn amounts(truth: &str, read: &str) -> (usize, usize) {
+    let read: Vec<&str> = read.split_whitespace().filter_map(amount).collect();
+    let drawn: Vec<&str> = truth.split_whitespace().filter_map(amount).collect();
+    let found = drawn.iter().filter(|value| read.contains(value)).count();
+    (found, drawn.len())
+}
+
 fn row(name: &str, m: &OcrMeasure) -> String {
     format!(
         "{name}\t{}\t{}\t{}/{}\t{}/{}\t{}/{}",
@@ -288,9 +318,10 @@ fn main() {
     let mut engine_total = OcrMeasure::default();
     let mut page_total = OcrMeasure::default();
     let (mut cpu_total, mut wall_total, mut pages_total) = (0.0, 0.0, 0_usize);
+    let mut amounts_total = (0, 0);
     let mut dump: BTreeMap<String, Vec<PageRead>> = BTreeMap::new();
     println!(
-        "document\tengine CER\tWER\tdates\tnames\tidentifiers\tpage CER\tWER\tdates\tnames\tidentifiers\tpages\tCPU s/page\twall s/page"
+        "document\tengine CER\tWER\tdates\tnames\tidentifiers\tpage CER\tWER\tdates\tnames\tidentifiers\tamounts\tpages\tCPU s/page\twall s/page"
     );
     for document in &gold.documents {
         let Some(truth) = &document.ocr_truth else {
@@ -319,6 +350,7 @@ fn main() {
         let mut worker_pages = Vec::new();
         let mut rows = Vec::new();
         let (mut cpu, mut wall) = (0.0, 0.0);
+        let mut money = (0, 0);
         for page in &extracted.pages {
             let ocr = reads.get(&(page.page_number - 1));
             // A page OCR never saw (a native page of a mixed document) reads
@@ -337,6 +369,10 @@ fn main() {
             worker_page.ocr_confidence = page.ocr_confidence.map(|value| value.round() as u32);
             worker_pages.push(worker_page);
             if let Some((result, page_cpu, page_wall)) = ocr {
+                if let Some(drawn) = truth.pages.iter().find(|p| p.page == page.page_number) {
+                    let (found, total) = amounts(&drawn.text, &page.text);
+                    money = (money.0 + found, money.1 + total);
+                }
                 cpu += page_cpu;
                 wall += page_wall;
                 rows.push(PageRead {
@@ -354,9 +390,11 @@ fn main() {
         let page_measure = measure(truth, &DocumentSource::from_pages(worker_pages));
         let read = rows.len().max(1) as f64;
         println!(
-            "{}\t{}\t{}\t{:.3}\t{:.3}",
+            "{}\t{}\t{}/{}\t{}\t{:.3}\t{:.3}",
             row(&document.id, &engine_measure),
             row("", &page_measure).trim_start_matches('\t'),
+            money.0,
+            money.1,
             rows.len(),
             cpu / read,
             wall / read
@@ -366,13 +404,16 @@ fn main() {
         cpu_total += cpu;
         wall_total += wall;
         pages_total += rows.len();
+        amounts_total = (amounts_total.0 + money.0, amounts_total.1 + money.1);
         dump.insert(document.id.clone(), rows);
     }
     let pages = pages_total.max(1) as f64;
     println!(
-        "{}\t{}\t{}\t{:.3}\t{:.3}",
+        "{}\t{}\t{}/{}\t{}\t{:.3}\t{:.3}",
         row("ALL", &engine_total),
         row("", &page_total).trim_start_matches('\t'),
+        amounts_total.0,
+        amounts_total.1,
         pages_total,
         cpu_total / pages,
         wall_total / pages
