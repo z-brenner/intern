@@ -5,7 +5,7 @@ use intern_engine::{
     PartyRelation, distill, engine::finish, validate,
 };
 use intern_engine::{
-    ModelFile, ModelManifest, ModelRole,
+    ModelFile, ModelRole, SelectedModel,
     download::{CancellationToken, DISK_RESERVE_BYTES, DiskSpace, SetupStage},
     error::EngineErrorCode as ModelErrorCode,
     setup::{
@@ -24,10 +24,11 @@ impl DiskSpace for FixedDisk {
     }
 }
 
-fn manifest() -> ModelManifest {
-    ModelManifest {
-        schema_version: 2,
+fn manifest() -> SelectedModel {
+    SelectedModel {
+        variant: "test".into(),
         model_id: "test-model".into(),
+        label: "Test".into(),
         served_model_name: "intern-local".into(),
         files: vec![ModelFile {
             name: "model.gguf".into(),

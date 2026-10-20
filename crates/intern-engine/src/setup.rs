@@ -6,7 +6,7 @@ use crate::download::{CancellationToken, DiskSpace, SetupProgress, install_selec
 use crate::error::{
     EngineError as ModelError, EngineErrorCode as ModelErrorCode, EngineResult as ModelResult,
 };
-use crate::manifest::ModelManifest;
+use crate::manifest::SelectedModel;
 use crate::manifest::ModelRole;
 
 /// A phrase that appears nowhere except the calibration document, so a model
@@ -80,7 +80,7 @@ pub struct ExistingModelSelection {
 }
 
 pub fn install_existing_model_files<D, F>(
-    manifest: &ModelManifest,
+    manifest: &SelectedModel,
     selection: &ExistingModelSelection,
     destination_directory: &std::path::Path,
     disk: &D,

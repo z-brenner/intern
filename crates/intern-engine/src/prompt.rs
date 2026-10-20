@@ -10,7 +10,7 @@
 //!   "due", the date cannot be anything but `YYYY-MM-DD`, and the party list is
 //!   capped, so whole classes of mistake are impossible rather than filtered.
 
-use crate::client::{EvidenceHandles, ModelRequest};
+use crate::client::{EvidenceHandles, ExampleExchange, ModelRequest};
 use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRole};
 use crate::index::EvidenceIndex;
@@ -194,6 +194,22 @@ pub fn evidence_system() -> String {
     format!("{SYSTEM_INSTRUCTION}\n\n{COMPACT_INSTRUCTIONS}")
 }
 
+/// The evidence pipeline's worked example: a fictional one-page dispatch
+/// note and its reply, sent between the system turn and the document.
+///
+/// This is the few-shot profile the native Windows evaluation selected for
+/// Bonsai (and Qwen) on calibration documents before any held-out answer
+/// was seen (`bench/reports/bonsai-native-windows-2026-10-18/`,
+/// `matched-profile.json`, `prompt.examples`), copied byte for byte. Its
+/// names are neutral and its handles (`L1`..`L5`) are not ids any real
+/// document is shown, so a reply cannot cite them: the grammar allows only
+/// the document's own. It is part of every evidence request's identity
+/// ([`ModelRequest::sha256`]) and of [`evidence_prompt_version`].
+pub const EVIDENCE_EXAMPLES: &[ExampleExchange] = &[ExampleExchange {
+    user: "The whole 1-page document follows.\n--- BEGIN EVIDENCE ---\nL1 DISPATCH NOTE\nL2 Issued January 16, 2026\nL3 Issuer: Harbor Packing Ltd.\nL4 Recipient: Alder Stone LLC\nL5 Shipment of twelve storage crates.\n--- END EVIDENCE ---\n\nJSON only.",
+    assistant: r#"{"type":["DISPATCH NOTE","L1"],"date":["2026-01-16","issuance","L2"],"parties":[["Harbor Packing Ltd.","issuer","L3"],["Alder Stone LLC","recipient","L4"]],"subject":["twelve storage crates","L5"]}"#,
+}];
+
 /// The request for one document's evidence: its prompt, the grammar that
 /// lets the reply cite exactly the handles the prompt shows, and the map
 /// from those handles back to the units' stable ids.
@@ -222,6 +238,7 @@ pub fn build_evidence_request(index: &EvidenceIndex, context: &EvidenceContext) 
         system: Some(evidence_system()),
         grammar: Some(grammar),
         evidence: Some(EvidenceHandles::new(handles)),
+        examples: EVIDENCE_EXAMPLES,
     }
 }
 
@@ -394,12 +411,18 @@ fn common_prefix<'a>(words: &[&'a str]) -> &'a str {
 }
 
 /// A short fingerprint of the evidence prompt's fixed parts - the
-/// instructions and the grammar's shape - for a recording to say which
-/// prompt its replies answer.
+/// instructions, the worked examples and the grammar's shape - for a
+/// recording to say which prompt its replies answer.
 pub fn evidence_prompt_version() -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(evidence_system().as_bytes());
+    for example in EVIDENCE_EXAMPLES {
+        hasher.update([0_u8, 3_u8]);
+        hasher.update(example.user.as_bytes());
+        hasher.update([0_u8]);
+        hasher.update(example.assistant.as_bytes());
+    }
     for (handles, style) in [
         (["p1.b1", "p1.b2"], IdStyle::Stable),
         (["1", "2"], IdStyle::Ordinal),
@@ -884,11 +907,13 @@ mod tests {
 
         /// The recordings of record (`bench/recording.json`,
         /// `fixtures/corpus-recording.json`) were made with this prompt. A
-        /// change to the instructions or the grammar changes it, and makes
-        /// every recorded reply stale: record again with the change.
+        /// change to the instructions, the worked example or the grammar
+        /// changes it, and makes every recorded reply stale: record again
+        /// with the change. `4425663a8a9e` was the zero-shot prompt the Qwen
+        /// recordings answered; this one adds the Bonsai few-shot example.
         #[test]
         fn the_recordings_of_record_answer_this_prompt() {
-            assert_eq!(evidence_prompt_version(), "4425663a8a9e");
+            assert_eq!(evidence_prompt_version(), "e2afbe23e64c");
         }
     }
 }
