@@ -30,6 +30,8 @@ mod labelled;
 pub mod router;
 mod text;
 
+pub(crate) use text::is_label;
+
 pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
 use labelled::Labelled;
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};

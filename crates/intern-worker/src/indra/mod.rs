@@ -33,6 +33,7 @@ pub mod beam;
 pub mod det;
 #[cfg(feature = "onnx-ocr")]
 mod engine;
+pub mod fields;
 pub mod imgops;
 pub mod lm;
 pub mod meta;

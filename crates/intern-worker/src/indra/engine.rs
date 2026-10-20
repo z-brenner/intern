@@ -37,6 +37,7 @@ use super::IndraAssets;
 use super::assemble::{AssembleOptions, TableCell, assemble_with};
 use super::beam::BeamParams;
 use super::det::{adaptive_long_side, decode, page_to_input, to_page};
+use super::fields::join_labelled_values;
 use super::imgops;
 use super::lm::NgramLm;
 use super::meta::Meta;
@@ -727,10 +728,14 @@ impl IndraOcr {
         })
     }
 
-    /// The pass as an [`OcrResult`] read at clockwise `rotation`.
+    /// The pass as an [`OcrResult`] read at clockwise `rotation`, after
+    /// Intern's own step: a form's labels joined to their values
+    /// ([`super::fields`]).
     fn to_result(&self, pass: &Pass, rotation: u16) -> OcrResult {
+        let mut reading = pass.reading.clone();
+        join_labelled_values(&mut reading);
         to_result(
-            &pass.reading,
+            &reading,
             &pass.cells,
             &pass.rec,
             self.shared.space,
