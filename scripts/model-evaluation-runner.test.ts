@@ -18,7 +18,11 @@ it('scores the corpus with the exact model the app installs, text-only', async (
   }
   expect(script).toContain('WorkingSet64');
   expect(script).toContain('docs/qa/model-evaluation.json');
-  expect(manifest.files.some((file: { role: string }) => file.role === 'model')).toBe(true);
+  expect(script).toContain('$Manifest.variants');
+  expect(script).toContain('"--cache-ram", "64"');
+  expect(script).toContain('model_variant');
+  const variant = manifest.variants.find((candidate: { id: string }) => candidate.id === manifest.default);
+  expect(variant.files.some((file: { role: string }) => file.role === 'model')).toBe(true);
 });
 
 it('the evaluator drives the shipping extraction, distillation, and validation path', async () => {

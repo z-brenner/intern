@@ -7,8 +7,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_MANIFEST = resolve(REPOSITORY_ROOT, 'src-tauri/resources/runtime-assets.json');
 const EXPECTED_DOWNLOADS = Object.freeze({
-  'llama.cpp': { version: 'b10361', archive: 'llama-b10361-bin-win-cpu-x64.zip', url: 'https://github.com/ggml-org/llama.cpp/releases/download/b10361/llama-b10361-bin-win-cpu-x64.zip', size: 18_427_695, sha256: '36da9e9c1c094bf7842fab69e6cc0921125a67fa2611ba8f329a00804350302a' },
-  'llama.cpp-license': { version: 'b10361', archive: 'llama.cpp-LICENSE.txt', url: 'https://raw.githubusercontent.com/ggml-org/llama.cpp/b10361/LICENSE', size: 1_078, sha256: '94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d' },
+  // PrismML's llama.cpp fork: Bonsai's PQ2_0 weights need its kernels, which
+  // upstream does not have. This is the exact Windows CPU build the native
+  // Bonsai evaluation ran (docs/bonsai-native-windows-evaluation.md); a newer
+  // fork release needs its own qualification before it replaces this pin.
+  'llama.cpp': { version: 'prism-b10777-e3de715', archive: 'llama-prism-b10777-e3de715-bin-win-cpu-x64.zip', url: 'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10777-e3de715/llama-prism-b10777-e3de715-bin-win-cpu-x64.zip', size: 19_530_958, sha256: 'cff7eeff19163e6263720618cf98023715b8dac14d0873f5be0918765de323c4' },
+  'llama.cpp-license': { version: 'prism-b10777-e3de715', archive: 'llama.cpp-LICENSE.txt', url: 'https://raw.githubusercontent.com/PrismML-Eng/llama.cpp/e3de715222b2667c54a267441159a5729f11155e/LICENSE', size: 1_078, sha256: '94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d' },
   pdfium: { version: 'chromium/7881', archive: 'pdfium-win-x64.tgz', url: 'https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7881/pdfium-win-x64.tgz', size: 3_733_154, sha256: '73cc0de638ac2095e7445bf56a38200a5b7c7ca0e9f4ba144598f2457377ac08' },
   'eng.traineddata': { version: '87416418657359cb625c412a48b6e1d6d41c29bd', archive: 'eng.traineddata', url: 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/eng.traineddata', size: 4_113_088, sha256: '7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2' },
   'osd.traineddata': { version: '87416418657359cb625c412a48b6e1d6d41c29bd', archive: 'osd.traineddata', url: 'https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/87416418657359cb625c412a48b6e1d6d41c29bd/osd.traineddata', size: 10_562_727, sha256: '9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff' },

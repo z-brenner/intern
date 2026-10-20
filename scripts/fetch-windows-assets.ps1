@@ -162,16 +162,19 @@ try {
     $LlamaDestination = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"
     Copy-RuntimeFile $LlamaServer[0].FullName $LlamaDestination
     Register-RuntimePackage $LlamaDestination "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
-    # The release zip is flat and also contains impl DLLs for every CLI tool;
-    # stage only llama-server's dependency closure (server impl, core llama/ggml
-    # runtime, and the OpenMP runtime), not the other tools' private DLLs.
+    # The release zip (PrismML's fork, which Bonsai's PQ2_0 weights need) is
+    # flat and also contains impl DLLs for every CLI tool; stage only
+    # llama-server's dependency closure (server impl, core llama/ggml runtime
+    # including every ggml-cpu variant, and the OpenMP runtime), not the other
+    # tools' private DLLs.
     Get-ChildItem -LiteralPath $LlamaServer[0].Directory.FullName -File -Filter "*.dll" |
         Where-Object { $_.Name -eq "llama-server-impl.dll" -or $_.Name -notmatch '-impl\.dll$' } |
         ForEach-Object {
             Copy-SidecarDll $_.FullName "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
         }
-    # llama.cpp binary releases ship no license text inside the archive, so the
-    # MIT license is pinned as its own download from the same upstream tag.
+    # llama.cpp binary releases - the PrismML fork's as much as upstream's -
+    # ship no license text inside the archive, so the MIT license is pinned as
+    # its own download from the same fork commit.
     Copy-RuntimeFile $Downloads["llama.cpp-license"] (Join-Path $LicensesDirectory "llama.cpp-LICENSE.txt")
 
     $PdfiumExtract = Join-Path $WorkDirectory "pdfium"

@@ -10,14 +10,23 @@ SHA-256-addressed inventory of native files bundled by the release build. `Cargo
 Language model weights are not part of the installer or GitHub release. When the
 user chooses local model setup, Intern downloads the separately licensed model
 files described by `model-manifest.json` directly to the user's local application
-data. The small OCR models listed below are different: they ship in the installer,
+data: only the variant the user selected, by default Ternary Bonsai 2 4B
+(`prism-ml/Ternary-Bonsai-2-4B-gguf`, `Ternary-Bonsai-2-4B-PQ2_0.gguf` at revision
+`8d6557168168f91ea6697a4a49ed2ef622b53adb`), or on request Ternary Bonsai 2 2B
+(`prism-ml/Ternary-Bonsai-2-2B-gguf`, `Ternary-Bonsai-2-2B-PQ2_0.gguf` at revision
+`683f7be2629342a50987627b40881e54761a2430`). Both are licensed under the Apache
+License 2.0, copyright 2026-present Prism ML, Inc. Created using Bonsai by Prism ML.
+As their `NOTICE` files state, they are built from Qwen3.5-4B and Qwen3.5-2B,
+Copyright 2026 Alibaba Cloud, Apache-2.0 (the DFlash draft model the 4B notice
+also credits is a separate file Intern does not download). Sources: <https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf> and
+<https://huggingface.co/prism-ml/Ternary-Bonsai-2-2B-gguf>. The small OCR models listed below are different: they ship in the installer,
 under `ocr-models/`, because reading a scan must work offline from the first run.
 
 ## Native runtime assets
 
 | Component | Pinned source | License | Copyright / project |
 | --- | --- | --- | --- |
-| llama.cpp | `b10361`, Windows CPU x64 archive | MIT | llama.cpp contributors |
+| llama.cpp (PrismML-Eng fork, needed for Bonsai's PQ2_0 weights) | `prism-b10777-e3de715` (commit `e3de715222b2667c54a267441159a5729f11155e`), Windows CPU x64 archive | MIT | The ggml authors, llama.cpp contributors and PrismML |
 | PDFium binaries | `chromium/7881`, Windows x64 | BSD-3-Clause | The PDFium Authors / Chromium Authors |
 | Tesseract OCR | 5.5.2, built with vcpkg baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | Apache-2.0 | Tesseract OCR contributors |
 | tessdata_fast English and OSD data | commit `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | Tesseract OCR contributors |
@@ -30,7 +39,8 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 
 Sources:
 
-- <https://github.com/ggml-org/llama.cpp>
+- <https://github.com/PrismML-Eng/llama.cpp>, a fork of
+  <https://github.com/ggml-org/llama.cpp>
 - <https://pdfium.googlesource.com/pdfium/>
 - <https://github.com/bblanchon/pdfium-binaries>
 - <https://github.com/tesseract-ocr/tesseract>

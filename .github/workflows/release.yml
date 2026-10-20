@@ -192,9 +192,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
       - name: Score the corpus through the shipping pipeline for this exact commit
         shell: pwsh
-        # Downloads 1.19 GiB and scores the corpus with real inference, about
-        # 11 minutes when healthy. Bounded so a wedged llama-server cannot hold
-        # the job open for hours.
+        # Downloads the default variant (Bonsai 4B, 1.07 GiB) and scores the
+        # corpus with real inference. Qwen took about 11 minutes when healthy;
+        # Bonsai 4B's inference measured about 2.2 times Qwen's in the native
+        # evaluation, so expect roughly 20-25. Bounded so a wedged
+        # llama-server cannot hold the job open for hours. The opt-in 2B
+        # variant is not release-gated (docs/model-bakeoff.md).
         timeout-minutes: 60
         run: |
           New-Item -ItemType Directory release -Force | Out-Null
