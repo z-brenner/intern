@@ -158,7 +158,11 @@ fn select_ocr_backend(
     if start <= OcrEngine::Indra {
         let assets = intern_worker::indra::IndraAssets::in_directory(runtime);
         if assets.present() {
-            match indra_backend(assets) {
+            // Asked for by name, Indra reads alone, for comparing engines;
+            // by default PP-OCR, when installed, reads the pages Indra is
+            // not sure of.
+            let second = requested.is_none().then_some(runtime);
+            match indra_backend(assets, second) {
                 Ok(engine) => return Ok(engine),
                 Err(error) => passed_over.push((
                     OcrEngine::Indra,
@@ -217,13 +221,41 @@ fn select_ocr_backend(
     )?)))
 }
 
+/// Indra OCR, with PP-OCR from `second`'s runtime directory as the second
+/// reader of the pages it is not sure of when PP-OCR is installed there
+/// ([`intern_worker::second_opinion`]).
 #[cfg(feature = "onnx-ocr")]
-fn indra_backend(assets: intern_worker::indra::IndraAssets) -> Result<SharedOcr, ExtractionError> {
-    Ok(Box::new(intern_worker::indra::IndraOcr::new(assets)?))
+fn indra_backend(
+    assets: intern_worker::indra::IndraAssets,
+    second: Option<&Path>,
+) -> Result<SharedOcr, ExtractionError> {
+    let indra: SharedOcr = Box::new(intern_worker::indra::IndraOcr::new(assets)?);
+    let Some(runtime) = second
+        .filter(|runtime| intern_worker::paddle::PaddleAssets::in_directory(runtime).present())
+    else {
+        return Ok(indra);
+    };
+    let runtime = runtime.to_path_buf();
+    Ok(Box::new(intern_worker::second_opinion::SecondOpinion::new(
+        indra,
+        Box::new(move || paddle_backend(&runtime)),
+        Box::new(|error| {
+            log_warning(
+                "OCR_SECOND_READING_UNAVAILABLE",
+                &format!(
+                    "PP-OCR did not load to read again the pages Indra OCR is unsure of: {error}"
+                ),
+                &[],
+            );
+        }),
+    )))
 }
 
 #[cfg(not(feature = "onnx-ocr"))]
-fn indra_backend(_assets: intern_worker::indra::IndraAssets) -> Result<SharedOcr, ExtractionError> {
+fn indra_backend(
+    _assets: intern_worker::indra::IndraAssets,
+    _second: Option<&Path>,
+) -> Result<SharedOcr, ExtractionError> {
     Err(ExtractionError::native_assets_missing(
         "intern-worker was built without the onnx-ocr feature",
     ))

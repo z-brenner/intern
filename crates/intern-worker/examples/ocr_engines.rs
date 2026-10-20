@@ -5,12 +5,12 @@
 //! INTERN_RUNTIME_DIR=/path/to/runtime cargo run --release -p intern-worker \
 //!     --features native-pdfium,onnx-ocr --example ocr_engines -- \
 //!     --engine indra --corpus bench/generated --gold bench/gold.json \
-//!     [--only id,id] [--threads 2] [--degrade 3] [--dump texts.json]
+//!     [--only id,id] [--threads 2] [--degrade 3] [--scale 0.667] [--dump texts.json]
 //! ```
 //!
-//! `--engine` is `indra`, `paddle` or `indra+paddle` (Indra with PP-OCR's
-//! recognizer as the second reading of uncertain critical-field lines; see
-//! `indra::second`). Run one engine per process: ONNX Runtime binds once per
+//! `--engine` is `indra`, `paddle` or `indra+paddle`: Indra, with PP-OCR
+//! reading again the pages Indra is not sure of, as the worker reads by
+//! default (`second_opinion`). Run one engine per process: ONNX Runtime binds once per
 //! process, and the peak memory printed at the end is the process's.
 //!
 //! Every scanned document of the gold (one with `ocr_truth`) is extracted
@@ -26,6 +26,10 @@
 //! OCR after PDFium renders it at 300 DPI. InternBench's own pages are at
 //! 200-300 DPI, where both ONNX engines find every critical field; `--degrade
 //! 3` (100 DPI) is where they part.
+//!
+//! `--scale F` hands the engine the page resized by F (0.667: as if
+//! rendered at 200 DPI instead of 300) and maps the boxes it reports back
+//! onto the page.
 //!
 //! Two texts are scored, with intern-bench's own OCR measure: the engine's
 //! (`OcrResult::text`) and the page's as the worker sends it (after the
@@ -46,8 +50,9 @@ use intern_worker::extract::{
 };
 use intern_worker::indra::{IndraAssets, IndraOcr};
 use intern_worker::limits::ResourceLimits;
-use intern_worker::paddle::{PaddleConfig, PaddleOcr, ThreadBudget};
+use intern_worker::paddle::{PaddleAssets, PaddleConfig, PaddleOcr, ThreadBudget};
 use intern_worker::pdf::PdfiumBackend;
+use intern_worker::second_opinion::{SecondOpinion, SharedOcr};
 
 /// Processor time this process has used, all threads, in seconds (Linux).
 fn cpu_seconds() -> f64 {
@@ -101,6 +106,7 @@ struct PageRead {
 struct Recording<'e> {
     engine: &'e (dyn OcrBackend + Sync),
     degrade: u32,
+    scale: f64,
     reads: Mutex<BTreeMap<usize, (OcrResult, f64, f64)>>,
 }
 
@@ -126,8 +132,32 @@ impl OcrBackend for Recording<'_> {
         } else {
             page
         };
+        let scaled;
+        let page = if self.scale != 1.0 {
+            let size = |side: u32| ((f64::from(side) * self.scale).round() as u32).max(1);
+            scaled = RenderedPage::new(
+                page.page_index,
+                page.image.resize_exact(
+                    size(page.image.width()),
+                    size(page.image.height()),
+                    image::imageops::FilterType::Triangle,
+                ),
+            );
+            &scaled
+        } else {
+            page
+        };
         let (cpu, wall) = (cpu_seconds(), Instant::now());
-        let result = self.engine.recognize(page, cancel)?;
+        let mut result = self.engine.recognize(page, cancel)?;
+        if self.scale != 1.0 {
+            let back = |bbox: [u32; 4]| bbox.map(|v| (f64::from(v) / self.scale).round() as u32);
+            for line in &mut result.lines {
+                line.bbox = back(line.bbox);
+            }
+            for block in &mut result.blocks {
+                block.bbox = back(block.bbox);
+            }
+        }
         let costs = (cpu_seconds() - cpu, wall.elapsed().as_secs_f64());
         self.reads
             .lock()
@@ -149,6 +179,7 @@ struct Args {
     only: Option<Vec<String>>,
     threads: usize,
     degrade: u32,
+    scale: f64,
     dump: Option<PathBuf>,
 }
 
@@ -160,6 +191,7 @@ fn args() -> Args {
         only: None,
         threads: 2,
         degrade: 1,
+        scale: 1.0,
         dump: None,
     };
     let mut iter = std::env::args().skip(1);
@@ -175,6 +207,7 @@ fn args() -> Args {
             "--only" => args.only = Some(value().split(',').map(str::to_owned).collect()),
             "--threads" => args.threads = value().parse().expect("--threads takes a number"),
             "--degrade" => args.degrade = value().parse().expect("--degrade takes a number"),
+            "--scale" => args.scale = value().parse().expect("--scale takes a number"),
             "--dump" => args.dump = Some(value().into()),
             other => panic!("unknown argument {other}"),
         }
@@ -182,27 +215,35 @@ fn args() -> Args {
     args
 }
 
-fn engine(name: &str, runtime: &Path, threads: usize) -> Box<dyn OcrBackend + Sync> {
+/// PP-OCR reading one page at a time on `threads` threads.
+fn paddle(runtime: &Path, threads: usize) -> Result<SharedOcr, ExtractionError> {
+    let config = PaddleConfig {
+        intra_threads: threads,
+        workers: 1,
+        ..PaddleConfig::default()
+    };
+    let engine = PaddleOcr::with_config(PaddleAssets::in_directory(runtime), config)?;
+    Ok(Box::new(engine))
+}
+
+fn engine(name: &str, runtime: &Path, threads: usize) -> SharedOcr {
     let budget = ThreadBudget {
         workers: 1,
         intra_threads: threads,
-    };
-    let paddle = || {
-        PaddleOcr::with_config(
-            intern_worker::paddle::PaddleAssets::in_directory(runtime),
-            PaddleConfig {
-                intra_threads: threads,
-                workers: 1,
-                ..PaddleConfig::default()
-            },
-        )
-        .expect("PP-OCR loads")
     };
     let indra =
         || IndraOcr::with_budget(IndraAssets::in_directory(runtime), budget).expect("Indra loads");
     match name {
         "indra" => Box::new(indra()),
-        "paddle" => Box::new(paddle()),
+        "paddle" => paddle(runtime, threads).expect("PP-OCR loads"),
+        "indra+paddle" => {
+            let runtime = runtime.to_path_buf();
+            Box::new(SecondOpinion::new(
+                Box::new(indra()),
+                Box::new(move || paddle(&runtime, threads)),
+                Box::new(|error| panic!("PP-OCR did not load: {error}")),
+            ))
+        }
         other => panic!("unknown engine {other}"),
     }
 }
@@ -264,6 +305,7 @@ fn main() {
         let recording = Recording {
             engine: engine.as_ref(),
             degrade: args.degrade,
+            scale: args.scale,
             reads: Mutex::new(BTreeMap::new()),
         };
         let extracted = if path.extension().is_some_and(|ext| ext == "pdf") {
