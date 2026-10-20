@@ -18,6 +18,7 @@ src-tauri/resources/licenses/
 src-tauri/resources/tessdata/
 src-tauri/resources/native/
 src-tauri/resources/ocr-models/
+src-tauri/resources/indra-models/
 
 # Local agent tooling state: session-scoped scratch, never release input.
 .crux/
