@@ -437,6 +437,25 @@ pub fn warp_affine_rows(
     width: usize,
     height: usize,
     border: Border,
+    each: impl FnMut(usize, &[u8]),
+) {
+    #[cfg(target_arch = "x86_64")]
+    let fused = fused::available();
+    #[cfg(not(target_arch = "x86_64"))]
+    let fused = false;
+    warp_rows(src, m, width, height, border, fused, each);
+}
+
+/// [`warp_affine_rows`], sampling with the processor's fused multiply-add
+/// when `fused` (which the caller has checked it has) and emulating it
+/// otherwise.
+fn warp_rows(
+    src: &Gray,
+    m: &[f64; 6],
+    width: usize,
+    height: usize,
+    border: Border,
+    fused: bool,
     mut each: impl FnMut(usize, &[u8]),
 ) {
     let inv = invert_affine(m);
@@ -451,6 +470,8 @@ pub fn warp_affine_rows(
     let mut out = vec![0u8; width];
     let (mut xs, mut ys) = (vec![0f32; width], vec![0f32; width]);
     let mut redo = Vec::new();
+    #[cfg(not(target_arch = "x86_64"))]
+    let _ = fused;
     for y in 0..height {
         let yf = y as f32;
         let (y1, y4) = (yf * mi[1], yf * mi[4]);
@@ -462,6 +483,14 @@ pub fn warp_affine_rows(
         for (sx, sy) in xs[vector_end..].iter_mut().zip(&mut ys[vector_end..]) {
             *sx += mi[2];
             *sy += mi[5];
+        }
+        #[cfg(target_arch = "x86_64")]
+        if fused {
+            // SAFETY: the caller checked that the processor has AVX2 and
+            // FMA.
+            unsafe { fused::sample_row(&sampler, &xs, &ys, &mut out) };
+            each(y, &out);
+            continue;
         }
         redo.clear();
         for (x, ((o, &sx), &sy)) in out.iter_mut().zip(&xs).zip(&ys).enumerate() {
@@ -475,6 +504,139 @@ pub fn warp_affine_rows(
             out[x] = sampler.sample_exactly(xs[x], ys[x]);
         }
         each(y, &out);
+    }
+}
+
+/// The warp's sampling with the processor's own fused multiply-add, on an
+/// x86-64 processor with AVX2 and FMA (nearly every one since 2013): the
+/// same three single-precision `fma`s OpenCV's kernel computes
+/// ([`warp_affine_rows`]), so the same bytes as the emulation
+/// ([`Sampler::sample`], [`fma32_exact`]), eight pixels at a time. A
+/// processor without them, or another architecture, emulates.
+///
+/// Measured on InternBench's pages, the skew search ([`super::page::estimate_skew`])
+/// costs a third of what it does emulated (`docs/ocr.md`).
+#[cfg(target_arch = "x86_64")]
+mod fused {
+    use std::arch::x86_64::*;
+
+    use super::{Sampler, saturate_u8};
+
+    /// Whether this processor has what [`sample_row`] needs.
+    pub(super) fn available() -> bool {
+        std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+    }
+
+    /// One pixel, through [`Sampler::neighbours`] (the image's edges and
+    /// border) and the processor's `fma`.
+    #[target_feature(enable = "fma")]
+    fn sample(sampler: &Sampler<'_>, sx: f32, sy: f32) -> u8 {
+        let ([p00, p01, p10, p11], fx, fy) = sampler.neighbours(sx, sy);
+        let top = fx.mul_add(p01 - p00, p00);
+        let bottom = fx.mul_add(p11 - p10, p10);
+        saturate_u8(fy.mul_add(bottom - top, top))
+    }
+
+    /// `out[i]` sampled at `(xs[i], ys[i])`.
+    ///
+    /// Eight pixels at a time when all eight read four neighbours inside
+    /// the image: their left neighbours at least four pixels from the
+    /// right edge and their top neighbours above the last row, so the two
+    /// four-byte gathers at `iy * width + ix` and one row below stay inside
+    /// the image's bytes. Any other pixel, and the row's last few, one at a
+    /// time.
+    ///
+    /// # Safety
+    /// The processor has AVX2 and FMA ([`available`]).
+    #[target_feature(enable = "avx2,fma")]
+    pub(super) unsafe fn sample_row(sampler: &Sampler<'_>, xs: &[f32], ys: &[f32], out: &mut [u8]) {
+        let n = out.len().min(xs.len()).min(ys.len());
+        let (width, height) = (sampler.width, sampler.height);
+        let mut x = 0;
+        // Byte offsets into the image are gathered as 32-bit integers.
+        let vectors = width >= 4
+            && height >= 2
+            && sampler.data.len() as i64 == width * height
+            && width * height < i64::from(i32::MAX);
+        if vectors {
+            let row = _mm256_set1_epi32(width as i32);
+            let x_end = _mm256_set1_epi32((width - 3) as i32);
+            let y_end = _mm256_set1_epi32((height - 1) as i32);
+            let before = _mm256_set1_epi32(-1);
+            let byte = _mm256_set1_epi32(0xff);
+            let (black, white) = (_mm256_set1_ps(0.0), _mm256_set1_ps(255.0));
+            let base = sampler.data.as_ptr().cast::<i32>();
+            while x + 8 <= n {
+                // SAFETY: x + 8 <= n <= xs.len(), ys.len().
+                let (sx, sy) = unsafe {
+                    (
+                        _mm256_loadu_ps(xs.as_ptr().add(x)),
+                        _mm256_loadu_ps(ys.as_ptr().add(x)),
+                    )
+                };
+                let (fx0, fy0) = (_mm256_floor_ps(sx), _mm256_floor_ps(sy));
+                // A coordinate past i32 (or NaN) converts to i32::MIN and
+                // fails the test below.
+                let (ix, iy) = (_mm256_cvttps_epi32(fx0), _mm256_cvttps_epi32(fy0));
+                let inside = _mm256_and_si256(
+                    _mm256_and_si256(
+                        _mm256_cmpgt_epi32(ix, before),
+                        _mm256_cmpgt_epi32(x_end, ix),
+                    ),
+                    _mm256_and_si256(
+                        _mm256_cmpgt_epi32(iy, before),
+                        _mm256_cmpgt_epi32(y_end, iy),
+                    ),
+                );
+                if _mm256_movemask_epi8(inside) != -1 {
+                    for i in x..x + 8 {
+                        out[i] = sample(sampler, xs[i], ys[i]);
+                    }
+                    x += 8;
+                    continue;
+                }
+                // 0 <= ix <= width - 4 and 0 <= iy <= height - 2: both
+                // gathers read four bytes inside the image's
+                // width * height, which fits an i32.
+                let at = _mm256_add_epi32(_mm256_mullo_epi32(iy, row), ix);
+                // SAFETY: every lane's four bytes at `at` and `at + width`
+                // are inside `sampler.data` (above).
+                let (top_bytes, bottom_bytes) = unsafe {
+                    (
+                        _mm256_i32gather_epi32::<1>(base, at),
+                        _mm256_i32gather_epi32::<1>(base, _mm256_add_epi32(at, row)),
+                    )
+                };
+                let first = |bytes| _mm256_cvtepi32_ps(_mm256_and_si256(bytes, byte));
+                let second = |bytes| {
+                    _mm256_cvtepi32_ps(_mm256_and_si256(_mm256_srli_epi32::<8>(bytes), byte))
+                };
+                let (p00, p01) = (first(top_bytes), second(top_bytes));
+                let (p10, p11) = (first(bottom_bytes), second(bottom_bytes));
+                let (fx, fy) = (_mm256_sub_ps(sx, fx0), _mm256_sub_ps(sy, fy0));
+                let top = _mm256_fmadd_ps(fx, _mm256_sub_ps(p01, p00), p00);
+                let bottom = _mm256_fmadd_ps(fx, _mm256_sub_ps(p11, p10), p10);
+                let value = _mm256_fmadd_ps(fy, _mm256_sub_ps(bottom, top), top);
+                // Clamped, then rounded half to even (the default rounding
+                // mode), as saturate_u8 rounds.
+                let value = _mm256_min_ps(_mm256_max_ps(value, black), white);
+                let mut bytes = [0i32; 8];
+                // SAFETY: `bytes` holds eight i32s.
+                unsafe {
+                    _mm256_storeu_si256(
+                        bytes.as_mut_ptr().cast::<__m256i>(),
+                        _mm256_cvtps_epi32(value),
+                    )
+                };
+                for (o, v) in out[x..x + 8].iter_mut().zip(bytes) {
+                    *o = v as u8;
+                }
+                x += 8;
+            }
+        }
+        for i in x..n {
+            out[i] = sample(sampler, xs[i], ys[i]);
+        }
     }
 }
 
@@ -1007,6 +1169,62 @@ mod tests {
             assert!((a - b).abs() < 1e-12);
         }
         assert!(invert_affine(&[0.0; 6]).iter().all(|&v| v == 0.0));
+    }
+
+    /// The processor's fused multiply-add samples every pixel as the
+    /// emulation does: at every angle and scale, inside the image, at its
+    /// edges and past them, with either border.
+    #[test]
+    fn fused_sampling_matches_the_emulation() {
+        #[cfg(target_arch = "x86_64")]
+        if fused::available() {
+            // A deterministic, noisy page with flat stretches.
+            let mut state = 0x2545_f491_u32;
+            let mut next = || {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state
+            };
+            let (w, h) = (157, 93);
+            let data = (0..w * h)
+                .map(|_| match next() % 4 {
+                    0 => 255,
+                    1 => 0,
+                    _ => (next() % 256) as u8,
+                })
+                .collect();
+            let src = Gray::new(w, h, data);
+            let mut checked = 0;
+            for angle in [
+                -45.0, -12.3, -2.0, -0.7, 0.0, 0.1, 0.35, 3.0, 29.9, 90.0, 133.0,
+            ] {
+                for (cx, cy) in [(78.5, 46.5), (0.0, 0.0), (300.25, -20.0)] {
+                    for border in [
+                        Border::Constant(0),
+                        Border::Constant(255),
+                        Border::Replicate,
+                    ] {
+                        for (dw, dh) in [(w, h), (200, 61), (7, 3)] {
+                            let mut m = rotation_matrix(cx, cy, angle);
+                            m[0] *= 1.13;
+                            m[4] *= 0.91;
+                            let mut emulated = Vec::new();
+                            warp_rows(&src, &m, dw, dh, border, false, |_, row| {
+                                emulated.extend_from_slice(row)
+                            });
+                            let mut fused = Vec::new();
+                            warp_rows(&src, &m, dw, dh, border, true, |_, row| {
+                                fused.extend_from_slice(row)
+                            });
+                            assert_eq!(fused, emulated, "{angle} ({cx}, {cy}) {border:?}");
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(checked, 297);
+        }
     }
 
     #[test]
