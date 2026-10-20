@@ -41,6 +41,7 @@ pub mod npy;
 pub mod order;
 pub mod page;
 pub mod rec;
+pub mod repair;
 pub mod types;
 pub mod vocab;
 

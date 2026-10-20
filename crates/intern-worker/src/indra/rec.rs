@@ -364,6 +364,18 @@ pub fn read_line(
     vocab: &Vocab,
     lm: Option<LineLm<'_>>,
 ) -> RecLine {
+    read_line_steps(out, bbox, stride, band_width, vocab, lm).0
+}
+
+/// [`read_line`], and the time step each of its tokens was emitted at.
+pub fn read_line_steps(
+    out: &LineOutputs<'_>,
+    bbox: &DetBox,
+    stride: f64,
+    band_width: usize,
+    vocab: &Vocab,
+    lm: Option<LineLm<'_>>,
+) -> (RecLine, Vec<usize>) {
     let (mut ids, mut steps, conf) = greedy(out.ids, out.conf);
     let mut probabilities: Vec<f32> = steps.iter().map(|&step| out.conf[step]).collect();
     if let Some(lm) = lm
@@ -377,18 +389,20 @@ pub fn read_line(
             .collect();
     }
     if conf < MIN_CONF {
-        return RecLine {
+        let line = RecLine {
             text: String::new(),
             conf,
             tokens: Vec::new(),
         };
+        return (line, Vec::new());
     }
     let xs = token_positions(bbox, &steps, stride, band_width);
-    RecLine {
+    let line = RecLine {
         text: vocab.decode(&ids),
         conf,
         tokens: id_tokens(&ids, &xs, &probabilities),
-    }
+    };
+    (line, steps)
 }
 
 #[cfg(test)]

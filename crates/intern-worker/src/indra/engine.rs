@@ -46,9 +46,10 @@ use super::page::{
     preview, rotate_page, round_to, turn, unrotate_box,
 };
 use super::rec::{
-    LineLm, LineOutputs, crop_geometry, crop_line, is_dark_line, pad_batch, read_line,
+    LineLm, LineOutputs, crop_geometry, crop_line, is_dark_line, pad_batch, read_line_steps,
     width_batches,
 };
+use super::repair::repair_fields;
 use super::types::{BlockClass, DetBox, Gray, OrderOutputs, PageReading, RecLine, TokenKind};
 
 /// The orientation network's input side.
@@ -380,11 +381,16 @@ impl IndraOcr {
     /// forms them, but only their geometry is computed up front: a batch's
     /// tall crops are cut when its turn comes, so a page of a thousand long
     /// lines holds one batch of crops at a time, not a thousand.
+    ///
+    /// With `intern`, Intern's own step follows each line's reading: a
+    /// damaged date or amount repaired from the recognizer's other
+    /// candidates ([`super::repair`]).
     fn recognize_lines(
         &self,
         sessions: &mut Sessions,
         gray: &Gray,
         boxes: &[DetBox],
+        intern: bool,
         cancel: &CancellationToken,
     ) -> Result<Vec<RecLine>, ExtractionError> {
         let meta = &self.shared.meta;
@@ -497,14 +503,18 @@ impl IndraOcr {
                                 topi: &topi[top],
                                 k,
                             };
-                            read_line(
+                            let (mut line, steps) = read_line_steps(
                                 &out,
                                 &boxes[index],
                                 stride,
                                 band_widths[index],
                                 &meta.vocab,
                                 Some(lm),
-                            )
+                            );
+                            if intern {
+                                repair_fields(&mut line, &steps, &out, &meta.vocab);
+                            }
+                            line
                         })
                         .collect())
                 },
@@ -569,11 +579,16 @@ impl IndraOcr {
     /// A page the network calls vertical (CJK columns) is read as it lies:
     /// only the CJK recognizer reads such columns, and this engine carries
     /// the Latin one.
+    ///
+    /// With `intern`, Intern's own steps after the recognizer run
+    /// ([`IndraOcr::recognize_lines`]); without, the read is the
+    /// reference's.
     fn read_gray(
         &self,
         sessions: &mut Sessions,
         gray: &Gray,
         classify: bool,
+        intern: bool,
         cancel: &CancellationToken,
     ) -> Result<Pass, ExtractionError> {
         cancel.check()?;
@@ -613,7 +628,7 @@ impl IndraOcr {
         drop(small);
         let page = &turned.gray;
         let boxes = self.detect(sessions, page, cancel)?;
-        let rec = self.recognize_lines(sessions, page, &boxes, cancel)?;
+        let rec = self.recognize_lines(sessions, page, &boxes, intern, cancel)?;
         cancel.check()?;
         let mut failure: Option<ExtractionError> = None;
         let mut order = |features: &[f32], n: usize| -> OrderOutputs {
@@ -688,7 +703,7 @@ impl IndraOcr {
                 || imgops::rot90(gray, -i32::from(rotation / 90)),
             ))
         };
-        let pass = self.read_gray(sessions, &turned, false, cancel)?;
+        let pass = self.read_gray(sessions, &turned, false, true, cancel)?;
         Ok(self.pass_reading(&pass, rotation))
     }
 
@@ -709,7 +724,7 @@ impl IndraOcr {
         gray: &Gray,
         cancel: &CancellationToken,
     ) -> Result<OcrResult, ExtractionError> {
-        let first = self.read_gray(sessions, gray, true, cancel)?;
+        let first = self.read_gray(sessions, gray, true, true, cancel)?;
         let probabilities = first.orientation.clone().unwrap_or_default();
         let (best, top) = argmax(&probabilities);
         let first = self.pass_reading(&first, first.reading.rotation as u16);
@@ -753,7 +768,7 @@ impl IndraOcr {
         let cancel = CancellationToken::new();
         let mut lease = self.pool.acquire(|| self.build_sessions(), &cancel)?;
         Ok(self
-            .read_gray(lease.sessions(), gray, true, &cancel)?
+            .read_gray(lease.sessions(), gray, true, false, &cancel)?
             .reading)
     }
 
