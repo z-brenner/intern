@@ -147,6 +147,9 @@ pub fn configuration_change(
             recorded.as_str()
         ));
     }
+    if recorded == Pipeline::Evidence {
+        pinned_model(&recording.model)?;
+    }
     let mut changes = Vec::new();
     let budget = crate::replay::current_budget().max_characters;
     if recording.budget_characters != budget {
@@ -191,6 +194,35 @@ pub fn configuration_change(
             changes.join(" and ")
         )
     }))
+}
+
+/// Refuses an evidence recording that does not name the model file that
+/// answered it, or names one `model-manifest.json` does not pin: its replies
+/// are not what any model Intern ships would say, and scoring them would
+/// keep the gate green on a model nobody runs. The digest pipeline, which a
+/// hosted model reads, is not held to it.
+pub fn pinned_model(model: &crate::machine::ModelInfo) -> Result<(), String> {
+    let manifest = intern_engine::ModelManifest::embedded()
+        .map_err(|error| format!("model manifest: {error}"))?;
+    let Some(sha256) = model.sha256.as_deref() else {
+        return Err(
+            "the recording does not say which model file made it; record it again with --model-path (see docs/internbench.md)"
+                .to_owned(),
+        );
+    };
+    match manifest.variant_with_sha256(sha256) {
+        Some(variant)
+            if variant
+                .model()
+                .is_some_and(|file| Some(file.size) == model.size_bytes) =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "the recording was made with a model model-manifest.json does not pin (sha256 {}); record it again with a pinned model (see docs/internbench.md)",
+            sha256.get(..12).unwrap_or(sha256)
+        )),
+    }
 }
 
 /// The scores [`evidence_scores`] adds to a record.
