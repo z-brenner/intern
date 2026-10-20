@@ -59,12 +59,35 @@ runtime:
 | `rotated-low-resolution-scan.png` | 76.1 | `DR-771` as `OR-?771`, `COURIERS` as `COURTERS` |
 | `mixed-signature.pdf` page 2 | 61.8 | `KITE` as `BRITE`, `SIGNATURE` as `SIGHATURE` |
 
+The two ONNX engines, through the worker with ONNX Runtime 1.30.0 on Linux
+(Indra OCR as the worker reads by default, PP-OCR with
+`INTERN_OCR_ENGINE=paddle`):
+
+| Fixture | Indra OCR | PP-OCR |
+| --- | --- | --- |
+| `document-image.jpg` | 97.5, none | 100.0, none |
+| `document-image.tiff` | 83.4, `WORK ORDER WO-312` as `MORK ORDER MO-312` | 82.0, the `WORK ORDER WO-312` line missing, `JULY 16 2025` as `JULY.15` |
+| `document-image.png` | 87.1, four stray `D` lines | 72.0, `2025` as `20z5`, mixed case (`EMBer POSt`) |
+| `scanned-lease.pdf` | 89.3, `EFFECTIVE` as `EFFECTIUE`, `CEDAR` as `CEDRR`, the title as two lines | 77.2, mixed case (`PrOperty`, `JUniper`) |
+| `rotated-low-resolution-scan.png` | 89.8, `DELIVERY` as `DELIUERY`, `VIOLET` as `UIOLET` | 73.6, mixed case (`DElIvery RECeIPt`) |
+| `mixed-signature.pdf` page 2 | 90.5, `COOPERATIVE` as `COOPERATIUE` | 83.3, mixed case |
+
+Indra reads this font's V as U wherever it occurs, confidently (the U of
+`UIOLET` at 0.995, V its second choice at 0.004), and finds every date;
+PP-OCR reads the letters and loses two dates. Of the nine party names on
+these pages Indra reads six and PP-OCR nine (ignoring case), so on this
+font Indra loses names PP-OCR keeps. It is not a font any real document is
+printed in, and InternBench's scans show nothing like it (`docs/ocr.md`),
+but it is measured, and it is why `scripts/smoke-worker.ps1` asserts
+`receipt` and `cartography studio` on the rotated scan rather than
+`delivery receipt` and `violet cartography studio`.
+
 Digits and narrow glyphs suffer most. So these fixtures prove routing, page
 assembly, orientation handling, and that a poor scan is sent to review — which is
 what `expected.json` marks them `needs_review` for. They do not prove that Intern
 names scanned documents accurately, and no assertion should imply they do.
-`scripts/smoke-worker.ps1` therefore asserts the multi-word alphabetic content
-that survives OCR rather than dates or identifiers, and asserts a confidence floor
+`scripts/smoke-worker.ps1` therefore asserts the alphabetic content that
+survives OCR in every engine rather than dates or identifiers, and asserts a confidence floor
 on the rotated fixture, because a page read in the wrong orientation returns a
 full page of plausible-looking gibberish that only confidence distinguishes from a
 real reading.

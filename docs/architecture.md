@@ -140,7 +140,11 @@ text-detection network, an English recognizer and a page-orientation
 classifier on the same ONNX Runtime, reads scans when Indra's files are not
 there or do not load; on InternBench's scans it makes a fifth of Tesseract's
 character errors and reads more of the dates and identifiers, at about three
-times Tesseract's CPU per page. Without either - a development machine, a
+times Tesseract's CPU per page. With Indra, PP-OCR, when installed, also
+reads again any page Indra reads with a confidence under 75, and the more
+confident reading of the two is kept; Indra finds every date, name and
+identifier PP-OCR does on InternBench's scans for about a fifteenth of its
+processor time. Without either - a development machine, a
 Linux CI runner - **Tesseract** reads scans exactly as before. An engine
 that is installed and passed over is named in the worker's log with the
 engine used instead; `INTERN_OCR_ENGINE` chooses one for a benchmark.
@@ -152,7 +156,10 @@ the page's text is the page's blocks in reading order: tables as rows,
 labelled values as `Label: value` lines. Indra also reads the page's layout:
 its blocks, their labels and their order, which become the page's blocks as
 they are - a section header a heading, a list group its items, a table a
-table, a form its labelled values. PP-OCR's and Tesseract's lines are turned
+table, a form its labelled values. Before they do, a column of labels Indra
+read apart from the column of values beside it is joined to them row by
+row, and a date or amount Indra read damaged (`S8,220.00`) is repaired from
+the recognizer's own second choices. PP-OCR's and Tesseract's lines are turned
 into blocks by the layout analysis like any other page's. An engine's own
 text order read an unruled table down its columns and left a form's labels
 apart from their values ([Document routing](document-routing.md) has the

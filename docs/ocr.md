@@ -42,7 +42,9 @@ exactly as it looks for PDFium:
 Indra is chosen when ONNX Runtime and all six of its files are there and it
 loads; PP-OCR when Indra's files are not there, or Indra does not load, and
 ONNX Runtime and PP-OCR's detector and recognizer are there and load;
-Tesseract otherwise. A runtime directory with none of an engine's files - a
+Tesseract otherwise. When Indra reads and PP-OCR is installed too, PP-OCR
+also reads again the pages Indra is not sure of (below,
+[A second reading by PP-OCR](#a-second-reading-by-pp-ocr)). A runtime directory with none of an engine's files - a
 development machine, a Linux CI runner - passes that engine over and says
 nothing. One that has an engine's files and cannot load them, or has only
 some of them (an antivirus quarantine, a damaged update), writes one warning
@@ -61,6 +63,8 @@ once, the first time a page needs OCR: a text PDF never loads an engine.
 starts the search at that engine instead, for comparing engines on a
 benchmark and for support: `paddle` passes Indra over, `tesseract` passes
 both ONNX engines over, and each falls back down the list as above. An
+engine named reads alone: `indra` is Indra without PP-OCR's second
+reading. An
 engine asked for and not installed is reported as a fallback. Unset, empty
 or `auto` is the default; any other value is logged once as an
 `OCR_ENGINE_UNKNOWN` warning and the default is used. The installed app
@@ -171,13 +175,272 @@ Indra's lines carry no per-character positions into the layout, so a line
 holding two table cells closer together than the line splitting's gap stays
 one cell.
 
+### What Intern adds to Indra's reading
+
+Two steps of Intern's own run after the reference pipeline's. The parity
+tests read through `IndraOcr::read_reference`, which runs neither, so the
+port is still checked against the reference package's output exactly.
+
+1. **Damaged dates and amounts repaired from the recognizer's second
+   choices** (`indra/repair.rs`). A line holding a date or an amount that
+   PP-OCR's second reading would call damaged - a dollar sign read as an
+   `S`, a letter among a date's digits, a day the month does not have - has
+   a character replaced by another of the eight candidates the recognizer
+   gave at that step, at least 0.01 likely, when that repairs a field and
+   loses none; the likeliest such candidate first, at most four in a line.
+   A purchase order's totals read `= S8,220.00`, `S9,920.00` and
+   `S1,760.00`; `$` was the recognizer's second choice at each (0.04, 0.45,
+   0.45), and all three are repaired. A line with nothing damaged is left
+   exactly as read.
+2. **A form's labels joined to their values** (`indra/fields.rs`). The
+   reading-order network reads a column of labels and the column of values
+   beside it one column after the other, often as two blocks: the page
+   said `Date of notice:` and the six other labels, then `08/12/2026` and
+   the six other values. A label - a short name ending in a colon - whose
+   row carries a value to its right is now written as one line, `Date of
+   notice: 08/12/2026`, where the label stood, and the value leaves its
+   own line and block. Only a column of labels is joined: a block with at
+   least two such labels, paired for at least half of its lines, so a line
+   of prose that ends in a colon beside another column is left alone.
+   Tables keep their cells.
+
+### A second reading by PP-OCR
+
+A page Indra reads with a confidence under 75 - the bar under which a page
+earns a low-confidence warning and may go to vision (`CONFIDENT_READING`) -
+and with some text on it is read again by PP-OCR, when PP-OCR is installed,
+and the better of the two readings is kept by the rule every choice between
+readings uses (`better_reading`): the more confident, if it found at least
+half as many words. Indra's confidence and PP-OCR's are measured alike
+(each word as sure as its least certain character), so the two compare. A
+blank page is not read again. PP-OCR is loaded the first time a page needs
+it, not before, and released with Indra's sessions when the document is
+done; one that does not load is logged once as
+`OCR_SECOND_READING_UNAVAILABLE` and Indra's reading stands
+(`second_opinion.rs`). `INTERN_OCR_ENGINE=indra` reads with Indra alone.
+
+At 300 and 150 DPI no InternBench page is under the bar, and the second
+reading costs nothing. Below that it decides most of what Indra would lose
+(next section).
+
 ## Indra OCR measurements
 
-The measurements of Indra OCR on InternBench's scans and the research sets,
-against PP-OCR and Tesseract on the same pages, follow in the table below.
+Measured on InternBench's 19 scanned documents, 55 pages read by OCR: the
+12 of the PP-OCR measurements below that have drawn text (47 pages, now
+that both of the fax's frames are read), and the seven scans added with the
+structure gold - a page scanned sideways inside a PDF, a cancellation notice
+at 150 DPI, a remittance advice at 120 DPI, a scanned middle page, a pasted
+signature region, a certificate of insurance and a bill of lading. Every
+figure is the page's text as the worker sends it, after the layout, scored
+by intern-bench's own OCR measure, so it is the text InternBench scores.
+Amounts are every sum with cents drawn on a page read by OCR (`$4,417.20`,
+`369.60`; 150 of them) found as a word of that page's reading.
 
-| Engine | CER | WER | Dates | Names | Identifiers | CPU s | Wall s | Peak RSS |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+`crates/intern-worker/examples/ocr_engines.rs` makes every table here:
+
+```sh
+INTERN_RUNTIME_DIR=/path/to/runtime cargo run --release -p intern-worker \
+  --features native-pdfium,onnx-ocr --example ocr_engines -- \
+  --engine indra+paddle --corpus bench/generated --gold bench/gold.json
+```
+
+It extracts each scan through the worker's own readers - PDFium at 300 DPI,
+the image reader for PNG and TIFF - so each engine gets exactly the pixels
+the worker hands OCR, through its own `OcrBackend`, one page at a time on
+two threads. `--engine` is `indra` (Indra alone), `paddle` or `indra+paddle`
+(Indra with PP-OCR's second reading, as the worker reads by default);
+`--degrade N` reads every page as a scan made at 1/N of its resolution
+(shrunk and enlarged back, so 300 DPI becomes 150, 100, 75 or 50); `--only`
+picks documents. InternBench's extract-only runs score the shipped worker
+end to end. The 30 synthetic business pages and the FUNSD forms of the
+PP-OCR measurements are not on the machine this was measured on, so neither
+is measured here; the degraded InternBench pages stand in for a
+low-resolution set.
+
+**Timings are from a machine shared with other work** - a 13th-generation
+Core i5-13400F (6 performance and 4 efficient cores, 16 threads), 30 GB,
+Ubuntu, beside another agent's model inference - taken back to back in a
+quiet stretch. CPU is the more trustworthy figure. PP-OCR took 5.95 s of
+processor time a page here against the 3.54 s of the 4-core machine of the
+PP-OCR measurements, so compare engines within a table, never across them.
+
+#### Engines
+
+InternBench, 55 pages at 300 DPI. CPU and wall are per page, two threads,
+one page at a time; peak RSS is the measuring process's. "As ported" is
+Indra as it was ported (the reference pipeline, with the worker's
+orientation search; commit `c3a5994`), before Intern's steps and before the
+warp used the processor's fused multiply-add.
+
+| Engine | CER | WER | Dates | Names | Identifiers | Amounts | CPU s | Wall s | Peak RSS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PP-OCR | 1.81% | 1.86% | 57/57 | 50/50 | 48/48 | 146/150 | 5.95 | 3.12 | 702-730 MB |
+| Indra, as ported | 2.50% | 2.60% | 57/57 | 50/50 | 48/48 | | 0.54 | 0.30 | 435-490 MB |
+| **Indra with Intern's steps and PP-OCR's second reading (shipped)** | **1.83%** | **1.94%** | **57/57** | **50/50** | **48/48** | **149/150** | **0.41** | **0.23** | **435-490 MB** |
+
+The same over the 12 documents (47 pages) of the PP-OCR measurements:
+
+| Engine | CER | WER | Dates | Names | Identifiers | Amounts |
+| --- | --- | --- | --- | --- | --- | --- |
+| PP-OCR | 0.29% | 0.36% | 30/30 | 27/27 | 15/15 | 104/107 |
+| Indra, as ported | 0.88% | 1.16% | 30/30 | 27/27 | 15/15 | |
+| Indra, shipped | 0.55% | 0.78% | 30/30 | 27/27 | 15/15 | 106/107 |
+
+No page at 300 DPI is under the second reading's bar, so Indra alone reads
+exactly as the shipped pair here. Per document, CER and the dates, names
+and identifiers found:
+
+| Document | PP-OCR | Indra, as ported | Indra, shipped |
+| --- | --- | --- | --- |
+| clean 2-page lease | 0.35% (6/6) | 0.48% (6/6) | 0.48% (6/6) |
+| mixed amendment, scanned page | 2.29% (6/6) | 3.54% (6/6) | 3.54% (6/6) |
+| rotated 90 degrees | 0.00% (5/5) | 8.49% (5/5) | 0.00% (5/5) |
+| upside down | 0.11% (5/5) | 10.16% (5/5) | 1.37% (5/5) |
+| skewed notice (3 degrees) | 0.00% (6/6) | 0.00% (6/6) | 0.00% (6/6) |
+| 100 DPI receipt | 12.52% (6/6) | 12.84% (6/6) | 12.84% (6/6) |
+| speckle and blur | 0.96% (6/6) | 4.47% (6/6) | 2.55% (6/6) |
+| faint light | 0.41% (5/5) | 0.00% (5/5) | 0.00% (5/5) |
+| 10-page agreement | 0.07% (7/7) | 0.08% (7/7) | 0.08% (7/7) |
+| 25-page lease, 200 DPI | 0.03% (6/6) | 0.03% (6/6) | 0.03% (6/6) |
+| fax, two frames | 2.58% (6/6) | 6.13% (6/6) | 2.23% (6/6) |
+| intake form | 0.43% (8/8) | 11.91% (8/8) | 11.91% (8/8) |
+| page scanned sideways in a PDF | 0.07% (10/10) | 6.86% (10/10) | 0.00% (10/10) |
+| cancellation notice, 150 DPI | 0.00% (10/10) | 12.89% (10/10) | 0.00% (10/10) |
+| remittance advice, 120 DPI | 10.11% (19/19) | 14.46% (19/19) | 13.15% (19/19) |
+| scanned middle page | 4.00% (3/3) | 3.56% (3/3) | 3.56% (3/3) |
+| pasted signature region | 0.16% (6/6) | 1.25% (6/6) | 1.25% (6/6) |
+| certificate of insurance | 28.81% (21/21) | 16.61% (21/21) | 16.61% (21/21) |
+| bill of lading | 32.47% (14/14) | 34.31% (14/14) | 34.10% (14/14) |
+
+Indra as ported lost to PP-OCR by 0.7 points of character error, and
+nearly all of it was one thing: a form's labels read as a column before
+the column of values beside them, which the labels' join now undoes
+(rotated invoice 8.49% to 0.00%, cancellation notice 12.89% to 0.00%, the
+sideways page 6.86% to 0.00%, the fax 6.13% to 2.23%). The repair of
+damaged amounts takes the upside-down purchase order's three `S` totals
+(6 of its 9 amounts to 9 of 9). What is left, by document:
+
+* **Intake form** (11.91% against 0.43%): reading order, not reading. The
+  letterhead and the form's title stand side by side and Indra reads the
+  left one down, then the right; the `EMERGENCY CONTACT` heading lands a
+  row early; a ticked box reads `(X]` and an empty one `g`. Every value on
+  the form is read right.
+* **Speckle and blur** (2.55% against 0.96%): specks before dates and
+  amounts read as `·`, `*`, `•` or a quote (`'06/02/2026`). Every date is
+  still found whole.
+* **Upside down** (1.37%): the order's ZIP code is placed after its line.
+* **Signatures**: a scrawl beside `By:` is read as words (`on M M`, `of
+  Wm`) and the `By:` with it, on the lease, the amendment and the
+  agreement; PP-OCR reads the scrawls as letters too (`WMN`).
+* **A closing apostrophe**: `days' notice` reads `days'notice`, three times
+  in 55 pages.
+* **The remittance advice** (13.15% against 10.11%) holds two columns of
+  labelled values; Indra reads the left column's pairs, then the right's,
+  where the drawn text runs across. The **bill of lading** and the
+  **certificate** are dense boxed forms on which neither engine's order
+  matches the drawn text's; Indra's is closer on the certificate.
+
+On structure, end to end (InternBench extract-only, the 19 scans):
+
+| Run | Key-values | Table rows | Table cells | Wall, whole run | Worker CPU | Worker peak |
+| --- | --- | --- | --- | --- | --- | --- |
+| PP-OCR (`INTERN_OCR_ENGINE=paddle`) | 39/40 | 26/29 | 153/156 | 131.5 s | 417.9 s | 1,342 MB |
+| Indra as ported | 12/40 | 29/29 | 156/156 | 17.0 s | | |
+| **shipped (default)** | **38/40** | **29/29** | **156/156** | **12.1 s** | **27.3 s** | **748 MB** |
+
+The worker read two pages at once on two threads each, as it does on a
+machine of 8 cores or more. Indra misses the certificate's `DATE
+(MM/DD/YYYY)` value, as PP-OCR does, and the bill of lading's `SHIP TO`,
+whose value it reads after the ship-from address beside it. The digest's date,
+party, type and fact recall are 100% for both engines; one of the 10-page
+agreement's four subject terms falls out of the context the engine builds
+from Indra's text and not from PP-OCR's.
+
+#### Low resolution
+
+The same 55 pages read as scans made at a half, a third, a quarter and a
+sixth of their resolution. "Indra" is Indra with Intern's steps, alone.
+
+| Scan | Engine | CER | WER | Dates | Names | Identifiers | Amounts |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 150 DPI | PP-OCR | 1.90% | 2.16% | 56/57 | 49/50 | 48/48 | 145/150 |
+| | Indra | 1.89% | 2.24% | 56/57 | 50/50 | 47/48 | 145/150 |
+| | **shipped** | **1.89%** | **2.24%** | **56/57** | **50/50** | **47/48** | **145/150** |
+| 100 DPI | PP-OCR | 1.78% | 2.72% | 52/57 | 48/50 | 42/48 | 121/150 |
+| | Indra | 2.47% | 3.15% | 49/57 | 47/50 | 39/48 | 121/150 |
+| | **shipped** | **2.12%** | **2.86%** | **52/57** | **49/50** | **42/48** | **125/150** |
+| 75 DPI | PP-OCR | 3.41% | 4.40% | 46/57 | 47/50 | 37/48 | 104/150 |
+| | Indra | 4.03% | 4.23% | 47/57 | 45/50 | 37/48 | 113/150 |
+| | **shipped** | **4.03%** | **4.23%** | **47/57** | **45/50** | **37/48** | **113/150** |
+| 50 DPI | PP-OCR | 4.77% | 7.83% | 41/57 | 33/50 | 34/48 | 99/150 |
+| | Indra | 5.53% | 7.80% | 35/57 | 30/50 | 31/48 | 101/150 |
+| | **shipped** | **5.08%** | **7.92%** | **41/57** | **33/50** | **34/48** | **103/150** |
+
+At a third of the resolution the only pages Indra reads under the bar are
+the two that were low-resolution to begin with (the receipt and the
+remittance advice, there at about 33 and 40 DPI), at confidences of 23 and
+20 where PP-OCR's are 59 and 77, and the second reading keeps PP-OCR's
+reading of both: that is where Indra alone loses its fields. At a quarter
+Indra's readings of the same two pages (64 and 67) are the more confident
+and stand. At a sixth Indra reads eight pages under the bar with text on
+them, and PP-OCR's reading is kept on seven. Over the four levels the
+shipped pair finds 196 dates, 177 names and 160 identifiers to PP-OCR's
+195, 177 and 161, and 486 amounts to 469; its character error is the same
+at 150 DPI and 0.3 to 0.6 points higher below. The second reading loads
+PP-OCR beside Indra: the measuring process peaked at 869 MB at 50 DPI,
+against 518 MB for Indra alone.
+
+#### Skew
+
+The skew search warps a 400-pixel thumbnail of the page at 46 angles and an
+800-pixel one at 20 to 40 more, and every warped pixel emulated OpenCV's
+single-precision fused multiply-add in double precision: 155 to 320 ms of
+one thread a page. On an x86-64 processor with AVX2 and FMA the warp now
+uses the instruction itself, eight pixels at a time - the same bytes, since
+the emulation reproduced exactly that instruction (every golden stays
+bit-exact, and a test holds the two paths to each other) - and the search
+takes 51 ms. A processor without them still emulates. Three alternating runs
+over the 55 pages:
+
+| Warp | CPU s a page | Wall s a page |
+| --- | --- | --- |
+| emulated | 0.531-0.540 | 0.294-0.300 |
+| **processor's FMA** | **0.399-0.416** | **0.223-0.232** |
+
+#### Tried and not kept
+
+| Change | Measured | Why not |
+| --- | --- | --- |
+| PP-OCR's recognizer reading again each critical-field line Indra was unsure of (line confidence under 95, at most 12 a page, kept by the guards of PP-OCR's own second reading) | 300 DPI: 9 lines read again, 7 replaced, every one with the same text. 150 / 100 / 75 / 50 DPI: dates, names and identifiers 56/50/47, 49/47/39, 47/45/37, 35/30/31 - Indra alone's, where the page-level second reading finds 52/49/42 at 100 DPI and 41/33/34 at 50 | Nothing found; PP-OCR's sessions on every document |
+| Enlarging a low-resolution page before reading (1.5, 2 and 3 times, Catmull-Rom and triangle filters) | 100 DPI receipt 12.84% -> 12.52-12.84%; 120 DPI remittance 15.54% -> 15.54-17.28% (Indra's own text); the bitmap fixture still `UIOLET` | No gain |
+| Rendering at 200 DPI, as the reference does, instead of 300 (`--scale 0.667`) | CER 1.83% -> 1.93%, and one of the receipt's dates lost (an image, shrunk with the rest) | Worse |
+| The language model's beam search for every line with a character under 0.5 or 0.7, not only for lines whose mean is under 0.9 | Bitmap fixtures: `CEDRR` -> `CEDAR` but `REPAIRS` -> `REPRIRS`; at 0.7 the rotated low-resolution scan's orientation search keeps a sideways reading | Breaks as much as it mends |
+
+The pages are grey to begin with - InternBench's scans and the fixtures are
+grey or black and white - so Indra reading grey costs them nothing.
+
+#### Decision (Indra against PP-OCR)
+
+**Indra reads scans first, with PP-OCR as its second reader and its
+fallback, and Tesseract last.** With Intern's two steps and PP-OCR's second
+reading it finds every date, name and identifier PP-OCR finds on
+InternBench's scans at 300 and 150 DPI, as many again over the degraded
+sets (196, 177 and 160 against 195, 177 and 161), and more amounts, for
+about a fifteenth of PP-OCR's processor time per page and two thirds of its
+memory; on the whole benchmark run the worker took 27 s of processor time
+where PP-OCR's took 418, and finished in 12 s instead of 132.
+
+It is not as good on character error, and that is not hidden here: 1.83%
+against 1.81% over the 55 pages, 0.55% against 0.29% over the 12 documents
+of the PP-OCR measurements, and 0.3 to 0.6 points more below 150 DPI. Almost
+all of it is reading order on forms (the intake form alone is 135 of the 12
+documents' 161 characters of difference), specks read as punctuation and
+signatures read as words, not words misread; and on the smoke test's
+synthetic 5x7 bitmap font Indra reads V as U (`DELIUERY`, `UIOLET`) and
+loses three of nine party names PP-OCR keeps (`fixtures/README.md`). If the
+exact text of a page matters more than processor time, PP-OCR first is the
+better order; for naming documents - dates, parties, identifiers, amounts -
+beside a local model on the same machine, Indra first is.
 
 ## PP-OCR
 
@@ -612,7 +875,9 @@ libraries; `native-pdfium,onnx-ocr` does not.)
 
 To read a benchmark with one engine and then another, set
 `INTERN_OCR_ENGINE` for the worker: `indra`, `paddle` or `tesseract`
-([InternBench](internbench.md)).
+([InternBench](internbench.md)). To compare the engines on the same pixels,
+page by page, run the `ocr_engines` example
+([Indra OCR measurements](#indra-ocr-measurements)).
 
 Everything in `crates/intern-worker/src/indra/` but its engine - image
 operations, detection decoding, cropping and batching, CTC decoding, the

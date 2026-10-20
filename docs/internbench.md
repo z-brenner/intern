@@ -200,10 +200,12 @@ PDF a worker process reads still loads PDFium, which is counted as parse;
 the worker is started again after a timeout, a cancellation or a crash.
 
 The worker reads scans with the best OCR engine its runtime directory holds
-(Indra OCR, then PP-OCR, then Tesseract; [OCR](ocr.md)). To score one engine
-against another on the same runtime, set `INTERN_OCR_ENGINE=indra`, `paddle`
-or `tesseract` for the run, which the worker inherits, and compare the two
-reports with `intern-bench compare`. An engine asked for that is not
+(Indra OCR, then PP-OCR, then Tesseract), and with Indra, PP-OCR reads again
+the pages Indra is not sure of ([OCR](ocr.md)). To score one engine against
+another on the same runtime, set `INTERN_OCR_ENGINE=indra`, `paddle` or
+`tesseract` for the run, which the worker inherits - an engine named reads
+alone, `indra` without PP-OCR's second reading - and compare the two reports
+with `intern-bench compare`. An engine asked for that is not
 installed falls back down that list and says so in the worker's log, so
 check the log before reading a run as that engine's.
 `--only id,id` runs a subset.

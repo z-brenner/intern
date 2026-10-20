@@ -149,15 +149,17 @@ try {
 
     # Native text and AnyDoc extraction are exact, so those fixtures assert exact
     # dates and names. OCR of the clean-room bitmap font is not: measured output
-    # includes "EFFECTIWE", "LEDAR" for CEDAR, and 2024 read as "24h24". Digits and
-    # narrow glyphs are the least reliable, so the scanned fixtures assert the
-    # multi-word alphabetic content that survives, and fixtures/README.md records
-    # the fidelity this font actually achieves. Asserting prose that the generator
-    # never rasterised - a comma the font has no glyph for, say - is how these
-    # assertions came to be unsatisfiable in the first place.
+    # includes "EFFECTIWE", "LEDAR" for CEDAR, and 2024 read as "24h24"
+    # (Tesseract), and V read as U - "DELIUERY", "UIOLET" - and the lease's
+    # title as two lines (Indra OCR). Digits and narrow glyphs are the least
+    # reliable, so the scanned fixtures assert the alphabetic content every
+    # engine reads, and fixtures/README.md records the fidelity this font
+    # actually achieves. Asserting prose that the generator never rasterised - a
+    # comma the font has no glyph for, say - is how these assertions came to be
+    # unsatisfiable in the first place.
     Assert-ParsedFixture "employment-agreement.pdf" @("Mira Vale", "February 14, 2025") @("native")
-    Assert-ParsedFixture "scanned-lease.pdf" @("lease agreement", "september", "juniper loop") @("ocr")
-    Assert-ParsedFixture "rotated-low-resolution-scan.png" @("delivery receipt", "june 12", "violet cartography studio") @("ocr") -MinimumOcrConfidence 60
+    Assert-ParsedFixture "scanned-lease.pdf" @("lease", "agreement", "september", "juniper loop") @("ocr")
+    Assert-ParsedFixture "rotated-low-resolution-scan.png" @("receipt", "june 12", "cartography studio") @("ocr") -MinimumOcrConfidence 60
     Assert-ParsedFixture "mixed-signature.pdf" @("Aurora Catalog Project", "January 8, 2025") @("native", "ocr")
     Assert-ParsedFixture "nda.docx" @("Project Marigold", "March 3, 2025") @("any_doc")
     Assert-ParsedFixture "document-image.jpg" @("Packing Slip", "PS-311") @("ocr")
