@@ -204,7 +204,9 @@ fn dict_value<'a>(header: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn parse_shape(header: &str) -> Option<Vec<usize>> {
-    let at = header.find("'shape'").or_else(|| header.find("\"shape\""))?;
+    let at = header
+        .find("'shape'")
+        .or_else(|| header.find("\"shape\""))?;
     let rest = &header[at..];
     let open = rest.find('(')?;
     let close = rest[open..].find(')')? + open;
@@ -221,7 +223,8 @@ mod tests {
     use super::*;
 
     fn npy(descr: &str, shape: &str, body: &[u8]) -> Vec<u8> {
-        let mut header = format!("{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape}, }}");
+        let mut header =
+            format!("{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape}, }}");
         while (10 + header.len() + 1) % 64 != 0 {
             header.push(' ');
         }
