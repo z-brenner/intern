@@ -139,6 +139,16 @@ pub fn configuration_change(
     recording: &Recording,
     settings: &EngineSettings,
 ) -> Result<Option<String>, String> {
+    configuration_change_checking(recording, settings, true)
+}
+
+/// [`configuration_change`], with the pinned-model check on or off: off only
+/// for `--allow-other-model`, which scores an earlier model's replies.
+pub fn configuration_change_checking(
+    recording: &Recording,
+    settings: &EngineSettings,
+    check_model: bool,
+) -> Result<Option<String>, String> {
     let recorded = recording.engine.pipeline.unwrap_or(Pipeline::Digest);
     if recorded != settings.pipeline {
         return Err(format!(
@@ -147,7 +157,7 @@ pub fn configuration_change(
             recorded.as_str()
         ));
     }
-    if recorded == Pipeline::Evidence {
+    if check_model && recorded == Pipeline::Evidence {
         pinned_model(&recording.model)?;
     }
     let mut changes = Vec::new();

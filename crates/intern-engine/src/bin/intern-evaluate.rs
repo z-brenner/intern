@@ -58,7 +58,9 @@
 //! GGUF the server loaded into the recording's `model` header. Replay
 //! refuses an evidence recording whose model is not one of the variants
 //! `model-manifest.json` pins, so replies from a model Intern no longer
-//! ships can never stand in for the one it does. The digest pipeline, which
+//! ships can never stand in for the one it does (`--allow-other-model`
+//! scores one anyway, with a warning, to compare an engine change on an
+//! earlier model's replies; CI never passes it). The digest pipeline, which
 //! a hosted model reads, is not checked: its recording documents the local
 //! model that made it.
 
@@ -713,6 +715,10 @@ struct EvidenceSettings {
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
     context_tokens: Option<usize>,
+    /// `--allow-other-model`: replay an evidence recording whose model the
+    /// manifest does not pin, with a warning - an earlier model's replies,
+    /// for comparing an engine change on them. Never in CI.
+    allow_other_model: bool,
 }
 
 impl EvidenceSettings {
@@ -763,6 +769,7 @@ impl EvidenceSettings {
             pipeline,
             retrieval,
             context_tokens,
+            allow_other_model: arguments.contains_key("allow-other-model"),
         })
     }
 
@@ -812,7 +819,12 @@ impl EvidenceSettings {
         if !self.evidence() {
             return Ok(());
         }
-        check_model(recording.model.as_ref())?;
+        match check_model(recording.model.as_ref()) {
+            Err(refusal) if self.allow_other_model => {
+                eprintln!("WARNING: --allow-other-model: {refusal}");
+            }
+            result => result?,
+        }
         if recording.retrieval != self.header_retrieval() {
             eprintln!("WARNING: the recording was made with another retrieval configuration");
         }
@@ -1845,7 +1857,7 @@ fn strings(fixture: &Value, key: &str) -> Vec<String> {
 }
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale", "token-confidence"];
+const FLAGS: &[&str] = &["allow-stale", "allow-other-model", "token-confidence"];
 
 fn parse_arguments() -> Result<HashMap<String, String>, String> {
     let mut values = HashMap::new();

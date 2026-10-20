@@ -66,6 +66,10 @@ or that names none. Replies from a model Intern no longer ships would
 otherwise keep the gate green forever, because nothing else in a prompt hash
 says which model answered it. The digest pipeline's recording is not held to
 this. InternBench applies the same check to `bench/recording.json`.
+`--allow-other-model` (both tools) scores such a recording anyway, with a
+warning - with `--allow-stale`, an earlier model's replies through today's
+engine, which is how a validation change is checked against the replies a
+model Intern no longer ships gave. CI never passes it.
 
 The prompt identity includes the evidence pipeline's worked example (the
 few-shot profile the Bonsai evaluation selected), so changing the example
