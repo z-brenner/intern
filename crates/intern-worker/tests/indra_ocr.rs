@@ -78,6 +78,10 @@ fn page(name: &str) -> Option<DynamicImage> {
     Some(load_oriented_image(&fixture(name)?, &ResourceLimits::default()).unwrap())
 }
 
+fn page_image(path: &Path) -> DynamicImage {
+    load_oriented_image(path, &ResourceLimits::default()).unwrap()
+}
+
 fn read(engine: &IndraOcr, image: DynamicImage) -> OcrResult {
     engine
         .recognize(&RenderedPage::new(0, image), &CancellationToken::new())
@@ -172,28 +176,36 @@ fn every_quarter_turn_is_read_the_right_way_up() {
 /// The installer smoke test's rotated, low-resolution receipt. The
 /// orientation network is not sure of it (0.92 for the right turn, under
 /// its 0.95), and the reference package reads it on its side, into
-/// gibberish; the confidence-driven search reads it upright.
+/// gibberish; the confidence-driven search reads it upright, in two passes.
+///
+/// The recognizer reads this page's V as U ("DELIUERY", "UIOLET"),
+/// confidently: the reference package reads the righted page so too.
 #[test]
 fn the_rotated_low_resolution_scan_reads_upright() {
     let (Some(engine), Some(path)) = (engine(), fixture("rotated-low-resolution-scan.png")) else {
         return;
     };
 
-    let document = extract_image(
-        &path,
-        engine,
-        &ResourceLimits::default(),
-        &CancellationToken::new(),
-    )
-    .unwrap();
+    let cancel = CancellationToken::new();
+    let document = extract_image(&path, engine, &ResourceLimits::default(), &cancel).unwrap();
 
     let page = &document.pages[0];
     assert_eq!(page.source, PageSource::Ocr);
     let text = page.text.to_lowercase();
-    for fact in ["delivery receipt", "june 12", "violet cartography studio"] {
+    for fact in [
+        "receipt dr-771",
+        "june 12 2025",
+        "pine echo couriers llc",
+        "cartography studio",
+    ] {
         assert!(text.contains(fact), "{fact}: {text}");
     }
-    assert!(page.ocr_confidence.unwrap() >= 60.0, "{page:?}");
+    assert!(page.ocr_confidence.unwrap() >= 75.0, "{page:?}");
+    assert_eq!(cancel.timings().ocr_passes, 2);
+
+    let image = page_image(&path);
+    let reading = read(engine, image);
+    assert_eq!(reading.rotation_degrees, 270);
 }
 
 /// The same page gives the same reading every time, from any number of
