@@ -1,6 +1,7 @@
 pub mod delimited;
 pub mod email;
 pub mod extract;
+pub mod indra;
 pub mod layout;
 pub mod limits;
 pub mod ocr;
