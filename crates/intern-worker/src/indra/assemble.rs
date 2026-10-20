@@ -79,6 +79,24 @@ pub struct AssembleOptions {
 pub struct Assembly {
     pub page: PageReading,
     pub tables: Vec<Option<TableGrid>>,
+    /// Block by block, the cells the table was laid out from (`Some`
+    /// exactly where `tables` is): each table line split at [`CELL_GAP`],
+    /// in the block's line order.
+    pub cells: Vec<Option<Vec<TableCell>>>,
+}
+
+/// A table cell as [`Reader::block_part`] finds it: the index of the line
+/// it was cut from (before ordering), its levelled box, its text.
+type RawCell = (usize, [f32; 4], String);
+
+/// One cell of a table line: the index into [`PageReading::lines`] of the
+/// line it was cut from, its box on the levelled page (unmirrored, rounded
+/// to 0.1 like the lines'), and its text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableCell {
+    pub line: usize,
+    pub bbox: [f64; 4],
+    pub text: String,
 }
 
 /// A table as `layout_post.table_html` lays it out: optional title lines
@@ -257,6 +275,7 @@ pub fn assemble_with<D: IdText + ?Sized>(
 
     let mut blocks = Vec::new();
     let mut tables = Vec::new();
+    let mut cells = Vec::new();
     let markdown = match &layout {
         None => texts.join("\n"),
         Some(outputs) => {
@@ -279,7 +298,21 @@ pub fn assemble_with<D: IdText + ?Sized>(
                 let block_texts: Vec<&str> = members.iter().map(|&i| texts[i]).collect();
                 let table =
                     reader.block_part(&mut parts, class, &members, &lines, &geo, width_f, options);
+                let (table, table_cells) = match table {
+                    Some((grid, found)) => (Some(grid), Some(found)),
+                    None => (None, None),
+                };
                 tables.push(table);
+                cells.push(table_cells.map(|found: Vec<RawCell>| {
+                    found
+                        .into_iter()
+                        .map(|(line, bx, text)| TableCell {
+                            line: position[&line],
+                            bbox: bx.map(|v| round_py(f64::from(v), 1)),
+                            text,
+                        })
+                        .collect()
+                }));
                 blocks.push(PageBlock {
                     class,
                     bbox,
@@ -304,6 +337,7 @@ pub fn assemble_with<D: IdText + ?Sized>(
             text,
         },
         tables,
+        cells,
     }
 }
 
@@ -577,7 +611,7 @@ impl<D: IdText + ?Sized> Reader<'_, D> {
         geo: &[[f32; 4]],
         width: f64,
         options: AssembleOptions,
-    ) -> Option<TableGrid> {
+    ) -> Option<(TableGrid, Vec<RawCell>)> {
         let texts: Vec<&str> = members.iter().map(|&i| lines[i].text.as_str()).collect();
         if matches!(class, BlockClass::PageHeader | BlockClass::PageFooter)
             && !options.keep_furniture
@@ -601,20 +635,23 @@ impl<D: IdText + ?Sized> Reader<'_, D> {
             BlockClass::Table if members.len() > 1 => {
                 // Inside tables a line splits into cells at CELL_GAP.
                 let (mut cell_boxes, mut cell_texts) = (Vec::new(), Vec::new());
+                let mut found = Vec::new();
                 for &i in members {
                     let cells = self.split_line(lines[i].bx, &lines[i].toks, CELL_GAP, &[]);
                     if cells.is_empty() {
                         cell_boxes.push(geo[i]);
                         cell_texts.push(lines[i].text.clone());
+                        found.push((i, lines[i].bx, lines[i].text.clone()));
                     }
                     for (b, text, _) in cells {
                         cell_boxes.push(self.geo(b, width));
-                        cell_texts.push(text);
+                        cell_texts.push(text.clone());
+                        found.push((i, b, text));
                     }
                 }
                 let grid = table_grid(&cell_boxes, &cell_texts);
                 parts.push(grid.to_html());
-                return Some(grid);
+                return Some((grid, found));
             }
             BlockClass::ListGroup => {
                 let mut items: Vec<Vec<&str>> = Vec::new();
@@ -1086,6 +1123,75 @@ mod tests {
             "<table>\n<tr><th>Name</th><th>Value</th></tr>\n<tr><td>a</td><td>b b2</td></tr>\n\
              <tr><td>c&lt;</td><td>d&amp;</td></tr>\n</table>"
         );
+    }
+
+    /// A table block's lines come back cut into the cells its grid was
+    /// laid out from, each naming the page line it was cut from.
+    #[test]
+    fn table_lines_are_cut_into_their_cells() {
+        use crate::indra::types::{DetBox, Token, TokenKind};
+        let vocab = Vocab::new([" ", "a", "b", "c", "d"].map(String::from).to_vec());
+        let token = |id: u32, x: f64| Token {
+            kind: TokenKind::Id(id),
+            x,
+            p: 0.9,
+        };
+        // Lines 10 high: a 25-pixel gap is past CELL_GAP (18) and short of
+        // SPLIT_GAP (30), so each line stays whole and is cut only as a
+        // table's.
+        let lines: Vec<RecLine> = (0..2)
+            .map(|_| RecLine {
+                text: "abcd".into(),
+                conf: 0.95,
+                tokens: vec![
+                    token(2, 5.0),
+                    token(3, 10.0),
+                    token(4, 35.0),
+                    token(5, 40.0),
+                ],
+            })
+            .collect();
+        let boxes = [0.0_f32, 20.0].map(|y| DetBox {
+            x0: 0.0,
+            y0: y,
+            x1: 50.0,
+            y1: y + 10.0,
+            score: 0.9,
+        });
+        let mut order = |_: &[f32], n: usize| {
+            let mut cls = vec![0.0; n * 10];
+            for line in 0..n {
+                cls[line * 10 + 5] = 10.0; // Table
+            }
+            OrderOutputs {
+                n,
+                a: vec![0.0, 5.0, -5.0, 0.0],
+                cls,
+                same: vec![0.0, 5.0, 5.0, 0.0],
+            }
+        };
+        let assembly = assemble_with(
+            100,
+            100,
+            &boxes,
+            &lines,
+            &vocab,
+            AssembleOptions::default(),
+            &mut order,
+        );
+        assert_eq!(assembly.page.blocks.len(), 1);
+        assert_eq!(assembly.page.blocks[0].class, BlockClass::Table);
+        assert!(assembly.tables[0].is_some());
+        let cells = assembly.cells[0].as_ref().expect("the table's cells");
+        let found: Vec<(usize, &str)> = cells
+            .iter()
+            .map(|cell| (cell.line, cell.text.as_str()))
+            .collect();
+        assert_eq!(found, [(0, "ab"), (0, "cd"), (1, "ab"), (1, "cd")]);
+        // Each cell's box is around its characters, inside its line's.
+        assert!(cells[0].bbox[2] < cells[1].bbox[0]);
+        assert_eq!(cells[1].bbox[1], assembly.page.lines[0].bbox[1]);
+        assert_eq!(cells[2].bbox[1], assembly.page.lines[1].bbox[1]);
     }
 
     #[test]

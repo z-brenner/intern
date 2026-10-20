@@ -646,7 +646,6 @@ mod tests {
     /// to Tesseract. A smoke test can tell a fallback away from Indra from
     /// any other by its `from`.
     #[test]
-    #[cfg(not(feature = "onnx-ocr"))]
     fn an_indra_install_that_does_not_load_is_reported_with_where_scans_went() {
         let runtime = tempfile::tempdir().unwrap();
         stand_in_indra(runtime.path());
@@ -665,11 +664,17 @@ mod tests {
                 (OcrEngine::Paddle, OcrEngine::Tesseract)
             ]
         );
+        // Built with ONNX Runtime support, the stand-in library is what
+        // fails to load; without it, the build says so.
+        let reason = if cfg!(feature = "onnx-ocr") {
+            "ONNX Runtime did not load from"
+        } else {
+            "intern-worker was built without the onnx-ocr feature"
+        };
         assert!(
-            reported[0].message.starts_with(
-                "Indra OCR did not load; reading scans with Tesseract: \
-                 intern-worker was built without the onnx-ocr feature"
-            ),
+            reported[0].message.starts_with(&format!(
+                "Indra OCR did not load; reading scans with Tesseract: {reason}"
+            )),
             "{reported:?}"
         );
         assert_tesseract(selected);

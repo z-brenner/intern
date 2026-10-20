@@ -34,7 +34,7 @@ use crate::paddle::orientation::{PassReading, mostly_vertical, search_orientatio
 use crate::paddle::{ThreadBudget, default_thread_budget};
 
 use super::IndraAssets;
-use super::assemble::assemble;
+use super::assemble::{AssembleOptions, TableCell, assemble_with};
 use super::beam::BeamParams;
 use super::det::{adaptive_long_side, decode, page_to_input, to_page};
 use super::imgops;
@@ -103,6 +103,8 @@ impl std::fmt::Debug for IndraOcr {
 /// One read of a page at one turn, before it is reported.
 struct Pass {
     reading: PageReading,
+    /// Block by block, the cells of the blocks assembly writes as tables.
+    cells: Vec<Option<Vec<TableCell>>>,
     /// The recognizer's reading of every detected line, in detection order,
     /// with each character's probability.
     rec: Vec<RecLine>,
@@ -627,14 +629,16 @@ impl IndraOcr {
                 same: vec![0.0; n * n],
             }
         };
-        let mut reading = assemble(
+        let assembly = assemble_with(
             page.width,
             page.height,
             &boxes,
             &rec,
             &self.shared.meta.vocab,
+            AssembleOptions::default(),
             &mut order,
         );
+        let (mut reading, mut cells) = (assembly.page, assembly.cells);
         if let Some(error) = failure {
             return Err(error);
         }
@@ -648,9 +652,13 @@ impl IndraOcr {
             for block in &mut reading.blocks {
                 block.bbox = unrotate_box(block.bbox, turned.skew, page.width, page.height);
             }
+            for cell in cells.iter_mut().flatten().flatten() {
+                cell.bbox = unrotate_box(cell.bbox, turned.skew, page.width, page.height);
+            }
         }
         Ok(Pass {
             reading,
+            cells,
             rec,
             boxes,
             orientation,
@@ -721,6 +729,7 @@ impl IndraOcr {
     fn to_result(&self, pass: &Pass, rotation: u16) -> OcrResult {
         to_result(
             &pass.reading,
+            &pass.cells,
             &pass.rec,
             self.shared.space,
             pass.width,
@@ -955,56 +964,83 @@ fn pixel_box(bbox: [f64; 4], width: usize, height: usize) -> [u32; 4] {
 ///
 /// Lines read as nothing (under the confidence floor, or only spaces) are
 /// left out, as every other engine leaves them out; blocks keep the lines
-/// that are left. The text is the blocks in reading order, a block's lines
-/// one to a line and a blank line between blocks, so distillation finds the
-/// network's paragraphs; page headers and footers stay in it - leaving them
-/// out is the layout analysis's call.
+/// that are left. A line of a block assembly writes as a table is reported
+/// as its cells - the line cut where its characters are more than
+/// [`super::assemble::CELL_GAP`] line heights apart, the cells the table is
+/// laid out from - each a line of its own with its own box and the line's
+/// confidence, so the layout analysis need not cut it again without the
+/// character positions. The text is the blocks in reading order, a block's
+/// lines (whole, not cut) one to a line and a blank line between blocks, so
+/// distillation finds the network's paragraphs; page headers and footers
+/// stay in it - leaving them out is the layout analysis's call.
 fn to_result(
     reading: &PageReading,
+    cells: &[Option<Vec<TableCell>>],
     rec: &[RecLine],
     space: Option<u32>,
     width: usize,
     height: usize,
     rotation: u16,
 ) -> OcrResult {
-    let mut kept = vec![None; reading.lines.len()];
+    let confidence = |conf: f64| (conf * 100.0).round().clamp(0.0, 100.0) as u8;
+    // The cells each table line is reported as.
+    let mut cut: Vec<Option<Vec<&TableCell>>> = vec![None; reading.lines.len()];
+    for cell in cells.iter().flatten().flatten() {
+        if let Some(slot) = cut.get_mut(cell.line) {
+            slot.get_or_insert_with(Vec::new).push(cell);
+        }
+    }
+    // Each page line's reported lines.
+    let mut kept: Vec<Vec<usize>> = vec![Vec::new(); reading.lines.len()];
     let mut lines = Vec::new();
     for (index, line) in reading.lines.iter().enumerate() {
-        let text = line.text.trim();
-        if text.is_empty() {
+        let pieces: Vec<(&str, [f64; 4])> = match &cut[index] {
+            Some(cells) => cells
+                .iter()
+                .map(|cell| (cell.text.trim(), cell.bbox))
+                .collect(),
+            None => vec![(line.text.trim(), line.bbox)],
+        };
+        for (text, bbox) in pieces {
+            if text.is_empty() {
+                continue;
+            }
+            kept[index].push(lines.len());
+            lines.push(OcrLine {
+                text: text.to_owned(),
+                bbox: pixel_box(bbox, width, height),
+                confidence: confidence(line.conf),
+            });
+        }
+    }
+    let mut placed = vec![false; reading.lines.len()];
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut blocks = Vec::new();
+    for block in &reading.blocks {
+        let members: Vec<usize> = block
+            .lines
+            .iter()
+            .filter_map(|&index| kept.get(index))
+            .flatten()
+            .copied()
+            .collect();
+        if members.is_empty() {
             continue;
         }
-        kept[index] = Some(lines.len());
-        lines.push(OcrLine {
-            text: text.to_owned(),
-            bbox: pixel_box(line.bbox, width, height),
-            confidence: (line.conf * 100.0).round().clamp(0.0, 100.0) as u8,
+        blocks.push(OcrBlock {
+            label: block_label(block.class),
+            bbox: pixel_box(block.bbox, width, height),
+            lines: members,
         });
-    }
-    let blocks: Vec<OcrBlock> = reading
-        .blocks
-        .iter()
-        .filter_map(|block| {
-            let members: Vec<usize> = block
-                .lines
-                .iter()
-                .filter_map(|&index| kept.get(index).copied().flatten())
-                .collect();
-            (!members.is_empty()).then(|| OcrBlock {
-                label: block_label(block.class),
-                bbox: pixel_box(block.bbox, width, height),
-                lines: members,
-            })
-        })
-        .collect();
-    let mut placed = vec![false; lines.len()];
-    let mut paragraphs: Vec<String> = Vec::new();
-    for block in &blocks {
         let texts: Vec<&str> = block
             .lines
             .iter()
-            .filter(|&&index| !std::mem::replace(&mut placed[index], true))
-            .map(|&index| lines[index].text.as_str())
+            .filter(|&&index| {
+                index < placed.len()
+                    && !kept[index].is_empty()
+                    && !std::mem::replace(&mut placed[index], true)
+            })
+            .map(|&index| reading.lines[index].text.trim())
             .collect();
         if !texts.is_empty() {
             paragraphs.push(texts.join("\n"));
@@ -1012,11 +1048,12 @@ fn to_result(
     }
     // Lines no block holds (a page of one line has no layout) follow, one
     // to a line.
-    let loose: Vec<&str> = lines
+    let loose: Vec<&str> = reading
+        .lines
         .iter()
-        .zip(&placed)
-        .filter(|(_, placed)| !**placed)
-        .map(|(line, _)| line.text.as_str())
+        .enumerate()
+        .filter(|&(index, _)| !placed[index] && !kept[index].is_empty())
+        .map(|(_, line)| line.text.trim())
         .collect();
     if !loose.is_empty() {
         paragraphs.push(loose.join("\n"));
@@ -1337,7 +1374,7 @@ mod tests {
             markdown: String::new(),
             text: String::new(),
         };
-        let result = to_result(&reading, &[], Some(1), 90, 70, 270);
+        let result = to_result(&reading, &[], &[], Some(1), 90, 70, 270);
         assert_eq!(result.text, "Heading\n\nFirst line\nsecond line");
         assert_eq!(result.rotation_degrees, 270);
         assert_eq!(result.lines.len(), 3);
@@ -1355,9 +1392,65 @@ mod tests {
             ..reading
         };
         assert_eq!(
-            to_result(&loose, &[], Some(1), 200, 200, 0).text,
+            to_result(&loose, &[], &[], Some(1), 200, 200, 0).text,
             "Heading\nFirst line\nsecond line"
         );
+    }
+
+    /// A table's lines are reported as their cells, each its own line in
+    /// the block; the page's text keeps each line whole.
+    #[test]
+    fn table_lines_are_reported_as_their_cells() {
+        let reading = PageReading {
+            rotation: 0,
+            skew: 0.0,
+            lines: vec![
+                line("Prices", [10.0, 5.0, 60.0, 15.0], 0.97),
+                line("Item  Price", [10.0, 20.0, 120.0, 30.0], 0.96),
+                line("Tea  2.50", [10.0, 32.0, 120.0, 42.0], 0.913),
+            ],
+            blocks: vec![
+                PageBlock {
+                    class: BlockClass::SectionHeader,
+                    bbox: [10.0, 5.0, 60.0, 15.0],
+                    text: "Prices".into(),
+                    lines: vec![0],
+                },
+                PageBlock {
+                    class: BlockClass::Table,
+                    bbox: [10.0, 20.0, 120.0, 42.0],
+                    text: "Item  Price\nTea  2.50".into(),
+                    lines: vec![1, 2],
+                },
+            ],
+            markdown: String::new(),
+            text: String::new(),
+        };
+        let cell = |line: usize, text: &str, bbox: [f64; 4]| TableCell {
+            line,
+            bbox,
+            text: text.into(),
+        };
+        let cells = vec![
+            None,
+            Some(vec![
+                cell(1, "Item", [10.0, 20.0, 40.2, 30.0]),
+                cell(1, "Price", [80.0, 20.0, 120.0, 30.0]),
+                cell(2, "Tea", [10.0, 32.0, 35.0, 42.0]),
+                cell(2, " ", [50.0, 32.0, 55.0, 42.0]),
+                cell(2, "2.50", [85.5, 32.0, 120.0, 42.0]),
+            ]),
+        ];
+        let result = to_result(&reading, &cells, &[], Some(1), 200, 100, 0);
+        let texts: Vec<&str> = result.lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(texts, ["Prices", "Item", "Price", "Tea", "2.50"]);
+        assert_eq!(result.lines[1].bbox, [10, 20, 41, 30]);
+        assert_eq!(result.lines[4].bbox, [85, 32, 120, 42]);
+        assert_eq!(result.lines[4].confidence, 91);
+        assert_eq!(result.blocks[0].lines, vec![0]);
+        assert_eq!(result.blocks[1].label, OcrBlockLabel::Table);
+        assert_eq!(result.blocks[1].lines, vec![1, 2, 3, 4]);
+        assert_eq!(result.text, "Prices\n\nItem  Price\nTea  2.50");
     }
 
     #[test]
