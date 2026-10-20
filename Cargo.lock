@@ -2434,6 +2434,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "image",
+ "intern-bench",
  "intern-core",
  "intern-engine",
  "intern-intake",

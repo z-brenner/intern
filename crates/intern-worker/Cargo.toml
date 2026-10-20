@@ -14,6 +14,12 @@ path = "src/main.rs"
 name = "route_calibration"
 required-features = ["native-pdfium"]
 
+# Reads InternBench's scans with one OCR engine and scores them
+# (docs/ocr.md); it renders PDFs and runs the ONNX engines.
+[[example]]
+name = "ocr_engines"
+required-features = ["native-pdfium", "onnx-ocr"]
+
 [features]
 default = []
 native-pdfium = ["dep:pdfium-render"]
@@ -50,5 +56,7 @@ intern-core = { path = "../intern-core" }
 # The host's side of the protocol, so a test can hold the two to the same
 # layouts: the engine mirrors the worker's types rather than sharing them.
 intern-engine = { path = "../intern-engine" }
+# The benchmark's gold and OCR measure, for the ocr_engines example.
+intern-bench = { path = "../intern-bench" }
 intern-intake = { path = "../intern-intake" }
 tempfile = "=3.23.0"
