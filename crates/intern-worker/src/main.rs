@@ -28,47 +28,205 @@ fn pdf_backend() -> Result<PdfiumBackend, ExtractionError> {
 /// An OCR engine any number of pages can be read with at once.
 type SharedOcr = Box<dyn OcrBackend + Send + Sync>;
 
+/// The engines that read scans, in the order the worker prefers them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum OcrEngine {
+    Indra,
+    Paddle,
+    Tesseract,
+}
+
+impl OcrEngine {
+    /// The name `INTERN_OCR_ENGINE` takes and the log writes.
+    fn id(self) -> &'static str {
+        match self {
+            OcrEngine::Indra => "indra",
+            OcrEngine::Paddle => "paddle",
+            OcrEngine::Tesseract => "tesseract",
+        }
+    }
+
+    /// The name a person reads in the log.
+    fn name(self) -> &'static str {
+        match self {
+            OcrEngine::Indra => "Indra OCR",
+            OcrEngine::Paddle => "PP-OCR",
+            OcrEngine::Tesseract => "Tesseract",
+        }
+    }
+}
+
+/// The environment variable that names the engine to read scans with, for
+/// benchmarking one engine against another and for support: `indra`,
+/// `paddle` or `tesseract`. Unset, empty or `auto`, the worker takes the
+/// best engine installed.
+const ENGINE_VARIABLE: &str = "INTERN_OCR_ENGINE";
+
+/// The engine `value` of [`ENGINE_VARIABLE`] asks for: none for the
+/// default, and an error naming a value the worker does not know.
+fn requested_engine(value: Option<&str>) -> Result<Option<OcrEngine>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "indra" => Ok(Some(OcrEngine::Indra)),
+        "paddle" => Ok(Some(OcrEngine::Paddle)),
+        "tesseract" => Ok(Some(OcrEngine::Tesseract)),
+        _ => Err(format!(
+            "{ENGINE_VARIABLE}={value:?} is not indra, paddle or tesseract; \
+             reading scans with the best engine installed"
+        )),
+    }
+}
+
+/// [`requested_engine`] for this process, read once: an unknown value is
+/// a warning in the log, written once, and the default.
+fn configured_engine() -> Option<OcrEngine> {
+    static REQUESTED: std::sync::OnceLock<Option<OcrEngine>> = std::sync::OnceLock::new();
+    *REQUESTED.get_or_init(|| {
+        let value = std::env::var_os(ENGINE_VARIABLE);
+        let value = value.as_ref().map(|value| value.to_string_lossy());
+        requested_engine(value.as_deref()).unwrap_or_else(|message| {
+            log_warning("OCR_ENGINE_UNKNOWN", &message, &[]);
+            None
+        })
+    })
+}
+
+/// One JSON line on standard error, which the host keeps in the worker's
+/// log. `fields` are written before the message, as strings.
+fn log_warning(code: &str, message: &str, fields: &[(&str, &str)]) {
+    let quote = |text: &str| serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_owned());
+    let mut line = format!("{{\"level\":\"warning\",\"code\":{}", quote(code));
+    for (key, value) in fields {
+        line.push_str(&format!(",{}:{}", quote(key), quote(value)));
+    }
+    line.push_str(&format!(",\"message\":{}}}", quote(message)));
+    let _ = writeln!(std::io::stderr().lock(), "{line}");
+}
+
+/// An engine the worker meant to read scans with and did not, the one it
+/// reads them with instead, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Fallback {
+    from: OcrEngine,
+    to: OcrEngine,
+    message: String,
+}
+
 fn ocr_backend() -> Result<SharedOcr, ExtractionError> {
     let runtime = runtime_directory()?;
-    select_ocr_backend(&runtime, |message| {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "{{\"level\":\"warning\",\"code\":\"OCR_ENGINE_FALLBACK\",\"message\":{}}}",
-            serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_owned())
+    select_ocr_backend(&runtime, configured_engine(), |fallback| {
+        log_warning(
+            "OCR_ENGINE_FALLBACK",
+            &fallback.message,
+            &[("from", fallback.from.id()), ("to", fallback.to.id())],
         );
     })
 }
 
-/// PP-OCR when its runtime and models are installed beside the worker and
-/// load; Tesseract, exactly as before, when they are not.
+/// Indra OCR when its runtime and models are installed beside the worker
+/// and load; PP-OCR when Indra's are not and PP-OCR's are; Tesseract,
+/// exactly as before, when neither is. `requested`, from
+/// [`ENGINE_VARIABLE`], starts the search at that engine instead.
 ///
-/// An install without them is a development machine or a CI runner, and
-/// says nothing. One that has them and cannot load them is worth a line in
-/// the log, which `report` writes - it names the file, never a document.
+/// An install without an engine's files is a development machine or a CI
+/// runner, and says nothing. One that has them and cannot load them, or has
+/// only some of them, is worth a line in the log, which `report` writes -
+/// it names the engine given up on, the engine used instead, and the file
+/// or the error, never a document. So is an engine that was asked for and
+/// is not installed.
 fn select_ocr_backend(
     runtime: &Path,
-    report: impl FnOnce(&str),
+    requested: Option<OcrEngine>,
+    mut report: impl FnMut(Fallback),
 ) -> Result<SharedOcr, ExtractionError> {
-    let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime);
-    if assets.present() {
-        match paddle_backend(runtime) {
-            Ok(engine) => return Ok(engine),
-            Err(error) => report(&format!(
-                "PP-OCR did not load; reading scans with Tesseract: {error}"
-            )),
+    let start = requested.unwrap_or(OcrEngine::Indra);
+    // Why each engine before the one that loads was passed over, reported
+    // once it is known which engine reads scans instead.
+    let mut passed_over: Vec<(OcrEngine, String)> = Vec::new();
+    let mut settle = |to: OcrEngine, passed_over: Vec<(OcrEngine, String)>| {
+        for (from, why) in passed_over {
+            report(Fallback {
+                from,
+                to,
+                message: why.replace("{to}", to.name()),
+            });
         }
-    } else if let Some(missing) = assets.partly_missing() {
-        // Some of it is installed: something removed the rest - an antivirus
-        // quarantine, a damaged update. That is worth the log's line.
-        report(&format!(
-            "PP-OCR is incomplete ({} missing); reading scans with Tesseract",
-            missing.display()
-        ));
+    };
+    if start <= OcrEngine::Indra {
+        let assets = intern_worker::indra::IndraAssets::in_directory(runtime);
+        if assets.present() {
+            match indra_backend(assets) {
+                Ok(engine) => return Ok(engine),
+                Err(error) => passed_over.push((
+                    OcrEngine::Indra,
+                    format!("Indra OCR did not load; reading scans with {{to}}: {error}"),
+                )),
+            }
+        } else if let Some(missing) = assets.partly_missing() {
+            // Some of it is installed: something removed the rest - an
+            // antivirus quarantine, a damaged update.
+            passed_over.push((
+                OcrEngine::Indra,
+                format!(
+                    "Indra OCR is incomplete ({} missing); reading scans with {{to}}",
+                    missing.display()
+                ),
+            ));
+        } else if requested == Some(OcrEngine::Indra) {
+            passed_over.push((
+                OcrEngine::Indra,
+                format!("Indra OCR was requested by {ENGINE_VARIABLE} but is not installed; reading scans with {{to}}"),
+            ));
+        }
     }
+    if start <= OcrEngine::Paddle {
+        let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime);
+        if assets.present() {
+            match paddle_backend(runtime) {
+                Ok(engine) => {
+                    settle(OcrEngine::Paddle, passed_over);
+                    return Ok(engine);
+                }
+                Err(error) => passed_over.push((
+                    OcrEngine::Paddle,
+                    format!("PP-OCR did not load; reading scans with {{to}}: {error}"),
+                )),
+            }
+        } else if let Some(missing) = assets.partly_missing() {
+            passed_over.push((
+                OcrEngine::Paddle,
+                format!(
+                    "PP-OCR is incomplete ({} missing); reading scans with {{to}}",
+                    missing.display()
+                ),
+            ));
+        } else if requested == Some(OcrEngine::Paddle) {
+            passed_over.push((
+                OcrEngine::Paddle,
+                format!("PP-OCR was requested by {ENGINE_VARIABLE} but is not installed; reading scans with {{to}}"),
+            ));
+        }
+    }
+    settle(OcrEngine::Tesseract, passed_over);
     Ok(Box::new(ParallelTesseract(TesseractOcr::new(
         runtime.join("tesseract.exe"),
         runtime.join("tessdata"),
     )?)))
+}
+
+#[cfg(feature = "onnx-ocr")]
+fn indra_backend(assets: intern_worker::indra::IndraAssets) -> Result<SharedOcr, ExtractionError> {
+    Ok(Box::new(intern_worker::indra::IndraOcr::new(assets)?))
+}
+
+#[cfg(not(feature = "onnx-ocr"))]
+fn indra_backend(_assets: intern_worker::indra::IndraAssets) -> Result<SharedOcr, ExtractionError> {
+    Err(ExtractionError::native_assets_missing(
+        "intern-worker was built without the onnx-ocr feature",
+    ))
 }
 
 #[cfg(feature = "onnx-ocr")]
@@ -127,17 +285,39 @@ impl OcrBackend for LazyOcr {
 }
 
 /// How many pages the engine [`select_ocr_backend`] would choose reads at
-/// once: PP-OCR's own thread budget when it is installed, [`ocr_workers`]
+/// once: Indra's or PP-OCR's thread budget when either is installed - both
+/// share [`intern_worker::paddle::thread_budget`] - and [`ocr_workers`]
 /// Tesseract processes otherwise.
 fn planned_ocr_workers() -> usize {
-    let paddle = cfg!(feature = "onnx-ocr")
-        && runtime_directory().is_ok_and(|runtime| {
-            intern_worker::paddle::PaddleAssets::in_directory(&runtime).present()
-        });
-    if paddle {
-        intern_worker::paddle::default_thread_budget().workers
+    let engine = runtime_directory().map_or(OcrEngine::Tesseract, |runtime| {
+        planned_engine(&runtime, configured_engine())
+    });
+    match engine {
+        OcrEngine::Indra | OcrEngine::Paddle => {
+            intern_worker::paddle::default_thread_budget().workers
+        }
+        OcrEngine::Tesseract => ocr_workers(),
+    }
+}
+
+/// The engine [`select_ocr_backend`] would choose, judged by which files
+/// are installed and without loading any: the first engine from
+/// `requested` on whose files are all there.
+fn planned_engine(runtime: &Path, requested: Option<OcrEngine>) -> OcrEngine {
+    let start = requested.unwrap_or(OcrEngine::Indra);
+    let onnx = cfg!(feature = "onnx-ocr");
+    if onnx
+        && start <= OcrEngine::Indra
+        && intern_worker::indra::IndraAssets::in_directory(runtime).present()
+    {
+        OcrEngine::Indra
+    } else if onnx
+        && start <= OcrEngine::Paddle
+        && intern_worker::paddle::PaddleAssets::in_directory(runtime).present()
+    {
+        OcrEngine::Paddle
     } else {
-        ocr_workers()
+        OcrEngine::Tesseract
     }
 }
 
@@ -367,20 +547,51 @@ mod tests {
         assert_eq!(timings.total_micros, 0, "{timings:?}");
     }
 
-    /// A runtime directory without ONNX Runtime and the models - every
-    /// development machine and CI runner - reads scans with Tesseract as it
-    /// always has, and says nothing about it.
-    #[test]
-    fn without_the_pp_ocr_runtime_scans_go_to_tesseract_silently() {
-        let runtime = tempfile::tempdir().unwrap();
+    /// Files that stand in for an engine's: right names, wrong contents, so
+    /// the selection sees the engine installed and its loading fails.
+    fn stand_in(paths: &[&Path]) {
+        for path in paths {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"not a library or a model").unwrap();
+        }
+    }
+
+    fn stand_in_indra(runtime: &Path) -> intern_worker::indra::IndraAssets {
+        let assets = intern_worker::indra::IndraAssets::in_directory(runtime);
+        stand_in(&[
+            &assets.runtime_library,
+            &assets.detection_model,
+            &assets.orientation_model,
+            &assets.recognition_model,
+            &assets.order_model,
+            &assets.language_model,
+            &assets.meta,
+        ]);
+        assets
+    }
+
+    fn stand_in_paddle(runtime: &Path) {
+        let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime);
+        stand_in(&[
+            &assets.runtime_library,
+            &assets.detection_model,
+            &assets.recognition_model,
+        ]);
+    }
+
+    /// Selects with `requested`, keeping what it reports.
+    fn select(
+        runtime: &Path,
+        requested: Option<OcrEngine>,
+    ) -> (Result<SharedOcr, ExtractionError>, Vec<Fallback>) {
         let mut reported = Vec::new();
+        let selected = select_ocr_backend(runtime, requested, |fallback| reported.push(fallback));
+        (selected, reported)
+    }
 
-        let selected =
-            select_ocr_backend(runtime.path(), |message| reported.push(message.to_owned()));
-
-        assert!(reported.is_empty(), "{reported:?}");
-        // Tesseract is built only with the native feature; without it the
-        // selection fails exactly as building Tesseract always has.
+    /// Tesseract is built only with the native feature; without it the
+    /// selection fails exactly as building Tesseract always has.
+    fn assert_tesseract(selected: Result<SharedOcr, ExtractionError>) {
         if cfg!(feature = "native-tesseract") {
             // Tesseract pages are processes of their own, read side by side.
             assert_eq!(selected.unwrap().concurrency(), ocr_workers());
@@ -389,34 +600,192 @@ mod tests {
         }
     }
 
+    /// A runtime directory without ONNX Runtime and the models - every
+    /// development machine and CI runner - reads scans with Tesseract as it
+    /// always has, and says nothing about it.
+    #[test]
+    fn without_an_onnx_runtime_scans_go_to_tesseract_silently() {
+        let runtime = tempfile::tempdir().unwrap();
+
+        let (selected, reported) = select(runtime.path(), None);
+
+        assert!(reported.is_empty(), "{reported:?}");
+        assert_eq!(planned_engine(runtime.path(), None), OcrEngine::Tesseract);
+        assert_tesseract(selected);
+    }
+
     /// Files that look like the PP-OCR runtime but do not load are not a
     /// reason to fail a scan: the worker says so once, in the log, and reads
     /// with Tesseract.
     #[test]
     fn a_pp_ocr_runtime_that_does_not_load_falls_back_to_tesseract() {
         let runtime = tempfile::tempdir().unwrap();
-        let assets = intern_worker::paddle::PaddleAssets::in_directory(runtime.path());
-        std::fs::create_dir(runtime.path().join(intern_worker::paddle::MODEL_DIRECTORY)).unwrap();
-        for path in [
-            &assets.runtime_library,
-            &assets.detection_model,
-            &assets.recognition_model,
-        ] {
-            std::fs::write(path, b"not a library or a model").unwrap();
-        }
-        let mut reported = Vec::new();
+        stand_in_paddle(runtime.path());
 
-        let selected =
-            select_ocr_backend(runtime.path(), |message| reported.push(message.to_owned()));
+        let (selected, reported) = select(runtime.path(), None);
 
         assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(
+            (reported[0].from, reported[0].to),
+            (OcrEngine::Paddle, OcrEngine::Tesseract)
+        );
         assert!(
-            reported[0].starts_with("PP-OCR did not load; reading scans with Tesseract"),
+            reported[0]
+                .message
+                .starts_with("PP-OCR did not load; reading scans with Tesseract"),
             "{reported:?}"
         );
         if cfg!(feature = "native-tesseract") {
             assert!(selected.is_ok());
         }
+    }
+
+    /// Indra comes first. An Indra install that does not load is reported
+    /// as Indra given up for the engine that does read the scans - here
+    /// neither ONNX engine loads, so each is named, in order, falling back
+    /// to Tesseract. A smoke test can tell a fallback away from Indra from
+    /// any other by its `from`.
+    #[test]
+    #[cfg(not(feature = "onnx-ocr"))]
+    fn an_indra_install_that_does_not_load_is_reported_with_where_scans_went() {
+        let runtime = tempfile::tempdir().unwrap();
+        stand_in_indra(runtime.path());
+        stand_in_paddle(runtime.path());
+
+        let (selected, reported) = select(runtime.path(), None);
+
+        let pairs = reported
+            .iter()
+            .map(|fallback| (fallback.from, fallback.to))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            pairs,
+            [
+                (OcrEngine::Indra, OcrEngine::Tesseract),
+                (OcrEngine::Paddle, OcrEngine::Tesseract)
+            ]
+        );
+        assert!(
+            reported[0].message.starts_with(
+                "Indra OCR did not load; reading scans with Tesseract: \
+                 intern-worker was built without the onnx-ocr feature"
+            ),
+            "{reported:?}"
+        );
+        assert_tesseract(selected);
+    }
+
+    /// Some of Indra's files and not the rest is something worth the log's
+    /// line - an antivirus quarantine, a damaged update - and names the
+    /// first file missing and the engine read with instead.
+    #[test]
+    fn a_partial_indra_install_is_reported() {
+        let runtime = tempfile::tempdir().unwrap();
+        let assets = intern_worker::indra::IndraAssets::in_directory(runtime.path());
+        stand_in(&[&assets.detection_model, &assets.recognition_model]);
+
+        let (selected, reported) = select(runtime.path(), None);
+
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(
+            (reported[0].from, reported[0].to),
+            (OcrEngine::Indra, OcrEngine::Tesseract)
+        );
+        assert!(
+            reported[0].message.starts_with("Indra OCR is incomplete (")
+                && reported[0]
+                    .message
+                    .contains(&assets.orientation_model.display().to_string())
+                && reported[0]
+                    .message
+                    .ends_with("missing); reading scans with Tesseract"),
+            "{reported:?}"
+        );
+        assert_eq!(planned_engine(runtime.path(), None), OcrEngine::Tesseract);
+        assert_tesseract(selected);
+    }
+
+    /// `INTERN_OCR_ENGINE` starts the search at the engine it names: asking
+    /// for Tesseract passes over the ONNX engines without a word, and
+    /// asking for an engine that is not installed says so.
+    #[test]
+    fn a_requested_engine_starts_the_search() {
+        let runtime = tempfile::tempdir().unwrap();
+        stand_in_indra(runtime.path());
+        stand_in_paddle(runtime.path());
+
+        let (selected, reported) = select(runtime.path(), Some(OcrEngine::Tesseract));
+        assert!(reported.is_empty(), "{reported:?}");
+        assert_tesseract(selected);
+        assert_eq!(
+            planned_engine(runtime.path(), Some(OcrEngine::Tesseract)),
+            OcrEngine::Tesseract
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        let (_, reported) = select(empty.path(), Some(OcrEngine::Indra));
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert_eq!(
+            reported[0].message,
+            "Indra OCR was requested by INTERN_OCR_ENGINE but is not installed; \
+             reading scans with Tesseract"
+        );
+        let (_, reported) = select(empty.path(), Some(OcrEngine::Paddle));
+        assert_eq!(
+            reported
+                .iter()
+                .map(|fallback| (fallback.from, fallback.to))
+                .collect::<Vec<_>>(),
+            [(OcrEngine::Paddle, OcrEngine::Tesseract)]
+        );
+    }
+
+    /// The worker plans its OCR workers by the engine it would choose, from
+    /// the files installed: Indra before PP-OCR, unless PP-OCR is asked for.
+    /// A build without ONNX Runtime support plans for Tesseract whatever is
+    /// installed, since that is what it reads with.
+    #[test]
+    fn the_planned_engine_follows_the_files_installed() {
+        let runtime = tempfile::tempdir().unwrap();
+        stand_in_paddle(runtime.path());
+        let onnx = |engine| {
+            if cfg!(feature = "onnx-ocr") {
+                engine
+            } else {
+                OcrEngine::Tesseract
+            }
+        };
+        assert_eq!(
+            planned_engine(runtime.path(), None),
+            onnx(OcrEngine::Paddle)
+        );
+        stand_in_indra(runtime.path());
+        assert_eq!(planned_engine(runtime.path(), None), onnx(OcrEngine::Indra));
+        assert_eq!(
+            planned_engine(runtime.path(), Some(OcrEngine::Paddle)),
+            onnx(OcrEngine::Paddle)
+        );
+    }
+
+    #[test]
+    fn the_engine_setting_names_an_engine_or_the_default() {
+        assert_eq!(requested_engine(None), Ok(None));
+        assert_eq!(requested_engine(Some("")), Ok(None));
+        assert_eq!(requested_engine(Some(" auto ")), Ok(None));
+        assert_eq!(requested_engine(Some("indra")), Ok(Some(OcrEngine::Indra)));
+        assert_eq!(
+            requested_engine(Some("Paddle")),
+            Ok(Some(OcrEngine::Paddle))
+        );
+        assert_eq!(
+            requested_engine(Some("TESSERACT\n")),
+            Ok(Some(OcrEngine::Tesseract))
+        );
+        let unknown = requested_engine(Some("ppocr")).unwrap_err();
+        assert!(
+            unknown.starts_with("INTERN_OCR_ENGINE=\"ppocr\" is not indra, paddle or tesseract"),
+            "{unknown}"
+        );
     }
 
     /// The admission list and the router are two lists that must name the

@@ -26,10 +26,12 @@ use serde::{Deserialize, Serialize};
 use crate::extract::{ExtractedPage, OcrLine, OcrResult, PageSource, PdfPageInspection};
 
 mod geometry;
+mod labelled;
 pub mod router;
 mod text;
 
 pub use geometry::{TextRun, analyze_runs, analyze_runs_within, crowding};
+use labelled::Labelled;
 pub use router::{NativePage, RouteSignals, measure_signals, route_page};
 pub(crate) use text::escape_cell;
 pub use text::{blocks_from_lines, blocks_from_text};
@@ -580,8 +582,10 @@ fn to_display_blocks(blocks: &mut [LayoutBlock], native: &NativePage) {
 pub const NOMINAL_UNITS_PER_PIXEL: f64 = UNITS_PER_POINT * 72.0 / 300.0;
 
 /// A page read by OCR: its blocks are built from the engine's lines by the
-/// same analysis native pages get, and its text is those blocks in reading
-/// order, as a page rebuilt from its geometry reads. An engine's own text
+/// same analysis native pages get - or, from an engine that lays the page
+/// out itself (Indra OCR), are its own blocks in its own reading order,
+/// with its labels as their kinds ([`labelled`]) - and its text is those
+/// blocks in reading order, as a page rebuilt from its geometry reads. An engine's own text
 /// runs an unruled table down its columns or across a row of boxes, and
 /// pairs no label with its value; on InternBench's scans, reading the
 /// blocks instead took labelled values from 90% to 99% with every table
@@ -636,8 +640,10 @@ pub fn ocr_layout(
 }
 
 /// [`ocr_layout`], and whether its blocks were built from the reading's
-/// lines. A reading with no lines, or one past the analysis's bounds, has
-/// blocks built from its text instead.
+/// lines - by the engine's own layout when it gives one that accounts for
+/// every line, by the geometric analysis otherwise. A reading with no
+/// lines, or one past the analysis's bounds, has blocks built from its
+/// text instead.
 fn ocr_layout_of(
     reading: &OcrResult,
     size: (u32, u32),
@@ -656,17 +662,23 @@ fn ocr_layout_of(
     let analysed = if reading.lines.is_empty() {
         None
     } else {
-        let runs = reading
-            .lines
-            .iter()
-            .map(|line| TextRun {
-                text: line.text.clone(),
-                bbox: line.bbox.map(to_units),
-                bold: false,
-                confidence: Some(line.confidence),
-            })
-            .collect::<Vec<_>>();
-        analyze_runs_within(&runs, width, height, &[], TextSource::Ocr, stop)
+        match labelled::labelled_blocks(reading, &to_units, width, height, stop) {
+            Labelled::Blocks(blocks) => Some(blocks),
+            Labelled::Stopped => None,
+            Labelled::Absent => {
+                let runs = reading
+                    .lines
+                    .iter()
+                    .map(|line| TextRun {
+                        text: line.text.clone(),
+                        bbox: line.bbox.map(to_units),
+                        bold: false,
+                        confidence: Some(line.confidence),
+                    })
+                    .collect::<Vec<_>>();
+                analyze_runs_within(&runs, width, height, &[], TextSource::Ocr, stop)
+            }
+        }
     };
     let from_lines = analysed.is_some();
     let blocks = analysed.unwrap_or_else(|| {

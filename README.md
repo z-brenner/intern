@@ -39,7 +39,9 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
-document information. The model file is 1.19 GiB, the text model and nothing
+document information. OCR sends nothing: Indra OCR, PP-OCR and Tesseract run
+inside the parser worker from models installed with the app, and make no
+network request. The model file is 1.19 GiB, the text model and nothing
 else. The update check asks only "is there a newer, signed build"; untick
 **Check for updates automatically** in Settings and only the button asks. A
 found update is never installed by the check itself: installing is always a
@@ -421,8 +423,10 @@ results.
 ## Windows runtime assets and installer
 
 From PowerShell on Windows, fetch the exact llama.cpp b10361, PDFium
-chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model
-assets ([OCR](docs/ocr.md) says which models and why):
+chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0, Indra OCR's
+models (`datalab-to/indra-ocr` v1.1.0, 24.7 MB) and the PP-OCR models
+([OCR](docs/ocr.md) says which models and why, and what they add to the
+install):
 
 ```powershell
 cargo build --locked -p intern-worker --release --features windows-native
@@ -446,7 +450,10 @@ Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 ```
 
 The installer includes third-party notices and the generated `licenses/`
-inventory but never includes `.gguf` model files. Local model weights are
+inventory but never includes `.gguf` model files. Indra OCR's model files are
+under their own license, a modified AI Pubs Open RAIL-M license with use
+restrictions, installed as `licenses/indra-ocr-models-LICENSE.txt` and
+summarised in `THIRD_PARTY_NOTICES.md`. Local model weights are
 installed separately under the user's local application data only after explicit
 setup.
 
