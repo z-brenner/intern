@@ -45,7 +45,7 @@ use super::page::{
     rotate_page, turn, unrotate_box,
 };
 use super::rec::{
-    LM_GATE, LineLm, LineOutputs, crop_geometry, crop_line, is_dark_line, pad_batch, read_line,
+    LineLm, LineOutputs, crop_geometry, crop_line, is_dark_line, pad_batch, read_line,
     width_batches,
 };
 use super::types::{BlockClass, DetBox, Gray, OrderOutputs, PageReading, RecLine, TokenKind};
@@ -389,10 +389,17 @@ impl IndraOcr {
             .iter()
             .map(|bbox| crop_geometry(bbox, 1).width)
             .collect();
+        // meta.json may tune the base recognizer's search; it does not for
+        // the pinned models, which leaves the pipeline's defaults.
+        let (alpha, beta, gate) = meta.lm_settings("base");
         let lm = LineLm {
             lm: &self.shared.lm,
-            params: BeamParams::default(),
-            gate: LM_GATE,
+            params: BeamParams {
+                alpha,
+                beta,
+                ..BeamParams::default()
+            },
+            gate,
         };
         let classes = meta.vocab.chars.len() + 1;
         let mut lines: Vec<Option<RecLine>> = vec![None; boxes.len()];

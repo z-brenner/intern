@@ -16,9 +16,8 @@ use super::vocab::Vocab;
 pub const MIN_CONF: f32 = 0.5;
 
 /// The base recognizer's lines are searched again under the language model
-/// when their greedy confidence is at least [`MIN_CONF`] and below this
-/// (`LM_GATE`).
-pub const LM_GATE: f64 = 0.9;
+/// when their greedy confidence is at least [`MIN_CONF`] and below this.
+pub use super::beam::LM_GATE;
 
 /// The band crop's height (`meta.rec_height`, `LINE_HEIGHT`).
 pub const LINE_HEIGHT: usize = 32;
