@@ -341,10 +341,20 @@ fn labels_another_date(window: &str) -> bool {
 /// are stepped over - so "This Lease, including any renewal, commences on"
 /// is a commencement, not a renewal date.
 pub(crate) fn labels_a_deadline(window: &str) -> bool {
-    window
+    let mut words = window
         .split(|character: char| !character.is_alphanumeric())
         .filter(|word| !word.is_empty())
-        .rev()
+        .rev();
+    // "No later than July 22, 2026" and "not later than" set a limit by
+    // definition: the day something must happen by, never the day the
+    // document was written. Read whole, so "later than expected" is not.
+    let mut last_three = words.clone().take(3);
+    if let (Some("than"), Some("later"), Some("no" | "not")) =
+        (last_three.next(), last_three.next(), last_three.next())
+    {
+        return true;
+    }
+    words
         .find(|word| !LABEL_FILLERS.contains(word))
         .is_some_and(|word| DEADLINE_LABELS.contains(&word))
 }
@@ -1142,6 +1152,8 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
             "expiry: ",
             "renewal date: ",
             "deadline: ",
+            "demands payment in full no later than ",
+            "must be received not later than ",
         ] {
             assert!(labels_a_deadline(deadline), "{deadline}");
         }
@@ -1153,6 +1165,8 @@ Invoice Date: 04/30/2025    Due Date: 05/30/2025",
             "tax return date: ",
             "this lease, including any renewal, commences on ",
             "the due diligence report is dated ",
+            "delivered later than ",
+            "no sooner than ",
             "",
         ] {
             assert!(!labels_a_deadline(not_a_deadline), "{not_a_deadline}");

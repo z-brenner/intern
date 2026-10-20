@@ -49,8 +49,10 @@ memory was 1.96 GB against Qwen's 2.21 GB; 2B's was 0.94 GB.
   controlling signature date. Shared engine composition still truncates
   "square feet" and overstates conditional effective dates. The review flow
   stays as it is, and nothing routes between the two models.
-- **Intern's own corpus and InternBench score 4B below Qwen on filenames
-  and dates** (tables below). On the corpus, recorded live on Linux
+- **As recorded, Intern's own corpus and InternBench scored 4B below Qwen on
+  filenames and dates** (tables below); deterministic checks added since
+  close most of that gap and leave 4B with fewer trap dates and
+  wrong-but-ready names than Qwen had ("Deterministic checks" below). On the corpus, recorded live on Linux
   (below), Bonsai 4B named 9 of 18 corpus fixtures exactly right against
   Qwen's 13, and 16 of 19 party sets against 18. Its losses: a type that
   absorbs the effective date ("Lease Agreement Effective September 1 2024",
@@ -118,6 +120,48 @@ filenames ready. Thirty documents lost at least one reviewed score and
 85 scores improved; the commit that records it lists them. Its median
 document took 65.5 s here (2 threads, Linux, on a machine shared with other
 work), so do not read it as a laptop figure.
+
+### Deterministic checks added for what Bonsai got wrong
+
+The tables above are the replies as recorded. Each of Bonsai 4B's trap
+dates and wrong-but-ready filenames was traced to a check the engine
+should have made and did not; these were added to validation (`facts.rs`,
+`infer.rs`), not to the prompt, which stays byte-identical to the evaluated
+profile. Each rule reads the document's own text and names no fixture.
+Measured by replaying the same recordings - Bonsai's and, through
+`--allow-stale --allow-other-model`, Qwen's - before and after:
+
+| Rule | Documents it changes |
+| --- | --- |
+| "No later than" / "not later than" before a date makes it a deadline | `demand-letter` (Bonsai): trap date 2026-07-22 withheld, sent to review |
+| A date in a table cell whose column (or row) label names another event - coverage, a requested effective date, birth, hire, due, delivery - is not the document's; the one date a column names as its own ("Date signed", "Date") replaces it, else it is withheld. New reason `DATE_IS_OTHER_KIND` | `scan-patient-intake-form` (Bonsai): trap 2026-01-01 withheld, review. `benefits-change-checkbox-form` (Bonsai): trap 2026-07-01 replaced by the signed date 2026-06-29, review. An earlier draft that treated any non-issue label as "other" also hit `purchase-order` ("PO Date") and `field-condition-report` ("Date of examination") in both models; it now requires a label naming another event, and neither changes |
+| A date stated only in signature blocks, or cited only from them, is a signing date: it gives way to a single stated effective date, else to a single "Date of this ..." date; an agreement or amendment's earlier signature gives way to the latest | `sow-under-msa-5p` (Bonsai): 2026-06-01 -> 2026-05-26, now right. `industrial-lease-dated-in-schedule-25p` (Bonsai): 2026-04-16 -> 2026-04-14, right. `mixed-signature-region` (Bonsai and Qwen): 2026-08-18 -> 2026-08-21, right for Bonsai; Qwen's date is fixed, its parties are still wrong |
+| A type loses a date phrase ("Effective September 1 2024", a leading "2025") or a trailing document number ("PS-311", "DR-771", "#10422") written into it, when a kind is left | corpus `scanned-lease.pdf`, `rotated-low-resolution-scan.png`, `document-image.jpg` (Bonsai): filenames now right. `annual-report-excerpt-8p`: "2025 Annual Report" -> "Annual Report" |
+| A bare "Letter", "Document" or "Agreement" is no type ("Never ... alone"): review (`TYPE_MISSING`) | `engagement-letter` (Bonsai): wrong ready name -> review. `agreement-two-column-footnotes` (Qwen): wrong ready name -> review |
+| An audience or a body - "Fellow Shareholders", "Board of Directors", "Human Resources" - is no party: dropped, review (`PARTY_UNSUPPORTED`) | `annual-report-excerpt-8p` (Bonsai): issuer now Rookwood Precision Metals Corporation and the filename right, but sent to review (a needless review). `board-resolution` (Bonsai): wrong ready name -> review. `benefits-change-checkbox-form`: party now Annika Solberg-Reyes, filename right, review (its date rule sends it there anyway) |
+| A type ending "of [the] <filename party>" drops it | `newsletter-three-column` (Bonsai): "Newsletter of the ... Association for ... Association" -> "Newsletter for ... Association"; still not the gold's "from" |
+
+After them, replaying the same recordings:
+
+| Score | Qwen3.5-2B before | Qwen3.5-2B after | Bonsai 4B before | Bonsai 4B after |
+| --- | ---: | ---: | ---: | ---: |
+| InternBench filename right | 54/77 | 54/77 | 50/77 | 55/77 |
+| InternBench date right | 75/77 | 76/77 | 70/77 | 74/77 |
+| InternBench trap dates filed | 1 | 0 | 6 | 0 |
+| InternBench wrong filename marked ready | 15 | 14 | 21 | 12 |
+| InternBench needless review | 2 | 2 | 5 | 7 |
+| InternBench routing right | 44/57 | 43/57 | 45/57 | 40/57 |
+| Corpus filename right | 13/18 | 13/18 | 9/18 | 12/18 |
+
+Routing falls because five documents whose filenames are wrong, or
+dated by a withheld trap, now go to review where the gold expected a
+ready one, and two right filenames go to review with them (the needless
+reviews above). The digest pipeline's replay is unchanged. Still wrong
+and ready for Bonsai: role confusions the text cannot settle on its own
+(a vendor form for the county that issues it, a loss notice from the
+insurer, a certificate for its broker), a product name in a type, a
+committee and a journal entry read as parties, and the generic-audience
+and relation cases above.
 
 These two tables were recorded with the routing worker (PP-OCR) on Linux;
 they are re-recorded with the Indra OCR worker before this ships, and the

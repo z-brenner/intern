@@ -69,8 +69,8 @@ use crate::phrases::{
 use crate::retrieve::EvidenceContext;
 use crate::validate::{
     GENERIC_CAPITALS, READY_CONFIDENCE, current_year, date_is_tainted, deadline_fires,
-    effective_alternates, first_unsupported_claim, issue_date_alternates, push,
-    reading_is_unsettled, validate_description, year_is_plausible,
+    effective_alternates, first_unsupported_claim, issue_date_alternates, own_date_alternates,
+    push, reading_is_unsettled, validate_description, year_is_plausible,
 };
 
 /// Share of a subject's distinct significant words its cited units must
@@ -427,6 +427,23 @@ pub fn validate_facts_at(
     if !type_supported {
         push(&mut reasons, ReviewReason::TypeUnsupported);
     }
+    // A type names a kind of document, not when it was made or which one
+    // it is: "Lease Agreement Effective September 1 2024" is a Lease
+    // Agreement, "Packing Slip PS-311" a Packing Slip. The date and the
+    // number are facts of their own, and in the type they repeat in the
+    // filename - or stand in for the filename's date - so they are cut.
+    if let Some(trimmed) = document_type.as_deref().and_then(without_date_or_number) {
+        document_type = Some(trimmed);
+    }
+    // "Never 'Document', 'Agreement' or 'Letter' alone": a bare generic
+    // word that no title of the document completed names no kind a person
+    // could file by, so it is no type of its own.
+    if document_type
+        .as_deref()
+        .is_some_and(|value| matches!(normalize(value).trim(), "letter" | "document" | "agreement"))
+    {
+        push(&mut reasons, ReviewReason::TypeMissing);
+    }
     if document_type.is_none() {
         match title_of(scope) {
             Some((inferred, line)) => {
@@ -528,6 +545,37 @@ pub fn validate_facts_at(
             }
         }
     }
+    // A date that stands in a table under a column that names another kind
+    // of date - "Coverage effective", "Requested effective date", "Date of
+    // birth" - is that date, not the document's. Only a date every
+    // statement of which is such a cell is turned away; the one date a
+    // column or a row label names as the document's own ("Date signed",
+    // "Date", "Invoice Date") replaces it, and with none or several it is
+    // withheld for a person to choose.
+    if !replaced
+        && let Some(date) = document_date.clone()
+        && dated_by_another_column(
+            scope.index,
+            &date,
+            DocumentClass::of(document_type.as_deref()),
+        )
+    {
+        push(&mut reasons, ReviewReason::DateIsOtherKind);
+        match own_column_dates(scope, &date).as_slice() {
+            [(alternate, line, signed)] => {
+                document_date = Some(alternate.clone());
+                date_role = signed.then_some(DateRole::Execution);
+                date_line = Some(line.clone());
+                replaced = true;
+            }
+            _ => {
+                document_date = None;
+                date_role = None;
+                date_line = None;
+                withheld_as_deadline = true;
+            }
+        }
+    }
     // A signed-on date loses to a stated effective or start date: an
     // agreement or a form takes effect when it says it does, not on the day
     // it was signed. Only the one effective date both views agree on
@@ -544,7 +592,13 @@ pub fn validate_facts_at(
             .then(|| infer_date_role(&scope.view(&cited), &date, document_type.as_deref()))
             .flatten()
             .or_else(|| infer_date_role(context, &date, document_type.as_deref()));
-        if wording == Some(DateRole::Execution)
+        // A date the document states only in its signature blocks, or that
+        // the reply cites only from them, is a signing date whatever its
+        // label says: "Date: June 1, 2026" under a signatory's name.
+        let signed = wording == Some(DateRole::Execution)
+            || only_in_signatures(scope.index, &date)
+            || (!cited.is_empty() && cited.iter().all(|unit| unit.features.position.signature));
+        if signed
             && let Some((alternate, line)) = single_agreed(
                 effective_alternates(context, &date),
                 effective_alternates(document, &date),
@@ -554,7 +608,37 @@ pub fn validate_facts_at(
             date_role = Some(DateRole::Effective);
             date_line = Some(line);
             replaced = true;
+        } else if signed
+            && let Some((alternate, line)) = single_agreed(
+                own_date_alternates(context, &date),
+                own_date_alternates(document, &date),
+            )
+        {
+            // "Date of this Lease: April 14, 2026": the date the document
+            // says it bears, apart from when each party signed it.
+            document_date = Some(alternate);
+            date_role = None;
+            date_line = Some(line);
+            replaced = true;
         }
+    }
+    // An agreement is made when its last party signs it. A signing date
+    // with a later one in the document's other signature blocks - and no
+    // stated effective date, which would have replaced it above - gives
+    // way to the latest.
+    if !replaced
+        && matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Agreement | DocumentClass::Amendment
+        )
+        && let Some(date) = document_date.clone()
+        && only_in_signatures(scope.index, &date)
+        && let Some((latest, line)) = latest_signature_date(scope, &date)
+    {
+        document_date = Some(latest);
+        date_role = Some(DateRole::Execution);
+        date_line = Some(line);
+        replaced = true;
     }
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
@@ -597,6 +681,14 @@ pub fn validate_facts_at(
         // A first name on its own is never a party: one word, not an
         // initialism, with nothing that makes it an organisation.
         if is_first_name_alone(name) {
+            support.parties.push(Support::Unsupported);
+            parties_supported = false;
+            continue;
+        }
+        // An audience or a body of a party - "Fellow Shareholders", "Board
+        // of Directors", "Human Resources" - is no party: it names who
+        // reads or acts, never which organisation or person it is.
+        if is_audience(name) {
             support.parties.push(Support::Unsupported);
             parties_supported = false;
             continue;
@@ -1068,7 +1160,11 @@ pub fn validate_facts_at(
     // A title too long to name both sides loses what follows its kind's
     // "and" - a "Settlement Agreement and Mutual Release" is a Settlement
     // Agreement - before the filename loses a party to fit.
+    // A type that names a filename party - "Newsletter of the Saltmarsh
+    // Point Homeowners Association" from that association - says it twice
+    // once the party follows it; the kind is what is left.
     let document_type = document_type
+        .map(|value| without_party(&value, &relation.parties).unwrap_or(value))
         .map(|value| fit_type(&value, &relation, document_date.as_deref()).unwrap_or(value));
 
     let party_lines = relation
@@ -1560,6 +1656,181 @@ fn scope_name(context: bool, document: bool) -> String {
 
 /// The one alternate both views agree on, when each has exactly one and it
 /// is the same date: a replacement neither view would dispute.
+/// True when every unit that states `date` stands in or just after a
+/// signature block, and one does.
+fn only_in_signatures(index: &EvidenceIndex, date: &str) -> bool {
+    let mut stated = false;
+    for unit in index.units() {
+        if unit.running || date_match_positions(date, &unit.normalized).is_empty() {
+            continue;
+        }
+        if !unit.features.position.signature {
+            return false;
+        }
+        stated = true;
+    }
+    stated
+}
+
+/// The latest date later than `date` that the document states only in its
+/// signature blocks, with its line.
+fn latest_signature_date(scope: &ValidationScope<'_>, date: &str) -> Option<(String, String)> {
+    let mut latest: Option<(String, String)> = None;
+    for unit in scope.index.units() {
+        if unit.running || !unit.features.position.signature {
+            continue;
+        }
+        for candidate in stated_dates(&scope.view(&[unit])) {
+            if candidate.as_str() > date
+                && latest
+                    .as_ref()
+                    .is_none_or(|(kept, _)| candidate.as_str() > kept.as_str())
+                && only_in_signatures(scope.index, &candidate)
+            {
+                let line = line_where(unit, |line| {
+                    !date_match_positions(&candidate, line).is_empty()
+                })
+                .unwrap_or_else(|| unit.text.trim().to_owned());
+                latest = Some((candidate, line));
+            }
+        }
+    }
+    latest
+}
+
+/// A table row's cells, without the outer bars.
+fn table_cells(text: &str) -> Vec<&str> {
+    let trimmed = text.trim();
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    inner.split('|').map(str::trim).collect()
+}
+
+/// The label a table names a date in `unit` by, and the index of its cell:
+/// the row's own label when the row is `| Label | value |`, else the header
+/// cell over the date's column. `None` when the unit is no table row, the
+/// date is not in one cell of it, or no label can be told.
+fn column_label<'u>(
+    index: &'u EvidenceIndex,
+    unit: &'u EvidenceUnit,
+    date: &str,
+) -> Option<String> {
+    if unit.kind != UnitKind::TableRow {
+        return None;
+    }
+    let cells = table_cells(&unit.normalized);
+    let at = cells
+        .iter()
+        .position(|cell| !date_match_positions(date, cell).is_empty())?;
+    // A form's table repeats its headers down the page, each over the row
+    // it labels: the row just above, when it is a row of labels - the same
+    // shape, in the same block, without a digit - is this row's header.
+    // Else a `| Label | value |` row labels itself, and otherwise the
+    // table's own header row labels it.
+    let above = unit
+        .ordinal
+        .checked_sub(1)
+        .and_then(|ordinal| index.units().get(ordinal as usize))
+        .filter(|above| {
+            matches!(above.kind, UnitKind::TableRow | UnitKind::TableHeader)
+                && above.block_id == unit.block_id
+                && table_cells(&above.normalized).len() == cells.len()
+                && !above
+                    .normalized
+                    .chars()
+                    .any(|character| character.is_ascii_digit())
+        });
+    let header = match above {
+        Some(above) => above,
+        None if at > 0 && unit.label.is_some() && cells.len() == 2 => {
+            return Some(cells[0].to_owned());
+        }
+        None => index.units().get(unit.table_header? as usize)?,
+    };
+    let labels = table_cells(&header.normalized);
+    (labels.len() == cells.len() && date_match_positions(date, &header.normalized).is_empty())
+        .then(|| labels[at].to_owned())
+        .filter(|label| !label.is_empty())
+}
+
+/// Whether a column or row label names a date as the document's own: the
+/// day it was issued or signed ("Date", "Invoice Date", "Date signed").
+/// Returns whether it is a signing date when it is.
+fn names_its_own_date(label: &str) -> Option<bool> {
+    let signed = ["signed", "signature", "executed"]
+        .iter()
+        .any(|word| label.split_whitespace().any(|token| token == *word));
+    if signed {
+        return Some(true);
+    }
+    crate::infer::labels_the_issue_date(&format!("{label}: ")).then_some(false)
+}
+
+/// True when the document states `date` only in table cells whose column
+/// (or row) label names some other kind of date: a coverage, a requested
+/// effective date, a date of birth or hire. An agreement's own date is its
+/// effective date, so for an agreement or an amendment "effective" names
+/// nothing else.
+fn dated_by_another_column(index: &EvidenceIndex, date: &str, class: DocumentClass) -> bool {
+    let effective_is_other = !matches!(class, DocumentClass::Agreement | DocumentClass::Amendment);
+    let mut stated = false;
+    for unit in index.units() {
+        if unit.running || date_match_positions(date, &unit.normalized).is_empty() {
+            continue;
+        }
+        match column_label(index, unit, date) {
+            Some(label)
+                if names_its_own_date(&label).is_none()
+                    && names_another_event(&label, effective_is_other) =>
+            {
+                stated = true;
+            }
+            _ => return false,
+        }
+    }
+    stated
+}
+
+/// Whether a label names the date as some other event's, in so many
+/// words: "Coverage effective", "Date of birth", "Date of hire", "Requested
+/// effective date", "Due date", "Delivery date". A label that only says
+/// "date" - "PO Date", "Date of examination" - names nothing else, and the
+/// date under it is left as the model read it.
+fn names_another_event(label: &str, effective_is_other: bool) -> bool {
+    label.split_whitespace().any(|word| {
+        match word.trim_matches(|character: char| !character.is_alphanumeric()) {
+            "effective" => effective_is_other,
+            "coverage" | "birth" | "dob" | "hire" | "hired" | "expires" | "expiry"
+            | "expiration" | "due" | "renewal" | "deadline" | "qualifying" | "requested"
+            | "delivery" | "ship" | "shipped" | "start" | "end" => true,
+            _ => false,
+        }
+    })
+}
+
+/// The dates other than `date` that a table names as the document's own,
+/// each once with its row and whether it is a signing date.
+fn own_column_dates(scope: &ValidationScope<'_>, date: &str) -> Vec<(String, String, bool)> {
+    let mut found: Vec<(String, String, bool)> = Vec::new();
+    for unit in scope.index.units() {
+        if unit.kind != UnitKind::TableRow || unit.running {
+            continue;
+        }
+        for candidate in stated_dates(&scope.view(&[unit])) {
+            if candidate == date || found.iter().any(|(existing, _, _)| *existing == candidate) {
+                continue;
+            }
+            if let Some(signed) = column_label(scope.index, unit, &candidate)
+                .as_deref()
+                .and_then(names_its_own_date)
+            {
+                found.push((candidate, unit.text.trim().to_owned(), signed));
+            }
+        }
+    }
+    found
+}
+
 fn single_agreed(
     context: Vec<(String, String)>,
     document: Vec<(String, String)>,
@@ -2471,6 +2742,156 @@ fn unstated_names_lowered(subject: &str, scope: &ValidationScope<'_>) -> String 
 /// Whether a name is one capitalised word and nothing else - "Rowan",
 /// "Priya" - the way a note names a person by first name. An initialism
 /// ("IBM") or a word ending an organisation's name is not one.
+/// Whether a name is only an audience or a body within an organisation:
+/// every word of it one of [`AUDIENCE_WORDS`], the glue words aside.
+fn is_audience(name: &str) -> bool {
+    let words = normalize(name)
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty() && !GLUE_WORDS.contains(word))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    !words.is_empty()
+        && words
+            .iter()
+            .all(|word| AUDIENCE_WORDS.contains(&word.as_str()))
+}
+
+/// The words of an audience or of a body inside an organisation.
+const AUDIENCE_WORDS: &[&str] = &[
+    "fellow",
+    "dear",
+    "valued",
+    "all",
+    "shareholders",
+    "stockholders",
+    "unitholders",
+    "policyholders",
+    "investors",
+    "members",
+    "owners",
+    "partners",
+    "residents",
+    "tenants",
+    "customers",
+    "clients",
+    "employees",
+    "staff",
+    "team",
+    "board",
+    "directors",
+    "trustees",
+    "human",
+    "resources",
+    "department",
+    "whom",
+    "concern",
+    "it",
+    "may",
+];
+
+/// A type without the date or the document number written into it, when
+/// what is left still names a kind of document: "Lease Agreement Effective
+/// September 1 2024", "2025 Annual Report", "Packing Slip PS-311". `None`
+/// when there is nothing to cut, or cutting would leave no kind.
+fn without_date_or_number(value: &str) -> Option<String> {
+    const MONTHS: &[&str] = &[
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "jan",
+        "feb",
+        "mar",
+        "apr",
+        "jun",
+        "jul",
+        "aug",
+        "sep",
+        "sept",
+        "oct",
+        "nov",
+        "dec",
+    ];
+    const DATE_CUES: &[&str] = &["effective", "dated", "as", "of", "on"];
+    let bare = |token: &str| {
+        token
+            .trim_matches(|character: char| !character.is_alphanumeric())
+            .to_lowercase()
+    };
+    let is_year = |token: &str| {
+        let token = bare(token);
+        token.len() == 4
+            && token.chars().all(|character| character.is_ascii_digit())
+            && (token.starts_with("19") || token.starts_with("20"))
+    };
+    let starts_numeric = |token: &str| {
+        bare(token)
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+    };
+    let is_numeric_date = |token: &str| {
+        let token = bare(token);
+        token.chars().filter(|character| *character == '/').count() == 2
+            || (token.chars().filter(|character| *character == '-').count() == 2
+                && token
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '-'))
+    };
+    // A document number: up to four letters, an optional hyphen, at least
+    // three digits ("PS-311", "DR-771", "INV10422"), or "#" and a number.
+    let is_number = |token: &str| {
+        let token =
+            token.trim_matches(|character: char| matches!(character, ',' | '.' | ';' | ':'));
+        if let Some(rest) = token.strip_prefix('#') {
+            return !rest.is_empty() && rest.chars().all(|character| character.is_ascii_digit());
+        }
+        let letters = token.chars().take_while(char::is_ascii_alphabetic).count();
+        let rest = token[letters..]
+            .strip_prefix('-')
+            .unwrap_or(&token[letters..]);
+        (1..=4).contains(&letters)
+            && rest.len() >= 3
+            && rest.chars().all(|character| character.is_ascii_digit())
+    };
+    let tokens = value.split_whitespace().collect::<Vec<_>>();
+    let mut kept = tokens.clone();
+    // A leading year: "2025 Annual Report".
+    while kept.len() > 1 && is_year(kept[0]) {
+        kept.remove(0);
+    }
+    // The first date in it, and the cue words that introduce it.
+    let cut = (0..kept.len()).find(|&at| {
+        is_year(kept[at])
+            || is_numeric_date(kept[at])
+            || (MONTHS.contains(&bare(kept[at]).as_str())
+                && (kept.get(at + 1).is_some_and(|next| starts_numeric(next))
+                    || (at > 0 && starts_numeric(kept[at - 1]))))
+    });
+    if let Some(mut at) = cut {
+        if at > 0 && starts_numeric(kept[at - 1]) && !is_year(kept[at]) {
+            at -= 1;
+        }
+        while at > 0 && DATE_CUES.contains(&bare(kept[at - 1]).as_str()) {
+            at -= 1;
+        }
+        kept.truncate(at);
+    }
+    while kept.len() > 1 && kept.last().is_some_and(|token| is_number(token)) {
+        kept.pop();
+    }
+    (kept.len() < tokens.len() && !kept.is_empty() && has_a_kind(&words(&kept.join(" "))))
+        .then(|| kept.join(" "))
+}
+
 fn is_first_name_alone(name: &str) -> bool {
     let mut parts = name.split_whitespace();
     let (Some(word), None) = (parts.next(), parts.next()) else {
@@ -2841,6 +3262,36 @@ const EXTENSION_ROOM: usize = 6;
 /// them: a compound title's first part when that part is itself a kind of
 /// document ("Settlement Agreement" of "Settlement Agreement and Mutual
 /// Release"). `None` when the name fits or there is no such part.
+/// `document_type` without a trailing "of [the] <party>", "for <party>" or
+/// "from <party>" naming one of `parties`, when what is left still names a
+/// kind of document.
+fn without_party(document_type: &str, parties: &[String]) -> Option<String> {
+    let typed = normalize_loosely(document_type);
+    for party in parties {
+        let name = normalize_loosely(party);
+        if name.is_empty() || !typed.ends_with(&name) {
+            continue;
+        }
+        let head = typed[..typed.len() - name.len()].trim_end();
+        let head = head.strip_suffix(" the").unwrap_or(head).trim_end();
+        let Some(kind) = ["of", "for", "from", "by"]
+            .iter()
+            .find_map(|joint| head.strip_suffix(joint).map(str::trim_end))
+        else {
+            continue;
+        };
+        let kept = document_type
+            .split_whitespace()
+            .take(kind.split_whitespace().count())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !kept.is_empty() && has_a_kind(&words(&kept)) {
+            return Some(kept);
+        }
+    }
+    None
+}
+
 fn fit_type(document_type: &str, relation: &Relation, date: Option<&str>) -> Option<String> {
     let [first, second] = relation.parties.as_slice() else {
         return None;
@@ -3902,6 +4353,271 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
                 .as_deref(),
             Some("both")
         );
+    }
+
+    /// "No later than" sets a deadline: the date is never the letter's,
+    /// and with no date the letter labels as its own it goes to a person.
+    #[test]
+    fn a_date_set_no_later_than_is_a_deadline() {
+        let index = index_of(
+            "DEMAND FOR PAYMENT\n\n\
+             To: Fernvale Cider Works LLC\n\n\
+             Highmeadow Orchard Supply Co. demands payment of $28,703.00 in full no later than July 22, 2026.",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Demand for Payment".into()),
+            type_evidence: vec![id_of(&index, "DEMAND FOR PAYMENT")],
+            document_date: Some("2026-07-22".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(&index, "no later than")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(outcome.reasons.contains(&ReviewReason::DateIsDeadline));
+        assert_eq!(outcome.proposal.document_date, None);
+    }
+
+    const INTAKE_FORM: &str = "NEW PATIENT INTAKE FORM\n\n\
+| Full legal name | Date of birth |\n\
+| Ione Kowalczyk | 11/23/1990 |\n\n\
+| Subscriber | Coverage effective | Copay |\n\
+| Self | 01/01/2026 | $30.00 |\n\n\
+| Patient signature | Date signed |\n\
+| /s/ Ione Kowalczyk | 08/27/2026 |";
+
+    fn intake_facts(index: &EvidenceIndex, date: &str, cited: &str) -> ModelFacts {
+        ModelFacts {
+            document_type: Some("New Patient Intake Form".into()),
+            type_evidence: vec![id_of(index, "NEW PATIENT INTAKE FORM")],
+            document_date: Some(date.into()),
+            date_role: Some(DateRole::Issuance),
+            date_evidence: vec![id_of(index, cited)],
+            parties: vec![party(
+                "Ione Kowalczyk",
+                Some(PartyRole::Other),
+                &[id_of(index, "| Ione Kowalczyk")],
+            )],
+            ..ModelFacts::default()
+        }
+    }
+
+    /// A date under a column that names another event is that event's: it
+    /// gives way to the one date a column names as the document's own, and
+    /// the document goes to a person, who is told why.
+    #[test]
+    fn a_date_in_a_column_naming_another_event_is_not_the_documents() {
+        let index = index_of(INTAKE_FORM);
+        let outcome = check(
+            intake_facts(&index, "2026-01-01", "| Self"),
+            &whole(&index),
+            &index,
+        );
+        assert!(outcome.reasons.contains(&ReviewReason::DateIsOtherKind));
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-27")
+        );
+        // The signed date itself is simply accepted.
+        let outcome = check(
+            intake_facts(&index, "2026-08-27", "/s/ Ione"),
+            &whole(&index),
+            &index,
+        );
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsOtherKind));
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-27")
+        );
+    }
+
+    /// "PO Date", "Date of examination": a column that only says "date"
+    /// names nothing else, and its date stands.
+    #[test]
+    fn a_column_that_only_says_date_names_no_other_event() {
+        let index = index_of(
+            "PURCHASE ORDER\n\nLamplighter Robotics Inc.\n\n\
+             | PO Number | PO Date | Buyer |\n\
+             | LR-PO-260117 | January 29, 2026 | Juniper Okonkwo |",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Purchase Order".into()),
+            type_evidence: vec![id_of(&index, "PURCHASE ORDER")],
+            document_date: Some("2026-01-29".into()),
+            date_role: Some(DateRole::Issuance),
+            date_evidence: vec![id_of(&index, "LR-PO-260117")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(!outcome.reasons.contains(&ReviewReason::DateIsOtherKind));
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-01-29")
+        );
+    }
+
+    const SIGNED_SOW: &str = "STATEMENT OF WORK\n\n\
+Thornbury Data Labs LLC and Saltmarsh Regional Water Authority agree to the work below.\n\n\
+This SOW is effective as of May 26, 2026 (the \"SOW Effective Date\").\n\n\
+IN WITNESS WHEREOF, the parties have signed this Statement of Work.\n\n\
+Thornbury Data Labs LLC\nBy: /s/ Ada Quill\nName: Ada Quill\nTitle: Director\nDate: June 1, 2026";
+
+    /// A date stated only in a signature block is a signing date, whatever
+    /// its label, and gives way to the stated effective date.
+    #[test]
+    fn a_signature_blocks_date_gives_way_to_the_stated_effective_date() {
+        let index = index_of(SIGNED_SOW);
+        let parties_line = id_of(&index, "agree to the work");
+        let facts = ModelFacts {
+            document_type: Some("Statement of Work".into()),
+            type_evidence: vec![id_of(&index, "STATEMENT OF WORK")],
+            document_date: Some("2026-06-01".into()),
+            date_role: Some(DateRole::Execution),
+            date_evidence: vec![id_of(&index, "Date: June 1")],
+            parties: vec![
+                party(
+                    "Thornbury Data Labs LLC",
+                    Some(PartyRole::Contractor),
+                    &[parties_line.clone()],
+                ),
+                party(
+                    "Saltmarsh Regional Water Authority",
+                    Some(PartyRole::Client),
+                    &[parties_line],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-05-26")
+        );
+        assert_eq!(outcome.proposal.date_role, Some(DateRole::Effective));
+    }
+
+    /// An agreement is made when its last party signs it: an earlier
+    /// signature's date gives way to the latest, when no effective date is
+    /// stated.
+    #[test]
+    fn an_earlier_signature_gives_way_to_the_last() {
+        let index = index_of(
+            "FIRST AMENDMENT TO SOFTWARE LICENSE AGREEMENT\n\n\
+             Corvane Analytics Inc. and Pellworth County Water Authority amend the license as follows.\n\n\
+             IN WITNESS WHEREOF, the parties have signed this Amendment.\n\n\
+             Corvane Analytics Inc.\nBy: /s/ Rosalind Achterberg\nTitle: President\nDate: August 18, 2026\n\n\
+             Pellworth County Water Authority\nBy: /s/ Barnaby Quist\nTitle: Director\nDate: August 21, 2026",
+        );
+        let parties_line = id_of(&index, "amend the license");
+        let facts = ModelFacts {
+            document_type: Some("First Amendment to Software License Agreement".into()),
+            type_evidence: vec![id_of(&index, "FIRST AMENDMENT")],
+            document_date: Some("2026-08-18".into()),
+            date_role: Some(DateRole::Amendment),
+            date_evidence: vec![id_of(&index, "Date: August 18")],
+            parties: vec![
+                party(
+                    "Corvane Analytics Inc.",
+                    Some(PartyRole::Licensor),
+                    &[parties_line.clone()],
+                ),
+                party(
+                    "Pellworth County Water Authority",
+                    Some(PartyRole::Licensee),
+                    &[parties_line],
+                ),
+            ],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+    }
+
+    #[test]
+    fn a_type_loses_the_date_and_the_number_written_into_it() {
+        for (value, kept) in [
+            (
+                "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+                Some("LEASE AGREEMENT"),
+            ),
+            (
+                "Lease Agreement dated March 3, 2025",
+                Some("Lease Agreement"),
+            ),
+            ("2025 Annual Report", Some("Annual Report")),
+            ("Annual Report 2025", Some("Annual Report")),
+            ("PACKING SLIP PS-311", Some("PACKING SLIP")),
+            ("Delivery Receipt DR-771", Some("Delivery Receipt")),
+            ("Invoice #10422", Some("Invoice")),
+            // Nothing to cut, or nothing would be left.
+            ("Form W-9", None),
+            ("Form 10-K", None),
+            ("May Newsletter", None),
+            ("Statement of Work", None),
+            ("Q2 2026", None),
+        ] {
+            assert_eq!(without_date_or_number(value).as_deref(), kept, "{value}");
+        }
+    }
+
+    #[test]
+    fn an_audience_is_no_party() {
+        for audience in [
+            "Fellow Shareholders",
+            "Board of Directors",
+            "Human Resources -",
+            "To Whom It May Concern",
+        ] {
+            assert!(is_audience(audience), "{audience}");
+        }
+        for party in [
+            "Rookwood Precision Metals Corporation",
+            "The Fictional Meridian Committee",
+            "Board of Trade of the City of Chicago, Inc.",
+            "Staffing Partners LLC",
+        ] {
+            assert!(!is_audience(party), "{party}");
+        }
+    }
+
+    #[test]
+    fn a_type_that_names_a_filename_party_loses_it() {
+        let parties = vec!["Saltmarsh Point Homeowners Association".to_owned()];
+        assert_eq!(
+            without_party(
+                "Newsletter of the Saltmarsh Point Homeowners Association",
+                &parties
+            )
+            .as_deref(),
+            Some("Newsletter")
+        );
+        assert_eq!(without_party("Newsletter", &parties), None);
+        assert_eq!(
+            without_party("Bylaws of Another Association", &parties),
+            None
+        );
+    }
+
+    /// "Never Letter alone": a bare generic word is no type a person could
+    /// file by, and goes to review.
+    #[test]
+    fn a_bare_letter_is_no_type() {
+        let index = index_of(
+            "January 9, 2026\n\nSilverbirch Ceramics Inc.\n\nThis letter confirms our engagement.\n\n\
+             Halloran Ostrowski CPAs LLP",
+        );
+        let facts = ModelFacts {
+            document_type: Some("Letter".into()),
+            type_evidence: vec![id_of(&index, "This letter")],
+            document_date: Some("2026-01-09".into()),
+            date_evidence: vec![id_of(&index, "January 9")],
+            ..ModelFacts::default()
+        };
+        let outcome = check(facts, &whole(&index), &index);
+        assert!(outcome.reasons.contains(&ReviewReason::TypeMissing));
+        assert_ne!(outcome.status, ProposalStatus::Ready);
     }
 
     const SOW_UNDER_MSA: &str = "STATEMENT OF WORK NO. 7\n\n\
