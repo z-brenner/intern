@@ -2446,6 +2446,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
+ "unicode-normalization",
+ "unicode-properties",
  "zip 4.6.1",
 ]
 
