@@ -73,6 +73,14 @@ SHA-256 of the pages the committed goldens were made from:
 | `intermediate/<page>/` | `dump_intermediates.py` | the decoded page; each network's inputs and outputs on its first call; `summary.json` with every call's shapes, the orientation probabilities and the beam searches run |
 | `lm_vectors.json` | `dump_lm_vectors.py` | beam-search cases (inputs and the chosen ids and steps) and `logp_keys` queries for each language model |
 | `onnx_dump.txt` | `dump_onnx.py` | every network's inputs, outputs and operators |
+| `imgops/` | `tests/fixtures/indra/imgops/generate.py` | the image operations' heavy goldens (resize, warp, skew, detector decode) |
+| `fixtures/` | the generators under `tests/fixtures/indra/{imgops,lm}/` | the committed stage-test fixtures made again; `diff -r` them against `crates/intern-worker/tests/fixtures/indra` |
+
+The order and assembly fixtures (`tests/fixtures/indra/order/`) replay the
+reference's assembly with their own tools in `order/tools/`.
+
+Regenerated with the pins above, every file listed here comes out identical
+to the one the port was developed against (the CLI's `timings` aside).
 
 `probe_recognizer.py MODEL_DIR IMAGE` prints the recognizer facts spec §1 and
 §6 rest on (time steps per width, padding and batch invariance).
