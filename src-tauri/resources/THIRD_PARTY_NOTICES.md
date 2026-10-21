@@ -173,6 +173,7 @@ transitive versions are pinned in the lockfiles.
 | unicode-normalization | Apache-2.0 OR MIT |
 | unicode-properties | Apache-2.0 OR MIT |
 | thiserror | Apache-2.0 OR MIT |
+| libm | MIT |
 | zip | MIT |
 | base64 | Apache-2.0 OR MIT |
 

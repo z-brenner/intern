@@ -375,8 +375,11 @@ pub fn rotation_matrix(cx: f64, cy: f64, degrees: f64) -> [f64; 6] {
     let cx = f64::from(cx as f32);
     let cy = f64::from(cy as f32);
     let angle = degrees * (std::f64::consts::PI / 180.0);
-    let alpha = angle.cos();
-    let beta = angle.sin();
+    // Not `f64::cos`/`sin`, which call the platform's C runtime: Windows'
+    // gives sin(-45 degrees) one place off glibc's, which OpenCV was
+    // measured with. libm's are the same everywhere.
+    let alpha = libm::cos(angle);
+    let beta = libm::sin(angle);
     [
         alpha,
         beta,

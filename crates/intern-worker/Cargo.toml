@@ -39,6 +39,9 @@ codepage = "=0.1.2"
 csv = "=1.4.0"
 encoding_rs = "=0.8.35"
 jiff = "=0.2.35"
+# The rotation's sine and cosine, the same on every platform: the C
+# runtimes' differ in the last place, and the deskew is held to OpenCV's.
+libm = "=0.2.16"
 mailparse = "=0.16.1"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
 pdfium-render = { version = "=0.9.3", optional = true, default-features = false, features = ["image_025", "pdfium_7881", "thread_safe"] }
