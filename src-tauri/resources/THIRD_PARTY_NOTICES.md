@@ -10,14 +10,24 @@ SHA-256-addressed inventory of native files bundled by the release build. `Cargo
 Language model weights are not part of the installer or GitHub release. When the
 user chooses local model setup, Intern downloads the separately licensed model
 files described by `model-manifest.json` directly to the user's local application
-data. The small OCR models listed below are different: they ship in the installer,
-under `ocr-models/`, because reading a scan must work offline from the first run.
+data: only the variant the user selected, by default Ternary Bonsai 2 4B
+(`prism-ml/Ternary-Bonsai-2-4B-gguf`, `Ternary-Bonsai-2-4B-PQ2_0.gguf` at revision
+`8d6557168168f91ea6697a4a49ed2ef622b53adb`), or on request Ternary Bonsai 2 2B
+(`prism-ml/Ternary-Bonsai-2-2B-gguf`, `Ternary-Bonsai-2-2B-PQ2_0.gguf` at revision
+`683f7be2629342a50987627b40881e54761a2430`). Both are licensed under the Apache
+License 2.0, copyright 2026-present Prism ML, Inc. Created using Bonsai by Prism ML.
+As their `NOTICE` files state, they are built from Qwen3.5-4B and Qwen3.5-2B,
+Copyright 2026 Alibaba Cloud, Apache-2.0 (the DFlash draft model the 4B notice
+also credits is a separate file Intern does not download). Sources: <https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf> and
+<https://huggingface.co/prism-ml/Ternary-Bonsai-2-2B-gguf>. The small OCR models listed below are different: they ship in the installer,
+under `indra-models/` and `ocr-models/`, because reading a scan must work offline
+from the first run.
 
 ## Native runtime assets
 
 | Component | Pinned source | License | Copyright / project |
 | --- | --- | --- | --- |
-| llama.cpp | `b10361`, Windows CPU x64 archive | MIT | llama.cpp contributors |
+| llama.cpp (PrismML-Eng fork, needed for Bonsai's PQ2_0 weights) | `prism-b10777-e3de715` (commit `e3de715222b2667c54a267441159a5729f11155e`), Windows CPU x64 archive | MIT | The ggml authors, llama.cpp contributors and PrismML |
 | PDFium binaries | `chromium/7881`, Windows x64 | BSD-3-Clause | The PDFium Authors / Chromium Authors |
 | Tesseract OCR | 5.5.2, built with vcpkg baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | Apache-2.0 | Tesseract OCR contributors |
 | tessdata_fast English and OSD data | commit `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | Tesseract OCR contributors |
@@ -27,10 +37,12 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 | PP-OCRv5 mobile text detection model (`ocr-models/text-detection.onnx`) | `PaddlePaddle/PP-OCRv5_mobile_det_onnx` at revision `e6f4fa85f00e168c862bc462aebca69eef9b3d3d` | Apache-2.0 | The PaddlePaddle Authors |
 | PP-OCRv5 mobile English text recognition model (`ocr-models/text-recognition.onnx`) and its character list, which is compiled into the parser worker | `PaddlePaddle/en_PP-OCRv5_mobile_rec_onnx` at revision `3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b` | Apache-2.0 | The PaddlePaddle Authors |
 | PP-LCNet document orientation model (`ocr-models/page-orientation.onnx`) | `PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx` at revision `7330ab7039123e46af2dc03154b9969aa412c61d` | Apache-2.0 | The PaddlePaddle Authors |
+| Indra OCR models: line detector, page orientation classifier, recognizer, reading-order and layout network, the recognizer's character language model, and their vocabularies (`indra-models/det.onnx`, `orient.onnx`, `rec.onnx`, `order.onnx`, `lm.npz`, `meta.json`) | `datalab-to/indra-ocr` at revision `a1283c4b42a273c09480ad50e71461daff50fcc7` (tag `v1.1.0`) | AI Pubs Open RAIL-M License, modified (see below) | Datalab |
 
 Sources:
 
-- <https://github.com/ggml-org/llama.cpp>
+- <https://github.com/PrismML-Eng/llama.cpp>, a fork of
+  <https://github.com/ggml-org/llama.cpp>
 - <https://pdfium.googlesource.com/pdfium/>
 - <https://github.com/bblanchon/pdfium-binaries>
 - <https://github.com/tesseract-ocr/tesseract>
@@ -41,6 +53,8 @@ Sources:
   <https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.30.0>
 - <https://github.com/PaddlePaddle/PaddleOCR> and
   <https://huggingface.co/PaddlePaddle>
+- <https://huggingface.co/datalab-to/indra-ocr> and
+  <https://github.com/datalab-to/indra>
 
 ONNX Runtime's own third-party notices are installed beside its license as
 `licenses/onnxruntime-ThirdPartyNotices.txt`. Intern loads ONNX Runtime from its
@@ -48,6 +62,69 @@ installation directory by absolute path and turns its telemetry off. The OCR
 models carry no license file of their own; the Apache License 2.0 text pinned
 from the PaddleOCR repository (release v3.7.0) is installed as
 `licenses/PaddleOCR-models-LICENSE.txt`.
+
+### Indra OCR
+
+The parser worker reads scans with a Rust reimplementation of the inference
+pipeline of Indra OCR (`indra-ocr` 1.1.2, <https://github.com/datalab-to/indra>
+at commit `0e96b93c6810f17cf8352acbb4487cc9e45b66d5`): its page orientation and
+skew search, line detection decoding, recognition and language-model rescoring,
+reading order, block assembly and table assembly follow that code's algorithms
+and constants, and the worker's `indra` module is distributed as a derivative
+of it. The Indra code is licensed under the Apache License 2.0; its license text is
+installed as `licenses/indra-LICENSE.txt`. None of the Indra Python code itself
+is shipped.
+
+The Indra OCR model files listed above are Datalab's, unchanged, and are licensed
+under the AI Pubs Open RAIL-M License (Version 0.1, March 2, 2023), as modified by
+Datalab. Its full text is installed as `licenses/indra-ocr-models-LICENSE.txt`
+and is the governing text; it is also at
+<https://huggingface.co/datalab-to/indra-ocr/blob/a1283c4b42a273c09480ad50e71461daff50fcc7/LICENSE>.
+In summary, and without replacing it:
+
+- **Grant.** A perpetual, worldwide, royalty-free copyright license to
+  reproduce, sublicense and distribute the model and derivatives of it, and a
+  patent license that ends for anyone who brings patent litigation over the
+  model (sections 2 and 3).
+- **Distribution conditions.** Anyone who distributes the model, or hosts it
+  for others, must include the use restrictions of Attachment A as an
+  enforceable provision of the agreement governing its use and tell recipients
+  they apply, give recipients a copy of the license, mark files they changed,
+  and keep the existing notices (section 4).
+- **Use restrictions (Attachment A).** The model, derivatives of it and its
+  output may not be used, reproduced, modified, created or distributed: in
+  violation of applicable law, or to infringe or misappropriate third-party
+  intellectual property rights; for any purpose by a person or entity (with its
+  employer or affiliated entity) that had more than US$20,000,000 of gross
+  revenue in the prior year, or has raised more than US$20,000,000 in total
+  equity or debt funding, except where the use is limited to personal use or
+  research; or for any purpose by a person or entity that provides any product
+  or service that competes with a product or service of Datalab or its
+  affiliates. The license points to <https://www.datalab.to/> for commercial and
+  broader licenses.
+- **Users bound.** Everyone who uses the model must be required to comply with
+  the use restrictions (section 5).
+- **Output.** Datalab claims no rights in the output except as the license sets
+  out, and the user is responsible for it; no use of the output may contravene
+  the license (section 6).
+- **Attribution.** In connection with any output, use or distribution, give
+  appropriate credit to Datalab, link to the original model, provide a copy of
+  the license, and identify any changes, without suggesting endorsement
+  (section 7). The models Intern ships are Datalab's Indra OCR, from
+  <https://huggingface.co/datalab-to/indra-ocr>, unchanged, with the license
+  text installed beside them.
+- **Share-alike.** The license is to be applied, to the exclusion of all others,
+  to all copies and derivatives of the model and to "the Output and any
+  derivatives, changes or improvements to or of the Output" (section 8).
+- **Other terms.** Datalab reserves, to the extent the law permits, the right
+  to restrict use that violates the license and to update the model (section 9);
+  no trademark rights are granted (section 10); the model is provided as is,
+  without warranty, and with liability limited (sections 11 and 12). The
+  license defines derivatives of the model to include models trained on its
+  output, such as by distillation.
+
+Intern makes no network request for Indra OCR: the models are read from the
+installation directory and run on the user's machine.
 
 The pinned vcpkg build can include runtime DLLs from Tesseract's dependency
 closure. Depending on the pinned port graph, those files can include libraries
@@ -92,7 +169,11 @@ transitive versions are pinned in the lockfiles.
 | image | Apache-2.0 OR MIT |
 | pdfium-render | Apache-2.0 OR MIT |
 | ort (ONNX Runtime bindings, loading the runtime at run time) | Apache-2.0 OR MIT |
+| Indra OCR pipeline, reimplemented in the parser worker (see above) | Apache-2.0 |
+| unicode-normalization | Apache-2.0 OR MIT |
+| unicode-properties | Apache-2.0 OR MIT |
 | thiserror | Apache-2.0 OR MIT |
+| libm | MIT |
 | zip | MIT |
 | base64 | Apache-2.0 OR MIT |
 

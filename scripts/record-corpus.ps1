@@ -17,11 +17,12 @@ tesseract.exe, and tessdata\. Produce one with scripts/stage-windows-runtime.ps1
 after scripts/fetch-windows-assets.ps1.
 
 .PARAMETER ModelPath
-The GGUF file named in src-tauri/resources/model-manifest.json, as the app
-downloaded it.
+A GGUF file one of the variants in src-tauri/resources/model-manifest.json
+pins, as the app downloaded it. The recording of record is the default
+variant's (Bonsai 4B); the script refuses any file the manifest does not pin.
 
 .EXAMPLE
-./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-2B-Q4_K_M.gguf"
+./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Ternary-Bonsai-2-4B-PQ2_0.gguf"
 #>
 [CmdletBinding()]
 param(
@@ -48,24 +49,41 @@ foreach ($Required in @("intern-worker.exe", "llama-server.exe", "pdfium.dll", "
 
 $Manifest = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/resources/model-manifest.json") -Raw | ConvertFrom-Json
 $ModelHash = (Get-FileHash -LiteralPath $Model -Algorithm SHA256).Hash.ToLowerInvariant()
-$Pinned = @($Manifest.files | Where-Object { $_.sha256 -eq $ModelHash })
+$Pinned = @($Manifest.variants | ForEach-Object { $Variant = $_; $_.files | Where-Object { $_.role -eq "model" -and $_.sha256 -eq $ModelHash } | ForEach-Object { [pscustomobject]@{ name = $_.name; variant = $Variant.id } } })
 if ($Pinned.Count -eq 0) {
-    throw "The model at $Model is not the one model-manifest.json pins; a recording of another model would be scored as if it were the shipped one"
+    throw "The model at $Model is not one model-manifest.json pins; a recording of another model would be scored as if it were the shipped one"
 }
 $RuntimeAssets = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/resources/runtime-assets.json") -Raw | ConvertFrom-Json
 $LlamaVersion = @($RuntimeAssets.downloads | Where-Object { $_.id -eq "llama.cpp" } | ForEach-Object { $_.version })
-$Description = "$($Pinned[0].name) (manifest sha256 $($ModelHash.Substring(0, 8))); llama.cpp $($LlamaVersion -join ',') on Windows, $Threads threads, 8192 context; packaged worker, PDFium, and Tesseract"
+$Description = "$($Pinned[0].name) (variant $($Pinned[0].variant), manifest sha256 $($ModelHash.Substring(0, 8))); llama.cpp $($LlamaVersion -join ',') on Windows, $Threads threads, 8192 context, 64 MiB prompt cache; packaged worker, PDFium, and Tesseract"
 if ($Note) { $Description = "$Description; $Note" }
 
 $ApiKey = [Guid]::NewGuid().ToString("N")
-# The same flags src/server.rs passes: one slot, CPU only, the model's own
-# chat template so the no-thinking switch reaches it, no web UI, no projector.
+# The same flags crates/intern-engine/src/server.rs passes: one slot, CPU
+# only, the model's own chat template so the no-thinking switch reaches it, no
+# web UI, a 64 MiB prompt cache, no projector.
 $ServerArguments = @(
     "--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey, "--model", $Model,
     "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
-    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj"
+    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui",
+    "--cache-ram", "64", "--no-mmproj"
 )
-$Server = Start-Process -FilePath (Join-Path $Runtime "llama-server.exe") -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
+# And, as the app does, no config.ini from %PROGRAMDATA% or %APPDATA% and no
+# LLAMA_ARG_* variable: the child inherits this environment, restored after.
+$SavedEnvironment = @{}
+foreach ($Name in @("PROGRAMDATA", "APPDATA") + @(Get-ChildItem Env: | Where-Object { $_.Name -like "LLAMA_ARG_*" } | ForEach-Object { $_.Name })) {
+    $SavedEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name)
+}
+$ConfigHome = Join-Path ([IO.Path]::GetTempPath()) "intern-llama-server-config"
+if (Test-Path -LiteralPath (Join-Path $ConfigHome "llama.cpp")) { Remove-Item -LiteralPath (Join-Path $ConfigHome "llama.cpp") -Recurse -Force }
+try {
+    foreach ($Name in $SavedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $null) }
+    $env:APPDATA = $ConfigHome
+    $Server = Start-Process -FilePath (Join-Path $Runtime "llama-server.exe") -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
+}
+finally {
+    foreach ($Name in $SavedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $SavedEnvironment[$Name]) }
+}
 try {
     $Deadline = (Get-Date).AddMinutes(3)
     do {
@@ -79,6 +97,7 @@ try {
         --fixtures $Fixtures --expected (Join-Path $RepositoryRoot "fixtures/expected.json") `
         --worker (Join-Path $Runtime "intern-worker.exe") `
         --endpoint "http://127.0.0.1:$Port/v1/chat/completions" --api-key $ApiKey --model-id intern-local `
+        --model-path $Model `
         --record (Join-Path $RepositoryRoot "fixtures/corpus-recording.json") `
         --write-baseline (Join-Path $RepositoryRoot "fixtures/corpus-baseline.json") `
         --output (Join-Path $RepositoryRoot "corpus-report.json") `

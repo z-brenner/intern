@@ -175,7 +175,7 @@ impl Drop for StallingServer {
 }
 
 /// A server that sends the whole correct body, slowly, in pieces - the shape
-/// of a 1.19 GiB download on a domestic connection.
+/// of a 1.07 GiB download on a domestic connection.
 struct DribblingServer {
     url: String,
     join: Option<thread::JoinHandle<()>>,
@@ -575,7 +575,7 @@ fn stalled_response_headers_time_out_without_hanging() {
     assert!(started.elapsed() < Duration::from_secs(2));
 }
 
-/// A ceiling on the whole transfer is a connection speed below which a 1.19
+/// A ceiling on the whole transfer is a connection speed below which a 1.07
 /// GiB download can never succeed, however many times it is retried. Only a
 /// transfer that stops moving may end one.
 #[test]

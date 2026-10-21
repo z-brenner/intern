@@ -37,6 +37,10 @@ pub enum Mode {
     Replay {
         recording: PathBuf,
         allow_stale: bool,
+        /// Score a recording whose model the manifest does not pin - an
+        /// earlier model's, for comparing an engine change on its replies.
+        /// Laboratory only, like `allow_stale`; CI never passes it.
+        allow_other_model: bool,
     },
     /// The worker alone, scored on extraction.
     Extract { options: ExtractOptions },
@@ -133,10 +137,19 @@ pub fn run(options: RunOptions) -> Result<i32, String> {
         Mode::Replay {
             recording,
             allow_stale,
+            allow_other_model,
         } => {
             let (recorded, bytes) = Recording::load(&recording)?;
-            let configuration_change =
-                crate::pipeline::configuration_change(&recorded, &options.engine)?;
+            if allow_other_model
+                && let Err(refusal) = crate::pipeline::pinned_model(&recorded.model)
+            {
+                eprintln!("WARNING: --allow-other-model: {refusal}");
+            }
+            let configuration_change = crate::pipeline::configuration_change_checking(
+                &recorded,
+                &options.engine,
+                !allow_other_model,
+            )?;
             if let Some(change) = &configuration_change {
                 eprintln!("WARNING: {change}");
             }

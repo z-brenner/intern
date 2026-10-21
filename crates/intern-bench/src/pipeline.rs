@@ -139,6 +139,16 @@ pub fn configuration_change(
     recording: &Recording,
     settings: &EngineSettings,
 ) -> Result<Option<String>, String> {
+    configuration_change_checking(recording, settings, true)
+}
+
+/// [`configuration_change`], with the pinned-model check on or off: off only
+/// for `--allow-other-model`, which scores an earlier model's replies.
+pub fn configuration_change_checking(
+    recording: &Recording,
+    settings: &EngineSettings,
+    check_model: bool,
+) -> Result<Option<String>, String> {
     let recorded = recording.engine.pipeline.unwrap_or(Pipeline::Digest);
     if recorded != settings.pipeline {
         return Err(format!(
@@ -146,6 +156,9 @@ pub fn configuration_change(
             recorded.as_str(),
             recorded.as_str()
         ));
+    }
+    if check_model && recorded == Pipeline::Evidence {
+        pinned_model(&recording.model)?;
     }
     let mut changes = Vec::new();
     let budget = crate::replay::current_budget().max_characters;
@@ -191,6 +204,35 @@ pub fn configuration_change(
             changes.join(" and ")
         )
     }))
+}
+
+/// Refuses an evidence recording that does not name the model file that
+/// answered it, or names one `model-manifest.json` does not pin: its replies
+/// are not what any model Intern ships would say, and scoring them would
+/// keep the gate green on a model nobody runs. The digest pipeline, which a
+/// hosted model reads, is not held to it.
+pub fn pinned_model(model: &crate::machine::ModelInfo) -> Result<(), String> {
+    let manifest = intern_engine::ModelManifest::embedded()
+        .map_err(|error| format!("model manifest: {error}"))?;
+    let Some(sha256) = model.sha256.as_deref() else {
+        return Err(
+            "the recording does not say which model file made it; record it again with --model-path (see docs/internbench.md)"
+                .to_owned(),
+        );
+    };
+    match manifest.variant_with_sha256(sha256) {
+        Some(variant)
+            if variant
+                .model()
+                .is_some_and(|file| Some(file.size) == model.size_bytes) =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "the recording was made with a model model-manifest.json does not pin (sha256 {}); record it again with a pinned model (see docs/internbench.md)",
+            sha256.get(..12).unwrap_or(sha256)
+        )),
+    }
 }
 
 /// The scores [`evidence_scores`] adds to a record.
@@ -355,6 +397,11 @@ mod tests {
             "schema_version": 1,
             "context_tokens": intern_engine::server::CONTEXT_TOKENS,
             "budget_characters": crate::replay::current_budget().max_characters,
+            "model": {
+                "id": "intern-local",
+                "size_bytes": BONSAI_4B_BYTES,
+                "sha256": BONSAI_4B_SHA256,
+            },
             "documents": [],
         });
         let header = serde_json::to_value(header).unwrap();
@@ -362,6 +409,43 @@ mod tests {
             value[key] = field.clone();
         }
         serde_json::from_value(value).unwrap()
+    }
+
+    const BONSAI_4B_BYTES: u64 = 1_146_465_120;
+    const BONSAI_4B_SHA256: &str =
+        "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409";
+
+    /// An evidence recording must name a model the manifest pins: the Qwen
+    /// model Intern shipped before, a recording that names none, or the
+    /// right digest at the wrong size are refused; the digest pipeline's
+    /// recording is not held to it.
+    #[test]
+    fn an_evidence_recording_must_name_a_pinned_model() {
+        let evidence = EngineSettings::default();
+        let mut recorded = recording(&evidence.header());
+        assert_eq!(configuration_change(&recorded, &evidence), Ok(None));
+
+        recorded.model.sha256 =
+            Some("aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223".into());
+        recorded.model.size_bytes = Some(1_280_835_840);
+        let refused = configuration_change(&recorded, &evidence).unwrap_err();
+        assert!(refused.contains("does not pin"), "{refused}");
+
+        recorded.model.sha256 = Some(BONSAI_4B_SHA256.into());
+        recorded.model.size_bytes = Some(1);
+        assert!(configuration_change(&recorded, &evidence).is_err());
+
+        recorded.model.sha256 = None;
+        let refused = configuration_change(&recorded, &evidence).unwrap_err();
+        assert!(refused.contains("--model-path"), "{refused}");
+
+        let digest = EngineSettings {
+            pipeline: Pipeline::Digest,
+            ..EngineSettings::default()
+        };
+        let mut digest_recording = recording(&PipelineHeader::default());
+        digest_recording.model = Default::default();
+        assert_eq!(configuration_change(&digest_recording, &digest), Ok(None));
     }
 
     /// A recording is replayed through the pipeline that made it; a changed

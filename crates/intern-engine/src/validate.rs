@@ -362,6 +362,24 @@ pub(crate) fn date_is_tainted(
 /// effective or commencement line, each once with the line it stands on:
 /// the candidates to replace a tainted date with.
 pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(String, String)> {
+    alternates_on_lines_with(digest, date, EFFECTIVE_CUES)
+}
+
+/// The dates other than `date` that `digest` names as this document's own
+/// date in so many words - "Date of this Lease", "Date of this Agreement" -
+/// each once with its line. What a signing date gives way to when the
+/// document says, apart from its signatures, what date it bears.
+pub(crate) fn own_date_alternates(digest: &impl Segments, date: &str) -> Vec<(String, String)> {
+    alternates_on_lines_with(digest, date, &["date of this "])
+}
+
+/// The dates other than `date` stated, not as another document's, on lines
+/// that hold one of `cues`.
+fn alternates_on_lines_with(
+    digest: &impl Segments,
+    date: &str,
+    cues: &[&str],
+) -> Vec<(String, String)> {
     let lines: Vec<&str> = digest
         .segments()
         .iter()
@@ -370,7 +388,7 @@ pub(crate) fn effective_alternates(digest: &impl Segments, date: &str) -> Vec<(S
     let mut alternates: Vec<(String, String)> = Vec::new();
     for line in &lines {
         let normalized = normalize(line);
-        if !EFFECTIVE_CUES.iter().any(|cue| normalized.contains(cue)) {
+        if !cues.iter().any(|cue| normalized.contains(cue)) {
             continue;
         }
         for found in extract_stated_dates(line) {

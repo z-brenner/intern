@@ -672,6 +672,10 @@ pub enum ReviewReason {
     /// The date is written only as numbers whose day and month could be
     /// read either way round, and nothing in the document settles which.
     DateAmbiguous,
+    /// The date the model chose stands in the document under a label that
+    /// names another kind of date - a table column such as "Coverage
+    /// effective" or "Requested effective date" - not the document's own.
+    DateIsOtherKind,
 }
 
 impl ReviewReason {
@@ -691,6 +695,7 @@ impl ReviewReason {
             Self::DateImplausible => "DATE_IMPLAUSIBLE",
             Self::DateIsDeadline => "DATE_IS_DEADLINE",
             Self::DateAmbiguous => "DATE_AMBIGUOUS",
+            Self::DateIsOtherKind => "DATE_IS_OTHER_KIND",
         }
     }
 }

@@ -63,7 +63,25 @@ pub struct ModelRequest {
     /// The evidence handles the prompt shows, for reading an
     /// evidence-pipeline reply. `None` for the digest pipeline.
     pub evidence: Option<EvidenceHandles>,
+    /// Worked example exchanges sent, in order, between the system turn and
+    /// the user turn: the evidence pipeline's few-shot profile
+    /// ([`crate::prompt::EVIDENCE_EXAMPLES`]). Empty for the digest
+    /// pipeline. Part of the request's identity.
+    pub examples: &'static [ExampleExchange],
 }
+
+/// One worked example: a user turn and the reply it should get.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExampleExchange {
+    pub user: &'static str,
+    pub assistant: &'static str,
+}
+
+/// The sampling seed the evidence pipeline's evaluated request profile sends.
+/// Decoding is greedy (temperature 0, top-k 1), so it selects nothing; it is
+/// sent so the request is byte-for-byte the one the evaluation measured
+/// (`bench/reports/bonsai-native-windows-2026-10-18/matched-profile.json`).
+pub(crate) const EVIDENCE_SEED: u64 = 17;
 
 impl ModelRequest {
     /// A digest-pipeline request: the prompt alone, answered under the fixed
@@ -110,6 +128,18 @@ impl ModelRequest {
                 hasher.update([0_u8]);
             }
         }
+        // The examples are read by the model as much as the prompt is: a
+        // reply recorded without them, or with different ones, answers a
+        // different request.
+        if !self.examples.is_empty() {
+            hasher.update([0_u8, 3_u8]);
+            for example in self.examples {
+                hasher.update(example.user.as_bytes());
+                hasher.update([0_u8]);
+                hasher.update(example.assistant.as_bytes());
+                hasher.update([0_u8]);
+            }
+        }
         format!("{:x}", hasher.finalize())
     }
 
@@ -125,6 +155,11 @@ impl ModelRequest {
         self.system
             .as_deref()
             .map_or(0, |system| system.chars().count())
+            + self
+                .examples
+                .iter()
+                .map(|example| example.user.chars().count() + example.assistant.chars().count())
+                .sum::<usize>()
             + self.prompt.chars().count()
     }
 }
@@ -444,12 +479,15 @@ impl ModelClient {
     /// is transport, and the token-probability fields in particular change
     /// no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
+        let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
+        for example in request.examples {
+            messages.push(json!({"role": "user", "content": example.user}));
+            messages.push(json!({"role": "assistant", "content": example.assistant}));
+        }
+        messages.push(json!({"role": "user", "content": request.prompt}));
         let mut body = json!({
             "model": self.model_id,
-            "messages": [
-                {"role": "system", "content": request.system_turn()},
-                {"role": "user", "content": request.prompt}
-            ],
+            "messages": messages,
             "stream": false,
             "temperature": 0,
             "top_k": 1,
@@ -461,6 +499,10 @@ impl ModelClient {
             // latency on a CPU.
             "chat_template_kwargs": {"enable_thinking": false}
         });
+        if !request.examples.is_empty() {
+            // The evidence pipeline's evaluated profile: see EVIDENCE_SEED.
+            body["seed"] = json!(EVIDENCE_SEED);
+        }
         if self.token_confidence {
             // One alternative is the least llama-server accepts; only the
             // chosen token's own probability is read.
@@ -653,7 +695,8 @@ pub(crate) fn read_error_body(body: impl std::io::Read) -> Vec<u8> {
 }
 
 /// Whether an error reply says the prompt did not fit the context window, in
-/// llama.cpp's words: the error type its server sends (b10361), and the
+/// llama.cpp's words: the error type its server sends (b10361, and the
+/// PrismML fork Intern now ships, prism-b10777-e3de715, word for word), and the
 /// sentence it and the servers built on it use.
 pub(crate) fn is_context_overflow(body: &[u8]) -> bool {
     let text = String::from_utf8_lossy(body);
@@ -1477,6 +1520,111 @@ mod tests {
         );
     }
 
+    /// The evidence pipeline's request is the evaluated few-shot profile:
+    /// system, the worked example's user and assistant turns, then the
+    /// document, with seed 17; the digest pipeline's is unchanged.
+    #[test]
+    fn an_evidence_request_carries_the_worked_example_and_the_seed() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        let request = ModelRequest {
+            prompt: "doc".into(),
+            system: Some("rules".into()),
+            grammar: Some("root ::= \"{}\"".into()),
+            evidence: None,
+            examples: crate::prompt::EVIDENCE_EXAMPLES,
+        };
+        let body = client.completion_request(&request);
+        let roles = body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+        assert_eq!(body["messages"][0]["content"], serde_json::json!("rules"));
+        assert_eq!(
+            body["messages"][1]["content"],
+            serde_json::json!(crate::prompt::EVIDENCE_EXAMPLES[0].user)
+        );
+        assert_eq!(
+            body["messages"][2]["content"],
+            serde_json::json!(crate::prompt::EVIDENCE_EXAMPLES[0].assistant)
+        );
+        assert_eq!(body["messages"][3]["content"], serde_json::json!("doc"));
+        assert_eq!(body["seed"], serde_json::json!(17));
+        assert_eq!(body["top_k"], serde_json::json!(1));
+
+        let digest = client.completion_request(&ModelRequest::new("p"));
+        assert_eq!(digest["messages"].as_array().unwrap().len(), 2);
+        assert!(digest.get("seed").is_none());
+    }
+
+    /// The examples are part of what identifies a request: a reply recorded
+    /// without them answers a different request, and replays stale.
+    #[test]
+    fn the_worked_example_is_part_of_the_request_identity() {
+        let with = ModelRequest {
+            prompt: "doc".into(),
+            system: Some("rules".into()),
+            examples: crate::prompt::EVIDENCE_EXAMPLES,
+            ..ModelRequest::default()
+        };
+        let without = ModelRequest {
+            examples: &[],
+            ..with.clone()
+        };
+        assert_ne!(with.sha256(), without.sha256());
+        assert!(with.input_characters() > without.input_characters());
+    }
+
+    /// The exact request bodies the native Windows evaluation sent Bonsai
+    /// (`tests/fixtures/benchmark-request-parity.json`, `expected`), rebuilt
+    /// from the production request alone: production sends what was
+    /// measured, with no laboratory profile on top.
+    #[test]
+    fn production_sends_the_evaluated_request_bodies() {
+        let rows: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/benchmark-request-parity.json"
+        ))
+        .unwrap();
+        let profile: Value = serde_json::from_str(include_str!(
+            "../../../bench/reports/bonsai-native-windows-2026-10-18/matched-profile.json"
+        ))
+        .unwrap();
+        let examples = profile["prompt"]["examples"].as_array().unwrap();
+        assert_eq!(examples.len(), 2 * crate::prompt::EVIDENCE_EXAMPLES.len());
+        assert_eq!(
+            examples[0]["content"],
+            serde_json::json!(crate::prompt::EVIDENCE_EXAMPLES[0].user)
+        );
+        assert_eq!(
+            examples[1]["content"],
+            serde_json::json!(crate::prompt::EVIDENCE_EXAMPLES[0].assistant)
+        );
+        assert_eq!(
+            profile["prompt"]["system"],
+            serde_json::json!(crate::prompt::evidence_system())
+        );
+        for row in rows.as_array().unwrap() {
+            let original = &row["original"];
+            let messages = original["messages"].as_array().unwrap();
+            let request = ModelRequest {
+                prompt: messages[1]["content"].as_str().unwrap().to_owned(),
+                system: Some(messages[0]["content"].as_str().unwrap().to_owned()),
+                grammar: Some(original["grammar"].as_str().unwrap().to_owned()),
+                evidence: None,
+                examples: crate::prompt::EVIDENCE_EXAMPLES,
+            };
+            let client = ModelClient::new(
+                "http://127.0.0.1:9/v1/chat/completions",
+                "k",
+                row["expected"]["model"].as_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(client.completion_request(&request), row["expected"]);
+        }
+    }
+
     /// The local server runs without a vision projector. A request that carried
     /// an image would be rejected by it, so the request must always be plain
     /// text - never a multimodal content array.
@@ -1513,7 +1661,8 @@ mod tests {
     #[test]
     fn exceed_context_400_maps_to_input_too_large() {
         // The body b10361 sends, as a live server answered a prompt too long
-        // for its 8,192-token context.
+        // for its 8,192-token context. The Prism fork (prism-b10777-e3de715)
+        // was checked to send the same shape and type.
         let overflow = r#"{"error":{"code":400,"message":"request (9214 tokens) exceeds the available context size (8192 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":9214,"n_ctx":8192}}"#;
         let server = scripted_server(vec![http_reply(
             "400 Bad Request",
@@ -1781,7 +1930,9 @@ mod tests {
         assert!(token_confidence(&[]).is_none());
     }
 
-    /// The server's own reply shape, trimmed from a live b10361 response.
+    /// The server's own reply shape, trimmed from a live b10361 response; the
+    /// Prism fork's replies decode the same way (the corpus and InternBench
+    /// recordings were made through it).
     #[test]
     fn token_confidence_is_read_from_the_servers_reply() {
         let completion: ChatCompletion = serde_json::from_str(

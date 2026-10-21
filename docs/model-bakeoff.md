@@ -3,9 +3,222 @@
 Every number here was measured on one machine with real local inference over the
 whole generated corpus. Nothing is extrapolated from published benchmarks.
 
+## Bonsai 2: the production model
+
+Intern's local model is now Prism ML's **Ternary Bonsai 2 4B** (PQ2_0,
+`Ternary-Bonsai-2-4B-PQ2_0.gguf`, 1,146,465,120 bytes, 1.07 GiB), with
+**Ternary Bonsai 2 2B** (PQ2_0, 517,312,992 bytes, 493 MiB) as an opt-in for
+machines short of memory. It replaces unsloth's Qwen3.5-2B Q4_K_M, the model
+this bake-off chose; everything below this section is that earlier,
+historical measurement and is kept as it was.
+
+**What changed.** `model-manifest.json` pins both variants (schema 3) by an
+immutable Hugging Face revision, size and SHA-256; only the one a person
+chooses is downloaded, one is resident at a time, and switching unloads the
+running model before loading the other. PQ2_0 needs PrismML's llama.cpp fork,
+pinned at `prism-b10777-e3de715`. The local evidence pipeline sends the
+request profile the evaluation selected: one fixed worked example (a
+fictional dispatch note) before the document, greedy decoding, seed 17,
+thinking off. Existing installations keep their Qwen file until the person
+removes it with **Remove the previous model (1.19 GiB)**; an update asks for
+the new download first.
+
+**Why.** On the [native Windows evaluation](bonsai-native-windows-evaluation.md)
+- twelve synthetic held-out documents, a 4 GiB / 2-vCPU Windows guest, one
+pass - Bonsai 4B named 11 of 12 strict filenames correctly against Qwen's 9
+and Bonsai 2B's 8, with one wrong-but-ready filename against Qwen's two, and
+resolved the amendment's last-signature date Qwen missed. Its peak model
+memory was 1.96 GB against Qwen's 2.21 GB; 2B's was 0.94 GB.
+
+**What it costs, and what it does not fix.** Read these before relying on it:
+
+- **Latency.** Bonsai 4B's median document took 54.1 s against Qwen's 26.2 s
+  on that guest - about twice as long - and its summed inference 2.2 times
+  Qwen's. Bonsai 2B was the fastest (22.5 s median) but named fewer
+  documents correctly. The 25-page scan is OCR-bound (about 125 s of its
+  143-170 s) whichever model reads it.
+- **Semantic failures remain** ([4B audit](../bench/reports/bonsai-native-windows-2026-10-18/bonsai4-semantic-audit.md),
+  [2B audit](../bench/reports/bonsai-native-windows-2026-10-18/bonsai2-semantic-audit.md)):
+  4B filed an annual report "to Fellow Shareholders" without its issuer and
+  marked it ready; it described a capital call as going to the general
+  partner that issued it (Qwen did too), reversed supplier and distributor
+  into buyer and seller in its raw facts, invented a recipient for a meeting
+  notice (sent to review), named an invoice's subject from a table header,
+  and mislabelled several date roles. 2B omitted a meeting notice's issuer
+  and marked it ready, and preferred an underlying agreement's date to the
+  controlling signature date. Shared engine composition still truncates
+  "square feet" and overstates conditional effective dates. The review flow
+  stays as it is, and nothing routes between the two models.
+- **As recorded, Intern's own corpus and InternBench scored 4B below Qwen on
+  filenames and dates** (tables below); deterministic checks added since
+  close most of that gap and leave 4B with fewer trap dates and
+  wrong-but-ready names than Qwen had ("Deterministic checks" below). On the corpus, recorded live on Linux
+  (below), Bonsai 4B named 9 of 18 corpus fixtures exactly right against
+  Qwen's 13, and 16 of 19 party sets against 18. Its losses: a type that
+  absorbs the effective date ("Lease Agreement Effective September 1 2024",
+  ready), an invented sender for meeting minutes ("The Fictional Meridian
+  Committee", ready), a spurious party on a 100-page journal ("Fictional
+  observation 001", ready), and two OCR'd scans whose types copy the OCR's
+  casing or an identifier (both sent to review, as before). It newly names
+  the multi-date invoice correctly instead of sending it to review. Dates,
+  types and the absence of trap dates and parties are unchanged, and every
+  document it named carried the right date.
+- **Not yet measured on Windows.** The corpus and InternBench recordings of
+  record were made on Linux x86-64 with PrismML's ubuntu-x64 build, 2
+  threads. The Windows recording on the packaged runtime, Windows memory and
+  latency on a real laptop, and a clean-VM check of the VC++ runtime the fork
+  (like upstream) needs are follow-ups. The release gate's floors were set
+  from the Linux run (`scripts/validate-model-evaluation.mjs`).
+
+### Corpus, Qwen3.5-2B and Bonsai 4B
+
+Both replayed through the same engine; the Qwen recording is the one
+committed before the switch (Linux, 4 threads), the Bonsai one
+`fixtures/corpus-recording.json` (Linux, 2 threads). The worker read every
+fixture identically for both, so every difference is the model's and its
+request profile's.
+
+| Score | Qwen3.5-2B | Bonsai 4B |
+| --- | ---: | ---: |
+| Filename exactly right | 13/18 | 9/18 |
+| Date right | 16/18 | 16/18 |
+| Type right | 17/18 | 17/18 |
+| Parties right | 18/19 | 16/19 |
+| Description specific | 17/19 | 18/19 |
+| Routing (ready vs review) right | 16/19 | 17/19 |
+| Named (ready) | 13/19 | 14/19 |
+| Trap date or party | 0 | 0 |
+| Named with the wrong date | 0 | 0 |
+
+### InternBench, Qwen3.5-2B and Bonsai 4B
+
+All 77 documents, `bench/recording.json` against the Qwen recording it
+replaced; the worker read all 77 identically for both. Rates over the
+documents each score applies to.
+
+| Score | Qwen3.5-2B | Bonsai 4B |
+| --- | ---: | ---: |
+| Filename exactly right | 70.1% | 64.9% |
+| Date right | 97.4% | 90.9% |
+| Date role right | 56.8% | 70.0% |
+| Type right | 93.5% | 90.9% |
+| Parties right | 87.0% | 90.9% |
+| Party roles right | 87.7% | 86.8% |
+| Documents naming a forbidden party | 8 | 1 |
+| Trap dates filed | 1 | 6 |
+| Wrong filename marked ready ("unsafe ready") | 15 | 21 |
+| Needless review | 3.8% | 9.4% |
+| Routing right | 77.2% | 79.0% |
+| Description specific | 96.1% | 100% |
+
+Bonsai 4B names parties better and almost never a forbidden one, but it
+files more documents under a trap date (a due, deadline or underlying
+agreement's date: `sow-under-msa-5p`, `demand-letter`,
+`scan-patient-intake-form`, `benefits-change-checkbox-form`,
+`industrial-lease-dated-in-schedule-25p` among them) and marks more wrong
+filenames ready. Thirty documents lost at least one reviewed score and
+85 scores improved; the commit that records it lists them. Its median
+document took 65.5 s here (2 threads, Linux, on a machine shared with other
+work), so do not read it as a laptop figure.
+
+### Deterministic checks added for what Bonsai got wrong
+
+The tables above are the replies as recorded. Each of Bonsai 4B's trap
+dates and wrong-but-ready filenames was traced to a check the engine
+should have made and did not; these were added to validation (`facts.rs`,
+`infer.rs`), not to the prompt, which stays byte-identical to the evaluated
+profile. Each rule reads the document's own text and names no fixture.
+Measured by replaying the same recordings - Bonsai's and, through
+`--allow-stale --allow-other-model`, Qwen's - before and after:
+
+| Rule | Documents it changes |
+| --- | --- |
+| "No later than" / "not later than" before a date makes it a deadline | `demand-letter` (Bonsai): trap date 2026-07-22 withheld, sent to review |
+| A date in a table cell whose column (or row) label names another event - coverage, a requested effective date, birth, hire, due, delivery - is not the document's; the one date a column names as its own ("Date signed", "Date") replaces it, else it is withheld. New reason `DATE_IS_OTHER_KIND` | `scan-patient-intake-form` (Bonsai): trap 2026-01-01 withheld, review. `benefits-change-checkbox-form` (Bonsai): trap 2026-07-01 replaced by the signed date 2026-06-29, review. An earlier draft that treated any non-issue label as "other" also hit `purchase-order` ("PO Date") and `field-condition-report` ("Date of examination") in both models; it now requires a label naming another event, and neither changes |
+| A date stated only in signature blocks, or cited only from them, is a signing date: it gives way to a single stated effective date, else to a single "Date of this ..." date; an agreement or amendment's earlier signature gives way to the latest | `sow-under-msa-5p` (Bonsai): 2026-06-01 -> 2026-05-26, now right. `industrial-lease-dated-in-schedule-25p` (Bonsai): 2026-04-16 -> 2026-04-14, right. `mixed-signature-region` (Bonsai and Qwen): 2026-08-18 -> 2026-08-21, right for Bonsai; Qwen's date is fixed, its parties are still wrong |
+| A type loses a date phrase ("Effective September 1 2024", a leading "2025") or a trailing document number ("PS-311", "DR-771", "#10422") written into it, when a kind is left | corpus `scanned-lease.pdf`, `rotated-low-resolution-scan.png`, `document-image.jpg` (Bonsai): filenames now right. `annual-report-excerpt-8p`: "2025 Annual Report" -> "Annual Report" |
+| A bare "Letter", "Document" or "Agreement" is no type ("Never ... alone"): review (`TYPE_MISSING`) | `engagement-letter` (Bonsai): wrong ready name -> review. `agreement-two-column-footnotes` (Qwen): wrong ready name -> review |
+| An audience or a body - "Fellow Shareholders", "Board of Directors", "Human Resources" - is no party: dropped, review (`PARTY_UNSUPPORTED`) | `annual-report-excerpt-8p` (Bonsai): issuer now Rookwood Precision Metals Corporation and the filename right, but sent to review (a needless review). `board-resolution` (Bonsai): wrong ready name -> review. `benefits-change-checkbox-form`: party now Annika Solberg-Reyes, filename right, review (its date rule sends it there anyway) |
+| A type ending "of [the] <filename party>" drops it | `newsletter-three-column` (Bonsai): "Newsletter of the ... Association for ... Association" -> "Newsletter for ... Association"; still not the gold's "from" |
+
+After them, replaying the same recordings:
+
+| Score | Qwen3.5-2B before | Qwen3.5-2B after | Bonsai 4B before | Bonsai 4B after |
+| --- | ---: | ---: | ---: | ---: |
+| InternBench filename right | 54/77 | 54/77 | 50/77 | 55/77 |
+| InternBench date right | 75/77 | 76/77 | 70/77 | 74/77 |
+| InternBench trap dates filed | 1 | 0 | 6 | 0 |
+| InternBench wrong filename marked ready | 15 | 14 | 21 | 12 |
+| InternBench needless review | 2 | 2 | 5 | 7 |
+| InternBench routing right | 44/57 | 43/57 | 45/57 | 40/57 |
+| Corpus filename right | 13/18 | 13/18 | 9/18 | 12/18 |
+
+Routing falls because five documents whose filenames are wrong, or
+dated by a withheld trap, now go to review where the gold expected a
+ready one, and two right filenames go to review with them (the needless
+reviews above). The digest pipeline's replay is unchanged. Still wrong
+and ready for Bonsai: role confusions the text cannot settle on its own
+(a vendor form for the county that issues it, a loss notice from the
+insurer, a certificate for its broker), a product name in a type, a
+committee and a journal entry read as parties, and the generic-audience
+and relation cases above.
+
+### The recordings of record: Bonsai 4B read through Indra OCR
+
+Everything above was measured over the routing worker's PP-OCR text. The
+committed recordings (`fixtures/corpus-recording.json`, `bench/recording.json`)
+were then made again, live, with the worker that ships - Indra OCR first,
+PP-OCR re-reading any page under 75 confidence, Tesseract last - and the
+same model, runtime, request profile and rules, on the same Linux machine.
+Indra changed the text of 6 corpus fixtures and 20 InternBench documents,
+all scans; Bonsai's reply to every document whose text did not change was
+byte for byte the same, so each difference below is the OCR's.
+
+| Score (rules on) | Corpus, PP-OCR text | Corpus, Indra text | InternBench, PP-OCR text | InternBench, Indra text |
+| --- | ---: | ---: | ---: | ---: |
+| Filename right | 12/18 | 11/18 | 55/77 | 55/77 |
+| Date right | 16/18 | 18/18 | 74/77 | 75/77 |
+| Type right | 17/18 | 15/18 | 70/77 | 71/77 |
+| Parties right | 16/19 | 15/19 | 73/77 | 74/77 |
+| Trap dates filed | 0 | 0 | 0 | 0 |
+| Wrong filename marked ready | - | - | 12 | 14 |
+| Documents naming a forbidden party | 0 | 0 | 1 | 0 |
+
+What Indra's text changed:
+
+- Better: corpus `document-image.png` and `document-image.tiff` are dated now
+  (PP-OCR read `20z5` and lost a line); `document-image.png`'s filename is
+  right. InternBench `scan-low-res-receipt`'s type is read, `scan-faint-letter`
+  names the right person, and `scan-patient-intake-form` and
+  `scan-bill-of-lading` lose an unsupported fact or a wrong date.
+- Worse: corpus `scanned-lease.pdf` and `rotated-low-resolution-scan.png`.
+  Indra reads that clean-room bitmap font's V as U (`EFFECTIUE`, `DELIUERY`,
+  `CEDRR`; `fixtures/README.md`), so the type the model spells correctly is
+  not stated in the text and the filename falls back to "Document", in
+  review. It is one synthetic font, not a general reading error, so no rule
+  reads around it. On InternBench, `scan-faint-letter` now names the right
+  person but with "-" rather than "from" and is ready, and
+  `scan-patient-intake-form` now carries its right date, so nothing sends it
+  to review, but it still names the clinic instead of the patient: the two
+  wrong-but-ready additions (12 -> 14). `scan-upside-down-po` (a description
+  fact), `scan-skewed-notice` (an unsupported fact) and
+  `scan-certificate-of-insurance` (a date role) lose one score each.
+
+The seven rules were checked again on the Indra text, rules off against on:
+InternBench trap dates 4 -> 0, wrong-but-ready 21 -> 14, filenames 51 -> 55,
+dates 72 -> 75, needless review 5 -> 7, routing 45 -> 40; corpus filenames
+10 -> 11. The documents each rule changes are the ones listed above, less
+those whose new text no longer needs it.
+
+The release gate's floors now follow this run
+(`scripts/validate-model-evaluation.mjs`): date 95%, type 80%, parties 75%,
+review at most 45% - type and parties lower than over PP-OCR's text, for
+the two scans above.
+
+
 **Machine:** AMD Ryzen 7 PRO 8840U, 8 cores / 16 threads, 14.7 GB usable RAM, no
 discrete GPU, Windows 11, ordinary background applications running.
-**Runtime:** llama.cpp `b10361`, CPU only, 8 threads, 8,192-token context.
+**Runtime (historical):** llama.cpp `b10361`, CPU only, 8 threads, 8,192-token context.
 **Corpus:** `fixtures/generated`, 21 fixtures. Thirteen are text-bearing documents
 that reach the model; two are intentionally unreadable (encrypted, malformed);
 six require OCR and were not scored on this machine, which has PDFium but no

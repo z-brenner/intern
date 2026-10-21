@@ -7,8 +7,8 @@ import type { SetupState } from '../types';
 const RATE_WINDOW_MS = 30_000;
 
 /**
- * The model download as a person reads it: "393 MiB of 1.19 GiB · 32% · about
- * 2 min left". It used to be "412,090,368 of 1,280,835,840 bytes", which
+ * The model download as a person reads it: "393 MiB of 1.07 GiB · 35% · about
+ * 2 min left". It used to be "412,090,368 of 1,146,465,120 bytes", which
  * answers neither how far along it is nor how long to wait. The exact count
  * stays in the title, for anyone comparing it with a file on disk.
  */

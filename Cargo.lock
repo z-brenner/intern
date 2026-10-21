@@ -2434,10 +2434,12 @@ dependencies = [
  "csv",
  "encoding_rs",
  "image",
+ "intern-bench",
  "intern-core",
  "intern-engine",
  "intern-intake",
  "jiff",
+ "libm",
  "mailparse",
  "msg_parser",
  "ort",
@@ -2446,6 +2448,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
+ "unicode-normalization",
+ "unicode-properties",
  "zip 4.6.1",
 ]
 
@@ -2762,6 +2766,12 @@ dependencies = [
  "cfg-if",
  "windows-link 0.2.1",
 ]
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"

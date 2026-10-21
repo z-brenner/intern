@@ -42,6 +42,9 @@ async function evidenceFixture() {
     release_inputs_sha256: 'c'.repeat(64),
     runner: { os: 'Windows', arch: 'X64', ci_run_id: runId },
     acceptance: { status: 'accepted', failures: [] },
+    model_variant: 'bonsai-4b',
+    model_file: 'Ternary-Bonsai-2-4B-PQ2_0.gguf',
+    model_sha256: 'd406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409',
   }));
   await writeFile(join(root, files.screenshot), screenshot);
   await writeFile(join(root, files.checklist), '# accepted release checklist\n');
@@ -336,4 +339,24 @@ it('binds a recaptured release screenshot by digest even when its packaged path 
     'scripts/validate-release-evidence.mjs', manifestPath, `--root=${fixture.root}`,
     `--commit=${fixture.commit}`, `--workflow=${fixture.workflow}`, `--run-id=${fixture.runId}`, '--run-attempt=2',
   ])).resolves.toMatchObject({ stdout: expect.stringContaining('"status":"accepted"') });
+});
+
+it('accepts model evidence only from the default variant the manifest pins', async () => {
+  for (const [variant, sha256] of [
+    // The previous Qwen model: no longer pinned.
+    ['qwen3.5-2b', 'aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223'],
+    // The opt-in low-memory variant is pinned, but it is not what a release
+    // downloads by default, so its evidence does not gate one.
+    ['bonsai-2b', 'd5f01a4ecaf49239653308ee732ad1a0c5f802c0ddb997549fc7b694c8b45928'],
+    // The default variant's name with another file's digest.
+    ['bonsai-4b', 'd5f01a4ecaf49239653308ee732ad1a0c5f802c0ddb997549fc7b694c8b45928'],
+  ]) {
+    const fixture = await evidenceFixture();
+    const model = JSON.parse(await readFile(join(fixture.root, fixture.files.model), 'utf8'));
+    model.model_variant = variant;
+    model.model_sha256 = sha256;
+    await writeFile(join(fixture.root, fixture.files.model), JSON.stringify(model));
+    const manifest = JSON.parse(await readFile(await createManifest(fixture), 'utf8'));
+    expect(manifest.signoffs.model_evaluation, variant).toBe('rejected');
+  }
 });

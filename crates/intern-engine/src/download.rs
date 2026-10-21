@@ -98,7 +98,7 @@ pub struct ReqwestHttpTransport {
 }
 
 impl ReqwestHttpTransport {
-    /// No ceiling on the whole transfer. The download is 1.19 GiB, so any
+    /// No ceiling on the whole transfer. The download is up to 1.07 GiB, so any
     /// fixed deadline is a connection speed below which the download can
     /// never succeed however many times it is retried: the two hours this
     /// used to allow meant every link under about 178 KB/s failed, every
@@ -461,7 +461,7 @@ impl<H: HttpTransport, D: DiskSpace> Downloader<H, D> {
                 // An installed file that fails its digest cannot be repaired by
                 // checking it again, and nothing in the app could remove it, so
                 // setup reported MODEL_FILE_INVALID forever. Delete it and
-                // download it afresh; keeping 1.19 GiB of bytes known to be
+                // download it afresh; keeping up to 1.07 GiB of bytes known to be
                 // wrong would only take the disk space the replacement needs.
                 Err(_) => fs::remove_file(&final_path).map_err(|_| invalid_file())?,
             }

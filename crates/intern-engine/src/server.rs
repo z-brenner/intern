@@ -31,6 +31,13 @@ const SERVER_LOG: &str = "llama-server.log";
 /// small enough that the KV cache stays a few hundred megabytes on CPU.
 pub const CONTEXT_TOKENS: u32 = 8_192;
 
+/// The most memory, in MiB, llama-server may keep in its host-memory prompt
+/// cache. Its default is 8,192 MiB; Intern sends one document at a time and
+/// keeps only the fixed system turn warm, and the native evaluation measured
+/// Bonsai's peak working set (4B 1.96 GB, 2B 0.94 GB) with exactly this
+/// budget (`bench/reports/bonsai-native-windows-2026-10-18`).
+pub const CACHE_RAM_MIB: u32 = 64;
+
 /// Threads to give the model.
 ///
 /// On a hyper-threaded laptop, llama.cpp scales with physical cores, not
@@ -223,6 +230,8 @@ impl LlamaServer {
             // enable_thinking switch to reach hybrid-reasoning models.
             "--jinja".into(),
             "--no-webui".into(),
+            "--cache-ram".into(),
+            CACHE_RAM_MIB.to_string(),
         ];
         match projector {
             Some(projector) => {
@@ -346,12 +355,55 @@ impl ProcessControl for StdChildProcess {
 struct StdProcessLauncher {
     /// Where the server's standard error is kept; nowhere when `None`.
     log_directory: Option<PathBuf>,
+    /// The server's private configuration home ([`isolate_from_configuration`]).
+    config_home: PathBuf,
 }
 
 impl StdProcessLauncher {
     fn new() -> Self {
+        let log_directory = crate::logs::log_directory().map(Path::to_path_buf);
+        let config_home = log_directory.as_deref().map_or_else(
+            || std::env::temp_dir().join("intern-llama-server-config"),
+            |logs| logs.with_file_name("llama-server-config"),
+        );
         Self {
-            log_directory: crate::logs::log_directory().map(Path::to_path_buf),
+            log_directory,
+            config_home,
+        }
+    }
+}
+
+/// Keeps every setting the server runs with the one Intern passes.
+///
+/// llama-server (from upstream b10616 on, and so the Prism build Intern
+/// ships) reads `config.ini` files before its flags: on Windows
+/// `%PROGRAMDATA%\llama.cpp\config.ini` and `%APPDATA%\llama.cpp\config.ini`,
+/// elsewhere `/etc/llama.cpp/config.ini` and
+/// `$XDG_CONFIG_HOME/llama.cpp/config.ini`; then `LLAMA_ARG_*` variables.
+/// Flags win, but anything Intern does not pass - a sampler default, a
+/// cache, a chat template override - a stray file or variable could change.
+/// So the child gets an empty `PROGRAMDATA` (which the server skips), a
+/// configuration home that is Intern's own and holds no `llama.cpp`
+/// directory, and no `LLAMA_ARG_*` variable. Only `/etc` on Linux, which an
+/// administrator owns, cannot be turned off; Intern ships on Windows.
+fn isolate_from_configuration(
+    command: &mut Command,
+    config_home: &Path,
+    inherited: impl IntoIterator<Item = std::ffi::OsString>,
+) {
+    // A configuration a previous run, or anything else, left in Intern's own
+    // home is removed rather than read. Nothing else is ever kept there.
+    let planted = config_home.join("llama.cpp");
+    if planted.exists() {
+        let _ = std::fs::remove_dir_all(&planted);
+    }
+    command
+        .env("PROGRAMDATA", "")
+        .env("APPDATA", config_home)
+        .env("XDG_CONFIG_HOME", config_home);
+    for name in inherited {
+        if name.to_string_lossy().starts_with("LLAMA_ARG_") {
+            command.env_remove(&name);
         }
     }
 }
@@ -367,6 +419,11 @@ impl ProcessLauncher for StdProcessLauncher {
         // missing CPU features, a quarantined runtime library, a model that
         // will not load. At its default verbosity it logs no prompt text and
         // not its `--api-key`; it must never be started with `-v`.
+        isolate_from_configuration(
+            &mut command,
+            &self.config_home,
+            std::env::vars_os().map(|(name, _)| name),
+        );
         command
             .args(arguments)
             .stdin(Stdio::null())
@@ -480,6 +537,61 @@ mod tests {
         assert!(arguments.contains(&"127.0.0.1".to_owned()));
     }
 
+    /// The memory profile the native evaluation measured: a 64 MiB prompt
+    /// cache rather than llama-server's 8 GiB default.
+    #[test]
+    fn the_prompt_cache_is_held_to_the_evaluated_budget() {
+        let arguments =
+            LlamaServer::arguments_for(Path::new("m.gguf"), None, 51_000, "key", &options());
+        let at = arguments.iter().position(|a| a == "--cache-ram").unwrap();
+        assert_eq!(arguments[at + 1], "64");
+        for flag in ["--jinja", "--no-webui", "--no-mmproj"] {
+            assert!(arguments.contains(&flag.to_owned()), "{flag}");
+        }
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|a| a.as_str() == "--cache-ram")
+                .count(),
+            1
+        );
+    }
+
+    /// No config.ini and no LLAMA_ARG_* variable reaches the server.
+    #[test]
+    fn the_server_reads_no_configuration_file_or_variable() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("config");
+        std::fs::create_dir_all(home.join("llama.cpp")).unwrap();
+        std::fs::write(home.join("llama.cpp").join("config.ini"), "temp = 2\n").unwrap();
+        let mut command = Command::new("llama-server");
+        isolate_from_configuration(
+            &mut command,
+            &home,
+            ["PATH", "LLAMA_ARG_TEMP_INTERN_TEST"].map(std::ffi::OsString::from),
+        );
+
+        assert!(
+            !home.join("llama.cpp").exists(),
+            "a planted config is removed"
+        );
+        let envs = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let home = home.to_string_lossy().into_owned();
+        assert!(envs.contains(&("PROGRAMDATA".into(), Some(String::new()))));
+        assert!(envs.contains(&("APPDATA".into(), Some(home.clone()))));
+        assert!(envs.contains(&("XDG_CONFIG_HOME".into(), Some(home))));
+        assert!(envs.contains(&("LLAMA_ARG_TEMP_INTERN_TEST".into(), None)));
+        assert!(!envs.iter().any(|(name, _)| name == "PATH"));
+    }
+
     #[test]
     fn a_vision_launch_loads_the_projector() {
         let arguments = LlamaServer::arguments_for(
@@ -506,6 +618,7 @@ mod tests {
 
         let launcher = StdProcessLauncher {
             log_directory: Some(logs.clone()),
+            config_home: directory.path().join("config"),
         };
         let mut process = launcher
             .launch(
@@ -529,6 +642,7 @@ mod tests {
         // No directory: the launch is unchanged, and nothing is written.
         let launcher = StdProcessLauncher {
             log_directory: None,
+            config_home: directory.path().join("config"),
         };
         let mut process = launcher
             .launch(

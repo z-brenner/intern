@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs InternBench live: starts llama-server with the flags the desktop app
 # uses (one slot, CPU only, 8,192-token context, the model's own chat
-# template, no web UI, no projector), waits for it to be healthy, runs
+# template, no web UI, no projector, a 64 MiB prompt cache, and no
+# config.ini or LLAMA_ARG_* variable), waits for it to be healthy, runs
 # `intern-bench run` over bench/generated with a recording, and stops the
 # server however the run ends. See docs/internbench.md.
 #
@@ -10,13 +11,18 @@
 #   INTERN_RUNTIME_DIR=/path/to/runtime scripts/run-internbench.sh [OUT_DIR] [-- intern-bench run args...]
 #
 # Environment (all optional except MODEL and LLAMA_SERVER):
-#   MODEL               the GGUF the app downloads (required)
-#   LLAMA_SERVER        the llama-server binary (required)
+#   MODEL               the GGUF the app downloads (required): one of the variants
+#                       src-tauri/resources/model-manifest.json pins, e.g.
+#                       Ternary-Bonsai-2-4B-PQ2_0.gguf (the default)
+#   LLAMA_SERVER        the llama-server binary (required): the Prism llama.cpp
+#                       build runtime-assets.json pins (PQ2_0 needs its kernels)
 #   INTERN_RUNTIME_DIR  what the worker reads PDFium, Tesseract and tessdata from
 #   INTERN_WORKER       the parser worker (default: target/release/intern-worker)
 #   INTERN_BENCH        the benchmark (default: built with cargo --release)
 #   THREADS             model threads (default: the app's, half the logical cores, 2..12)
 #   PORT                server port (default: 18090)
+#   NOTE                more provenance for the recording's note (the runtime
+#                       build, the worker), appended after the server settings
 #   CORPUS, GOLD        the corpus and its gold (default: bench/generated, bench/gold.json;
 #                       the default corpus is generated again unless every file in it
 #                       matches the committed bench/manifest.json, so a missing, partial
@@ -100,9 +106,16 @@ fi
 mkdir -p "$OUT_DIR"
 
 KEY="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-"$LLAMA_SERVER" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
+# As the app launches it (crates/intern-engine/src/server.rs): no config.ini
+# from a configuration home, and no LLAMA_ARG_* variable, can change a
+# setting the flags below do not name.
+CONFIG_HOME="$OUT_DIR/llama-server-config"
+rm -rf "$CONFIG_HOME/llama.cpp"
+env $(env | sed -n 's/^\(LLAMA_ARG_[^=]*\)=.*/-u \1/p') \
+  PROGRAMDATA= APPDATA="$CONFIG_HOME" XDG_CONFIG_HOME="$CONFIG_HOME" \
+  "$LLAMA_SERVER" --host 127.0.0.1 --port "$PORT" --api-key "$KEY" --model "$MODEL" \
   --parallel 1 --ctx-size 8192 --n-gpu-layers 0 \
-  --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --no-mmproj \
+  --threads "$THREADS" --threads-batch "$THREADS" --jinja --no-webui --cache-ram 64 --no-mmproj \
   > "$OUT_DIR/llama-server.log" 2>&1 &
 SERVER=$!
 trap 'kill "$SERVER" 2>/dev/null || true; wait "$SERVER" 2>/dev/null || true' EXIT
@@ -123,7 +136,7 @@ status=0
 "$INTERN_BENCH" run --corpus "$CORPUS" --gold "$GOLD" ${MANIFEST_ARGUMENTS[@]+"${MANIFEST_ARGUMENTS[@]}"} \
   --worker "$WORKER" --endpoint "http://127.0.0.1:$PORT/v1/chat/completions" --api-key "$KEY" \
   --model-id intern-local --model-path "$MODEL" --server-pid "$SERVER" \
-  --note "llama-server $THREADS threads, 8192 context, $(uname -sm)" \
+  --note "llama-server $THREADS threads, 8192 context, 64 MiB prompt cache, $(uname -sm)${NOTE:+; $NOTE}" \
   --record "$OUT_DIR/recording.json" --output "$OUT_DIR/report.json" --markdown "$OUT_DIR/report.md" \
   "$@" || status=$?
 echo "report: $OUT_DIR/report.md (JSON: $OUT_DIR/report.json, recording: $OUT_DIR/recording.json)" >&2

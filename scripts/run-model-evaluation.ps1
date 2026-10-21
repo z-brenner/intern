@@ -4,7 +4,9 @@
     pipeline with the pinned local model, on this machine, with real inference.
 
 .DESCRIPTION
-    Downloads and verifies the exact model named by the embedded manifest,
+    Downloads and verifies the exact model one variant of the embedded
+    manifest names (the default variant, Bonsai 4B, unless -Variant says
+    otherwise),
     starts the packaged llama.cpp server text-only on a loopback port with a
     random key, runs every generated fixture through `intern-evaluate`, and
     records accuracy, review rate, latency, and peak model memory.
@@ -22,7 +24,10 @@ param(
     # The shipping pipeline by default: the release gate accepts nothing else.
     # `digest` (or its old name `new`) and `legacy` remain for comparison runs.
     [ValidateSet("evidence", "digest", "new", "legacy")][string]$Pipeline = "evidence",
-    [int]$Threads = 0
+    [int]$Threads = 0,
+    # A variant id from model-manifest.json; empty means its default, which is
+    # the only variant the release gate accepts evidence from.
+    [string]$Variant = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,8 +40,11 @@ $Evaluate = (Resolve-Path -LiteralPath $EvaluatePath).Path
 $Fixtures = (Resolve-Path -LiteralPath $FixtureDirectory).Path
 $ExpectedPath = Join-Path $Repository "fixtures/expected.json"
 $Manifest = Get-Content -LiteralPath (Join-Path $Repository "src-tauri/resources/model-manifest.json") -Raw | ConvertFrom-Json
-$ModelSpec = $Manifest.files | Where-Object { $_.role -eq "model" } | Select-Object -First 1
-if (-not $ModelSpec) { throw "The embedded manifest names no text model" }
+if (-not $Variant) { $Variant = [string]$Manifest.default }
+$VariantSpec = $Manifest.variants | Where-Object { $_.id -eq $Variant } | Select-Object -First 1
+if (-not $VariantSpec) { throw "The embedded manifest has no variant $Variant" }
+$ModelSpec = $VariantSpec.files | Where-Object { $_.role -eq "model" } | Select-Object -First 1
+if (-not $ModelSpec) { throw "The embedded manifest names no text model for $Variant" }
 if ($Threads -le 0) {
     $Logical = [Environment]::ProcessorCount
     $Threads = [Math]::Min(12, [Math]::Max(2, [int]($Logical / 2)))
@@ -87,10 +95,25 @@ $Arguments = @(
     "--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey,
     "--model", $ModelPath, "--parallel", "1", "--ctx-size", "8192",
     "--n-gpu-layers", "0", "--threads", "$Threads", "--threads-batch", "$Threads",
-    "--jinja", "--no-webui", "--no-mmproj"
+    "--jinja", "--no-webui", "--cache-ram", "64", "--no-mmproj"
 )
 $ServerLog = Join-Path $ModelDirectory "llama-server.log"
-$Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput $ServerLog -RedirectStandardError "$ServerLog.err"
+# As the app launches it: no config.ini from %PROGRAMDATA% or %APPDATA%, and
+# no LLAMA_ARG_* variable, may change a setting the flags above do not name.
+$SavedEnvironment = @{}
+foreach ($Name in @("PROGRAMDATA", "APPDATA") + @(Get-ChildItem Env: | Where-Object { $_.Name -like "LLAMA_ARG_*" } | ForEach-Object { $_.Name })) {
+    $SavedEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name)
+}
+$ConfigHome = Join-Path $ModelDirectory "llama-server-config"
+if (Test-Path -LiteralPath (Join-Path $ConfigHome "llama.cpp")) { Remove-Item -LiteralPath (Join-Path $ConfigHome "llama.cpp") -Recurse -Force }
+try {
+    foreach ($Name in $SavedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $null) }
+    $env:APPDATA = $ConfigHome
+    $Process = Start-Process -FilePath $Server -ArgumentList $Arguments -PassThru -NoNewWindow -RedirectStandardOutput $ServerLog -RedirectStandardError "$ServerLog.err"
+}
+finally {
+    foreach ($Name in $SavedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $SavedEnvironment[$Name]) }
+}
 
 try {
     $Deadline = (Get-Date).AddMinutes(10)
@@ -157,6 +180,8 @@ $AcceptanceJson = & node (Join-Path $Repository "scripts/validate-model-evaluati
 $AcceptanceExit = $LASTEXITCODE
 $Acceptance = $AcceptanceJson | ConvertFrom-Json
 $Report | Add-Member -NotePropertyName "acceptance" -NotePropertyValue $Acceptance -Force
+$Report | Add-Member -NotePropertyName "model_variant" -NotePropertyValue ([string]$VariantSpec.id) -Force
+$Report | Add-Member -NotePropertyName "model_label" -NotePropertyValue ([string]$VariantSpec.model_id) -Force
 $Report | Add-Member -NotePropertyName "model_file" -NotePropertyValue ([string]$ModelSpec.name) -Force
 $Report | Add-Member -NotePropertyName "model_sha256" -NotePropertyValue ([string]$ModelSpec.sha256) -Force
 $Report | Add-Member -NotePropertyName "model_bytes" -NotePropertyValue ([long]$ModelSpec.size) -Force

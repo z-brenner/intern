@@ -33,6 +33,38 @@ impl ModelSource {
     }
 }
 
+/// Which local model is downloaded and run, when the local model is chosen.
+///
+/// Each is a variant of `model-manifest.json`, pinned there by URL, size and
+/// SHA-256, and only the chosen one is ever downloaded. Bonsai 4B is the
+/// default; Bonsai 2B is the smaller, faster, lower-memory choice that names
+/// fewer documents correctly (docs/model-bakeoff.md). A settings file from
+/// before there was a choice has no `localModel` and gets the default.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum LocalModel {
+    #[default]
+    #[serde(rename = "bonsai-4b")]
+    Bonsai4b,
+    #[serde(rename = "bonsai-2b")]
+    Bonsai2b,
+}
+
+impl LocalModel {
+    pub const ALL: [Self; 2] = [Self::Bonsai4b, Self::Bonsai2b];
+
+    /// The variant id in `model-manifest.json`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bonsai4b => "bonsai-4b",
+            Self::Bonsai2b => "bonsai-2b",
+        }
+    }
+
+    pub fn from_variant(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|model| model.as_str() == id)
+    }
+}
+
 /// How filed documents are arranged under the destination folder.
 ///
 /// A flat destination is the default and what every earlier version did. The
@@ -137,6 +169,9 @@ pub struct AppSettings {
     /// The local model, or a hosted one behind an API key.
     #[serde(default)]
     pub model_source: ModelSource,
+    /// Which local model, when the local one is chosen.
+    #[serde(default)]
+    pub local_model: LocalModel,
     /// The wire format the hosted model speaks.
     #[serde(default)]
     pub hosted_provider: HostedProvider,

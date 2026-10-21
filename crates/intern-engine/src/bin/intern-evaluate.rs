@@ -52,6 +52,17 @@
 //! server's context when it is not the app's. A recording says which
 //! pipeline, retrieval and prompt made it, and is replayed only through the
 //! same pipeline.
+//!
+//! **Model identity.** An evidence-pipeline recording must say which model
+//! file answered it: `--model-path PATH` on a live `--record` run hashes the
+//! GGUF the server loaded into the recording's `model` header. Replay
+//! refuses an evidence recording whose model is not one of the variants
+//! `model-manifest.json` pins, so replies from a model Intern no longer
+//! ships can never stand in for the one it does (`--allow-other-model`
+//! scores one anyway, with a warning, to compare an engine change on an
+//! earlier model's replies; CI never passes it). The digest pipeline, which
+//! a hosted model reads, is not checked: its recording documents the local
+//! model that made it.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -141,6 +152,16 @@ fn run() -> Result<i32, String> {
         return Err("legacy runs cannot be recorded".to_owned());
     }
     let settings = EvidenceSettings::parse(&pipeline, &arguments)?;
+    let recorded_model = match arguments.get("model-path") {
+        Some(path) => Some(RecordedModel::of(Path::new(path))?),
+        None => None,
+    };
+    if record_path.is_some() && settings.evidence() && recorded_model.is_none() {
+        return Err(
+            "an evidence-pipeline recording must say which model made it: pass --model-path with the GGUF the server loaded"
+                .to_owned(),
+        );
+    }
 
     let expected: Value = serde_json::from_slice(
         &fs::read(expected_path).map_err(|error| format!("cannot read gold corpus: {error}"))?,
@@ -230,6 +251,7 @@ fn run() -> Result<i32, String> {
                         .map(|elapsed| elapsed.as_secs())
                         .unwrap_or(0),
                     note: arguments.get("note").cloned().unwrap_or_default(),
+                    model: recorded_model,
                     fixtures: recorded,
                 }
                 .save(path)?;
@@ -693,6 +715,10 @@ struct EvidenceSettings {
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
     context_tokens: Option<usize>,
+    /// `--allow-other-model`: replay an evidence recording whose model the
+    /// manifest does not pin, with a warning - an earlier model's replies,
+    /// for comparing an engine change on them. Never in CI.
+    allow_other_model: bool,
 }
 
 impl EvidenceSettings {
@@ -743,6 +769,7 @@ impl EvidenceSettings {
             pipeline,
             retrieval,
             context_tokens,
+            allow_other_model: arguments.contains_key("allow-other-model"),
         })
     }
 
@@ -791,6 +818,12 @@ impl EvidenceSettings {
         }
         if !self.evidence() {
             return Ok(());
+        }
+        match check_model(recording.model.as_ref()) {
+            Err(refusal) if self.allow_other_model => {
+                eprintln!("WARNING: --allow-other-model: {refusal}");
+            }
+            result => result?,
         }
         if recording.retrieval != self.header_retrieval() {
             eprintln!("WARNING: the recording was made with another retrieval configuration");
@@ -996,7 +1029,77 @@ struct Recording {
     /// Free text about the machine and runtime the recording was made on.
     #[serde(default)]
     note: String,
+    /// The model file that answered, when the run named it (`--model-path`).
+    /// Required of an evidence-pipeline recording ([`check_model`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<RecordedModel>,
     fixtures: Vec<RecordedFixture>,
+}
+
+/// The model file a recording's replies came from.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct RecordedModel {
+    /// The file's name, without the directory it was in.
+    file: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
+impl RecordedModel {
+    fn of(path: &Path) -> Result<Self, String> {
+        use std::io::Read;
+        let mut file = fs::File::open(path)
+            .map_err(|error| format!("cannot read model {}: {error}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; 1 << 20];
+        let mut size_bytes = 0_u64;
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| format!("cannot read model {}: {error}", path.display()))?;
+            if read == 0 {
+                break;
+            }
+            size_bytes += read as u64;
+            hasher.update(&buffer[..read]);
+        }
+        Ok(Self {
+            file: path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            size_bytes,
+            sha256: format!("{:x}", hasher.finalize()),
+        })
+    }
+}
+
+/// Refuses an evidence recording that does not say which model made it, or
+/// was made by a model `model-manifest.json` does not pin: its replies are
+/// not what any model Intern ships would say.
+fn check_model(model: Option<&RecordedModel>) -> Result<(), String> {
+    let manifest = intern_engine::ModelManifest::embedded()
+        .map_err(|error| format!("model manifest: {error}"))?;
+    let Some(model) = model else {
+        return Err(
+            "the recording does not say which model made it; record it again with --model-path (see docs/evaluation.md)"
+                .to_owned(),
+        );
+    };
+    match manifest.variant_with_sha256(&model.sha256) {
+        Some(variant)
+            if variant
+                .model()
+                .is_some_and(|file| file.size == model.size_bytes) =>
+        {
+            Ok(())
+        }
+        _ => Err(format!(
+            "the recording was made with {} (sha256 {}), which is not a model model-manifest.json pins; record it again with a pinned model (see docs/evaluation.md)",
+            model.file,
+            model.sha256.get(..12).unwrap_or(&model.sha256)
+        )),
+    }
 }
 
 impl Recording {
@@ -1754,7 +1857,7 @@ fn strings(fixture: &Value, key: &str) -> Vec<String> {
 }
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale", "token-confidence"];
+const FLAGS: &[&str] = &["allow-stale", "allow-other-model", "token-confidence"];
 
 fn parse_arguments() -> Result<HashMap<String, String>, String> {
     let mut values = HashMap::new();
@@ -2142,6 +2245,7 @@ mod tests {
             context_tokens: None,
             recorded_at_unix: 0,
             note: String::new(),
+            model: None,
             fixtures: vec![RecordedFixture {
                 file: "invoice.txt".into(),
                 sha256: None,
@@ -2155,6 +2259,91 @@ mod tests {
                 }),
             }],
         }
+    }
+
+    fn evidence_settings() -> EvidenceSettings {
+        EvidenceSettings::parse("evidence", &HashMap::new()).unwrap()
+    }
+
+    fn recorded_model(file: &str, size_bytes: u64, sha256: &str) -> RecordedModel {
+        RecordedModel {
+            file: file.into(),
+            size_bytes,
+            sha256: sha256.into(),
+        }
+    }
+
+    /// An evidence recording made by a model the manifest no longer pins -
+    /// the Qwen model Intern shipped before Bonsai - or one that does not
+    /// say which model made it is refused before anything is scored.
+    #[test]
+    fn an_evidence_recording_must_be_a_pinned_models() {
+        let mut recording = recording_with(None);
+        recording.pipeline = Some(Pipeline::Evidence);
+        let settings = evidence_settings();
+
+        let error = settings.check(&recording).unwrap_err();
+        assert!(error.contains("--model-path"), "{error}");
+
+        recording.model = Some(recorded_model(
+            "Qwen3.5-2B-Q4_K_M.gguf",
+            1_280_835_840,
+            "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
+        ));
+        let error = settings.check(&recording).unwrap_err();
+        assert!(
+            error.contains("not a model model-manifest.json pins"),
+            "{error}"
+        );
+
+        // The right digest with the wrong length is not the pinned file.
+        recording.model = Some(recorded_model(
+            "Ternary-Bonsai-2-4B-PQ2_0.gguf",
+            1,
+            "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409",
+        ));
+        assert!(settings.check(&recording).is_err());
+
+        for (file, size, sha256) in [
+            (
+                "Ternary-Bonsai-2-4B-PQ2_0.gguf",
+                1_146_465_120,
+                "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409",
+            ),
+            (
+                "Ternary-Bonsai-2-2B-PQ2_0.gguf",
+                517_312_992,
+                "d5f01a4ecaf49239653308ee732ad1a0c5f802c0ddb997549fc7b694c8b45928",
+            ),
+        ] {
+            recording.model = Some(recorded_model(file, size, sha256));
+            settings.check(&recording).unwrap();
+        }
+    }
+
+    /// The digest pipeline is what a hosted model reads; its recording
+    /// documents the local model that made it and is not held to the
+    /// manifest.
+    #[test]
+    fn a_digest_recording_is_not_held_to_the_manifest() {
+        let mut recording = recording_with(None);
+        recording.model = Some(recorded_model("Qwen3.5-2B-Q4_K_M.gguf", 1, "aa"));
+        digest_settings().check(&recording).unwrap();
+    }
+
+    #[test]
+    fn a_recorded_model_is_named_by_file_size_and_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("model.gguf");
+        fs::write(&path, b"hello").unwrap();
+        assert_eq!(
+            RecordedModel::of(&path).unwrap(),
+            recorded_model(
+                "model.gguf",
+                5,
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+            )
+        );
     }
 
     /// The whole point of a recording: the engine's own validation and

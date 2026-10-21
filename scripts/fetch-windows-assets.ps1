@@ -21,6 +21,7 @@ $ResourcesDirectory = Join-Path $RepositoryRoot "src-tauri/resources"
 $NativeDirectory = Join-Path $ResourcesDirectory "native"
 $TessdataDirectory = Join-Path $ResourcesDirectory "tessdata"
 $OcrModelsDirectory = Join-Path $ResourcesDirectory "ocr-models"
+$IndraModelsDirectory = Join-Path $ResourcesDirectory "indra-models"
 $LicensesDirectory = Join-Path $ResourcesDirectory "licenses"
 $TargetTriple = "x86_64-pc-windows-msvc"
 $RuntimePackages = @{}
@@ -128,6 +129,7 @@ function Get-PackagedRuntimePath {
     }
     if ($Relative.StartsWith("src-tauri/resources/tessdata/")) { return "tessdata/$(Split-Path -Leaf $Path)" }
     if ($Relative.StartsWith("src-tauri/resources/ocr-models/")) { return "ocr-models/$(Split-Path -Leaf $Path)" }
+    if ($Relative.StartsWith("src-tauri/resources/indra-models/")) { return "indra-models/$(Split-Path -Leaf $Path)" }
     if ($Relative.StartsWith("src-tauri/resources/native/")) { return (Split-Path -Leaf $Path) }
     throw "No package mapping for staged runtime file: $Relative"
 }
@@ -148,7 +150,8 @@ try {
     if (Test-Path -LiteralPath $TessdataDirectory) { Remove-Item -LiteralPath $TessdataDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $LicensesDirectory) { Remove-Item -LiteralPath $LicensesDirectory -Recurse -Force }
     if (Test-Path -LiteralPath $OcrModelsDirectory) { Remove-Item -LiteralPath $OcrModelsDirectory -Recurse -Force }
-    New-Item -ItemType Directory -Path $NativeDirectory, $TessdataDirectory, $LicensesDirectory, $OcrModelsDirectory -Force | Out-Null
+    if (Test-Path -LiteralPath $IndraModelsDirectory) { Remove-Item -LiteralPath $IndraModelsDirectory -Recurse -Force }
+    New-Item -ItemType Directory -Path $NativeDirectory, $TessdataDirectory, $LicensesDirectory, $OcrModelsDirectory, $IndraModelsDirectory -Force | Out-Null
 
     $Downloads = @{}
     foreach ($Download in $Manifest.downloads) { $Downloads[$Download.id] = Get-PinnedDownload $Download }
@@ -162,16 +165,19 @@ try {
     $LlamaDestination = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"
     Copy-RuntimeFile $LlamaServer[0].FullName $LlamaDestination
     Register-RuntimePackage $LlamaDestination "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
-    # The release zip is flat and also contains impl DLLs for every CLI tool;
-    # stage only llama-server's dependency closure (server impl, core llama/ggml
-    # runtime, and the OpenMP runtime), not the other tools' private DLLs.
+    # The release zip (PrismML's fork, which Bonsai's PQ2_0 weights need) is
+    # flat and also contains impl DLLs for every CLI tool; stage only
+    # llama-server's dependency closure (server impl, core llama/ggml runtime
+    # including every ggml-cpu variant, and the OpenMP runtime), not the other
+    # tools' private DLLs.
     Get-ChildItem -LiteralPath $LlamaServer[0].Directory.FullName -File -Filter "*.dll" |
         Where-Object { $_.Name -eq "llama-server-impl.dll" -or $_.Name -notmatch '-impl\.dll$' } |
         ForEach-Object {
             Copy-SidecarDll $_.FullName "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
         }
-    # llama.cpp binary releases ship no license text inside the archive, so the
-    # MIT license is pinned as its own download from the same upstream tag.
+    # llama.cpp binary releases - the PrismML fork's as much as upstream's -
+    # ship no license text inside the archive, so the MIT license is pinned as
+    # its own download from the same fork commit.
     Copy-RuntimeFile $Downloads["llama.cpp-license"] (Join-Path $LicensesDirectory "llama.cpp-LICENSE.txt")
 
     $PdfiumExtract = Join-Path $WorkDirectory "pdfium"
@@ -235,6 +241,25 @@ try {
         Register-RuntimePackage $ModelDestination $OcrModelPackages[$ModelId] ([string]$ModelDownload.version)
     }
     Copy-RuntimeFile $Downloads["paddleocr-license"] (Join-Path $LicensesDirectory "PaddleOCR-models-LICENSE.txt")
+
+    # Indra OCR's networks, language model and vocabularies, every file
+    # pinned to one Hugging Face commit of datalab-to/indra-ocr (tag v1.1.0)
+    # and staged under the names the worker looks for. Only the Latin set:
+    # the multilingual recognizers and model.safetensors (the recognizer's
+    # float weights, which nothing reads) are not taken. The weights are
+    # under their own licence, shipped beside them as the licence requires;
+    # the Apache-2.0 licence of the Indra code the worker's reader is ported
+    # from is pinned from the same release of github.com/datalab-to/indra.
+    $IndraVersion = [string]($Manifest.downloads | Where-Object id -eq "indra-detection").version
+    foreach ($ModelId in @("indra-detection", "indra-orientation", "indra-recognition", "indra-order", "indra-language-model", "indra-meta")) {
+        $ModelDownload = $Manifest.downloads | Where-Object id -eq $ModelId
+        if ([string]$ModelDownload.version -ne $IndraVersion) { throw "Indra OCR files must all come from one model revision: $ModelId" }
+        $ModelDestination = Join-Path $IndraModelsDirectory $ModelDownload.archive
+        Copy-RuntimeFile $Downloads[$ModelId] $ModelDestination
+        Register-RuntimePackage $ModelDestination "datalab-to/indra-ocr" $IndraVersion
+    }
+    Copy-RuntimeFile $Downloads["indra-ocr-models-license"] (Join-Path $LicensesDirectory "indra-ocr-models-LICENSE.txt")
+    Copy-RuntimeFile $Downloads["indra-license"] (Join-Path $LicensesDirectory "indra-LICENSE.txt")
 
     $VcpkgDirectory = Join-Path $WorkDirectory "vcpkg"
     if (-not (Test-Path -LiteralPath (Join-Path $VcpkgDirectory ".git"))) {
@@ -305,9 +330,15 @@ try {
     if (-not (Test-Path -LiteralPath $TesseractCopyright -PathType Leaf)) { throw "Tesseract copyright file is missing" }
     Copy-RuntimeFile $TesseractCopyright (Join-Path $LicensesDirectory "tessdata-Apache-2.0.txt")
 
+    # Indra's language model (.npz) and vocabularies (.json) are bundled
+    # from its own directory only: a .json anywhere else is not a runtime file.
+    $IndraModelsPrefix = $IndraModelsDirectory.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
     $BundledFiles = @(
-        Get-ChildItem -LiteralPath $BinariesDirectory, $NativeDirectory, $TessdataDirectory, $OcrModelsDirectory -Recurse -File |
-            Where-Object { $_.Extension -in @(".exe", ".dll", ".traineddata", ".onnx") } |
+        Get-ChildItem -LiteralPath $BinariesDirectory, $NativeDirectory, $TessdataDirectory, $OcrModelsDirectory, $IndraModelsDirectory -Recurse -File |
+            Where-Object {
+                $_.Extension -in @(".exe", ".dll", ".traineddata", ".onnx") -or
+                ($_.FullName.StartsWith($IndraModelsPrefix) -and $_.Extension -in @(".npz", ".json"))
+            } |
             Sort-Object FullName |
             ForEach-Object {
                 $Relative = [System.IO.Path]::GetRelativePath($RepositoryRoot, $_.FullName).Replace("\", "/")

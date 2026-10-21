@@ -14,6 +14,12 @@ path = "src/main.rs"
 name = "route_calibration"
 required-features = ["native-pdfium"]
 
+# Reads InternBench's scans with one OCR engine and scores them
+# (docs/ocr.md); it renders PDFs and runs the ONNX engines.
+[[example]]
+name = "ocr_engines"
+required-features = ["native-pdfium", "onnx-ocr"]
+
 [features]
 default = []
 native-pdfium = ["dep:pdfium-render"]
@@ -33,12 +39,17 @@ codepage = "=0.1.2"
 csv = "=1.4.0"
 encoding_rs = "=0.8.35"
 jiff = "=0.2.35"
+# The rotation's sine and cosine, the same on every platform: the C
+# runtimes' differ in the last place, and the deskew is held to OpenCV's.
+libm = "=0.2.16"
 mailparse = "=0.16.1"
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "tiff"] }
 pdfium-render = { version = "=0.9.3", optional = true, default-features = false, features = ["image_025", "pdfium_7881", "thread_safe"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
 thiserror = "=2.0.17"
+unicode-normalization = "=0.1.24"
+unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"] }
 zip = { version = "=4.6.1", default-features = false, features = ["deflate"] }
 msg_parser = "=0.3.6"
 ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["std", "load-dynamic"] }
@@ -48,5 +59,7 @@ intern-core = { path = "../intern-core" }
 # The host's side of the protocol, so a test can hold the two to the same
 # layouts: the engine mirrors the worker's types rather than sharing them.
 intern-engine = { path = "../intern-engine" }
+# The benchmark's gold and OCR measure, for the ocr_engines example.
+intern-bench = { path = "../intern-bench" }
 intern-intake = { path = "../intern-intake" }
 tempfile = "=3.23.0"

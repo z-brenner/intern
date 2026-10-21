@@ -198,7 +198,8 @@ impl Engine {
     /// behind both.
     ///
     /// The budget is in characters, the model's context in tokens, and the
-    /// two part ways on exactly the documents a firm files: Qwen reads every
+    /// two part ways on exactly the documents a firm files: the Qwen3.5
+    /// tokenizer (which Bonsai, a Qwen3.5 derivative, keeps) reads every
     /// digit, and every CJK character, as a token of its own, so a bank
     /// statement or a Chinese contract inside the character budget can still
     /// overflow the local server's 8,192 tokens. For a model with a context
@@ -613,15 +614,22 @@ pub fn finish_with_dates(
     }
 }
 
-/// Roughly how many tokens `text` costs Qwen's tokenizer: one per digit and
+/// Roughly how many tokens `text` costs the Qwen3.5 tokenizer the local
+/// model (Bonsai, a Qwen3.5 derivative) uses: one per digit and
 /// per CJK, Hangul, or Kana character, which it splits singly, and one per
 /// three and a half characters of anything else. Deliberately on the high
 /// side; underestimating is what costs a request.
-/// The estimated tokens of a request's own text: its user turn, and its
-/// system turn when that is the request's own (the compact evidence reply
-/// carries its instructions there).
+/// The estimated tokens of a request's own text: its user turn, its system
+/// turn when that is the request's own (the compact evidence reply carries
+/// its instructions there), and its worked examples.
 fn request_tokens(request: &ModelRequest) -> usize {
-    estimated_tokens(&request.prompt) + request.system.as_deref().map_or(0, estimated_tokens)
+    estimated_tokens(&request.prompt)
+        + request.system.as_deref().map_or(0, estimated_tokens)
+        + request
+            .examples
+            .iter()
+            .map(|example| estimated_tokens(example.user) + estimated_tokens(example.assistant))
+            .sum::<usize>()
 }
 
 /// The least context, in tokens, the evidence pipeline can answer in.

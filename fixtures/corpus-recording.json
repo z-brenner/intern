@@ -4,9 +4,14 @@
   "budget_characters": 12000,
   "pipeline": "evidence",
   "retrieval": "f7ab2a5355b6f3c7c7d1938067462f0f92e15edda279238a373ed5068fc2942e",
-  "prompt_version": "4425663a8a9e",
-  "recorded_at_unix": 1791392088,
-  "note": "Qwen3.5-2B-Q4_K_M.gguf (manifest sha256 aaf42c8b), llama.cpp CPU build, 4 threads, 8192 context, Linux x86_64; routing worker with PP-OCR (phase 2); evidence pipeline, stable ids, compact reply; every fixture recorded live on 2026-10-07 from commit 902c7fe65c69 (the Stage 7 prompt). The digest pipeline's recording is fixtures/corpus-recording-digest.json",
+  "prompt_version": "e2afbe23e64c",
+  "recorded_at_unix": 1792551213,
+  "note": "Ternary-Bonsai-2-4B-PQ2_0.gguf (variant bonsai-4b, manifest sha256 d406b1e9), PrismML llama.cpp prism-b10777-e3de715 ubuntu-x64 release build (llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz, sha256 3f97b6fb), 2 threads, 8192 context, 64 MiB prompt cache, no config.ini, Linux x86_64 (16 logical cores); worker OCR = Indra OCR (datalab-to/indra-ocr v1.1.0; PP-OCR re-reads pages under 75 confidence; no Tesseract installed), worker built with onnx-ocr,native-pdfium from commit 6062c2ccb19d (feat/indra-ocr 47346f5 merged); evidence pipeline, stable ids, the few-shot Bonsai profile (prompt e2afbe23e64c); every fixture recorded live on 2026-10-21. Linux recording: the Windows recording of record, on the packaged runtime, is a follow-up. The digest pipeline's recording is fixtures/corpus-recording-digest.json",
+  "model": {
+    "file": "Ternary-Bonsai-2-4B-PQ2_0.gguf",
+    "size_bytes": 1146465120,
+    "sha256": "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409"
+  },
   "fixtures": [
     {
       "file": "employment-agreement.pdf",
@@ -147,16 +152,16 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "00b6924c3d2b4ebee404d4038145a7798ca800652abff808c4b08b66d3e9067e",
+      "prompt_sha256": "67f55f730ec2a6afec08b2b59117e778564b1757b5604e711081b61f8a731512",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Employment Agreement",
+          "document_type": "EMPLOYMENT AGREEMENT",
           "document_date": "2025-02-14",
           "date_role": "effective",
           "parties": [
-            "Northstar Lantern Works LLC",
-            "Mira Vale"
+            "Northstar Lantern Works LLC.",
+            "Mira Vale."
           ],
           "party_relation": "none",
           "description": "",
@@ -168,7 +173,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Employment Agreement",
+            "document_type": "EMPLOYMENT AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
@@ -179,23 +184,23 @@
             ],
             "parties": [
               {
-                "name": "Northstar Lantern Works LLC",
+                "name": "Northstar Lantern Works LLC.",
                 "role": "employer",
                 "evidence": [
-                  "p1.b2.f2"
+                  "p1.b2.f3"
                 ]
               },
               {
-                "name": "Mira Vale",
+                "name": "Mira Vale.",
                 "role": "employee",
                 "evidence": [
                   "p1.b2.f3"
                 ]
               }
             ],
-            "subject": "Employment",
+            "subject": "Employment Agreement",
             "subject_evidence": [
-              "p1.b2.f3"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -213,9 +218,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "LEASE AGREEMENT\nEFFECTIVE SEPTEMBER 1 2024\n\nPrOperty 47 JUniper LOOP\nCedar Finch Properties Llc\nOrion Glass Studio inc",
+              "text": "LEASE\nAGREEMENT\nEFFECTIUE SEPTEMBER 1 2024\nPROPERTY 47 JUNIPER LOOP\nCEDRR FINCH PROPERTIES LLC\nORION GLASS STUDIO INC",
               "origin": "ocr",
-              "ocr_confidence": 77,
+              "ocr_confidence": 89,
               "layout": {
                 "width": 6120,
                 "height": 7920,
@@ -241,83 +246,76 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "heading",
-                    "text": "LEASE AGREEMENT\nEFFECTIVE SEPTEMBER 1 2024",
+                    "kind": "paragraph",
+                    "text": "LEASE\nAGREEMENT\nEFFECTIUE SEPTEMBER 1 2024\nPROPERTY 47 JUNIPER LOOP\nCEDRR FINCH PROPERTIES LLC\nORION GLASS STUDIO INC",
                     "bbox": [
-                      538,
-                      821,
+                      557,
+                      838,
                       3696,
-                      1193
+                      1721
                     ],
-                    "level": 4,
                     "source": "ocr",
-                    "confidence": 96,
+                    "confidence": 97,
                     "lines": [
                       {
-                        "text": "LEASE AGREEMENT",
+                        "text": "LEASE",
                         "bbox": [
-                          538,
-                          821,
-                          2374,
-                          1003
+                          557,
+                          838,
+                          1284,
+                          1034
+                        ],
+                        "confidence": 94
+                      },
+                      {
+                        "text": "AGREEMENT",
+                        "bbox": [
+                          1241,
+                          845,
+                          2347,
+                          1018
                         ],
                         "confidence": 98
                       },
                       {
-                        "text": "EFFECTIVE SEPTEMBER 1 2024",
+                        "text": "EFFECTIUE SEPTEMBER 1 2024",
                         "bbox": [
-                          562,
-                          1010,
+                          557,
+                          1003,
                           3696,
-                          1193
+                          1205
                         ],
-                        "confidence": 93
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "paragraph",
-                    "text": "PrOperty 47 JUniper LOOP\nCedar Finch Properties Llc\nOrion Glass Studio inc",
-                    "bbox": [
-                      562,
-                      1183,
-                      3696,
-                      1728
-                    ],
-                    "section": "p1.b1",
-                    "source": "ocr",
-                    "confidence": 68,
-                    "lines": [
-                      {
-                        "text": "PrOperty 47 JUniper LOOP",
-                        "bbox": [
-                          562,
-                          1183,
-                          3463,
-                          1366
-                        ],
-                        "confidence": 67
+                        "confidence": 98
                       },
                       {
-                        "text": "Cedar Finch Properties Llc",
+                        "text": "PROPERTY 47 JUNIPER LOOP",
                         "bbox": [
-                          562,
+                          559,
+                          1188,
+                          3449,
+                          1378
+                        ],
+                        "confidence": 95
+                      },
+                      {
+                        "text": "CEDRR FINCH PROPERTIES LLC",
+                        "bbox": [
+                          557,
                           1366,
                           3696,
-                          1548
+                          1567
                         ],
-                        "confidence": 67
+                        "confidence": 97
                       },
                       {
-                        "text": "Orion Glass Studio inc",
+                        "text": "ORION GLASS STUDIO INC",
                         "bbox": [
-                          562,
+                          576,
                           1546,
                           3214,
-                          1728
+                          1721
                         ],
-                        "confidence": 71
+                        "confidence": 99
                       }
                     ]
                   }
@@ -329,16 +327,16 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "3ba03391335c426949a636a82597e5c2070f8e6fde4370f2d2dbbb71b54a13ea",
+      "prompt_sha256": "6d45cc58c8affe1433a1f6e4afada702d28d4eea2ad841073a4d8736d6f6acdb",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Lease Agreement",
+          "document_type": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIPER LOOP CEDRR FINCH",
           "document_date": "2024-09-01",
           "date_role": "effective",
           "parties": [
-            "PrOperty 47 JUniper LOOP Cedar Finch Properties Llc",
-            "Orion Glass Studio inc"
+            "Finch Properties LLC",
+            "Orion Glass Studio Inc"
           ],
           "party_relation": "none",
           "description": "",
@@ -350,7 +348,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Lease Agreement",
+            "document_type": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIPER LOOP CEDRR FINCH",
             "type_evidence": [
               "p1.b1"
             ],
@@ -361,21 +359,21 @@
             ],
             "parties": [
               {
-                "name": "PrOperty 47 JUniper LOOP Cedar Finch Properties Llc",
-                "role": "client",
+                "name": "Finch Properties LLC",
+                "role": "landlord",
                 "evidence": [
                   "p1.b1"
                 ]
               },
               {
-                "name": "Orion Glass Studio inc",
-                "role": "client",
+                "name": "Orion Glass Studio Inc",
+                "role": "tenant",
                 "evidence": [
                   "p1.b1"
                 ]
               }
             ],
-            "subject": "Lease Agreement",
+            "subject": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIP",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -513,9 +511,9 @@
             },
             {
               "page_number": 2,
-              "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIVE\n\nSolstice index Llc\n\nJANUARY 8 2025",
+              "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIUE\nSOLSTICE INDEX LLC\nJANUARY 8 2025",
               "origin": "ocr",
-              "ocr_confidence": 83,
+              "ocr_confidence": 91,
               "layout": {
                 "width": 6120,
                 "height": 7920,
@@ -541,90 +539,57 @@
                 "blocks": [
                   {
                     "id": "p2.b1",
-                    "kind": "heading",
-                    "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIVE",
+                    "kind": "paragraph",
+                    "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIUE\nSOLSTICE INDEX LLC\nJANUARY 8 2025",
                     "bbox": [
-                      562,
-                      821,
-                      3206,
-                      1183
+                      559,
+                      842,
+                      3216,
+                      1534
                     ],
-                    "level": 4,
+                    "section": "p1.b1",
                     "source": "ocr",
-                    "confidence": 98,
+                    "confidence": 97,
                     "lines": [
                       {
                         "text": "SIGNATURE PAGE",
                         "bbox": [
                           562,
-                          821,
-                          2256,
-                          1001
+                          842,
+                          2237,
+                          1003
+                        ],
+                        "confidence": 99
+                      },
+                      {
+                        "text": "LUMEN KITE COOPERATIUE",
+                        "bbox": [
+                          559,
+                          1008,
+                          3216,
+                          1198
                         ],
                         "confidence": 97
                       },
                       {
-                        "text": "LUMEN KITE COOPERATIVE",
+                        "text": "SOLSTICE INDEX LLC",
                         "bbox": [
-                          562,
-                          1001,
-                          3206,
-                          1183
+                          559,
+                          1188,
+                          2734,
+                          1368
                         ],
-                        "confidence": 99
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p2.b2",
-                    "kind": "heading",
-                    "text": "Solstice index Llc",
-                    "bbox": [
-                      552,
-                      1164,
-                      2758,
-                      1390
-                    ],
-                    "level": 3,
-                    "source": "ocr",
-                    "confidence": 65,
-                    "lines": [
-                      {
-                        "text": "Solstice index Llc",
-                        "bbox": [
-                          552,
-                          1164,
-                          2758,
-                          1390
-                        ],
-                        "confidence": 65
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p2.b3",
-                    "kind": "heading",
-                    "text": "JANUARY 8 2025",
-                    "bbox": [
-                      547,
-                      1351,
-                      2263,
-                      1553
-                    ],
-                    "level": 4,
-                    "section": "p2.b2",
-                    "source": "ocr",
-                    "confidence": 77,
-                    "lines": [
+                        "confidence": 97
+                      },
                       {
                         "text": "JANUARY 8 2025",
                         "bbox": [
-                          547,
-                          1351,
-                          2263,
-                          1553
+                          562,
+                          1363,
+                          2254,
+                          1534
                         ],
-                        "confidence": 77
+                        "confidence": 93
                       }
                     ]
                   }
@@ -636,13 +601,13 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "94eb694ea535b917628eef819572097321e2f247e93cedad2a427e4ccbcd42d1",
+      "prompt_sha256": "0ec0863ac1cc643082b540d4c307363c9b48bcc2297f3f30e0e3bd836592b11a",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Services Agreement",
+          "document_type": "SERVICES AGREEMENT",
           "document_date": "2025-01-08",
-          "date_role": "effective",
+          "date_role": "execution",
           "parties": [
             "Lumen Kite Cooperative",
             "Solstice Index LLC"
@@ -657,26 +622,26 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Services Agreement",
+            "document_type": "SERVICES AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-01-08",
-            "date_role": "effective",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b2"
             ],
             "parties": [
               {
                 "name": "Lumen Kite Cooperative",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Solstice Index LLC",
-                "role": "recipient",
+                "role": "contractor",
                 "evidence": [
                   "p1.b2"
                 ]
@@ -848,11 +813,11 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "1c87e94f00d5e4263e0dcddeb8575b5a3dd8d2018257f25aba56a09ee68f6305",
+      "prompt_sha256": "a8e002cd199c96827019b7eeab3fb3e5db376f43c0feab9f2788fe63499873a1",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Non-Disclosure Agreement",
+          "document_type": "MUTUAL NON-DISCLOSURE AGREEMENT",
           "document_date": "2025-03-03",
           "date_role": "execution",
           "parties": [
@@ -869,7 +834,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Non-Disclosure Agreement",
+            "document_type": "MUTUAL NON-DISCLOSURE AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
@@ -881,14 +846,14 @@
             "parties": [
               {
                 "name": "Fable Harbor Labs LLC",
-                "role": "recipient",
+                "role": "contractor",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Copper Wren Design Inc.",
-                "role": "sender",
+                "role": "contractor",
                 "evidence": [
                   "p1.b2"
                 ]
@@ -1080,11 +1045,11 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "3149460680166d1b8a1db44af30264001efc99914d2c542329bcd55cd42c4da3",
+      "prompt_sha256": "99f694285beb81d83b3966191d3ebce35011562c9a7439bc2d5121520e79be97",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Invoice",
+          "document_type": "INVOICE",
           "document_date": "2025-04-30",
           "date_role": "invoice",
           "parties": [
@@ -1101,32 +1066,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Invoice",
+            "document_type": "INVOICE",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-04-30",
             "date_role": "invoice",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2.f1"
             ],
             "parties": [
               {
                 "name": "Nimbus Orchard Supply Co.",
-                "role": "sender",
+                "role": "issuer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b3"
                 ]
               },
               {
                 "name": "Atlas Threadworks LLC",
-                "role": "recipient",
+                "role": "customer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b3"
                 ]
               }
             ],
-            "subject": "1-page document",
+            "subject": "Invoice",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -1219,14 +1184,16 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "f720c07671345f1743fbd7fd823b45011f58851c12954351ca77e9ca3c25d278",
+      "prompt_sha256": "4dddc0f42019cfd9c62481348cac1ea79d9dcb46f8f080d147e93adbb41b242b",
       "reply": {
         "outcome": "proposed",
         "proposal": {
           "document_type": "Quarterly Operations Review",
           "document_date": "2025-05-07",
-          "date_role": "other",
-          "parties": [],
+          "date_role": "execution",
+          "parties": [
+            "The Fictional Meridian Committee"
+          ],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -1242,14 +1209,22 @@
               "p1.b1"
             ],
             "document_date": "2025-05-07",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
-            "parties": [],
-            "subject": "inventory",
+            "parties": [
+              {
+                "name": "The Fictional Meridian Committee",
+                "role": "recipient",
+                "evidence": [
+                  "p1.b3"
+                ]
+              }
+            ],
+            "subject": "inventory, safety, and the next quarterly plan",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b3"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -1267,9 +1242,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "DElIvery RECeIPt DR-771\n\nJUNE 12 2025.\n\nPine Echo Couriers Llc\nViolet cartography Studio",
+              "text": "DELIUERY RECEIPT DR-771\nJUNE 12 2025\nPINE ECHO COURIERS LLC\nI\nUIOLET CARTOGRAPHY STUDIO",
               "origin": "ocr",
-              "ocr_confidence": 74,
+              "ocr_confidence": 90,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -1295,88 +1270,67 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "paragraph",
-                    "text": "DElIvery RECeIPt DR-771",
-                    "bbox": [
-                      24,
-                      24,
-                      1013,
-                      86
-                    ],
-                    "source": "ocr",
-                    "confidence": 60,
-                    "lines": [
-                      {
-                        "text": "DElIvery RECeIPt DR-771",
-                        "bbox": [
-                          24,
-                          24,
-                          1013,
-                          86
-                        ],
-                        "confidence": 60
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
                     "kind": "heading",
-                    "text": "JUNE 12 2025.",
+                    "text": "DELIUERY RECEIPT DR-771\nJUNE 12 2025\nPINE ECHO COURIERS LLC\nI\nUIOLET CARTOGRAPHY STUDIO",
                     "bbox": [
-                      22,
-                      84,
-                      547,
-                      156
+                      17,
+                      17,
+                      1114,
+                      281
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 92,
+                    "confidence": 97,
                     "lines": [
                       {
-                        "text": "JUNE 12 2025.",
+                        "text": "DELIUERY RECEIPT DR-771",
                         "bbox": [
-                          22,
-                          84,
-                          547,
-                          156
+                          19,
+                          17,
+                          1022,
+                          91
                         ],
-                        "confidence": 92
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b3",
-                    "kind": "paragraph",
-                    "text": "Pine Echo Couriers Llc\nViolet cartography Studio",
-                    "bbox": [
-                      22,
-                      154,
-                      1106,
-                      286
-                    ],
-                    "section": "p1.b2",
-                    "source": "ocr",
-                    "confidence": 70,
-                    "lines": [
-                      {
-                        "text": "Pine Echo Couriers Llc",
-                        "bbox": [
-                          22,
-                          154,
-                          979,
-                          216
-                        ],
-                        "confidence": 82
+                        "confidence": 96
                       },
                       {
-                        "text": "Violet cartography Studio",
+                        "text": "JUNE 12 2025",
                         "bbox": [
-                          24,
-                          216,
-                          1106,
-                          286
+                          17,
+                          79,
+                          552,
+                          158
                         ],
-                        "confidence": 57
+                        "confidence": 99
+                      },
+                      {
+                        "text": "PINE ECHO COURIERS LLC",
+                        "bbox": [
+                          19,
+                          144,
+                          991,
+                          226
+                        ],
+                        "confidence": 96
+                      },
+                      {
+                        "text": "I",
+                        "bbox": [
+                          636,
+                          151,
+                          672,
+                          238
+                        ],
+                        "confidence": 98
+                      },
+                      {
+                        "text": "UIOLET CARTOGRAPHY STUDIO",
+                        "bbox": [
+                          17,
+                          209,
+                          1114,
+                          281
+                        ],
+                        "confidence": 96
                       }
                     ]
                   }
@@ -1384,12 +1338,7 @@
               }
             }
           ],
-          "parser_warnings": [
-            {
-              "code": "LOW_OCR_CONFIDENCE",
-              "field_affecting": true
-            }
-          ],
+          "parser_warnings": [],
           "page_image": {
             "page_number": 1,
             "media_type": "image/png",
@@ -1397,16 +1346,16 @@
           }
         }
       },
-      "prompt_sha256": "6f87fb7a6b8eca302a7c99a03613f8ae6b73e4007a60c7aba58aad776f020c94",
+      "prompt_sha256": "7f9a7d018bd41ab0bca78d3a05ef45ea3f7eb741deb55e78a6b95a18b29e9057",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Delivery Receipt",
+          "document_type": "DELIVERY RECEIPT DR-771",
           "document_date": "2025-06-12",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
-            "Pine Echo Couriers Llc",
-            "Violet cartography Studio"
+            "PINE ECHO COURIERS LLC",
+            "I UIOLET CARTOGRAPHY STUDIO"
           ],
           "party_relation": "none",
           "description": "",
@@ -1418,32 +1367,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Delivery Receipt",
+            "document_type": "DELIVERY RECEIPT DR-771",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-06-12",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
-                "name": "Pine Echo Couriers Llc",
-                "role": "issuer",
+                "name": "PINE ECHO COURIERS LLC",
+                "role": "recipient",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               },
               {
-                "name": "Violet cartography Studio",
-                "role": "recipient",
+                "name": "I UIOLET CARTOGRAPHY STUDIO",
+                "role": "issuer",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": "Delivery Receipt",
+            "subject": "DELIVERY RECEIPT DR-771",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -12186,14 +12135,16 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "a407f9d19df3d43ecb987a80a9e9db9ce8312b66e8b33d8745b026130e1e9b69",
+      "prompt_sha256": "3d90254de013bbc78d79b3d13a35945ae27ff6dced236675f3c6c823d7cd3065",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Journal",
+          "document_type": "JOURNAL",
           "document_date": "2025-07-01",
-          "date_role": "filing",
-          "parties": [],
+          "date_role": "execution",
+          "parties": [
+            "Fictional observation 001"
+          ],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -12204,19 +12155,27 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Journal",
+            "document_type": "JOURNAL",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-01",
-            "date_role": "filing",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2.f1"
             ],
-            "parties": [],
-            "subject": "Moonlit Archive Project",
+            "parties": [
+              {
+                "name": "Fictional observation 001",
+                "role": "other",
+                "evidence": [
+                  "p1.b3"
+                ]
+              }
+            ],
+            "subject": "Fictional observation 001",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b3"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -12234,9 +12193,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PURCHASE ORDER PO-310\n\nDAtE JULY 14 20z5\n\nEMBer POSt MANUFACtURInG LLC",
+              "text": "D\nD\nD\nD\nPURCHASE ORDER PO-310\nDATE JULY 14 2025\nEMBER POST MANUFACTURING LLC",
               "origin": "ocr",
-              "ocr_confidence": 72,
+              "ocr_confidence": 87,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -12263,78 +12222,86 @@
                   {
                     "id": "p1.b1",
                     "kind": "heading",
-                    "text": "PURCHASE ORDER PO-310",
+                    "text": "D\nD\nD\nD\nPURCHASE ORDER PO-310\nDATE JULY 14 2025\nEMBER POST MANUFACTURING LLC",
                     "bbox": [
-                      22,
-                      24,
-                      931,
-                      86
+                      19,
+                      19,
+                      1238,
+                      214
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 94,
+                    "confidence": 88,
                     "lines": [
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          79,
+                          55,
+                          156
+                        ],
+                        "confidence": 85
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          82,
+                          55,
+                          158
+                        ],
+                        "confidence": 77
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          84,
+                          53,
+                          158
+                        ],
+                        "confidence": 89
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          31,
+                          79,
+                          62,
+                          158
+                        ],
+                        "confidence": 71
+                      },
                       {
                         "text": "PURCHASE ORDER PO-310",
                         "bbox": [
-                          22,
-                          24,
-                          931,
-                          86
+                          19,
+                          19,
+                          938,
+                          94
                         ],
-                        "confidence": 94
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "paragraph",
-                    "text": "DAtE JULY 14 20z5",
-                    "bbox": [
-                      22,
-                      89,
-                      763,
-                      151
-                    ],
-                    "section": "p1.b1",
-                    "source": "ocr",
-                    "confidence": 67,
-                    "lines": [
+                        "confidence": 96
+                      },
                       {
-                        "text": "DAtE JULY 14 20z5",
+                        "text": "DATE JULY 14 2025",
+                        "bbox": [
+                          34,
+                          82,
+                          768,
+                          156
+                        ],
+                        "confidence": 97
+                      },
+                      {
+                        "text": "EMBER POST MANUFACTURING LLC",
                         "bbox": [
                           22,
-                          89,
-                          763,
-                          151
-                        ],
-                        "confidence": 67
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b3",
-                    "kind": "heading",
-                    "text": "EMBer POSt MANUFACtURInG LLC",
-                    "bbox": [
-                      24,
-                      154,
-                      1238,
-                      216
-                    ],
-                    "level": 4,
-                    "source": "ocr",
-                    "confidence": 60,
-                    "lines": [
-                      {
-                        "text": "EMBer POSt MANUFACtURInG LLC",
-                        "bbox": [
-                          24,
-                          154,
+                          149,
                           1238,
-                          216
+                          214
                         ],
-                        "confidence": 60
+                        "confidence": 98
                       }
                     ]
                   }
@@ -12342,12 +12309,7 @@
               }
             }
           ],
-          "parser_warnings": [
-            {
-              "code": "LOW_OCR_CONFIDENCE",
-              "field_affecting": true
-            }
-          ],
+          "parser_warnings": [],
           "page_image": {
             "page_number": 1,
             "media_type": "image/png",
@@ -12355,15 +12317,15 @@
           }
         }
       },
-      "prompt_sha256": "beedf6b30dbe36d6387e805131ee605d8dc52e7f6ecefc4d41a1842f11c49795",
+      "prompt_sha256": "15b372bbf385710c7283793aaa3c55585c32a9041f514d506a4f56e5ad307202",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Purchase Order",
+          "document_type": "PURCHASE ORDER",
           "document_date": "2025-07-14",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
-            "Manufacuring LLC"
+            "EMBER POST MANUFACTURING LLC"
           ],
           "party_relation": "none",
           "description": "",
@@ -12375,27 +12337,27 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Purchase Order",
+            "document_type": "PURCHASE ORDER",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-14",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
-                "name": "Manufacuring LLC",
-                "role": "issuer",
+                "name": "EMBER POST MANUFACTURING LLC",
+                "role": "buyer",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": "manufacturing",
+            "subject": "PURCHASE ORDER",
             "subject_evidence": [
-              "p1.b3"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -12413,9 +12375,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PACKING SLIP PS-311\n\nDATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC",
+              "text": "PACKING SLIP PS-311\n\nDATE JULY 15 2025\n\nQUARTZ MEADOW RETAIL LLC",
               "origin": "ocr",
-              "ocr_confidence": 100,
+              "ocr_confidence": 97,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -12446,58 +12408,74 @@
                     "bbox": [
                       58,
                       79,
-                      770,
-                      151
+                      778,
+                      134
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 100,
+                    "confidence": 99,
                     "lines": [
                       {
                         "text": "PACKING SLIP PS-311",
                         "bbox": [
                           58,
                           79,
-                          770,
-                          151
+                          778,
+                          134
                         ],
-                        "confidence": 100
+                        "confidence": 99
                       }
                     ]
                   },
                   {
                     "id": "p1.b2",
-                    "kind": "heading",
-                    "text": "DATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC",
+                    "kind": "paragraph",
+                    "text": "DATE JULY 15 2025",
                     "bbox": [
                       55,
-                      194,
-                      1073,
-                      396
+                      197,
+                      701,
+                      262
                     ],
-                    "level": 4,
+                    "section": "p1.b1",
                     "source": "ocr",
-                    "confidence": 100,
+                    "confidence": 97,
                     "lines": [
                       {
                         "text": "DATE JULY 15 2025",
                         "bbox": [
                           55,
-                          194,
-                          698,
-                          283
+                          197,
+                          701,
+                          262
                         ],
-                        "confidence": 100
-                      },
+                        "confidence": 97
+                      }
+                    ]
+                  },
+                  {
+                    "id": "p1.b3",
+                    "kind": "heading",
+                    "text": "QUARTZ MEADOW RETAIL LLC",
+                    "bbox": [
+                      58,
+                      319,
+                      1078,
+                      374
+                    ],
+                    "level": 4,
+                    "source": "ocr",
+                    "confidence": 99,
+                    "lines": [
                       {
                         "text": "QUARTZ MEADOW RETAIL LLC",
                         "bbox": [
                           58,
-                          314,
-                          1073,
-                          396
+                          319,
+                          1078,
+                          374
                         ],
-                        "confidence": 100
+                        "confidence": 99
                       }
                     ]
                   }
@@ -12513,14 +12491,16 @@
           }
         }
       },
-      "prompt_sha256": "312394cd4c04921f32c97dda9a8abc97be73fdec1ba3b8ac0f95bd0fec68d1ac",
+      "prompt_sha256": "eefb7206ad234f97e2b966f58e4c4feb3ab7bd081c271a6aed35e039cf9b86f7",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Packing Slip",
+          "document_type": "PACKING SLIP PS-311",
           "document_date": "2025-07-15",
-          "date_role": "other",
-          "parties": [],
+          "date_role": "execution",
+          "parties": [
+            "Quartz Meadow Retail LLC"
+          ],
           "party_relation": "none",
           "description": "",
           "confidence": 1.0,
@@ -12531,17 +12511,25 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Packing Slip",
+            "document_type": "PACKING SLIP PS-311",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-07-15",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b2"
             ],
-            "parties": [],
-            "subject": "Packing Slip",
+            "parties": [
+              {
+                "name": "Quartz Meadow Retail LLC",
+                "role": "buyer",
+                "evidence": [
+                  "p1.b3"
+                ]
+              }
+            ],
+            "subject": "PACKING SLIP PS-311",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -12561,12 +12549,12 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "DATE JULY.15\n\nHARBOR COMET REPAIRS LLC",
+              "text": "MORK ORDER MO-312\nDATE JULY 16 2025\nHARBOR COMET REPAIRS LLC\nE",
               "origin": "ocr",
-              "ocr_confidence": 82,
+              "ocr_confidence": 83,
               "layout": {
-                "width": 720,
-                "height": 1344,
+                "width": 1344,
+                "height": 720,
                 "route": "ocr",
                 "signals": {
                   "chars": 0,
@@ -12589,53 +12577,56 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "heading",
-                    "text": "DATE JULY.15",
+                    "kind": "paragraph",
+                    "text": "MORK ORDER MO-312\nDATE JULY 16 2025\nHARBOR COMET REPAIRS LLC\nE",
                     "bbox": [
-                      547,
-                      12,
-                      650,
-                      581
+                      19,
+                      19,
+                      1073,
+                      226
                     ],
-                    "level": 4,
                     "source": "ocr",
-                    "confidence": 51,
+                    "confidence": 96,
                     "lines": [
                       {
-                        "text": "DATE JULY.15",
+                        "text": "MORK ORDER MO-312",
                         "bbox": [
-                          547,
-                          12,
-                          650,
-                          581
+                          19,
+                          19,
+                          768,
+                          96
                         ],
-                        "confidence": 51
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "heading",
-                    "text": "HARBOR COMET REPAIRS LLC",
-                    "bbox": [
-                      487,
-                      5,
-                      583,
-                      1070
-                    ],
-                    "level": 4,
-                    "source": "ocr",
-                    "confidence": 97,
-                    "lines": [
+                        "confidence": 96
+                      },
+                      {
+                        "text": "DATE JULY 16 2025",
+                        "bbox": [
+                          22,
+                          82,
+                          768,
+                          158
+                        ],
+                        "confidence": 95
+                      },
                       {
                         "text": "HARBOR COMET REPAIRS LLC",
                         "bbox": [
-                          487,
-                          5,
-                          583,
-                          1070
+                          19,
+                          144,
+                          1073,
+                          216
                         ],
-                        "confidence": 97
+                        "confidence": 95
+                      },
+                      {
+                        "text": "E",
+                        "bbox": [
+                          629,
+                          146,
+                          658,
+                          226
+                        ],
+                        "confidence": 98
                       }
                     ]
                   }
@@ -12651,15 +12642,15 @@
           }
         }
       },
-      "prompt_sha256": "40103711aa4338c976e0e5b686deb4718fbb7837eab36ef22cef7db311774d8d",
+      "prompt_sha256": "af6864c2f3f0824546df4655cd70118831bae08b91407581b56b509e47c2c443",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Evidence",
-          "document_date": "2023-07-15",
-          "date_role": "other",
+          "document_type": "MORK ORDER",
+          "document_date": "2025-07-16",
+          "date_role": "execution",
           "parties": [
-            "Harbor Comet Repairs LLC"
+            "HARBOR COMET REPAIRS LLC"
           ],
           "party_relation": "none",
           "description": "",
@@ -12671,25 +12662,25 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Evidence",
+            "document_type": "MORK ORDER",
             "type_evidence": [
               "p1.b1"
             ],
-            "document_date": "2023-07-15",
-            "date_role": "other",
+            "document_date": "2025-07-16",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b1"
             ],
             "parties": [
               {
-                "name": "Harbor Comet Repairs LLC",
-                "role": "other",
+                "name": "HARBOR COMET REPAIRS LLC",
+                "role": "buyer",
                 "evidence": [
                   "p1.b1"
                 ]
               }
             ],
-            "subject": "Harbor Comet Repairs LLC",
+            "subject": "MORK ORDER",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -20091,13 +20082,13 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "bd93a749cb820fc0bdb2d0b45dc3d67539e009fac1efee90fd9476421b5246b5",
+      "prompt_sha256": "755f71117984bcae47a2fef61d33360eaece7ef3f350e7b622357f2f178143aa",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Statement of Work",
+          "document_type": "STATEMENT OF WORK",
           "document_date": "2026-04-09",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Ridgeline Cartography LLC",
             "Contoso Worldwide, Inc."
@@ -20112,34 +20103,34 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Statement of Work",
+            "document_type": "STATEMENT OF WORK",
             "type_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "document_date": "2026-04-09",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p14.b1"
             ],
             "parties": [
               {
                 "name": "Ridgeline Cartography LLC",
-                "role": "issuer",
+                "role": "client",
                 "evidence": [
-                  "p14.b2"
+                  "p14.b4"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "client",
                 "evidence": [
-                  "p14.b3.f1"
+                  "p14.b5.f2"
                 ]
               }
             ],
-            "subject": "customer relationship management platform",
+            "subject": "Statement of Work",
             "subject_evidence": [
-              "p1.b5"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -20582,15 +20573,15 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "7d7751eb4d70d763af5a4bc4fd14cc719dc88e41c3a8f108367fbbca4b3e2770",
+      "prompt_sha256": "820399db5beeb73c1931fe2e799a569cc5e10970d551fedc7f5bfd75887d4921",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Notice of Termination",
+          "document_type": "NOTICE OF TERMINATION",
           "document_date": "2026-12-29",
-          "date_role": "other",
+          "date_role": "notice",
           "parties": [
-            "Harriet Voss",
+            "John Smith",
             "Northstar Lantern Works LLC"
           ],
           "party_relation": "none",
@@ -20603,34 +20594,34 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Notice of Termination",
+            "document_type": "NOTICE OF TERMINATION",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-12-29",
-            "date_role": "other",
+            "date_role": "notice",
             "date_evidence": [
-              "p1.b1"
+              "p1.b3.f1"
             ],
             "parties": [
               {
-                "name": "Harriet Voss",
-                "role": "recipient",
+                "name": "John Smith",
+                "role": "employee",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b4.f2"
                 ]
               },
               {
                 "name": "Northstar Lantern Works LLC",
-                "role": "sender",
+                "role": "employer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b5"
                 ]
               }
             ],
-            "subject": "Termination of Employment Agreement",
+            "subject": "Termination of the Employment Agreement",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b6.f1"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -21471,11 +21462,11 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "c37fb9254baaf01c3b71e9bc02184451713a86b8b60d1adb0037e9aec32d166a",
+      "prompt_sha256": "f2359d651221a9da4ae5888dcf7c6f7c4f6721afb557776cf3fdb5e7f5a8168e",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "First Amendment to Consulting Agreement",
+          "document_type": "FIRST AMENDMENT TO CONSULTING AGREEMENT",
           "document_date": "2025-09-14",
           "date_role": "execution",
           "parties": [
@@ -21492,34 +21483,34 @@
             "parties": []
           },
           "facts": {
-            "document_type": "First Amendment to Consulting Agreement",
+            "document_type": "FIRST AMENDMENT TO CONSULTING AGREEMENT",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-09-14",
             "date_role": "execution",
             "date_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "parties": [
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "issuer",
+                "role": "employer",
                 "evidence": [
-                  "p1.b1"
+                  "p2.b4"
                 ]
               },
               {
                 "name": "Jane Ellery",
-                "role": "recipient",
+                "role": "employee",
                 "evidence": [
-                  "p1.b1"
+                  "p2.b5.f1"
                 ]
               }
             ],
-            "subject": "Fees",
+            "subject": "amends the Consulting Agreement",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -21901,11 +21892,11 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "9d5f8a4e037057cf32b212be413c88a0145fe26b1224446956fd4aeb1da403ce",
+      "prompt_sha256": "f6280141708699099ce1ef3866f9ab893ffdb78933377ee02e638e46c5f42436",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "invoice",
+          "document_type": "INVOICE",
           "document_date": "2026-01-05",
           "date_role": "invoice",
           "parties": [
@@ -21922,34 +21913,34 @@
             "parties": []
           },
           "facts": {
-            "document_type": "invoice",
+            "document_type": "INVOICE",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-01-05",
             "date_role": "invoice",
             "date_evidence": [
-              "p1.b1"
+              "p1.b3.f2"
             ],
             "parties": [
               {
                 "name": "Acme Corporation",
-                "role": "sender",
+                "role": "buyer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "customer",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b4.f1"
                 ]
               }
             ],
-            "subject": "platform subscription services",
+            "subject": "Annual platform subscription",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b5"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -25714,11 +25705,11 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "0c2ae976b2bce425a35919f12762e64b9653ef787c085c6218b6271191a69fe8",
+      "prompt_sha256": "86cb59eb3821051481011513bd4a1be14d7a9c782eea58ed92d1e48437024257",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Settlement Agreement and Mutual Release",
+          "document_type": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",
           "document_date": "2026-07-22",
           "date_role": "effective",
           "parties": [
@@ -25735,9 +25726,9 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Settlement Agreement and Mutual Release",
+            "document_type": "SETTLEMENT AGREEMENT AND MUTUAL RELEASE",
             "type_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "document_date": "2026-07-22",
             "date_role": "effective",
@@ -25747,20 +25738,20 @@
             "parties": [
               {
                 "name": "Harborline Freight Systems LLC",
-                "role": "sender",
+                "role": "client",
                 "evidence": [
-                  "p1.b2"
+                  "p7.b7"
                 ]
               },
               {
                 "name": "Quill and Vane Advisory Group, Inc.",
-                "role": "sender",
+                "role": "contractor",
                 "evidence": [
-                  "p1.b2"
+                  "p7.b9"
                 ]
               }
             ],
-            "subject": "dispute concerning invoices issued under a logistics service",
+            "subject": "dispute resolution",
             "subject_evidence": [
               "p1.b4"
             ],
@@ -25917,12 +25908,12 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "bafab044ca90d5c785ea2d82f0a053a066a36d49985437364004ad24adef568f",
+      "prompt_sha256": "25d73359ff034416315b48efdb163b0e0ae4aaedfe8c4a9e72b454071d6c0930",
       "reply": {
         "outcome": "proposed",
         "proposal": {
           "document_type": "Notes",
-          "document_date": "2024-01-15",
+          "document_date": "2026-01-16",
           "date_role": "other",
           "parties": [
             "Rowan",
@@ -25943,7 +25934,7 @@
             "type_evidence": [
               "p1.b1"
             ],
-            "document_date": "2024-01-15",
+            "document_date": "2026-01-16",
             "date_role": "other",
             "date_evidence": [
               "p1.b1"
@@ -25953,14 +25944,14 @@
                 "name": "Rowan",
                 "role": "other",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
                 "name": "Priya",
                 "role": "other",
                 "evidence": [
-                  "p1.b1"
+                  "p1.b2"
                 ]
               },
               {
@@ -25971,9 +25962,9 @@
                 ]
               }
             ],
-            "subject": "offsite",
+            "subject": "thing from last week",
             "subject_evidence": [
-              "p1.b1"
+              "p1.b2"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -26188,16 +26179,17 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "60f6275f6bb2cae183ce8ebb8d1d511821d1e2e7947b7c68ea1d760738ca738d",
+      "prompt_sha256": "468cf2fce77345ed1731e3e90ae95bde1e56e9cb67868e5ac4c03fd4b67d90f6",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Quarterly Business Review",
+          "document_type": "QUARTERLY BUSINESS REVIEW",
           "document_date": "2026-05-21",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Contoso Worldwide, Inc.",
-            "Ridgeline Cartography LLC"
+            "Ridgeline Cartography LLC.",
+            "Dana Ruiz"
           ],
           "party_relation": "none",
           "description": "",
@@ -26209,12 +26201,12 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Quarterly Business Review",
+            "document_type": "QUARTERLY BUSINESS REVIEW",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-05-21",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b4"
             ],
@@ -26227,16 +26219,23 @@
                 ]
               },
               {
-                "name": "Ridgeline Cartography LLC",
+                "name": "Ridgeline Cartography LLC.",
                 "role": "sender",
                 "evidence": [
                   "p1.b3"
                 ]
+              },
+              {
+                "name": "Dana Ruiz",
+                "role": "recipient",
+                "evidence": [
+                  "p1.b11.f1"
+                ]
               }
             ],
-            "subject": "Q2 pipeline",
+            "subject": "Member map renewals across all chapters",
             "subject_evidence": [
-              "p1.b7.f1"
+              "p1.b6"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -26416,13 +26415,13 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "beb3fa7c6f0f4af555592017515dd336e7d0a61cd647e1ee9d9ec5fe09ce1be2",
+      "prompt_sha256": "4918285721633da08f976dbc147ee6cc95c0bd1de59c5a1741a680b25ec4a499",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "Order Form",
+          "document_type": "ORDER FORM",
           "document_date": "2026-01-14",
-          "date_role": "other",
+          "date_role": "execution",
           "parties": [
             "Tessellate Analytics Ltd.",
             "Contoso Worldwide, Inc."
@@ -26437,26 +26436,26 @@
             "parties": []
           },
           "facts": {
-            "document_type": "Order Form",
+            "document_type": "ORDER FORM",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2026-01-14",
-            "date_role": "other",
+            "date_role": "execution",
             "date_evidence": [
               "p1.b4"
             ],
             "parties": [
               {
                 "name": "Tessellate Analytics Ltd.",
-                "role": "sender",
+                "role": "buyer",
                 "evidence": [
                   "p1.b2"
                 ]
               },
               {
                 "name": "Contoso Worldwide, Inc.",
-                "role": "recipient",
+                "role": "seller",
                 "evidence": [
                   "p1.b2"
                 ]

@@ -55,14 +55,16 @@ pub mod text;
 pub mod validate;
 pub mod worker;
 
-pub use client::{EvidenceHandles, ModelClient, ModelRequest, Proposer, ProposerReply};
+pub use client::{
+    EvidenceHandles, ExampleExchange, ModelClient, ModelRequest, Proposer, ProposerReply,
+};
 pub use distill::{DigestBudget, DocumentDigest, distill, source_from_text};
 pub use domain::*;
 pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_prompt_tokens};
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
-pub use manifest::{ModelFile, ModelManifest, ModelRole};
+pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelVariant, SelectedModel};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
 pub use server::{LlamaServer, ServerOptions};

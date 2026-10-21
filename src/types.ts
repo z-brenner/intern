@@ -92,6 +92,32 @@ export type ModelSource = 'local' | 'hosted';
 /** The wire format a hosted model speaks. */
 export type HostedProvider = 'anthropic' | 'openai_compatible';
 
+/**
+ * Which local model reads documents: Ternary Bonsai 2 at 4B parameters, the
+ * default, or at 2B for a computer with little memory. Only the chosen one is
+ * downloaded.
+ */
+export type LocalModelId = 'bonsai-4b' | 'bonsai-2b';
+
+/** One local model this build pins, as the backend reports it from the manifest. */
+export interface LocalModelOption {
+  id: LocalModelId;
+  label: string;
+  /** The file's name, for a person choosing a copy they already have. */
+  file: string;
+  bytes: number;
+  selected: boolean;
+  /** The file is in Intern's model folder at its pinned size. */
+  installed: boolean;
+  default: boolean;
+}
+
+/** The model file an earlier version of Intern downloaded and this one no longer uses. */
+export interface LegacyModel {
+  file: string;
+  bytes: number;
+}
+
 export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
@@ -141,6 +167,12 @@ export interface AppSettings {
   hostedBaseUrl: string;
   /** The hosted model's name; "" = the provider's default, where there is one. */
   hostedModel: string;
+  /**
+   * The local model, when the model source is local. Absent from an older
+   * backend, and from a file written before there was a choice: both mean
+   * the default, `bonsai-4b`.
+   */
+  localModel?: LocalModelId;
 }
 
 /** Versioned backend-owned progress for the guided SharePoint setup. */
@@ -297,6 +329,8 @@ export interface SetupState {
   error?: string;
   /** A hosted model is chosen and configured, so documents can be processed without the local one. */
   hostedModelReady?: boolean;
+  /** The local model the sizes above belong to. Absent from an older backend. */
+  localModel?: LocalModelId;
 }
 
 /** Which part of a name a learned spelling rewrites. */

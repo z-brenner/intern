@@ -3,13 +3,15 @@ import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSetti
 import { SharePointConnection } from '../features/settings/SharePointConnection';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule, LocalModelId, LocalModelOption } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
 import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
-import { installingLabel } from '../lib/format';
+import { formatBytes, installingLabel } from '../lib/format';
+import { DEFAULT_LOCAL_MODEL, knownModels } from '../lib/localModels';
 import { Icon } from './Icon';
+import { LegacyModelNotice } from './LocalModelChoice';
 
 /**
  * A failed update check is almost always the network, and saying so is more
@@ -65,6 +67,7 @@ function saveFailure(error: unknown): string {
     // The managed-save refusals read the same here as everywhere else SharePoint setup is explained.
     case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
     case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
+    case 'SETUP_BUSY': return 'The local model could not be switched while its download or check is running. Your other settings were saved. Let it finish, or cancel it, then save again. (SETUP_BUSY)';
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
@@ -156,6 +159,16 @@ const PROVIDERS: Array<{ value: HostedProvider; label: string }> = [
 function isProvider(value: string): value is HostedProvider {
   return PROVIDERS.some((provider) => provider.value === value);
 }
+
+/**
+ * The two local models in words. The figures are from Intern's evaluation
+ * on twelve held-out documents (docs/bonsai-native-windows-evaluation.md);
+ * the smaller model is a trade, so it says what it gives up.
+ */
+const LOCAL_MODEL_NOTES: Record<LocalModelId, { tag: string; hint: string }> = {
+  'bonsai-4b': { tag: 'recommended', hint: 'Names the most documents correctly: 11 of 12 in Intern\'s evaluation.' },
+  'bonsai-2b': { tag: 'for less memory', hint: 'More than twice as fast and needs about half the memory, but named only 8 of 12 correctly in Intern\'s evaluation.' },
+};
 
 /*
   With the fixed SharePoint deployment these belong to the connection, not to
@@ -257,6 +270,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [testError, setTestError] = useState('');
   const [rules, setRules] = useState<LearnedRule[]>();
   const [rulesError, setRulesError] = useState('');
+  const [localModels, setLocalModels] = useState<LocalModelOption[]>();
   // Unknown (undefined) until the backend answers. The shared-intake and
   // background controls wait for the answer, so a managed build never flashes
   // manual pairing; a build without the deployment, or a failed read, shows
@@ -330,6 +344,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     void Promise.resolve().then(() => bridge.hostedModelStatus())
       .then((current) => { if (active) setHostedStatus(current); })
       .catch(() => { /* An older bridge without the hosted model leaves the section quiet. */ });
+    void Promise.resolve().then(() => bridge.getLocalModels())
+      .then((current) => { if (active) setLocalModels(current); })
+      .catch(() => { /* The choice is still offered, from the pinned sizes. */ });
     void Promise.resolve().then(() => bridge.houseRulesList())
       .then((current) => { if (active) setRules(current); })
       .catch(() => { /* A bridge that has learned nothing leaves the section quiet. */ });
@@ -561,6 +578,16 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="section-lead">Which model reads your documents. The local model keeps every document on this computer. A hosted model sends the text of each document to the service you name, under your own API key.</p>
         <label className="check-label"><input type="radio" name="model-source" value="local" checked={next.modelSource === 'local'} onChange={() => setNext({ ...next, modelSource: 'local' })} />Local model on this computer (recommended)</label>
         <label className="check-label"><input type="radio" name="model-source" value="hosted" checked={next.modelSource === 'hosted'} onChange={() => setNext({ ...next, modelSource: 'hosted' })} />Hosted model with my API key</label>
+        {next.modelSource === 'local' && <div className="local-model" role="radiogroup" aria-label="Local model">
+          {knownModels(localModels).map((model) => {
+            const installed = localModels?.find((entry) => entry.id === model.id)?.installed;
+            return <Fragment key={model.id}>
+              <label className="check-label"><input type="radio" name="local-model" value={model.id} checked={(next.localModel ?? DEFAULT_LOCAL_MODEL) === model.id} onChange={() => setNext({ ...next, localModel: model.id })} />{model.label}, {formatBytes(model.bytes)} ({LOCAL_MODEL_NOTES[model.id].tag}){installed === false ? ' · not downloaded' : ''}</label>
+              <p className="check-hint">{LOCAL_MODEL_NOTES[model.id].hint}</p>
+            </Fragment>;
+          })}
+          <p className="check-hint">Switching unloads the model in use before loading the other. A model not downloaded yet waits on the setup screen until you choose to download it.</p>
+        </div>}
         {next.modelSource === 'hosted' && <div className="hosted-model" role="group" aria-label="Hosted model">
           <p className="privacy-warning" role="note">With this on, the text Intern reads from each document — not the file, but the words in it, condensed — is sent to this service to be named. It is the only setting that sends document text off this computer. Your key, your account, your provider's terms.</p>
           <label>Provider<select value={next.hostedProvider} onChange={(event) => { const value = event.target.value; if (isProvider(value)) setNext({ ...next, hostedProvider: value }); }}>
@@ -579,6 +606,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
             {hostedStatus?.keyStored && <button type="button" disabled={testing} onClick={() => void runClearKey()}>Remove stored key</button>}
           </div>
         </div>}
+        <LegacyModelNotice bridge={bridge} className="legacy-model" actionsClassName="update-actions" />
       </section>
       {managed && !hideSharePointConnection && <SharePointConnection bridge={bridge} settings={settings} />}
       {managed === undefined && <section className="settings-group">

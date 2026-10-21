@@ -306,6 +306,7 @@ impl Bench {
             mode: Mode::Replay {
                 recording: self.path("recording.json"),
                 allow_stale: false,
+                allow_other_model: false,
             },
             // The recording here is the digest pipeline's.
             engine: EngineSettings {
@@ -451,6 +452,7 @@ fn allowing_staleness_scores_the_stale_prompt_and_marks_it() {
         options.mode = Mode::Replay {
             recording: bench.path("recording.json"),
             allow_stale: true,
+            allow_other_model: false,
         };
         options.only = vec!["invoice-alpha".into(), "notice-beta".into()];
     });
@@ -898,6 +900,7 @@ fn allowing_staleness_never_passes_a_changed_fixture_and_is_shown() {
         options.mode = Mode::Replay {
             recording: bench.path("recording.json"),
             allow_stale: true,
+            allow_other_model: false,
         };
         options.manifest = Some(bench.path("manifest.json"));
         options.only = vec![

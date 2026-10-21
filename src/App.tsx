@@ -647,6 +647,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       onCancel={model.cancel}
       onChooseExisting={model.chooseExisting}
       onUseHostedModel={() => setSettingsOpen(true)}
+      localModel={model.localModel}
+      models={model.models}
+      onSwitchModel={model.switchModel}
+      bridge={bridge}
     />
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={() => setSettingsOpen(false)} onSave={async (next) => { await saveSettings(next); setSettingsOpen(false); await model.refresh(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </>;
@@ -739,7 +743,12 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => {
+      // A local model not yet downloaded leaves setup waiting for a download, which the setup screen offers.
+      const modelChanged = (next.localModel ?? 'bonsai-4b') !== (settings.localModel ?? 'bonsai-4b');
+      await saveSettings(next); closeSettings(); void refreshAfterSettings();
+      if (modelChanged) void model.refresh().catch(() => { /* The desktop bridge also reports setup changes as events. */ });
+    }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
 }
 

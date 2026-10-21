@@ -281,6 +281,38 @@ pub struct OcrResult {
     /// it does not, and then `text` is all there is.
     #[serde(default)]
     pub lines: Vec<OcrLine>,
+    /// The engine's own layout of the page, where it makes one: blocks in
+    /// reading order, each naming the `lines` it holds. Empty for engines
+    /// that report lines only, and then the layout analysis finds blocks
+    /// from the lines' geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<OcrBlock>,
+}
+
+/// What a layout block is, as an OCR engine that labels its blocks names it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrBlockLabel {
+    Text,
+    SectionHeader,
+    PageHeader,
+    PageFooter,
+    ListGroup,
+    Table,
+    Caption,
+    Footnote,
+    TableOfContents,
+    Form,
+}
+
+/// One block of an engine's layout: its label, the box around it in the
+/// same pixels as [`OcrLine::bbox`], and the indices into
+/// [`OcrResult::lines`] of the lines it holds, in reading order.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OcrBlock {
+    pub label: OcrBlockLabel,
+    pub bbox: [u32; 4],
+    pub lines: Vec<usize>,
 }
 
 /// One line of an OCR reading: what it says, where it sits, and how sure
@@ -303,6 +335,7 @@ impl OcrResult {
             mean_confidence,
             rotation_degrees: 0,
             lines: Vec::new(),
+            blocks: Vec::new(),
         }
     }
 
@@ -313,6 +346,11 @@ impl OcrResult {
 
     pub fn with_lines(mut self, lines: Vec<OcrLine>) -> Self {
         self.lines = lines;
+        self
+    }
+
+    pub fn with_blocks(mut self, blocks: Vec<OcrBlock>) -> Self {
+        self.blocks = blocks;
         self
     }
 }

@@ -33,7 +33,7 @@ Every reader produces one:
 | Reader | Route | Blocks from |
 | --- | --- | --- |
 | PDF, text page | `fast` / `layout` / `ocr_regions` | see below |
-| PDF, scanned page; images | `ocr` | the OCR engine's lines (PP-OCR's where its runtime is installed, Tesseract's TSV lines otherwise) |
+| PDF, scanned page; images | `ocr` | Indra OCR's own blocks, in its reading order and with its labels, where its runtime is installed; otherwise the OCR engine's lines (PP-OCR's, or Tesseract's TSV lines) |
 | Office (Markdown), sheets, CSV, email, text | `fast` | the text's own structure: Markdown headings, blank lines, `\|` table rows, list markers, `Key: value` lines, short lines in capitals; no boxes |
 
 Running headers and footers are marked across the document on every route:
@@ -353,7 +353,7 @@ Scanned documents (one run each; Tesseract 5.3.4):
 A PDF's scanned pages are rendered one at a time (PDFium is not
 thread-safe; inspection and rendering share one open document) and read by
 a pool of OCR workers through a bounded queue: as many as the engine offers
-(`OcrBackend::concurrency`; for PP-OCR its configured workers, for Tesseract
+(`OcrBackend::concurrency`; for Indra and PP-OCR their configured workers, for Tesseract
 half the logical cores, at most four). Rendering never runs further ahead
 of OCR than the queue allows: the rendered pages held at once are the one
 being rendered, at most `MAX_QUEUED_RENDERED_PAGES` (one) waiting, and one
@@ -454,11 +454,12 @@ most; reading a page's characters 0.74 ms at the median.
 
 ## Known limits
 
-* Only the OCR engine's lines are geometry on scanned pages (PP-OCR and
-  Tesseract both fill `OcrResult::lines` in upright page pixels). An OCR
-  page's text is its blocks' linearisation, built from those lines; a
-  reading with no lines, or with more than the analysis takes on, keeps
-  the engine's own text.
+* Only the OCR engine's lines are geometry on scanned pages (Indra, PP-OCR
+  and Tesseract all fill `OcrResult::lines` in upright page pixels). An OCR
+  page's text is its blocks' linearisation, built from those lines - or,
+  from Indra, from its own blocks (`OcrResult::blocks`), kept in its order
+  and mapped from its labels ([OCR](ocr.md)); a reading with no lines, or
+  with more than the analysis takes on, keeps the engine's own text.
 * Tables are found from alignment and rules, not from a model; borderless
   tables whose columns never line up (the corpus invoice) stay on the fast
   route as lines.

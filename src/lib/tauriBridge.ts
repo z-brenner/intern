@@ -3,7 +3,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 // Types only: the plugin itself is still imported lazily, below.
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, LegacyModel, LocalModelId, LocalModelOption, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
@@ -206,6 +206,12 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   setupChooseExisting(files: ExistingModelFiles): Promise<void> {
     return this.transport.invoke('setup_choose_existing', { files });
   }
+  getLocalModels(): Promise<LocalModelOption[]> { return this.transport.invoke('local_models'); }
+  setLocalModel(model: LocalModelId): Promise<void> { return this.transport.invoke('set_local_model', { model }); }
+  async getLegacyModel(): Promise<LegacyModel | null> {
+    return await this.transport.invoke<LegacyModel | null | undefined>('legacy_model_get') ?? null;
+  }
+  removeLegacyModel(): Promise<void> { return this.transport.invoke('legacy_model_remove'); }
   clearHistory(): Promise<void> { return this.transport.invoke('history_clear'); }
 
   async historyList(): Promise<HistoryEntry[]> {

@@ -39,8 +39,11 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
-document information. The model file is 1.19 GiB, the text model and nothing
-else. The update check asks only "is there a newer, signed build"; untick
+document information. OCR sends nothing: Indra OCR, PP-OCR and Tesseract run
+inside the parser worker from models installed with the app, and make no
+network request. The model file is 1.07 GiB (Bonsai 4B, the default) or
+493 MiB (Bonsai 2B, if you choose the smaller model), the text model and
+nothing else. The update check asks only "is there a newer, signed build"; untick
 **Check for updates automatically** in Settings and only the button asks. A
 found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
@@ -106,7 +109,12 @@ as the installer, so whoever could replace one could replace both. The
 attestation is the part that establishes where the file came from.
 
 On first launch Intern shows a setup screen and asks to download the one thing
-the installer deliberately leaves out: the pinned model file, 1.19 GiB. That
+the installer deliberately leaves out: the pinned model file. By default that is
+Prism ML's Ternary Bonsai 2 4B, 1.07 GiB; **Use the smaller model (493 MiB)
+instead** under *Other ways to get the model* downloads Bonsai 2B, which is
+faster and needs about half the memory but names fewer documents correctly
+(see [the model choice](docs/model-bakeoff.md#bonsai-2-the-production-model)).
+Only the model you choose is downloaded, and you can switch in Settings. That
 download is resumable, it transfers no document information, and the file becomes active only after its exact length and SHA-256 match the manifest
 built into the installer. If you already have the file, **Choose existing model
 files** points Intern at it and skips the download. Nothing else needs
@@ -420,9 +428,12 @@ results.
 
 ## Windows runtime assets and installer
 
-From PowerShell on Windows, fetch the exact llama.cpp b10361, PDFium
-chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model
-assets ([OCR](docs/ocr.md) says which models and why):
+From PowerShell on Windows, fetch the exact llama.cpp build (PrismML's fork,
+`prism-b10777-e3de715`, which Bonsai's PQ2_0 weights need), PDFium
+chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0, Indra OCR's
+models (`datalab-to/indra-ocr` v1.1.0, 24.7 MB) and the PP-OCR models
+([OCR](docs/ocr.md) says which models and why, and what they add to the
+install):
 
 ```powershell
 cargo build --locked -p intern-worker --release --features windows-native
@@ -446,7 +457,10 @@ Tauri produces a per-user NSIS installer. To smoke-test a clean installer:
 ```
 
 The installer includes third-party notices and the generated `licenses/`
-inventory but never includes `.gguf` model files. Local model weights are
+inventory but never includes `.gguf` model files. Indra OCR's model files are
+under their own license, a modified AI Pubs Open RAIL-M license with use
+restrictions, installed as `licenses/indra-ocr-models-LICENSE.txt` and
+summarised in `THIRD_PARTY_NOTICES.md`. Local model weights are
 installed separately under the user's local application data only after explicit
 setup.
 

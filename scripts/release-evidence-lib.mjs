@@ -1,6 +1,23 @@
 import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const MODEL_MANIFEST = resolve(dirname(fileURLToPath(import.meta.url)), '../src-tauri/resources/model-manifest.json');
+
+/**
+ * The model the release evaluation must have run: the manifest's default
+ * variant, named by id and pinned by digest. Evidence from another variant -
+ * or from a model the manifest no longer pins - says nothing about what a
+ * person who presses "Download model" gets.
+ */
+export async function releaseModel(manifestPath = MODEL_MANIFEST) {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const variant = manifest.variants?.find((candidate) => candidate.id === manifest.default);
+  const model = variant?.files?.find((file) => file.role === 'model');
+  requireValue(variant && model, 'model-manifest.json names no default variant with a text model');
+  return { variant: variant.id, sha256: model.sha256, file: model.name };
+}
 
 export function requireValue(condition, message) {
   if (!condition) throw new Error(message);
@@ -38,13 +55,15 @@ export async function readJsonArtifact(root, path) {
   return JSON.parse(await readFile(safeArtifactPath(root, path), 'utf8'));
 }
 
-function acceptedModel(report, context) {
+function acceptedModel(report, context, expected) {
   return report?.schema_version === 3
     && report.pipeline === 'evidence'
     && report.status === 'completed'
     && report.commit === context.commit
     && report.runner?.ci_run_id === context.run_id
-    && report.acceptance?.status === 'accepted';
+    && report.acceptance?.status === 'accepted'
+    && report.model_variant === expected.variant
+    && report.model_sha256 === expected.sha256;
 }
 
 export function acceptedFidelity(signoff, screenshot, model) {
@@ -82,13 +101,14 @@ function acceptedInstalledCore(report, installer, context) {
 }
 
 export async function deriveSignoffs(root, paths, artifacts, context) {
-  const [model, fidelity, installed] = await Promise.all([
+  const [model, fidelity, installed, expected] = await Promise.all([
     readJsonArtifact(root, paths.model_evaluation),
     readJsonArtifact(root, paths.fidelity_signoff),
     readJsonArtifact(root, paths.installed_core_smoke),
+    releaseModel(),
   ]);
   return {
-    model_evaluation: acceptedModel(model, context) ? 'accepted' : 'rejected',
+    model_evaluation: acceptedModel(model, context, expected) ? 'accepted' : 'rejected',
     rendered_fidelity: acceptedFidelity(fidelity, artifacts.implementation_screenshot, model) ? 'accepted' : (fidelity?.status === 'pending' ? 'pending' : 'rejected'),
     installed_core_path: acceptedInstalledCore(installed, artifacts.installer, context) ? 'accepted' : 'rejected',
   };

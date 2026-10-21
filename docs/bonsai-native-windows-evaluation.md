@@ -1,5 +1,13 @@
 # Bonsai 2 Small: native Windows qualification
 
+> **Decision, 2026-10-20.** After this evaluation Intern made Bonsai 4B its
+> production local model, with Bonsai 2B as an opt-in low-memory choice and
+> the few-shot greedy profile below as the production request; see
+> [the model choice](model-bakeoff.md#bonsai-2-the-production-model) for what
+> changed and its caveats. The text below is the evaluation as it was
+> written, including its recommendation at the time to keep production
+> unchanged.
+
 Both Bonsai variants run through Intern's current extraction and evidence pipeline on the real Windows guest. Bonsai 2B reduces latency and memory; Bonsai 4B improves strict filename accuracy on this frozen cohort. The results do **not qualify automatic 2B-to-4B routing or a production-default replacement**: accepted summaries still contain false relationships, one 4B filename loses the document issuer, and reliable routing criteria have not been validated.
 
 The implementation adds opt-in [native qualification and request capture](native-model-qualification.md). It does not change the app's model manifest, downloads, defaults or production prompts. The current working backend remains available. No automatic dual-model download, concurrent warm models, merge or release is part of this change.

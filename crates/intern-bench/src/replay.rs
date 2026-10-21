@@ -302,7 +302,14 @@ mod tests {
             schema_version: crate::recording::RECORDING_SCHEMA_VERSION,
             suite: String::new(),
             recorded_at: String::new(),
-            model: Default::default(),
+            model: crate::machine::ModelInfo {
+                id: "intern-local".into(),
+                path: None,
+                size_bytes: Some(1_146_465_120),
+                sha256: Some(
+                    "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409".into(),
+                ),
+            },
             context_tokens: current_context(),
             budget_characters: current_budget().max_characters,
             engine: EngineSettings::default().header(),

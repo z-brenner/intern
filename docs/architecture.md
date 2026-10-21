@@ -131,21 +131,39 @@ straight into the page-sized copy, and only then turned upright, so a
 48-megapixel photo costs the worker about 220 MB at its peak rather than the
 760 MB a filtered resample's floating-point intermediate took.
 
-Scans are read by PP-OCR, a text-detection network, an English recognizer and
-a page-orientation classifier run through ONNX Runtime, when the runtime and
-models are installed beside the worker, as they are in the Windows package. On
-InternBench's scans it makes a fifth of Tesseract's character errors and reads
-more of the dates and identifiers, at about three times Tesseract's CPU per
-page, which OCR's share of a document's time absorbs. Without those files - a
-development machine, a Linux CI runner - or when they fail to load, Tesseract
-reads scans exactly as before. [OCR](ocr.md) has the engine, its settings,
-the benchmark behind each one, and what it costs. Either way the reading
-comes back as lines with boxes and confidences, which the layout analysis
-turns into blocks like any other page's, and the page's text is those blocks
-in reading order: tables as rows, labelled values as `Label: value` lines.
-An engine's own order read an unruled table down its columns and left a
-form's labels apart from their values ([Document routing](document-routing.md)
-has the measurement).
+Scans are read by the first of three engines that is installed beside the
+worker and loads, as all three are in the Windows package. **Indra OCR**
+(Datalab's `indra-ocr` 1.1.2, ported to Rust) runs a line detector, an
+orientation classifier, a recognizer with a character language model, and a
+reading-order and layout network through ONNX Runtime. **PP-OCR**, a
+text-detection network, an English recognizer and a page-orientation
+classifier on the same ONNX Runtime, reads scans when Indra's files are not
+there or do not load; on InternBench's scans it makes a fifth of Tesseract's
+character errors and reads more of the dates and identifiers, at about three
+times Tesseract's CPU per page. With Indra, PP-OCR, when installed, also
+reads again any page Indra reads with a confidence under 75, and the more
+confident reading of the two is kept; Indra finds every date, name and
+identifier PP-OCR does on InternBench's scans for about a fifteenth of its
+processor time. Without either - a development machine, a
+Linux CI runner - **Tesseract** reads scans exactly as before. An engine
+that is installed and passed over is named in the worker's log with the
+engine used instead; `INTERN_OCR_ENGINE` chooses one for a benchmark.
+[OCR](ocr.md) has the engines, their settings, the measurements behind
+them, and what they cost.
+
+Every engine's reading comes back as lines with boxes and confidences, and
+the page's text is the page's blocks in reading order: tables as rows,
+labelled values as `Label: value` lines. Indra also reads the page's layout:
+its blocks, their labels and their order, which become the page's blocks as
+they are - a section header a heading, a list group its items, a table a
+table, a form its labelled values. Before they do, a column of labels Indra
+read apart from the column of values beside it is joined to them row by
+row, and a date or amount Indra read damaged (`S8,220.00`) is repaired from
+the recognizer's own second choices. PP-OCR's and Tesseract's lines are turned
+into blocks by the layout analysis like any other page's. An engine's own
+text order read an unruled table down its columns and left a form's labels
+apart from their values ([Document routing](document-routing.md) has the
+measurement).
 
 Tesseract's lines come from its TSV output: words on a line joined with a
 space, lines grouped into Tesseract's blocks and paragraphs. Its text used to
@@ -191,9 +209,10 @@ documented as intent:
 * PDFium is bound once per process and shared. Binding it per document made
   every PDF after the first one in a queue fail as "native assets missing";
   `one_pdf_backend_parses_every_document_in_a_queue` keeps that fixed.
-The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
-asks its orientation classifier first and then runs the same confidence
-search ([OCR](ocr.md)).
+The rest of this list is how Tesseract, the last fallback, reads a page;
+PP-OCR asks its orientation classifier first and then runs the same
+confidence search, and Indra finds the page's skew and quarter turn before
+it reads ([OCR](ocr.md)).
 
 * A page is read as it came first, in grey: Tesseract binarises whatever it is
   given, and grey is a third of the bytes to encode for every pass. A reading
@@ -322,7 +341,8 @@ taste: prefill on the target machine runs at about 160 tokens/second, so every
 1,000 characters of budget costs about 1.5 seconds of wall clock on every
 document. A larger budget buys nothing on the corpus and costs seconds per file.
 
-"Roughly 3,000 tokens" holds for prose. Qwen's tokenizer reads every digit, and
+"Roughly 3,000 tokens" holds for prose. The Qwen3.5 tokenizer (which Bonsai, a
+Qwen3.5 derivative, keeps) reads every digit, and
 every CJK, Hangul, or Kana character, as a token of its own, so a bank statement
 or a Chinese contract inside the character budget can come to 8,000 tokens or
 more and no longer fit the 8,192-token context. Before a prompt is sent the
@@ -686,8 +706,9 @@ named as it was keeps whatever the reviewer had typed.
 
 | | |
 | --- | --- |
-| Model | Qwen3.5-2B-Instruct, Q4_K_M GGUF (1.19 GiB) |
-| Runtime | llama.cpp `b10361`, CPU only |
+| Model | Prism ML Ternary Bonsai 2 4B, PQ2_0 GGUF (1.07 GiB), by default; Ternary Bonsai 2 2B, PQ2_0 (493 MiB), when chosen. One variant is installed and resident at a time. See [the model choice](model-bakeoff.md#bonsai-2-the-production-model) |
+| Runtime | PrismML's llama.cpp fork, `prism-b10777-e3de715`, CPU only, 64 MiB prompt cache, no `config.ini` |
+| Request | the evidence prompt with one fixed worked example (a fictional dispatch note), greedy, seed 17, thinking off, 1,024-token cap |
 | Context | 8,192 tokens |
 | Threads | half the logical processors, clamped to 2–12 |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
@@ -961,8 +982,8 @@ ordinary applications running:
 | Distillation | 0.3 ms to 9 ms |
 | Median document, end to end | 12.4-27.7 s across four runs of the same corpus on the same machine |
 | 29,000-character contract | 42 s |
-| Peak model process memory | 2,470-2,590 MB |
-| First-run download | 1.19 GiB, the text model and nothing else |
+| Peak model process memory | 2,470-2,590 MB (Qwen3.5-2B, before Bonsai; Bonsai's measured Windows peaks are 1.96 GB for 4B and 0.94 GB for 2B, docs/bonsai-native-windows-evaluation.md) |
+| First-run download | 1.07 GiB (Bonsai 4B) or 493 MiB (Bonsai 2B), the text model and nothing else |
 
 Quote the latency as a range. Four runs of the same corpus on this machine gave
 medians of 12.4, 16.6, 19.6, and 27.7 seconds depending on what else was

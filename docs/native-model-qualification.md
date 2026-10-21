@@ -1,5 +1,15 @@
 # Native model qualification on Windows
 
+> **Decision, 2026-10-20.** After this evaluation Intern made Bonsai 4B its
+> production local model, with Bonsai 2B as an opt-in low-memory choice and
+> the few-shot greedy profile below as the production request; see
+> [the model choice](model-bakeoff.md#bonsai-2-the-production-model) for what
+> changed and its caveats. The text below is the evaluation as it was
+> written, including its recommendation at the time to keep production
+> unchanged.
+
+Production now sends the selected few-shot profile itself (`crates/intern-engine/src/prompt.rs`, `EVIDENCE_EXAMPLES`; seed 17 in `client.rs`), so an empty profile reproduces production. The matched profile does too: it replaces the system turn and example with identical ones and keeps the document turn, and `production_sends_the_evaluated_request_bodies` checks the production bodies against the evaluated wire bodies.
+
 `benchmark-transport` is an opt-in laboratory feature. The desktop app does not enable it, and its default model, download flow and request behavior stay unchanged.
 
 Build the benchmark and qualification runner with the feature enabled:

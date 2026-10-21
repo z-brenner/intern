@@ -184,7 +184,7 @@ pinned model.
 ```sh
 cargo build --release --locked -p intern-worker --features windows-native
 cargo build --release --locked -p intern-bench
-MODEL=/path/to/Qwen3.5-2B-Q4_K_M.gguf LLAMA_SERVER=/path/to/llama-server \
+MODEL=/path/to/Ternary-Bonsai-2-4B-PQ2_0.gguf LLAMA_SERVER=/path/to/llama-server \
 INTERN_RUNTIME_DIR=/path/to/runtime THREADS=4 \
   scripts/run-internbench.sh target/internbench -- --baseline bench/baseline.json
 ```
@@ -198,6 +198,16 @@ the worker and the engine and is discarded, so the first scored document is
 not charged for starting the worker or for an empty prompt cache. The first
 PDF a worker process reads still loads PDFium, which is counted as parse;
 the worker is started again after a timeout, a cancellation or a crash.
+
+The worker reads scans with the best OCR engine its runtime directory holds
+(Indra OCR, then PP-OCR, then Tesseract), and with Indra, PP-OCR reads again
+the pages Indra is not sure of ([OCR](ocr.md)). To score one engine against
+another on the same runtime, set `INTERN_OCR_ENGINE=indra`, `paddle` or
+`tesseract` for the run, which the worker inherits - an engine named reads
+alone, `indra` without PP-OCR's second reading - and compare the two reports
+with `intern-bench compare`. An engine asked for that is not
+installed falls back down that list and says so in the worker's log, so
+check the log before reading a run as that engine's.
 `--only id,id` runs a subset.
 
 Each document goes the way it goes in the app: `SupervisedWorker` extracts

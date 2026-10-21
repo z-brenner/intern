@@ -5,7 +5,7 @@
 //!                  (--worker PATH --endpoint URL --api-key KEY [--model-id intern-local]
 //!                   [--model-path GGUF] [--record OUT.json] [--note TEXT] [--server-pid PID]
 //!                   [--no-warmup]
-//!                  | --replay bench/recording.json [--allow-stale]
+//!                  | --replay bench/recording.json [--allow-stale] [--allow-other-model]
 //!                  | --extract-only --worker PATH [--no-warmup])
 //!                  [--only id,id] [--manifest bench/manifest.json]
 //!                  [--output report.json] [--markdown report.md]
@@ -40,7 +40,7 @@ const USAGE: &str = "usage:
   intern-bench run --corpus DIR --gold GOLD.json
                    (--worker PATH --endpoint URL --api-key KEY [--model-id ID] [--model-path GGUF]
                     [--record OUT.json] [--note TEXT] [--server-pid PID] [--no-warmup]
-                   | --replay RECORDING.json [--allow-stale]
+                   | --replay RECORDING.json [--allow-stale] [--allow-other-model]
                    | --extract-only --worker PATH [--no-warmup])
                    [--only id,id] [--manifest MANIFEST.json] [--output REPORT.json] [--markdown REPORT.md]
                    [--baseline BASELINE.json] [--write-baseline BASELINE.json] [--latency-gate RATIO]
@@ -57,7 +57,13 @@ const USAGE: &str = "usage:
                    [--output SWEEP.json] [--markdown SWEEP.md] [--dump DIR]";
 
 /// Arguments that take no value.
-const FLAGS: &[&str] = &["allow-stale", "no-warmup", "extract-only", "sweep"];
+const FLAGS: &[&str] = &[
+    "allow-stale",
+    "allow-other-model",
+    "no-warmup",
+    "extract-only",
+    "sweep",
+];
 
 const RUN_KEYS: &[&str] = &[
     "corpus",
@@ -73,6 +79,7 @@ const RUN_KEYS: &[&str] = &[
     "no-warmup",
     "replay",
     "allow-stale",
+    "allow-other-model",
     "extract-only",
     "only",
     "manifest",
@@ -231,6 +238,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
         Mode::Replay {
             recording: PathBuf::from(recording),
             allow_stale: values.contains_key("allow-stale"),
+            allow_other_model: values.contains_key("allow-other-model"),
         }
     } else if extract_only {
         refuse(
@@ -244,6 +252,7 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
                 "note",
                 "server-pid",
                 "allow-stale",
+                "allow-other-model",
                 "pipeline",
                 "context-tokens",
                 "bench-profile",
@@ -258,8 +267,8 @@ fn run_options(values: &HashMap<String, String>) -> Result<RunOptions, String> {
             },
         }
     } else {
-        if values.contains_key("allow-stale") {
-            return Err("--allow-stale is for --replay".to_owned());
+        if values.contains_key("allow-stale") || values.contains_key("allow-other-model") {
+            return Err("--allow-stale and --allow-other-model are for --replay".to_owned());
         }
         Mode::Live {
             options: LiveOptions {
