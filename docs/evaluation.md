@@ -30,8 +30,8 @@ The evaluator runs the evidence pipeline, the default, unless asked for
 another (`--pipeline digest`, or `legacy` live). A recording says which
 pipeline made it and is replayed only through that one:
 `fixtures/corpus-recording.json` and `corpus-baseline.json` are the evidence
-pipeline's, recorded live with Bonsai 4B (the default local model) from
-`2cdc8a2`, and `fixtures/corpus-recording-digest.json` and
+pipeline's, recorded live with Bonsai 4B (the default local model) and the Indra OCR
+worker from `6062c2c`, and `fixtures/corpus-recording-digest.json` and
 `corpus-baseline-digest.json` the digest pipeline's, which a hosted model
 reads through (it was recorded with the earlier Qwen3.5-2B local model, and
 stays so: no prompt a hosted model reads has changed). CI replays both:
@@ -164,8 +164,9 @@ committed evidence recordings (`fixtures/corpus-recording.json`,
 own ubuntu-x64 release of the pinned fork
 (`llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz`, SHA-256
 `3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713`), 2 threads
-as in the native evaluation, a 64 MiB prompt cache, the routing worker with
-PP-OCR and no Tesseract installed; llama.cpp is not bit-identical across
+as in the native evaluation, a 64 MiB prompt cache, and the worker that ships:
+Indra OCR first, PP-OCR on pages under 75 confidence, no Tesseract installed;
+llama.cpp is not bit-identical across
 machines or thread counts, so a Windows recording may differ in a reply or
 two. The earlier recordings were made on Linux with the then-pinned model and a
 llama.cpp CPU build from source; the digest pipeline's with PDFium

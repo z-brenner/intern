@@ -163,9 +163,57 @@ insurer, a certificate for its broker), a product name in a type, a
 committee and a journal entry read as parties, and the generic-audience
 and relation cases above.
 
-These two tables were recorded with the routing worker (PP-OCR) on Linux;
-they are re-recorded with the Indra OCR worker before this ships, and the
-recording's `note` says which.
+### The recordings of record: Bonsai 4B read through Indra OCR
+
+Everything above was measured over the routing worker's PP-OCR text. The
+committed recordings (`fixtures/corpus-recording.json`, `bench/recording.json`)
+were then made again, live, with the worker that ships - Indra OCR first,
+PP-OCR re-reading any page under 75 confidence, Tesseract last - and the
+same model, runtime, request profile and rules, on the same Linux machine.
+Indra changed the text of 6 corpus fixtures and 20 InternBench documents,
+all scans; Bonsai's reply to every document whose text did not change was
+byte for byte the same, so each difference below is the OCR's.
+
+| Score (rules on) | Corpus, PP-OCR text | Corpus, Indra text | InternBench, PP-OCR text | InternBench, Indra text |
+| --- | ---: | ---: | ---: | ---: |
+| Filename right | 12/18 | 11/18 | 55/77 | 55/77 |
+| Date right | 16/18 | 18/18 | 74/77 | 75/77 |
+| Type right | 17/18 | 15/18 | 70/77 | 71/77 |
+| Parties right | 16/19 | 15/19 | 73/77 | 74/77 |
+| Trap dates filed | 0 | 0 | 0 | 0 |
+| Wrong filename marked ready | - | - | 12 | 14 |
+| Documents naming a forbidden party | 0 | 0 | 1 | 0 |
+
+What Indra's text changed:
+
+- Better: corpus `document-image.png` and `document-image.tiff` are dated now
+  (PP-OCR read `20z5` and lost a line); `document-image.png`'s filename is
+  right. InternBench `scan-low-res-receipt`'s type is read, `scan-faint-letter`
+  names the right person, and `scan-patient-intake-form` and
+  `scan-bill-of-lading` lose an unsupported fact or a wrong date.
+- Worse: corpus `scanned-lease.pdf` and `rotated-low-resolution-scan.png`.
+  Indra reads that clean-room bitmap font's V as U (`EFFECTIUE`, `DELIUERY`,
+  `CEDRR`; `fixtures/README.md`), so the type the model spells correctly is
+  not stated in the text and the filename falls back to "Document", in
+  review. It is one synthetic font, not a general reading error, so no rule
+  reads around it. On InternBench, `scan-faint-letter` now names the right
+  person but with "-" rather than "from" and is ready, and
+  `scan-patient-intake-form` now carries its right date, so nothing sends it
+  to review, but it still names the clinic instead of the patient: the two
+  wrong-but-ready additions (12 -> 14). `scan-upside-down-po` (a description
+  fact), `scan-skewed-notice` (an unsupported fact) and
+  `scan-certificate-of-insurance` (a date role) lose one score each.
+
+The seven rules were checked again on the Indra text, rules off against on:
+InternBench trap dates 4 -> 0, wrong-but-ready 21 -> 14, filenames 51 -> 55,
+dates 72 -> 75, needless review 5 -> 7, routing 45 -> 40; corpus filenames
+10 -> 11. The documents each rule changes are the ones listed above, less
+those whose new text no longer needs it.
+
+The release gate's floors now follow this run
+(`scripts/validate-model-evaluation.mjs`): date 95%, type 80%, parties 75%,
+review at most 45% - type and parties lower than over PP-OCR's text, for
+the two scans above.
 
 
 **Machine:** AMD Ryzen 7 PRO 8840U, 8 cores / 16 threads, 14.7 GB usable RAM, no

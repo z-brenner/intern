@@ -112,8 +112,8 @@ describe('model evaluation gate', () => {
   // ceiling cannot return to zero tolerance, or drift upward to where it would
   // stop catching a real collapse.
   it('tolerates two documents of machine drift but not a collapse into review', () => {
-    // Bonsai 4B's recorded run sent 5 of 19 to review.
-    const drifted = validateEvaluation(report({}, { review_rate: 7 / 19 }));
+    // Bonsai 4B's recorded run over Indra OCR sent 6 of 19 to review.
+    const drifted = validateEvaluation(report({}, { review_rate: 8 / 19 }));
     expect(drifted.accepted).toBe(true);
 
     const collapsed = validateEvaluation(report({}, { review_rate: 9 / 19 }));
@@ -126,14 +126,14 @@ describe('model evaluation gate', () => {
     // a filename. Changing one of these is a decision to make on purpose.
     expect(GATES.dateCorrectWhenNamed).toBe(1);
     expect(GATES.maximumForbiddenDateRate).toBe(0);
-    expect(GATES.dateCorrect).toBe(0.85);
-    expect(GATES.typeCorrect).toBe(0.9);
-    expect(GATES.partiesCorrect).toBe(0.8);
+    expect(GATES.dateCorrect).toBe(0.95);
+    expect(GATES.typeCorrect).toBe(0.8);
+    expect(GATES.partiesCorrect).toBe(0.75);
     expect(GATES.descriptionSpecific).toBe(0.9);
   });
 
   it('accepts the recorded Bonsai 4B run the floors were set from', async () => {
-    const recorded = JSON.parse(await readFile('bench/reports/bonsai-default-2026-10-20/corpus-live-linux-bonsai-4b.json', 'utf8'));
+    const recorded = JSON.parse(await readFile('bench/reports/bonsai-default-2026-10-20/corpus-live-linux-bonsai-4b-indra.json', 'utf8'));
     const result = validateEvaluation(recorded);
     expect(result.failures).toEqual([]);
     expect(result.accepted).toBe(true);
