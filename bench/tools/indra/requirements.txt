@@ -1,0 +1,11 @@
+# The reference runtime the goldens were made with (spec §0). indra-ocr does
+# not pin its dependencies; OpenCV's version changes the reference's own
+# output (spec §13), so all of them are pinned here.
+indra-ocr==1.1.2
+onnxruntime==1.31.0
+opencv-python-headless==5.0.0.93
+numpy==2.5.4
+pypdfium2==5.14.0
+huggingface_hub==2.2.0
+# For dump_onnx.py only.
+onnx==1.23.2

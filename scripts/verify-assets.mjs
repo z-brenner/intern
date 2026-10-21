@@ -24,6 +24,18 @@ const EXPECTED_DOWNLOADS = Object.freeze({
   'ocr-text-recognition': { version: '3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b', archive: 'text-recognition.onnx', url: 'https://huggingface.co/PaddlePaddle/en_PP-OCRv5_mobile_rec_onnx/resolve/3fafbc3b5dcf93dd72add9f48368be8a3a2cd33b/inference.onnx', size: 7_848_423, sha256: 'b5f833dfc5d0eb71da397b4efa06ebeee9b431b690a47d6af40d77d8eabc557f' },
   'ocr-page-orientation': { version: '7330ab7039123e46af2dc03154b9969aa412c61d', archive: 'page-orientation.onnx', url: 'https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori_onnx/resolve/7330ab7039123e46af2dc03154b9969aa412c61d/inference.onnx', size: 6_788_069, sha256: 'af9a0a4f317ff0709ce752067807f819cb15d883f8ecad89f28df1c6ee2d9c92' },
   'paddleocr-license': { version: 'v3.7.0', archive: 'PaddleOCR-LICENSE.txt', url: 'https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/b03f46425e8ff4442b268ce449e3eef758146cd4/LICENSE', size: 11_376, sha256: '3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e' },
+  // Indra OCR, every file from one commit of datalab-to/indra-ocr (tag
+  // v1.1.0): the Latin networks, the recognizer's language model, the
+  // vocabularies, and the weights' own licence; and the Apache-2.0 licence
+  // of the Indra code the worker's reader is ported from.
+  'indra-detection': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'det.onnx', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/det.onnx', size: 389_948, sha256: 'f2bd4cba23e9c328cf7ec824634e423e191a2c6aacbbf35c62bd79dd70f62f59' },
+  'indra-orientation': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'orient.onnx', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/orient.onnx', size: 371_802, sha256: '20eaf670f55a7cf9facfe1bdd6c7b8e40be75bbf4d48a3df43f66aa3bbd874fd' },
+  'indra-recognition': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'rec.onnx', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/rec.onnx', size: 5_042_161, sha256: '475972a2710be4a3cbfeb2bc7f3624ffd563de07de42476fc7a290d4e1ece484' },
+  'indra-order': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'order.onnx', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/order.onnx', size: 2_973_138, sha256: 'a42db2e8b536ad3d84045a4b7f9b0a72667cf8be4aa02d63f7b38004719fb180' },
+  'indra-language-model': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'lm.npz', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/lm.npz', size: 15_695_957, sha256: '6c0fb618a363a0acdd05d4f5b0edd9e8146d2d990541b87f6130bbfe17cea58d' },
+  'indra-meta': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'meta.json', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/meta.json', size: 211_869, sha256: '4ce4c94b46f5d644033c02e718322014ff4081270f385038c571912b56696339' },
+  'indra-ocr-models-license': { version: 'a1283c4b42a273c09480ad50e71461daff50fcc7', archive: 'indra-ocr-models-LICENSE.txt', url: 'https://huggingface.co/datalab-to/indra-ocr/resolve/a1283c4b42a273c09480ad50e71461daff50fcc7/LICENSE', size: 14_750, sha256: '50c88a018a7ee322e89f6b09401b237beb0cd331685879405b3db48993950a5f' },
+  'indra-license': { version: '1.1.2', archive: 'indra-LICENSE.txt', url: 'https://raw.githubusercontent.com/datalab-to/indra/0e96b93c6810f17cf8352acbb4487cc9e45b66d5/LICENSE', size: 11_358, sha256: 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30' },
 });
 
 /**
@@ -39,6 +51,24 @@ const OCR_RUNTIME_INSTALL_PATHS = Object.freeze([
   'ocr-models/page-orientation.onnx',
 ]);
 
+/**
+ * Indra OCR's own files, each staged under indra-models/ from the download
+ * named beside it. Like PP-OCR's, a bundle holds all of them or none, and a
+ * release bundle all of them. Indra runs on the same ONNX Runtime as PP-OCR,
+ * so a bundle with any of them needs onnxruntime.dll too, and the weights'
+ * licence, which says a copy goes with them, and the Indra code's.
+ */
+const INDRA_DOWNLOADS = Object.freeze({
+  'indra-models/det.onnx': 'indra-detection',
+  'indra-models/orient.onnx': 'indra-orientation',
+  'indra-models/rec.onnx': 'indra-recognition',
+  'indra-models/order.onnx': 'indra-order',
+  'indra-models/lm.npz': 'indra-language-model',
+  'indra-models/meta.json': 'indra-meta',
+});
+const INDRA_INSTALL_PATHS = Object.freeze(Object.keys(INDRA_DOWNLOADS));
+const INDRA_LICENSE_PATHS = Object.freeze(['licenses/indra-ocr-models-LICENSE.txt', 'licenses/indra-LICENSE.txt']);
+
 // The pinned digest each OCR runtime file must have when it is bundled: the
 // DLL as extracted from its package, each model as downloaded.
 function pinnedOcrDigests(downloads) {
@@ -48,6 +78,7 @@ function pinnedOcrDigests(downloads) {
     ['ocr-models/text-detection.onnx', download('ocr-text-detection')?.sha256],
     ['ocr-models/text-recognition.onnx', download('ocr-text-recognition')?.sha256],
     ['ocr-models/page-orientation.onnx', download('ocr-page-orientation')?.sha256],
+    ...Object.entries(INDRA_DOWNLOADS).map(([path, id]) => [path, download(id)?.sha256]),
   ]);
 }
 
@@ -158,11 +189,6 @@ export async function verifyRuntimeAssets(manifestPath = DEFAULT_MANIFEST, optio
     assert(await sha256(path) === file.sha256, `runtime asset SHA-256 mismatch: ${file.path}`);
     verifiedFiles += 1;
   }
-  const stagedOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
-  const missingOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));
-  const ocrRequired = requireBundled && requireExpectedPins;
-  assert(missingOcr.length === 0 || (stagedOcr.length === 0 && !ocrRequired),
-    `bundled OCR runtime is incomplete: missing ${missingOcr.join(', ')}`);
   // What ships must be what was pinned, not only what staging wrote down: a
   // bundled OCR file whose digest is not its download's pin is refused.
   const pinnedOcr = pinnedOcrDigests(manifest.downloads);
@@ -171,6 +197,21 @@ export async function verifyRuntimeAssets(manifestPath = DEFAULT_MANIFEST, optio
     const pinned = pinnedOcr.get(file.install_path);
     assert(pinned !== undefined, `no pinned download for bundled ${file.install_path}`);
     assert(file.sha256 === pinned, `bundled ${file.install_path} is not the pinned download: ${file.sha256} != ${pinned}`);
+  }
+  const ocrRequired = requireBundled && requireExpectedPins;
+  const stagedOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
+  const missingOcr = OCR_RUNTIME_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));
+  assert(missingOcr.length === 0 || (stagedOcr.length === 0 && !ocrRequired),
+    `bundled OCR runtime is incomplete: missing ${missingOcr.join(', ')}`);
+  const stagedIndra = INDRA_INSTALL_PATHS.filter((path) => seenInstallPaths.has(path));
+  const missingIndra = INDRA_INSTALL_PATHS.filter((path) => !seenInstallPaths.has(path));
+  assert(missingIndra.length === 0 || (stagedIndra.length === 0 && !ocrRequired),
+    `bundled Indra OCR runtime is incomplete: missing ${missingIndra.join(', ')}`);
+  if (stagedIndra.length > 0) {
+    assert(seenInstallPaths.has('onnxruntime.dll'), 'bundled Indra OCR models need onnxruntime.dll');
+    const licenses = new Set(manifest.license_files.map((file) => file.install_path));
+    const missingLicenses = INDRA_LICENSE_PATHS.filter((path) => !licenses.has(path));
+    assert(missingLicenses.length === 0, `bundled Indra OCR models need their licences: missing ${missingLicenses.join(', ')}`);
   }
   let verifiedLicenses = 0;
   const seenLicensePaths = new Set();

@@ -128,11 +128,13 @@ jobs:
           New-Item -ItemType Directory src-tauri\resources\native\pdfium -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\native\sidecars -Force | Out-Null
           New-Item -ItemType Directory src-tauri\resources\ocr-models -Force | Out-Null
+          New-Item -ItemType Directory src-tauri\resources\indra-models -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\licenses\compile-placeholder.txt -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\tessdata\compile-placeholder.traineddata -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\pdfium\compile-placeholder.dll -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\native\sidecars\compile-placeholder.dll -Force | Out-Null
           New-Item -ItemType File src-tauri\resources\ocr-models\compile-placeholder.onnx -Force | Out-Null
+          New-Item -ItemType File src-tauri\resources\indra-models\compile-placeholder.onnx -Force | Out-Null
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Run apply, undo, recovery, worker, and workspace tests
@@ -170,6 +172,7 @@ jobs:
           Remove-Item src-tauri\resources\native\pdfium\compile-placeholder.dll -Force
           Remove-Item src-tauri\resources\native\sidecars\compile-placeholder.dll -Force
           Remove-Item src-tauri\resources\ocr-models\compile-placeholder.onnx -Force
+          Remove-Item src-tauri\resources\indra-models\compile-placeholder.onnx -Force
           ./scripts/fetch-windows-assets.ps1 -CacheDirectory "${{ runner.temp }}\intern-assets-cache"
       - run: npm run assets:verify -- --require-bundled
       - run: cargo test --locked -p intern-worker --test generated_fixtures --features windows-native
@@ -190,6 +193,17 @@ jobs:
           $env:INTERN_REQUIRE_PP_OCR = "1"
           cargo test --locked -p intern-worker --test paddle_ocr --features windows-native
           if ($LASTEXITCODE -ne 0) { throw "PP-OCR runtime tests failed" }
+      # Indra OCR is the engine scans are read with first; this reads scans
+      # through it, from the staged ONNX Runtime and Indra's models, and
+      # fails if either is missing rather than skipping. PP-OCR, the engine
+      # it falls back to, keeps its own step above.
+      - name: Read scans through the staged Indra OCR runtime
+        shell: pwsh
+        run: |
+          $env:INTERN_RUNTIME_DIR = $env:INTERN_RUNTIME_STAGE
+          $env:INTERN_REQUIRE_INDRA_OCR = "1"
+          cargo test --locked -p intern-worker --test indra_ocr --features windows-native
+          if ($LASTEXITCODE -ne 0) { throw "Indra OCR runtime tests failed" }
       - name: Score the corpus through the shipping pipeline for this exact commit
         shell: pwsh
         # Downloads the default variant (Bonsai 4B, 1.07 GiB) and scores the

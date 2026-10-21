@@ -2434,6 +2434,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "image",
+ "intern-bench",
  "intern-core",
  "intern-engine",
  "intern-intake",
@@ -2446,6 +2447,8 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.17",
+ "unicode-normalization",
+ "unicode-properties",
  "zip 4.6.1",
 ]
 

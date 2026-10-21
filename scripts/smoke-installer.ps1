@@ -67,7 +67,7 @@ try {
         $Digest = (Get-FileHash -LiteralPath $Packaged -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($Digest -ne [string]$Entry.sha256) { throw "Installed SHA-256 mismatch: $Relative" }
     }
-    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx")) {
+    foreach ($Required in @("intern-worker.exe", "llama-server.exe", "tesseract.exe", "pdfium.dll", "tessdata/eng.traineddata", "tessdata/osd.traineddata", "onnxruntime.dll", "ocr-models/text-detection.onnx", "ocr-models/text-recognition.onnx", "ocr-models/page-orientation.onnx", "indra-models/det.onnx", "indra-models/orient.onnx", "indra-models/rec.onnx", "indra-models/order.onnx", "indra-models/lm.npz", "indra-models/meta.json", "licenses/indra-ocr-models-LICENSE.txt", "licenses/indra-LICENSE.txt")) {
         if (-not $Seen.ContainsKey($Required)) { throw "Installed manifest omits required runtime: $Required" }
     }
     if (-not (Get-ChildItem -LiteralPath $InstallDirectory -Recurse -File -Filter "THIRD_PARTY_NOTICES.md")) { throw "Third-party notices are missing from the installation" }

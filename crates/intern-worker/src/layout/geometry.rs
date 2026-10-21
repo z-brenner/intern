@@ -1981,7 +1981,18 @@ fn block_of(kind: BlockKind, lines: Vec<LayoutLine>, source: TextSource) -> Layo
 /// Small lines at the very top and bottom of a page are its running header
 /// and footer: a page number, a document title repeated on every page.
 fn mark_running_lines(blocks: &mut [LayoutBlock], stats: &PageStats) {
-    let margin = stats.page_height * 0.06;
+    mark_running_lines_by(blocks, stats.body_height, stats.page_height);
+}
+
+/// [`mark_running_lines`] on a page whose body text is `body_height` tall
+/// and which is `page_height` tall, both in tenths of a point: what an OCR
+/// engine's own layout gets too, so its pages are marked as these are.
+pub(super) fn mark_running_lines_by(
+    blocks: &mut [LayoutBlock],
+    body_height: f64,
+    page_height: f64,
+) {
+    let margin = page_height * 0.06;
     for block in blocks.iter_mut() {
         let Some(bbox) = block.bbox else {
             continue;
@@ -1994,7 +2005,7 @@ fn mark_running_lines(blocks: &mut [LayoutBlock], stats: &PageStats) {
         }
         let small = block.lines.iter().all(|line| {
             line.bbox
-                .is_some_and(|bbox| f64::from(bbox[3] - bbox[1]) <= stats.body_height * 1.2)
+                .is_some_and(|bbox| f64::from(bbox[3] - bbox[1]) <= body_height * 1.2)
         });
         if !small {
             continue;
@@ -2002,7 +2013,7 @@ fn mark_running_lines(blocks: &mut [LayoutBlock], stats: &PageStats) {
         if f64::from(bbox[3]) <= margin {
             block.kind = BlockKind::PageHeader;
             block.level = None;
-        } else if f64::from(bbox[1]) >= stats.page_height - margin {
+        } else if f64::from(bbox[1]) >= page_height - margin {
             block.kind = BlockKind::PageFooter;
             block.level = None;
         }
