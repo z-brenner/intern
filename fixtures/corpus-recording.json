@@ -5,8 +5,8 @@
   "pipeline": "evidence",
   "retrieval": "f7ab2a5355b6f3c7c7d1938067462f0f92e15edda279238a373ed5068fc2942e",
   "prompt_version": "e2afbe23e64c",
-  "recorded_at_unix": 1792516746,
-  "note": "Ternary-Bonsai-2-4B-PQ2_0.gguf (variant bonsai-4b, manifest sha256 d406b1e9), PrismML llama.cpp prism-b10777-e3de715 ubuntu-x64 release build (llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz, sha256 3f97b6fb), 2 threads, 8192 context, 64 MiB prompt cache, no config.ini, Linux x86_64 (16 logical cores); routing worker with PP-OCR built from commit 2cdc8a237240 (features windows-native; Tesseract not installed, PP-OCR loaded); evidence pipeline, stable ids, the few-shot Bonsai profile (prompt e2afbe23e64c); every fixture recorded live on 2026-10-20. Linux recording: the Windows recording of record, on the packaged runtime, is a follow-up. The digest pipeline's recording is fixtures/corpus-recording-digest.json",
+  "recorded_at_unix": 1792551213,
+  "note": "Ternary-Bonsai-2-4B-PQ2_0.gguf (variant bonsai-4b, manifest sha256 d406b1e9), PrismML llama.cpp prism-b10777-e3de715 ubuntu-x64 release build (llama-prism-b10777-e3de715-bin-ubuntu-x64.tar.gz, sha256 3f97b6fb), 2 threads, 8192 context, 64 MiB prompt cache, no config.ini, Linux x86_64 (16 logical cores); worker OCR = Indra OCR (datalab-to/indra-ocr v1.1.0; PP-OCR re-reads pages under 75 confidence; no Tesseract installed), worker built with onnx-ocr,native-pdfium from commit 6062c2ccb19d (feat/indra-ocr 47346f5 merged); evidence pipeline, stable ids, the few-shot Bonsai profile (prompt e2afbe23e64c); every fixture recorded live on 2026-10-21. Linux recording: the Windows recording of record, on the packaged runtime, is a follow-up. The digest pipeline's recording is fixtures/corpus-recording-digest.json",
   "model": {
     "file": "Ternary-Bonsai-2-4B-PQ2_0.gguf",
     "size_bytes": 1146465120,
@@ -218,9 +218,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "LEASE AGREEMENT\nEFFECTIVE SEPTEMBER 1 2024\n\nPrOperty 47 JUniper LOOP\nCedar Finch Properties Llc\nOrion Glass Studio inc",
+              "text": "LEASE\nAGREEMENT\nEFFECTIUE SEPTEMBER 1 2024\nPROPERTY 47 JUNIPER LOOP\nCEDRR FINCH PROPERTIES LLC\nORION GLASS STUDIO INC",
               "origin": "ocr",
-              "ocr_confidence": 77,
+              "ocr_confidence": 89,
               "layout": {
                 "width": 6120,
                 "height": 7920,
@@ -246,83 +246,76 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "heading",
-                    "text": "LEASE AGREEMENT\nEFFECTIVE SEPTEMBER 1 2024",
+                    "kind": "paragraph",
+                    "text": "LEASE\nAGREEMENT\nEFFECTIUE SEPTEMBER 1 2024\nPROPERTY 47 JUNIPER LOOP\nCEDRR FINCH PROPERTIES LLC\nORION GLASS STUDIO INC",
                     "bbox": [
-                      538,
-                      821,
+                      557,
+                      838,
                       3696,
-                      1193
+                      1721
                     ],
-                    "level": 4,
                     "source": "ocr",
-                    "confidence": 96,
+                    "confidence": 97,
                     "lines": [
                       {
-                        "text": "LEASE AGREEMENT",
+                        "text": "LEASE",
                         "bbox": [
-                          538,
-                          821,
-                          2374,
-                          1003
+                          557,
+                          838,
+                          1284,
+                          1034
+                        ],
+                        "confidence": 94
+                      },
+                      {
+                        "text": "AGREEMENT",
+                        "bbox": [
+                          1241,
+                          845,
+                          2347,
+                          1018
                         ],
                         "confidence": 98
                       },
                       {
-                        "text": "EFFECTIVE SEPTEMBER 1 2024",
+                        "text": "EFFECTIUE SEPTEMBER 1 2024",
                         "bbox": [
-                          562,
-                          1010,
+                          557,
+                          1003,
                           3696,
-                          1193
+                          1205
                         ],
-                        "confidence": 93
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "paragraph",
-                    "text": "PrOperty 47 JUniper LOOP\nCedar Finch Properties Llc\nOrion Glass Studio inc",
-                    "bbox": [
-                      562,
-                      1183,
-                      3696,
-                      1728
-                    ],
-                    "section": "p1.b1",
-                    "source": "ocr",
-                    "confidence": 68,
-                    "lines": [
-                      {
-                        "text": "PrOperty 47 JUniper LOOP",
-                        "bbox": [
-                          562,
-                          1183,
-                          3463,
-                          1366
-                        ],
-                        "confidence": 67
+                        "confidence": 98
                       },
                       {
-                        "text": "Cedar Finch Properties Llc",
+                        "text": "PROPERTY 47 JUNIPER LOOP",
                         "bbox": [
-                          562,
+                          559,
+                          1188,
+                          3449,
+                          1378
+                        ],
+                        "confidence": 95
+                      },
+                      {
+                        "text": "CEDRR FINCH PROPERTIES LLC",
+                        "bbox": [
+                          557,
                           1366,
                           3696,
-                          1548
+                          1567
                         ],
-                        "confidence": 67
+                        "confidence": 97
                       },
                       {
-                        "text": "Orion Glass Studio inc",
+                        "text": "ORION GLASS STUDIO INC",
                         "bbox": [
-                          562,
+                          576,
                           1546,
                           3214,
-                          1728
+                          1721
                         ],
-                        "confidence": 71
+                        "confidence": 99
                       }
                     ]
                   }
@@ -334,16 +327,16 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "07447562dda17a1010ae5c9f2a71601620b42f9ff89e0f97e07802864d49ccb6",
+      "prompt_sha256": "6d45cc58c8affe1433a1f6e4afada702d28d4eea2ad841073a4d8736d6f6acdb",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+          "document_type": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIPER LOOP CEDRR FINCH",
           "document_date": "2024-09-01",
           "date_role": "effective",
           "parties": [
-            "Cedar Finch Properties Llc",
-            "Orion Glass Studio inc"
+            "Finch Properties LLC",
+            "Orion Glass Studio Inc"
           ],
           "party_relation": "none",
           "description": "",
@@ -355,7 +348,7 @@
             "parties": []
           },
           "facts": {
-            "document_type": "LEASE AGREEMENT EFFECTIVE SEPTEMBER 1 2024",
+            "document_type": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIPER LOOP CEDRR FINCH",
             "type_evidence": [
               "p1.b1"
             ],
@@ -366,23 +359,23 @@
             ],
             "parties": [
               {
-                "name": "Cedar Finch Properties Llc",
+                "name": "Finch Properties LLC",
                 "role": "landlord",
                 "evidence": [
-                  "p1.b2"
+                  "p1.b1"
                 ]
               },
               {
-                "name": "Orion Glass Studio inc",
+                "name": "Orion Glass Studio Inc",
                 "role": "tenant",
                 "evidence": [
-                  "p1.b2"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": "Property 47 JUniper LOOP",
+            "subject": "LEASE AGREEMENT EFFECTIUE SEPTEMBER 1 2024 PROPERTY 47 JUNIP",
             "subject_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "identifier": null,
             "identifier_evidence": [],
@@ -518,9 +511,9 @@
             },
             {
               "page_number": 2,
-              "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIVE\n\nSolstice index Llc\n\nJANUARY 8 2025",
+              "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIUE\nSOLSTICE INDEX LLC\nJANUARY 8 2025",
               "origin": "ocr",
-              "ocr_confidence": 83,
+              "ocr_confidence": 91,
               "layout": {
                 "width": 6120,
                 "height": 7920,
@@ -546,90 +539,57 @@
                 "blocks": [
                   {
                     "id": "p2.b1",
-                    "kind": "heading",
-                    "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIVE",
+                    "kind": "paragraph",
+                    "text": "SIGNATURE PAGE\nLUMEN KITE COOPERATIUE\nSOLSTICE INDEX LLC\nJANUARY 8 2025",
                     "bbox": [
-                      562,
-                      821,
-                      3206,
-                      1183
+                      559,
+                      842,
+                      3216,
+                      1534
                     ],
-                    "level": 4,
+                    "section": "p1.b1",
                     "source": "ocr",
-                    "confidence": 98,
+                    "confidence": 97,
                     "lines": [
                       {
                         "text": "SIGNATURE PAGE",
                         "bbox": [
                           562,
-                          821,
-                          2256,
-                          1001
+                          842,
+                          2237,
+                          1003
+                        ],
+                        "confidence": 99
+                      },
+                      {
+                        "text": "LUMEN KITE COOPERATIUE",
+                        "bbox": [
+                          559,
+                          1008,
+                          3216,
+                          1198
                         ],
                         "confidence": 97
                       },
                       {
-                        "text": "LUMEN KITE COOPERATIVE",
+                        "text": "SOLSTICE INDEX LLC",
                         "bbox": [
-                          562,
-                          1001,
-                          3206,
-                          1183
+                          559,
+                          1188,
+                          2734,
+                          1368
                         ],
-                        "confidence": 99
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p2.b2",
-                    "kind": "heading",
-                    "text": "Solstice index Llc",
-                    "bbox": [
-                      552,
-                      1164,
-                      2758,
-                      1390
-                    ],
-                    "level": 3,
-                    "source": "ocr",
-                    "confidence": 65,
-                    "lines": [
-                      {
-                        "text": "Solstice index Llc",
-                        "bbox": [
-                          552,
-                          1164,
-                          2758,
-                          1390
-                        ],
-                        "confidence": 65
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p2.b3",
-                    "kind": "heading",
-                    "text": "JANUARY 8 2025",
-                    "bbox": [
-                      547,
-                      1351,
-                      2263,
-                      1553
-                    ],
-                    "level": 4,
-                    "section": "p2.b2",
-                    "source": "ocr",
-                    "confidence": 77,
-                    "lines": [
+                        "confidence": 97
+                      },
                       {
                         "text": "JANUARY 8 2025",
                         "bbox": [
-                          547,
-                          1351,
-                          2263,
-                          1553
+                          562,
+                          1363,
+                          2254,
+                          1534
                         ],
-                        "confidence": 77
+                        "confidence": 93
                       }
                     ]
                   }
@@ -641,7 +601,7 @@
           "page_image": null
         }
       },
-      "prompt_sha256": "0341a1ac62a291ca5041c04a5ecfdf4fe60544001a8f57af4dfa27177318cd26",
+      "prompt_sha256": "0ec0863ac1cc643082b540d4c307363c9b48bcc2297f3f30e0e3bd836592b11a",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -669,7 +629,7 @@
             "document_date": "2025-01-08",
             "date_role": "execution",
             "date_evidence": [
-              "p2.b3"
+              "p1.b2"
             ],
             "parties": [
               {
@@ -683,7 +643,7 @@
                 "name": "Solstice Index LLC",
                 "role": "contractor",
                 "evidence": [
-                  "p2.b2"
+                  "p1.b2"
                 ]
               }
             ],
@@ -1282,9 +1242,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "DElIvery RECeIPt DR-771\n\nJUNE 12 2025.\n\nPine Echo Couriers Llc\nViolet cartography Studio",
+              "text": "DELIUERY RECEIPT DR-771\nJUNE 12 2025\nPINE ECHO COURIERS LLC\nI\nUIOLET CARTOGRAPHY STUDIO",
               "origin": "ocr",
-              "ocr_confidence": 74,
+              "ocr_confidence": 90,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -1310,88 +1270,67 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "paragraph",
-                    "text": "DElIvery RECeIPt DR-771",
-                    "bbox": [
-                      24,
-                      24,
-                      1013,
-                      86
-                    ],
-                    "source": "ocr",
-                    "confidence": 60,
-                    "lines": [
-                      {
-                        "text": "DElIvery RECeIPt DR-771",
-                        "bbox": [
-                          24,
-                          24,
-                          1013,
-                          86
-                        ],
-                        "confidence": 60
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
                     "kind": "heading",
-                    "text": "JUNE 12 2025.",
+                    "text": "DELIUERY RECEIPT DR-771\nJUNE 12 2025\nPINE ECHO COURIERS LLC\nI\nUIOLET CARTOGRAPHY STUDIO",
                     "bbox": [
-                      22,
-                      84,
-                      547,
-                      156
+                      17,
+                      17,
+                      1114,
+                      281
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 92,
+                    "confidence": 97,
                     "lines": [
                       {
-                        "text": "JUNE 12 2025.",
+                        "text": "DELIUERY RECEIPT DR-771",
                         "bbox": [
-                          22,
-                          84,
-                          547,
-                          156
+                          19,
+                          17,
+                          1022,
+                          91
                         ],
-                        "confidence": 92
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b3",
-                    "kind": "paragraph",
-                    "text": "Pine Echo Couriers Llc\nViolet cartography Studio",
-                    "bbox": [
-                      22,
-                      154,
-                      1106,
-                      286
-                    ],
-                    "section": "p1.b2",
-                    "source": "ocr",
-                    "confidence": 70,
-                    "lines": [
-                      {
-                        "text": "Pine Echo Couriers Llc",
-                        "bbox": [
-                          22,
-                          154,
-                          979,
-                          216
-                        ],
-                        "confidence": 82
+                        "confidence": 96
                       },
                       {
-                        "text": "Violet cartography Studio",
+                        "text": "JUNE 12 2025",
                         "bbox": [
-                          24,
-                          216,
-                          1106,
-                          286
+                          17,
+                          79,
+                          552,
+                          158
                         ],
-                        "confidence": 57
+                        "confidence": 99
+                      },
+                      {
+                        "text": "PINE ECHO COURIERS LLC",
+                        "bbox": [
+                          19,
+                          144,
+                          991,
+                          226
+                        ],
+                        "confidence": 96
+                      },
+                      {
+                        "text": "I",
+                        "bbox": [
+                          636,
+                          151,
+                          672,
+                          238
+                        ],
+                        "confidence": 98
+                      },
+                      {
+                        "text": "UIOLET CARTOGRAPHY STUDIO",
+                        "bbox": [
+                          17,
+                          209,
+                          1114,
+                          281
+                        ],
+                        "confidence": 96
                       }
                     ]
                   }
@@ -1399,12 +1338,7 @@
               }
             }
           ],
-          "parser_warnings": [
-            {
-              "code": "LOW_OCR_CONFIDENCE",
-              "field_affecting": true
-            }
-          ],
+          "parser_warnings": [],
           "page_image": {
             "page_number": 1,
             "media_type": "image/png",
@@ -1412,16 +1346,16 @@
           }
         }
       },
-      "prompt_sha256": "be1172a5e63067505a7c53ec9ef12dcdef6e657692141dfb2ee3de346be459d9",
+      "prompt_sha256": "7f9a7d018bd41ab0bca78d3a05ef45ea3f7eb741deb55e78a6b95a18b29e9057",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "DElIvery RECeIPt DR-771",
+          "document_type": "DELIVERY RECEIPT DR-771",
           "document_date": "2025-06-12",
           "date_role": "execution",
           "parties": [
-            "Pine Echo Couriers Llc",
-            "Violet cartography Studio"
+            "PINE ECHO COURIERS LLC",
+            "I UIOLET CARTOGRAPHY STUDIO"
           ],
           "party_relation": "none",
           "description": "",
@@ -1433,32 +1367,32 @@
             "parties": []
           },
           "facts": {
-            "document_type": "DElIvery RECeIPt DR-771",
+            "document_type": "DELIVERY RECEIPT DR-771",
             "type_evidence": [
               "p1.b1"
             ],
             "document_date": "2025-06-12",
             "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
-                "name": "Pine Echo Couriers Llc",
-                "role": "vendor",
+                "name": "PINE ECHO COURIERS LLC",
+                "role": "recipient",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               },
               {
-                "name": "Violet cartography Studio",
-                "role": "customer",
+                "name": "I UIOLET CARTOGRAPHY STUDIO",
+                "role": "issuer",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": "DElIvery RECeIPt DR-771",
+            "subject": "DELIVERY RECEIPT DR-771",
             "subject_evidence": [
               "p1.b1"
             ],
@@ -12259,9 +12193,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PURCHASE ORDER PO-310\n\nDAtE JULY 14 20z5\n\nEMBer POSt MANUFACtURInG LLC",
+              "text": "D\nD\nD\nD\nPURCHASE ORDER PO-310\nDATE JULY 14 2025\nEMBER POST MANUFACTURING LLC",
               "origin": "ocr",
-              "ocr_confidence": 72,
+              "ocr_confidence": 87,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -12288,78 +12222,86 @@
                   {
                     "id": "p1.b1",
                     "kind": "heading",
-                    "text": "PURCHASE ORDER PO-310",
+                    "text": "D\nD\nD\nD\nPURCHASE ORDER PO-310\nDATE JULY 14 2025\nEMBER POST MANUFACTURING LLC",
                     "bbox": [
-                      22,
-                      24,
-                      931,
-                      86
+                      19,
+                      19,
+                      1238,
+                      214
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 94,
+                    "confidence": 88,
                     "lines": [
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          79,
+                          55,
+                          156
+                        ],
+                        "confidence": 85
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          82,
+                          55,
+                          158
+                        ],
+                        "confidence": 77
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          22,
+                          84,
+                          53,
+                          158
+                        ],
+                        "confidence": 89
+                      },
+                      {
+                        "text": "D",
+                        "bbox": [
+                          31,
+                          79,
+                          62,
+                          158
+                        ],
+                        "confidence": 71
+                      },
                       {
                         "text": "PURCHASE ORDER PO-310",
                         "bbox": [
-                          22,
-                          24,
-                          931,
-                          86
+                          19,
+                          19,
+                          938,
+                          94
                         ],
-                        "confidence": 94
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "paragraph",
-                    "text": "DAtE JULY 14 20z5",
-                    "bbox": [
-                      22,
-                      89,
-                      763,
-                      151
-                    ],
-                    "section": "p1.b1",
-                    "source": "ocr",
-                    "confidence": 67,
-                    "lines": [
+                        "confidence": 96
+                      },
                       {
-                        "text": "DAtE JULY 14 20z5",
+                        "text": "DATE JULY 14 2025",
+                        "bbox": [
+                          34,
+                          82,
+                          768,
+                          156
+                        ],
+                        "confidence": 97
+                      },
+                      {
+                        "text": "EMBER POST MANUFACTURING LLC",
                         "bbox": [
                           22,
-                          89,
-                          763,
-                          151
-                        ],
-                        "confidence": 67
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b3",
-                    "kind": "heading",
-                    "text": "EMBer POSt MANUFACtURInG LLC",
-                    "bbox": [
-                      24,
-                      154,
-                      1238,
-                      216
-                    ],
-                    "level": 4,
-                    "source": "ocr",
-                    "confidence": 60,
-                    "lines": [
-                      {
-                        "text": "EMBer POSt MANUFACtURInG LLC",
-                        "bbox": [
-                          24,
-                          154,
+                          149,
                           1238,
-                          216
+                          214
                         ],
-                        "confidence": 60
+                        "confidence": 98
                       }
                     ]
                   }
@@ -12367,12 +12309,7 @@
               }
             }
           ],
-          "parser_warnings": [
-            {
-              "code": "LOW_OCR_CONFIDENCE",
-              "field_affecting": true
-            }
-          ],
+          "parser_warnings": [],
           "page_image": {
             "page_number": 1,
             "media_type": "image/png",
@@ -12380,7 +12317,7 @@
           }
         }
       },
-      "prompt_sha256": "a9318672543fdc0227c32b5d1ba52133a406ec661b56d24e3e01854f1a7ab1fb",
+      "prompt_sha256": "15b372bbf385710c7283793aaa3c55585c32a9041f514d506a4f56e5ad307202",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -12388,7 +12325,7 @@
           "document_date": "2025-07-14",
           "date_role": "execution",
           "parties": [
-            "EMber POSt MANUFACtURInG LLC"
+            "EMBER POST MANUFACTURING LLC"
           ],
           "party_relation": "none",
           "description": "",
@@ -12407,19 +12344,21 @@
             "document_date": "2025-07-14",
             "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
-                "name": "EMber POSt MANUFACtURInG LLC",
+                "name": "EMBER POST MANUFACTURING LLC",
                 "role": "buyer",
                 "evidence": [
-                  "p1.b3"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": null,
-            "subject_evidence": [],
+            "subject": "PURCHASE ORDER",
+            "subject_evidence": [
+              "p1.b1"
+            ],
             "identifier": null,
             "identifier_evidence": [],
             "key_facts": []
@@ -12436,9 +12375,9 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "PACKING SLIP PS-311\n\nDATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC",
+              "text": "PACKING SLIP PS-311\n\nDATE JULY 15 2025\n\nQUARTZ MEADOW RETAIL LLC",
               "origin": "ocr",
-              "ocr_confidence": 100,
+              "ocr_confidence": 97,
               "layout": {
                 "width": 1344,
                 "height": 720,
@@ -12469,58 +12408,74 @@
                     "bbox": [
                       58,
                       79,
-                      770,
-                      151
+                      778,
+                      134
                     ],
                     "level": 4,
                     "source": "ocr",
-                    "confidence": 100,
+                    "confidence": 99,
                     "lines": [
                       {
                         "text": "PACKING SLIP PS-311",
                         "bbox": [
                           58,
                           79,
-                          770,
-                          151
+                          778,
+                          134
                         ],
-                        "confidence": 100
+                        "confidence": 99
                       }
                     ]
                   },
                   {
                     "id": "p1.b2",
-                    "kind": "heading",
-                    "text": "DATE JULY 15 2025\nQUARTZ MEADOW RETAIL LLC",
+                    "kind": "paragraph",
+                    "text": "DATE JULY 15 2025",
                     "bbox": [
                       55,
-                      194,
-                      1073,
-                      396
+                      197,
+                      701,
+                      262
                     ],
-                    "level": 4,
+                    "section": "p1.b1",
                     "source": "ocr",
-                    "confidence": 100,
+                    "confidence": 97,
                     "lines": [
                       {
                         "text": "DATE JULY 15 2025",
                         "bbox": [
                           55,
-                          194,
-                          698,
-                          283
+                          197,
+                          701,
+                          262
                         ],
-                        "confidence": 100
-                      },
+                        "confidence": 97
+                      }
+                    ]
+                  },
+                  {
+                    "id": "p1.b3",
+                    "kind": "heading",
+                    "text": "QUARTZ MEADOW RETAIL LLC",
+                    "bbox": [
+                      58,
+                      319,
+                      1078,
+                      374
+                    ],
+                    "level": 4,
+                    "source": "ocr",
+                    "confidence": 99,
+                    "lines": [
                       {
                         "text": "QUARTZ MEADOW RETAIL LLC",
                         "bbox": [
                           58,
-                          314,
-                          1073,
-                          396
+                          319,
+                          1078,
+                          374
                         ],
-                        "confidence": 100
+                        "confidence": 99
                       }
                     ]
                   }
@@ -12536,7 +12491,7 @@
           }
         }
       },
-      "prompt_sha256": "c2a96a5464f2de7babf97da4c7ea4fee2eecf5084c64e7029a9023f1832b89bb",
+      "prompt_sha256": "eefb7206ad234f97e2b966f58e4c4feb3ab7bd081c271a6aed35e039cf9b86f7",
       "reply": {
         "outcome": "proposed",
         "proposal": {
@@ -12568,9 +12523,9 @@
             "parties": [
               {
                 "name": "Quartz Meadow Retail LLC",
-                "role": "recipient",
+                "role": "buyer",
                 "evidence": [
-                  "p1.b2"
+                  "p1.b3"
                 ]
               }
             ],
@@ -12594,12 +12549,12 @@
           "pages": [
             {
               "page_number": 1,
-              "text": "DATE JULY.15\n\nHARBOR COMET REPAIRS LLC",
+              "text": "MORK ORDER MO-312\nDATE JULY 16 2025\nHARBOR COMET REPAIRS LLC\nE",
               "origin": "ocr",
-              "ocr_confidence": 82,
+              "ocr_confidence": 83,
               "layout": {
-                "width": 720,
-                "height": 1344,
+                "width": 1344,
+                "height": 720,
                 "route": "ocr",
                 "signals": {
                   "chars": 0,
@@ -12622,53 +12577,56 @@
                 "blocks": [
                   {
                     "id": "p1.b1",
-                    "kind": "heading",
-                    "text": "DATE JULY.15",
+                    "kind": "paragraph",
+                    "text": "MORK ORDER MO-312\nDATE JULY 16 2025\nHARBOR COMET REPAIRS LLC\nE",
                     "bbox": [
-                      547,
-                      12,
-                      650,
-                      581
+                      19,
+                      19,
+                      1073,
+                      226
                     ],
-                    "level": 4,
                     "source": "ocr",
-                    "confidence": 51,
+                    "confidence": 96,
                     "lines": [
                       {
-                        "text": "DATE JULY.15",
+                        "text": "MORK ORDER MO-312",
                         "bbox": [
-                          547,
-                          12,
-                          650,
-                          581
+                          19,
+                          19,
+                          768,
+                          96
                         ],
-                        "confidence": 51
-                      }
-                    ]
-                  },
-                  {
-                    "id": "p1.b2",
-                    "kind": "heading",
-                    "text": "HARBOR COMET REPAIRS LLC",
-                    "bbox": [
-                      487,
-                      5,
-                      583,
-                      1070
-                    ],
-                    "level": 4,
-                    "source": "ocr",
-                    "confidence": 97,
-                    "lines": [
+                        "confidence": 96
+                      },
+                      {
+                        "text": "DATE JULY 16 2025",
+                        "bbox": [
+                          22,
+                          82,
+                          768,
+                          158
+                        ],
+                        "confidence": 95
+                      },
                       {
                         "text": "HARBOR COMET REPAIRS LLC",
                         "bbox": [
-                          487,
-                          5,
-                          583,
-                          1070
+                          19,
+                          144,
+                          1073,
+                          216
                         ],
-                        "confidence": 97
+                        "confidence": 95
+                      },
+                      {
+                        "text": "E",
+                        "bbox": [
+                          629,
+                          146,
+                          658,
+                          226
+                        ],
+                        "confidence": 98
                       }
                     ]
                   }
@@ -12684,13 +12642,13 @@
           }
         }
       },
-      "prompt_sha256": "ec949d42f313f7b5af4723536f153726c6fab5021e7d6a2b11d7af9eead734e2",
+      "prompt_sha256": "af6864c2f3f0824546df4655cd70118831bae08b91407581b56b509e47c2c443",
       "reply": {
         "outcome": "proposed",
         "proposal": {
-          "document_type": "DATE",
-          "document_date": "2026-07-15",
-          "date_role": "notice",
+          "document_type": "MORK ORDER",
+          "document_date": "2025-07-16",
+          "date_role": "execution",
           "parties": [
             "HARBOR COMET REPAIRS LLC"
           ],
@@ -12704,25 +12662,25 @@
             "parties": []
           },
           "facts": {
-            "document_type": "DATE",
+            "document_type": "MORK ORDER",
             "type_evidence": [
               "p1.b1"
             ],
-            "document_date": "2026-07-15",
-            "date_role": "notice",
+            "document_date": "2025-07-16",
+            "date_role": "execution",
             "date_evidence": [
-              "p1.b2"
+              "p1.b1"
             ],
             "parties": [
               {
                 "name": "HARBOR COMET REPAIRS LLC",
-                "role": "other",
+                "role": "buyer",
                 "evidence": [
-                  "p1.b2"
+                  "p1.b1"
                 ]
               }
             ],
-            "subject": "DATE",
+            "subject": "MORK ORDER",
             "subject_evidence": [
               "p1.b1"
             ],
