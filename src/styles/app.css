@@ -139,8 +139,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .view-empty .view-empty-title { font-size: 16px; font-weight: 600; color: var(--text); }
 
 /* ---------- queue ---------- */
-.queue-actions { display: flex; justify-content: flex-end; gap: 10px; min-height: 38px; margin: 0 10px 12px; }
+/* One row above the table: the "need review" count on the left, what can be
+   done to the table on the right. Wraps at narrow widths rather than
+   squeezing the buttons. */
+.queue-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; min-height: 38px; margin: 0 10px 12px; }
+/* Its buttons flow in the toolbar's own row, so beside the Details panel they
+   wrap one at a time instead of as a block. */
+.queue-actions { display: contents; }
+.need-review { margin-right: auto; }
 .queue-actions button { min-height: 36px; }
+.queue-actions button svg { width: 16px; height: 16px; flex: none; }
+.queue-actions .details-toggle[aria-expanded='true'] { background: var(--brand-tint); border-color: var(--selected-border); color: var(--brand-navy); }
+/* The count the Needs Review page's badge used to carry, in the review amber
+   the Status column uses for the same state. */
+.need-review { min-height: 30px; padding: 0 12px; border: 1px solid #ecd3a8; border-radius: 15px; background: #fdf6ea; color: var(--review-strong); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.need-review:hover { background: #faecd3; border-color: #e0bb7c; }
 .queue-actions span { display: inline-grid; place-items: center; min-width: 22px; height: 20px; margin-left: 4px; padding: 0 6px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; background: var(--brand-tint); color: var(--brand-navy); }
 .queue-actions .primary span { background: rgba(255, 255, 255, .22); color: #fff; }
 .queue-filter { margin: 0 10px 12px; }
@@ -154,13 +167,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 /* A collapsed border belongs to the table and scrolls away; the shadow stays with the header. */
 .table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px 0 var(--border); }
 .table-wrap table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 14px; }
-.table-wrap th { text-align: left; padding: 6px 16px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-.table-wrap th:nth-child(1) { width: 29%; }
-.table-wrap th:nth-child(2) { width: 20%; }
-.table-wrap th:nth-child(3) { width: 37%; }
-.table-wrap th:nth-child(4) { width: 14%; }
-.table-wrap td { padding: 8px 16px; height: 48px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
-.row-select { border: 0; background: transparent; color: inherit; padding: 4px 0; margin: -4px 0; width: 100%; display: inline-flex; align-items: center; gap: 12px; text-align: left; font: inherit; }
+.table-wrap th { text-align: left; padding: 6px 12px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.table-wrap th.col-original { width: 25%; }
+.table-wrap th.col-status { width: 15%; }
+.table-wrap th.col-proposed { width: 26%; }
+.table-wrap th.col-description { width: 21%; }
+.table-wrap th.col-confidence { width: 13%; }
+/* Below this the words of a filename start breaking mid-word; the table
+   scrolls sideways instead, which only happens beside the Details panel at
+   the narrowest widths it is a side panel for. */
+.queue-grid { min-width: 560px; }
+.table-wrap td { padding: 8px 12px; height: 48px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: break-word; }
+.cell-filename { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cell-filename > span:last-child { min-width: 0; }
 .file-kind { flex: 0 0 22px; display: inline-grid; place-items: center; color: var(--text-muted); }
 .file-kind--pdf { color: #a33b32; }
 .file-kind--document { color: #315caa; }
@@ -174,8 +193,37 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .table-wrap tbody tr:hover { background: var(--surface-subtle); }
 .table-wrap tr.selected { background: var(--surface-selected); }
 .table-wrap tr.selected td { border-top: 1px solid var(--selected-border); border-bottom: 1px solid var(--selected-border); }
-.table-wrap tr.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
-.row-description { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+.table-wrap tr.selected td:first-child { --row-bar: inset 3px 0 0 var(--accent); }
+/* Three lines at most; the whole sentence is the cell's tooltip, is in the
+   Details panel, and is what a copy of the cell carries. */
+.row-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; color: var(--text-muted); font-size: 12px; line-height: 1.35; }
+
+/* Cells select like a spreadsheet's: a tinted fill, and a rule round the
+   edge of the selected rectangle. The browser's own text selection would be
+   a second highlight that disagrees with it, so a drag selects cells and
+   never text; a cell's text is copied whole with Ctrl+C. Status is never
+   selected: inside a selection it keeps its own background, so the gap
+   shows it will not be copied. */
+.queue-grid td { -webkit-user-select: none; user-select: none; cursor: cell; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent); }
+.queue-grid td.col-status { cursor: default; }
+.queue-grid th.col-original, .queue-grid th.col-proposed, .queue-grid th.col-description, .queue-grid th.col-confidence { cursor: pointer; -webkit-user-select: none; user-select: none; }
+.queue-grid td.cell-selected { background: var(--cell-selected); }
+.queue-grid td.edge-top { --edge-top: inset 0 2px 0 var(--cell-selected-edge); }
+.queue-grid td.edge-bottom { --edge-bottom: inset 0 -2px 0 var(--cell-selected-edge); }
+.queue-grid td.edge-left { --edge-left: inset 2px 0 0 var(--cell-selected-edge); }
+.queue-grid td.edge-right { --edge-right: inset -2px 0 0 var(--cell-selected-edge); }
+/* The fill is darker than a selected row's, so the quieter text in it takes
+   the next darker shade to stay at 4.5:1 or better. */
+.queue-grid td.cell-selected .row-description, .queue-grid td.cell-selected .kept-original { color: var(--text-soft); }
+.queue-grid td.cell-selected.confidence.review { color: var(--review-strong); }
+.queue-grid td.cell-selected.confidence.ready, .queue-grid td.cell-selected.confidence.completed { color: var(--ready-strong); }
+.queue-grid td:focus { outline: none; }
+.queue-grid td:focus-visible { outline: 2px solid var(--brand-navy); outline-offset: -2px; }
+@media (forced-colors: active) {
+  .queue-grid td.cell-selected { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .queue-grid td.cell-selected * { color: HighlightText !important; }
+  .queue-grid td:focus-visible { outline-color: CanvasText; }
+}
 .kept-original { color: var(--text-muted); font-style: italic; }
 
 /* Wraps rather than painting over the next column. Beside the inspector at
@@ -423,14 +471,22 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 
-/* With the side inspector open below 1440px the table is about 600px wide, and
-   a fifth of it left the status label 56px: "Reading document…" broke inside
-   its words. The status column takes a larger share until the window is wide
-   enough not to need it; at 1100px and below the inspector is a drawer and
-   the table has the width back. */
+/* With the Details panel open below 1440px the table is about 600px wide for
+   five columns. A fifth of it once left the status label 56px, and "Reading
+   document…" broke inside its words. The cells pad less, headings may wrap,
+   and Status keeps a larger share until the window is wide enough not to need
+   it; at 1100px and below the panel is a drawer and the table has the width
+   back. */
 @media (min-width: 1101px) and (max-width: 1439px) {
-  .table-wrap th:nth-child(2) { width: 25%; }
-  .table-wrap th:nth-child(3) { width: 32%; }
+  .workspace:has(> .inspector) .table-wrap th, .workspace:has(> .inspector) .table-wrap td { padding-left: 8px; padding-right: 8px; }
+  .workspace:has(> .inspector) .table-wrap th { white-space: normal; letter-spacing: .02em; }
+  .workspace:has(> .inspector) .cell-filename { gap: 8px; }
+  .workspace:has(> .inspector) .status { gap: 6px; }
+  .workspace:has(> .inspector) .table-wrap th.col-original { width: 22%; }
+  .workspace:has(> .inspector) .table-wrap th.col-status { width: 20%; }
+  .workspace:has(> .inspector) .table-wrap th.col-proposed { width: 25%; }
+  .workspace:has(> .inspector) .table-wrap th.col-description { width: 18%; }
+  .workspace:has(> .inspector) .table-wrap th.col-confidence { width: 15%; }
 }
 
 /* ---------- narrow ---------- */
@@ -455,10 +511,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
   .drop-zone--bar { gap: 12px; padding: 12px 14px; }
   .queue-panel { padding-top: 12px; }
   .table-wrap th, .table-wrap td { padding-left: 8px; padding-right: 8px; }
-  .table-wrap th:nth-child(1) { width: 30%; }
-  .table-wrap th:nth-child(2) { width: 24%; }
-  .table-wrap th:nth-child(3) { width: 32%; }
-  .table-wrap th:nth-child(4) { width: 14%; }
+  .table-wrap th.col-original { width: 24%; }
+  .table-wrap th.col-status { width: 19%; }
+  .table-wrap th.col-proposed { width: 24%; }
+  .table-wrap th.col-description { width: 20%; }
+  .table-wrap th.col-confidence { width: 13%; }
   .inspector { width: min(370px, calc(100vw - 64px)); }
   .product strong { font-size: 24px; }
 }

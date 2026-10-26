@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../App';
+import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
 
-const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
+const selectRow = openRow;
 
 const rescan: QueueItem = {
   id: 'rescan',
@@ -22,7 +23,7 @@ const rescan: QueueItem = {
 describe('a document that repeats a filed one', () => {
   it('says so in words and names the filing it repeats', async () => {
     render(<App bridge={createInMemoryBridge({ items: [rescan] })} />);
-    selectRow(await screen.findByRole('row', { name: /Scan 0051.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Scan 0051.pdf/i }));
 
     const reason = screen.getByRole('heading', { name: 'Reason for review' }).closest('section')!;
     expect(reason).toHaveTextContent('This looks like a document that was filed already. Approve to file it as well, keep the original, or remove it.');

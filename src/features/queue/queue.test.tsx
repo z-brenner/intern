@@ -6,14 +6,16 @@ import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemo
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
 import type { AddReport, QueueItem } from '../../types';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
+import { clickCell, openDetails, queueCell } from './gridTesting';
 
 describe('queue interactions', () => {
+  // Selects the row and opens the Details panel for it, as a reviewer does.
   const selectRow = async (row: HTMLElement) => {
-    const select = within(row).getByRole('button', { name: /select/i });
-    const filename = select.getAttribute('aria-label')?.replace(/^Select /, '');
-    fireEvent.click(select);
+    const cell = row.querySelector<HTMLElement>('[data-column="original"]')!;
+    clickCell(cell);
+    await openDetails();
     const inspector = await screen.findByRole('complementary', { name: 'Review item' });
-    if (filename) await waitFor(() => expect(inspector).toHaveTextContent(filename));
+    await waitFor(() => expect(inspector).toHaveTextContent(cell.textContent ?? ''));
   };
   it('keeps identical bytes from different paths separate and deduplicates only the same path', async () => {
     const bridge = createFixtureBatchBridge();
@@ -110,13 +112,16 @@ describe('queue interactions', () => {
     render(<App bridge={bridge} selection={{ pickFiles: async () => [], pickFolder: async () => undefined, pickExistingModelFiles: async () => undefined, resolveDrop }} />);
     const zone = await screen.findByRole('region', { name: /drag files/i });
 
+    // The added row is selected; selecting never opens the Details panel.
     fireEvent.drop(zone);
-    expect(await screen.findByRole('complementary', { name: 'Review item' })).toHaveTextContent('duplicate-invoice-a.pdf');
+    await waitFor(() => expect(queueCell('duplicate-invoice-a.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
+    expect(await openDetails()).toHaveTextContent('duplicate-invoice-a.pdf');
     fireEvent.click(screen.getByRole('button', { name: 'Close review' }));
     fireEvent.drop(zone);
 
-    expect(await screen.findByRole('complementary', { name: 'Review item' })).toHaveTextContent('duplicate-invoice-a.pdf');
-    expect(screen.getAllByRole('button', { name: 'Select duplicate-invoice-a.pdf' })).toHaveLength(1);
+    await waitFor(() => expect(queueCell('duplicate-invoice-a.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.getAllByRole('gridcell', { name: 'duplicate-invoice-a.pdf' }).filter((cell) => cell.dataset.column === 'original')).toHaveLength(1);
   });
 
   it('describes supported formats without adding a nonfunctional keyboard stop', async () => {
@@ -400,8 +405,9 @@ describe('queue interactions', () => {
 
     render(<App bridge={bridge} />);
 
+    // Proposed filename, description and confidence; Status says "Waiting".
     const row = await screen.findByRole('row', { name: /Invoice INV-1001.pdf/i });
-    expect(within(row).getAllByText('—')).toHaveLength(2);
+    expect(within(row).getAllByText('—')).toHaveLength(3);
   });
 
   it('opens the review inspector after selecting a review item', async () => {
@@ -523,7 +529,7 @@ describe('queue interactions', () => {
     expect(screen.queryByRole('button', { name: /^Undo these/ })).not.toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Undid 3 renames.');
     // Undo left with its toast; focus goes to the first document put back.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' })).toHaveFocus());
+    await waitFor(() => expect(queueCell('Employment Agreement - John Smith.pdf')).toHaveFocus());
   });
 
   it('reports an undo the backend refuses and still undoes the rest', async () => {

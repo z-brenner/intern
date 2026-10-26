@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 
 async function openSettings() {
@@ -72,7 +73,7 @@ describe('your organization\'s names', () => {
     expect(lease).toHaveTextContent('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc.pdf');
     // Open in the inspector before the rename, so the name it shows is one
     // it had already taken as the starting draft.
-    fireEvent.click(within(lease).getByRole('button', { name: /select/i }));
+    await openRow(lease);
     expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     const dialog = await openSettings();

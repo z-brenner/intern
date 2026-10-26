@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createReviewBatchBridge } from '../../lib/inMemoryBridge';
+import { clickCell, detailsToggle, openDetails, queueCell } from '../queue/gridTesting';
 
 /*
   FRONTEND_UX-10. With 200 items queued, a keyboard user reached Approve from
@@ -12,12 +13,14 @@ import { createReviewBatchBridge } from '../../lib/inMemoryBridge';
 */
 describe('keyboard review', () => {
   const inspector = () => screen.getByRole('complementary', { name: 'Review item' });
-  const rowButton = (name: string) => screen.getByRole('button', { name: `Select ${name}` });
+  const rowButton = (name: string) => queueCell(name);
   const press = (key: string, init: Partial<KeyboardEventInit> = {}) => fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
   const start = async () => {
     const base = createReviewBatchBridge();
     const bridge = { ...base, approve: vi.fn(base.approve), keepOriginal: vi.fn(base.keepOriginal), remove: vi.fn(base.remove) };
     render(<App bridge={bridge} />);
+    // Intern selects the first item to decide; the Details panel opens only when asked.
+    await openDetails();
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0101.pdf'));
     return bridge;
   };
@@ -161,7 +164,7 @@ describe('keyboard review', () => {
 
   it('approve_advances_to_next_undecided_and_announces', async () => {
     const bridge = await start();
-    fireEvent.click(rowButton('Scan 0102.pdf'));
+    clickCell(rowButton('Scan 0102.pdf'));
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0102.pdf'));
     expect(inspector()).toHaveTextContent('2 of 6 to decide');
 
@@ -203,6 +206,7 @@ describe('keyboard review', () => {
     ] });
     const bridge = { ...base, approve: vi.fn(base.approve) };
     render(<App bridge={bridge} />);
+    await openDetails();
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0301.pdf'));
     expect(inspector()).toHaveTextContent('1 of 2 to decide');
     const status = screen.getByRole('status', { name: 'Action status' });
@@ -223,7 +227,7 @@ describe('keyboard review', () => {
     expect(bridge.approve).toHaveBeenCalledTimes(2);
 
     // Opened again, it says why it is still in the queue.
-    fireEvent.click(rowButton('Scan 0301.pdf'));
+    clickCell(rowButton('Scan 0301.pdf'));
     await waitFor(() => expect(inspector()).toHaveTextContent('Approved. It will be renamed when the queue is free.'));
     expect(inspector()).not.toHaveTextContent('to decide');
   });
@@ -242,6 +246,7 @@ describe('keyboard review', () => {
         : item),
     };
     render(<App bridge={bridge} />);
+    await openDetails();
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0101.pdf'));
 
     press('Enter', { ctrlKey: true });
@@ -256,6 +261,7 @@ describe('keyboard review', () => {
       { id: 'later', originalFilename: 'Scan 0202.pdf', status: 'waiting' },
     ] });
     render(<App bridge={base} />);
+    await openDetails();
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0201.pdf'));
     expect(inspector()).not.toHaveTextContent('Next undecided');
 
@@ -272,10 +278,11 @@ describe('keyboard review', () => {
     await start();
     const filename = () => within(inspector()).getByLabelText('Filename');
 
-    // A row clicked in the wide window: focus goes to the panel's heading,
-    // not a row count of Tab presses away from it.
-    fireEvent.click(rowButton('Scan 0104.pdf'));
-    await waitFor(() => expect(within(inspector()).getByRole('heading', { name: 'Review item' })).toHaveFocus());
+    // A cell clicked: focus stays in the table, where the person is working,
+    // and the open panel follows the selection.
+    clickCell(rowButton('Scan 0104.pdf'));
+    await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0104.pdf'));
+    expect(rowButton('Scan 0104.pdf')).toHaveFocus();
     press('F2');
     expect(filename()).toHaveFocus();
     expect(filename()).toHaveValue('2024-03-30 Statement of Work with Litware Inc');
@@ -301,7 +308,7 @@ describe('keyboard review', () => {
     expect(inspector()).toHaveTextContent('2 of 6 to decide');
 
     // A waiting item is not one to decide: the count stands, without a place in it.
-    fireEvent.click(rowButton('Scan 0107.pdf'));
+    clickCell(rowButton('Scan 0107.pdf'));
     await waitFor(() => expect(inspector()).toHaveTextContent('Scan 0107.pdf'));
     expect(inspector()).toHaveTextContent('6 to decide');
     expect(inspector()).not.toHaveTextContent('of 6 to decide');

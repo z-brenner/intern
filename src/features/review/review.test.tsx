@@ -1,17 +1,18 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { detailsToggle, openDetails, openRow, queueCell, selectRow as selectByName } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 
 describe('review actions', () => {
   afterEach(() => vi.unstubAllGlobals());
-  const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
+  const selectRow = openRow;
   it('keeps editing local until a nonblank filename is approved', async () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     const bridge = { ...baseBridge, approve };
     render(<App bridge={bridge} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
     fireEvent.change(filename, { target: { value: '' } });
 
@@ -28,7 +29,7 @@ describe('review actions', () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
 
     fireEvent.change(filename, { target: { value: '2023-09-15 Lease Agreement: ABC Properties LLC' } });
@@ -50,7 +51,7 @@ describe('review actions', () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
 
     expect(filename.tagName).toBe('TEXTAREA');
@@ -66,7 +67,7 @@ describe('review actions', () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
 
     fireEvent.change(filename, { target: { value: '2023-09-15 Lease\r\nAgreement\n' } });
@@ -80,7 +81,7 @@ describe('review actions', () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
 
     fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2023-09-15 Lease.PDF' } });
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
@@ -94,7 +95,7 @@ describe('review actions', () => {
   it('explains a filename the backend refused in words, and can be dismissed', async () => {
     const approve = vi.fn(async () => { throw { code: 'NAME_INVALID', message: 'filename must be one nonblank path component' }; });
     render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
 
     const feedback = await screen.findByRole('alert', { name: 'Action error' });
@@ -113,7 +114,7 @@ describe('review actions', () => {
   it('says to close a document another program holds, rather than the system error', async () => {
     const approve = vi.fn(async () => { throw { code: 'SOURCE_LOCKED', message: 'atomic no-replace rename failed (The process cannot access the file because it is being used by another process. (os error 32))' }; });
     render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
 
     const feedback = await screen.findByRole('alert', { name: 'Action error' });
@@ -127,7 +128,7 @@ describe('review actions', () => {
   it('points an approval refused because the file changed at Analyze again', async () => {
     const approve = vi.fn(async () => { throw { code: 'FILE_CHANGED', message: 'The file changed after it was analyzed. Re-analyze it.' }; });
     render(<App bridge={{ ...createInMemoryBridge(), approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/i }));
 
     const feedback = await screen.findByRole('alert', { name: 'Action error' });
@@ -154,16 +155,16 @@ describe('review actions', () => {
     render(<App bridge={{ ...base, retry }} />);
     const status = () => screen.getByRole('status', { name: 'Action status' });
 
-    selectRow(await screen.findByRole('row', { name: /stuck\.pdf/ }));
+    await selectRow(await screen.findByRole('row', { name: /stuck\.pdf/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(status()).toHaveTextContent('Checked stuck.pdf: it was not renamed, and waits for your decision.'));
 
-    selectRow(screen.getByRole('row', { name: /copied\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /copied\.pdf/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     await waitFor(() => expect(status()).toHaveTextContent('Checked copied.pdf: it is filed.'));
     expect(status()).not.toHaveTextContent('queued for retry');
 
-    selectRow(screen.getByRole('row', { name: /ambiguous\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /ambiguous\.pdf/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     const feedback = await screen.findByRole('alert', { name: 'Action error' });
     expect(feedback).not.toHaveTextContent('Check again');
@@ -183,13 +184,13 @@ describe('review actions', () => {
     });
     render(<App bridge={{ ...base, approve }} />);
 
-    selectRow(await screen.findByRole('row', { name: /ambiguous\.pdf/ }));
+    await selectRow(await screen.findByRole('row', { name: /ambiguous\.pdf/ }));
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
     const feedback = await screen.findByRole('alert', { name: 'Action error' });
     expect(feedback).not.toHaveTextContent('Check again');
     expect(feedback).toHaveTextContent('I have resolved the files myself');
 
-    selectRow(screen.getByRole('row', { name: /stuck\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /stuck\.pdf/ }));
     fireEvent.change(screen.getByLabelText('Filename'), { target: { value: '2024-05-01 Stuck renamed' } });
     fireEvent.click(screen.getByRole('button', { name: /Approve & rename/ }));
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Renamed stuck.pdf.'));
@@ -212,7 +213,7 @@ describe('review actions', () => {
     expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).toHaveTextContent('Kept original');
     expect(screen.getByRole('row', { name: /Board minutes\.docx/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.docx');
 
-    selectRow(screen.getByRole('row', { name: /Completed lease\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /Completed lease\.pdf/ }));
     const inspector = screen.getByRole('complementary', { name: 'Review item' });
     expect(within(inspector).getByRole('heading', { level: 2 })).toHaveTextContent('Filed document');
     expect(within(inspector).getByText('Original name')).toBeVisible();
@@ -224,13 +225,13 @@ describe('review actions', () => {
     expect(revealItem).toHaveBeenCalledWith('filed');
     expect(within(inspector).getByRole('button', { name: 'Undo' })).toBeEnabled();
 
-    selectRow(screen.getByRole('row', { name: /Board minutes\.docx/ }));
+    await selectRow(screen.getByRole('row', { name: /Board minutes\.docx/ }));
     await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
     expect(inspector).not.toHaveTextContent('Renamed to');
     expect(within(inspector).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
 
     // A settled item's reason is a note about what happened, not a reason it waits.
-    selectRow(screen.getByRole('row', { name: /2024-02-01 Invoice\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /2024-02-01 Invoice\.pdf/ }));
     await waitFor(() => expect(within(inspector).getByRole('heading', { name: 'Note' })).toBeVisible());
     expect(within(inspector).queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
   });
@@ -249,10 +250,10 @@ describe('review actions', () => {
     expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).toHaveTextContent('Kept original');
     expect(screen.getByRole('row', { name: /Scan 0402\.pdf/ })).not.toHaveTextContent('2024-05-07 Board Meeting Minutes.pdf');
 
-    selectRow(screen.getByRole('row', { name: /Scan 0401\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /Scan 0401\.pdf/ }));
     const inspector = screen.getByRole('complementary', { name: 'Review item' });
     await waitFor(() => expect(inspector).toHaveTextContent('Renamed to 2024-01-22 Lease Agreement.pdf'));
-    selectRow(screen.getByRole('row', { name: /Scan 0402\.pdf/ }));
+    await selectRow(screen.getByRole('row', { name: /Scan 0402\.pdf/ }));
     await waitFor(() => expect(inspector).toHaveTextContent('Kept its original name'));
     expect(inspector).not.toHaveTextContent('Renamed to');
   });
@@ -260,7 +261,7 @@ describe('review actions', () => {
   it('says plainly when the document is no longer where Intern saw it', async () => {
     const openItem = vi.fn(async () => { throw { code: 'PATH_UNAVAILABLE', message: 'the document is not where Intern last saw it' }; });
     render(<App bridge={{ ...createInMemoryBridge(), openItem }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Open' }));
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('It may have been moved, renamed, or deleted outside Intern.');
@@ -273,7 +274,7 @@ describe('review actions', () => {
     const reanalyze = vi.spyOn(bridge, 'reanalyze');
     const retry = vi.spyOn(bridge, 'retry');
     render(<App bridge={bridge} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: 'More review actions' }));
     expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Analyze again' }));
@@ -291,7 +292,7 @@ describe('review actions', () => {
   it('still shows the description after a file has been renamed', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Completed, / }));
-    selectRow(await screen.findByRole('row', { name: /Completed lease.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Completed lease.pdf/i }));
 
     const inspector = screen.getByRole('complementary', { name: 'Review item' });
     expect(within(inspector).getByText(/Residential lease agreement for a twelve-month term/i)).toBeVisible();
@@ -310,7 +311,7 @@ describe('review actions', () => {
   it('preserves a draft through a same-revision queue refresh', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
     fireEvent.change(filename, { target: { value: 'My local draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
@@ -354,34 +355,45 @@ describe('review actions', () => {
     dispatchEvent: vi.fn(),
   })));
 
-  // The panel is seeded with the first item needing review so it is not empty
-  // on launch. Narrow, that seeding used to open the modal drawer: Intern
-  // started inside a dialog nobody had asked for, over an inert queue, with
-  // the caret already in a proposed filename.
+  // Intern selects the first item needing review at launch. Narrow, that
+  // selection used to open the modal drawer: Intern started inside a dialog
+  // nobody had asked for, over an inert queue, with the caret already in a
+  // proposed filename. Now nothing but the Details button opens the panel,
+  // and narrow, not even a panel left open on a wide window last time.
   it('does not launch a narrow window inside a modal nobody opened', async () => {
+    window.localStorage.setItem('intern.detailsPanel', 'open');
     stubNarrowWindow();
     render(<App bridge={createInMemoryBridge()} />);
 
-    const seeded = await screen.findByRole('complementary', { name: 'Review item' });
-    expect(seeded).not.toHaveAttribute('aria-modal');
+    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
     expect(screen.getByRole('banner')).not.toHaveAttribute('inert');
     expect(screen.getByRole('navigation', { name: 'Queue navigation' })).not.toHaveAttribute('inert');
-    expect(screen.getByLabelText('Filename')).not.toHaveFocus();
+    expect(detailsToggle()).toHaveAttribute('aria-expanded', 'false');
 
-    // A selection a person makes is still the modal drawer it was.
-    fireEvent.click(screen.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }));
+    // Selecting is only selecting.
+    selectByName('NDA - Acme Corp.docx');
+    expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
 
+    // The Details button opens the modal drawer.
+    fireEvent.click(detailsToggle());
     expect(await screen.findByRole('dialog', { name: 'Review item' })).toHaveAttribute('aria-modal', 'true');
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
+    expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp');
   });
 
-  it('turns the narrow inspector into a contained drawer and restores row focus', async () => {
+  it('turns the narrow inspector into a contained drawer and restores focus to what opened it', async () => {
     stubNarrowWindow();
     render(<App bridge={createInMemoryBridge()} />);
 
-    const trigger = await screen.findByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' });
-    fireEvent.click(trigger);
+    await screen.findByRole('grid', { name: 'Queue' });
+    selectByName('Lease Agreement - 123 Main St.pdf');
+    const toggle = detailsToggle();
+    fireEvent.click(toggle);
     const initialDrawer = await screen.findByRole('dialog', { name: 'Review item' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', initialDrawer.id);
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
     expect(screen.getByRole('banner')).toHaveAttribute('inert');
     expect(screen.getByRole('navigation', { name: 'Queue navigation' })).toHaveAttribute('inert');
@@ -392,20 +404,29 @@ describe('review actions', () => {
     expect(screen.getByRole('button', { name: 'Close review' })).toHaveFocus();
     fireEvent.keyDown(initialDrawer, { key: 'Escape' });
 
-    fireEvent.click(trigger);
+    // Closed: back to the Details button, the row still selected.
+    expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
+    await waitFor(() => expect(detailsToggle()).toHaveFocus());
+    expect(detailsToggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(queueCell('Lease Agreement - 123 Main St.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+
+    // Enter on a cell opens it too, and closing goes back to that cell.
+    const cell = queueCell('Lease Agreement - 123 Main St.pdf');
+    cell.focus();
+    fireEvent.keyDown(cell, { key: 'Enter' });
     const reopenedDrawer = await screen.findByRole('dialog', { name: 'Review item' });
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
-    fireEvent.keyDown(reopenedDrawer, { key: 'Escape' });
+    fireEvent.click(within(reopenedDrawer).getByRole('button', { name: 'Close review' }));
 
     expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
-    await waitFor(() => expect(trigger).toHaveFocus());
+    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
   });
 
   it('moves focus to a visible queue control when refresh removes the invoking row', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
-    const trigger = await screen.findByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' });
-    fireEvent.click(trigger);
+    await screen.findByRole('grid', { name: 'Queue' });
+    await openDetails('Lease Agreement - 123 Main St.pdf');
     await bridge.remove('lease');
     fireEvent.click(screen.getByRole('button', { name: 'Pause queue' }));
 
@@ -639,10 +660,10 @@ describe('review actions', () => {
   it('moves Keep original to Completed without offering an undo the backend would refuse', async () => {
     const bridge = createInMemoryBridge();
     render(<App bridge={bridge} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     fireEvent.click(screen.getByRole('button', { name: /Keep original/i }));
     fireEvent.click(await screen.findByRole('button', { name: /^Completed/ }));
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
 
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     expect((await bridge.listItems()).find((item) => item.id === 'lease')).toMatchObject({

@@ -1,10 +1,12 @@
+import { ClipboardCopy, PanelRight } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { DropZone } from './components/DropZone';
 import { FolderSetupFlow } from './components/FolderSetupFlow';
 import { HistoryDialog } from './components/HistoryDialog';
+import { Icon } from './components/Icon';
 import { OnboardingFlow, OnboardingProblemNotice } from './components/OnboardingFlow';
-import { QueueTable } from './components/QueueTable';
+import { QueueTable, findCell } from './components/QueueTable';
 import { ReviewInspector } from './components/ReviewInspector';
 import { SettingsDialog } from './components/SettingsDialog';
 import { SetupScreen } from './components/SetupScreen';
@@ -23,6 +25,9 @@ import type { DragState, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
+import { useGridClipboard } from './features/queue/clipboard';
+import { describeBlock, selectionBounds } from './features/queue/grid';
+import type { CellRef, ColumnKey, GridSelection } from './features/queue/grid';
 import { useQueue } from './features/queue/useQueue';
 import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } from './features/review/actions';
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
@@ -95,7 +100,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const seededSelection = useRef(false);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const historyTrigger = useRef<HTMLElement | null>(null);
-  const reviewTrigger = useRef<{ element: HTMLButtonElement; itemId: string } | null>(null);
+  const reviewTrigger = useRef<{ element: HTMLElement; itemId: string } | null>(null);
   const focusRestoreVersion = useRef(0);
   const { items, paused, setPaused, refresh, error: queueError, pipelineError, reconnect } = useQueue(bridge);
   const inspectorHandle = useRef<ReviewInspectorHandle>(null);
@@ -105,11 +110,32 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const [view, setView] = useState<QueueView>('queue');
   const [filter, setFilter] = useState('');
   const [selectedId, setSelectedId] = useState<string>();
-  // Whether the selection is one a person made. Narrow, the inspector is a
-  // modal drawer, and the selection seeded below is not a person's: opening
-  // that drawer for it launched Intern inside a dialog nobody had asked for,
-  // over an inert queue, with the caret in a proposed filename.
-  const [selectedByPerson, setSelectedByPerson] = useState(false);
+  // The Details panel opens and closes only by its own buttons - the
+  // toolbar's Details toggle, its close button, and Enter or F2 on the
+  // selected item - never by selecting something. Selecting used to open it,
+  // so every click in the table pushed the queue aside, and the selection
+  // Intern seeds at launch opened it before anyone had asked for anything.
+  // Wide, whether it is open is remembered from one launch to the next.
+  const [detailsOpen, setDetailsOpen] = useState(readDetailsPreference);
+  // Narrow, the panel is a modal drawer over an inert queue, and a remembered
+  // preference must not open one at launch: Intern would start inside a
+  // dialog nobody had asked for, with the caret in a proposed filename. There
+  // it opens only when asked in this session.
+  const [detailsAskedFor, setDetailsAskedFor] = useState(false);
+  // What opened the panel, for focus to go back to when it closes.
+  const detailsTrigger = useRef<HTMLElement | null>(null);
+  const detailsButton = useRef<HTMLButtonElement>(null);
+  // Selected cells of the queue table, and the cell keyboard focus last
+  // rested on, kept with the selected item it was set under: once something
+  // else changes the selected item (a decision moving on, an import), focus
+  // rests in that item's row instead, in the same column.
+  const [gridSelection, setGridSelectionState] = useState<GridSelection>();
+  const [activeCell, setActiveCell] = useState<{ cell: CellRef; selectedId?: string }>();
+  const activeColumn: ColumnKey = activeCell?.cell.column ?? 'original';
+  const setGridSelection = (next: GridSelection | undefined, active = next?.focus) => {
+    setGridSelectionState(next);
+    if (active) setActiveCell({ cell: active, selectedId });
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [folderSetupOpen, setFolderSetupOpen] = useState(false);
@@ -188,7 +214,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       if (firstReview) setSelectedId(firstReview.id);
     }
   }, [items]);
-  const inCurrentView = (item: QueueItem) => view === 'queue' ? item.status !== 'completed' : view === 'review' ? item.status === 'review' : item.status === 'completed';
+  const inCurrentView = (item: QueueItem) => view === 'queue' ? item.status !== 'completed' : item.status === 'completed';
   const filtered = items.filter(inCurrentView);
   // A folder of four hundred documents is a wall of rows. The filter narrows
   // the current view by anything a person is likely to remember: the name the
@@ -198,7 +224,17 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const visible = shown(items);
   const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
   const selected = items.find((item) => item.id === selectedId);
-  const drawerOpen = Boolean(selected && selectedByPerson && narrowInspector);
+  const panelOpen = Boolean(selected) && detailsOpen && (!narrowInspector || detailsAskedFor);
+  const drawerOpen = panelOpen && narrowInspector;
+  // Everything in the queue still waiting on a person, wherever the filter is.
+  // The Needs Review page used to collect these; the queue's toolbar counts
+  // them now, so the number the page's badge carried is not lost with it.
+  const needReview = items.filter((item) => item.status === 'review');
+  // Where Tab lands in the table when no cell is selected.
+  const restingRow = visible.find((item) => item.id === selectedId) ?? visible[0];
+  const restingCell: CellRef | undefined = activeCell && activeCell.selectedId === selectedId && visible.some((item) => item.id === activeCell.cell.id)
+    ? activeCell.cell
+    : restingRow && { id: restingRow.id, column: activeColumn };
   const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
@@ -211,31 +247,64 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // or already renamed is deliberately out of reach of the discard action.
   const waitingItems = items.filter((item) => item.status === 'waiting');
   const queueStatus = queueStatusAnnouncement(items, paused);
-  const rowButton = (id: string) => [...document.querySelectorAll<HTMLButtonElement>('.row-select')].find((button) => button.dataset.itemId === id);
-  const rowTrigger = (id: string) => { const element = rowButton(id); return element ? { element, itemId: id } : null; };
-  // Wide, the panel sits after the whole queue in the tab order, so a click
-  // brings focus to its heading rather than leaving it a row count of Tab
-  // presses away. Narrow, the drawer takes focus itself.
-  const select = (item: QueueItem, trigger: HTMLButtonElement) => {
-    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = { element: trigger, itemId: item.id }; setSelectedId(item.id); setSelectedByPerson(true);
-    if (!narrowInspector) setFocusRequest({ id: item.id, target: 'heading' });
+  // A row's cell in the column focus rests in: where focus goes back to in the table.
+  const rowCell = (id: string) => findCell(document, { id, column: activeColumn });
+  const rowTrigger = (id: string) => { const element = rowCell(id); return element ? { element, itemId: id } : null; };
+  // A cell clicked or arrowed to makes its row the selected item. Focus stays
+  // in the table, where the person is working, and the Details panel - open
+  // or not - stays as it was; open, it follows the selection.
+  const selectRow = (item: QueueItem, cell: HTMLElement) => {
+    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = { element: cell, itemId: item.id }; setSelectedId(item.id);
   };
-  // J/K and the arrow keys: the selection moves and focus goes with it, onto
-  // the row - unless the drawer is open over the rows, where it moves to the
-  // item's name instead.
+  // J/K, and the arrow keys where nothing else has focus: the selected row
+  // moves, the active cell with it, and focus goes onto that cell - unless
+  // the drawer is open over the table, where focus stays in the drawer.
   const moveSelection = (item: QueueItem) => {
     seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = rowTrigger(item.id); setSelectedId(item.id);
+    const cell = { id: item.id, column: activeColumn };
+    setGridSelection({ anchor: cell, focus: cell });
     if (!drawerOpen) setFocusRequest({ id: item.id, target: 'row' });
   };
-  // Enter on a row, and Next undecided: select it and go straight to its name.
-  const openItem = (item: QueueItem) => {
-    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = rowTrigger(item.id); setSelectedId(item.id); setSelectedByPerson(true);
+  const rememberDetails = (open: boolean) => {
+    setDetailsOpen(open); setDetailsAskedFor(open);
+    try { window.localStorage.setItem(DETAILS_PREFERENCE_KEY, open ? 'open' : 'closed'); } catch { /* Not remembered; it still opens now. */ }
+  };
+  const openDetails = (trigger: HTMLElement | null) => {
+    if (!panelOpen) detailsTrigger.current = trigger;
+    rememberDetails(true);
+  };
+  // The panel's close button, Escape in the drawer, and the Details toggle.
+  // The selection stays: closing the panel is not deselecting the row. Focus
+  // goes back to what opened the panel, once the queue is no longer inert
+  // under the drawer.
+  const closeDetails = () => {
+    const trigger = detailsTrigger.current;
+    detailsTrigger.current = null;
+    rememberDetails(false);
+    setQueueFocus({ version: ++focusRestoreVersion.current, element: trigger?.isConnected ? trigger : detailsButton.current ?? undefined });
+  };
+  // Enter on a cell, F2, and Next undecided: select the item, open the
+  // Details panel, and go straight to its name.
+  const openItem = (item: QueueItem, trigger?: HTMLElement) => {
+    seededSelection.current = true; focusRestoreVersion.current += 1; reviewTrigger.current = trigger ? { element: trigger, itemId: item.id } : rowTrigger(item.id); setSelectedId(item.id);
+    if (item.id !== selectedId) setGridSelection(undefined);
+    openDetails(trigger ?? rowCell(item.id) ?? null);
     setFocusRequest({ id: item.id, target: itemActions(item).approve ? 'filename' : 'heading' });
+  };
+  // "3 need review": the next one after the selected row, round to the first.
+  // It selects, and leaves the Details panel as it was.
+  const goToNextReview = () => {
+    const inQueue = items.filter((item) => item.status !== 'completed');
+    const shownNow = query && !visible.some((item) => item.status === 'review') ? inQueue : visible;
+    if (shownNow !== visible) setFilter('');
+    const at = shownNow.findIndex((item) => item.id === selectedId);
+    const next = [...shownNow.slice(at + 1), ...shownNow.slice(0, at + 1)].find((item) => item.status === 'review');
+    if (next) moveSelection(next);
   };
   useEffect(() => {
     if (!focusRequest) return;
     setFocusRequest(undefined);
-    if (focusRequest.target === 'row') rowButton(focusRequest.id)?.focus();
+    if (focusRequest.target === 'row') { const cell = rowCell(focusRequest.id); cell?.focus(); cell?.scrollIntoView?.({ block: 'nearest' }); }
     else if (selected?.id === focusRequest.id) inspectorHandle.current?.focus(focusRequest.target);
   }, [focusRequest, selected?.id]);
   // Review works through what is left to decide: needing review first, then
@@ -247,7 +316,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // row being filed was still on screen a moment before it left the view, and
   // every toolbar button was still disabled for the action in flight - so
   // focus went to <body> whenever there was no next item to go to.
-  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLButtonElement; itemId?: string }>();
+  const [queueFocus, setQueueFocus] = useState<{ version: number; element?: HTMLElement; itemId?: string }>();
   // `itemId`: a row to go to instead, once it is on screen - the document an
   // undo has just put back in the queue.
   const restoreQueueFocus = (itemId?: string) => {
@@ -260,7 +329,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     setQueueFocus(undefined);
     const { version, element, itemId } = queueFocus;
     if (focusRestoreVersion.current !== version) return;
-    const refreshedTrigger = itemId ? rowButton(itemId) : undefined;
+    const refreshedTrigger = itemId ? rowCell(itemId) : undefined;
     // Prefer the primary action by name rather than "the first button in the
     // panel". That positional fallback silently moved the moment the toolbar
     // gained a second control, sending focus to a destructive Discard button
@@ -268,19 +337,29 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     const target = element?.isConnected
       ? element
       : refreshedTrigger
-        ?? document.querySelector<HTMLButtonElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
-        ?? document.querySelector<HTMLButtonElement>('.queue-panel button:not(:disabled)');
+        ?? document.querySelector<HTMLElement>('.queue-panel .queue-actions button.primary:not(:disabled)')
+        ?? document.querySelector<HTMLElement>('.queue-panel .queue-grid [tabindex="0"]')
+        ?? document.querySelector<HTMLElement>('.queue-panel button:not(:disabled)');
     target?.focus();
   }, [queueFocus]);
-  const closeReview = () => {
-    setSelectedId(undefined);
-    restoreQueueFocus();
-  };
   useEffect(() => {
     if (!selectedId || selected) return;
     setSelectedId(undefined);
     restoreQueueFocus();
   }, [selected, selectedId]);
+  // A drawer emptied by its item leaving (filed, removed) is closed, not left
+  // to spring open again over the next row a person clicks.
+  useEffect(() => { if (!selected) setDetailsAskedFor(false); }, [selected]);
+  // A selection whose corner has left the view (filed, filtered out) is gone,
+  // rather than coming back if that row ever returns.
+  const gridSelectionShown = Boolean(selectionBounds(gridSelection, visible));
+  useEffect(() => { if (gridSelection && !gridSelectionShown) setGridSelectionState(undefined); }, [gridSelection, gridSelectionShown]);
+  const clipboard = useGridClipboard({
+    rows: visible,
+    selection: gridSelection,
+    onCopied: (block) => { setActionError(''); setActionMessage(`Copied ${describeBlock(block)}.`); },
+    onFailed: (error) => setActionError(`Intern could not copy to the clipboard. ${describeActionError(error)}`),
+  });
   // Promise<unknown>: some commands report what they did - discardWaiting
   // resolves with a count - and the result is not needed here. False when
   // the command failed; otherwise the queue as read after it, for a caller
@@ -573,7 +652,6 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     focusRestoreVersion.current += 1;
     reviewTrigger.current = null;
     setSelectedId(targetId);
-    setSelectedByPerson(true);
   };
   // Tauri's own drag-drop is on, so on the desktop a dropped file never
   // reaches the drop zone's HTML5 handler: the paths arrive as a window event
@@ -610,7 +688,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     selected,
     inspector: inspectorHandle,
     onMove: moveSelection,
-    onOpen: openItem,
+    onOpen: (item) => openItem(item),
     onFilter: () => {
       const box = document.querySelector<HTMLInputElement>('.queue-filter input');
       box?.focus();
@@ -667,7 +745,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
     <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
-    <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
+    <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); setGridSelectionState(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
     <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
       {queueError && <div className="note note--failed" role="alert" aria-label="Queue connection error">
         <p>{queueError.kind === 'subscription' ? 'Live queue updates are unavailable.' : 'The queue could not be refreshed.'} {describeActionError(queueError.cause)} {items.length > 0 ? 'Showing the last loaded items.' : 'Queue contents may not be available yet.'}</p>
@@ -692,31 +770,50 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         grows into the whole panel and says what to do with it.
       */}
       <DropZone variant={items.length === 0 ? 'hero' : 'bar'} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
-      {/*
-        The way out of a folder chosen by mistake. Pointing the queue at a large
-        directory used to be unrecoverable from inside the app: pausing stops it
-        taking new work but leaves the backlog, Clear history only touches
-        finished items, and dropping a waiting item was one click each. Four
-        hundred items meant four hundred clicks, so the count is shown here to
-        make the scale of what is being dropped explicit.
-      */}
-      {view === 'queue' && (readyItems.length > 0 || waitingItems.length > 0) && <div className="queue-actions">
-        {waitingItems.length > 0 && <button type="button" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}>Discard waiting <span>{waitingItems.length}</span></button>}
-        {readyItems.length > 0 && <button type="button" className="primary" aria-label="Apply all ready" disabled={actionPending} onClick={() => void applyAllReady()}>Apply all ready <span>{readyItems.length}</span></button>}
-      </div>}
-      {view === 'completed' && filtered.length > 0 && <div className="queue-actions">
-        <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
-        <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[data-view="completed"]')?.focus()); })()}>Clear history</button>
+      {items.length > 0 && <div className="queue-toolbar">
+        {/*
+          What the Needs Review page used to collect, counted where the work
+          is. A click goes to the next one, in table order after the selected
+          row; it selects, like any click in the table, and opens nothing.
+        */}
+        {view === 'queue' && needReview.length > 0 && <button type="button" className="need-review" title="Go to the next document that needs review" onClick={goToNextReview}>
+          {needReview.length} {needReview.length === 1 ? 'needs' : 'need'} review
+        </button>}
+        <div className="queue-actions">
+          {/*
+            Copies what Ctrl+C copies: the selected cells, or with none
+            selected, the whole table as shown with its headings. The label
+            says which, so nobody pastes four hundred rows expecting three.
+          */}
+          <button type="button" disabled={visible.length === 0} onClick={clipboard.copy}><Icon icon={ClipboardCopy} />{clipboard.hasSelection ? 'Copy selection' : 'Copy table'}</button>
+          <button ref={detailsButton} type="button" className="details-toggle" aria-expanded={panelOpen} aria-controls={panelOpen ? REVIEW_PANEL_ID : undefined} disabled={!selected}
+            title={selected ? undefined : 'Select a row to see its details'} onClick={(event) => panelOpen ? closeDetails() : openDetails(event.currentTarget)}><Icon icon={PanelRight} />Details</button>
+          {/*
+            The way out of a folder chosen by mistake. Pointing the queue at a
+            large directory used to be unrecoverable from inside the app:
+            pausing stops it taking new work but leaves the backlog, Clear
+            history only touches finished items, and dropping a waiting item
+            was one click each. Four hundred items meant four hundred clicks,
+            so the count is shown here to make the scale of what is being
+            dropped explicit.
+          */}
+          {view === 'queue' && waitingItems.length > 0 && <button type="button" aria-label="Discard waiting items" disabled={actionPending} onClick={() => void (async () => { const dropped = waitingItems.length; await runQueueAction(() => bridge.discardWaiting(), `Discarded ${dropped} waiting ${dropped === 1 ? 'item' : 'items'}.`); })()}>Discard waiting <span>{waitingItems.length}</span></button>}
+          {view === 'queue' && readyItems.length > 0 && <button type="button" className="primary" aria-label="Apply all ready" disabled={actionPending} onClick={() => void applyAllReady()}>Apply all ready <span>{readyItems.length}</span></button>}
+          {view === 'completed' && filtered.length > 0 && <>
+            <button type="button" disabled={actionPending} onClick={(event) => openHistory(event.currentTarget)}>History</button>
+            <button type="button" disabled={actionPending} onClick={() => void (async () => { if (await runQueueAction(() => bridge.clearHistory(), 'History cleared.')) queueMicrotask(() => document.querySelector<HTMLButtonElement>('.sidebar button[data-view="completed"]')?.focus()); })()}>Clear history</button>
+          </>}
+        </div>
       </div>}
       {filterShown && <div className="queue-filter" role="search">
-        <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => setFilter(event.target.value)} onKeyDown={(event) => {
+        <input type="search" aria-label="Filter queue" placeholder="Filter by filename or description" value={filter} onChange={(event) => { setFilter(event.target.value); setGridSelectionState(undefined); }} onKeyDown={(event) => {
           // Escape clears the filter first; only an already-empty box lets the
           // key through to whatever else listens for it.
           if (event.key === 'Escape' && filter) { event.stopPropagation(); setFilter(''); }
         }} />
       </div>}
       {items.length > 0 && (visible.length > 0
-        ? <QueueTable items={visible} selectedId={selectedId} onSelect={select} />
+        ? <QueueTable items={visible} selectedId={selectedId} selection={gridSelection} restingCell={restingCell} onSelectionChange={setGridSelection} onSelectRow={selectRow} onOpen={openItem} />
         : query
           ? <p className="queue-filter-empty" role="status">No items match “{filter.trim()}”.</p>
           : <ViewEmpty view={view} />)}
@@ -733,14 +830,29 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
           onDismiss={toast.kind === 'progress' ? undefined : () => setToast(undefined)}>{toast.text}</Toast>}
         {actionError && <Toast tone="error" label="Action error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       </div>}
-      {selected && <ReviewInspector ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
+      {panelOpen && selected && <ReviewInspector id={REVIEW_PANEL_ID} ref={inspectorHandle} busy={actionPending} drawer={drawerOpen} item={selected}
         position={undecided.length ? { index: undecided.findIndex((item) => item.id === selected.id) + 1 || undefined, total: undecided.length } : undefined}
         onNext={nextToDecide && nextToDecide.id !== selected.id ? () => openItem(nextToDecide) : undefined}
-        onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
+        onClose={closeDetails} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
+}
+
+/** The Details panel, for the toggle that opens it to name. */
+const REVIEW_PANEL_ID = 'review-panel';
+
+/** Where the Details panel's open or closed state is remembered between launches. */
+const DETAILS_PREFERENCE_KEY = 'intern.detailsPanel';
+
+/**
+ * Closed unless a person left it open last time. Storage can be missing or
+ * refuse to be read (a locked-down profile); that is a closed panel, not an
+ * error.
+ */
+function readDetailsPreference(): boolean {
+  try { return window.localStorage.getItem(DETAILS_PREFERENCE_KEY) === 'open'; } catch { return false; }
 }
 
 /** Views with this many items or fewer are short enough to read; the filter box appears above longer ones. */

@@ -1,5 +1,5 @@
 export type QueueStatus = 'ready' | 'review' | 'processing' | 'waiting' | 'completed' | 'failed';
-export type QueueView = 'queue' | 'review' | 'completed';
+export type QueueView = 'queue' | 'completed';
 /** What a processing document is doing: reading its text, proposing a name, or being renamed. */
 export type ProcessingStage = 'reading' | 'naming' | 'filing';
 
