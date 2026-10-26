@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::{
     ErrorCode, InternError, InternResult, OperationDirection, OperationKind, OperationReceipt,
-    OperationStage, QueueItem, QueueStatus,
+    OperationStage, QueueItem, QueueStatus, error::unreadable_codes_sql,
 };
 
 const LEASE_SECONDS: i64 = 60;
@@ -39,11 +39,94 @@ pub struct QueueStore {
 /// destination of the latest completed apply receipt. A keep-original
 /// completion moved nothing and has no such receipt, so `filed_as` is `None`
 /// and the caller falls back to the item's original filename.
+///
+/// `filed_path` is that destination whole, so a copy of the content can be
+/// filed in the same folder; `None` exactly when `filed_as` is.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DuplicateInfo {
     pub queue_item_id: i64,
     pub source_path: PathBuf,
     pub filed_as: Option<String>,
+    pub filed_path: Option<PathBuf>,
+}
+
+/// Why a document's file was renamed where it lies. See
+/// [`QueueStore::plan_review_rename`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewRenamePurpose {
+    /// `NEEDS REVIEW - ` put in front of a document Intern could not read.
+    Mark,
+    /// That prefix taken off again, when a person keeps the document's own
+    /// name. Committing it completes the item as kept.
+    Restore,
+}
+
+impl ReviewRenamePurpose {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Mark => "mark",
+            Self::Restore => "restore",
+        }
+    }
+
+    fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "mark" => Some(Self::Mark),
+            "restore" => Some(Self::Restore),
+            _ => None,
+        }
+    }
+}
+
+/// How far a rename in place got.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReviewRenameStage {
+    /// Journaled and about to happen, or happened with its record one write
+    /// behind. Recovery looks at the disk to tell which.
+    Planned,
+    /// The file is at `to`, and the queue row says so.
+    Complete,
+    /// Nothing moved: a crash came before the rename, or recovery found the
+    /// file still at `from`. A mark that rolled back is tried again.
+    RolledBack,
+    /// The rename was tried and refused - a held file, a folder that may not
+    /// be written - and nothing moved. Not tried again on its own.
+    Failed,
+}
+
+impl ReviewRenameStage {
+    fn as_db(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Complete => "complete",
+            Self::RolledBack => "rolled_back",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "planned" => Some(Self::Planned),
+            "complete" => Some(Self::Complete),
+            "rolled_back" => Some(Self::RolledBack),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// One journaled rename of a document's file inside its own folder, with
+/// the fingerprint of the document it moves so recovery can tell the
+/// document from a stranger at either name.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRename {
+    pub id: i64,
+    pub queue_item_id: i64,
+    pub purpose: ReviewRenamePurpose,
+    pub from: PathBuf,
+    pub to: PathBuf,
+    pub stage: ReviewRenameStage,
+    pub source_hash: String,
 }
 
 /// What the queue listing shows of one item's operations. See
@@ -129,6 +212,7 @@ impl QueueStore {
                active_receipt_id INTEGER,
                reconciliation_receipt_id INTEGER,
                applying_epoch INTEGER NOT NULL DEFAULT 0,
+               copy_filing INTEGER NOT NULL DEFAULT 0,
                created_at INTEGER NOT NULL,
                updated_at INTEGER NOT NULL,
                UNIQUE(source_path_key, source_hash)
@@ -176,6 +260,38 @@ impl QueueStore {
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS operation_receipts_by_item
                    ON operation_receipts(queue_item_id, id);",
+            )
+            .map_err(InternError::from)?;
+        // The journal of renames a document's file takes inside its own
+        // folder: `NEEDS REVIEW - ` put in front of a document Intern could
+        // not read, and taken off again when a person keeps its name. The
+        // queue row is keyed by its path, so the row has to follow the file,
+        // and a crash between the rename and the row's update must leave
+        // something that says which of the two names is the document. The
+        // receipts above journal moves between folders and carry a filing's
+        // undo; these do neither, so they are kept apart from them. A mark
+        // that completed also lets the intake watcher, which knows the file
+        // by the name it arrived under, still find the document's row.
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS review_renames (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   queue_item_id INTEGER NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                   purpose TEXT NOT NULL,
+                   from_path TEXT NOT NULL,
+                   from_path_key TEXT NOT NULL,
+                   to_path TEXT NOT NULL,
+                   to_path_key TEXT NOT NULL,
+                   stage TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS review_renames_by_item
+                   ON review_renames(queue_item_id, id);
+                 CREATE INDEX IF NOT EXISTS review_renames_by_origin
+                   ON review_renames(from_path_key);
+                 CREATE UNIQUE INDEX IF NOT EXISTS one_planned_review_rename
+                   ON review_renames(queue_item_id) WHERE stage = 'planned';",
             )
             .map_err(InternError::from)?;
         let session_id = new_session_id();
@@ -402,6 +518,12 @@ impl QueueStore {
     /// `ready`, its content back at its original path, and a still-pending item
     /// has not been filed anywhere yet. Ties on the completion timestamp fall
     /// to the newest row.
+    ///
+    /// A document filed as a copy of another (see
+    /// [`QueueStore::is_copy_filing`]) never answers: it is that other
+    /// document's duplicate, not a filing of its own, and a third copy named
+    /// after the second would read `COPY - COPY - ...` instead of naming the
+    /// document they all repeat.
     pub fn find_completed_duplicate(
         &self,
         source_hash: &str,
@@ -412,6 +534,7 @@ impl QueueStore {
             .query_row(
                 "SELECT id, source_path FROM queue_items
                  WHERE status = 'completed' AND source_hash = ?1 AND source_path_key <> ?2
+                   AND copy_filing = 0
                  ORDER BY updated_at DESC, id DESC LIMIT 1",
                 params![source_hash, excluding_path_key],
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
@@ -429,7 +552,7 @@ impl QueueStore {
         // anything. An operation that rolled back moved nothing, so it cannot
         // answer the question, and the completed apply underneath it still can.
         // A completed undo does answer it: the file is back at its own name.
-        let filed_as = connection
+        let filed_path = connection
             .query_row(
                 "SELECT direction, destination_path FROM operation_receipts
                  WHERE queue_item_id = ?1 AND stage = 'complete'
@@ -440,17 +563,35 @@ impl QueueStore {
             .optional()
             .map_err(InternError::from)?
             .filter(|(direction, _)| direction == OperationDirection::Apply.as_db())
-            .and_then(|(_, destination)| {
-                Path::new(&destination)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            });
+            .map(|(_, destination)| PathBuf::from(destination));
+        let filed_as = filed_path.as_deref().and_then(|destination| {
+            destination
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
 
         Ok(Some(DuplicateInfo {
             queue_item_id,
             source_path: PathBuf::from(source_path),
+            filed_path: if filed_as.is_some() { filed_path } else { None },
             filed_as,
         }))
+    }
+
+    /// Whether the item was staged, or filed, as a copy of a document filed
+    /// before it: an exact duplicate moved to the output folder under the
+    /// original's name with `COPY - ` in front.
+    pub fn is_copy_filing(&self, id: i64) -> InternResult<bool> {
+        let connection = self.lock()?;
+        Ok(connection
+            .query_row(
+                "SELECT copy_filing FROM queue_items WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?
+            .unwrap_or(false))
     }
 
     /// Requeues a duplicate-flagged review item so it analyzes normally.
@@ -459,26 +600,91 @@ impl QueueStore {
     /// the pre-processing DUPLICATE flag may take this shortcut back to the
     /// queue, and a concurrent decision on the item makes the retry fail
     /// closed.
+    ///
+    /// A copy a person filed and then undid waits under the same flag with
+    /// the record of the copy it was; processing it anyway makes it an
+    /// ordinary document, so that record and the copy mark go in the same
+    /// transaction.
     pub fn retry_duplicate(&self, id: i64) -> InternResult<QueueItem> {
-        let connection = self.lock()?;
-        let changed = connection
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let changed = transaction
             .execute(
                 "UPDATE queue_items
              SET status = 'queued', processing_failures = 0, error_code = NULL,
                  owner_session = NULL, lease_expires_at = NULL,
                  previous_status = NULL, active_receipt_id = NULL,
-                 reconciliation_receipt_id = NULL, updated_at = ?1
+                 reconciliation_receipt_id = NULL, copy_filing = 0, updated_at = ?1
              WHERE id = ?2 AND status = 'needs_review' AND error_code = 'DUPLICATE'",
                 params![now(), id],
             )
             .map_err(InternError::from)?;
         if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
             return Err(InternError::new(
                 ErrorCode::StateConflict,
                 "item is not a duplicate awaiting review",
             ));
         }
-        query_one(&connection, "WHERE id = ?1", params![id])
+        transaction
+            .execute(
+                "DELETE FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+            )
+            .map_err(InternError::from)?;
+        let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(item)
+    }
+
+    /// Sends a document Intern could not read back to the queue to be read
+    /// again: Retry on an item in review under one of [`UNREADABLE_CODES`].
+    ///
+    /// Such an item was never analyzed into a proposal, so there is nothing
+    /// for a person to approve unless they name it themselves - and a
+    /// password removed, a file saved again, or a model that is working now
+    /// can all mean a second reading succeeds. The compare-and-swap covers
+    /// the code as well as the status, as `retry_duplicate` does, and a name
+    /// typed for the document earlier goes with the failure.
+    ///
+    /// [`UNREADABLE_CODES`]: crate::UNREADABLE_CODES
+    pub fn retry_unreadable(&self, id: i64) -> InternResult<QueueItem> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let changed = transaction
+            .execute(
+                &format!(
+                    "UPDATE queue_items
+             SET status = 'queued', processing_failures = 0, error_code = NULL,
+                 owner_session = NULL, lease_expires_at = NULL,
+                 previous_status = NULL, active_receipt_id = NULL,
+                 reconciliation_receipt_id = NULL, updated_at = ?1
+             WHERE id = ?2 AND status = 'needs_review' AND error_code IN ({})",
+                    unreadable_codes_sql()
+                ),
+                params![now(), id],
+            )
+            .map_err(InternError::from)?;
+        if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "item is not an unreadable document awaiting review",
+            ));
+        }
+        transaction
+            .execute(
+                "DELETE FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+            )
+            .map_err(InternError::from)?;
+        let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(item)
     }
 
     /// Sends a document waiting on a person back to the queue to be read
@@ -537,7 +743,7 @@ impl QueueStore {
              SET status = 'queued', source_hash = COALESCE(?1, source_hash),
                  processing_failures = 0, error_code = NULL, owner_session = NULL,
                  lease_expires_at = NULL, previous_status = NULL, active_receipt_id = NULL,
-                 reconciliation_receipt_id = NULL, updated_at = ?2
+                 reconciliation_receipt_id = NULL, copy_filing = 0, updated_at = ?2
              WHERE id = ?3 AND status = ?4",
             params![new_hash, now(), id, expected.as_db()],
         ) {
@@ -1277,6 +1483,360 @@ impl QueueStore {
             .map_err(InternError::from)
     }
 
+    /// [`Self::find_newest_by_source_path`], also matching an item whose
+    /// file was renamed for review from one of `paths`.
+    ///
+    /// The intake watcher knows a document by the name it arrived under,
+    /// and holds its claim on that name. A document Intern could not read is
+    /// renamed in place to `NEEDS REVIEW - ...`, and its row follows the
+    /// file; asked about the old name, the plain lookup found nothing, and
+    /// the watcher read the document as removed while it was still waiting
+    /// in review. Only a rename that completed counts.
+    pub fn find_newest_by_intake_path(&self, paths: &[&Path]) -> InternResult<Option<QueueItem>> {
+        if paths.is_empty() {
+            return Ok(None);
+        }
+        let keys = paths
+            .iter()
+            .map(|path| source_path_key(path))
+            .collect::<Vec<_>>();
+        let placeholders = (1..=keys.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                &queue_select(&format!(
+                    "WHERE source_path_key IN ({placeholders})
+                        OR id IN (
+                          SELECT queue_item_id FROM review_renames
+                          WHERE purpose = 'mark' AND stage = 'complete'
+                            AND from_path_key IN ({placeholders})
+                        )
+                     ORDER BY id DESC LIMIT 1"
+                )),
+                rusqlite::params_from_iter(keys.iter()),
+                row_to_item,
+            )
+            .optional()
+            .map_err(InternError::from)
+    }
+
+    /// Whether a queue row already holds `path` with these exact bytes: a
+    /// name a row cannot be moved to, because rows are keyed by path and
+    /// content.
+    pub fn path_taken(&self, path: &Path, source_hash: &str) -> InternResult<bool> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM queue_items WHERE source_path_key = ?1 AND source_hash = ?2
+                 )",
+                params![source_path_key(path), source_hash],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(InternError::from)
+    }
+
+    /// Journals a rename of an item's file inside its own folder, before it
+    /// happens.
+    ///
+    /// The row is keyed by the file's path, so it must follow the file, and
+    /// the rename and the row's update cannot be one step. Recording the
+    /// intent first is what lets a crash between them be settled: recovery
+    /// finds the planned rename and looks at the disk for which of the two
+    /// names now holds the document (see `FileApplier::reconcile_review_renames`).
+    ///
+    /// Refused unless the row is still where the plan says - at `from`, in
+    /// review under an unreadable code for a mark, waiting for a decision
+    /// for a restore - with no other rename planned and no file operation
+    /// left unfinished: a document whose files need checking is not one to
+    /// rename again.
+    pub fn plan_review_rename(
+        &self,
+        id: i64,
+        purpose: ReviewRenamePurpose,
+        from: &Path,
+        to: &Path,
+    ) -> InternResult<ReviewRename> {
+        let status_rule = match purpose {
+            ReviewRenamePurpose::Mark => format!(
+                "status = 'needs_review' AND error_code IN ({})",
+                unreadable_codes_sql()
+            ),
+            ReviewRenamePurpose::Restore => "status IN ('ready', 'needs_review')".to_owned(),
+        };
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let source_hash = transaction
+            .query_row(
+                &format!(
+                    "SELECT source_hash FROM queue_items
+                     WHERE id = ?1 AND source_path_key = ?2 AND {status_rule}
+                       AND NOT EXISTS (
+                         SELECT 1 FROM review_renames
+                         WHERE queue_item_id = ?1 AND stage = 'planned'
+                       )
+                       AND NOT EXISTS (
+                         SELECT 1 FROM operation_receipts
+                         WHERE queue_item_id = ?1 AND stage NOT IN ('complete', 'rolled_back')
+                       )"
+                ),
+                params![id, source_path_key(from)],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?;
+        let Some(source_hash) = source_hash else {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the document changed before its file could be renamed",
+            ));
+        };
+        let timestamp = now();
+        transaction
+            .execute(
+                "INSERT INTO review_renames(
+                   queue_item_id, purpose, from_path, from_path_key, to_path, to_path_key,
+                   stage, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'planned', ?7, ?7)",
+                params![
+                    id,
+                    purpose.as_db(),
+                    path_text(from),
+                    source_path_key(from),
+                    path_text(to),
+                    source_path_key(to),
+                    timestamp
+                ],
+            )
+            .map_err(InternError::from)?;
+        let rename = ReviewRename {
+            id: transaction.last_insert_rowid(),
+            queue_item_id: id,
+            purpose,
+            from: from.to_owned(),
+            to: to.to_owned(),
+            stage: ReviewRenameStage::Planned,
+            source_hash,
+        };
+        transaction.commit().map_err(InternError::from)?;
+        Ok(rename)
+    }
+
+    /// Records that a planned rename landed: the row moves to the new path
+    /// in the same transaction that completes the journal entry, and a
+    /// restore completes the item as kept under its own name.
+    ///
+    /// The row follows the file whatever has happened to the item since -
+    /// the file is where it is - so the move is conditioned only on the row
+    /// still being at the old path. A row another item already holds at the
+    /// new path and content is refused, and leaves the rename planned for
+    /// recovery to try again rather than losing track of the file.
+    pub fn commit_review_rename(&self, rename: &ReviewRename) -> InternResult<QueueItem> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(InternError::from)?;
+        let timestamp = now();
+        let journaled = transaction
+            .execute(
+                "UPDATE review_renames SET stage = 'complete', updated_at = ?1
+                 WHERE id = ?2 AND queue_item_id = ?3 AND stage = 'planned'",
+                params![timestamp, rename.id, rename.queue_item_id],
+            )
+            .map_err(InternError::from)?;
+        if journaled != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the rename is no longer planned",
+            ));
+        }
+        let restore = rename.purpose == ReviewRenamePurpose::Restore;
+        let moved = match transaction.execute(
+            "UPDATE queue_items
+             SET source_path = ?1, source_path_key = ?2, updated_at = ?3,
+                 status = CASE WHEN ?4 AND status IN ('ready', 'needs_review')
+                               THEN 'completed' ELSE status END,
+                 error_code = CASE WHEN ?4 AND status IN ('ready', 'needs_review')
+                                   THEN NULL ELSE error_code END
+             WHERE id = ?5 AND source_path_key = ?6",
+            params![
+                path_text(&rename.to),
+                source_path_key(&rename.to),
+                timestamp,
+                restore,
+                rename.queue_item_id,
+                source_path_key(&rename.from)
+            ],
+        ) {
+            Ok(changed) => changed,
+            Err(rusqlite::Error::SqliteFailure(failure, _))
+                if failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                transaction.rollback().map_err(InternError::from)?;
+                return Err(InternError::new(
+                    ErrorCode::StateConflict,
+                    "another queue item already holds the renamed file",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if moved != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the queue item is no longer at the renamed file's old path",
+            ));
+        }
+        let item = query_one(&transaction, "WHERE id = ?1", params![rename.queue_item_id])?;
+        transaction.commit().map_err(InternError::from)?;
+        Ok(item)
+    }
+
+    /// Records that a planned rename moved nothing: `RolledBack` when a
+    /// crash came first or recovery found the file where it was, `Failed`
+    /// when the rename itself was refused.
+    pub fn settle_review_rename(
+        &self,
+        rename: &ReviewRename,
+        stage: ReviewRenameStage,
+    ) -> InternResult<()> {
+        if !matches!(
+            stage,
+            ReviewRenameStage::RolledBack | ReviewRenameStage::Failed
+        ) {
+            return Err(InternError::new(
+                ErrorCode::InvalidTransition,
+                "a rename that moved nothing settles as rolled back or failed",
+            ));
+        }
+        let connection = self.lock()?;
+        let changed = connection
+            .execute(
+                "UPDATE review_renames SET stage = ?1, updated_at = ?2
+                 WHERE id = ?3 AND stage = 'planned'",
+                params![stage.as_db(), now(), rename.id],
+            )
+            .map_err(InternError::from)?;
+        if changed != 1 {
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "the rename is no longer planned",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every rename journaled and not yet settled: what a crash left behind.
+    pub fn planned_review_renames(&self) -> InternResult<Vec<ReviewRename>> {
+        self.review_renames("WHERE renames.stage = 'planned' ORDER BY renames.id", [])
+    }
+
+    /// The mark that put the item's file at the name it has now, if it has
+    /// one: what a restore takes back.
+    pub fn current_review_mark(&self, id: i64) -> InternResult<Option<ReviewRename>> {
+        Ok(self
+            .review_renames(
+                "WHERE renames.queue_item_id = ?1 AND renames.purpose = 'mark'
+                   AND renames.stage = 'complete'
+                   AND renames.to_path_key = items.source_path_key
+                 ORDER BY renames.id DESC LIMIT 1",
+                params![id],
+            )?
+            .pop())
+    }
+
+    /// Items in review under an unreadable code whose file was never marked:
+    /// the crash came between the item reaching review and the rename's
+    /// journal, or the rename was rolled back before it happened. A mark
+    /// that was tried and refused is not offered again; one that completed
+    /// needs nothing more.
+    pub fn awaiting_review_mark(&self) -> InternResult<Vec<QueueItem>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(&queue_select(&format!(
+                "WHERE status = 'needs_review' AND error_code IN ({})
+                   AND COALESCE((
+                     SELECT stage FROM review_renames
+                     WHERE review_renames.queue_item_id = queue_items.id
+                       AND review_renames.purpose = 'mark'
+                     ORDER BY review_renames.id DESC LIMIT 1
+                   ), 'rolled_back') = 'rolled_back'
+                 ORDER BY id",
+                unreadable_codes_sql()
+            )))
+            .map_err(InternError::from)?;
+        let rows = statement
+            .query_map([], read_item)
+            .map_err(InternError::from)?;
+        let mut items = Vec::new();
+        for row in rows {
+            if let Some(item) = row.map_err(InternError::from)? {
+                items.push(item);
+            }
+        }
+        Ok(items)
+    }
+
+    fn review_renames<P: rusqlite::Params>(
+        &self,
+        suffix: &str,
+        parameters: P,
+    ) -> InternResult<Vec<ReviewRename>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT renames.id, renames.queue_item_id, renames.purpose, renames.from_path,
+                        renames.to_path, renames.stage, items.source_hash
+                 FROM review_renames renames
+                 JOIN queue_items items ON items.id = renames.queue_item_id
+                 {suffix}"
+            ))
+            .map_err(InternError::from)?;
+        let rows = statement
+            .query_map(parameters, |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(InternError::from)?;
+        let mut renames = Vec::new();
+        for row in rows {
+            let (id, queue_item_id, purpose, from, to, stage, source_hash) =
+                row.map_err(InternError::from)?;
+            // A purpose or stage a newer build wrote is not one this build
+            // can settle; it is left for that build.
+            let (Some(purpose), Some(stage)) = (
+                ReviewRenamePurpose::from_db(&purpose),
+                ReviewRenameStage::from_db(&stage),
+            ) else {
+                continue;
+            };
+            renames.push(ReviewRename {
+                id,
+                queue_item_id,
+                purpose,
+                from: PathBuf::from(from),
+                to: PathBuf::from(to),
+                stage,
+                source_hash,
+            });
+        }
+        Ok(renames)
+    }
+
     /// Every item in the queue that this build can read, oldest first.
     ///
     /// A row with a status this build does not know is left out and counted
@@ -1428,6 +1988,24 @@ impl QueueStore {
         id: i64,
         error: ErrorCode,
     ) -> InternResult<QueueStatus> {
+        self.record_retryable_failure(id, error, None)
+    }
+
+    /// [`Self::record_processing_failure`], and when this failure uses up
+    /// the document's last attempt and `review_when_exhausted` names a code,
+    /// the document goes to review under that code instead of failing.
+    ///
+    /// For a failure that is this document's own when it happens twice -
+    /// a parser that crashed on it both times, a model that timed out on it
+    /// both times - but may pass on a second attempt. The first attempt is
+    /// counted and queued as before; the second hands the document to a
+    /// person rather than leaving it failed behind the rest.
+    pub fn record_retryable_failure(
+        &self,
+        id: i64,
+        error: ErrorCode,
+        review_when_exhausted: Option<ErrorCode>,
+    ) -> InternResult<QueueStatus> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -1448,10 +2026,10 @@ impl QueueStore {
                 )
             })?
             + 1;
-        let status = if failures >= 2 {
-            QueueStatus::Failed
-        } else {
-            QueueStatus::Queued
+        let (status, error) = match (failures >= 2, review_when_exhausted) {
+            (true, Some(review)) => (QueueStatus::NeedsReview, review),
+            (true, None) => (QueueStatus::Failed, error),
+            (false, _) => (QueueStatus::Queued, error),
         };
         transaction
             .execute(
@@ -1483,15 +2061,29 @@ impl QueueStore {
     /// least the automatic-retry limit so the row reads like any other
     /// document that has used its attempts.
     pub fn record_terminal_failure(&self, id: i64, error: ErrorCode) -> InternResult<()> {
+        self.record_terminal(id, QueueStatus::Failed, error)
+    }
+
+    /// Hands owned processing work to a person at once, for a document
+    /// Intern could not read for a reason of its own (see
+    /// [`crate::UNREADABLE_CODES`]): the same accounting as
+    /// [`Self::record_terminal_failure`], with the document left in review -
+    /// in the queue, where it can be retried, named by hand, kept or
+    /// removed - instead of failed.
+    pub fn record_unreadable(&self, id: i64, error: ErrorCode) -> InternResult<()> {
+        self.record_terminal(id, QueueStatus::NeedsReview, error)
+    }
+
+    fn record_terminal(&self, id: i64, status: QueueStatus, error: ErrorCode) -> InternResult<()> {
         let connection = self.lock()?;
         let changed = connection
             .execute(
                 "UPDATE queue_items
-             SET status = 'failed', processing_failures = MAX(processing_failures + 1, 2),
-                 error_code = ?1, owner_session = NULL, lease_expires_at = NULL,
-                 updated_at = ?2
-             WHERE id = ?3 AND status IN ('extracting', 'analyzing') AND owner_session = ?4",
-                params![error.as_str(), now(), id, self.session_id],
+             SET status = ?1, processing_failures = MAX(processing_failures + 1, 2),
+                 error_code = ?2, owner_session = NULL, lease_expires_at = NULL,
+                 updated_at = ?3
+             WHERE id = ?4 AND status IN ('extracting', 'analyzing') AND owner_session = ?5",
+                params![status.as_db(), error.as_str(), now(), id, self.session_id],
             )
             .map_err(InternError::from)?;
         if changed != 1 {
@@ -1932,6 +2524,7 @@ fn migrate_legacy_schema(connection: &mut Connection) -> InternResult<()> {
             "applying_epoch",
             "applying_epoch INTEGER NOT NULL DEFAULT 0",
         ),
+        ("copy_filing", "copy_filing INTEGER NOT NULL DEFAULT 0"),
     ] {
         if !column_exists(&transaction, "queue_items", column)? {
             transaction

@@ -16,7 +16,10 @@ use std::{fs::OpenOptions, io::Write};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{ErrorCode, InternError, InternResult, QueueItem, QueueStore};
+use crate::{
+    ErrorCode, InternError, InternResult, QueueItem, QueueStatus, QueueStore, ReviewRename,
+    ReviewRenamePurpose, ReviewRenameStage, available_name, needs_review_name,
+};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -1488,45 +1491,180 @@ impl FileApplier {
     }
 
     fn available_destination(&self, requested: &Path) -> InternResult<PathBuf> {
-        let parent = requested.parent().ok_or_else(|| {
-            InternError::new(
-                ErrorCode::DestinationUnavailable,
-                "destination has no parent",
-            )
-        })?;
-        let stem = requested
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| {
-                InternError::new(
-                    ErrorCode::DestinationUnavailable,
-                    "destination name is invalid",
-                )
-            })?;
-        let extension = requested.extension().and_then(|value| value.to_str());
-        for index in 1_u32.. {
-            let name = if index == 1 {
-                requested
-                    .file_name()
-                    .ok_or_else(|| {
-                        InternError::new(
-                            ErrorCode::DestinationUnavailable,
-                            "destination name is missing",
-                        )
-                    })?
-                    .to_owned()
+        available_name(requested, |candidate| self.filesystem.exists(candidate))
+    }
+
+    /// Renames the file of a document Intern could not read to
+    /// `NEEDS REVIEW - <its name>`, in its own folder, and moves its queue
+    /// row with it. Returns the new path, or `None` when there is nothing to
+    /// do: the item is not in review under an unreadable code, or its name
+    /// already carries the prefix.
+    ///
+    /// The rename is journaled before it happens and committed after (see
+    /// [`QueueStore::plan_review_rename`]), it never replaces a file, and a
+    /// name already taken - on disk, or by another row with these bytes -
+    /// takes the next ` (2)`. A rename that is refused moves nothing and is
+    /// recorded as refused; the document still waits in review under its
+    /// own name.
+    pub fn mark_for_review(&self, queue_item_id: i64) -> InternResult<Option<PathBuf>> {
+        let Some(item) = self.store.get(queue_item_id)? else {
+            return Ok(None);
+        };
+        if item.status != QueueStatus::NeedsReview
+            || !item.error_code.is_some_and(ErrorCode::marks_unreadable)
+        {
+            return Ok(None);
+        }
+        let Some(marked) = item
+            .source_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(needs_review_name)
+        else {
+            return Ok(None);
+        };
+        let target = self.free_name(&item.source_path.with_file_name(marked), &item.source_hash)?;
+        let plan = self.store.plan_review_rename(
+            item.id,
+            ReviewRenamePurpose::Mark,
+            &item.source_path,
+            &target,
+        )?;
+        self.carry_out_review_rename(&plan)?;
+        Ok(Some(target))
+    }
+
+    /// Takes back the mark that gave a document its `NEEDS REVIEW - ` name,
+    /// when a person keeps the document under its own name, and completes
+    /// the item as kept in the same step. The name it gets back is the one
+    /// the mark took away, or the next ` (2)` when a file has since arrived
+    /// under it. `None` when the file carries no mark Intern made: its name
+    /// is the person's, and keeping it is not a rename.
+    pub fn restore_from_review(&self, queue_item_id: i64) -> InternResult<Option<QueueItem>> {
+        let Some(item) = self.store.get(queue_item_id)? else {
+            return Ok(None);
+        };
+        let Some(mark) = self.store.current_review_mark(queue_item_id)? else {
+            return Ok(None);
+        };
+        let Some(original) = mark.from.file_name() else {
+            return Ok(None);
+        };
+        let target = self.free_name(
+            &item.source_path.with_file_name(original),
+            &item.source_hash,
+        )?;
+        let plan = self.store.plan_review_rename(
+            item.id,
+            ReviewRenamePurpose::Restore,
+            &item.source_path,
+            &target,
+        )?;
+        self.carry_out_review_rename(&plan).map(Some)
+    }
+
+    /// Settles every rename in place a crash left journaled but unsettled,
+    /// then marks the documents in review whose mark never happened. Returns
+    /// how many planned renames were settled.
+    ///
+    /// For each planned rename the disk decides, as it does for a receipt:
+    /// the document at the new name and nothing at the old one means the
+    /// rename landed and only its record is behind, so the row follows it;
+    /// the document still at the old name means nothing moved. Both names
+    /// taken is settled by the bytes - the name holding the document is the
+    /// document - and with neither, nothing moved that this can follow.
+    pub fn reconcile_review_renames(&self) -> InternResult<usize> {
+        let mut settled = 0;
+        for plan in self.store.planned_review_renames()? {
+            // One that cannot be recorded now - a row another item holds at
+            // the new name - stays planned for the next pass, and is no
+            // reason to leave the others unsettled.
+            let recorded = if self.review_rename_landed(&plan) {
+                self.store.commit_review_rename(&plan).map(drop)
             } else {
-                match extension {
-                    Some(value) => format!("{stem} ({index}).{value}").into(),
-                    None => format!("{stem} ({index})").into(),
-                }
+                self.store
+                    .settle_review_rename(&plan, ReviewRenameStage::RolledBack)
             };
-            let candidate = parent.join(name);
-            if !self.filesystem.exists(&candidate) {
-                return Ok(candidate);
+            settled += usize::from(recorded.is_ok());
+        }
+        for item in self.store.awaiting_review_mark()? {
+            // One file that will not be renamed is no reason to leave the
+            // rest unmarked; it is recorded as refused and not tried again.
+            let _ = self.mark_for_review(item.id);
+        }
+        Ok(settled)
+    }
+
+    /// Renames the file a plan journaled and records the outcome. A rename
+    /// that reports failure has moved nothing - it never replaces, and it
+    /// rolls itself back - unless the report is what failed, so the disk is
+    /// asked before the plan is recorded as refused.
+    fn carry_out_review_rename(&self, plan: &ReviewRename) -> InternResult<QueueItem> {
+        match self
+            .lock_retry
+            .run(|| self.filesystem.rename_no_replace(&plan.from, &plan.to))
+        {
+            Ok(()) => self.store.commit_review_rename(plan),
+            Err(_) if self.review_rename_landed(plan) => self.store.commit_review_rename(plan),
+            Err(error) => {
+                self.store
+                    .settle_review_rename(plan, ReviewRenameStage::Failed)?;
+                let code = if error.kind() == io::ErrorKind::AlreadyExists {
+                    ErrorCode::DestinationUnavailable
+                } else if is_transient_lock(&error) {
+                    ErrorCode::SourceLocked
+                } else if error.kind() == io::ErrorKind::NotFound {
+                    ErrorCode::FileChanged
+                } else {
+                    ErrorCode::IoError
+                };
+                Err(InternError::new(
+                    code,
+                    format!("the file could not be renamed in its folder ({error})"),
+                ))
             }
         }
-        unreachable!("u32 destination suffix space exhausted")
+    }
+
+    /// Whether the file a planned rename moves is now at its new name.
+    fn review_rename_landed(&self, plan: &ReviewRename) -> bool {
+        let at_old = self.filesystem.exists(&plan.from);
+        let at_new = self.filesystem.exists(&plan.to);
+        match (at_old, at_new) {
+            // Nothing else writes a name Intern chose a moment ago, so the
+            // file there is the one that left the old name.
+            (false, true) => true,
+            (true, true) => {
+                let is_document = |path: &Path| {
+                    self.lock_retry
+                        .run(|| self.filesystem.hash(path))
+                        .is_ok_and(|hash| hash == plan.source_hash)
+                };
+                !is_document(&plan.from) && is_document(&plan.to)
+            }
+            _ => false,
+        }
+    }
+
+    /// The first of `requested` and its ` (2)` names that is free on disk
+    /// and that no queue row holds with these bytes.
+    fn free_name(&self, requested: &Path, source_hash: &str) -> InternResult<PathBuf> {
+        let mut failure = None;
+        let name = available_name(requested, |candidate| {
+            if self.filesystem.exists(candidate) {
+                return true;
+            }
+            match self.store.path_taken(candidate, source_hash) {
+                Ok(taken) => taken,
+                Err(error) => {
+                    // Stop at the first candidate: no name can be judged
+                    // while the queue cannot be read.
+                    failure = Some(error);
+                    false
+                }
+            }
+        })?;
+        failure.map_or(Ok(name), Err)
     }
 }
 

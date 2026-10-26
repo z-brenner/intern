@@ -10,6 +10,7 @@ mod atomic_file;
 mod domain;
 mod error;
 mod file_ops;
+mod names;
 mod snapshot;
 mod store;
 
@@ -17,6 +18,7 @@ pub use atomic_file::{DurableReplaceError, replace_file_durable};
 pub use domain::*;
 pub use error::*;
 pub use file_ops::*;
+pub use names::*;
 pub use snapshot::*;
 pub use store::*;
 
