@@ -3,6 +3,7 @@
 use tauri::Manager;
 
 pub mod commands;
+pub mod input_folder;
 pub mod intake;
 pub mod microsoft_intake;
 pub mod model;
@@ -143,8 +144,8 @@ pub fn run() {
             microsoft_intake::microsoft_bind_intake,
             microsoft_intake::microsoft_open_sign_in,
             commands::queue_list,
-            commands::queue_add_files,
-            commands::queue_add_folder,
+            commands::input_copy,
+            commands::intake_queue_existing,
             commands::queue_take_launch_report,
             commands::update_relaunch_expected,
             commands::queue_pause,
