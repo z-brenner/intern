@@ -15,6 +15,8 @@
 #   native    -march=native for the build machine; for comparison only, never
 #             ship it.
 #
+# TARGETS="llama-server llama-bench" limits the build to those targets.
+#
 # The web UI, OpenSSL/HTTPS downloads, tests and examples are left out: Intern
 # runs the server with --no-webui on a local GGUF. Binaries land in
 # BUILD_DIR/bin with an $ORIGIN rpath, so the directory can be moved whole.
@@ -54,6 +56,13 @@ esac
 
 cmake -S "$SOURCE" -B "$BUILD" "${COMMON[@]}" "${FLAGS[@]}"
 # With GGML_BACKEND_DL the CPU variants are separate targets that nothing links
-# against, so build everything the configured tree defines.
-cmake --build "$BUILD" --config Release -j "$JOBS"
+# against, so build everything the configured tree defines - unless TARGETS
+# names what to build (e.g. TARGETS="llama-server llama-bench" for avx2/native,
+# where the CPU backend is linked in).
+if [ -n "${TARGETS:-}" ]; then
+  read -r -a TARGET_LIST <<< "$TARGETS"
+  cmake --build "$BUILD" --config Release -j "$JOBS" --target "${TARGET_LIST[@]}"
+else
+  cmake --build "$BUILD" --config Release -j "$JOBS"
+fi
 ls -la "$BUILD/bin"
