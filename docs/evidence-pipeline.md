@@ -37,7 +37,7 @@ only, and with each fact the id of the line that states it.
   role, up to three parties with their roles, and optionally a subject.
   An absent type or date is `null`.
 - **No amount.** The amount is read from the document: an issued
-  document's last labelled total (`Total`, `Amount Due`, `Balance Due`),
+  document's last labeled total (`Total`, `Amount Due`, `Balance Due`),
   otherwise the first amount a field or table row labels as a price,
   principal, salary, rent, fee or similar, otherwise the first total. An
   amount's id cost 9 to 10 generated tokens (`,"amount":"p1.b9.r2"`) and
@@ -48,7 +48,7 @@ only, and with each fact the id of the line that states it.
   as an optional `"review":true`, the flag was raised on 5 of 19 fixtures
   the gold expects ready. 14 of 77 identifiers were an id written back. The
   identifier is read from the document instead: the number after the type
-  on its title line (`PACKING SLIP PS-311`), or a field labelled as that
+  on its title line (`PACKING SLIP PS-311`), or a field labeled as that
   kind of document's number (`Invoice No.:`, `Policy Number`).
 - **The instructions are the system turn** (`COMPACT_INSTRUCTIONS`, 430
   tokens with the model's tokenizer; 472 with the shared opening line)
@@ -141,7 +141,7 @@ The other checks:
   to review (`DESCRIPTION_UNSUPPORTED`).
 - **The words of a subject or a key fact** (`every_word_stated` in
   `facts.rs`). This check catches a model's honest mistakes: a word, a
-  number or a symbol it adds, swaps or misremembers. It is no defence
+  number or a symbol it adds, swaps or misremembers. It is no defense
   against text crafted to pass it. Whoever writes the document already
   decides what the context states, so crafted text gains nothing.
   - Each word must be stated in some unit of the context, as a whole word
@@ -224,15 +224,15 @@ The other checks:
   with (`Re: Offer of Employment - ...`) are titles too.
 - **Names.** A party's name loses a field's label, a street address or a
   second name that the layout ran into it (`PrOperty 47 JUniper LOOP Cedar
-  Finch Properties Llc`); a legal form ends an organisation's name. A name
-  that is the end of an organisation a unit names (`MANUFACTURING LLC` of
+  Finch Properties Llc`); a legal form ends an organization's name. A name
+  that is the end of an organization a unit names (`MANUFACTURING LLC` of
   `EMBer POSt MANUFACtURInG LLC`) is completed to it. Capitals OCR
   scattered are read as capitals. A first name on its own is unsupported.
   A name keeps what stands before an address that runs on to its city
   (`John Smith, 1420 Fielder Lane, Cedar Rapids, IA 52402`).
 - **Who is a party.** Someone named only on a `cc:` line is copied in, and
-  someone who signs for an organisation among the parties (a name, a job
-  title, then the organisation) acts for it: both stay on record, with role
+  someone who signs for an organization among the parties (a name, a job
+  title, then the organization) acts for it: both stay on record, with role
   other, and neither is ever a filename's party. A notice or a letter
   whose reply names no one it is addressed to takes as its addressee the
   name its first page's `To:` field opens with; an `Attn:` line names the
@@ -287,7 +287,7 @@ order the document first names them.
 | Class | Relation |
 | --- | --- |
 | Agreement, amendment | `between` the first two parties; one party, `with` |
-| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that names no one takes the one organisation at the head of the first page as the issuer |
+| Issued | `from` the issuer; for a purchase order, the buyer; then the vendor, seller or sender; then the party the issuer and customer cues name, or the one party at the head of the first page before any customer cue; then the side opposite a supported customer. The customer alone is never the filename's party. A reply that names no one takes the one organization at the head of the first page as the issuer |
 | Notice | `for` the party it is about; else `to` the recipient; else `from` the issuer; else `for` the counterpart of a provider; else `from` the provider; two parties marked other read `between` |
 | Letter | `to` the addressee; else `from` the sender; else `for` the party it is about, or the provider's counterpart; else `from` the provider |
 | Email | `from` the sender; else `to` the addressee |
@@ -315,7 +315,7 @@ document's own spellings:
 | Class | Template |
 | --- | --- |
 | Agreement | `{type} between {A} and {B} for {subject}.` |
-| Issued | `{type} from {issuer} to {customer} for {subject}, {invoice} {number}, totalling {amount}.` |
+| Issued | `{type} from {issuer} to {customer} for {subject}, {invoice} {number}, totaling {amount}.` |
 | Notice, letter | `{type} from {issuer} to {party} regarding {subject}.` |
 | Email | `{type} from {sender} to {addressee} about {subject}.` |
 | Record | `{type} for {party} covering {subject}, prepared by {issuer}.` |
@@ -323,19 +323,19 @@ document's own spellings:
 
 Values, not labels:
 
-- **The subject** is a value. A labelled field gives its value (`Project:
+- **The subject** is a value. A labeled field gives its value (`Project:
   Aurora Catalog Project`); a field that names a party (`Bill to ...`), a
   subject that only repeats the type or names a party or the identifier, or
   says nothing the type's and the parties' words do not (`retail` for
-  Quartz Meadow Retail LLC), is left out. A run of capitalised words the document never states as one
+  Quartz Meadow Retail LLC), is left out. A run of capitalized words the document never states as one
   phrase is written in lower case.
-- **The amount** reads with the label the document gives it: `totalling
+- **The amount** reads with the label the document gives it: `totaling
   $1,248.00` for an issued document's total, `annual fee of $96,000` for a
-  labelled one, beside the subject it is the price of (`for ... ($312,500)`)
-  or `for $X` otherwise. A table row's amount is labelled by the nearest
+  labeled one, beside the subject it is the price of (`for ... ($312,500)`)
+  or `for $X` otherwise. A table row's amount is labeled by the nearest
   cell before it that holds no amount (`| | | Order Total (USD) |
   $84,438.00 |`, `| Base rent | $1,845.00 | $1,965.00 |`), or by its
-  header when it stands alone; with no labelled amount, a non-issued
+  header when it stands alone; with no labeled amount, a non-issued
   document is for the amount its first-page title states (`$350,000,000
   Senior Secured Credit Facilities`).
 - **The identifier** stands after the type when it is on the type's title

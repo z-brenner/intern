@@ -133,7 +133,7 @@ A document taken out of the queue — **Remove**, **Discard waiting**, or
 claim records it as kept, for as long as the document stays there unchanged.
 One limit: if Intern restarts in the seconds between taking a document out of
 the queue and the next scan, it cannot tell that from a document whose hand-over
-was cut short, and the document is analysed again. Clearing the history of a
+was cut short, and the document is analyzed again. Clearing the history of a
 document that failed while its content was still in the cloud is not a
 decision about it either; the document is handed over again once its content
 can be read. A document the queue cannot take at all — a file this account may
@@ -168,7 +168,7 @@ be typed or browsed afterwards.
 
 The lease protocol does not require a sync client. A folder on a network share — a UNC path
 such as `\\fileserver\legal\intake`, or a mapped drive letter Windows reports
-as remote — is recognised and labelled *On a network share* in Settings, and
+as remote — is recognized and labeled *On a network share* in Settings, and
 several machines watching the same share coordinate through exactly the same
 `.intern/` claim files. The difference is in the guarantees: a share is one
 filesystem, so claim creation is genuinely exclusive there, and the
@@ -237,7 +237,7 @@ filename it was filed under, where it was in the folder, and which machine
 filed it. A machine that later enqueues the same bytes, under any name and
 from any uploader, finds the marker and routes the document to review as a
 duplicate: *Duplicate of `2026-03-02 Master Services Agreement between Acme
-and Globex.pdf` (filed from Front desk)*. Nothing is analysed and nothing is
+and Globex.pdf` (filed from Front desk)*. Nothing is analyzed and nothing is
 renamed unless a person chooses **Retry** to process it anyway. Undoing a
 filing removes the marker it left, and only that one — a marker another
 machine wrote records a filing this machine did not undo. Markers live for a
@@ -248,7 +248,7 @@ from anywhere else on a machine is nobody else's business.
 The marker also carries a fingerprint of the document's extracted text
 (`textFingerprint`, sixteen hex digits), because the second copy a teammate
 sends is rarely the same bytes: it is a fresh scan of the same page, or the
-same attachment exported again. A machine that analyses a document whose
+same attachment exported again. A machine that analyzes a document whose
 text is within a few bits of a marker's fingerprint, dated the same, sends
 it to review as *Filed already as ... (filed from Front desk)* rather than
 filing it a second time. The comparison is made by the queue with both

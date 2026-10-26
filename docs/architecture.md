@@ -62,18 +62,18 @@ and a `.doc` that is really a Word 2007 package (or a `.pptx` that is really a
 97-2003 deck) reaches no reader without the caps it would have had. A file
 saved with a password to open is reported as `PASSWORD_PROTECTED` rather than
 as damage: an encrypted Office package is an OLE compound file holding
-`EncryptionInfo` and `EncryptedPackage` streams, recognised before the zip
+`EncryptionInfo` and `EncryptedPackage` streams, recognized before the zip
 pre-pass would have called it a corrupt archive; a legacy workbook carries a
 `FilePass` record; and PDFium's password error on a PDF maps to the same code.
 Every error message is one line, never a debug dump.
 
 Every page also carries a layout: the page as blocks in reading order -
-headings, paragraphs, tables with their rows and cells, labelled values -
+headings, paragraphs, tables with their rows and cells, labeled values -
 each with a stable id (`p3.b7`, rows `p3.b7.r2`, fields `p3.b7.f1`), the
 heading it falls under, its box on the page where the reader knows one, and
 where its text came from. A PDF page is routed before it is read: most pages
 keep PDFium's text exactly as it has always been read and get blocks built
-cheaply from it; a page whose columns, tables or grids of labelled values
+cheaply from it; a page whose columns, tables or grids of labeled values
 PDFium would run together is rebuilt from the geometry of its characters,
 and its text becomes those blocks in order; a page with no usable text, or
 an invisible text layer that is a bad prior OCR, is read by OCR; and a large
@@ -125,7 +125,7 @@ that would have to go below 50 DPI to fit is a resource limit, and the size of
 what was actually rendered is still checked against the cap. A standalone
 image is decoded up to 100 megapixels — a phone's 48- and 50-megapixel modes
 are ordinary — and up to 400 MB of decoded pixels, which holds a scanner's
-16-bit colour mode to the memory an 8-bit image takes. It is scaled down to
+16-bit color mode to the memory an 8-bit image takes. It is scaled down to
 the page cap before OCR by averaging the pixels each page pixel covers,
 straight into the page-sized copy, and only then turned upright, so a
 48-megapixel photo costs the worker about 220 MB at its peak rather than the
@@ -142,14 +142,14 @@ reads scans exactly as before. [OCR](ocr.md) has the engine, its settings,
 the benchmark behind each one, and what it costs. Either way the reading
 comes back as lines with boxes and confidences, which the layout analysis
 turns into blocks like any other page's, and the page's text is those blocks
-in reading order: tables as rows, labelled values as `Label: value` lines.
+in reading order: tables as rows, labeled values as `Label: value` lines.
 An engine's own order read an unruled table down its columns and left a
 form's labels apart from their values ([Document routing](document-routing.md)
 has the measurement).
 
 Tesseract's lines come from its TSV output: words on a line joined with a
 space, lines grouped into Tesseract's blocks and paragraphs. Its text used to
-be one line per page, which left distillation no headings, no labelled lines,
+be one line per page, which left distillation no headings, no labeled lines,
 and no date lines on exactly the documents where dates go missing; the
 scanned lease's evidence for its date was its whole page.
 
@@ -161,8 +161,8 @@ rather than dropped silently. `.eml` emails and Outlook `.msg` messages
 emit a fixed-order header block followed by the body and a listing (never an
 extraction) of attachments. The `Date:` line is the message's own `Date`
 header, verbatim — for a `.msg`, the one in the transport headers it
-travelled with — so the sent date is checkable against the document like any
-other fact, in the sender's own offset. A `.msg` that never travelled (a
+traveled with — so the sent date is checkable against the document like any
+other fact, in the sender's own offset. A `.msg` that never traveled (a
 draft, a sent item) has only a UTC submit time, and is dated in this
 machine's zone with its offset written out. No second, UTC rendering of the
 date is added: for every evening email west of Greenwich it falls on the
@@ -195,8 +195,8 @@ The rest of this list is how Tesseract, the fallback, reads a page; PP-OCR
 asks its orientation classifier first and then runs the same confidence
 search ([OCR](ocr.md)).
 
-* A page is read as it came first, in grey: Tesseract binarises whatever it is
-  given, and grey is a third of the bytes to encode for every pass. A reading
+* A page is read as it came first, in gray: Tesseract binarizes whatever it is
+  given, and gray is a third of the bytes to encode for every pass. A reading
   of at least three words at a mean confidence of 75 or more is done — one
   recognition pass and no orientation detection — and so is a reading that
   found nothing, since a blank page, every other sheet of a duplex scan, is
@@ -302,7 +302,7 @@ implemented in Rust with no dependencies beyond the standard library.
 
 ### Budgets
 
-| Source size | Behaviour |
+| Source size | Behavior |
 | --- | --- |
 | ≤ 12,000 characters | passed through untouched |
 | > 12,000 characters | distilled to ≤ 12,000 characters |
@@ -340,7 +340,7 @@ that the prompt did not fit.
 
 The SECTIONS line that opens a condensed digest lists at most 40 headings in at
 most 1,500 characters, ending in ` | …` when cut. A table row is never a
-heading, however capitalised: a 600-row ledger used to put 600 of them there.
+heading, however capitalized: a 600-row ledger used to put 600 of them there.
 
 ## The prompt and the grammar
 
@@ -375,7 +375,7 @@ The goal is calibration, not timidity. A proposal goes to review only when a
 | Date | it is a real calendar date **and** is written, in some ordinary human form, in the document — `April 1, 2026`, `1st April 2026`, `01/04/2026`, `01.04.2026`, `4/1/26`, `01/04/26`, `01.04.26`, and their relatives, matched as whole tokens so `12/1/2026` never supports February 1. A two-digit year is read in either order; dotted or dashed, only padded, so a section number like `1.4.26` is never a date |
 | Type | at least 60% of its significant words appear in the document |
 | Party | the name appears in the document, verbatim or with punctuation disregarded (`Contoso Worldwide Inc` for a document that writes `Contoso Worldwide, Inc.`, and `&` read as `and`); the words themselves are never loosened. Two spellings of one name (`ACME CORP`, `Acme Corp.`) are one party, but a name is never merged into a longer one (`Acme`, `Acme Holdings`) |
-| Description | one sentence, 6–42 words, and every number and capitalised name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
+| Description | one sentence, 6–42 words, and every number and capitalized name in it appears in the document, allowing a possessive, a thousands separator, a hyphen the sentence added, or a date the document states written another way (`January 5, 2026` for `01/05/2026`) |
 
 The date rule is deliberately about the *date*, not about the model's quoted
 line. Small models paraphrase their own quotes — answering
@@ -401,7 +401,7 @@ checks read the document around it:
   sets off the cited date (`the Master Services Agreement, as amended,
   effective June 2, 2023`) does not end it, while one followed by a clause
   of its own (`..., your employment will terminate effective`) does.
-* **A deadline.** When every statement of the chosen date is labelled a
+* **A deadline.** When every statement of the chosen date is labeled a
   deadline (`Due Date:`, `Payment due`, `Expires`, `Renewal Date`), the one
   date the document labels as its issue date (`Invoice Date:`, `Dated`, a
   bare `Date:` - not `Ship Date:` or `Order Date:`) replaces it; with none
@@ -435,7 +435,7 @@ specific type.
 
 Three things are then decided from the document rather than from the model,
 because a two-billion-parameter model is good at finding facts and poor at
-labelling them consistently:
+labeling them consistently:
 
 * **The date's role.** The wording in the ninety-odd characters before the
   validated date decides whether it is an effective, execution, invoice,
@@ -502,7 +502,7 @@ model's unverified reading. The analysis keeps the model's reply beside the
 validated facts for exactly that offer — a date the document never states
 verbatim is withheld from the name, not lost — and lists every date the
 document does state, so a document the model could not date is dated from
-its own page in a click, with the file's last-modified date as the labelled
+its own page in a click, with the file's last-modified date as the labeled
 last resort. A date printed only in numbers is listed when it can be read
 one way: `30/01/2026`, a year-first date, or `03/04/2026` in a document
 whose other numeric dates show which way round it writes them. One that
@@ -519,7 +519,7 @@ printed in capitals is title-cased for the name — `ORION GLASS STUDIO INC.`
 becomes `Orion Glass Studio Inc.` — when it has no lowercase letter and at
 least two words of four letters or more, so `IBM` and `KPMG LLP` stay as they
 are; company suffixes read as usual (`Inc`, `Corp`, `Ltd`, `GmbH`, while
-`LLC`, `LLP`, `PLC` stay in capitals), a word with a full stop is an
+`LLC`, `LLP`, `PLC` stay in capitals), a word with a period is an
 abbreviation (`No. 2`, `St. Louis`), common short words are cased (`Bank of
 New York`, `Wage and Tax Statement`), other words of three letters or fewer
 and vowel-less initialisms (`ABC`, `HSBC`) stay in capitals, and a word with
@@ -654,16 +654,16 @@ person changed their mind about the word, not about Intern - and restoring
 the document's own spelling retracts the rule. The whole memory is the list
 in Settings; nothing is learned that cannot be seen and forgotten there.
 
-### Your organisation
+### Your organization
 
 A firm's own name is on almost everything it files, so a name that carries
 every party says the firm over and over, and the Party layout files one
 client's documents under whichever side the model happened to name first.
-Settings takes the organisation's names, one per line, and the queue applies
+Settings takes the organization's names, one per line, and the queue applies
 them after house style (`own_names::counterparty_view`): when a document
-names the organisation and someone else, the organisation's parties are left
+names the organization and someone else, the organization's parties are left
 out of the name and the others keep their order, "between" becoming "with"
-when one is left. A document that names only the organisation keeps it - a
+when one is left. A document that names only the organization keeps it - a
 name with no party says less than one that names the firm. Matching is house
 style's key, plus a whole-word prefix either way round ("Contoso" is
 "Contoso Worldwide, Inc."), and an own name under four characters is ignored
@@ -882,7 +882,7 @@ The key is stored in the operating system's credential store under Intern's
 name, never in the settings file, and never travels anywhere but the address
 that was configured — redirects are refused. Plain HTTP is accepted only to
 this machine, so a local server can be used without a certificate and a
-remote one cannot be used without one; the same judgement takes the machine's
+remote one cannot be used without one; the same judgment takes the machine's
 proxy out of the path for an address on this machine, because a proxy would
 otherwise receive in cleartext the key and the document text that plain HTTP
 was allowed for on the grounds that neither leaves the machine. A service on
@@ -901,7 +901,7 @@ Exact duplicates are a hash comparison before analysis. The duplicates people
 make are not exact: a second scan of the same page, a PDF exported twice from
 the same message, a copy saved again by a program that rewrote its metadata.
 So the engine also fingerprints everything the extractor read - a 64-bit
-simhash over five-character shingles of the normalised text, hashed with
+simhash over five-character shingles of the normalized text, hashed with
 FNV-1a spelled out in the crate so the value is identical on every machine
 and in every build, because the shared filed index carries it between
 teammates. Similar text gives similar bits; a second scan with a handful of
@@ -1029,7 +1029,7 @@ here, on the next retry, or on the next recovery pass - is reported the same
 way, because what is reported is read from the queue's own record of the
 operation rather than from whichever call happened to finish it.
 
-The mirror image is the *duplicate oracle*: before analysing a document the
+The mirror image is the *duplicate oracle*: before analyzing a document the
 queue checks its own history for the same content, then asks the oracle,
 which in the desktop app reads the shared folder's filed markers. Either
 answer routes the document to review as a duplicate, naming what the content
