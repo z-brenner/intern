@@ -75,7 +75,10 @@ impl LockRetry {
         }
     }
 
-    fn run<T>(self, mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    /// Runs `operation`, waiting out a transient sharing violation - a sync
+    /// client or indexer holding the file for a moment - with the policy's
+    /// backoff, and returns the last result.
+    pub fn run<T>(self, mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
         let mut backoff = self.backoff;
         for _ in 1..self.attempts.max(1) {
             match operation() {
@@ -1555,7 +1558,11 @@ const fn nothing_published(stage: OperationStage) -> bool {
     )
 }
 
-fn temporary_path(destination: &Path) -> PathBuf {
+/// A unique, dot-prefixed name beside `destination` to write a copy under
+/// before it is published onto `destination` with `rename_no_replace`. The
+/// leading dot keeps the intake scanner and every add away from a copy that
+/// is still being written.
+pub fn temporary_path(destination: &Path) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

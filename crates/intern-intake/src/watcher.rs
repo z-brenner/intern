@@ -28,13 +28,19 @@ use crate::{
     identity::MachineIdentity,
     scan::{
         FileFacts, Hydration, IntakeAdmission, IntakeConfig, IntakeHost, IntakeStatus, ItemState,
-        StabilityTracker, SystemHydration, is_conflict_copy, walk_intake,
+        StabilityTracker, SystemHydration, is_conflict_copy, modified_secs, relative_slash_path,
+        walk_intake,
     },
 };
 
 pub struct IntakeWatcher {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
+    /// Kept beside the thread's own copies so `hand_over` can run the same
+    /// admission check and claim protocol on the caller's thread.
+    identity: MachineIdentity,
+    host: Arc<dyn IntakeHost>,
+    clock: Arc<dyn Clock>,
 }
 
 struct Shared {
@@ -42,6 +48,27 @@ struct Shared {
     wake: Condvar,
     status: Mutex<IntakeStatus>,
     shutdown: AtomicBool,
+    /// Claims `hand_over` took for this machine, by key, for the scan loop to
+    /// take into its own bookkeeping on its next pass.
+    adopted: Mutex<Vec<(String, PathBuf)>>,
+}
+
+/// What became of a document handed straight to the queue with
+/// [`IntakeWatcher::hand_over`].
+#[derive(Debug, Eq, PartialEq)]
+pub enum HandOver<T> {
+    /// Claimed for this machine and taken by the queue; `T` is what the
+    /// queue said about it.
+    Queued(T),
+    /// The host's admission check does not let this machine take it yet - a
+    /// verified team Inbox that has not heard from Microsoft about the file,
+    /// typically. It stays in the folder, and scans ask again.
+    Held(IntakeAdmission),
+    /// Another machine holds the claim and is working on it.
+    ClaimedElsewhere,
+    /// The claim could not be written, or the queue refused the document;
+    /// the code or message says why. Nothing is left claimed.
+    Refused(String),
 }
 
 struct Control {
@@ -79,6 +106,7 @@ impl IntakeWatcher {
         let shared = Arc::new(Shared {
             status: Mutex::new(IntakeStatus::idle(config.intake_root.clone())),
             shutdown: AtomicBool::new(false),
+            adopted: Mutex::new(Vec::new()),
             control: Mutex::new(Control {
                 config,
                 generation: 0,
@@ -91,12 +119,18 @@ impl IntakeWatcher {
             .name("intern-intake-watcher".to_string())
             .spawn({
                 let shared = shared.clone();
+                let identity = identity.clone();
+                let host = host.clone();
+                let clock = clock.clone();
                 move || run(&shared, &identity, host, clock, hydration)
             })
             .expect("intake watcher thread could not be spawned");
         IntakeWatcher {
             shared,
             thread: Some(thread),
+            identity,
+            host,
+            clock,
         }
     }
 
@@ -108,6 +142,82 @@ impl IntakeWatcher {
     pub fn scan_now(&self) {
         lock(&self.shared.control).wake = true;
         self.shared.wake.notify_all();
+    }
+
+    /// Hands a document this machine has just put into the intake folder
+    /// itself - a copy of a file dropped on the window - straight to the
+    /// queue, instead of leaving it for a scan to find once it has settled.
+    ///
+    /// It goes through what a scan would put it through, in the same order:
+    /// the host's admission check, the origin marker naming this machine, an
+    /// exclusive claim, and `enqueue` (the caller's, so it can say what the
+    /// queue made of it). The claim is then the scan loop's to shepherd like
+    /// any it took itself, so the scan that later finds the file settled sees
+    /// a claim this machine holds and does not hand the document over again,
+    /// and a document filed away before any scan saw it still has its claim
+    /// closed. A person dropped this document on purpose, so it is claimed
+    /// even where teammates' documents are not processed, and even over an
+    /// old tombstone left for the same name, size and time - a document filed
+    /// long ago whose history was cleared, dropped again; that one is queued
+    /// without a claim, since the tombstone cannot be reopened.
+    ///
+    /// Runs on the caller's thread. `path` must be inside the intake folder.
+    pub fn hand_over<T>(
+        &self,
+        path: &Path,
+        enqueue: impl FnOnce(&Path) -> Result<T, String>,
+    ) -> HandOver<T> {
+        let root = lock(&self.shared.control).config.intake_root.clone();
+        let Some(relative_path) = relative_slash_path(&root, path) else {
+            return HandOver::Refused("NOT_IN_INTAKE_FOLDER".into());
+        };
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => return HandOver::Refused("FILE_MISSING".into()),
+        };
+        match self.host.admission(path) {
+            IntakeAdmission::Verified | IntakeAdmission::LocalOnly => {}
+            held => return HandOver::Held(held),
+        }
+        let doc = DocumentFacts {
+            relative_path,
+            size: metadata.len(),
+            modified_secs: modified_secs(&metadata),
+        };
+        let key = doc.key();
+        let store = match ClaimStore::with_clock(&root, self.identity.clone(), self.clock.clone()) {
+            Ok(store) => store,
+            Err(error) => {
+                return HandOver::Refused(format!("INTAKE_COORDINATION_UNAVAILABLE: {error}"));
+            }
+        };
+        // Best effort, like a scan's: the claim below is what decides.
+        let _ = store.write_origin(&doc);
+        match store.acquire(&doc) {
+            AcquireOutcome::Acquired if store.verify(&key) => {}
+            AcquireOutcome::Acquired | AcquireOutcome::HeldByOther(_) => {
+                return HandOver::ClaimedElsewhere;
+            }
+            AcquireOutcome::Done(_) => {
+                return match enqueue(path) {
+                    Ok(queued) => HandOver::Queued(queued),
+                    Err(message) => HandOver::Refused(message),
+                };
+            }
+            AcquireOutcome::Failed(error) => {
+                return HandOver::Refused(format!("CLAIM_IO_FAILED: {error}"));
+            }
+        }
+        match enqueue(path) {
+            Ok(queued) => {
+                lock(&self.shared.adopted).push((key, path.to_path_buf()));
+                HandOver::Queued(queued)
+            }
+            Err(message) => {
+                let _ = store.release(&key);
+                HandOver::Refused(message)
+            }
+        }
     }
 
     /// Re-arms the running watcher on a new configuration. Per-folder scan
@@ -204,6 +314,12 @@ fn run(
         if state_generation != Some(generation) {
             state = ScanState::new(&config);
             state_generation = Some(generation);
+        }
+        // Claims `hand_over` took: the queue has their items from that
+        // moment, exactly as for a claim this loop took itself.
+        for (key, path) in lock(&shared.adopted).drain(..) {
+            state.seen_live.insert(key.clone());
+            state.owned.insert(key, path);
         }
         // A rescan while files settle comes every few seconds, and asking
         // again about every document that is merely being held - for a shared

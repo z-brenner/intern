@@ -16,9 +16,9 @@ use common::{MockClock, facts_for, identity, labelled_identity, wait_until};
 use intern_intake::{
     BACKLOG_FORGET_SECONDS, CLAIM_LEASE_SECONDS, COURTESY_DELAY_SECONDS, ClaimInfo, ClaimState,
     ClaimStore, DEFAULT_MIN_QUIET_SECONDS, DEFAULT_SCAN_INTERVAL, DoneOutcome,
-    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, Hydration, IntakeAdmission, IntakeConfig,
-    IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity, SETTLING_SCAN_INTERVAL,
-    StabilityTracker, scan::is_conflict_copy,
+    ENQUEUE_RETRY_CAP_SECONDS, ENQUEUE_RETRY_SECONDS, HandOver, Hydration, IntakeAdmission,
+    IntakeConfig, IntakeHost, IntakeStatus, IntakeWatcher, ItemState, MachineIdentity,
+    SETTLING_SCAN_INTERVAL, StabilityTracker, scan::is_conflict_copy,
 };
 use tempfile::TempDir;
 
@@ -2334,4 +2334,119 @@ fn a_file_that_arrives_with_an_old_timestamp_still_waits_out_the_courtesy_delay(
     rig.clock.advance(COURTESY_DELAY_SECONDS);
     rig.step();
     assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+/// A file dropped on Intern's window is copied into the intake folder and
+/// handed to the queue at once, with the claim a scan would have taken, so
+/// the scans that find it settled later do not hand it over a second time,
+/// and its claim is closed when the queue files it.
+#[test]
+fn a_document_handed_over_directly_is_queued_once_and_its_claim_shepherded() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("dropped.pdf", b"copied in from the desktop");
+    let key = facts_for(rig.temp.path(), "dropped.pdf").key();
+
+    let outcome = rig.watcher.hand_over(&path, |path| {
+        rig.host.enqueue(&[path.to_path_buf()])?;
+        Ok("queued")
+    });
+    assert_eq!(outcome, HandOver::Queued("queued"));
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+    assert_eq!(rig.read_claim(&key).machine_id, "here-machine");
+    let store = ClaimStore::new(rig.temp.path(), identity("other", "elsewhere")).unwrap();
+    assert_eq!(store.read_origin(&key).unwrap().machine_id, "here-machine");
+
+    rig.step();
+    rig.step();
+    rig.step();
+    assert_eq!(
+        rig.host.enqueue_calls.load(Ordering::SeqCst),
+        1,
+        "never handed over again"
+    );
+
+    rig.host.set_state(
+        &path,
+        ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("2024-01-02 Dropped.pdf".to_string()),
+        },
+    );
+    rig.step();
+    let done = rig.read_claim(&key);
+    assert_eq!(done.state, ClaimState::Done);
+    assert_eq!(done.outcome, Some(DoneOutcome::Renamed));
+}
+
+/// A document the queue files before any scan has seen it settle still has
+/// its claim closed, rather than left as a lease nothing renews.
+#[test]
+fn a_handed_over_document_filed_before_any_scan_saw_it_has_its_claim_closed() {
+    let rig = Rig::start(false, &[]);
+    let path = rig.write("quick.pdf", b"filed in a moment");
+    let key = facts_for(rig.temp.path(), "quick.pdf").key();
+    let outcome = rig
+        .watcher
+        .hand_over(&path, |path| rig.host.enqueue(&[path.to_path_buf()]));
+    assert_eq!(outcome, HandOver::Queued(()));
+
+    rig.host.set_state(
+        &path,
+        ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("2024 Quick.pdf".to_string()),
+        },
+    );
+    fs::remove_file(&path).unwrap();
+    rig.step();
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Done);
+}
+
+/// Where the host does not admit a document yet - the verified team Inbox
+/// before Microsoft has heard of the file - nothing is claimed or queued: it
+/// stays for the scans to ask about again.
+#[test]
+fn a_document_the_host_holds_is_not_claimed_when_handed_over() {
+    let rig = Rig::start(false, &[]);
+    *rig.host.admission.lock().unwrap() = Some(IntakeAdmission::Retryable);
+    let path = rig.write("unverified.pdf", b"not uploaded yet");
+    let key = facts_for(rig.temp.path(), "unverified.pdf").key();
+    let outcome = rig.watcher.hand_over(&path, |_| Ok(()));
+    assert_eq!(outcome, HandOver::Held(IntakeAdmission::Retryable));
+    assert!(rig.host.enqueued().is_empty());
+    assert!(!rig.claim_file(&key).exists());
+}
+
+/// A queue that refuses the document leaves nothing claimed, so a scan can
+/// try it again later.
+#[test]
+fn a_refused_hand_over_releases_its_claim() {
+    let rig = Rig::start(false, &[]);
+    rig.host.fail_enqueue.store(true, Ordering::SeqCst);
+    let path = rig.write("refused.pdf", b"queue offline");
+    let key = facts_for(rig.temp.path(), "refused.pdf").key();
+    let outcome = rig
+        .watcher
+        .hand_over(&path, |path| rig.host.enqueue(&[path.to_path_buf()]));
+    assert_eq!(
+        outcome,
+        HandOver::Refused("the queue is unavailable".into())
+    );
+    assert!(!rig.claim_file(&key).exists());
+
+    rig.host.fail_enqueue.store(false, Ordering::SeqCst);
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path]);
+}
+
+#[test]
+fn only_a_file_inside_the_intake_folder_can_be_handed_over() {
+    let rig = Rig::start(false, &[]);
+    let outside = TempDir::new().unwrap();
+    let path = outside.path().join("elsewhere.pdf");
+    fs::write(&path, b"outside").unwrap();
+    let outcome = rig.watcher.hand_over(&path, |_| Ok(()));
+    assert_eq!(outcome, HandOver::Refused("NOT_IN_INTAKE_FOLDER".into()));
 }
