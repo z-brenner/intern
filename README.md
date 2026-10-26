@@ -255,17 +255,24 @@ skipped rather than stopping the scan.
 
 Alongside the filename, Intern writes one sentence saying what the document
 concerns. With **Write a description record for each filed document** turned
-on, every rename into the destination folder also writes a small JSON record
-under `<destination>\.intern\descriptions\` — the filename, its path in the
+on, every rename into the output folder also writes a small JSON record under
+`<output folder>\.intern\descriptions\` — the filename, its path in the
 library, the sentence, and the date, type, and parties behind the name; never
 document text. The sync client uploads the record like any other file, and a
-Power Automate flow (the recipe is in
-[`docs/sharepoint-descriptions.md`](docs/sharepoint-descriptions.md)) copies
-the sentence into a **Description** column of the library. Intern still makes
-no network request for this; the flow runs under the SharePoint account of
-whoever creates it. Records for documents filed before the setting was turned
-on can be written from Settings, and the rename history's CSV export carries
-the same sentence in its last column for anyone who would rather paste.
+Power Automate flow copies the sentence into a **Description** column of the
+library. The flow is ready to import:
+[`intern-description-flow.zip`](https://z-brenner.github.io/intern/downloads/intern-description-flow.zip)
+(source in
+[`integrations/power-automate/description-flow`](integrations/power-automate/description-flow/package/)),
+imported with *Import Package (Legacy)*, asks only for a SharePoint
+connection, a site, and a library; it has not yet been verified in a real
+tenant, so [`docs/sharepoint-descriptions.md`](docs/sharepoint-descriptions.md)
+also has the same flow as a step-by-step recipe. Settings lists the four
+steps. Intern still makes no network request for this; the flow runs in your
+own tenant, under the SharePoint connection of whoever imports it. Records for
+documents filed before the setting was turned on can be written from
+Settings, and the rename history's CSV export carries the same sentence in its
+last column for anyone who would rather paste.
 
 ## How a document becomes a filename
 
