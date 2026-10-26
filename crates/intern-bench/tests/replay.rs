@@ -96,7 +96,7 @@ fn invoice_reply() -> ModelProposal {
         date_role: Some(DateRole::Invoice),
         parties: vec!["Halvorsen Fixture Works LLC".into()],
         party_relation: PartyRelation::From,
-        description: "Invoice INV-20417 from Halvorsen Fixture Works LLC to Quillon Ridge Bakery for display fixtures supplied and installed, totalling $4,812.50.".into(),
+        description: "Invoice INV-20417 from Halvorsen Fixture Works LLC to Quillon Ridge Bakery for display fixtures supplied and installed, totaling $4,812.50.".into(),
         confidence: 0.93,
         needs_review: false,
         evidence: Evidence {

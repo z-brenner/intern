@@ -905,7 +905,7 @@ mod tests {
         Outcome {
             analysed: true,
             filename: Some(filename),
-            description: "Invoice from Halvorsen Fixture Works LLC for display fixtures totalling $4,812.50, issued March 4, 2026.",
+            description: "Invoice from Halvorsen Fixture Works LLC for display fixtures totaling $4,812.50, issued March 4, 2026.",
             document_type: Some("Invoice"),
             document_date: Some("2026-03-04"),
             date_role: Some("invoice"),

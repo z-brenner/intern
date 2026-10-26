@@ -75,7 +75,7 @@ impl PdfiumBackend {
             Some(Ok(pdfium)) => Ok(pdfium),
             Some(Err(message)) => Err(ExtractionError::native_assets_missing(message.clone())),
             None => Err(ExtractionError::native_assets_missing(
-                "PDFium was not initialised",
+                "PDFium was not initialized",
             )),
         }
     }

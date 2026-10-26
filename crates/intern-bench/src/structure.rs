@@ -18,8 +18,8 @@
 //! the middle of another value.
 //!
 //! The text is read page by page, in page order, as *lines*: each page's
-//! text split at line breaks, normalised, blank lines dropped. A table row
-//! the worker linearised as `| a | b |` is one line.
+//! text split at line breaks, normalized, blank lines dropped. A table row
+//! the worker linearized as `| a | b |` is one line.
 //!
 //! * `reading_order_accuracy`: each snippet's position is its first
 //!   occurrence in the whole text (pages joined, normalised). The snippets
@@ -59,7 +59,7 @@
 //!   (`| … |`) holds the label as a whole cell (`CONTRACT DATE` is not the
 //!   cell of `DATE`) and the next line, also a table row, holds the value
 //!   in the cell of the same column - a label set over its value,
-//!   linearised as a table. The score is the share of pairs found.
+//!   linearized as a table. The score is the share of pairs found.
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
@@ -392,7 +392,7 @@ fn only_separators(rest: &str) -> bool {
         .all(|character| character.is_whitespace() || matches!(character, ':' | '|' | '-' | '.'))
 }
 
-/// The cells of a line linearised as a table row (`| a | b |`), or none
+/// The cells of a line linearized as a table row (`| a | b |`), or none
 /// for any other line. An escaped pipe is part of its cell, as the worker
 /// and the engine read a row.
 fn table_cells(line: &str) -> Option<Vec<&str>> {
@@ -942,7 +942,7 @@ mod tests {
             ])],
             ..StructureTruth::default()
         };
-        // A linearised table: every row on its own `| … |` line.
+        // A linearized table: every row on its own `| … |` line.
         let table = measure(
             &truth,
             &source(&[
@@ -1168,7 +1168,7 @@ mod tests {
             "{:?}",
             crowded.misses
         );
-        // Labels over their values, linearised as a table: each value is
+        // Labels over their values, linearized as a table: each value is
         // in the cell under its label, and only there.
         let grid = measure(
             &truth,

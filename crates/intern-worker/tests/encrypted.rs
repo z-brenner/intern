@@ -93,7 +93,7 @@ fn encrypted_pdf_is_password_protected() {
             _page: &RenderedPage,
             _cancel: &CancellationToken,
         ) -> Result<OcrResult, ExtractionError> {
-            panic!("an unopenable PDF has no pages to recognise")
+            panic!("an unopenable PDF has no pages to recognize")
         }
     }
 

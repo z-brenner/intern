@@ -822,7 +822,7 @@ fn compose(
         let total = label.is_none_or(is_total_label);
         match label {
             _ if total && (facts.class == DocumentClass::Issued || label.is_some()) => {
-                text.push_str(&format!(", totalling {amount}"));
+                text.push_str(&format!(", totaling {amount}"));
             }
             None => text.push_str(&format!(", for {amount}")),
             Some(label) => text.push_str(&format!(", {label} of {amount}")),

@@ -748,7 +748,7 @@ pub struct StructureRow {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct StructureReport {
     /// Every count summed over the documents, each score the share of the
-    /// pooled items (snippets, rows, cells, labelled values, pages): a document with
+    /// pooled items (snippets, rows, cells, labeled values, pages): a document with
     /// forty table rows weighs forty times one with one. A document whose
     /// extraction failed is in it, every item missed.
     pub aggregate: StructureFigures,

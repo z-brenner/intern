@@ -3751,7 +3751,7 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
         assert_eq!(
             proposal.description,
             "Invoice from Halvorsen Fixture Works LLC to Quillon Ridge Bakery, Inc. for display \
-             shelving for the bakery counter, invoice INV-10438, totalling $1,248.00."
+             shelving for the bakery counter, invoice INV-10438, totaling $1,248.00."
         );
         // What a reviewer is shown is the document's own lines.
         let lines = INVOICE.lines().map(str::trim).collect::<Vec<_>>();
@@ -4294,7 +4294,7 @@ Dated May 12, 2026";
 
     /// The description `invoice_facts` gives with no subject.
     const INVOICE_WITHOUT_SUBJECT: &str = "Invoice from Halvorsen Fixture Works LLC to Quillon \
-                                           Ridge Bakery, Inc., invoice INV-10438, totalling \
+                                           Ridge Bakery, Inc., invoice INV-10438, totaling \
                                            $1,248.00.";
 
     /// `invoice_facts` with another subject, cited to the first unit
@@ -4944,10 +4944,10 @@ Dis\u{ad}play shelving for the bak\u{ad}ery counter, $1,248.00";
     /// review and never takes the place of the document's own total.
     #[test]
     fn a_key_fact_amount_is_accepted_only_as_the_context_writes_it() {
-        const TOTALLED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
+        const TOTALED: &str = "Nimbus Orchard Supply Co.\n\nINVOICE\n\n\
 Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.00";
-        let unclaimed = with_key_facts(TOTALLED, &[]).proposal.description;
-        assert!(unclaimed.contains("totalling $1,248.00"), "{unclaimed}");
+        let unclaimed = with_key_facts(TOTALED, &[]).proposal.description;
+        assert!(unclaimed.contains("totaling $1,248.00"), "{unclaimed}");
         for (fact, cited) in [
             ("$48", Some("Total")),
             ("$7", None),
@@ -4959,7 +4959,7 @@ Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.0
             ("\u{20ac}1,248.00", Some("Total")),
             ("$1,248.00 million", Some("Total")),
         ] {
-            let outcome = with_key_facts(TOTALLED, &[(fact, cited)]);
+            let outcome = with_key_facts(TOTALED, &[(fact, cited)]);
             let facts = outcome.facts.as_ref().unwrap();
             assert_eq!(
                 facts.support.key_facts,
@@ -4977,7 +4977,7 @@ Invoice date: April 30, 2025\n\nBill to Atlas Threadworks LLC\n\nTotal: $1,248.0
             assert_eq!(outcome.proposal.description, unclaimed, "{fact}");
         }
         for fact in ["$1,248.00", "Total: $1,248.00"] {
-            let outcome = with_key_facts(TOTALLED, &[(fact, Some("Total"))]);
+            let outcome = with_key_facts(TOTALED, &[(fact, Some("Total"))]);
             assert!(
                 !outcome
                     .reasons
@@ -5483,7 +5483,7 @@ Total: $1,248.00";
         assert_eq!(outcome.proposal.parties, vec!["Nimbus Orchard Supply Co."]);
         assert_eq!(
             outcome.proposal.description,
-            "Invoice INV-2048 from Nimbus Orchard Supply Co., totalling $1,248.00."
+            "Invoice INV-2048 from Nimbus Orchard Supply Co., totaling $1,248.00."
         );
         // The customer alone, under its label, is never the issuer.
         let (outcome, _) = facts_for(INVOICE, |index| ModelFacts {
@@ -5614,7 +5614,7 @@ $28,703.00.";
             ..ModelFacts::default()
         });
         let description = &outcome.proposal.description;
-        assert!(description.contains("totalling $1,080.00"), "{description}");
+        assert!(description.contains("totaling $1,080.00"), "{description}");
         // A line a hosted reply cites for the amount stands in when the
         // document labels none; a line with no amount gives none and is no
         // claim either.
@@ -5663,7 +5663,7 @@ $28,703.00.";
 | | | | Order Total (USD) | $84,438.00 |",
             "Purchase Order",
         );
-        assert!(order.contains("totalling $84,438.00"), "{order}");
+        assert!(order.contains("totaling $84,438.00"), "{order}");
         let rent = described(
             "NOTICE OF RENT INCREASE\n\n| Charge | Current | New |\n\
 | Base rent | $1,845.00 | $1,965.00 |\n\nThe base rent increase is $120.00 per month.",
