@@ -316,6 +316,15 @@ pub(crate) fn status_dto(
 /// A canceled item is a person's decision to leave the document alone, so it
 /// reports `KeptOriginal` too. One the watcher withdrew itself never reaches
 /// here; see `screen_lookup`.
+///
+/// An exact duplicate the queue filed as a copy - moved into the output
+/// folder as `COPY - <the original's name>` - left the intake folder by a
+/// completed apply like any filing, so it reports `Renamed` with the copy's
+/// name. It is no filing of its own (no shared filed marker records it), but
+/// the claim only has to say the document is gone from the folder and needs
+/// nothing more from any machine. A document waiting in review under a
+/// `NEEDS REVIEW - ` name reports `NeedsReview`, like any review item, and
+/// the claim stays held until a person decides.
 pub(crate) fn item_fate(
     status: QueueStatus,
     receipt: Option<&OperationReceipt>,
@@ -436,8 +445,14 @@ fn enqueue_for_intake(pipeline: &Pipeline, paths: &[PathBuf]) -> Result<(), Stri
 /// `Unknown`. The newest matching item is the source's current fate;
 /// older completed rows for the same path are history. One indexed
 /// lookup per file: this is asked once per document on every scan.
+///
+/// A document the queue could not read was renamed where it lies to
+/// `NEEDS REVIEW - <name>`, and its row moved with it, while the watcher's
+/// claim still names the path it arrived under. The lookup follows that
+/// rename, so the document reads as waiting for review - not as a row a
+/// person removed - and its claim closes only on its real fate.
 fn intake_item_state(pipeline: &Pipeline, path: &Path) -> ItemState {
-    match screen_lookup(pipeline.find_by_source_path(path)) {
+    match screen_lookup(pipeline.find_by_intake_path(path)) {
         Ok(Some(item)) => pipeline_item_fate(&item),
         Ok(None) => ItemState::Unknown,
         Err(state) => state,
@@ -449,6 +464,12 @@ fn intake_item_state(pipeline: &Pipeline, path: &Path) -> ItemState {
 /// not cancelable and the pipeline says so, and the claim protocol only needs
 /// pending work withdrawn. A row already canceled was canceled by a person,
 /// and stays theirs.
+///
+/// Only an item still at `path` is withdrawn. A document renamed
+/// `NEEDS REVIEW - ...` because it could not be read is no longer at the
+/// path the claim names, and the plain lookup used here does not follow that
+/// rename on purpose: giving up a claim on the old name must never cancel the
+/// document waiting in review under the new one.
 fn withdraw_for_intake(pipeline: &Pipeline, path: &Path) {
     if let Ok(Some(item)) = pipeline.find_by_source_path(path)
         && item.status != QueueStatus::Canceled
@@ -1353,6 +1374,76 @@ mod watcher_host_tests {
             "nothing failed to retry"
         );
         assert!(!retry_failed(&pipeline, &dir.join("never-enqueued.pdf")));
+
+        drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+    /// An extractor that finds every document password-protected: the
+    /// document's own problem, so it waits in review renamed.
+    struct Locked;
+
+    impl WorkerBoundary for Locked {
+        fn extract(
+            &self,
+            _request_id: &str,
+            _path: &Path,
+            _progress: &mut dyn FnMut(intern_engine::ExtractProgress),
+        ) -> Result<intern_engine::DocumentSource, WorkerFailure> {
+            Err(WorkerFailure::reported(
+                "PASSWORD_PROTECTED",
+                "the document is encrypted",
+                false,
+            ))
+        }
+
+        fn cancel(&self, _request_id: &str) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+
+        fn restart(&self) -> Result<(), WorkerFailure> {
+            Ok(())
+        }
+    }
+
+    /// The watcher holds its claim on the name a document arrived under. A
+    /// document renamed NEEDS REVIEW for being unreadable is still found by
+    /// that name and reads as waiting for review, giving the claim up never
+    /// withdraws it, and once a person removes it the name reads as no item.
+    #[test]
+    fn a_document_renamed_for_review_is_followed_but_never_withdrawn_by_its_old_name() {
+        let (dir, _) = queue("needs-review");
+        let pipeline = Pipeline::with_local_files(
+            dir.join("queue.sqlite3"),
+            Arc::new(Locked),
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            SettingsStore::new(dir.join("settings.json")),
+        )
+        .unwrap();
+        let document = dir.join("locked.pdf");
+        fs::write(&document, b"an encrypted document").unwrap();
+        enqueue_for_intake(&pipeline, std::slice::from_ref(&document)).unwrap();
+        pipeline.run_next().unwrap();
+        let marked = dir.join("NEEDS REVIEW - locked.pdf");
+        assert!(marked.exists());
+        assert!(!document.exists());
+
+        assert_eq!(
+            intake_item_state(&pipeline, &document),
+            ItemState::NeedsReview
+        );
+        withdraw_for_intake(&pipeline, &document);
+        assert!(!retry_failed(&pipeline, &document));
+        let row = pipeline.find_by_source_path(&marked).unwrap().unwrap();
+        assert_eq!(row.status, QueueStatus::NeedsReview);
+        assert_eq!(
+            row.error_code,
+            Some(intern_core::ErrorCode::PasswordProtected)
+        );
+
+        pipeline.remove(row.id, false).unwrap();
+        assert_eq!(intake_item_state(&pipeline, &document), ItemState::Unknown);
+        assert!(marked.exists(), "removing it leaves the file as it is");
 
         drop(pipeline);
         let _ = fs::remove_dir_all(dir);

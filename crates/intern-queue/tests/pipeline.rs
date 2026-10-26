@@ -745,7 +745,7 @@ fn an_account_out_of_credit_pauses_the_queue_instead_of_failing_the_backlog() {
 }
 
 #[test]
-fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
+fn a_crashing_item_does_not_block_the_next_and_worker_restarts_only_once() {
     let temp = tempdir().unwrap();
     let first = source(temp.path(), "crashes.pdf");
     let second = source(temp.path(), "continues.pdf");
@@ -773,8 +773,10 @@ fn failed_item_does_not_block_the_next_and_worker_restarts_only_once() {
 
     let items = pipeline.list().unwrap();
     assert_eq!(worker.restarts.load(Ordering::SeqCst), 1);
-    assert_eq!(items[0].status, QueueStatus::Failed);
-    assert_eq!(items[0].error_code, Some(ErrorCode::IoError));
+    // A parser that crashed on the document on both attempts could not read
+    // it: it waits in review, not failed, and the next document goes on.
+    assert_eq!(items[0].status, QueueStatus::NeedsReview);
+    assert_eq!(items[0].error_code, Some(ErrorCode::ExtractionFailed));
     assert_eq!(items[1].status, QueueStatus::Ready);
 }
 
@@ -795,8 +797,9 @@ fn documents(dir: &Path, files: &FakeFiles, names: &[&str]) -> Vec<PathBuf> {
 
 /// Every extraction failure used to be stored as IO_ERROR ("A file operation
 /// failed.") and extracted a second time, whatever the worker said. A failure
-/// the worker calls permanent now fails the document on the first attempt,
-/// under a code that says what is wrong with it.
+/// the worker calls permanent now settles the document on the first attempt,
+/// under a code that says what is wrong with it - in review, since each is
+/// the document's own problem.
 #[test]
 fn non_retryable_extraction_failure_is_terminal_with_its_code() {
     let cases = [
@@ -837,7 +840,7 @@ fn non_retryable_extraction_failure_is_terminal_with_its_code() {
     assert_eq!(model.calls.load(Ordering::SeqCst), 0);
     let items = pipeline.list().unwrap();
     for (item, (code, expected)) in items.iter().zip(cases) {
-        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.status, QueueStatus::NeedsReview, "{code}");
         assert_eq!(item.error_code, Some(expected), "{code}");
     }
     assert!(!pipeline.is_paused());
@@ -962,7 +965,7 @@ fn refused_and_too_large_are_terminal_and_do_not_pause() {
     assert_eq!(worker.calls.load(Ordering::SeqCst), paths.len());
     let items = pipeline.list().unwrap();
     for (item, (code, expected)) in items.iter().zip(cases) {
-        assert_eq!(item.status, QueueStatus::Failed, "{code}");
+        assert_eq!(item.status, QueueStatus::NeedsReview, "{code}");
         assert_eq!(item.error_code, Some(expected), "{code}");
     }
     assert_eq!(items[3].status, QueueStatus::Ready);
@@ -970,7 +973,7 @@ fn refused_and_too_large_are_terminal_and_do_not_pause() {
     assert_eq!(pipeline.pause_reason(), None);
 }
 
-/// One reply that cannot be used fails that document. A model that keeps
+/// One reply that cannot be used sends that document to review. A model that keeps
 /// answering that way is broken for every document, so the third in a row
 /// stops the queue - but only in a row: a document read successfully in
 /// between starts the count again.
@@ -1025,17 +1028,17 @@ fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
     assert_eq!(
         statuses,
         [
-            QueueStatus::Failed,
-            QueueStatus::Failed,
+            QueueStatus::NeedsReview,
+            QueueStatus::NeedsReview,
             QueueStatus::Ready,
-            QueueStatus::Failed,
-            QueueStatus::Failed,
+            QueueStatus::NeedsReview,
+            QueueStatus::NeedsReview,
         ]
     );
     assert!(
         items
             .iter()
-            .filter(|item| item.status == QueueStatus::Failed)
+            .filter(|item| item.status == QueueStatus::NeedsReview)
             .all(|item| item.error_code == Some(ErrorCode::ModelOutputInvalid))
     );
 
@@ -1047,7 +1050,8 @@ fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
     assert_eq!(reason.as_deref(), Some("MODEL_OUTPUT_INVALID"));
     assert_eq!(calls, 3);
     assert!(items[..3].iter().all(|item| {
-        item.status == QueueStatus::Failed && item.error_code == Some(ErrorCode::ModelOutputInvalid)
+        item.status == QueueStatus::NeedsReview
+            && item.error_code == Some(ErrorCode::ModelOutputInvalid)
     }));
     assert_eq!(items[3].status, QueueStatus::Queued);
 }

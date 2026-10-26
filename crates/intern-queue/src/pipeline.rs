@@ -9,7 +9,7 @@ use std::{
 
 use intern_core::{
     ErrorCode, FileApplier, FileSystem, InternError, OperationDirection, OperationReceipt,
-    OperationStage, QueueItem, QueueStatus, QueueStore, StdFileSystem, source_path_key,
+    OperationStage, QueueItem, QueueStatus, QueueStore, StdFileSystem, copy_name, source_path_key,
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
@@ -287,6 +287,24 @@ pub trait FileActions: Send + Sync {
     fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
         path.try_exists()
     }
+    /// Renames the file of an item in review because it could not be read
+    /// to `NEEDS REVIEW - <its name>`, where it lies, and moves the row
+    /// with it. Nothing, by default: a boundary that keeps no files has no
+    /// name to change.
+    fn mark_for_review(&self, _item_id: i64) -> PipelineResult<()> {
+        Ok(())
+    }
+    /// Takes that prefix back off and completes the item as kept, when a
+    /// person keeps the document's own name. `false` when the file carries
+    /// no mark of Intern's, and keeping it renames nothing.
+    fn restore_from_review(&self, _item_id: i64) -> PipelineResult<bool> {
+        Ok(false)
+    }
+    /// Settles the renames in place a crash left half-recorded, and marks
+    /// the documents whose mark never happened.
+    fn reconcile_review_renames(&self) -> PipelineResult<()> {
+        Ok(())
+    }
 }
 
 pub struct CoreFileActions {
@@ -375,6 +393,27 @@ impl FileActions for CoreFileActions {
 
     fn try_exists(&self, path: &Path) -> std::io::Result<bool> {
         self.applier.try_exists(path)
+    }
+
+    fn mark_for_review(&self, item_id: i64) -> PipelineResult<()> {
+        self.applier
+            .mark_for_review(item_id)
+            .map(drop)
+            .map_err(Into::into)
+    }
+
+    fn restore_from_review(&self, item_id: i64) -> PipelineResult<bool> {
+        self.applier
+            .restore_from_review(item_id)
+            .map(|kept| kept.is_some())
+            .map_err(Into::into)
+    }
+
+    fn reconcile_review_renames(&self) -> PipelineResult<()> {
+        self.applier
+            .reconcile_review_renames()
+            .map(drop)
+            .map_err(Into::into)
     }
 }
 
@@ -542,11 +581,44 @@ pub struct ProposalRecord {
     /// when it is free even with automatic renaming switched off.
     #[serde(default)]
     pub approved: bool,
+    /// A name a person typed for a document Intern could not read. There
+    /// was no analysis to propose one, so `analysis` is empty: nothing here
+    /// is the model's, and nothing recomposes the name from it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual: bool,
+    /// Set on the record of an exact duplicate filed as a copy of the
+    /// document it repeats. `filename` is the copy's name; there was no
+    /// analysis, and the filing is no filing of its own (see
+    /// [`CopyOf`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_of: Option<CopyOf>,
+}
+
+/// What an exact duplicate is a copy of, and where its copy goes.
+///
+/// A document whose bytes are already filed is not read or named again: it
+/// is moved out of the input folder into the output folder as
+/// `COPY - <the original's filed name>`, beside the original when Intern
+/// knows its folder. Such a filing leaves no record of its own - no
+/// description, no shared filed marker, no text fingerprint - because the
+/// document it repeats already has them, and no later duplicate is ever
+/// named after a copy.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyOf {
+    /// The name the original is filed under.
+    pub original: String,
+    /// The folder the copy is filed into.
+    pub folder: PathBuf,
 }
 
 /// The review reason for a document whose text is nearly the text of one
 /// already filed. The record's `near_duplicate_of` names that filing.
 pub const NEAR_DUPLICATE: &str = "NEAR_DUPLICATE";
+
+/// The note on an exact duplicate filed as a copy of the document it
+/// repeats: why it is named `COPY - ...` and was never read.
+pub const EXACT_COPY: &str = "EXACT_COPY";
 
 /// The review reason for a rename a person took back. The document is where
 /// it started and waits for a decision; nothing files it again on its own.
@@ -557,6 +629,44 @@ pub const UNDONE: &str = "UNDONE";
 pub const ALREADY_NAMED: &str = "ALREADY_NAMED";
 
 impl ProposalRecord {
+    /// A record with no analysis behind it, for `filename`: a name typed by
+    /// hand, or a copy's.
+    fn synthetic(filename: String, description: String) -> Self {
+        Self {
+            analysis: DocumentAnalysis {
+                filename: String::new(),
+                description: String::new(),
+                status: ProposalStatus::NeedsReview,
+                review_reasons: Vec::new(),
+                proposal: ValidatedProposal::default(),
+                telemetry: Default::default(),
+                model_proposal: None,
+                stated_dates: Vec::new(),
+                text_fingerprint: None,
+                token_confidence: None,
+                facts: None,
+            },
+            status: ProposalStatus::NeedsReview,
+            filename,
+            description,
+            reasons: Vec::new(),
+            revision: 1,
+            house_rules: Vec::new(),
+            own_names: Vec::new(),
+            near_duplicate_of: None,
+            approved: false,
+            manual: false,
+            copy_of: None,
+        }
+    }
+
+    /// Whether the record has no analysis behind it - a name typed for an
+    /// unreadable document, or a copy's - so there is nothing to recompose
+    /// its name from, and no confidence or evidence to show.
+    pub fn is_synthetic(&self) -> bool {
+        self.manual || self.copy_of.is_some()
+    }
+
     /// The validated facts as the name carries them: the document's words,
     /// respelled the way the reviewer has taught Intern to, with the
     /// person's own organisation left out where the document names someone
@@ -930,33 +1040,212 @@ impl Pipeline {
         Ok((item, inserted))
     }
 
-    /// Flags a just-queued item whose content is already filed as completed.
+    /// Files a just-queued item whose content is already filed as completed
+    /// as a copy of that filing, or flags it for review (see
+    /// [`Self::file_duplicate`]).
     ///
-    /// Enqueue holds no run lock, so the flag is a compare-and-swap on the
+    /// Enqueue holds no run lock, so either is a compare-and-swap on the
     /// Queued status: if the scheduler claimed the item between the lookup and
     /// the transition, the claim wins and the item analyzes normally.
     fn flag_if_completed_duplicate(&self, item: QueueItem) -> PipelineResult<QueueItem> {
-        let duplicate = self
+        let Some(duplicate) = self
             .store
-            .find_completed_duplicate(&item.source_hash, &source_path_key(&item.source_path))?;
-        if duplicate.is_none() {
+            .find_completed_duplicate(&item.source_hash, &source_path_key(&item.source_path))?
+        else {
             return Ok(item);
-        }
-        self.flag_duplicate(item)
+        };
+        let original = match (duplicate.filed_as, duplicate.filed_path) {
+            (Some(name), Some(filed)) => DuplicateOriginal {
+                name,
+                folder: filed.parent().map(Path::to_path_buf),
+                filed_path: Some(filed),
+            },
+            // Completed without a rename: the original kept its own name,
+            // wherever it is, so that is the name the copy carries.
+            _ => DuplicateOriginal {
+                name: duplicate
+                    .source_path
+                    .file_name()
+                    .unwrap_or(duplicate.source_path.as_os_str())
+                    .to_string_lossy()
+                    .into_owned(),
+                folder: None,
+                filed_path: Some(duplicate.source_path),
+            },
+        };
+        self.file_duplicate(item, original)
     }
 
-    /// Flags a just-queued item whose content the duplicate oracle knows to be
-    /// filed already - by a teammate, typically. Same compare-and-swap as the
-    /// local check.
+    /// The same for a just-queued item whose content the duplicate oracle
+    /// knows to be filed already - by a teammate, typically. The name is the
+    /// one the filing was made under, as the oracle has it; its folder is
+    /// another machine's business, so the copy goes to the output folder's
+    /// root.
     fn flag_if_filed_elsewhere(&self, item: QueueItem) -> PipelineResult<QueueItem> {
-        if self
+        let Some(known) = self
             .duplicates
             .filed_elsewhere(&item.source_hash, &item.source_path)
-            .is_none()
-        {
+        else {
             return Ok(item);
+        };
+        self.file_duplicate(
+            item,
+            DuplicateOriginal {
+                name: known.filename,
+                folder: None,
+                filed_path: None,
+            },
+        )
+    }
+
+    /// What becomes of an exact duplicate: with an output folder to file
+    /// into, it is filed there as `COPY - <the original's name>` without
+    /// being read; without one, it waits in review as a duplicate, untouched,
+    /// as every duplicate used to.
+    ///
+    /// Staged, the copy is a ready item with an approved copy record, so it
+    /// is filed through the same journaled move as any approval - now, unless
+    /// the queue is paused or busy, and otherwise by the scheduler the moment
+    /// it is free - whether automatic renaming is on or not. Undo puts it
+    /// back where it came from like any filing.
+    fn file_duplicate(
+        &self,
+        item: QueueItem,
+        original: DuplicateOriginal,
+    ) -> PipelineResult<QueueItem> {
+        let Some((filename, copy)) = self.copy_plan(&item, original) else {
+            return self.flag_duplicate(item);
+        };
+        let mut record = ProposalRecord::synthetic(filename, String::new());
+        record.status = ProposalStatus::Ready;
+        record.approved = true;
+        record.reasons = vec![EXACT_COPY.to_owned()];
+        record.copy_of = Some(copy);
+        match self.repository.stage_copy(item.id, &record) {
+            Ok(()) => {}
+            Err(error) if error.code == "STATE_CONFLICT" => return Ok(item),
+            Err(error) => return Err(error),
         }
-        self.flag_duplicate(item)
+        if !self.paused.load(Ordering::SeqCst) {
+            let staged = self.find_item(item.id)?;
+            // The scheduler files it if this cannot: busy is not a failure,
+            // and a failure has already put it in review.
+            let _ = self.apply_copy(&staged, &record);
+        }
+        self.find_item(item.id)
+    }
+
+    /// The name and folder a duplicate's copy is filed under, or `None` when
+    /// it is not filed as a copy: there is no output folder, the file is
+    /// already in it, or the original's name cannot be a file's name.
+    ///
+    /// A file inside the output folder is a filed document - very likely the
+    /// original itself, added again from where it is filed - and moving it
+    /// would take a filing out of its place; it waits in review instead. The
+    /// copy goes beside the original when the original is known to be filed
+    /// inside the output folder, and to its root otherwise.
+    fn copy_plan(&self, item: &QueueItem, original: DuplicateOriginal) -> Option<(String, CopyOf)> {
+        let settings = self.settings.load().ok()?;
+        let root = settings.destination.trim();
+        if root.is_empty() {
+            return None;
+        }
+        let root = PathBuf::from(root);
+        if is_within(&item.source_path, &root)
+            || original
+                .filed_path
+                .as_deref()
+                .is_some_and(|filed| same_file_path(filed, &item.source_path))
+        {
+            return None;
+        }
+        let folder = original
+            .folder
+            .filter(|folder| is_within(folder, &root))
+            .unwrap_or(root);
+        let extension = item
+            .source_path
+            .extension()
+            .and_then(|extension| extension.to_str());
+        // A teammate's filing is named from a file anyone with access to the
+        // shared folder can write, so its name must be a plain file name
+        // before it becomes part of a path.
+        let filename = validate_leaf_filename(&copy_name(&original.name, extension)).ok()?;
+        Some((
+            filename,
+            CopyOf {
+                original: original.name,
+                folder,
+            },
+        ))
+    }
+
+    /// Files a staged copy: the journaled move into its folder, under its
+    /// name, with ` (2)` and on when a copy is there already. Nothing is
+    /// reported as filed: the original's records stand for both.
+    ///
+    /// Busy is no failure - the copy stays staged and the scheduler files it
+    /// between documents. Anything else puts the document in review as a
+    /// duplicate, untouched, as it would have been with nowhere to file it.
+    fn apply_copy(&self, item: &QueueItem, record: &ProposalRecord) -> PipelineResult<()> {
+        let Some(copy) = record.copy_of.as_ref() else {
+            return Ok(());
+        };
+        if let Err(error) = self.authorize_item(item, AdmissionStage::Apply) {
+            if !error.is_retryable() {
+                let _ = self.repository.abandon_copy(item.id);
+                self.events.queue_changed();
+            }
+            return Err(error);
+        }
+        if let Err(error) = fs::create_dir_all(&copy.folder) {
+            let _ = self.repository.abandon_copy(item.id);
+            self.events.queue_changed();
+            return Err(PipelineError::new(
+                "DESTINATION_UNAVAILABLE",
+                format!("the destination folder could not be created ({error})"),
+            ));
+        }
+        let destination = copy.folder.join(&record.filename);
+        let applied = {
+            let _files = self.hold_file_ops();
+            let applied = self.files.apply(item, &destination);
+            if let Err(error) = &applied
+                && error.code != APPLY_DEFERRED
+            {
+                let _ = self.files.reconcile(item);
+            }
+            applied
+        };
+        match applied {
+            Ok(()) => {
+                self.events.queue_changed();
+                Ok(())
+            }
+            Err(error) if error.code == APPLY_DEFERRED => Ok(()),
+            Err(error) => {
+                if self
+                    .store
+                    .get(item.id)?
+                    .is_some_and(|current| current.status == QueueStatus::Ready)
+                {
+                    let _ = self.repository.abandon_copy(item.id);
+                } else {
+                    self.report_settled(item.id);
+                }
+                self.events.queue_changed();
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether the item's record is a copy's.
+    fn is_copy(&self, item_id: i64) -> bool {
+        self.repository
+            .load_proposal(item_id)
+            .ok()
+            .flatten()
+            .is_some_and(|record| record.copy_of.is_some())
     }
 
     fn flag_duplicate(&self, item: QueueItem) -> PipelineResult<QueueItem> {
@@ -997,6 +1286,26 @@ impl Pipeline {
         }
         self.store
             .find_newest_by_source_path(&candidates)?
+            .map(|item| self.pipeline_item(item))
+            .transpose()
+    }
+
+    /// [`Self::find_by_source_path`] for the intake watcher, which knows a
+    /// document by the name it arrived under: also the item whose file was
+    /// renamed `NEEDS REVIEW - ...` from that name because it could not be
+    /// read. Only the watcher's question about a document's fate may follow
+    /// that rename. Withdrawing or retrying by the old name must not find the
+    /// row: the document was taken out of the folder's reach on purpose.
+    pub fn find_by_intake_path(&self, path: &Path) -> PipelineResult<Option<PipelineItem>> {
+        let canonical = fs::canonicalize(path).ok();
+        let mut candidates = vec![path];
+        if let Some(canonical) = canonical.as_deref()
+            && canonical != path
+        {
+            candidates.push(canonical);
+        }
+        self.store
+            .find_newest_by_intake_path(&candidates)?
             .map(|item| self.pipeline_item(item))
             .transpose()
     }
@@ -1070,7 +1379,8 @@ impl Pipeline {
             .filter(|item| item.status == QueueStatus::Completed)
             .filter_map(|item| {
                 let receipt = item.filed_receipt?;
-                let proposal = item.proposal?;
+                // A copy is no filing of its own; see `report_filed`.
+                let proposal = item.proposal.filter(|record| record.copy_of.is_none())?;
                 let filed_at = self
                     .store
                     .receipt_updated_at(receipt.id)
@@ -1225,11 +1535,17 @@ impl Pipeline {
                 // that is not what its name says, a document past the limits
                 // - reads the same on every attempt, and a second attempt
                 // only re-ran it (thirty minutes of it, for a document that
-                // hit the time limit). It fails now, with its own reason.
-                // A crash, or a failure the worker says may pass, still gets
-                // its second attempt.
+                // hit the time limit). It is settled now, with its own
+                // reason. A crash, or a failure the worker says may pass,
+                // still gets its second attempt.
                 if !error.retryable && !error.crashed && code != ErrorCode::IoError {
-                    self.store.record_terminal_failure(item.id, code)?;
+                    if code.marks_unreadable() {
+                        // The document's own problem: it waits in review,
+                        // renamed so the input folder says so too.
+                        self.hold_unreadable(item.id, code)?;
+                    } else {
+                        self.store.record_terminal_failure(item.id, code)?;
+                    }
                     // Without the text-recognition files every document that
                     // needs them fails the same way, so the queue stops and
                     // says why rather than failing the backlog one by one.
@@ -1242,7 +1558,21 @@ impl Pipeline {
                 let restart_failed = error.crashed
                     && item.processing_failures == 0
                     && self.worker.restart().is_err();
-                self.store.record_processing_failure(item.id, code)?;
+                // A parser that crashed on this document on both attempts
+                // could not read it, and that is the document's problem as
+                // much as a parse failure is: it waits in review. Any other
+                // failure that may pass - the worker's own reading of the
+                // file, a placeholder whose content is still in the cloud,
+                // a busy worker - fails as before; the intake watcher hands
+                // such a document over again once its content arrives.
+                let review_when_exhausted = error.crashed.then_some(ErrorCode::ExtractionFailed);
+                if self
+                    .store
+                    .record_retryable_failure(item.id, code, review_when_exhausted)?
+                    == QueueStatus::NeedsReview
+                {
+                    self.mark_unreadable(item.id);
+                }
                 // A worker that will not come back cannot read this
                 // document on a second attempt either, so the failure is
                 // counted twice and the document fails now rather than
@@ -1374,8 +1704,10 @@ impl Pipeline {
                     ModelFailureAction::Terminal => {
                         // Asking again gets the same answer about this
                         // document, and from a hosted model bills for it
-                        // again, so it fails now and the queue moves on.
-                        self.store.record_terminal_failure(item.id, code)?;
+                        // again, so it is settled now and the queue moves
+                        // on: in review, for a person to retry, name by
+                        // hand, keep or remove.
+                        self.hold_unreadable(item.id, code)?;
                         if is_unreadable_reply(&error.code) {
                             // One reply that cannot be used is that
                             // document's problem. Several documents in a row
@@ -1405,7 +1737,23 @@ impl Pipeline {
                         self.pause_for(pause_reason_code(&error.code, code));
                     }
                     ModelFailureAction::Retry => {
-                        self.store.record_processing_failure(item.id, code)?;
+                        // A model that ran out of time on this document
+                        // twice could not finish it, and the next document
+                        // is no reason to think otherwise: it waits in
+                        // review. Every other failure here - an unhealthy
+                        // server, a rejected request, settings that could
+                        // not be read - is this computer's, and fails as it
+                        // always did once the second attempt is used.
+                        let review_when_exhausted =
+                            (error.code == "MODEL_TIMEOUT").then_some(ErrorCode::ModelFailed);
+                        if self.store.record_retryable_failure(
+                            item.id,
+                            code,
+                            review_when_exhausted,
+                        )? == QueueStatus::NeedsReview
+                        {
+                            self.mark_unreadable(item.id);
+                        }
                     }
                 }
                 self.events.queue_changed();
@@ -1467,6 +1815,8 @@ impl Pipeline {
             own_names,
             near_duplicate_of,
             approved: false,
+            manual: false,
+            copy_of: None,
         };
         let next = match record.status {
             ProposalStatus::Ready => QueueStatus::Ready,
@@ -1570,6 +1920,13 @@ impl Pipeline {
                 continue;
             };
             if !automatic && !proposal.approved {
+                continue;
+            }
+            // A duplicate staged as a copy while the queue was busy, filed
+            // whatever automatic renaming says: it was never going to be
+            // named by anyone.
+            if proposal.copy_of.is_some() {
+                let _ = self.apply_copy(&item, &proposal);
                 continue;
             }
             let _ = self.apply_if_unchanged(&item, &proposal.filename, &settings);
@@ -1748,7 +2105,9 @@ impl Pipeline {
         let Some(mut record) = self.repository.load_proposal(item.id)? else {
             return Ok(false);
         };
-        if record.approved {
+        // A copy's name, or one typed for a document that could not be
+        // read, has no facts behind it to compose a name from.
+        if record.approved || record.is_synthetic() {
             return Ok(false);
         }
         let (styled, house_rules) = style.apply(&record.analysis.proposal);
@@ -2109,6 +2468,12 @@ impl Pipeline {
         let Ok(Some(proposal)) = self.repository.load_proposal(item.id) else {
             return;
         };
+        // A copy is the original's duplicate, not a filing of its own: no
+        // description record, no shared marker, no text fingerprint, so
+        // nothing ever names another document after it.
+        if proposal.copy_of.is_some() {
+            return;
+        }
         if let Some(document) =
             filed_document(item.id, &item.source_hash, &receipt, &proposal, unix_now())
         {
@@ -2127,6 +2492,42 @@ impl Pipeline {
                     .remember_fingerprint(item.id, fingerprint, &filed_name);
             }
             self.filing.filed(&document);
+        }
+    }
+
+    /// Settles a document Intern could not read: in review under `code`,
+    /// and its file renamed `NEEDS REVIEW - ...` where it lies.
+    ///
+    /// The review comes first and on its own: it is the decision, and it is
+    /// durable the moment it is made. The rename follows under its own
+    /// journal, so a crash between the two leaves a document in review that
+    /// recovery marks (see `FileApplier::reconcile_review_renames`), never a
+    /// renamed file the queue has lost.
+    fn hold_unreadable(&self, item_id: i64, code: ErrorCode) -> PipelineResult<()> {
+        self.store.record_unreadable(item_id, code)?;
+        self.mark_unreadable(item_id);
+        Ok(())
+    }
+
+    /// Renames an unreadable document's file, under the hold every file
+    /// operation runs under. A rename that is refused - a viewer holding the
+    /// file, a folder this account may not write - is recorded as refused,
+    /// and the document still waits in review under its own name, which is
+    /// no worse than before it was renamed: so the refusal is not the
+    /// queue's to report.
+    fn mark_unreadable(&self, item_id: i64) {
+        let _files = self.hold_file_ops();
+        let _ = self.files.mark_for_review(item_id);
+    }
+
+    /// Puts an item an undo returned to ready back in review, as undone: a
+    /// copy back where it came from waits as the duplicate it is, so
+    /// "Process anyway" stays one click, and nothing files it again.
+    fn mark_undone(&self, item_id: i64) -> PipelineResult<()> {
+        if self.is_copy(item_id) {
+            self.repository.hold_undone_copy(item_id)
+        } else {
+            self.repository.mark_needs_review(item_id, UNDONE)
         }
     }
 
@@ -2158,7 +2559,7 @@ impl Pipeline {
                 .flatten()
                 .is_some_and(|item| item.status == QueueStatus::Ready)
         {
-            let _ = self.repository.mark_needs_review(item_id, UNDONE);
+            let _ = self.mark_undone(item_id);
         }
     }
 
@@ -2185,8 +2586,14 @@ impl Pipeline {
             && let Some(code) = item.error_code
         {
             // A rename that moved nothing and left the document in review,
-            // for a reason a person has to act on.
-            let _ = self.repository.hold_for_review(item_id, code.as_str());
+            // for a reason a person has to act on. A copy that could not be
+            // filed waits as the duplicate it is, as it would have with
+            // nowhere to file it.
+            if self.is_copy(item_id) {
+                let _ = self.repository.abandon_copy(item_id);
+            } else {
+                let _ = self.repository.hold_for_review(item_id, code.as_str());
+            }
             return;
         }
         if receipt.stage != OperationStage::Complete {
@@ -2202,18 +2609,23 @@ impl Pipeline {
                 // apply the same name again within the minute and undo the
                 // person's undo. Taking a decision back is a decision, so the
                 // document waits for the next one.
-                let _ = self.repository.mark_needs_review(item_id, UNDONE);
+                let copy = self.is_copy(item_id);
+                let _ = self.mark_undone(item_id);
                 let _ = self.repository.forget_fingerprint(item_id);
                 // An undo receipt reads the other way round: it moved the
                 // document from the name it was filed under back to where it
                 // started, and the vacated name is what a records keeper knows
-                // it by.
-                self.filing.unfiled(&UnfiledDocument {
-                    item_id,
-                    source_path: item.source_path.clone(),
-                    source_hash: item.source_hash.clone(),
-                    destination: receipt.source.clone(),
-                });
+                // it by. A copy was never reported filed, and its bytes are
+                // the original's: retracting it would retract the original's
+                // shared marker, which is keyed by those bytes.
+                if !copy {
+                    self.filing.unfiled(&UnfiledDocument {
+                        item_id,
+                        source_path: item.source_path.clone(),
+                        source_hash: item.source_hash.clone(),
+                        destination: receipt.source.clone(),
+                    });
+                }
                 if let Ok(settings) = self.settings.load() {
                     prune_empty_layout_folders(
                         &destination_root(&settings, &item.source_path),
@@ -2431,6 +2843,22 @@ impl Pipeline {
             self.events.queue_changed();
             return Ok(());
         }
+        if item.status == QueueStatus::NeedsReview
+            && item.error_code.is_some_and(ErrorCode::marks_unreadable)
+        {
+            // A document Intern could not read is read again from the start:
+            // the password removed, the file saved again, the model working
+            // now. It is read from wherever its file is - under its
+            // NEEDS REVIEW name, once it has one - and taken back to the
+            // queue under the file hold, so a rename of it still in flight
+            // finishes before it is read.
+            {
+                let _files = self.hold_file_ops();
+                self.store.retry_unreadable(id)?;
+            }
+            self.events.queue_changed();
+            return Ok(());
+        }
         match item.status {
             QueueStatus::Failed => {
                 self.store.manual_retry(id)?;
@@ -2552,11 +2980,34 @@ impl Pipeline {
             return Err(error);
         }
         let proposed = self.repository.load_proposal(id)?;
+        if proposed.is_none()
+            && item.status == QueueStatus::NeedsReview
+            && item.error_code.is_some_and(ErrorCode::marks_unreadable)
+        {
+            // A document Intern could not read has no proposal to approve,
+            // so the name the person typed becomes one: approved like any
+            // other, under the same date rule, and filed into the output
+            // folder the same way - which leaves its NEEDS REVIEW name
+            // behind with the input folder. Nothing is learned from it;
+            // there was no proposal for it to correct.
+            self.repository.create_manual_proposal(id)?;
+        }
+        if proposed
+            .as_ref()
+            .is_some_and(|record| record.copy_of.is_some())
+        {
+            // A person naming a duplicate - one staged as a copy, or a copy
+            // they undid - is filing it as a document of its own, under
+            // their name: it is a copy no longer, and is recorded like any
+            // other filing.
+            self.repository.release_copy(id)?;
+        }
         self.repository
             .approve_user_edit(id, item.status, &filename, description)?;
         // A preference store, not a filing step: a lesson that cannot be
-        // written must not stop the rename that was just approved.
-        if let Some(record) = proposed.as_ref() {
+        // written must not stop the rename that was just approved. A name
+        // with no reading behind it corrects nothing.
+        if let Some(record) = proposed.as_ref().filter(|record| !record.is_synthetic()) {
             let _ = self.learn_from_edit(record, source_extension, &filename);
         }
         let ready = self.store.get(id)?.ok_or_else(|| {
@@ -2623,12 +3074,31 @@ impl Pipeline {
         ))
     }
 
+    /// Completes a document under the name it has, without filing it.
+    ///
+    /// A document Intern renamed `NEEDS REVIEW - ...` because it could not
+    /// read it gets its own name back first - the name the mark took away,
+    /// or the next ` (2)` when another file has taken it since - in the same
+    /// journaled step that completes it, so a crash can never leave a kept
+    /// document under the review prefix, or one in review without it. A
+    /// rename that is refused (the file is open somewhere) completes
+    /// nothing, and says why.
     pub fn keep_original(&self, id: i64) -> PipelineResult<()> {
         let item = self.find_item(id)?;
         if let Some(error) = unsettled_files(&item, self.unsettled_receipt(&item)?.as_ref()) {
             return Err(error);
         }
-        self.store.complete_keep_original(id, item.status)?;
+        if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+            self.store.complete_keep_original(id, item.status)?;
+            return Ok(());
+        }
+        let restored = {
+            let _files = self.hold_file_ops();
+            self.files.restore_from_review(id)?
+        };
+        if !restored {
+            self.store.complete_keep_original(id, item.status)?;
+        }
         self.events.queue_changed();
         Ok(())
     }
@@ -2767,6 +3237,15 @@ impl Pipeline {
     }
 
     pub fn recover(&self) -> PipelineResult<()> {
+        {
+            // Renames in place for documents that could not be read: one a
+            // crash left between the rename and its record, and one that
+            // never happened at all. Under the file hold, like every rename.
+            // One that cannot be settled now stays journaled for the next
+            // pass, and is no reason to leave the rest of recovery undone.
+            let _files = self.hold_file_ops();
+            let _ = self.files.reconcile_review_renames();
+        }
         let interrupted = self
             .store
             .list()?
@@ -3254,6 +3733,122 @@ impl PipelineRepository {
         Ok(())
     }
 
+    /// Stages an exact duplicate to be filed as a copy: its copy record, the
+    /// row ready, and the mark that keeps every later duplicate from being
+    /// named after it - in one transaction, from queued, so a document the
+    /// scheduler has claimed in the meantime is analyzed as usual instead.
+    fn stage_copy(&self, id: i64, record: &ProposalRecord) -> PipelineResult<()> {
+        let json = serde_json::to_string(record)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(database_error)?;
+        let changed = transaction
+            .execute(
+                "UPDATE queue_items SET status = 'ready', error_code = NULL, copy_filing = 1,
+                     updated_at = unixepoch()
+                 WHERE id = ?1 AND status = 'queued'",
+                params![id],
+            )
+            .map_err(database_error)?;
+        if changed != 1 {
+            return Err(PipelineError::new(
+                "STATE_CONFLICT",
+                "the duplicate was claimed before it could be filed as a copy",
+            ));
+        }
+        transaction
+            .execute(
+                "INSERT INTO proposals(queue_item_id, proposal_json, created_at) VALUES (?1, ?2, unixepoch())
+                 ON CONFLICT(queue_item_id) DO UPDATE SET proposal_json = excluded.proposal_json, created_at = excluded.created_at",
+                params![id, json],
+            )
+            .map_err(database_error)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// Gives up filing a staged copy: the document waits in review as a
+    /// duplicate, untouched and with no record, exactly as a duplicate with
+    /// nowhere to file it does - and "Process anyway" is one click.
+    fn abandon_copy(&self, id: i64) -> PipelineResult<()> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(database_error)?;
+        let changed = transaction
+            .execute(
+                "UPDATE queue_items SET status = 'needs_review', error_code = 'DUPLICATE',
+                     copy_filing = 0, updated_at = unixepoch()
+                 WHERE id = ?1 AND copy_filing = 1 AND status IN ('ready', 'needs_review')",
+                params![id],
+            )
+            .map_err(database_error)?;
+        if changed != 1 {
+            return Err(PipelineError::new(
+                "STATE_CONFLICT",
+                "the copy changed before it could be returned to review",
+            ));
+        }
+        transaction
+            .execute(
+                "DELETE FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+            )
+            .map_err(database_error)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// Makes a copy's record an ordinary hand-named one, and the row no copy:
+    /// for a duplicate a person names and files as a document of its own.
+    fn release_copy(&self, id: i64) -> PipelineResult<()> {
+        let mut record = self
+            .load_proposal(id)?
+            .ok_or_else(|| PipelineError::new("INVALID_DATA", "proposal is missing"))?;
+        record.copy_of = None;
+        record.manual = true;
+        record.reasons.retain(|reason| reason != EXACT_COPY);
+        let json = serde_json::to_string(&record)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction().map_err(database_error)?;
+        transaction
+            .execute(
+                "UPDATE queue_items SET copy_filing = 0, updated_at = unixepoch() WHERE id = ?1",
+                params![id],
+            )
+            .map_err(database_error)?;
+        transaction
+            .execute(
+                "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+                params![json, id],
+            )
+            .map_err(database_error)?;
+        transaction.commit().map_err(database_error)
+    }
+
+    /// Puts a copy an undo returned to ready in review, as the undone
+    /// duplicate it is: flagged DUPLICATE so "Process anyway" applies, and
+    /// with its record no longer approved, so nothing files it again.
+    fn hold_undone_copy(&self, id: i64) -> PipelineResult<()> {
+        self.put_in_review_as(id, Some(UNDONE), QueueStatus::Ready, Some("DUPLICATE"))
+    }
+
+    /// Gives a document Intern could not read the empty record a typed name
+    /// is approved into. Nothing is replaced: a record already there - a
+    /// name typed before - is the one approved.
+    fn create_manual_proposal(&self, id: i64) -> PipelineResult<()> {
+        let mut record = ProposalRecord::synthetic(String::new(), String::new());
+        record.manual = true;
+        let json = serde_json::to_string(&record)
+            .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
+        self.lock()?
+            .execute(
+                "INSERT INTO proposals(queue_item_id, proposal_json, created_at)
+                 VALUES (?1, ?2, unixepoch())
+                 ON CONFLICT(queue_item_id) DO NOTHING",
+                params![id, json],
+            )
+            .map_err(database_error)?;
+        Ok(())
+    }
+
     /// Records the proposal as waiting for a person - with `reason` among its
     /// reasons, when there is one - and the row as in review, provided the
     /// row is still `row_status`.
@@ -3262,6 +3857,18 @@ impl PipelineRepository {
         id: i64,
         reason: Option<&str>,
         row_status: QueueStatus,
+    ) -> PipelineResult<()> {
+        self.put_in_review_as(id, reason, row_status, None)
+    }
+
+    /// [`Self::put_in_review`], with the row's code set to `error_code` when
+    /// one is given and left as it is otherwise.
+    fn put_in_review_as(
+        &self,
+        id: i64,
+        reason: Option<&str>,
+        row_status: QueueStatus,
+        error_code: Option<&str>,
     ) -> PipelineResult<()> {
         let mut record = self
             .load_proposal(id)?
@@ -3279,8 +3886,10 @@ impl PipelineRepository {
         let mut connection = self.lock()?;
         let transaction = connection.transaction().map_err(database_error)?;
         let changed = transaction.execute(
-            "UPDATE queue_items SET status = 'needs_review', updated_at = unixepoch() WHERE id = ?1 AND status = ?2",
-            params![id, queue_status_text(row_status)],
+            "UPDATE queue_items SET status = 'needs_review', error_code = COALESCE(?3, error_code),
+                 updated_at = unixepoch()
+             WHERE id = ?1 AND status = ?2",
+            params![id, queue_status_text(row_status), error_code],
         ).map_err(database_error)?;
         if changed != 1 {
             return Err(PipelineError::new(
@@ -3318,7 +3927,8 @@ impl PipelineRepository {
     fn retry_canceled(&self, id: i64) -> PipelineResult<()> {
         let changed = self.lock()?.execute(
             "UPDATE queue_items SET status = 'queued', processing_failures = 0, error_code = NULL,
-             owner_session = NULL, lease_expires_at = NULL, updated_at = unixepoch()
+             owner_session = NULL, lease_expires_at = NULL, copy_filing = 0,
+             updated_at = unixepoch()
              WHERE id = ?1 AND status = 'canceled'",
             params![id],
         ).map_err(database_error)?;
@@ -3751,6 +4361,35 @@ fn names_beside(folder: &Path, source_path: &Path) -> Vec<String> {
         names.retain(|name| name_key(name) != own);
     }
     names
+}
+
+/// The document an exact duplicate repeats, as far as the queue knows it.
+struct DuplicateOriginal {
+    /// The name it is filed under, or kept under.
+    name: String,
+    /// The folder it is filed in, when this machine filed it.
+    folder: Option<PathBuf>,
+    /// Where it is, when this machine knows: never moved as a copy of itself.
+    filed_path: Option<PathBuf>,
+}
+
+/// Whether `path` is `root` or inside it, as written or once both resolve.
+fn is_within(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+        || matches!(
+            (fs::canonicalize(path), fs::canonicalize(root)),
+            (Ok(path), Ok(root)) if path.starts_with(&root)
+        )
+}
+
+/// Whether two paths name the same file, as the queue keys paths or once
+/// both resolve.
+fn same_file_path(left: &Path, right: &Path) -> bool {
+    source_path_key(left) == source_path_key(right)
+        || matches!(
+            (fs::canonicalize(left), fs::canonicalize(right)),
+            (Ok(left), Ok(right)) if left == right
+        )
 }
 
 /// Whether filing at `destination` would leave the document where it is,

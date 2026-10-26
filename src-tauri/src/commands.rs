@@ -2522,6 +2522,11 @@ pub struct SkippedDocumentDto {
 /// never a document, and the reason for that differs from "not a supported
 /// format" in what a person should do about it - nothing.
 const TEMPORARY_FILE: &str = "TEMPORARY_FILE";
+
+/// A file named `NEEDS REVIEW - ...`: one Intern renamed because it could
+/// not read it, and which waits for a person in the queue rather than being
+/// taken in again as a new document.
+const NEEDS_REVIEW_FILE: &str = "NEEDS_REVIEW_FILE";
 /// A document with no bytes in it, often a download or a scan that has not
 /// finished.
 const EMPTY_FILE: &str = "EMPTY_FILE";
@@ -2565,6 +2570,9 @@ fn skip_code(input: &Path, error: PipelineError) -> String {
         .unwrap_or_default();
     if name.starts_with("~$") || name.starts_with('.') {
         return TEMPORARY_FILE.into();
+    }
+    if intern_core::is_needs_review_name(name) {
+        return NEEDS_REVIEW_FILE.into();
     }
     let supported = input
         .extension()
@@ -4090,7 +4098,11 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .to_owned(),
         status: item.status,
         proposed_filename: proposal.map(|record| record.filename.clone()),
-        confidence: proposal.map(|record| record.analysis.proposal.confidence),
+        // A name typed by hand, or a copy's, has no reading behind it to be
+        // confident in.
+        confidence: proposal
+            .filter(|record| !record.is_synthetic())
+            .map(|record| record.analysis.proposal.confidence),
         description: proposal.map(|record| record.description.clone()),
         evidence,
         reason: proposal
@@ -4920,6 +4932,31 @@ mod add_report_tests {
                 (".DS_Store".to_owned(), "TEMPORARY_FILE".to_owned()),
                 ("gone.pdf".to_owned(), "FILE_MISSING".to_owned()),
             ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A file Intern renamed because it could not read it waits in the
+    /// queue for a person; added again, it is named as that rather than as
+    /// an unsupported format. Inside a folder it is passed over silently.
+    #[test]
+    fn a_needs_review_file_is_left_out_as_one_already_waiting_for_review() {
+        let root = folder("needs-review");
+        let marked = write(&root, "NEEDS REVIEW - scan.pdf", b"%PDF-1.7 unreadable");
+        let scans = root.join("Scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        write(&scans, "Needs Review - other.pdf", b"%PDF-1.7 unreadable");
+        let scan = write(&scans, "scan.pdf", b"%PDF-1.7 a scan");
+
+        let (files, rejected) = partition_inputs(&[marked, scans]);
+
+        assert_eq!(files, vec![scan.canonicalize().unwrap()]);
+        assert_eq!(
+            rejected,
+            vec![(
+                "NEEDS REVIEW - scan.pdf".to_owned(),
+                "NEEDS_REVIEW_FILE".to_owned()
+            )]
         );
         std::fs::remove_dir_all(root).unwrap();
     }
