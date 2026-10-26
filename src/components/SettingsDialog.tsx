@@ -1,13 +1,14 @@
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
+import { SharePointDescriptions } from '../features/settings/SharePointDescriptions';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
+import type { AppSettings, CloudLocation, CloudRoot, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
-import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
+import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
 import { Icon } from './Icon';
 
@@ -97,19 +98,6 @@ function rootLabel(root: CloudRoot): string {
   if (root.provider === 'sharepoint') return `SharePoint – ${root.displayName}`;
   if (root.provider === 'network_share') return `Network share – ${root.displayName}`;
   return root.displayName;
-}
-
-function formatRecordedTime(at: number | null): string {
-  return at === null ? 'never' : new Date(at * 1000).toLocaleString();
-}
-
-function describeDescriptionsError(error: string): string {
-  // The backend keeps the code and the operating system's own words; the
-  // first is for the guide's troubleshooting table, the second says what
-  // actually happened (a folder that is read-only, a share that went away).
-  return error.startsWith('DESCRIPTION_RETRACT_FAILED')
-    ? `The record for an undone rename could not be removed. ${error}`
-    : `The last description record could not be written. ${error}`;
 }
 
 /**
@@ -243,10 +231,6 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [intakeError, setIntakeError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [roots, setRoots] = useState<CloudRoot[]>([]);
-  const [descriptions, setDescriptions] = useState<DescriptionsStatus>();
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillMessage, setBackfillMessage] = useState('');
-  const [backfillError, setBackfillError] = useState('');
   const [helpError, setHelpError] = useState('');
   const [hostedStatus, setHostedStatus] = useState<HostedModelStatus>();
   // The key is typed here and sent to the credential store on Save or Test;
@@ -297,17 +281,12 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   }, [bridge]);
   useEffect(() => {
     let active = true;
-    // Both are conveniences: a bridge without them (an older desktop build,
-    // a test double) leaves the list empty and the status line quiet.
+    // A convenience: a bridge without it (an older desktop build, a test
+    // double) leaves the list empty.
     void Promise.resolve().then(() => bridge.cloudRoots())
       .then((found) => { if (active) setRoots(found); })
       .catch(() => { if (active) setRoots([]); });
-    void Promise.resolve().then(() => bridge.descriptionsStatus())
-      .then((current) => { if (active) setDescriptions(current); })
-      .catch(() => { /* The section still renders without a status. */ });
-    const source = bridge as DesktopBridge & Partial<DescriptionsEventSource>;
-    const stop = source.subscribeDescriptions?.((current) => { if (active) setDescriptions(current); });
-    return () => { active = false; stop?.(); };
+    return () => { active = false; };
   }, [bridge]);
   useEffect(() => {
     let active = true;
@@ -401,23 +380,6 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       setHostedStatus(await bridge.hostedModelStatus());
     } catch (error) {
       setTestError(saveFailure(error));
-    }
-  };
-  const runBackfill = async () => {
-    if (backfilling) return;
-    setBackfilling(true);
-    setBackfillError('');
-    setBackfillMessage('');
-    try {
-      const result = await bridge.descriptionsBackfill();
-      setBackfillMessage(result.failed
-        ? `${result.written} ${result.written === 1 ? 'record' : 'records'} written; ${result.failed} could not be written.`
-        : `${result.written} ${result.written === 1 ? 'record' : 'records'} written.`);
-      setDescriptions(await bridge.descriptionsStatus());
-    } catch (error) {
-      setBackfillError(saveFailure(error));
-    } finally {
-      setBackfilling(false);
     }
   };
   const runScanNow = async () => {
@@ -656,34 +618,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           <button type="button" disabled={scanning} onClick={() => void runScanNow()}>{scanning ? 'Scanning…' : 'Scan now'}</button>
         </div>}
       </section></>}
-      <section className="settings-group">
-        <h3>Descriptions for SharePoint</h3>
-        {/*
-          The sentence Intern writes about a document used to live only in the
-          queue. A SharePoint library has a column for it; the sync client that
-          carries the file can carry a small record beside it; and a flow (the
-          guide has the recipe) copies the sentence into the column. Intern
-          itself still makes no network request for this.
-        */}
-        <p className="section-lead">Intern can leave a small record beside each document it files — the one-sentence description and the date, type, and parties behind the name — so a SharePoint library column can be filled from it. Records go in <code>.intern\descriptions</code> under the destination folder; nothing is sent anywhere by Intern.</p>
-        <label className="check-label"><input type="checkbox" checked={Boolean(next.recordDescriptions)} onChange={(event) => setNext({ ...next, recordDescriptions: event.target.checked })} />Write a description record for each filed document</label>
-        <p className="check-hint">Needs a destination folder. The guide's “Descriptions in a SharePoint column” section shows the Power Automate flow that fills the column from these records.</p>
-        {descriptions && <div className="descriptions-status">
-          <p role="status" aria-label="Description records status" aria-live="polite">{descriptions.enabled
-            ? `On · ${descriptions.recordedThisSession} ${descriptions.recordedThisSession === 1 ? 'record' : 'records'} written since Intern started · Last: ${formatRecordedTime(descriptions.lastRecordedAt)}`
-            : 'Off · no records are being written'}{descriptions.folder ? ` · ${descriptions.folder}` : ''}</p>
-          {descriptions.lastError && <p className="form-error" role="alert">{describeDescriptionsError(descriptions.lastError)}</p>}
-          {backfillMessage && <p role="status" aria-label="Backfill status" aria-live="polite">{backfillMessage}</p>}
-          {backfillError && <p className="form-error" role="alert">{backfillError}</p>}
-          {/*
-            Only once the saved settings have records on: the backend refuses
-            otherwise, and an enabled button that always fails is worse than a
-            hint saying what to do first.
-          */}
-          <button type="button" disabled={backfilling || !settings.recordDescriptions} onClick={() => void runBackfill()}>{backfilling ? 'Writing…' : 'Write records for documents already filed'}</button>
-          {!settings.recordDescriptions && <p className="check-hint">Save with records on, then write records for what was filed before.</p>}
-        </div>}
-      </section>
+      <SharePointDescriptions bridge={bridge} savedEnabled={Boolean(settings.recordDescriptions)} draftEnabled={Boolean(next.recordDescriptions)} onDraftEnabledChange={(enabled) => setNext((current) => ({ ...current, recordDescriptions: enabled }))} />
       <section className="settings-group">
         <h3>Updates</h3>
         {/*

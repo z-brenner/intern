@@ -47,19 +47,27 @@ export interface SelectionBoundary {
  */
 export const GUIDE_URL = 'https://z-brenner.github.io/intern/guide.html';
 
-/** The fixed recovery destinations SharePoint setup can send a person to. */
-export type SupportLinkTarget = 'sharepoint-site' | 'onedrive-download';
+/**
+ * The fixed destinations Intern can send a person to: SharePoint setup's
+ * recovery links, and the guide's section with the Power Automate flow that
+ * fills a library's Description column.
+ */
+export type SupportLinkTarget = 'sharepoint-site' | 'onedrive-download' | 'description-flow';
 
 /**
  * Where each support link goes. Like `GUIDE_URL`, these are the exact
  * addresses `src-tauri/capabilities/default.json` admits for the opener, so
  * the webview can open these and nothing else. The OneDrive address is
  * Microsoft's own download page; without a locale it redirects to the
- * visitor's language.
+ * visitor's language. The description flow is a section of the published
+ * guide, where the package is downloaded beside the steps that explain it, so
+ * the capability's existing guide-site entry already covers it - and opening
+ * it is the person's browser fetching a page, not Intern making a request.
  */
 export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
   'sharepoint-site': 'https://teamcontoso.sharepoint.com/sites/InternTestSite',
   'onedrive-download': 'https://www.microsoft.com/microsoft-365/onedrive/download',
+  'description-flow': `${GUIDE_URL}#sharepoint-descriptions`,
 };
 
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {

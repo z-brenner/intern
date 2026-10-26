@@ -114,10 +114,12 @@ describe('createInMemoryBridge support links', () => {
 
     await bridge.openSupportLink('sharepoint-site');
     await bridge.openSupportLink('onedrive-download');
+    await bridge.openSupportLink('description-flow');
 
     expect(open.mock.calls).toEqual([
       [SUPPORT_LINKS['sharepoint-site'], '_blank', 'noopener,noreferrer'],
       [SUPPORT_LINKS['onedrive-download'], '_blank', 'noopener,noreferrer'],
+      [SUPPORT_LINKS['description-flow'], '_blank', 'noopener,noreferrer'],
     ]);
     open.mockRestore();
   });

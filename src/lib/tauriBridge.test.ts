@@ -568,14 +568,17 @@ describe('TauriBridge', () => {
 
     await bridge.openSupportLink('sharepoint-site');
     await bridge.openSupportLink('onedrive-download');
+    await bridge.openSupportLink('description-flow');
 
     expect(fake.calls).toEqual([
       { command: 'plugin:opener|open_url', args: { url: 'https://teamcontoso.sharepoint.com/sites/InternTestSite' } },
       { command: 'plugin:opener|open_url', args: { url: 'https://www.microsoft.com/microsoft-365/onedrive/download' } },
+      { command: 'plugin:opener|open_url', args: { url: 'https://z-brenner.github.io/intern/guide.html#sharepoint-descriptions' } },
     ]);
     expect(SUPPORT_LINKS).toEqual({
       'sharepoint-site': 'https://teamcontoso.sharepoint.com/sites/InternTestSite',
       'onedrive-download': 'https://www.microsoft.com/microsoft-365/onedrive/download',
+      'description-flow': 'https://z-brenner.github.io/intern/guide.html#sharepoint-descriptions',
     });
   });
 
