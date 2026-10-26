@@ -135,16 +135,37 @@ export function tableBlock(rows: readonly QueueItem[]): CopiedBlock {
   return { columns: [...COPYABLE_COLUMNS], rows: rows.map((item) => COPYABLE_COLUMNS.map((column) => cellText(item, column.key))), header: true };
 }
 
+/** The one cell copied with nothing selected: the active cell, as a spreadsheet copies. */
+export function cellBlock(cell: CellRef, rows: readonly QueueItem[]): CopiedBlock | undefined {
+  if (!COLUMNS[columnIndex(cell.column)]?.copyable) return undefined;
+  return selectedBlock({ anchor: cell, focus: cell }, rows);
+}
+
+/**
+ * Characters a spreadsheet reads, at the start of a cell, as the start of a
+ * formula (OWASP's CSV injection list). Filenames come from whoever drops the
+ * files, and descriptions and proposed names are model output that a
+ * document's own text can steer, so none of them may paste as a formula.
+ */
+const FORMULA_START = /^[=+\-@\t\r]/;
+
 /**
  * Tab-separated text, as Excel itself puts on the clipboard: a field holding a
  * tab, a line break or a double quote is wrapped in double quotes, with each
  * quote inside doubled, so it lands in one cell instead of spilling into the
  * next column or row. Rows end in CRLF, Excel's own line ending.
+ *
+ * A text field that would start a formula gets a leading apostrophe, which
+ * Excel and Google Sheets both take as "this is text" and do not show. Plain
+ * text is what a paste without formatting uses (Keep Text Only,
+ * Ctrl+Shift+V), and there the HTML's own protections below do not apply.
+ * Confidence is a percentage Intern writes itself and is left as it is.
  */
 export function toTsv(block: CopiedBlock): string {
-  const field = (value: string) => /[\t\r\n"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const quoted = (value: string) => /[\t\r\n"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const field = (value: string, column: GridColumn | undefined) => quoted(column?.key !== 'confidence' && FORMULA_START.test(value) ? `'${value}` : value);
   const lines = block.header ? [block.columns.map((column) => column.label), ...block.rows] : block.rows;
-  return lines.map((line) => line.map(field).join('\t')).join('\r\n');
+  return lines.map((line) => line.map((value, index) => field(value, block.columns[index])).join('\t')).join('\r\n');
 }
 
 const escapeHtml = (value: string) => value
@@ -155,22 +176,33 @@ const escapeHtml = (value: string) => value
   .replace(/'/g, '&#39;');
 
 /**
+ * Spaces HTML would collapse: a run of two or more, and any at the start or
+ * end of a line. Written as Excel writes them, non-breaking spaces in a
+ * `mso-spacerun` span, which Excel pastes back as ordinary spaces - so
+ * "Lease  2024.pdf" keeps both of its spaces.
+ */
+const keepSpaces = (line: string) => line.replace(/^ +| {2,}| +$/g, (run) => `<span style="mso-spacerun:yes">${'&nbsp;'.repeat(run.length)}</span>`);
+
+/**
  * The same block as an HTML table, which Excel and Google Sheets prefer over
  * the plain text when both are on the clipboard.
  *
- * Two Excel-specific hints ride along, and every other program ignores them.
- * Text columns are marked as text (`mso-number-format:'\@'`): Excel would
- * otherwise read a description starting with "=" as a formula and run it, and
- * strip a filename such as "0012" down to the number 12. Confidence is left
- * alone, so "87%" pastes as a percentage a person can sort. A line break
- * inside a cell is a <br> Excel is told to keep in the same cell; a bare one
- * starts a new row.
+ * Each spreadsheet is told in its own dialect that a text cell is text, and
+ * every other program ignores both hints: Excel reads
+ * `mso-number-format:'\@'`, and Google Sheets reads `data-sheets-value` (type
+ * 2, a string, holding the exact value). Without them a description starting
+ * with "=" would paste as a formula and run, and a filename such as "0012"
+ * would become the number 12. Confidence is left alone, so "87%" pastes as a
+ * percentage a person can sort. A line break inside a cell is a <br> Excel is
+ * told to keep in the same cell; a bare one starts a new row.
  */
 export function toHtml(block: CopiedBlock): string {
-  const style = (column: GridColumn) => column.key === 'confidence' ? '' : ' style="mso-number-format:\'\\@\'"';
-  const content = (value: string) => escapeHtml(value).replace(/\r\n|\r|\n/g, '<br style="mso-data-placement:same-cell">');
+  const asText = (column: GridColumn, value: string) => column.key === 'confidence'
+    ? ''
+    : ` style="mso-number-format:'\\@'" data-sheets-value="${escapeHtml(JSON.stringify({ 1: 2, 2: value }))}"`;
+  const content = (value: string) => value.split(/\r\n|\r|\n/).map((line) => keepSpaces(escapeHtml(line))).join('<br style="mso-data-placement:same-cell">');
   const head = block.header ? `<thead><tr>${block.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}</tr></thead>` : '';
-  const body = block.rows.map((row) => `<tr>${row.map((value, index) => `<td${style(block.columns[index])}>${content(value)}</td>`).join('')}</tr>`).join('');
+  const body = block.rows.map((row) => `<tr>${row.map((value, index) => `<td${asText(block.columns[index], value)}>${content(value)}</td>`).join('')}</tr>`).join('');
   return `<meta charset="utf-8"><table>${head}<tbody>${body}</tbody></table>`;
 }
 

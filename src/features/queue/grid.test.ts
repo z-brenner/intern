@@ -92,30 +92,68 @@ describe('queue grid', () => {
     };
     expect(toTsv(block)).toBe([
       '"tab\there"\t"line one\nline two"\t"She said ""hello"""\tCrème brûlée — 東京 🗂️',
-      '""""\t"\r\n"\tplain\t',
+      // A value starting with a line break would start a formula too.
+      '""""\t"\'\r\n"\tplain\t',
     ].join('\r\n'));
   });
 
-  it('writes an HTML table that pastes into separate cells', () => {
+  // Filenames come from whoever drops the files, and descriptions are model
+  // output a document can steer. A paste without formatting (Keep Text Only,
+  // Ctrl+Shift+V) reads the plain text, where "=..." used to run as a formula.
+  it('never lets a text cell paste as a formula from the plain text', () => {
+    const block: CopiedBlock = {
+      columns: tableBlock([]).columns,
+      rows: [
+        ['=HYPERLINK("http://x","click")', '+1 Lease.pdf', '-2 Notes', '@SUM(A1)'],
+        ['\tTabbed.pdf', '\rReturned.pdf', 'Plain = fine.pdf', '87%'],
+      ],
+      header: false,
+    };
+    expect(toTsv(block).split('\r\n')).toEqual([
+      // Confidence is Intern's own percentage, never a formula, and left alone.
+      `"'=HYPERLINK(""http://x"",""click"")"\t'+1 Lease.pdf\t'-2 Notes\t@SUM(A1)`,
+      `"'\tTabbed.pdf"\t"'\rReturned.pdf"\tPlain = fine.pdf\t87%`,
+    ]);
+    // The header row of a whole-table copy is Intern's own words.
+    expect(toTsv({ ...block, rows: [], header: true })).toBe('Original filename\tProposed filename\tDescription\tConfidence');
+  });
+
+  it('writes an HTML table that pastes into separate cells, as text in both spreadsheets', () => {
     const block: CopiedBlock = {
       columns: tableBlock([]).columns,
       rows: [['<b>&"\'', 'first\nsecond', '=HYPERLINK("x")', '87%']],
       header: true,
     };
     const html = toHtml(block);
+    const asText = (value: string) => ` style="mso-number-format:'\\@'" data-sheets-value="${value}"`;
     expect(html).toBe(
       '<meta charset="utf-8"><table>'
       + '<thead><tr><th>Original filename</th><th>Proposed filename</th><th>Description</th><th>Confidence</th></tr></thead>'
       + '<tbody><tr>'
-      + '<td style="mso-number-format:\'\\@\'">&lt;b&gt;&amp;&quot;&#39;</td>'
-      + '<td style="mso-number-format:\'\\@\'">first<br style="mso-data-placement:same-cell">second</td>'
-      + '<td style="mso-number-format:\'\\@\'">=HYPERLINK(&quot;x&quot;)</td>'
+      + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;&lt;b&gt;&amp;\\&quot;&#39;&quot;}')}>&lt;b&gt;&amp;&quot;&#39;</td>`
+      + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;first\\nsecond&quot;}')}>first<br style="mso-data-placement:same-cell">second</td>`
+      + `<td${asText('{&quot;1&quot;:2,&quot;2&quot;:&quot;=HYPERLINK(\\&quot;x\\&quot;)&quot;}')}>=HYPERLINK(&quot;x&quot;)</td>`
       + '<td>87%</td>'
       + '</tr></tbody></table>',
     );
-    // Parsed back, it is the same cells.
+    // Parsed back, it is the same cells, and Google Sheets' value is the exact string.
     const parsed = new DOMParser().parseFromString(html, 'text/html');
-    expect([...parsed.querySelectorAll('tbody td')].map((cell) => cell.textContent)).toEqual(['<b>&"\'', 'firstsecond', '=HYPERLINK("x")', '87%']);
+    const cells = [...parsed.querySelectorAll('tbody td')];
+    expect(cells.map((cell) => cell.textContent)).toEqual(['<b>&"\'', 'firstsecond', '=HYPERLINK("x")', '87%']);
+    expect(cells.slice(0, 3).map((cell) => JSON.parse(cell.getAttribute('data-sheets-value')!))).toEqual([
+      { 1: 2, 2: '<b>&"\'' }, { 1: 2, 2: 'first\nsecond' }, { 1: 2, 2: '=HYPERLINK("x")' },
+    ]);
+    expect(cells[3].hasAttribute('data-sheets-value')).toBe(false);
     expect(toHtml({ ...block, rows: [['東京 🗂️', '', '', '']], header: false })).toContain('東京 🗂️');
+  });
+
+  // HTML collapses a run of spaces, and drops them at either end of a line.
+  it('keeps every space of a name in the HTML', () => {
+    const html = toHtml({ columns: tableBlock([]).columns.slice(0, 1), rows: [['  Lease  2024.pdf '], ['a\n   b']], header: false });
+    const spaces = (count: number) => `<span style="mso-spacerun:yes">${'&nbsp;'.repeat(count)}</span>`;
+    expect(html).toContain(`>${spaces(2)}Lease${spaces(2)}2024.pdf${spaces(1)}</td>`);
+    expect(html).toContain(`>a<br style="mso-data-placement:same-cell">${spaces(3)}b</td>`);
+    // A single space between words is left as it is.
+    expect(toHtml({ columns: tableBlock([]).columns.slice(0, 1), rows: [['Lease 2024.pdf']], header: false })).toContain('>Lease 2024.pdf</td>');
   });
 });
