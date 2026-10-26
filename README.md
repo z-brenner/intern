@@ -112,14 +112,30 @@ built into the installer. If you already have the file, **Choose existing model
 files** points Intern at it and skips the download. Nothing else needs
 installing — PDF text extraction, OCR, and inference all ship inside the app.
 
-Then drag documents or a folder onto the window — PDFs, Word documents
+Then Intern asks for **two folders**, and it cannot be used until both are
+chosen — there is no skipping it:
+
+- **Input folder** — put files here that you want Intern to process.
+- **Output folder** — processed files end up here, renamed. It has to be
+  outside the input folder.
+
+Setup lists the OneDrive and SharePoint folders already on the computer and
+can make an *Output* folder beside the input folder; both folders can be
+changed later at the top of Settings. An install from an earlier release that
+has no input folder is asked on its next launch, with its output folder
+offered again.
+
+Put documents in the input folder, or drag documents or a folder onto the
+window — Intern **copies** what you drop into the input folder and leaves the
+original where it was — PDFs, Word documents
 (`.docx`, `.doc`, `.rtf`, `.odt`), Excel workbooks and exports (`.xlsx`,
 `.xls`, `.ods`, `.csv`), PowerPoint decks (`.pptx`, `.ppt`, `.odp`), `.eml` and
 Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
 Intern can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
-until you approve it, either one item at a time or with **Apply all ready**,
-and a rename can be undone. A document whose content Intern has already filed
+until you approve it, either one item at a time or with **Apply all ready**;
+approving moves the document out of the input folder into the output folder
+under its new name, and a rename can be undone. A document whose content Intern has already filed
 is flagged as a duplicate of the filed name instead of being renamed into a
 second copy, and the **History** view in Completed lists every rename and undo
 Intern has ever applied, exportable as CSV. A long queue has a filter box
@@ -136,7 +152,7 @@ states is one click away, and the file's own last-modified date is the last,
 labelled resort. The date a reviewer gives a name is the date the document
 is filed under: the year folder and the description record follow it.
 
-Filed documents can be **arranged into subfolders** of the destination —
+Filed documents can be **arranged into subfolders** of the output folder —
 by year, by year and document type, by type, or by first party — with
 **Arrange filed documents** in Settings. Folders are created as documents
 arrive and removed again when an undo empties them, and a document missing
@@ -144,7 +160,7 @@ the fact a layout keys on goes into `Undated` or `Unsorted` rather than the
 root, so what still needs a hand stays visible.
 
 Intern can also **run in the background**: with the setting on, closing the
-window keeps Intern in the system tray — watched folders keep working — and
+window keeps Intern in the system tray — the input folder is still processed — and
 **Start Intern when you sign in** makes it a quiet always-on service. Both are
 off by default. The tray icon's tooltip says how many documents need review
 or are ready to rename, so a glance answers whether the window is worth
@@ -152,50 +168,67 @@ opening.
 
 The installer also puts Intern in Explorer's **Send to** menu: select
 documents — attachments saved from Outlook, a folder of scans — right-click,
-and choose **Send to > Intern**. They join the queue whether or not Intern is
-already open. An add is never refused as a batch: a file Intern cannot read
-(a `.zip`, an empty file, an Office lock file, a scan another program still
-has open) is left out and named in the window, with the reason, and everything
-else is queued. Installing an update restarts Intern without sending those
-documents again.
+and choose **Send to > Intern**. Intern copies them into the input folder and
+queues them, whether or not it is already open. Every way of adding — Add
+files, Add folder, a drop, Send to — copies into the input folder: a folder is
+flattened, a name already taken gets " (2)", " (3)", a file already in the
+input folder is not copied again, and the originals are never changed. Each
+copy is written under a hidden temporary name, checked against the original,
+and only then given its real name, so the folder never holds half a copy; it
+joins the queue at once rather than after the watcher's settle time. An add is
+never refused as a batch: a file Intern cannot read (a `.zip`, an empty file,
+an Office lock file, a scan another program still has open) is left out and
+named in the window, with the reason, and everything else is copied and
+queued. With no input folder set up, an add is refused and points to
+Settings; nothing is ever processed where it sits. Installing an update
+restarts Intern without sending those documents again.
 
 If Intern cannot start, a dialog says why and names its data folder
 (`%LOCALAPPDATA%\com.intern.app`), and the same is written to
 `logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:
 where and when it happened, never what the document said.
 
-## Watched intake folders, OneDrive, and SharePoint
+## Input and output folders, OneDrive, and SharePoint
 
-Instead of dragging documents in, Settings can point Intern at an **intake
-folder** to watch: documents that appear in it are analyzed and, once approved
-(or automatically, if you enable high-confidence renames), moved to the
-destination folder under their new name.
+Intern has one way in: a document is processed because it is in the **input
+folder**, which Intern always watches, and it is filed into the **output
+folder**. Documents that appear in the input folder — put there in Explorer,
+synced down by OneDrive, or copied in by a drop — are analyzed and, once
+approved (or automatically, if you enable high-confidence renames), moved to
+the output folder under their new name.
 
-### Your own folder: three clicks
+### Choosing the folders
 
-The first time Intern opens without an administrator's deployment, it offers
-to watch a folder for you. Nothing asks for a tenant, a site, or an account.
+Without an administrator's deployment, Intern's first launch asks for both
+folders. Nothing asks for a tenant, a site, or an account.
 
-1. **Choose a folder.** Intern lists the OneDrive and SharePoint folders
-   already on this computer, such as *Legal - Documents (Contoso SharePoint)*
-   or *OneDrive – Contoso*. Use one, or browse to a folder inside it. Folders
-   synced with **Sync**, folders added with **Add shortcut to My files**, and
-   your own OneDrive all work. If none is listed, open the folder in
-   SharePoint, click Sync (or Add shortcut to My files), and check again.
-2. **Say where renamed documents go.** Intern creates a *Filed* folder next to
-   the one you chose, or you choose another.
-3. **Decide about what is already there.** If the folder already holds
-   documents, Intern asks once whether to rename them too. The default is to
-   rename only new ones.
+1. **Choose your input folder.** Intern lists the OneDrive and SharePoint
+   folders already on this computer, such as *Legal - Documents (Contoso
+   SharePoint)* or *OneDrive – Contoso*. Use one, browse to a folder inside it,
+   or choose any folder on the computer. Folders synced with **Sync**, folders
+   added with **Add shortcut to My files**, and your own OneDrive all work.
+2. **Choose your output folder.** Intern creates an *Output* folder next to
+   the input folder, keeps the output folder you already had, or you choose
+   another — never one inside the input folder. Chosen whole, a synced
+   location gets an *Input* and an *Output* folder inside it, so both stay
+   synced. An output folder in OneDrive or SharePoint also turns on the
+   description records below.
+3. **Decide about what is already there.** If the input folder already holds
+   documents, Intern asks once whether to process them too. The default is
+   only new files.
 
-Pick a folder that **only you add documents to**: choosing it is how Intern
-knows the documents in it are yours, so it does not ask Microsoft who uploaded
-them. Intern then keeps running in the system tray and starts when you sign in.
-Settings shows how the folder is doing — up to date, waiting for OneDrive to
-download documents, OneDrive not running, or no longer synced — with the one
-button that fixes each, and **Set up a folder step by step…** runs the same
-setup again. A document whose contents are still in the cloud is never renamed
-or moved until OneDrive has downloaded it.
+Pick an input folder that **only you add documents to**: choosing it — in
+setup, or with **Change…** in Settings — is how Intern knows the documents in
+it are yours, so it does not ask Microsoft who uploaded them. Intern then keeps
+running in the system tray and starts when you sign in. Settings shows both
+folders at the top, each with **Change…**, and how the input folder is doing —
+up to date, waiting for OneDrive to download documents, OneDrive not running,
+or no longer synced — with the one button that fixes each; **Set up folders
+step by step…** runs the same setup again. Changing the input folder there asks
+the same question about documents already in it. The options for a folder
+shared with other computers are folded under **Advanced**. A document whose
+contents are still in the cloud is never renamed or moved until OneDrive has
+downloaded it.
 
 The verified team Inbox described below is unchanged. It is used only in a
 build an administrator provisioned, and is documented in the
@@ -206,8 +239,13 @@ build an administrator provisioned, and is documented in the
 Files continue to move through the **Microsoft sync client**. Shared intake
 uses strict Microsoft uploader verification rather than assuming that a file
 first seen on this machine was uploaded by its user. Unknown uploaders stay out
-of the processing queue, including manual imports from the protected folder.
-Ordinary manual documents outside intake stay local.
+of the processing queue. Settings shows `Files/Inbox` and `Files/Filed` as the
+input and output folders, read-only. A file dropped on the window is copied
+into `Files/Inbox` like any other add, and OneDrive uploads the copy as you;
+it joins the queue only once Microsoft confirms that upload, so the window
+says the copy is waiting rather than queued. A same-user upload of an
+unchanged file is expected to verify, but that has not been proven against a
+live tenant.
 
 Intern supports one shared library: `Files` on
 `teamcontoso.sharepoint.com/sites/InternTestSite`, watching `Files/Inbox` and
@@ -241,9 +279,10 @@ In a build without the deployment, Settings lists the **synced locations** the
 sync client keeps on the machine — each SharePoint library and OneDrive
 account, with its local folder — so the folder a library syncs to
 (`C:\Users\pat\Contoso\Legal - Documents`, a name nobody chose) can be picked
-as a destination without a hunt through a folder dialog. A synced folder is
-watched as your own only through folder setup; one typed into Settings by hand
-is still held for Microsoft upload verification, and private local mode is
+as the input or output folder without a hunt through a folder dialog. A synced
+folder is watched as your own when it is chosen in setup or with **Change…**;
+one typed into Settings by an earlier release is still held for Microsoft
+upload verification until it is chosen again, and private local mode is
 refused for synced folders. A build with the deployment hides these manual
 controls and uses the SharePoint connection instead. A folder on a **network
 share** — a UNC path or a mapped drive — is recognised and labelled too, and

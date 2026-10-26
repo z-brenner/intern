@@ -146,25 +146,39 @@ describe('what the site says about installing', () => {
 
 // CI_RELEASE_DOCS-5. The guide taught "pick the folder in Settings and enable
 // Watch a folder", which in the published build leaves every document held as
-// an unverified upload.
+// an unverified upload. Now the folders are chosen in setup or with Change…,
+// and the guide has to say so in the words the app shows.
 describe('what the guide says about setting up a folder', () => {
-  it('teaches the step-by-step setup for synced folders and the private local box for plain ones', async () => {
+  it('teaches the two folders, step by step, and the private local box for plain ones', async () => {
     const guide = text(await readFile('site/guide.html', 'utf8'));
-    expect(guide).toContain('Set up a folder step by step…');
+    expect(guide).toContain('Set up folders step by step…');
     expect(guide).toContain('only you add documents to');
-    expect(guide).toContain('This is a private local intake');
+    expect(guide).toContain('This is a private local input folder');
     expect(guide).toMatch(/provisioned/);
     expect(guide).not.toMatch(/In Settings, pick that folder/);
     expect(guide).not.toMatch(/That's it\. Files that appear in the folder get processed/);
+    expect(guide).not.toContain('Watch a folder for new documents');
+    expect(guide).not.toMatch(/renamed in place/);
     // The same labels the app shows, so a reader can find them.
     const [settings, setup] = await Promise.all([
       readFile('src/components/SettingsDialog.tsx', 'utf8'),
       readFile('src/components/FolderSetupFlow.tsx', 'utf8'),
     ]);
-    expect(settings).toContain('Set up a folder step by step…');
-    expect(settings).toContain('This is a private local intake, not a shared or synced folder');
-    expect(guide).toContain('This is a private local intake, not a shared or synced folder');
-    expect(setup).toContain('Check again');
-    expect(guide).toContain('Check again');
+    expect(settings).toContain('Set up folders step by step…');
+    expect(settings).toContain('This is a private local input folder, not a shared or synced folder');
+    expect(guide).toContain('This is a private local input folder, not a shared or synced folder');
+    expect(setup).toContain('Look for OneDrive folders again');
+    expect(guide).toContain('Look for OneDrive folders again');
+    for (const hint of ['Put files here that you want Intern to process.', 'Processed files end up here, renamed.']) {
+      expect(setup).toContain(hint);
+      expect(guide).toContain(hint.replace(/\.$/, ''));
+    }
+  });
+
+  it('says adding a file copies it into the input folder and leaves the original', async () => {
+    const guide = text(await readFile('site/guide.html', 'utf8'));
+    expect(guide).toMatch(/copied (here|into the input folder)[^.]*; the original(s)? stay/);
+    expect(guide).toMatch(/Send to (>|&gt;) Intern/);
+    expect(guide).toMatch(/Intern copies them into your input folder/);
   });
 });

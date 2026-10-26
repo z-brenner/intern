@@ -1,11 +1,15 @@
 # Shared intake folders, OneDrive, and SharePoint
 
-Intern can watch an **intake folder**: documents that appear in it are analyzed,
-named, and moved to the **destination folder** (the same destination setting the
-rest of the app uses). Both folders can live inside a OneDrive or SharePoint
-library, and several machines can watch the same intake folder without stepping
-on each other. This document explains how, and exactly what that costs in
-privacy and in guarantees.
+Intern always watches the **input folder** (the `intakeFolder` setting, called
+the intake folder below): documents that appear in it are analyzed, named, and
+moved to the **output folder** (the `destination` setting). Intern is not
+usable until both are chosen, and every way of adding a document — a drop,
+**Add files**, **Add folder**, **Send to > Intern** — copies it into the input
+folder, so the watcher and its claim protocol are the one way documents reach
+the queue. Both folders can live inside a OneDrive or SharePoint library, and
+several machines can watch the same intake folder without stepping on each
+other. This document explains how, and exactly what that costs in privacy and
+in guarantees.
 
 ## The integration is the sync client, on purpose
 
@@ -37,10 +41,13 @@ into `Files/Inbox`; documents from anyone else, or that cannot be verified,
 stay where they are.
 
 In a build without the deployment (the shipped default), Microsoft
-verification is unavailable. Settings accepts a watched intake folder only when
-it is private and local; a folder in a OneDrive or SharePoint sync root, or on
-a network share, cannot be saved as an intake, and documents in one saved
-earlier stay held.
+verification is unavailable. A folder chosen as the input folder — in setup,
+or with **Change…** in Settings — is vouched for by that choice: a plain local
+folder is saved as private and local, and a folder in a OneDrive or SharePoint
+sync root as the person's own (`intakeMyFolder`). A network share can be
+neither. A synced folder that reached the settings any other way - typed into
+Settings by an earlier release - is not vouched for, and its documents stay
+held until it is chosen again.
 
 Files On-Demand are not read by Intern until uploader verification succeeds.
 Once permitted, the sync client may hydrate a file for the local/cloud checksum
@@ -65,8 +72,9 @@ The rest of this document describes the watcher and the shared-folder protocol
 underneath both modes. With the SharePoint deployment enabled, onboarding
 chooses the folders and these Settings controls are hidden.
 
-Enable **Watch a folder** in Settings and pick the intake folder. The watcher
-scans on a short interval — polling, not filesystem events, because sync
+First-run setup asks for the input folder, and Settings changes it with
+**Change…**; there is no switch that turns watching off. The watcher scans on a
+short interval — polling, not filesystem events, because sync
 clients replay changes in ways that make event streams lie, and a periodic
 scan is invisible next to a model that takes seconds per document. A
 file is picked up once its size and modification time have held still for ten
@@ -114,10 +122,12 @@ Restarting Intern, installing an update, or changing the machine's label
 watches the same documents as before, so a document that arrived while the
 computer was off is new and is picked up. A file replaced with new content, or
 a new scan saved under an old name, is new too. Starting a new watch takes the
-first look again: turning **Watch a folder** on, choosing a different folder,
-or changing how the folder's documents are admitted (a private local folder,
-or a synced folder of your own). "Only new documents" means new from that
-moment, so documents that arrived while watching was off are left alone too.
+first look again: choosing an input folder for the first time, choosing a
+different one, or changing how the folder's documents are admitted (a private
+local folder, or a synced folder of your own). "Only new files" means new from
+that moment, so documents that arrived while watching was off are left alone
+too. Answering "Process them too" instead hands what is already there to the
+queue through the claim protocol below, exactly as a copy is handed over.
 
 The first look also remembers what it could not see: a subfolder that refused
 to be listed, a file whose details could not be read, and which document types
@@ -143,10 +153,40 @@ as waiting for OneDrive or as could not be read. A placeholder does not wait out
 its pause once the connection is back: each scan asks the sync client for its
 content, and the document is handed over as soon as the content arrives.
 
-A watched intake requires a destination folder **outside** the intake folder.
-Renaming in place inside a watched folder would make every result reappear as
-a new document; Intern refuses the configuration at save time rather than
-discovering the loop at run time.
+The input folder requires an output folder **outside** it. A processed
+document landing back in the input folder would reappear as a new document;
+Intern refuses the configuration at save time - and setup and Settings refuse
+the pick before that - rather than discovering the loop at run time.
+
+### Documents Intern copies in
+
+A drop, **Add files**, **Add folder**, and **Send to > Intern** copy what they
+are given into the input folder (`input_copy`, in `src-tauri/src/input_folder.rs`).
+A folder is flattened, with the same rules an add always had for what counts
+as a document: unsupported, empty, temporary, and hidden files are reported as
+left out, never copied. Each copy is written under a dot-prefixed temporary
+name - the scan skips dot-names, so it never sees a half-written copy -
+checked against the original's fingerprint, and only then published onto its
+real name with a rename that refuses to replace anything. A name already taken
+in the folder, or one the queue has held a document at before, gets " (2)",
+" (3)", and so on. A file already inside the input folder is not copied; one
+inside the output folder is refused, since it is filed already. The originals
+are never renamed, moved, or deleted, and the same file added again while its
+copy still waits in the queue is not copied twice.
+
+A copy does not wait for the ten-second settle: Intern made it and checked it,
+so it is handed straight to the queue with `IntakeWatcher::hand_over`, which
+runs what a scan would - the admission check, the origin marker naming this
+machine, an exclusive claim, the enqueue - on the adding thread, and passes
+the claim to the scan loop. The scan that later finds the copy settled sees a
+claim this machine holds and does not hand it over again, and a copy filed
+before any scan saw it still has its claim closed. A copy the queue will not
+take is removed again, so the folder is as it was and the report's "left out"
+is true. Where the admission check holds a document - the verified team Inbox,
+before Microsoft has heard of the upload - the copy stays in the folder,
+unclaimed, for the scans to ask about again, and the window says it is waiting
+rather than queued. With no input folder set up, an add is refused whole
+(`INPUT_FOLDER_NOT_SET`); nothing is ever processed where it sits.
 
 A subfolder the scan cannot list — a folder this account has no permission to
 open, or one the sync client removed between the listing and the descent — is
@@ -160,9 +200,10 @@ The folder a SharePoint library syncs to lives under the user's profile with
 a name nobody chose (`C:\Users\pat\Contoso\Legal - Documents`), and finding
 it in a folder dialog was the step people got stuck on. Settings therefore
 lists the **synced locations** the sync client has registered on the machine
-— every SharePoint library and OneDrive account, with its local folder — and
-fills the intake or destination field from one click. A subfolder can still
-be typed or browsed afterwards.
+— every SharePoint library and OneDrive account, with its local folder — under
+**Advanced**, and makes any of them the input or output folder in one click,
+checked exactly as a folder chosen with **Change…** is. Setup offers the same
+list as quick picks.
 
 ## Network shares
 
@@ -262,9 +303,11 @@ In strict shared-intake mode, Microsoft's authenticated account and the file's
 drive-item metadata establish identity before any claim or content read. Only
 fresh, unchanged uploads created by the connected account after filing was
 turned on are eligible. Other verified people are held; unknowns remain held
-even when team-worker mode is selected. Existing queued items, retries and
-manual imports from protected roots obey the same gate. A held document stays
-untouched in the folder and is checked again on later scans.
+even when team-worker mode is selected. Existing queued items, retries, and
+copies a person drops into a protected root obey the same gate: a copy waits
+in the Inbox, unclaimed, until OneDrive has uploaded it and Microsoft confirms
+the connected account did. A held document stays untouched in the folder and
+is checked again on later scans.
 
 Origin markers are retained only for coordination and the explicit private
 local-folder mode. They do not identify a Microsoft uploader. In particular,
