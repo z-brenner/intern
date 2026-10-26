@@ -2,7 +2,7 @@
  * A pass over the whole window in the order a person drives it: the queue, the
  * filter, the review drawer, the dialogs, the keyboard, and the narrow window.
  * It began as an exploratory session written to find defects rather than to pin
- * behaviour, and the defects it found are now assertions.
+ * behavior, and the defects it found are now assertions.
  *
  * It drives the browser build, whose backend is the in-memory bridge, so it
  * proves the interface and not the pipeline underneath it.
@@ -36,7 +36,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   await expect(page.getByRole('row')).toHaveCount(9); // header + 8
   await expect(page.getByRole('button', { name: /^Queue/ })).toContainText('8');
 
-  // Every row's status must be readable as text, not colour alone.
+  // Every row's status must be readable as text, not color alone.
   for (const [name, status] of [
     ['Employment Agreement - John Smith.pdf', 'Ready'],
     ['Lease Agreement - 123 Main St.pdf', 'Needs review'],
@@ -147,7 +147,7 @@ test('analyze_again_on_review_item', async ({ page }) => {
   await expect(page.getByRole('alert', { name: 'Action error' })).toHaveCount(0);
 });
 
-// The error banner was centred on the window, and in the narrow window it sat
+// The error banner was centered on the window, and in the narrow window it sat
 // over the drawer's own buttons. The toast is anchored at the bottom left of
 // the queue, and stays clear of the review panel beside it or over it.
 test('the undo toast stays clear of the review panel', async ({ page }) => {

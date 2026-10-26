@@ -187,7 +187,7 @@ const alpha9Settings: AppSettings = {
 /*
   The same file as this build reads it back: every saved value as it was, and
   each field added since alpha.9 at the default the backend's serde gives it -
-  the organisation's names as the empty list, which names nobody, and the
+  the organization's names as the empty list, which names nobody, and the
   update switch as checks on.
 */
 const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false };

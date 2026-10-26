@@ -8,13 +8,13 @@ async function openSettings() {
   return screen.findByRole('dialog', { name: 'Settings' });
 }
 
-describe('your organisation\'s names', () => {
+describe('your organization\'s names', () => {
   it('keeps what is typed while editing and saves trimmed, non-empty lines', async () => {
     const base = createInMemoryBridge({ settings: { ourNames: ['Contoso Worldwide, Inc.'] } });
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);
     let dialog = await openSettings();
-    const names = within(dialog).getByLabelText('Your organisation\'s names');
+    const names = within(dialog).getByLabelText('Your organization\'s names');
     expect(names).toHaveValue('Contoso Worldwide, Inc.');
     expect(names).toHaveAccessibleDescription('Your own firm\'s names. When a document names your firm and someone else, the filename and the Party folder use the other side.');
 
@@ -30,7 +30,7 @@ describe('your organisation\'s names', () => {
     expect((await base.getSettings()).ourNames).toEqual(['Contoso Worldwide, Inc.', 'Contoso']);
 
     dialog = await openSettings();
-    expect(within(dialog).getByLabelText('Your organisation\'s names')).toHaveValue('Contoso Worldwide, Inc.\nContoso');
+    expect(within(dialog).getByLabelText('Your organization\'s names')).toHaveValue('Contoso Worldwide, Inc.\nContoso');
   });
 
   it('saves an empty list when every line is cleared', async () => {
@@ -38,7 +38,7 @@ describe('your organisation\'s names', () => {
     const saveSettings = vi.fn(base.saveSettings);
     render(<App bridge={{ ...base, saveSettings }} />);
     const dialog = await openSettings();
-    fireEvent.change(within(dialog).getByLabelText('Your organisation\'s names'), { target: { value: ' \n' } });
+    fireEvent.change(within(dialog).getByLabelText('Your organization\'s names'), { target: { value: ' \n' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(saveSettings).toHaveBeenCalledWith(expect.objectContaining({ ourNames: [] })));
   });
@@ -48,7 +48,7 @@ describe('your organisation\'s names', () => {
   it('says which names are too short to be used', async () => {
     render(<App bridge={createInMemoryBridge()} />);
     const dialog = await openSettings();
-    const names = within(dialog).getByLabelText('Your organisation\'s names');
+    const names = within(dialog).getByLabelText('Your organization\'s names');
 
     fireEvent.change(names, { target: { value: 'E.Y.\nPwC\nContoso Worldwide, Inc.\nKPMG\n' } });
     expect(names).toHaveAccessibleDescription(expect.stringContaining('“E.Y.”, “PwC” are too short to match safely and will not be used. Add the name as your documents print it in full.'));
@@ -76,13 +76,13 @@ describe('your organisation\'s names', () => {
     expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement between ABC Properties LLC and TenantCo Inc');
 
     const dialog = await openSettings();
-    fireEvent.change(within(dialog).getByLabelText('Your organisation\'s names'), { target: { value: 'TenantCo Inc.' } });
+    fireEvent.change(within(dialog).getByLabelText('Your organization\'s names'), { target: { value: 'TenantCo Inc.' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
 
     await waitFor(() => expect(screen.getByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i })).toHaveTextContent('2023-09-15 Lease Agreement with ABC Properties LLC.pdf'));
     // The inspector follows the new proposal rather than offering the old
     // name to approve.
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC'));
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('TenantCo Inc. is your organisation');
+    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('TenantCo Inc. is your organization');
   });
 });

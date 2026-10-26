@@ -332,7 +332,7 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
   });
 });
 
-describe('createInMemoryBridge organisation names', () => {
+describe('createInMemoryBridge organization names', () => {
   const lease = async (bridge: ReturnType<typeof createInMemoryBridge>) => (await bridge.listItems()).find((item) => item.id === 'lease')!;
 
   it('starts with no names and stores them the way the backend does', async () => {
@@ -377,7 +377,7 @@ describe('createInMemoryBridge organisation names', () => {
     expect(await lease(supplied)).toEqual({ id: 'lease', originalFilename: 'lease.pdf', status: 'review', proposedFilename: '2023-09-15 Lease.pdf' });
   });
 
-  it('never matches on an own name too short to mean one organisation', async () => {
+  it('never matches on an own name too short to mean one organization', async () => {
     const bridge = createInMemoryBridge({ settings: { ourNames: ['ABC'] } });
     expect(await lease(bridge)).not.toHaveProperty('omittedParties');
   });

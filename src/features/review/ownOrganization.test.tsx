@@ -23,12 +23,12 @@ const byCounterparty: QueueItem = {
   must never quietly drop.
 */
 describe('a name filed by the other side', () => {
-  it('says which party was left out as the organisation, while the evidence keeps it', async () => {
+  it('says which party was left out as the organization, while the evidence keeps it', async () => {
     render(<App bridge={createInMemoryBridge({ items: [byCounterparty] })} />);
     selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Filed by the other side' });
-    expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organisation, so it is left out of the name. Change this under Settings.');
+    expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organization, so it is left out of the name. Change this under Settings.');
     expect(within(note).getByText('Contoso Worldwide, Inc.').tagName).toBe('Q');
     expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work with Ridgeline Cartography LLC');
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
@@ -41,7 +41,7 @@ describe('a name filed by the other side', () => {
     render(<App bridge={createInMemoryBridge({ items: [twice] })} />);
     selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc., Contoso UK and CONTOSO are your organisation, so they are left out of the name. Change this under Settings.');
+    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc., Contoso UK and CONTOSO are your organization, so they are left out of the name. Change this under Settings.');
   });
 
   it('says nothing when the name carries every party', async () => {

@@ -260,7 +260,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         document is with.
       */}
       {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
-        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organisation, so it is' : 'are your organisation, so they are'} left out of the name. Change this under Settings.
+        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organization, so it is' : 'are your organization, so they are'} left out of the name. Change this under Settings.
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:

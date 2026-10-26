@@ -1,5 +1,5 @@
 /**
- * How the backend compares the organisation's names (own_names.rs), for the
+ * How the backend compares the organization's names (own_names.rs), for the
  * places the window has to agree with it.
  */
 

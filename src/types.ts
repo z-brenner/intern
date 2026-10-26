@@ -53,7 +53,7 @@ export interface QueueItem {
   suggestedDate?: string;
   /** Every date the document states, in the order it states them, for a name that has none yet. */
   datesInDocument?: string[];
-  /** The file's own last-modified date, a labelled last resort when the document states none. */
+  /** The file's own last-modified date, a labeled last resort when the document states none. */
   fileModifiedDate?: string;
   /**
    * The reviewer's own spellings applied to this name. The evidence still
@@ -68,7 +68,7 @@ export interface QueueItem {
   nearDuplicateOf?: string;
   /**
    * Parties left out of the proposed name because they are the person's own
-   * organisation (Settings, "Your organisation's names"), as the document
+   * organization (Settings, "Your organization's names"), as the document
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
@@ -96,7 +96,7 @@ export interface AppSettings {
   destination: string;
   destinationLayout: DestinationLayout;
   /**
-   * The person's own organisation, one name per entry. A document that names
+   * The person's own organization, one name per entry. A document that names
    * it and someone else is named, and filed in the Party layout, by the
    * someone else. Absent from an older backend.
    */
@@ -224,7 +224,7 @@ export interface HistoryEntry {
 export type CloudProvider = 'onedrive_personal' | 'onedrive_business' | 'sharepoint' | 'network_share';
 
 /**
- * A folder recognised as living inside a OneDrive/SharePoint sync root, or
+ * A folder recognized as living inside a OneDrive/SharePoint sync root, or
  * reached over the network (a UNC path or a mapped drive).
  */
 export interface CloudLocation {
