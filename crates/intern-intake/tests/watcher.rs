@@ -868,7 +868,7 @@ fn a_claimed_file_deleted_by_the_user_leaves_a_removed_tombstone() {
 
 /// Remove on a review item deletes the queue row. Releasing the claim because
 /// the row was gone put the document straight back into the queue on the next
-/// scan, to be analysed again seconds after the person said "Item removed."
+/// scan, to be analyzed again seconds after the person said "Item removed."
 #[test]
 fn removed_review_item_is_tombstoned_not_reenqueued() {
     let rig = Rig::start(false, &[]);
@@ -1638,7 +1638,7 @@ fn a_sync_conflict_copy_is_counted_and_left_alone() {
         "report (Jane's conflicted copy 2026-08-31).pdf",
         b"spelled-out conflict copy",
     );
-    // A hyphen and a capitalised trailing word do not make a conflict copy.
+    // A hyphen and a capitalized trailing word do not make a conflict copy.
     let genuine = rig.write("Invoice-ACME.pdf", b"an ordinary document");
     rig.step();
     rig.step();
@@ -1979,7 +1979,7 @@ fn other_uploads_are_held_and_a_later_revocation_abandons_owned_work() {
 
 /// Microsoft being briefly unreachable is not an uploader verdict. Collapsing
 /// that answer into Unknown makes the watcher report an unknown uploader even
-/// though it learned nothing, while cancelling would throw away work that was
+/// though it learned nothing, while canceling would throw away work that was
 /// legitimately admitted.
 #[test]
 fn a_retryable_recheck_keeps_the_owned_claim_without_recording_a_verdict() {
@@ -2058,7 +2058,7 @@ fn held_and_done_files_are_not_reverified_each_scan() {
 
 /// OneDrive names the losing side of a conflict after the machine that wrote
 /// it, and that is the hostname — not the friendly label someone typed into
-/// Settings. A labelled machine that only knows its label never recognises its
+/// Settings. A labeled machine that only knows its label never recognizes its
 /// own conflict copies, and files the losing copy as a second document.
 #[test]
 fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
@@ -2078,7 +2078,7 @@ fn a_labelled_machine_still_recognises_its_own_hostname_conflict_copies() {
     assert_eq!(rig.host.enqueued(), vec![genuine]);
     assert_eq!(rig.watcher.status().sync_conflicts, 1);
 
-    // The same is true of a teammate's labelled machine, whose presence record
+    // The same is true of a teammate's labeled machine, whose presence record
     // is all this machine knows about it.
     let other = ClaimStore::new(
         rig.temp.path(),
@@ -2103,7 +2103,7 @@ fn machine_label_is_not_a_conflict_suffix() {
         &[],
     );
     rig.step();
-    // A teammate's labelled machine, and one whose presence record predates
+    // A teammate's labeled machine, and one whose presence record predates
     // hostnames, when its display name was the hostname.
     ClaimStore::new(
         rig.temp.path(),

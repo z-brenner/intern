@@ -435,7 +435,7 @@ fn ansi_strings_are_read_in_the_declared_code_page() {
     );
 }
 
-/// A message that travelled over SMTP carries the `Date` header its sender's
+/// A message that traveled over SMTP carries the `Date` header its sender's
 /// client wrote, in the sender's offset, and that is the line kept. One that
 /// never did is dated in this machine's zone: a Sydney sent item at 08:30
 /// on 3 March is 21:30 on 2 March in UTC, and naming it after the UTC day
@@ -445,9 +445,9 @@ fn msg_date_uses_transport_header_or_local_offset() {
     let directory = tempdir().unwrap();
     let sydney = TimeZone::fixed(tz::offset(11));
 
-    let travelled = directory.path().join("received.msg");
+    let traveled = directory.path().join("received.msg");
     message(
-        &travelled,
+        &traveled,
         &[
             ("0037001F", utf16("Signed engagement letter")),
             (
@@ -462,7 +462,7 @@ fn msg_date_uses_transport_header_or_local_offset() {
         ],
         &[(0x0040, 0x0039, SYDNEY_MORNING.to_le_bytes())],
     );
-    let text = extract_in(&travelled, &TimeZone::UTC);
+    let text = extract_in(&traveled, &TimeZone::UTC);
     assert!(
         text.contains("\nDate: Mon, 3 Mar 2025 08:30:00 +1100\n"),
         "{text}"

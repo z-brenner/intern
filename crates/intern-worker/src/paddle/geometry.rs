@@ -28,14 +28,14 @@ impl Point {
         (delta.x * delta.x + delta.y * delta.y).sqrt()
     }
 
-    /// This point turned by `radians` about `centre`, counter-clockwise on
+    /// This point turned by `radians` about `center`, counter-clockwise on
     /// screen for a positive angle (y points down).
-    pub fn rotated_about(self, centre: Self, radians: f32) -> Self {
+    pub fn rotated_about(self, center: Self, radians: f32) -> Self {
         let (sin, cos) = radians.sin_cos();
-        let offset = self.minus(centre);
+        let offset = self.minus(center);
         Self::new(
-            centre.x + offset.x * cos + offset.y * sin,
-            centre.y - offset.x * sin + offset.y * cos,
+            center.x + offset.x * cos + offset.y * sin,
+            center.y - offset.x * sin + offset.y * cos,
         )
     }
 }
@@ -72,11 +72,11 @@ pub fn convex_hull(points: &[Point]) -> Vec<Point> {
     hull
 }
 
-/// A rectangle at any angle: its centre, its two side lengths, and the
+/// A rectangle at any angle: its center, its two side lengths, and the
 /// direction of its `width` side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RotatedRect {
-    pub centre: Point,
+    pub center: Point,
     pub width: f32,
     pub height: f32,
     /// Direction of the `width` side, as a unit vector.
@@ -94,7 +94,7 @@ impl RotatedRect {
             -self.axis.y * self.height / 2.0,
             self.axis.x * self.height / 2.0,
         );
-        let c = self.centre;
+        let c = self.center;
         [
             Point::new(c.x - ux - nx, c.y - uy - ny),
             Point::new(c.x + ux - nx, c.y + uy - ny),
@@ -131,7 +131,7 @@ pub fn min_area_rect(points: &[Point]) -> Option<RotatedRect> {
         0 => return None,
         1 => {
             return Some(RotatedRect {
-                centre: hull[0],
+                center: hull[0],
                 width: 0.0,
                 height: 0.0,
                 axis: Point::new(1.0, 0.0),
@@ -166,7 +166,7 @@ pub fn min_area_rect(points: &[Point]) -> Option<RotatedRect> {
             best = Some((
                 area,
                 RotatedRect {
-                    centre: Point::new(
+                    center: Point::new(
                         start.x + axis.x * mid_u + normal.x * mid_v,
                         start.y + axis.y * mid_u + normal.y * mid_v,
                     ),
@@ -236,7 +236,7 @@ impl Quad {
         ]
     }
 
-    pub fn centre(&self) -> Point {
+    pub fn center(&self) -> Point {
         let sum = self.0.iter().fold(Point::default(), |sum, point| {
             Point::new(sum.x + point.x, sum.y + point.y)
         });
@@ -260,9 +260,9 @@ impl Quad {
         true
     }
 
-    /// Every corner turned by `radians` about `centre`.
-    pub fn rotated_about(&self, centre: Point, radians: f32) -> Self {
-        Self(self.0.map(|point| point.rotated_about(centre, radians)))
+    /// Every corner turned by `radians` about `center`.
+    pub fn rotated_about(&self, center: Point, radians: f32) -> Self {
+        Self(self.0.map(|point| point.rotated_about(center, radians)))
     }
 
     /// Every corner scaled from one image's pixels to another's.
@@ -372,7 +372,7 @@ mod tests {
         let rect = min_area_rect(&points).unwrap();
         assert!(close(rect.width.max(rect.height), 100.0), "{rect:?}");
         assert!(close(rect.shorter_side(), 20.0), "{rect:?}");
-        assert!(close(rect.centre.x, 60.0) && close(rect.centre.y, 30.0));
+        assert!(close(rect.center.x, 60.0) && close(rect.center.y, 30.0));
         let quad = Quad::from_rect(&rect);
         assert_eq!(quad.0[0], Point::new(10.0, 20.0));
         assert_eq!(quad.0[1], Point::new(110.0, 20.0));
@@ -385,7 +385,7 @@ mod tests {
     fn the_minimum_rectangle_follows_a_tilted_line() {
         // A 200 x 20 line climbing at five degrees.
         let rect = RotatedRect {
-            centre: Point::new(300.0, 300.0),
+            center: Point::new(300.0, 300.0),
             width: 200.0,
             height: 20.0,
             axis: Point::new(5_f32.to_radians().cos(), -(5_f32.to_radians().sin())),
@@ -402,14 +402,14 @@ mod tests {
     #[test]
     fn growing_a_rectangle_adds_the_distance_on_every_side() {
         let rect = RotatedRect {
-            centre: Point::new(0.0, 0.0),
+            center: Point::new(0.0, 0.0),
             width: 10.0,
             height: 4.0,
             axis: Point::new(1.0, 0.0),
         };
         let grown = rect.grown(1.5);
         assert_eq!((grown.width, grown.height), (13.0, 7.0));
-        assert_eq!(grown.centre, rect.centre);
+        assert_eq!(grown.center, rect.center);
     }
 
     #[test]
@@ -441,9 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn rotating_about_a_centre_keeps_distances() {
-        let centre = Point::new(50.0, 50.0);
-        let turned = Point::new(150.0, 50.0).rotated_about(centre, 90_f32.to_radians());
+    fn rotating_about_a_center_keeps_distances() {
+        let center = Point::new(50.0, 50.0);
+        let turned = Point::new(150.0, 50.0).rotated_about(center, 90_f32.to_radians());
         // Counter-clockwise on screen: to the right becomes straight up.
         assert!(
             close(turned.x, 50.0) && close(turned.y, -50.0),

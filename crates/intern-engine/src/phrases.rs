@@ -7,7 +7,7 @@
 //! makes a fact more acceptable than validation found it: a phrase read
 //! back is always words the document states, in the order it states them.
 
-use crate::cues::{NOT_A_TITLE, ORGANISATION_ENDINGS, TYPE_NOUNS};
+use crate::cues::{NOT_A_TITLE, ORGANIZATION_ENDINGS, TYPE_NOUNS};
 use crate::evidence::normalize;
 
 /// The lower-case words of `text`, split at anything that is not a letter
@@ -199,7 +199,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
     }
     // To the left, words written the way the noun is - a title in capitals
     // is all capitals - and never across a connector (the noun would be a
-    // complement then), a company's legal form or an organisation's noun.
+    // complement then), a company's legal form or an organization's noun.
     let style = writing(tokens[at]);
     let mut start = at;
     while start > 0 {
@@ -210,7 +210,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
             || TITLE_STOPS.contains(&word.as_str())
             || LEFT_STOPS.contains(&word.as_str())
             || CONNECTORS.contains(&word.as_str())
-            || ORGANISATION_ENDINGS.contains(&word.trim_end_matches('.'))
+            || ORGANIZATION_ENDINGS.contains(&word.trim_end_matches('.'))
             || writing(previous) != style
         {
             break;
@@ -268,7 +268,7 @@ pub(crate) fn title_phrase(line: &str, head: &str) -> Option<String> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Writing {
     Capitals,
-    Capitalised,
+    Capitalized,
     Lower,
 }
 
@@ -289,7 +289,7 @@ fn writing(token: &str) -> Writing {
     if upper > 1 && lower == 0 {
         Writing::Capitals
     } else if first_upper {
-        Writing::Capitalised
+        Writing::Capitalized
     } else if upper == 1 && lower == 0 {
         Writing::Capitals
     } else {
@@ -821,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn a_labelled_subject_is_its_value_and_a_party_field_is_none() {
+    fn a_labeled_subject_is_its_value_and_a_party_field_is_none() {
         assert_eq!(
             subject_value("Project: Aurora Catalog Project"),
             Some("Aurora Catalog Project")

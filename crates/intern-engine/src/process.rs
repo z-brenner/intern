@@ -14,7 +14,7 @@
 //! its last handle closes, and the last handle is this process's - closed by
 //! the kernel however this process ends, deliberately or not. So every child
 //! Intern spawns joins one process-wide job, and the ordinary stop paths
-//! below become an optimisation rather than the only hope.
+//! below become an optimization rather than the only hope.
 //!
 //! Everywhere else this is a no-op: the desktop app ships on Windows, and on
 //! other platforms `Drop` remains the stop path it always was.

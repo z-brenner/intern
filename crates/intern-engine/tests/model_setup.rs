@@ -98,7 +98,7 @@ fn an_existing_model_file_is_validated_and_published_with_progress() {
     assert_eq!(events.last().unwrap().total_bytes, 11);
 }
 
-/// Cancelling must leave nothing half-installed, and a second attempt must
+/// Canceling must leave nothing half-installed, and a second attempt must
 /// still work. With one file there is no partial set to resume, so the
 /// guarantee is that the destination stays clean and the retry succeeds.
 #[test]

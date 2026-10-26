@@ -436,7 +436,7 @@ fn a_scanned_page_with_a_confidentiality_stamp_is_still_ocred() {
 /// An engineering drawing on an A1 sheet is over the render cap at 300 DPI,
 /// and it has a perfectly good text layer. Enforcing the cap before deciding
 /// whether the page is ever rendered failed the whole document over a page
-/// nobody was going to rasterise.
+/// nobody was going to rasterize.
 #[test]
 fn a_large_format_text_page_is_extracted_without_rendering() {
     let mut drawing = page(

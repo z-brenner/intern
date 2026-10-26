@@ -106,7 +106,7 @@ fn no_utc_sent_line() {
 }
 
 /// Receipts and statements are HTML tables. A label and its value in
-/// neighbouring cells stay on one line, told apart, and the curly
+/// neighboring cells stay on one line, told apart, and the curly
 /// apostrophe in a client's name arrives as the character it is.
 #[test]
 fn html_tables_and_entities() {

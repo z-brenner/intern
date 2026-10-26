@@ -59,7 +59,7 @@ const MONTH_TO_YEAR_WINDOW: usize = 16;
 /// A date is anchored on a four-digit year or on a month word paired with a
 /// nearby year, so `April 1, 2026`, `2026-04-01`, `3/14/2026`, and
 /// `the 1st day of April, 2026` each count exactly once. Two-digit-year
-/// numeric dates are recognised separately.
+/// numeric dates are recognized separately.
 ///
 /// This is deliberately generous: a block that merely looks like it carries a
 /// date is worth keeping so the model can decide what the date means. The

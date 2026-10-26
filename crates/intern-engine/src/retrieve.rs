@@ -6,7 +6,7 @@
 //! number, and the key facts a description states. Each field scores every
 //! unit by a weighted sum of six components - the cue logic distillation
 //! has always used, BM25 against a lexicon for the field, structure (a
-//! heading, a labelled value, a letterhead, a signature block, a table's
+//! heading, a labeled value, a letterhead, a signature block, a table's
 //! header), heading proximity (a section about definitions, the parties,
 //! the scope), position in the document, and the dates and names read off
 //! the unit - and takes units greedily by score until its budget of
@@ -314,13 +314,13 @@ pub struct Weights {
     pub cues: u32,
     /// BM25 against each field's lexicon.
     pub bm25: u32,
-    /// Headings, labelled values, letterheads, signature blocks, tables.
+    /// Headings, labeled values, letterheads, signature blocks, tables.
     pub structure: u32,
     /// What the headings above a unit say its section is about.
     pub heading: u32,
     /// The opening and closing of the document, its first and last page.
     pub position: u32,
-    /// Dates with their roles, organisations, people, identifiers, money.
+    /// Dates with their roles, organizations, people, identifiers, money.
     pub features: u32,
 }
 
@@ -351,7 +351,7 @@ impl Weights {
 }
 
 /// Everything retrieval is tuned by. Integers only, so a configuration is
-/// one fingerprint and one behaviour.
+/// one fingerprint and one behavior.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct RetrievalConfig {
@@ -377,7 +377,7 @@ pub struct RetrievalConfig {
     pub id_style: IdStyle,
     pub tier: TierPolicy,
     /// Whether [`TierPolicy::Auto`] goes dense for crowded evidence: many
-    /// candidate dates scored alike, many organisations, poor OCR.
+    /// candidate dates scored alike, many organizations, poor OCR.
     pub dense_triggers: bool,
 }
 
@@ -814,12 +814,12 @@ fn components(
             }
         }
         Field::Parties => {
-            let labelled = label_has(unit, PARTY_LABELS);
-            let entities = features.organisations.len() + features.people.len();
+            let labeled = label_has(unit, PARTY_LABELS);
+            let entities = features.organizations.len() + features.people.len();
             if entities == 0
                 && cues.party_cues == 0
                 && features.proper_names == 0
-                && !labelled
+                && !labeled
                 && !cues.defined_role
             {
                 return None;
@@ -834,7 +834,7 @@ fn components(
                 bm25,
                 structure: flag(position.letterhead, 40)
                     + flag(position.signature, 25)
-                    + flag(labelled, 40)
+                    + flag(labeled, 40)
                     + flag(heading && entities > 0, 20),
                 heading: flag(tags & (tag::PARTIES | tag::RECITALS) != 0, 30)
                     + flag(tags & tag::SIGNATURE != 0, 20)
@@ -842,7 +842,7 @@ fn components(
                 position: flag(position.opening, 40)
                     + flag(position.first_page, 12)
                     + flag(position.closing, 20),
-                features: features.organisations.len().min(4) as i64 * 25
+                features: features.organizations.len().min(4) as i64 * 25
                     + features.people.len().min(4) as i64 * 20
                     + i64::from(features.proper_names.min(4)) * 5,
             }
@@ -937,7 +937,7 @@ fn components(
                 position: flag(position.first_page, 5)
                     + flag(position.closing, 10)
                     + flag(position.early && !features.money.is_empty(), 20),
-                features: flag(features.money_labelled, 60) + flag(!features.money.is_empty(), 25),
+                features: flag(features.money_labeled, 60) + flag(!features.money.is_empty(), 25),
             }
         }
     };
@@ -1060,7 +1060,7 @@ pub fn log2_fixed(numerator: u64, denominator: u64) -> u32 {
 
 /// Whether the document's evidence is crowded enough for the dense tier:
 /// six or more candidate dates whose two best score within 15% of each
-/// other, five or more organisations named where parties are, or OCR the
+/// other, five or more organizations named where parties are, or OCR the
 /// reader was not sure of.
 fn crowded(index: &EvidenceIndex, candidates: &[u32], date_scores: &BTreeMap<u32, i64>) -> bool {
     let units = index.units();
@@ -1075,11 +1075,11 @@ fn crowded(index: &EvidenceIndex, candidates: &[u32], date_scores: &BTreeMap<u32
     best.sort_unstable_by(|left, right| right.cmp(left));
     let close_dates =
         best.len() >= 6 && best[0] > 0 && (best[0] - best[1]) * 100 <= best[0].abs() * 15;
-    let organisations = candidates
+    let organizations = candidates
         .iter()
         .map(|ordinal| &units[*ordinal as usize])
         .filter(|unit| unit.features.cues.party_cues > 0 || unit.features.cues.defined_role)
-        .flat_map(|unit| unit.features.organisations.iter())
+        .flat_map(|unit| unit.features.organizations.iter())
         .collect::<BTreeSet<_>>();
     let ocr = candidates
         .iter()
@@ -1089,7 +1089,7 @@ fn crowded(index: &EvidenceIndex, candidates: &[u32], date_scores: &BTreeMap<u32
         .map(u64::from)
         .collect::<Vec<_>>();
     let poor_ocr = !ocr.is_empty() && ocr.iter().sum::<u64>() < 80 * ocr.len() as u64;
-    close_dates || organisations.len() >= 5 || poor_ocr
+    close_dates || organizations.len() >= 5 || poor_ocr
 }
 
 /// The units a field may choose from when retrieval is hierarchical: those
@@ -1186,7 +1186,7 @@ fn select(
     let names = |ordinal: u32| -> Vec<&String> {
         let features = &units[ordinal as usize].features;
         let mut names = features
-            .organisations
+            .organizations
             .iter()
             .chain(&features.people)
             .collect::<Vec<_>>();
@@ -1321,7 +1321,7 @@ fn select(
         }
         for name in unit
             .features
-            .organisations
+            .organizations
             .iter()
             .chain(&unit.features.people)
         {

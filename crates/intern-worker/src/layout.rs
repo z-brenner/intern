@@ -10,13 +10,13 @@
 //!
 //! Geometry is in tenths of a PDF point with the origin at the top left of
 //! the page as it is displayed, so everything here is an integer, keeps
-//! `Eq`, and serialises the same way every time. OCR pages map pixels to
+//! `Eq`, and serializes the same way every time. OCR pages map pixels to
 //! points by the resolution they were rendered at. Confidence is 0-100.
 //!
 //! A PDF page is routed before it is read ([`PageRoute`]): most pages keep
 //! PDFium's text exactly as it has always been read and get blocks built
 //! cheaply from it; a page whose text PDFium would read in the wrong order,
-//! or whose tables and labelled values it would run together, is rebuilt
+//! or whose tables and labeled values it would run together, is rebuilt
 //! from the geometry of its characters; a page with no usable text is read
 //! by OCR. [`router`] holds the signals and the thresholds, and
 //! `docs/document-routing.md` the measurements behind them.
@@ -63,7 +63,7 @@ pub enum PageRoute {
     #[default]
     Fast,
     /// Rebuilt from the geometry of the page's characters: reading order
-    /// from its columns, tables from aligned rows, labelled values paired.
+    /// from its columns, tables from aligned rows, labeled values paired.
     Layout,
     /// Read by OCR: there was no text worth keeping.
     Ocr,
@@ -166,7 +166,7 @@ pub struct LayoutCell {
     pub header: bool,
 }
 
-/// A labelled value: `Invoice date` and `March 4, 2026`.
+/// A labeled value: `Invoice date` and `March 4, 2026`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeyValue {
     /// `p{page}.b{n}.f{field}`.
@@ -201,7 +201,7 @@ impl LayoutBlock {
 }
 
 impl PageLayout {
-    /// How many lines, table cells and labelled values the layout holds:
+    /// How many lines, table cells and labeled values the layout holds:
     /// the objects it has one of for every few characters, which the
     /// character caps alone do not bound (see
     /// [`crate::extract::TextBudget`]). Its blocks are never more than
@@ -510,7 +510,7 @@ pub fn geometry_layout(
     route: PageRoute,
     stop: &dyn Fn() -> bool,
 ) -> Option<PageLayout> {
-    // The page is analysed as it is displayed, which is how it reads: a
+    // The page is analyzed as it is displayed, which is how it reads: a
     // page turned by `/Rotate` has its runs and rules turned first. Its
     // blocks are then already in the displayed frame.
     let turned = native.rotation % 360 != 0;
@@ -584,7 +584,7 @@ pub const NOMINAL_UNITS_PER_PIXEL: f64 = UNITS_PER_POINT * 72.0 / 300.0;
 /// order, as a page rebuilt from its geometry reads. An engine's own text
 /// runs an unruled table down its columns or across a row of boxes, and
 /// pairs no label with its value; on InternBench's scans, reading the
-/// blocks instead took labelled values from 90% to 99% with every table
+/// blocks instead took labeled values from 90% to 99% with every table
 /// row and reading order kept. A reading with no lines, or one past what
 /// the analysis takes on ([`router::bounds`]) or stopped by `stop`, keeps
 /// the engine's text.
@@ -601,13 +601,13 @@ pub fn ocr_page(
     signals: RouteSignals,
     stop: &dyn Fn() -> bool,
 ) -> ExtractedPage {
-    let (mut layout, analysed) = ocr_layout_of(&reading, size, scale, signals, stop);
+    let (mut layout, analyzed) = ocr_layout_of(&reading, size, scale, signals, stop);
     number_blocks(page_number, &mut layout.blocks);
-    // A reading whose lines were not analysed, and whose text has more lines
+    // A reading whose lines were not analyzed, and whose text has more lines
     // than a page's layout may hold, goes without a layout, as a text page
     // that dense does, and keeps its text.
-    let dense = !analysed && too_dense(&reading.text);
-    let text = if !analysed || layout.blocks.is_empty() {
+    let dense = !analyzed && too_dense(&reading.text);
+    let text = if !analyzed || layout.blocks.is_empty() {
         reading.text
     } else {
         linearize(&layout.blocks)
@@ -653,7 +653,7 @@ fn ocr_layout_of(
     };
     let to_units = |pixels: u32| (f64::from(pixels) * scale).round().max(0.0) as u32;
     let (width, height) = (to_units(width), to_units(height));
-    let analysed = if reading.lines.is_empty() {
+    let analyzed = if reading.lines.is_empty() {
         None
     } else {
         let runs = reading
@@ -668,8 +668,8 @@ fn ocr_layout_of(
             .collect::<Vec<_>>();
         analyze_runs_within(&runs, width, height, &[], TextSource::Ocr, stop)
     };
-    let from_lines = analysed.is_some();
-    let blocks = analysed.unwrap_or_else(|| {
+    let from_lines = analyzed.is_some();
+    let blocks = analyzed.unwrap_or_else(|| {
         if too_dense(&reading.text) {
             return Vec::new();
         }
@@ -843,7 +843,7 @@ pub fn regions_page(
 /// the stream by chance.
 const SEGMENT_LOOKAHEAD: usize = 4;
 
-/// The text object a character centred at `center` belongs to, when it is
+/// The text object a character centered at `center` belongs to, when it is
 /// not the current one: the first of the next [`SEGMENT_LOOKAHEAD`] objects
 /// whose box (with a point to spare) holds it. None while the current one
 /// holds it, or when none of those does.
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn layouts_serialise_in_snake_case_without_empty_parts() {
+    fn layouts_serialize_in_snake_case_without_empty_parts() {
         let mut layout = PageLayout::of_text(1, "INVOICE\n\nInvoice date: May 1, 2026");
         layout.route = PageRoute::OcrRegions;
         let value = serde_json::to_value(&layout).unwrap();

@@ -223,8 +223,8 @@ struct JsonLineSink<'a, W: Write> {
 
 impl<W: Write> EventSink for JsonLineSink<'_, W> {
     fn emit(&mut self, response: &Response) -> io::Result<()> {
-        // One event, one write. Serialising straight into the pipe writes a
-        // fragment at a time, and a serialisation that fails halfway leaves
+        // One event, one write. Serializing straight into the pipe writes a
+        // fragment at a time, and a serialization that fails halfway leaves
         // half a JSON line on the wire for the host to choke on.
         let mut line = serde_json::to_vec(response).map_err(io::Error::other)?;
         line.push(b'\n');

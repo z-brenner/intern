@@ -104,7 +104,7 @@ pub struct Measured<'a> {
     pub extraction_wall_micros: Option<u64>,
     /// What the worker said about its stages, when it said.
     pub worker: Option<&'a ExtractionTimings>,
-    /// The engine's account, for a document it analysed.
+    /// The engine's account, for a document it analyzed.
     pub telemetry: Option<&'a AnalysisTelemetry>,
     pub analyze_wall_micros: Option<u64>,
     /// Every model request the engine made for the document.

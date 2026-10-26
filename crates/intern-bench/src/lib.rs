@@ -14,7 +14,7 @@
 //!   [`recording`] again without either; [`extract`] runs the worker alone
 //!   and scores what extraction decides: OCR, and the [`structure`] of the
 //!   text read.
-//! * [`report`] summarises the records, [`markdown`] renders them for a
+//! * [`report`] summarizes the records, [`markdown`] renders them for a
 //!   person, [`compare`] diffs two reports, and [`baseline`] gates a run.
 //! * [`merge`] replaces or adds documents in a recording, so a few can be
 //!   recorded again without the whole corpus.

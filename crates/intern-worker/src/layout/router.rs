@@ -50,7 +50,7 @@ pub struct RouteSignals {
     pub aligned_rows: u16,
     /// Lines that read as a label and its value.
     pub key_values: u16,
-    /// Lines holding two or more labelled values side by side: the rows of
+    /// Lines holding two or more labeled values side by side: the rows of
     /// a grid of fields, or signature blocks set next to each other.
     pub key_value_grid: u16,
     /// Per mille of segments drawn over another segment.
@@ -311,7 +311,7 @@ pub mod thresholds {
     pub const REGION_MIN_CHARS: u32 = 20;
     /// Lines of aligned cells that make a page a table page.
     pub const ALIGNED_ROWS: u16 = 3;
-    /// Lines of labelled values side by side that make a page a form.
+    /// Lines of labeled values side by side that make a page a form.
     pub const KEY_VALUE_GRID: u16 = 2;
     /// Segments drawn over each other.
     pub const OVERLAP: u16 = 100;
@@ -324,7 +324,7 @@ pub mod thresholds {
 /// is a bad prior OCR of a full-page image is read again. Native text with
 /// a large image no text overlaps gets that image read too. A page whose
 /// text PDFium would run together - side by side flows, table rows,
-/// labelled grids, overprinted text - is rebuilt from its geometry; every
+/// labeled grids, overprinted text - is rebuilt from its geometry; every
 /// other page keeps its text exactly as it was read.
 pub fn route_page(signals: &RouteSignals, needs_ocr: bool) -> PageRoute {
     use thresholds::*;
@@ -463,7 +463,7 @@ fn key_value_lines(text: &str) -> u16 {
     u16::try_from(count).unwrap_or(u16::MAX)
 }
 
-/// Lines with two or more labels on them, each a capitalised name of a few
+/// Lines with two or more labels on them, each a capitalized name of a few
 /// words ending in a colon: `Invoice No: 4471   Date: May 1, 2026`, or
 /// `Name: Ada Example   Name: Ben Example` across two signature blocks.
 /// PDFium runs such a line together, so the fast route would read the
@@ -950,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grid_of_labelled_values_is_told_from_one_label_per_line() {
+    fn a_grid_of_labeled_values_is_told_from_one_label_per_line() {
         let grid = "Invoice No: INV-20417   Date: March 4, 2026\n\
                     By: /s/ Ada Example   By: /s/ Ben Example\n\
                     Name: Ada Example   Name: Ben Example\n\

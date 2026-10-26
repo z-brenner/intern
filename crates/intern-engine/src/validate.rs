@@ -29,7 +29,7 @@ pub const MAX_DESCRIPTION_WORDS: usize = 42;
 /// Share of a document type's significant words that must appear in its quote.
 const TYPE_OVERLAP: f32 = 0.6;
 
-/// Capitalised words that routinely open or punctuate a description and are not
+/// Capitalized words that routinely open or punctuate a description and are not
 /// claims about the document.
 pub(crate) const GENERIC_CAPITALS: &[&str] = &[
     "a", "an", "and", "as", "at", "between", "by", "for", "from", "in", "of", "on", "the", "this",
@@ -95,7 +95,7 @@ pub fn validate_at(
     // so the evidence check passes it, and the grammar's lack of a "due"
     // role does not stop the model reaching for it. The document's own
     // labels say which date it is: when every statement of the chosen date
-    // is labelled a deadline, the one date labelled as the issue date takes
+    // is labeled a deadline, the one date labeled as the issue date takes
     // its place, and with no single such date the choice is a person's. A
     // date the referencing guard already replaced came from an effective
     // line, so it is left alone.
@@ -398,16 +398,16 @@ enum Deadline {
 }
 
 /// `Some` when every statement of `date` the document makes - references to
-/// other documents aside - is labelled a due, expiry, renewal, or deadline
+/// other documents aside - is labeled a due, expiry, renewal, or deadline
 /// date ("Due Date: 05/30/2025", "Payment due", "Expires on"). The
-/// replacement is the one other date labelled as the date of issue ("Invoice
+/// replacement is the one other date labeled as the date of issue ("Invoice
 /// Date:", "Date of issue", "Dated", a bare "Date:"); two or none, and the
 /// date is withheld rather than guessed at. A numeric date both readings fit
 /// counts as two, unless the document's other numeric dates settle which way
 /// round it writes them ([`numeric_date_order`]), the way the date chips
 /// read it.
 ///
-/// A single unlabelled statement of the date anywhere clears it: the
+/// A single unlabeled statement of the date anywhere clears it: the
 /// document then says something besides "this is when it is due".
 fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
     if !deadline_fires(digest, date) {
@@ -423,7 +423,7 @@ fn deadline_redirect(digest: &impl Segments, date: &str) -> Option<Deadline> {
 }
 
 /// Whether every statement of `date` in `digest`, references to other
-/// documents aside, is labelled a deadline - and there is at least one.
+/// documents aside, is labeled a deadline - and there is at least one.
 pub(crate) fn deadline_fires(digest: &impl Segments, date: &str) -> bool {
     let lines: Vec<String> = digest
         .segments()
@@ -608,7 +608,7 @@ pub(crate) fn reference_introduced(normalized: &str, position: usize) -> bool {
 }
 
 /// Whether the wording between a citation and a date ends the clause the
-/// citation opened: a semicolon, a colon, a full stop that ends a sentence,
+/// citation opened: a semicolon, a colon, a period that ends a sentence,
 /// or a comma that a clause of its own follows. The point in "Section 9.2",
 /// "No. 12" or "Acme Inc." and the comma in "Contoso Worldwide, Inc." are
 /// part of what is cited, and reading them as the clause ending would let
@@ -714,7 +714,7 @@ const REFERRING_WORDS: &[&str] = &[
 /// document. A determiner or preposition settles it as another one, and so
 /// does a word that ends a clause, or running out of words: a noun nobody
 /// qualified is how a document cites another, and a cover line that names
-/// the document itself is recognised separately, by its type.
+/// the document itself is recognized separately, by its type.
 ///
 /// One determiner is not the noun's own: the article of a defined term,
 /// `This Consulting Agreement (the "Agreement") dated ...`, belongs to the
@@ -936,7 +936,7 @@ pub(crate) fn validate_description(
 ///
 /// An abbreviation still ends the sentence when a new one plainly starts
 /// after it - "... Contoso Ltd. The invoice ..." - since a name never
-/// continues with a capitalised "The".
+/// continues with a capitalized "The".
 fn is_abbreviation_period(value: &str, index: usize) -> bool {
     let before = value[..index]
         .split(|character: char| character.is_whitespace())
@@ -1008,7 +1008,7 @@ fn is_dotted_initialism(token: &str) -> bool {
             .all(|part| part.len() == 1 && part.bytes().all(|byte| byte.is_ascii_alphabetic()))
 }
 
-/// Capitalised words that only ever open a sentence.
+/// Capitalized words that only ever open a sentence.
 const SENTENCE_OPENERS: &[&str] = &[
     "the", "this", "that", "these", "those", "it", "its", "they", "their", "there", "a", "an",
 ];
@@ -1041,7 +1041,7 @@ fn is_usable_sentence(description: &str) -> bool {
 }
 
 /// Finds the first specific claim in the description that the document does not
-/// contain: a number, or a capitalised name.
+/// contain: a number, or a capitalized name.
 ///
 /// Only specifics are checked. Ordinary prose the model wrote to glue the
 /// sentence together is not a claim about the document and must not send an
@@ -1057,10 +1057,10 @@ pub(crate) fn first_unsupported_claim(description: &str, digest: &impl Segments)
             continue;
         }
         let has_digit = token.bytes().any(|byte| byte.is_ascii_digit());
-        let capitalised = index > 0
+        let capitalized = index > 0
             && token.chars().next().is_some_and(char::is_uppercase)
             && !GENERIC_CAPITALS.contains(&token.to_ascii_lowercase().as_str());
-        if !(has_digit || capitalised) {
+        if !(has_digit || capitalized) {
             continue;
         }
         if !claim_is_supported(digest, token) {
@@ -1768,7 +1768,7 @@ The total fee is $248,000.00 payable on delivery.
 
     /// "This Consulting Agreement dated as of March 1, 2026" is the
     /// agreement dating itself, but only a "this" directly on the noun was
-    /// recognised: the adjective in between made the date a reference, and
+    /// recognized: the adjective in between made the date a reference, and
     /// it was withheld - or, with a commencement line to fall back on,
     /// silently replaced, and the file went out Ready under the wrong date.
     #[test]
@@ -2059,7 +2059,7 @@ This Statement of Work is issued under the Master Services Agreement, effective 
         ] {
             assert!(reference_at(line, "2023-06-02"), "{line}");
         }
-        // A full stop that ends the sentence still ends the citation.
+        // A period that ends the sentence still ends the citation.
         assert!(!reference_at(
             "Pursuant to Section 9.2 of the Employment Agreement. Your employment will terminate effective January 31, 2027",
             "2027-01-31"
@@ -2158,7 +2158,7 @@ Invoice Date: January 5, 2026
             outcome.proposal.description,
             "Invoice from Acme U.K. Ltd for consulting services delivered to Contoso Ltd."
         );
-        // And an ordinary full stop is untouched by any of it.
+        // And an ordinary period is untouched by any of it.
         let outcome = described(
             "Invoice from Acme Corporation for consulting services delivered in March 2026. It is payable on receipt.",
             document,
@@ -2330,7 +2330,7 @@ This Intercompany Agreement is effective as of April 1, 2026 between Acme and Ac
     /// document's one issue date takes its place; with no single issue date
     /// the choice is withheld for a person, the model's date still offered.
     #[test]
-    fn a_due_date_labelled_as_the_invoice_date_is_caught() {
+    fn a_due_date_labeled_as_the_invoice_date_is_caught() {
         let both = invoice_document("Invoice Date: 04/30/2025    Due Date: 05/30/2025");
         let outcome = validate_at(invoice("2025-05-30"), &digest_of(&both), 2026);
         assert_eq!(

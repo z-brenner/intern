@@ -658,7 +658,7 @@ impl ClaimStore {
     /// person's decision to leave the document where it is - kept under its
     /// own name, canceled, removed from the queue, discarded while waiting -
     /// and the tombstone is the only record of it: expired, the document was
-    /// picked up again as new and analysed once more a month after someone
+    /// picked up again as new and analyzed once more a month after someone
     /// decided against it. Once the document is moved, deleted or rewritten
     /// its key is one nothing will see again, and the tombstone goes as
     /// before. Other outcomes keep the plain retention: a failure is tried

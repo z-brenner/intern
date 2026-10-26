@@ -43,7 +43,7 @@ use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
 use crate::validate::validate;
 
 /// Below this much extracted text, a document is treated as unreadable rather
-/// than analysed on the strength of a few stray characters.
+/// than analyzed on the strength of a few stray characters.
 ///
 /// Intern has no vision fallback: the model is text-only and the local server
 /// runs without a projector, so a page nothing could read is a page for a human

@@ -50,7 +50,7 @@ mod tests {
     fn line(x: f32, y: f32, length: f32, thickness: f32, degrees: f32) -> Quad {
         let radians = degrees.to_radians();
         Quad::from_rect(&RotatedRect {
-            centre: Point::new(x, y),
+            center: Point::new(x, y),
             width: length,
             height: thickness,
             axis: Point::new(radians.cos(), -radians.sin()),

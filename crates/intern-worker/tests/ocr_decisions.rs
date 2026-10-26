@@ -37,7 +37,7 @@ fn a_genuinely_rotated_page_keeps_the_rotation_that_read_it() {
 }
 
 /// A tie keeps the detected orientation rather than silently preferring the
-/// unrotated read, so behaviour on a blank page stays predictable.
+/// unrotated read, so behavior on a blank page stays predictable.
 #[test]
 fn an_equal_score_keeps_the_detected_orientation() {
     let oriented = OcrResult::new("", 0.0).with_rotation(90);
@@ -291,7 +291,7 @@ fn two_confident_specks_are_not_an_upright_page() {
 
 /// The same decisions through the real adapter, with a stand-in Tesseract
 /// that logs every invocation: what it was asked for, the image it was
-/// given, and the PNG colour type of that image.
+/// given, and the PNG color type of that image.
 #[cfg(all(feature = "native-tesseract", unix))]
 mod through_the_adapter {
     use image::{DynamicImage, RgbImage};
@@ -299,14 +299,14 @@ mod through_the_adapter {
     use intern_worker::ocr::TesseractOcr;
 
     /// One logged invocation: `recognize` or `osd`, the output name it was
-    /// given, and the input's width, height and PNG colour type.
+    /// given, and the input's width, height and PNG color type.
     #[derive(Debug, PartialEq, Eq)]
     struct Invocation {
         mode: String,
         output: String,
         width: u32,
         height: u32,
-        colour_type: u8,
+        color_type: u8,
     }
 
     /// A stand-in `tesseract` that logs each invocation and answers
@@ -370,7 +370,7 @@ if [ "$name" = "{confident_output}" ]; then conf=93; else conf=41; fi
                     output: fields[1].to_owned(),
                     width: be(0),
                     height: be(4),
-                    colour_type: byte(9) as u8,
+                    color_type: byte(9) as u8,
                 }
             })
             .collect()
@@ -382,12 +382,12 @@ if [ "$name" = "{confident_output}" ]; then conf=93; else conf=41; fi
             output: output.to_owned(),
             width,
             height,
-            // PNG colour type 0 is greyscale.
-            colour_type: 0,
+            // PNG color type 0 is grayscale.
+            color_type: 0,
         }
     }
 
-    /// A 40 x 20 colour page, so a quarter turn shows in the dimensions.
+    /// A 40 x 20 color page, so a quarter turn shows in the dimensions.
     fn page() -> RenderedPage {
         RenderedPage::new(0, DynamicImage::ImageRgb8(RgbImage::new(40, 20)))
     }

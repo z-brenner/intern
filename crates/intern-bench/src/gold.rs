@@ -92,7 +92,7 @@ pub struct GoldDocument {
     #[serde(default)]
     pub recording: Option<String>,
     /// What the page's layout says, where it plainly says something: the
-    /// reading order, the tables, the labelled values, and the route each
+    /// reading order, the tables, the labeled values, and the route each
     /// page should take. Scored over the text the engine receives.
     #[serde(default)]
     pub structure: Option<StructureTruth>,
@@ -296,7 +296,7 @@ pub struct StructureTruth {
     #[serde(default)]
     pub key_values: Vec<KeyValueTruth>,
     /// The route a page should take, by page number, for the pages where
-    /// that is not a judgement call: `fast`, `layout`, `ocr` or
+    /// that is not a judgment call: `fast`, `layout`, `ocr` or
     /// `ocr_regions`.
     #[serde(default)]
     pub expected_routes: BTreeMap<usize, String>,
@@ -310,7 +310,7 @@ pub struct TableTruth {
     pub rows: Vec<Vec<String>>,
 }
 
-/// A labelled value: the label as printed, without its colon, and the
+/// A labeled value: the label as printed, without its colon, and the
 /// value.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct KeyValueTruth {

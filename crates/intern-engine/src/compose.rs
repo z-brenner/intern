@@ -619,7 +619,7 @@ fn compose(
         })
         .filter(|_| keep(Part::Subject));
     // An amount with no label reads beside the subject it is the price of,
-    // or as what the document is for; a labelled one or a total at the end.
+    // or as what the document is for; a labeled one or a total at the end.
     let amount = facts.amount.filter(|_| keep(Part::Amount));
     let beside_subject = amount.is_some_and(|(label, _)| {
         label.is_none() && facts.class != DocumentClass::Issued && subject.is_some()
@@ -942,7 +942,7 @@ fn subject_phrase(subject: &str) -> String {
     }
     let mut words = value.split(' ');
     if let Some(first) = words.next()
-        && is_ordinary_capitalised(first)
+        && is_ordinary_capitalized(first)
     {
         let mut characters = first.chars();
         let lowered = characters
@@ -964,7 +964,7 @@ fn subject_phrase(subject: &str) -> String {
     value
 }
 
-/// Common words a reply capitalises only because they open its phrase.
+/// Common words a reply capitalizes only because they open its phrase.
 const ORDINARY_OPENERS: &[&str] = &[
     "the",
     "a",
@@ -1030,7 +1030,7 @@ const ORDINARY_OPENERS: &[&str] = &[
     "products",
 ];
 
-fn is_ordinary_capitalised(word: &str) -> bool {
+fn is_ordinary_capitalized(word: &str) -> bool {
     let mut characters = word.chars();
     let starts_upper = characters.next().is_some_and(char::is_uppercase);
     let rest_lower = characters.all(|character| !character.is_uppercase());
@@ -1066,7 +1066,7 @@ fn shorten(phrase: &str, most: usize) -> String {
     words.join(" ").trim_end_matches([',', ';', ':']).to_owned()
 }
 
-/// Capitalises the sentence's first letter and closes it with one period.
+/// Capitalizes the sentence's first letter and closes it with one period.
 fn finish_sentence(text: String) -> String {
     let mut characters = text.chars();
     let mut sentence = match characters.next() {
@@ -1179,7 +1179,7 @@ pub fn money_in(fact: &str) -> Option<&str> {
     None
 }
 
-/// The word a labelled amount reads with outside an issued document - a
+/// The word a labeled amount reads with outside an issued document - a
 /// loan's principal, a lease's rent - or `None` for an amount nothing
 /// labels as one of those.
 pub fn amount_label(fact: &str) -> Option<&'static str> {

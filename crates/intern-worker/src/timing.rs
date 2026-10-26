@@ -30,7 +30,7 @@ pub struct ExtractionTimings {
     /// Measuring a PDF page's image coverage and deciding whether it is a
     /// scan.
     pub analysis_micros: u64,
-    /// PDFium rasterising pages: the ones that go to OCR, and the rare page
+    /// PDFium rasterizing pages: the ones that go to OCR, and the rare page
     /// rendered only to be the page image.
     pub render_micros: u64,
     /// Decoding a standalone image file, scaling it to the page cap, and
@@ -38,7 +38,7 @@ pub struct ExtractionTimings {
     pub image_decode_micros: u64,
     /// All OCR for the document: every recognition and orientation pass.
     pub ocr_micros: u64,
-    /// Of `ocr_micros`: turning pages grey and encoding the PNGs Tesseract
+    /// Of `ocr_micros`: turning pages gray and encoding the PNGs Tesseract
     /// is handed.
     pub ocr_encode_micros: u64,
     /// Of `ocr_micros`: waiting on Tesseract processes.

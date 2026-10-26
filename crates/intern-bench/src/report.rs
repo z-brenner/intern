@@ -1,4 +1,4 @@
-//! The report: every record, and the corpus summarised several ways.
+//! The report: every record, and the corpus summarized several ways.
 //!
 //! Written as JSON with every object's keys sorted and every list in a
 //! fixed order (records in gold order, groups and metrics by name), so two
@@ -267,7 +267,7 @@ pub const LONG_PAGES: u32 = 10;
 /// The categories that make a document `complex`: what it says has to be
 /// found or reasoned out - a fact in the middle, a referenced agreement's
 /// date or parties, names that are not parties, columns or a stream order
-/// that scrambles the reading, a date or labelled value inside a table,
+/// that scrambles the reading, a date or labeled value inside a table,
 /// parties placed only by the layout, a dense page. Left out:
 /// `competing_dates`, which nearly every document has; `table`, whose
 /// header tables are routine (`date_in_table` and `key_value` keep the
