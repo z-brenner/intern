@@ -282,7 +282,8 @@ describe('createInMemoryBridge review rules mirror the backend', () => {
   // with nothing to undo, and says why.
   it('completes an approval of the name a document already has as kept, not renamed', async () => {
     const named = (id: string): QueueItem => ({ id, originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' });
-    const bridge = createInMemoryBridge({ items: [named('same'), named('case')] });
+    // Filed in place: no output folder, as an earlier release allowed.
+    const bridge = createInMemoryBridge({ items: [named('same'), named('case')], settings: { destination: '' } });
 
     await bridge.approve('same', '2024-05-01 Lease.pdf', '');
     await bridge.approve('case', '2024-05-01 lease.PDF', '');

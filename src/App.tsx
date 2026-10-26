@@ -21,6 +21,7 @@ import type { DesktopBridge, LaunchReportSource, SelectionBoundary, SelectionRes
 import { createInMemoryBridge } from './lib/inMemoryBridge';
 import type { DragState, TauriSelectionBoundary } from './lib/tauriBridge';
 import { useMediaQuery } from './lib/useMediaQuery';
+import { folderName, foldersChosen } from './features/intake/folderNames';
 import { describeSharePointProblem } from './features/sharepoint/sharePointProblems';
 import type { SharePointProblem } from './features/sharepoint/sharePointProblems';
 import { useQueue } from './features/queue/useQueue';
@@ -33,15 +34,16 @@ import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from '.
 type Gate =
   | { kind: 'loading' }
   | { kind: 'failed'; problem: SharePointProblem }
-  | { kind: 'onboarding' | 'folder-setup' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState };
+  | { kind: 'onboarding' | 'folder-setup' | 'app'; pendingSettings?: Promise<AppSettings>; pendingSetup?: Promise<SetupState>; initialSetup?: SetupState; managed?: boolean };
 
 export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBridge; selection?: SelectionBoundary }) {
   // The demo pushes its own changes, as the desktop backend does, so an item
   // sent back to be analyzed again is seen coming back.
   const bridgeRef = useRef<DesktopBridge>(suppliedBridge ?? createInMemoryBridge({ liveEvents: true }));
   const bridge = suppliedBridge ?? bridgeRef.current;
-  // The built-in demo bridge carries no SharePoint deployment, so it opens
-  // straight into the app exactly as it always has.
+  // The built-in demo bridge carries no SharePoint deployment and starts with
+  // its demo input and output folders chosen, so it opens straight into the
+  // app exactly as it always has.
   const [gate, setGate] = useState<Gate>(suppliedBridge ? { kind: 'loading' } : { kind: 'app' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -57,13 +59,17 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     void Promise.all([bridge.getOnboarding(), settled]).then(([status, [settings, setup]]) => {
       if (!active) return;
       // SharePoint onboarding exists only for an enabled deployment; a
-      // required flag alone must not strand anyone. Without one, a first run
-      // that watches no folder yet is offered folder setup once - and only
-      // when the settings could be read, so nobody is asked to redo a folder
-      // Intern merely failed to load.
-      const folderSetup = !status.sharePointAvailable && status.completedVersion < status.currentVersion
-        && settings.status === 'fulfilled' && !settings.value.intakeEnabled;
-      setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : folderSetup ? 'folder-setup' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined });
+      // required flag alone must not strand anyone. Without one, Intern
+      // cannot be used until an input folder and an output folder are
+      // chosen: every document is processed by being in the one and filed
+      // into the other. So it is the folders, not a record of having seen
+      // setup once, that decide - a first run, and anyone whose settings have
+      // no input folder (someone who chose "Not now" in an earlier release),
+      // is asked on every launch until both are chosen. Only when the
+      // settings could be read, so nobody is asked to redo folders Intern
+      // merely failed to load; an add then says where to choose them.
+      const folderSetup = !status.sharePointAvailable && settings.status === 'fulfilled' && !foldersChosen(settings.value);
+      setGate({ kind: status.required && status.sharePointAvailable ? 'onboarding' : folderSetup ? 'folder-setup' : 'app', pendingSettings, pendingSetup, initialSetup: setup.status === 'fulfilled' ? setup.value : undefined, managed: status.sharePointAvailable });
     }).catch((error: unknown) => {
       if (active) setGate({ kind: 'failed', problem: describeSharePointProblem(error) });
     });
@@ -78,20 +84,27 @@ export function App({ bridge: suppliedBridge, selection }: { bridge?: DesktopBri
     <OnboardingProblemNotice problem={gate.problem} />
     <div className="setup-actions"><button type="button" className="primary" onClick={() => { setGate({ kind: 'loading' }); setAttempt((count) => count + 1); }}>Try again</button></div>
   </section></main>;
-  // The queue and its subscriptions are not mounted until onboarding is recorded as complete.
-  // Done or skipped, it is recorded so it is offered only once; Settings can open it again.
+  // The queue and its subscriptions are not mounted until both folders are
+  // chosen; there is no skipping it. Onboarding is still recorded as
+  // complete, so the record agrees, but a failure to write that record does
+  // not keep anyone out - the folders are what open the app. The settings
+  // read before setup are stale once it has saved, so the app reads them
+  // again.
   if (gate.kind === 'folder-setup') {
-    const finish = async () => { await bridge.completeOnboarding(); setGate({ ...gate, kind: 'app' }); };
-    return <FolderSetupFlow welcome bridge={bridge} selection={selection} onDone={finish} onSkip={finish} />;
+    const finish = async () => {
+      await bridge.completeOnboarding().catch(() => { /* The saved folders, not this record, open the app. */ });
+      setGate({ ...gate, kind: 'app', pendingSettings: undefined });
+    };
+    return <FolderSetupFlow welcome bridge={bridge} selection={selection} onDone={finish} />;
   }
   if (gate.kind === 'onboarding') return <OnboardingFlow bridge={bridge} selection={selection} pendingSettings={gate.pendingSettings} pendingSetup={gate.pendingSetup} initialSetup={gate.initialSetup} onComplete={() => setGate({ kind: 'app' })} />;
   // A model that still needs setup is shown at once. A ready one is read again
   // by the app itself, as it always was, so the queue's first snapshot arrives
   // before the queue screen replaces the loading state.
-  return <MainApp bridge={bridge} selection={selection} demo={!suppliedBridge} pendingSettings={gate.pendingSettings} initialSetup={modelReady(gate.initialSetup) ? undefined : gate.initialSetup} />;
+  return <MainApp bridge={bridge} selection={selection} demo={!suppliedBridge} managed={gate.managed === true} pendingSettings={gate.pendingSettings} initialSetup={modelReady(gate.initialSetup) ? undefined : gate.initialSetup} />;
 }
 
-function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { bridge: DesktopBridge; selection?: SelectionBoundary; demo: boolean; pendingSettings?: Promise<AppSettings>; initialSetup?: SetupState }) {
+function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSetup }: { bridge: DesktopBridge; selection?: SelectionBoundary; demo: boolean; managed: boolean; pendingSettings?: Promise<AppSettings>; initialSetup?: SetupState }) {
   const seededSelection = useRef(false);
   const settingsTrigger = useRef<HTMLElement | null>(null);
   const historyTrigger = useRef<HTMLElement | null>(null);
@@ -536,6 +549,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const closeHistory = () => { setHistoryOpen(false); historyTrigger.current?.focus(); };
   // Keep picker, drop resolution, import, and refresh in the same error and
   // busy boundary. A state-only lock misses two events before React rerenders.
+  // Every add - the pickers, a drop, the drop zone - copies into the input
+  // folder; the backend refuses one with no input folder rather than
+  // processing anything where it sits, and the refusal says where to choose
+  // one.
   const importSelection = async (choose: () => Promise<SelectionResult>) => {
     if (actionInFlight.current) {
       setActionError('Another queue action is still running. Add these files again when it finishes.');
@@ -544,27 +561,27 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     const selectionVersion = focusRestoreVersion.current;
     let targetId: string | undefined;
     let report: AddReport | undefined;
+    // A copy can be numbered - "Lease (2).pdf" - so the new row is found by
+    // what is new, not by the name it was picked under. A file added again
+    // while its copy still waits makes no new row, and the one it already
+    // has is the one to show.
+    const before = new Set(items.map((item) => item.id));
     const imported = await runQueueAction(async () => {
       const result = await choose();
-      let displayName: string;
-      if (result.folder) {
-        displayName = result.folder.files?.at(-1)?.displayName ?? `${result.folder.displayName}/`;
-        report = await bridge.addFolder(result.folder);
-      } else if (result.files?.length) {
-        displayName = result.files[result.files.length - 1].displayName;
-        report = await bridge.addFiles(result.files);
-      } else {
-        return; // Canceling a picker is not an import and needs no success notice.
-      }
+      // Canceling a picker is not an import and needs no success notice.
+      if (!result.folder && !result.files?.length) return;
+      const picked = (result.folder?.files?.at(-1)?.displayName ?? result.files?.at(-1)?.displayName ?? '').split('/').at(-1);
+      report = await bridge.copyToInput(result);
       setSkippedNotice('');
       const refreshed = await bridge.listItems();
-      targetId = [...refreshed].reverse().find((item) => item.originalFilename === displayName)?.id;
+      targetId = refreshed.filter((item) => !before.has(item.id)).at(-1)?.id
+        ?? [...refreshed].reverse().find((item) => item.originalFilename === picked)?.id;
     }, '');
-    // "Added 24 documents. Skipped 1: notes.zip (not a supported format)."
+    // "Copied 24 files into Input. Skipped 1: notes.zip (not a supported format)."
     if (imported && report) {
       const message = describeAddReport(report);
       setActionMessage(message);
-      if (report.skipped.length > 0) setSkippedNotice(message);
+      if (report.skipped.length > 0 || (report.held ?? 0) > 0) setSkippedNotice(message);
     }
     // Select only after the queue contains the imported row, and never over
     // a different document the reviewer chose while the import was running.
@@ -626,9 +643,13 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     return source.subscribeLaunchReports((report) => {
       const message = describeAddReport(report);
       setActionMessage(message);
-      if (report.skipped.length > 0) setSkippedNotice(message);
+      if (report.skipped.length > 0 || (report.held ?? 0) > 0) setSkippedNotice(message);
     });
   }, [bridge]);
+  // The folders' own names, for the drop target, the header and the drag
+  // overlay to say where an add goes. Empty until the settings are read.
+  const inputName = settingsLoaded && settings.intakeFolder.trim() ? folderName(settings.intakeFolder) : '';
+  const outputName = settingsLoaded && settings.destination.trim() ? folderName(settings.destination) : '';
   // Opened from Settings. The queue stays subscribed underneath, and the
   // saved settings are read back afterwards so Settings shows the new folder.
   if (folderSetupOpen) return <FolderSetupFlow bridge={bridge} selection={selection} onCancel={() => setFolderSetupOpen(false)} onDone={async () => {
@@ -653,7 +674,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   return <main className="app-shell" aria-label="Intern">
     <p className="sr-only" role="status" aria-label="Queue status" aria-live="polite" aria-atomic="true">{queueStatus}</p>
     <p className="sr-only" role="status" aria-label="Action status" aria-live="polite" aria-atomic="true">{actionMessage}</p>
-    {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{drag.count > 0 ? `Drop to add ${drag.count} ${drag.count === 1 ? 'file' : 'files'}` : 'Drop to add files'}</p></div>}
+    {drag.dragging && <div className="drop-overlay" aria-hidden="true"><p>{dropOverlayText(drag.count, inputName)}</p></div>}
     {/* Settings has its own Updates section with the same information and its
        own Install button; showing both at once would be the same choice
        offered twice. */}
@@ -666,7 +687,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
       </div>
       {renameApplying && (!updateInstalling || updateProgress?.fraction === 1) && <p className="check-hint">Waiting for a rename to finish</p>}
     </div>}
-    <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
+    <AppHeader inert={drawerOpen} busy={actionPending} paused={paused} hosted={settings.modelSource === 'hosted'} inputFolder={inputName} onAddFiles={() => { if (selection) void importSelection(async () => ({ files: await selection.pickFiles() })); }} onAddFolder={() => { if (selection) void importSelection(async () => ({ folder: await selection.pickFolder() })); }} onTogglePause={() => void (async () => { if (await runQueueAction(() => paused ? bridge.resumeQueue() : bridge.pauseQueue(), `Queue ${paused ? 'resumed' : 'paused'}.`)) setPaused(!paused); })()} />
     <Sidebar inert={drawerOpen} active={view} items={items} onChange={(next) => { focusRestoreVersion.current += 1; reviewTrigger.current = null; setView(next); setSelectedId(undefined); }} onSettings={openSettings} onHelp={() => void openGuide()} />
     <div className="workspace"><section className="queue-panel" aria-label="Queue items" inert={drawerOpen || undefined}>
       {queueError && <div className="note note--failed" role="alert" aria-label="Queue connection error">
@@ -691,7 +712,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
         four column headings with nothing under them. The same drop target
         grows into the whole panel and says what to do with it.
       */}
-      <DropZone variant={items.length === 0 ? 'hero' : 'bar'} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
+      <DropZone variant={items.length === 0 ? 'hero' : 'bar'} inputFolder={inputName} outputFolder={outputName} automaticRename={Boolean(settings.automaticRename)} managed={managed} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
       {/*
         The way out of a folder chosen by mistake. Pointing the queue at a large
         directory used to be unrecoverable from inside the app: pausing stops it
@@ -741,6 +762,12 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
     {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
+}
+
+/** "Drop to copy 3 files into Input": a drop copies into the input folder, named when it is known. */
+function dropOverlayText(count: number, inputFolder: string) {
+  const into = inputFolder || 'your input folder';
+  return count > 0 ? `Drop to copy ${count} ${count === 1 ? 'file' : 'files'} into ${into}` : `Drop to copy files into ${into}`;
 }
 
 /** Views with this many items or fewer are short enough to read; the filter box appears above longer ones. */

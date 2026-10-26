@@ -1,3 +1,4 @@
+import { folderName } from '../features/intake/folderNames';
 import type { AddReport } from '../types';
 
 /**
@@ -18,19 +19,40 @@ const SKIP_REASONS: Record<string, string> = {
   FILE_CHANGED: 'it changed while it was being added',
   UPLOADER_OTHER: 'someone else uploaded it',
   UPLOADER_UNVERIFIED: 'its uploader could not be confirmed',
+  IN_OUTPUT_FOLDER: 'it is already in your output folder',
+  COPY_FAILED: 'it could not be copied into your input folder',
+  CLAIMED_ELSEWHERE: 'another computer is already working on it',
+  INPUT_FOLDER_NOT_SET: 'no input folder is set up yet; choose one in Settings',
+  INPUT_FOLDER_UNAVAILABLE: 'your input folder could not be opened',
 };
 
 /** At most this many skipped files are named; the rest are counted. */
 const NAMED_LIMIT = 5;
 
+const files = (count: number) => `${count} ${count === 1 ? 'file' : 'files'}`;
+
 /**
- * One message for an add: what was queued, what was there already, and each
- * file left out with its reason - "Added 24 documents. Skipped 1: notes.zip
- * (not a supported format)."
+ * One message for an add: what was copied into the input folder and queued,
+ * what was there already, and each file left out with its reason - "Copied 24
+ * files into Input. Skipped 1: notes.zip (not a supported format)." A report
+ * without a copy count - setup's "Process them too", which queues what is
+ * already in the input folder - says what it added instead.
  */
 export function describeAddReport(report: AddReport): string {
   const parts: string[] = [];
-  if (report.added > 0) parts.push(`Added ${report.added} ${report.added === 1 ? 'document' : 'documents'}.`);
+  const into = report.inputFolder ? folderName(report.inputFolder) : 'your input folder';
+  const held = report.held ?? 0;
+  if (report.copied !== undefined) {
+    if (report.copied > 0) parts.push(`Copied ${files(report.copied)} into ${into}.`);
+    const inPlace = report.inPlace ?? 0;
+    if (inPlace > 0) parts.push(`${inPlace} already in ${into} ${inPlace === 1 ? 'was' : 'were'} added to the queue.`);
+    if (held > 0) {
+      const one = held === 1;
+      parts.push(`${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`);
+    }
+  } else if (report.added > 0) {
+    parts.push(`Added ${report.added} ${report.added === 1 ? 'document' : 'documents'}.`);
+  }
   if (report.alreadyQueued > 0) {
     parts.push(`${report.alreadyQueued} ${report.alreadyQueued === 1 ? 'was' : 'were'} already in the queue.`);
   }
@@ -39,5 +61,6 @@ export function describeAddReport(report: AddReport): string {
     const more = report.skipped.length - named.length;
     parts.push(`Skipped ${report.skipped.length}: ${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`);
   }
-  return parts.length > 0 ? parts.join(' ') : 'No documents were found to add.';
+  if (parts.length > 0) return parts.join(' ');
+  return report.copied !== undefined ? 'No documents were found to copy.' : 'No documents were found to add.';
 }

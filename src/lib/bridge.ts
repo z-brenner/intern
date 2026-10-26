@@ -65,13 +65,22 @@ export const SUPPORT_LINKS: Readonly<Record<SupportLinkTarget, string>> = {
 export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   listItems(): Promise<QueueItem[]>;
   /**
-   * Add files - or, from a drop, folders too. One file that cannot be added
-   * never refuses the rest; the report says what was queued and names
-   * whatever was left out.
+   * Copy files and folders into the input folder, where Intern processes
+   * everything, and queue the copies. Folders are flattened; a name already
+   * taken gets " (2)", " (3)"; a file already in the input folder is queued
+   * where it is; the originals are never changed. One file that cannot be
+   * added never refuses the rest; the report says what was copied and queued
+   * and names whatever was left out. Refused whole with INPUT_FOLDER_NOT_SET
+   * when no input folder is set up - there is no processing a file where it
+   * sits to fall back to.
    */
-  addFiles(files: FileSelection[]): Promise<AddReport>;
-  /** Add the supported documents in a folder, reported the same way. */
-  addFolder(folder: FolderSelection): Promise<AddReport>;
+  copyToInput(selection: SelectionResult): Promise<AddReport>;
+  /**
+   * Queue the documents already in the input folder: setup's "Process them
+   * too" for a folder that was not empty. Takes no path, so it can only ever
+   * reach the input folder.
+   */
+  queueInputFolder(): Promise<AddReport>;
   pauseQueue(): Promise<void>;
   resumeQueue(): Promise<void>;
   cancel(id: string): Promise<void>;
@@ -168,10 +177,10 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   cloudRoots(): Promise<CloudRoot[]>;
   /** How many documents a folder already holds, counted the way adding the folder to the queue would. */
   intakeFolderDocuments(path: string): Promise<number>;
-  /** Create (or find) an "Inbox" folder inside a synced location's top folder; resolves with its path. */
-  createInboxFolder(root: string): Promise<string>;
-  /** Create (or find) the "Filed" folder beside `intakeFolder`; resolves with its path. */
-  createFiledFolder(intakeFolder: string): Promise<string>;
+  /** Create (or find) an "Input" folder inside a synced location's top folder; resolves with its path. */
+  createInputFolder(root: string): Promise<string>;
+  /** Create (or find) the "Output" folder beside `intakeFolder`; resolves with its path. */
+  createOutputFolder(intakeFolder: string): Promise<string>;
   /** Start OneDrive, or open its folder when it is already running. */
   openOneDrive(): Promise<void>;
   /** What the description records are doing: on or off, where, and the last failure. */

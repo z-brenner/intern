@@ -1,4 +1,13 @@
-import type { CloudRoot } from '../../types';
+import type { AppSettings, CloudRoot } from '../../types';
+
+/**
+ * Whether both of Intern's folders are chosen: an input folder it watches,
+ * and an output folder it files into. Until they are, Intern is not usable,
+ * and setup asks for them.
+ */
+export function foldersChosen(settings: AppSettings): boolean {
+  return settings.intakeEnabled && settings.intakeFolder.trim() !== '' && settings.destination.trim() !== '';
+}
 
 /** The last folder name in a Windows or POSIX path. */
 export function folderName(path: string): string {
@@ -53,15 +62,15 @@ const ROOTS = [
 ];
 
 /**
- * The "Filed" folder setup offers beside `folder`, spelled with the folder's
+ * The "Output" folder setup offers beside `folder`, spelled with the folder's
  * own separator - or undefined for a root, which has nothing beside it. The
  * backend refuses to make one there, and "E:\" used to come out as "E/Filed".
  */
-export function filedBeside(folder: string): string | undefined {
+export function outputBeside(folder: string): string | undefined {
   if (ROOTS.some((root) => root.test(folder))) return undefined;
   const trimmed = folder.replace(/[\\/]+$/, '');
   const cut = Math.max(trimmed.lastIndexOf('\\'), trimmed.lastIndexOf('/'));
   if (cut < 0) return undefined;
   const separator = trimmed.includes('\\') ? '\\' : '/';
-  return `${trimmed.slice(0, cut)}${separator}Filed`;
+  return `${trimmed.slice(0, cut)}${separator}Output`;
 }

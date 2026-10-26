@@ -6,7 +6,7 @@ import { filenameExtension, leadingDate, validateFilename, validateLeafFilename 
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
 import { humanizeReason } from './reasons';
 import type { QueueBridgeEvent } from './tauriBridge';
-import { filedBeside, rootFor } from '../features/intake/folderNames';
+import { outputBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
 import { isParked, retryAccepted } from '../features/review/actions';
 
@@ -15,6 +15,14 @@ const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
 
 /** A filename as Windows compares two in one folder, as pipeline.rs name_key does: regardless of case and of trailing dots and spaces. */
 const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
+
+/**
+ * The demo's input and output folders. The browser build has no files behind
+ * it, but the app is never used without both folders, so the demo starts with
+ * a pair already chosen; `settings` replaces them, and empty ones walk setup.
+ */
+export const DEMO_INPUT_FOLDER = 'C:\\Intern\\Input';
+export const DEMO_OUTPUT_FOLDER = 'C:\\Intern\\Output';
 
 /** Exact size of the single pinned model file this build downloads. */
 export const PINNED_MODEL_BYTES = 1_280_835_840;
@@ -203,13 +211,27 @@ function skipCode(file: FileSelection): string | undefined {
   return SUPPORTED_EXTENSIONS.includes(extension) ? undefined : 'UNSUPPORTED_FORMAT';
 }
 
+/** Whether `path` is inside `folder`, compared the way Windows does. */
+function within(folder: string, path: string): boolean {
+  const root = folder.replace(/[\\/]+$/, '').toLowerCase();
+  const lower = path.toLowerCase();
+  return root.length > 0 && (lower.startsWith(`${root}\\`) || lower.startsWith(`${root}/`));
+}
+
+/** "Lease.pdf", then "Lease (2).pdf", "Lease (3).pdf": the backend's numbering. */
+function numberedName(name: string, index: number): string {
+  if (index === 1) return name;
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? `${name.slice(0, dot)} (${index})${name.slice(dot)}` : `${name} (${index})`;
+}
+
 function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): DesktopBridge {
   let items = (options.items ?? seedItems).map((item) => ({ ...item }));
   let history = seedHistory.map((entry) => ({ ...entry }));
   // skipUpdateChecks is spelled out because the desktop backend always
   // returns it - false for a file that predates it - so a bridge that left it
   // out would differ from the real one in exactly the case worth testing.
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  let settings: AppSettings = { destination: DEMO_OUTPUT_FOLDER, destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: DEMO_INPUT_FOLDER, intakeEnabled: true, intakeLocalOnly: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -410,36 +432,74 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   };
   renameWaiting();
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
-  // Mirrors the backend's partial add: what it would leave out is reported by
-  // name, everything else is queued, and a path already queued says so.
-  const addSelections = (files: FileSelection[], report: AddReport) => {
+  // The names taken in the input folder, as Windows compares them, so a copy
+  // is numbered the way the desktop backend numbers one; and what each
+  // original was copied as, so the same file added again while its copy
+  // still waits is copied once.
+  const inputNames = new Set(items.map((item) => fileNameKey(item.originalFilename)));
+  const copyOf = new Map<string, string>();
+  const inputFolder = () => {
+    if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no input folder is set up; choose one in Settings' };
+    return settings.intakeFolder.replace(/[\\/]+$/, '');
+  };
+  const queueAt = (path: string, name: string) => {
+    const item = itemFromFile({ path, displayName: name }, fixtureBatch);
+    idByPath.set(path, item.id);
+    pathById.set(item.id, path);
+    items = [...items, item];
+    return item;
+  };
+  const waitingCopy = (source: string) => {
+    const id = copyOf.get(source);
+    return items.some((item) => item.id === id && item.status !== 'completed' && item.status !== 'failed');
+  };
+  // Mirrors the backend's input_copy: what it would leave out is reported by
+  // name, a folder is flattened (passing over silently what is not a
+  // document, as Add folder always has), a clash is numbered, a file already
+  // in the input folder is queued where it is, and a filed one in the output
+  // folder is not copied back.
+  const copyToInput = (selection: SelectionResult): AddReport => {
+    const input = inputFolder();
+    const separator = input.includes('\\') ? '\\' : '/';
+    const report: AddReport = { added: 0, alreadyQueued: 0, skipped: [], copied: 0, inputFolder: input };
+    const files: FileSelection[] = [...(selection.files ?? [])];
+    if (selection.folder?.files) files.push(...selection.folder.files.filter((file) => skipCode(file) === undefined));
+    else if (selection.folder) report.skipped.push({ name: selection.folder.displayName, code: 'FOLDER_UNAVAILABLE' });
     for (const file of files) {
+      const name = file.displayName.split('/').at(-1) ?? file.displayName;
       const code = skipCode(file);
-      if (code) { report.skipped.push({ name: file.displayName.split('/').at(-1) ?? file.displayName, code }); continue; }
-      if (idByPath.has(file.path)) { report.alreadyQueued += 1; continue; }
-      const item = itemFromFile(file, fixtureBatch);
-      idByPath.set(file.path, item.id);
-      pathById.set(item.id, file.path);
-      items = [...items, item];
+      if (code) { report.skipped.push({ name, code }); continue; }
+      if (settings.destination.trim() && within(settings.destination, file.path)) { report.skipped.push({ name, code: 'IN_OUTPUT_FOLDER' }); continue; }
+      if (within(input, file.path)) {
+        if (idByPath.has(file.path)) report.alreadyQueued += 1;
+        else { queueAt(file.path, name); report.added += 1; report.inPlace = (report.inPlace ?? 0) + 1; }
+        continue;
+      }
+      if (waitingCopy(file.path)) { report.alreadyQueued += 1; continue; }
+      let index = 1;
+      while (inputNames.has(fileNameKey(numberedName(name, index)))) index += 1;
+      const copy = numberedName(name, index);
+      inputNames.add(fileNameKey(copy));
+      copyOf.set(file.path, queueAt(`${input}${separator}${copy}`, copy).id);
       report.added += 1;
+      report.copied = (report.copied ?? 0) + 1;
     }
     return report;
   };
-  const addFolder = (folder: FolderSelection): AddReport => {
-    const sourceFiles = folder.files ?? [];
-    // A folder skips what it cannot read silently, as Add folder always has.
-    if (sourceFiles.length) return addSelections(sourceFiles.filter((file) => skipCode(file) === undefined), { added: 0, alreadyQueued: 0, skipped: [] });
-    if (idByPath.has(folder.path)) return { added: 0, alreadyQueued: 1, skipped: [] };
-    const item = { id: `folder-${crypto.randomUUID()}`, originalFilename: `${folder.displayName}/`, status: 'waiting' as const };
-    idByPath.set(folder.path, item.id);
-    pathById.set(item.id, folder.path);
-    items = [...items, item];
-    return { added: 1, alreadyQueued: 0, skipped: [] };
-  };
   return {
     listItems: async () => items.map((item) => ({ ...item })),
-    addFiles: async (files) => addSelections(files, { added: 0, alreadyQueued: 0, skipped: [] }),
-    addFolder: async (folder) => addFolder(folder),
+    copyToInput: async (selection) => copyToInput(selection),
+    // What folder setup found in the input folder (`existingDocuments`), queued where it is.
+    queueInputFolder: async () => {
+      const input = inputFolder();
+      const count = options.existingDocuments ?? 0;
+      for (let index = 1; index <= count; index += 1) {
+        const name = `Document ${index}.pdf`;
+        inputNames.add(fileNameKey(name));
+        queueAt(`${input}\\${name}`, name);
+      }
+      return { added: count, alreadyQueued: 0, skipped: [] };
+    },
     pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
     resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
     cancel: async (id) => update(id, { status: 'failed', stage: undefined, progress: undefined, reason: 'Canceled.' }),
@@ -656,10 +716,10 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     classifyFolder: (path) => classifyPath(path),
     cloudRoots: async () => roots.map((root) => ({ ...root })),
     intakeFolderDocuments: async () => options.existingDocuments ?? 0,
-    createInboxFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Inbox`,
+    createInputFolder: async (root) => `${root.replace(/[\\/]+$/, '')}\\Input`,
     // Mirrors the backend: a drive or share root has no folder beside it.
-    createFiledFolder: async (intakeFolder) => {
-      const filed = filedBeside(intakeFolder);
+    createOutputFolder: async (intakeFolder) => {
+      const filed = outputBeside(intakeFolder);
       if (filed === undefined) throw { code: 'FILED_FOLDER_UNAVAILABLE', message: 'a drive\'s top folder has nothing beside it to file into' };
       return filed;
     },

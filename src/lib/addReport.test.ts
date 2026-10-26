@@ -20,4 +20,17 @@ describe('describeAddReport', () => {
   it('says so when a folder held nothing to add', () => {
     expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [] })).toBe('No documents were found to add.');
   });
+
+  it('says what was copied into the input folder, by the folder\'s name', () => {
+    expect(describeAddReport({ added: 3, alreadyQueued: 0, skipped: [], copied: 3, inputFolder: 'C:\\Intern\\Input' }))
+      .toBe('Copied 3 files into Input.');
+    expect(describeAddReport({ added: 2, alreadyQueued: 1, skipped: [{ name: 'Filed.pdf', code: 'IN_OUTPUT_FOLDER' }], copied: 1, inPlace: 1, inputFolder: 'C:\\Intern\\Input' }))
+      .toBe('Copied 1 file into Input. 1 already in Input was added to the queue. 1 was already in the queue. Skipped 1: Filed.pdf (it is already in your output folder).');
+    expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 0 })).toBe('No documents were found to copy.');
+  });
+
+  it('says when copies wait for Microsoft before they join the queue', () => {
+    expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 2, held: 2, inputFolder: 'C:\\Users\\pat\\Contoso\\Files\\Inbox' }))
+      .toBe('Copied 2 files into Inbox. They join the queue once OneDrive has uploaded them and Microsoft confirms they are yours.');
+  });
 });

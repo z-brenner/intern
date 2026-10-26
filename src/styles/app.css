@@ -101,6 +101,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .private { display: inline-flex; align-items: center; gap: 9px; padding: 5px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-subtle); font-size: 13px; color: var(--text); white-space: nowrap; }
 .private i { width: 8px; height: 8px; border-radius: 50%; background: var(--ready); box-shadow: 0 0 0 3px rgba(20, 128, 74, .14); }
 .header-actions { display: flex; gap: 10px; align-items: center; }
+/* Where Add files and Add folder put what they are given, by the folder's own name. */
+.header-note { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-muted); }
+.header-note strong { color: var(--text); font-weight: 600; }
 
 /* ---------- sidebar ---------- */
 .sidebar { grid-area: nav; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; justify-content: space-between; gap: 16px; border-right: 1px solid var(--border); padding: 14px 0 16px; background: var(--surface); }
@@ -339,6 +342,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .folder-row label { flex: 1; min-width: 0; margin: 0; }
 .folder-row button { flex: none; white-space: nowrap; }
 .cloud-badge { color: var(--text-muted); font-size: 12px; line-height: 1.45; margin: -6px 0 12px; }
+/* An input or output folder in Settings: what it is, where it is, what it is for, and the one button that changes it. */
+.folder-setting { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 10px 0 12px; }
+.folder-setting-text { min-width: 0; }
+.folder-setting .folder-path { margin: 2px 0 4px; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.folder-setting .check-hint { margin: 0; }
+.folder-setting button { flex: none; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 500; }
+.folder-setting button:hover { background: var(--surface-subtle); border-color: var(--text-muted); }
+.existing-choice { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.existing-choice legend { padding: 0 4px; font-size: 13px; color: var(--text); }
+.settings-advanced > summary { cursor: pointer; font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--text); padding: 2px 0; }
+.settings-advanced[open] > summary { margin-bottom: 10px; }
 .intake-status { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); padding: 12px; margin: 14px 0 4px; font-size: 13px; }
 .intake-status p { margin: 0 0 8px; line-height: 1.45; }
 
@@ -442,7 +456,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 
 @media (max-width: 800px) {
   .app-header { padding: 0 12px; }
-  .private, .brand-tag { display: none; }
+  .private, .brand-tag, .header-note { display: none; }
   .header-actions { gap: 6px; }
   .header-actions button:not(.icon-button) span { display: none; }
   .drop-zone--bar { gap: 12px; padding: 12px 14px; }
@@ -540,6 +554,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .onboarding-panel h1.onboarding-finished { font-size: 28px; color: var(--brand-navy); }
 .onboarding-panel p { margin: 0 0 14px; font-size: 15px; line-height: 1.6; color: var(--text-soft); max-width: 62ch; }
 .onboarding-list { margin: 0 0 16px; padding-left: 20px; font-size: 15px; line-height: 1.7; color: var(--text-soft); }
+/* The two folders Intern works between, each with the one line that says what it is for. */
+.setup-folders { display: grid; gap: 10px; margin: 8px 0 18px; }
+.setup-folders > div { padding: 14px 16px; border-left: 3px solid var(--brand-navy); background: var(--surface-subtle); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; overflow-wrap: anywhere; }
+.setup-folders dt { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--brand-navy); }
+.setup-folders dd { margin: 0; display: grid; gap: 2px; }
+.setup-folders dd strong { font-size: 15px; color: var(--text); }
+.setup-folders dd span { font-size: 14px; line-height: 1.5; color: var(--text-soft); }
 
 .onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 24px 0 8px; }
 .onboarding button {

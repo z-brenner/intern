@@ -149,8 +149,9 @@ describe('TauriBridge', () => {
     const bridge = new TauriBridge(fake.transport);
 
     await bridge.listItems();
-    await bridge.addFiles([{ path: 'C:\\Docs\\a.pdf', displayName: 'a.pdf' }]);
-    await bridge.addFolder({ path: 'C:\\Docs', displayName: 'Docs' });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Docs\\a.pdf', displayName: 'a.pdf' }] });
+    await bridge.copyToInput({ folder: { path: 'C:\\Docs', displayName: 'Docs' } });
+    await bridge.queueInputFolder();
     await bridge.pauseQueue();
     await bridge.resumeQueue();
     await bridge.cancel('7');
@@ -179,8 +180,9 @@ describe('TauriBridge', () => {
 
     expect(fake.calls).toEqual([
       { command: 'queue_list', args: undefined },
-      { command: 'queue_add_files', args: { files: [{ path: 'C:\\Docs\\a.pdf', displayName: 'a.pdf' }] } },
-      { command: 'queue_add_folder', args: { folder: { path: 'C:\\Docs', displayName: 'Docs' } } },
+      { command: 'input_copy', args: { paths: ['C:\\Docs\\a.pdf'] } },
+      { command: 'input_copy', args: { paths: ['C:\\Docs'] } },
+      { command: 'intake_queue_existing', args: undefined },
       { command: 'queue_pause', args: undefined },
       { command: 'queue_resume', args: undefined },
       { command: 'queue_cancel', args: { id: '7' } },
@@ -586,16 +588,18 @@ describe('TauriBridge', () => {
     expect(fake.calls).toEqual([{ command: 'folder_classify', args: { path: 'C:\\Local\\Scans' } }]);
   });
 
-  it('returns the add report the backend sends for files and for a folder', async () => {
-    const report = { added: 24, alreadyQueued: 1, skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] };
-    const fake = fakeTransport({ queue_add_files: report, queue_add_folder: { added: 3, alreadyQueued: 0, skipped: [] } });
+  it('returns the report the backend sends for a copy into the input folder, and for the files already there', async () => {
+    const report = { added: 24, alreadyQueued: 1, copied: 24, held: 0, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] };
+    const fake = fakeTransport({ input_copy: report, intake_queue_existing: { added: 3, alreadyQueued: 0, skipped: [] } });
     const bridge = new TauriBridge(fake.transport);
 
-    expect(await bridge.addFiles([{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }])).toEqual(report);
-    expect(await bridge.addFolder({ path: 'C:\\Inbox', displayName: 'Inbox' })).toEqual({ added: 3, alreadyQueued: 0, skipped: [] });
+    // A held count of zero is left out, like every other optional count.
+    expect(await bridge.copyToInput({ files: [{ path: 'C:\\Downloads\\a.pdf', displayName: 'a.pdf' }], folder: { path: 'C:\\Downloads\\Scans', displayName: 'Scans' } }))
+      .toEqual({ added: 24, alreadyQueued: 1, copied: 24, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'notes.zip', code: 'UNSUPPORTED_FORMAT' }] });
+    expect(await bridge.queueInputFolder()).toEqual({ added: 3, alreadyQueued: 0, skipped: [] });
     expect(fake.calls).toEqual([
-      { command: 'queue_add_files', args: { files: [{ path: 'C:\\Inbox\\a.pdf', displayName: 'a.pdf' }] } },
-      { command: 'queue_add_folder', args: { folder: { path: 'C:\\Inbox', displayName: 'Inbox' } } },
+      { command: 'input_copy', args: { paths: ['C:\\Downloads\\a.pdf', 'C:\\Downloads\\Scans'] } },
+      { command: 'intake_queue_existing', args: undefined },
     ]);
   });
 
