@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { KeyboardEvent, MouseEvent } from 'react';
 import { keptOriginal } from '../features/review/actions';
 import { COLUMNS, COPYABLE_COLUMNS, columnIndex, inBounds, selectAll, selectionBounds } from '../features/queue/grid';
@@ -44,6 +44,7 @@ const PAGE_ROWS = 10;
  */
 export function QueueTable({ items, selectedId, selection, restingCell, onSelectionChange, onSelectRow, onOpen }: Props) {
   const tableRef = useRef<HTMLTableElement>(null);
+  const idPrefix = useId();
   const dragging = useRef(false);
   const bounds = selectionBounds(selection, items);
   // The cell that takes Tab: the moving end of the selection, or with nothing
@@ -198,7 +199,12 @@ export function QueueTable({ items, selectedId, selection, restingCell, onSelect
             : '';
           const isActive = active?.id === item.id && active.column === column.key;
           const className = [`col-${column.key}`, column.key === 'confidence' ? `confidence ${item.status}` : '', selected ? 'cell-selected' : '', edge].filter(Boolean).join(' ');
+          // The arrow keys step over Status, so from the keyboard a screen
+          // reader would never reach it. The filename cell is described by it
+          // instead: moving down the first column reads each status.
           return <td key={column.key} role="gridcell" className={className} data-item-id={item.id} data-column={column.key}
+            id={column.key === 'status' ? `${idPrefix}-status-${rowIndex}` : undefined}
+            aria-describedby={column.key === 'original' ? `${idPrefix}-status-${rowIndex}` : undefined}
             tabIndex={column.copyable ? (isActive ? 0 : -1) : undefined}
             aria-selected={column.copyable ? selected : undefined}
             title={column.key === 'description' && item.status !== 'waiting' ? item.description : undefined}

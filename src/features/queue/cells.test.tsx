@@ -63,6 +63,9 @@ describe('queue cells', () => {
     // Status is not selectable at all, so it says nothing about selection.
     expect(queueCell('Scan 0103.pdf', 'status')).not.toHaveAttribute('aria-selected');
     expect(queueCell('Scan 0103.pdf', 'status')).not.toHaveAttribute('tabindex');
+    // The keyboard steps over it, so the filename cell carries it for a screen reader.
+    expect(queueCell('Scan 0103.pdf')).toHaveAccessibleDescription('Ready');
+    expect(queueCell('Scan 0102.pdf')).toHaveAccessibleDescription('Needs review');
     // Extending moved neither the selected item nor anything else.
     expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('status', { name: 'Cell selection' })).toHaveTextContent('3 rows by 2 columns selected');
