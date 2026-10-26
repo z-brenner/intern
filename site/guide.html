@@ -876,7 +876,7 @@
           </div>
           <div>
             <dt>Duplicates</dt>
-            <dd>A document whose content Intern has already filed is flagged as a duplicate of the filed name, rather than renamed again. Choose <strong>Process anyway</strong> to process it all the same. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
+            <dd>A document whose content Intern has already filed is not read again. With an output folder set, it is moved there under the original's filed name with <strong>COPY -</strong> in front — <code>COPY - 2026-01-02 Lease.pdf</code>, then <code>COPY - 2026-01-02 Lease (2).pdf</code> — next to the original. <strong>Undo</strong> puts it back, where it waits in review; choose <strong>Process anyway</strong> to process it all the same. Without an output folder it waits in review untouched. A second scan, a re-export, or a copy saved again is not the same bytes, so Intern also compares the words: a document that says what a filed one says, dated the same, waits in review with <strong>Filed already as</strong> and the name — on this computer or a teammate's. Approve to file it anyway, keep the original, or remove it.</dd>
           </div>
           <div>
             <dt>Where files land</dt>
@@ -1185,7 +1185,7 @@
           </div>
           <div>
             <dt>The same document twice</dt>
-            <dd>The shared folder remembers what every machine has filed out of it, for a year. A document someone uploads again — under any name — is flagged as a duplicate of the filed name, naming the machine that filed it, instead of being filed a second time.</dd>
+            <dd>The shared folder remembers what every machine has filed out of it, for a year. A document someone uploads again — under any name — is filed as <strong>COPY -</strong> and the name it was filed under, instead of being read and filed a second time.</dd>
           </div>
         </dl>
 
@@ -1378,6 +1378,12 @@
             <summary>A document failed twice and stopped trying</summary>
             <div class="answer">
               <p>It is in Failed, with the reason shown. Retry it manually from there.</p>
+            </div>
+          </details>
+          <details>
+            <summary>A file in my input folder is called NEEDS REVIEW - …</summary>
+            <div class="answer">
+              <p>Intern could not read it: a password, a damaged file, one too large to read, or one the model could not answer for. It waits in the queue for review with the reason shown, renamed so you can see it in the folder too, and Intern never picks it up as a new document. <strong>Retry</strong> reads it again (after you remove a password, say), or type a name for it and approve it to file it. <strong>Keep original</strong> takes the prefix off again; <strong>Remove from queue</strong> leaves the file as it is.</p>
             </div>
           </details>
           <details>

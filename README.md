@@ -119,10 +119,16 @@ Outlook `.msg` emails, plain text, Markdown, and scanned images. Names
 Intern can support with verbatim text from the document appear ready to apply;
 anything else goes to review with the reason shown. Nothing on disk is renamed
 until you approve it, either one item at a time or with **Apply all ready**,
-and a rename can be undone. A document whose content Intern has already filed
-is flagged as a duplicate of the filed name instead of being renamed into a
-second copy, and the **History** view in Completed lists every rename and undo
-Intern has ever applied, exportable as CSV. A long queue has a filter box
+and a rename can be undone - with two exceptions Intern makes on its own, both
+of which say so in the file's name. A document Intern cannot read (a password,
+a damaged or mislabeled file, one too large to read, one the model could not
+answer for) stays in the queue for review and its file is renamed in place to
+`NEEDS REVIEW - <name>`, so the folder shows it too; Retry reads it again, or
+type a name for it and approve that, and Keep original takes the prefix off
+again. A document whose bytes Intern has already filed is moved into the
+output folder as `COPY - <the original's filed name>`, with ` (2)`, ` (3)` for
+further copies, and Undo puts it back. The **History** view in Completed lists
+every rename and undo Intern has ever applied, exportable as CSV. A long queue has a filter box
 above it that narrows the rows by original name, proposed name, or a word
 from the description.
 
@@ -319,8 +325,16 @@ suffix on collision.
 
 ### The same document twice
 
-Identical bytes are caught before analysis and flagged as a duplicate of the
-filed name. A second scan of the same page, a PDF exported twice, or a copy
+Identical bytes are caught before analysis and never read again: with an
+output folder set, the document is moved there under the original's filed
+name with `COPY - ` in front - beside the original, `COPY - 2026-01-02
+Lease.pdf`, then `COPY - 2026-01-02 Lease (2).pdf` - whether automatic renaming
+is on or not. Every copy is named after the original, never after another
+copy, and a copy leaves no records of its own (no description record, no
+shared filed marker). Undo puts it back in the input folder, where it waits in
+review as a duplicate and is not moved again; **Process anyway** reads it like
+any other document. Without an output folder, a duplicate waits in review
+untouched, as before. A second scan of the same page, a PDF exported twice, or a copy
 saved again with new metadata is not identical bytes, so Intern also
 fingerprints the text it extracted and holds every new document against what
 it has filed - on this machine and, through the shared filed index, on

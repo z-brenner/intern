@@ -596,6 +596,23 @@ backlog until the next wake. An undo that cannot reach the filed document -
 an offline share - says so; only a document the file system reports missing
 is called moved or deleted.
 
+A document Intern could not read is renamed where it lies, to
+`NEEDS REVIEW - <name>`, and its queue row - keyed by path - follows it. The
+rename and the row's update cannot be one step, so a `review_renames`
+journal, kept apart from the receipts, records the intent first: planned, then
+a no-replace rename, then the row's new path committed with the journal entry.
+A crash in between is settled from the disk on the next recovery pass - the
+document at the new name means the rename landed, still at the old one means
+nothing moved, and both names taken is settled by the bytes - and a document
+left in review without its mark is marked then. A rename that is refused (a
+held file, a folder that may not be written) moves nothing and is recorded as
+refused rather than retried for ever. Keep original takes the prefix off again
+with the same journal, completing the item in the same commit, and Retry and
+approval read and file the document from wherever its file now is. Every scan
+and add skips the prefix, in any case, and the intake watcher still finds the
+row by the name the document arrived under, so its claim follows the document
+instead of reading it as removed.
+
 A document that changed after it was read - signed, edited, saved over - is
 never filed under a name that described the earlier version: approving it
 sends it back to review as `FILE_CHANGED` and says so. **Re-analyze** (the
@@ -843,17 +860,22 @@ queue's fifteen-minute deadline rather than running on past it.
 
 Each failure is stored under a code that says what went wrong, and the code
 decides what happens next. A failure that would come out the same on a second
-attempt fails the document at once: a password-protected file, a file that is
+attempt settles the document at once: a password-protected file, a file that is
 not what its extension says, a document past the extraction limits or too long
 for the model, a damaged file the parser rejects, an internal failure on that
-one document, and a model refusal. Asking again would only re-read the file —
+one document, and a model refusal. Each of these is the document's own
+problem, so it does not fail: it waits in review under its code
+(`UNREADABLE_CODES` in `intern-core`), and its file is renamed in place to
+`NEEDS REVIEW - <name>` so the input folder shows it too. A parser that crashed
+on the document on both attempts, and a model that timed out on it on both,
+send it to review the same way. Asking again would only re-read the file —
 thirty minutes of it, for a scan that hit the time limit — or re-send and
 re-bill the request. A worker crash, a failure the worker says may pass, and a
 model request that timed out or was called off get one more attempt. A failure
 that every following document would share pauses the queue and names the
 reason in the window: the hosted-model failures above, a local model server
 that cannot be started or recovered, and missing text-recognition files. A
-model reply that cannot be used fails that document; three documents in a row
+model reply that cannot be used sends that document to review; three documents in a row
 with such a reply pause the queue, since by then the model is the problem, and
 any document read successfully starts the count again. A document that meets
 no model at all — the moment while Settings switches between the hosted and
@@ -897,7 +919,22 @@ do not have.
 
 ### The same document twice
 
-Exact duplicates are a hash comparison before analysis. The duplicates people
+Exact duplicates are a hash comparison before analysis. One that has an
+output folder to go to is staged as an approved copy - a record with no
+analysis, `copy_of` naming the original - and moved through the same
+journaled apply as any approval into the original's folder (or the output
+folder's root, for a teammate's filing or an original whose folder is not
+known), as `COPY - <the original's filed name>` with the duplicate's own
+extension and the usual ` (2)` on collision. It is filed now when the queue
+is free and between documents otherwise, whatever automatic renaming says. A
+copy is not a filing of its own: no fingerprint, no description record, no
+shared filed marker, and the queue row's `copy_filing` mark keeps it out of
+every later duplicate lookup, so each copy is named after the original. A
+file already inside the output folder - the original itself, added again - is
+never moved as a copy of itself, and with no output folder a duplicate waits in
+review untouched. Undo puts a copy back and leaves it in review flagged
+`DUPLICATE`, where nothing files it again; Process anyway clears the mark and
+reads it. The duplicates people
 make are not exact: a second scan of the same page, a PDF exported twice from
 the same message, a copy saved again by a program that rewrote its metadata.
 So the engine also fingerprints everything the extractor read - a 64-bit
@@ -1032,6 +1069,8 @@ operation rather than from whichever call happened to finish it.
 The mirror image is the *duplicate oracle*: before analysing a document the
 queue checks its own history for the same content, then asks the oracle,
 which in the desktop app reads the shared folder's filed markers. Either
-answer routes the document to review as a duplicate, naming what the content
-was filed as and, for a teammate's filing, by which machine. Analysis never
-runs on a duplicate unless a person asks for it.
+answer files the document as a copy named after that filing (see "The same
+document twice"), or, with nowhere to file it, routes it to review as a
+duplicate, naming what the content was filed as and, for a teammate's filing,
+by which machine. Analysis never runs on a duplicate unless a person asks for
+it.
