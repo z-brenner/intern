@@ -516,8 +516,10 @@ impl KnownFiling {
 
 /// Where the queue asks whether a document's content has already been filed
 /// somewhere its own history cannot see. Asked once per enqueued document,
-/// before any analysis; a positive answer routes the document to review as
-/// a duplicate, where "process anyway" is one click.
+/// before any analysis; a positive answer files the document as a copy named
+/// after that filing (`COPY - <filename>`), or, with no output folder to file
+/// it into, routes it to review as a duplicate, where "process anyway" is one
+/// click.
 pub trait DuplicateOracle: Send + Sync {
     fn filed_elsewhere(&self, source_hash: &str, source_path: &Path) -> Option<KnownFiling>;
     /// A filing whose text fingerprint is within [`NEAR_DUPLICATE_DISTANCE`]
