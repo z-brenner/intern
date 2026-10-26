@@ -1,0 +1,306 @@
+{
+  "name": "c3ec181c-618b-455b-9878-426d7111dab3",
+  "id": "/providers/Microsoft.Flow/flows/c3ec181c-618b-455b-9878-426d7111dab3",
+  "type": "Microsoft.Flow/flows",
+  "properties": {
+    "apiId": "/providers/Microsoft.PowerApps/apis/shared_logicflows",
+    "displayName": "Intern - fill the Description column",
+    "definition": {
+      "metadata": {
+        "workflowEntityId": null,
+        "provisioningMethod": "FromDefinition",
+        "failureAlertSubscription": true,
+        "clientLastModifiedTime": "2026-10-26T00:00:00.0000000Z"
+      },
+      "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+      "contentVersion": "1.0.0.0",
+      "parameters": {
+        "$connections": {
+          "defaultValue": {},
+          "type": "Object"
+        },
+        "$authentication": {
+          "defaultValue": {},
+          "type": "SecureObject"
+        }
+      },
+      "triggers": {
+        "When_an_Intern_record_is_created_or_changed": {
+          "recurrence": {
+            "interval": 5,
+            "frequency": "Minute"
+          },
+          "splitOn": "@triggerOutputs()?['body/value']",
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+              "connectionName": "shared_sharepointonline",
+              "operationId": "GetOnUpdatedFileItems"
+            },
+            "parameters": {
+              "dataset": "",
+              "table": ""
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "conditions": [
+            {
+              "expression": "@endsWith(toLower(triggerOutputs()?['body/{FilenameWithExtension}']), '.json')"
+            },
+            {
+              "expression": "@contains(toLower(triggerOutputs()?['body/{Path}']), '.intern/descriptions')"
+            }
+          ],
+          "description": "Choose your site and the document library Intern files into. Leave Folder blank: the two trigger conditions (Settings) admit only Intern's .json records in any .intern/descriptions folder of the library, so nothing else starts a run."
+        }
+      },
+      "actions": {
+        "Initialize_document_item_id": {
+          "runAfter": {},
+          "type": "InitializeVariable",
+          "inputs": {
+            "variables": [
+              {
+                "name": "DocumentItemId",
+                "type": "integer",
+                "value": 0
+              }
+            ]
+          },
+          "description": "Stays 0 until the document the record describes is found in the library."
+        },
+        "Get_the_record": {
+          "runAfter": {
+            "Initialize_document_item_id": [
+              "Succeeded"
+            ]
+          },
+          "type": "OpenApiConnection",
+          "inputs": {
+            "host": {
+              "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+              "connectionName": "shared_sharepointonline",
+              "operationId": "GetFileContent"
+            },
+            "parameters": {
+              "dataset": "",
+              "id": "@triggerOutputs()?['body/{Identifier}']",
+              "inferContentType": true
+            },
+            "authentication": "@parameters('$authentication')"
+          },
+          "description": "Choose the same site as the trigger."
+        },
+        "Read_the_record": {
+          "runAfter": {
+            "Get_the_record": [
+              "Succeeded"
+            ]
+          },
+          "type": "ParseJson",
+          "inputs": {
+            "content": "@json(string(body('Get_the_record')))",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "integer"
+                },
+                "key": {
+                  "type": "string"
+                },
+                "filename": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "libraryPath": {
+                  "type": "string"
+                },
+                "library": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "documentDate": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "documentType": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "confidence": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "originalFilename": {
+                  "type": "string"
+                },
+                "filedAt": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "version",
+                "filename",
+                "path",
+                "description"
+              ]
+            }
+          }
+        },
+        "Document_path": {
+          "runAfter": {
+            "Read_the_record": [
+              "Succeeded"
+            ]
+          },
+          "type": "Compose",
+          "inputs": "@replace(concat('/', first(split(triggerOutputs()?['body/{Path}'], '.intern/descriptions')), body('Read_the_record')?['path']), '//', '/')",
+          "description": "The record sits in <destination>/.intern/descriptions and its path is relative to <destination>, so the document is at the record's folder minus .intern/descriptions, plus that path. This needs nothing typed in, and works for any destination inside the library."
+        },
+        "Wait_for_the_document_to_sync": {
+          "runAfter": {
+            "Document_path": [
+              "Succeeded"
+            ]
+          },
+          "type": "Until",
+          "expression": "@greater(variables('DocumentItemId'), 0)",
+          "limit": {
+            "count": 60,
+            "timeout": "PT2H"
+          },
+          "actions": {
+            "Find_the_document": {
+              "runAfter": {},
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                  "connectionName": "shared_sharepointonline",
+                  "operationId": "GetFileMetadataByPath"
+                },
+                "parameters": {
+                  "dataset": "",
+                  "path": "@outputs('Document_path')"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "description": "Choose the same site as the trigger. Fails while the document has not finished uploading."
+            },
+            "Remember_the_document": {
+              "runAfter": {
+                "Find_the_document": [
+                  "Succeeded"
+                ]
+              },
+              "type": "SetVariable",
+              "inputs": {
+                "name": "DocumentItemId",
+                "value": "@int(outputs('Find_the_document')?['body/ItemId'])"
+              }
+            },
+            "Wait_a_minute": {
+              "runAfter": {
+                "Find_the_document": [
+                  "Failed",
+                  "TimedOut"
+                ]
+              },
+              "type": "Wait",
+              "inputs": {
+                "interval": {
+                  "count": 1,
+                  "unit": "Minute"
+                }
+              }
+            }
+          },
+          "description": "The sync client uploads a document and its record independently, and the record can arrive first. Look again every minute for up to an hour."
+        },
+        "If_the_document_was_found": {
+          "runAfter": {
+            "Wait_for_the_document_to_sync": [
+              "Succeeded",
+              "Failed",
+              "TimedOut"
+            ]
+          },
+          "type": "If",
+          "expression": {
+            "and": [
+              {
+                "greater": [
+                  "@variables('DocumentItemId')",
+                  0
+                ]
+              }
+            ]
+          },
+          "actions": {
+            "Write_the_Description_column": {
+              "runAfter": {},
+              "type": "OpenApiConnection",
+              "inputs": {
+                "host": {
+                  "apiId": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+                  "connectionName": "shared_sharepointonline",
+                  "operationId": "PatchFileItem"
+                },
+                "parameters": {
+                  "dataset": "",
+                  "table": "",
+                  "id": "@variables('DocumentItemId')",
+                  "item/Description": "@body('Read_the_record')?['description']"
+                },
+                "authentication": "@parameters('$authentication')"
+              },
+              "description": "Choose the same site and library as the trigger, then check that the Description box holds the record's description. If your column's internal name is Description0, put the description in that box instead."
+            }
+          },
+          "else": {
+            "actions": {
+              "Stop_the_document_is_gone": {
+                "runAfter": {},
+                "type": "Terminate",
+                "inputs": {
+                  "runStatus": "Cancelled"
+                },
+                "description": "The document never appeared at the record's path: it was moved, renamed, or the rename was undone before this ran. Nothing to write."
+              }
+            }
+          }
+        }
+      }
+    },
+    "connectionReferences": {
+      "shared_sharepointonline": {
+        "connectionName": "shared-sharepointonl-8187bd65-0c26-4124-9a65-66a925fed9b3",
+        "source": "Embedded",
+        "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+        "tier": "NotSpecified"
+      }
+    },
+    "flowFailureAlertSubscribed": false
+  }
+}

@@ -1034,32 +1034,44 @@
           anyone with access can add to it.
         </p>
 
-        <h3 class="sym-group">DESCRIPTIONS IN A SHAREPOINT COLUMN</h3>
+        <h3 class="sym-group" id="sharepoint-descriptions">DESCRIPTIONS IN A SHAREPOINT COLUMN</h3>
         <p class="prose">
           Alongside the filename, Intern writes one sentence saying what the
-          document concerns. It can leave that sentence beside each document it
-          files, so a column of the library can show it.
+          document concerns. It leaves that sentence in a small record beside
+          each document it files, and a Power Automate flow copies it into the
+          library's <strong>Description</strong> column. Intern makes no
+          network request for this: OneDrive uploads the record like any other
+          file, and the flow runs in your own Microsoft 365 account.
         </p>
         <ol class="steps">
           <li>
-            <b>Turn on the records.</b>
-            <p>In Settings, under <strong>Descriptions for SharePoint</strong>, tick <strong>Write a description record for each filed document</strong> and save. It needs a destination folder, because that is where the records live.</p>
+            <b>Check that records are on.</b>
+            <p>In Settings, under <strong>Descriptions for SharePoint</strong>, <strong>Write a description record for each filed document</strong> should be ticked; the status line says <em>On</em> and where records go (<code>.intern\descriptions</code> in the output folder). Each record holds the new filename, its path, the sentence, and the date, type, and parties behind the name. Never any document text.</p>
           </li>
           <li>
-            <b>Intern writes one small file per filed document.</b>
-            <p>Under <code>.intern\descriptions</code> in the destination folder: the new filename, its path in the library, the sentence, and the date, type, and parties behind the name. Never any document text. The sync client uploads it like any other file. Intern makes no network request for this.</p>
+            <b>Add the column.</b>
+            <p>In the library, add a column named <strong>Description</strong>, of type <strong>Multiple lines of text</strong>.</p>
           </li>
           <li>
-            <b>A flow fills the column.</b>
-            <p>Add a <strong>Description</strong> column to the library and create the Power Automate flow described step by step in the <a href="https://github.com/z-brenner/intern/blob/main/docs/sharepoint-descriptions.md">description-column guide</a>. It runs under the account of whoever creates it and copies each record's sentence into the column.</p>
+            <b>Download the flow.</b>
+            <p><a href="downloads/intern-description-flow.zip" download>intern-description-flow.zip</a> — a small Power Automate package. Its source is readable in the <a href="https://github.com/z-brenner/intern/tree/main/integrations/power-automate/description-flow/package">repository</a>.</p>
+          </li>
+          <li>
+            <b>Import it and pick your library.</b>
+            <p>In <a href="https://make.powerautomate.com">Power Automate</a>, choose <strong>My flows → Import → Import Package (Legacy)</strong>, upload the zip, and choose your SharePoint connection. Open the imported flow, choose your site and library in its trigger and in the steps that ask, then save and turn it on. It runs under that connection, so its owner needs edit rights on the library.</p>
+          </li>
+          <li>
+            <b>Fill in what was filed before.</b>
+            <p>Back in the same Settings section, <strong>Write records for documents already filed</strong> writes a record for everything filed before records were on. The column fills within a few minutes of each record reaching the library.</p>
           </li>
         </ol>
         <p class="note">
-          Turned it on after filing a stack of documents? <strong>Write
-          records for documents already filed</strong> in the same section
-          writes them now. No flow? The rename history's CSV export has the
-          sentence in its last column, ready to paste into the library's grid
-          view.
+          The flow package has not yet been tried in a real Microsoft 365
+          tenant. If the import or the first run fails, the
+          <a href="https://github.com/z-brenner/intern/blob/main/docs/sharepoint-descriptions.md#building-the-flow-by-hand">description-column guide</a>
+          builds the same flow step by step. No flow at all? The rename
+          history's CSV export has the sentence in its last column, ready to
+          paste into the library's grid view.
         </p>
 
         <h3 class="sym-group">TWO THINGS PEOPLE ASK</h3>
@@ -1402,12 +1414,19 @@
                 SharePoint says <em>On</em> and shows the records folder; the
                 folder <code>.intern\descriptions</code> exists in the library
                 (open it in the browser — if it is missing, the sync client has
-                not uploaded it yet); and the flow's run history shows it ran.
+                not uploaded it yet); and the flow is on and its run history
+                shows it ran.
               </p>
               <p>
-                A record can arrive before its document. The recipe's retry
-                handles that; a flow built without it fails once and needs a
-                re-run.
+                No runs at all usually means the trigger points at a different
+                site or library than the one Intern files into. A run that
+                ends <em>Cancelled</em> means the document never appeared at
+                the path in its record — it was moved or the rename was undone.
+                A record can arrive before its document; the flow waits up to
+                an hour for it. A run that fails at <em>Write the Description
+                column</em> usually means the column is not named
+                <strong>Description</strong>, or that step's Description box
+                is empty.
               </p>
             </div>
           </details>

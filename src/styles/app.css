@@ -363,6 +363,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .descriptions-status button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
 .descriptions-status button:disabled { opacity: .5; cursor: default; }
 .descriptions-status .check-hint { margin: 8px 0 0; }
+.descriptions-steps-title { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: var(--text); }
+.descriptions-steps { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.5; }
+.descriptions-steps li { margin: 0 0 8px; overflow-wrap: anywhere; }
+.descriptions-steps li > .check-hint, .descriptions-steps li > .form-error, .descriptions-steps li > [role='status'] { display: block; margin: 4px 0 0; }
+.descriptions-steps button { border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); min-height: 30px; padding: 0 10px; font-size: 12px; font-weight: 500; }
+.descriptions-steps button:hover:not(:disabled) { background: var(--surface-subtle); border-color: var(--text-muted); }
+.descriptions-steps button:disabled { opacity: .5; cursor: default; }
 .settings-group code { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; }
 .update-note { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 

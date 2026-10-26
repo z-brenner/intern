@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { SUPPORT_LINKS } from '../../lib/bridge';
 import type { DesktopBridge, SupportLinkTarget } from '../../lib/bridge';
 
-const SUPPORT_LINK_NAMES: Record<SupportLinkTarget, string> = { 'sharepoint-site': 'SharePoint', 'onedrive-download': 'The OneDrive download page' };
+const SUPPORT_LINK_NAMES: Record<SupportLinkTarget, string> = { 'sharepoint-site': 'SharePoint', 'onedrive-download': 'The OneDrive download page', 'description-flow': 'The guide' };
 
 /**
  * Opens a fixed support link through the bridge; a link element would do
