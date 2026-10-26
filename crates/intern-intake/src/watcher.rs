@@ -699,6 +699,18 @@ impl Scanner<'_> {
     /// released too. Nothing judged it, and Clear history tidying its failed
     /// item away is no decision about it; handed over again, it gets the
     /// attempt it is owed.
+    ///
+    /// A document the queue could not read is renamed where it lies, to
+    /// `NEEDS REVIEW - <name>`, and waits in review. No scan claims that
+    /// name (see `walk_intake`), so the claim is never seen at its key again
+    /// and arrives here with its file gone. The host answers for the name
+    /// the document arrived under - the queue keeps it beside the row - so
+    /// the item reads as waiting for review and the claim is kept, until the
+    /// item's own fate closes it like any other: renamed once a person files
+    /// it, kept once they keep its name (which takes the prefix off again),
+    /// removed once they take it out of the queue. The host withdraws only
+    /// an item still at the path it is asked about, so giving up such a
+    /// claim never cancels the document in review.
     fn manage_owned(&mut self, key: &str, path: &Path, file_present: bool) {
         match self.host.item_state(path) {
             ItemState::Active | ItemState::NeedsReview => {

@@ -239,8 +239,11 @@ pub(crate) struct Walk {
 
 /// Recursive walk with the same skip rules as intern-queue's path handling:
 /// dot-names (which covers `.intern` itself), `~$` office lock files,
-/// Intern's own history export, unsupported extensions, zero-byte files, and
-/// symlinks.
+/// Intern's own history export, unsupported extensions, zero-byte files,
+/// symlinks, and a document Intern renamed `NEEDS REVIEW - ...` because it
+/// could not read it - that file is already in the queue, waiting for a
+/// person, and claimed again it would be read as a new upload every time
+/// its name changed.
 ///
 /// Only the root has to be readable. A subfolder that refuses to be listed -
 /// a shared drive grants permissions per folder, and a sync client can remove
@@ -565,7 +568,10 @@ fn skipped_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .is_none_or(|name| {
-            name.starts_with('.') || name.starts_with("~$") || intern_core::is_history_export(name)
+            name.starts_with('.')
+                || name.starts_with("~$")
+                || intern_core::is_history_export(name)
+                || intern_core::is_needs_review_name(name)
         })
 }
 

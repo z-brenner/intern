@@ -2335,3 +2335,154 @@ fn a_file_that_arrives_with_an_old_timestamp_still_waits_out_the_courtesy_delay(
     rig.step();
     assert_eq!(rig.host.enqueued(), vec![path]);
 }
+
+/// What the queue does to a document it cannot read: renames it where it
+/// lies to `NEEDS REVIEW - <name>`, keeps it waiting in review, and answers
+/// for it by the name it arrived under (the host's alias for the moved row).
+fn mark_for_review(rig: &Rig, path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let marked = path.with_file_name(format!("NEEDS REVIEW - {name}"));
+    fs::rename(path, &marked).unwrap();
+    rig.host.set_state(path, ItemState::NeedsReview);
+    marked
+}
+
+/// A renamed document is still the queue's: the new name is never handed
+/// over as a new upload, the old name going away is not a withdrawal, and
+/// the claim stays held for as long as the document waits for a person.
+#[test]
+fn a_document_renamed_for_review_keeps_its_claim_and_is_never_taken_in_again() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("locked.pdf", b"a password-protected document");
+    let key = facts_for(rig.temp.path(), "locked.pdf").key();
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path.clone()]);
+
+    let marked = mark_for_review(&rig, &path);
+    for _ in 0..4 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+
+    assert_eq!(
+        rig.host.enqueued(),
+        vec![path.clone()],
+        "the NEEDS REVIEW name is never handed over"
+    );
+    assert!(rig.host.abandoned().is_empty(), "nothing was withdrawn");
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Claimed);
+    assert!(
+        claim.lease_expires_at > intern_intake::Clock::now(rig.clock.as_ref()),
+        "the lease is renewed while the document waits in review"
+    );
+    assert!(marked.exists());
+    let status = rig.watcher.status();
+    assert_eq!(status.processed_here, 0);
+    assert_eq!(status.unreadable_documents, 0);
+
+    // Keep original takes the prefix off again and completes the item as
+    // kept: the document is back under its own name and key, and the claim
+    // closes as kept rather than as a new upload.
+    fs::rename(&marked, &path).unwrap();
+    rig.host.set_state(
+        &path,
+        ItemState::Done {
+            outcome: DoneOutcome::KeptOriginal,
+            result_filename: None,
+        },
+    );
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::KeptOriginal));
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![path], "kept means left alone");
+}
+
+/// Filed from review under a name a person gave it, the document's claim
+/// closes as renamed, under that name.
+#[test]
+fn a_renamed_document_filed_from_review_closes_its_claim_as_renamed() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("scan.pdf", b"a scan the model could not read");
+    let key = facts_for(rig.temp.path(), "scan.pdf").key();
+    rig.step();
+    rig.step();
+    let marked = mark_for_review(&rig, &path);
+    rig.step();
+
+    fs::remove_file(&marked).unwrap();
+    rig.host.set_state(
+        &path,
+        ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("2026-01-02 Lease.pdf".to_string()),
+        },
+    );
+    rig.step();
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Done);
+    assert_eq!(claim.outcome, Some(DoneOutcome::Renamed));
+    assert_eq!(
+        claim.result_filename.as_deref(),
+        Some("2026-01-02 Lease.pdf")
+    );
+    assert!(rig.host.abandoned().is_empty());
+}
+
+/// Removed from the queue, a renamed document stays in the folder under its
+/// NEEDS REVIEW name, where Intern leaves it alone for good.
+#[test]
+fn a_renamed_document_removed_from_the_queue_is_left_alone() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("damaged.pdf", b"a damaged document");
+    let key = facts_for(rig.temp.path(), "damaged.pdf").key();
+    rig.step();
+    rig.step();
+    let marked = mark_for_review(&rig, &path);
+    rig.step();
+
+    rig.host.remove(&path);
+    rig.step();
+    let tombstone = rig.read_claim(&key);
+    assert_eq!(tombstone.state, ClaimState::Done);
+    assert_eq!(tombstone.outcome, Some(DoneOutcome::Removed));
+    for _ in 0..3 {
+        rig.step();
+    }
+    assert!(marked.exists());
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert!(rig.host.abandoned().is_empty());
+}
+
+/// The prefix is skipped in any case and in any subfolder, whoever wrote it:
+/// a file already marked is never claimed, and neither is a person's own
+/// "Needs review - " file.
+#[test]
+fn needs_review_names_are_skipped_in_any_case() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    rig.write("NEEDS REVIEW - scan.pdf", b"marked by Intern");
+    rig.write("needs review - notes.txt", b"marked by a person");
+    fs::create_dir(rig.temp.path().join("nested")).unwrap();
+    fs::write(
+        rig.temp
+            .path()
+            .join("nested")
+            .join("Needs Review - deep.pdf"),
+        b"marked in a subfolder",
+    )
+    .unwrap();
+    let ordinary = rig.write("Needs reviewing.pdf", b"an ordinary name");
+    rig.step();
+    rig.step();
+    assert_eq!(rig.host.enqueued(), vec![ordinary]);
+    let status = rig.watcher.status();
+    assert_eq!(status.held_for_others, 0);
+    assert_eq!(status.arriving, 0);
+}
