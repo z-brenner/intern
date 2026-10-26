@@ -8,7 +8,7 @@ import { humanizeReason } from './reasons';
 import type { QueueBridgeEvent } from './tauriBridge';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import { isParked, retryAccepted } from '../features/review/actions';
+import { isParked, isUnreadable, retryAccepted, withoutReviewPrefix } from '../features/review/actions';
 
 /** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
 const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
@@ -198,6 +198,9 @@ function itemFromFile(file: FileSelection, fixtureBatch = false): QueueItem {
 function skipCode(file: FileSelection): string | undefined {
   const name = file.displayName.split('/').at(-1) ?? file.displayName;
   if (name.startsWith('~$') || name.startsWith('.')) return 'TEMPORARY_FILE';
+  // A document Intern renamed because it could not read it waits in the
+  // queue for a person, and is never taken in again as a new one.
+  if (withoutReviewPrefix(name) !== name) return 'NEEDS_REVIEW_FILE';
   const dot = name.lastIndexOf('.');
   const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
   return SUPPORTED_EXTENSIONS.includes(extension) ? undefined : 'UNSUPPORTED_FORMAT';
@@ -410,6 +413,39 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   };
   renameWaiting();
   const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
+  // Items filed as a copy of another (Pipeline::file_duplicate). A copy is
+  // never what a later duplicate is named after.
+  const copyIds = new Set<string>();
+  // Pipeline::file_duplicate, for a document whose bytes are already filed.
+  // The bridge has no bytes to compare, so a file named like the original of
+  // a filed document stands in for the same bytes added again. With an output
+  // folder it is filed there at once as "COPY - <the original's filed name>",
+  // " (2)" and on for further copies, beside the original; without one it
+  // waits in review as a duplicate, untouched.
+  const duplicateOf = (file: FileSelection): QueueItem | undefined => {
+    const name = file.displayName.split('/').at(-1) ?? file.displayName;
+    const original = items.find((entry) => entry.status === 'completed' && !copyIds.has(entry.id) && fileNameKey(entry.originalFilename) === fileNameKey(name));
+    if (!original) return undefined;
+    const filedAs = original.keptOriginal ? original.originalFilename : original.filedName ?? original.originalFilename;
+    const id = `file-${crypto.randomUUID()}`;
+    if (!settings.destination.trim()) return { id, originalFilename: name, status: 'review', errorCode: 'DUPLICATE', reason: `Duplicate of ${filedAs}` };
+    const extension = filenameExtension(name);
+    const originalExtension = filenameExtension(filedAs);
+    const stem = originalExtension === undefined ? filedAs : filedAs.slice(0, filedAs.length - originalExtension.length - 1);
+    const suffix = extension === undefined ? '' : `.${extension}`;
+    const taken = new Set(items.map((entry) => fileNameKey(entry.filedName ?? '')));
+    let copy = `COPY - ${stem}${suffix}`;
+    for (let index = 2; taken.has(fileNameKey(copy)); index += 1) copy = `COPY - ${stem} (${index})${suffix}`;
+    // Beside the original when it was filed into a folder, otherwise in the
+    // output folder's root, in that folder's own spelling of separators.
+    const filedFolder = !original.keptOriginal && original.filedPath
+      ? original.filedPath.slice(0, Math.max(original.filedPath.lastIndexOf('\\'), original.filedPath.lastIndexOf('/')))
+      : '';
+    const folder = filedFolder || settings.destination.replace(/[\\/]+$/, '');
+    const separator = folder.includes('/') && !folder.includes('\\') ? '/' : '\\';
+    copyIds.add(id);
+    return { id, originalFilename: name, status: 'completed', proposedFilename: copy, filedName: copy, filedPath: `${folder}${separator}${copy}`, undoable: true, keptOriginal: false, reason: humanizeReason('EXACT_COPY') };
+  };
   // Mirrors the backend's partial add: what it would leave out is reported by
   // name, everything else is queued, and a path already queued says so.
   const addSelections = (files: FileSelection[], report: AddReport) => {
@@ -417,7 +453,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const code = skipCode(file);
       if (code) { report.skipped.push({ name: file.displayName.split('/').at(-1) ?? file.displayName, code }); continue; }
       if (idByPath.has(file.path)) { report.alreadyQueued += 1; continue; }
-      const item = itemFromFile(file, fixtureBatch);
+      const item = duplicateOf(file) ?? itemFromFile(file, fixtureBatch);
       idByPath.set(file.path, item.id);
       pathById.set(item.id, file.path);
       items = [...items, item];
@@ -490,11 +526,14 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     },
     // complete_keep_original changes the status and nothing else: the
     // proposal stays, unapplied, and with no rename there is nothing to undo.
+    // A document Intern could not read gets its own name back first: the
+    // NEEDS REVIEW prefix Intern gave the file comes off again.
     keepOriginal: async (id) => {
       const item = find(id);
       if (isParked(item)) throw parkedRefusal();
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only ready or review items can keep their original name' };
-      update(id, { status: 'completed', keptOriginal: true, undoable: false });
+      const originalFilename = isUnreadable(item) ? withoutReviewPrefix(item.originalFilename) : item.originalFilename;
+      update(id, { status: 'completed', keptOriginal: true, undoable: false, originalFilename });
     },
     // Pipeline::retry: failed and canceled items, and only the review items
     // whose code says what a retry would do. A parked item's retry is
@@ -506,6 +545,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         checkAgain(item);
         return;
       }
+      copyIds.delete(id);
       replace({ id: item.id, originalFilename: item.originalFilename, status: 'waiting' });
     },
     // Re-analysis forgets the proposal and reads the document again. Here the
@@ -545,6 +585,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       if (item.status !== 'completed') throw { code: 'INVALID_TRANSITION', message: 'only completed operations can be undone' };
       if (!item.undoable) throw { code: 'STATE_CONFLICT', message: 'completed item has no durable operation receipt' };
       const { filedName: _filedName, filedPath: _filedPath, keptOriginal: _keptOriginal, ...rest } = item;
+      // A copy back where it came from waits as the duplicate it is, and
+      // nothing moves it again on its own; Process anyway reads it.
+      if (copyIds.has(id)) {
+        replace({ ...rest, status: 'review', undoable: false, errorCode: 'DUPLICATE', reason: humanizeReason('EXACT_COPY, UNDONE') });
+        return;
+      }
       replace({ ...rest, status: 'review', undoable: false, reason: humanizeReason('UNDONE') });
     },
     // There are no files behind the browser preview to hand to a program,

@@ -1,15 +1,40 @@
 import type { QueueItem } from '../../types';
 
 /**
- * Review codes the backend's retry accepts (Pipeline::retry): a duplicate is
- * processed anyway, an unverified upload is checked again, and a renamed copy
- * whose original could not be deleted has the deletion tried again. Every
- * other review reason is refused with INVALID_TRANSITION, which is why Retry
- * is not on the menu for them - SOURCE_LOCKED included: a rename refused
- * because another program held the file is rolled back, and approving again
- * once it is closed is how it is retried.
+ * Review codes for a document Intern could not read for a reason of its own
+ * (UNREADABLE_CODES in crates/intern-core/src/error.rs): it waits in review,
+ * its file renamed "NEEDS REVIEW - ..." where it lies, with no proposal. Retry
+ * reads it again, and a person can type a name for it and approve that.
  */
-const RETRYABLE_REVIEW_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED', 'SOURCE_DELETE_FAILED']);
+const UNREADABLE_REVIEW_CODES = new Set([
+  'PASSWORD_PROTECTED', 'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'EXTRACTION_FAILED',
+  'MODEL_DECLINED', 'MODEL_OUTPUT_INVALID', 'ANALYSIS_FAILED', 'MODEL_FAILED',
+]);
+
+/**
+ * Review codes the backend's retry accepts (Pipeline::retry): a duplicate is
+ * processed anyway, an unverified upload is checked again, a renamed copy
+ * whose original could not be deleted has the deletion tried again, and a
+ * document Intern could not read is read again. Every other review reason is
+ * refused with INVALID_TRANSITION, which is why Retry is not on the menu for
+ * them - SOURCE_LOCKED included: a rename refused because another program
+ * held the file is rolled back, and approving again once it is closed is how
+ * it is retried.
+ */
+const RETRYABLE_REVIEW_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED', 'SOURCE_DELETE_FAILED', ...UNREADABLE_REVIEW_CODES]);
+
+/** The prefix the backend puts in front of the name of a document it could not read (NEEDS_REVIEW_PREFIX). */
+export const NEEDS_REVIEW_PREFIX = 'NEEDS REVIEW - ';
+
+/** Whether a review item is a document Intern could not read, waiting for a person with no proposal. */
+export function isUnreadable(item: QueueItem): boolean {
+  return item.status === 'review' && UNREADABLE_REVIEW_CODES.has(item.errorCode ?? '');
+}
+
+/** `name` without the NEEDS REVIEW prefix, in any case, when it has one. */
+export function withoutReviewPrefix(name: string): string {
+  return name.slice(0, NEEDS_REVIEW_PREFIX.length).toUpperCase() === NEEDS_REVIEW_PREFIX ? name.slice(NEEDS_REVIEW_PREFIX.length) : name;
+}
 
 /** The two codes that always meant a rename's files need checking, before the backend said so itself. */
 const PARKED_CODES = new Set(['SOURCE_DELETE_FAILED', 'RECONCILIATION_REQUIRED']);
@@ -68,7 +93,11 @@ export function undecided(item: QueueItem): boolean {
 
 /** What the inspector offers for an item: exactly what the backend accepts for it, and nothing it refuses. */
 export interface ItemActions {
-  /** Approve & rename (review) or Apply rename (ready). Needs a proposal: the backend has nothing to approve without one. */
+  /**
+   * Approve & rename (review) or Apply rename (ready). Needs a proposal - the
+   * backend has nothing to approve without one - except for a document Intern
+   * could not read, whose name a person types and the backend makes into one.
+   */
   approve: boolean;
   keep: boolean;
   /** Retry under the name that says what it does here, and whether it is the item's main action. */
@@ -109,16 +138,21 @@ export function itemActions(item: QueueItem): ItemActions {
       // had finished, takes an approval of the name it filed and refuses any
       // other (ALREADY_FILED). It needs a proposal, as any approval does.
       if (isParked(item)) return { ...none, approve: item.proposedFilename !== undefined, retry: { label: 'Check again', primary: true }, remove: { label: 'Remove from queue', resolvedFiles: true }, open: true, reveal: true };
-      const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : undefined;
+      const unreadable = isUnreadable(item);
+      const retry = item.errorCode === 'DUPLICATE' ? 'Process anyway' : item.errorCode === 'UPLOADER_UNVERIFIED' ? 'Check again' : unreadable ? 'Retry' : undefined;
       return {
         ...none,
-        approve: item.proposedFilename !== undefined,
+        // A duplicate's proposal, when it has one, is the COPY name of a copy
+        // the person undid: Process anyway is how it is read and named.
+        approve: unreadable || (item.proposedFilename !== undefined && item.errorCode !== 'DUPLICATE'),
         keep: true,
         ...(retry ? { retry: { label: retry, primary: false } } : {}),
         // Accepted for every review code, a duplicate's and an unverified
         // upload's too: read again from the start, a duplicate is processed
-        // and an upload's uploader is checked again on the way in.
-        reanalyze: reanalyzeAccepted(item),
+        // and an upload's uploader is checked again on the way in. For a
+        // document that could not be read it is what Retry already does, so
+        // only Retry is offered.
+        reanalyze: !unreadable && reanalyzeAccepted(item),
         remove: { label: 'Remove from queue', resolvedFiles: false },
         // Held because nobody could vouch for who uploaded it: opening it
         // would start its program from Intern's window, so it can only be

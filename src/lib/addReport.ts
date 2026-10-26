@@ -10,6 +10,7 @@ const SKIP_REASONS: Record<string, string> = {
   UNSUPPORTED_FORMAT: 'not a supported format',
   EMPTY_FILE: 'the file is empty',
   TEMPORARY_FILE: 'a temporary or hidden file',
+  NEEDS_REVIEW_FILE: 'its name marks it as waiting for review',
   FILE_MISSING: 'not found',
   FOLDER_UNAVAILABLE: 'the folder could not be read',
   PATH_UNTRUSTED: 'a shortcut or link, which Intern does not follow',
