@@ -44,6 +44,7 @@ pub mod naming;
 pub mod own_names;
 pub(crate) mod phrases;
 mod process;
+pub mod profile;
 pub mod prompt;
 pub mod retrieve;
 pub mod server;
@@ -65,6 +66,7 @@ pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, 
 pub use manifest::{ModelFile, ModelManifest, ModelRole};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
+pub use profile::PromptProfile;
 pub use server::{LlamaServer, ServerOptions};
 pub use structure::{StructuredDocument, StructuredPage, structured};
 pub use validate::validate;

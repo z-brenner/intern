@@ -15,12 +15,16 @@
 //! `--pipeline digest` (or `new`) runs the digest pipeline a hosted model
 //! reads through, and `--pipeline legacy` the pre-redesign head/tail window
 //! and prompt, which is how they are compared on one corpus.
+//!
+//! `--prompt-profile NAME` asks the model the way a manifest's
+//! `prompt_profile` does (`bonsai_2`), as the app asks the model it pins.
+//! Evidence pipeline only; without it the request is the engine's alone.
 
 use std::{collections::HashMap, env, fs, path::Path, process, time::Instant};
 
 use intern_engine::{
     DigestBudget, DocumentExtractor, DocumentSource, Engine, EngineErrorCode, ModelClient,
-    Pipeline, SupervisedWorker,
+    Pipeline, PromptProfile, SupervisedWorker,
     distill::distill,
     domain::{AnalysisTelemetry, PageOrigin, SourcePage},
     engine::finish,
@@ -89,8 +93,13 @@ fn run() -> Result<Value, String> {
         .get("model-id")
         .map(String::as_str)
         .unwrap_or("intern-local");
+    let profile = prompt_profile(&arguments)?;
+    let pipeline = arguments.get("pipeline").map(String::as_str);
+    if profile.is_some() && !matches!(pipeline, Some("evidence") | None) {
+        return Err("--prompt-profile is for --pipeline evidence".to_owned());
+    }
 
-    match arguments.get("pipeline").map(String::as_str) {
+    match pipeline {
         Some("legacy") => run_legacy(
             &source,
             &extension,
@@ -114,10 +123,27 @@ fn run() -> Result<Value, String> {
             endpoint,
             api_key,
             model_id,
+            profile,
             extraction_millis,
         ),
+
         Some(other) => Err(format!("unknown --pipeline {other}")),
     }
+}
+
+/// The profile `--prompt-profile` names, if any.
+fn prompt_profile(arguments: &HashMap<String, String>) -> Result<Option<PromptProfile>, String> {
+    arguments
+        .get("prompt-profile")
+        .map(|word| {
+            PromptProfile::parse(word).ok_or_else(|| {
+                format!(
+                    "--prompt-profile is {}, not {word}",
+                    PromptProfile::ALL.map(PromptProfile::as_str).join(" or ")
+                )
+            })
+        })
+        .transpose()
 }
 
 fn run_evidence(
@@ -126,11 +152,14 @@ fn run_evidence(
     endpoint: &str,
     api_key: &str,
     model_id: &str,
+    profile: Option<PromptProfile>,
     extraction_millis: u64,
 ) -> Result<Value, String> {
     let client = ModelClient::new(endpoint, api_key, model_id)
         .map_err(|error| format!("model client: {error}"))?;
-    let engine = Engine::new(client).with_pipeline(Pipeline::Evidence);
+    let engine = Engine::new(client)
+        .with_pipeline(Pipeline::Evidence)
+        .with_prompt_profile(profile);
     match engine.analyze(source, extension, &[]) {
         Ok(analysis) => Ok(json!({
             "pipeline": "evidence",

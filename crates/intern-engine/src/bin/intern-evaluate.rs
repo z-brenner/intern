@@ -52,6 +52,12 @@
 //! server's context when it is not the app's. A recording says which
 //! pipeline, retrieval and prompt made it, and is replayed only through the
 //! same pipeline.
+//!
+//! `--prompt-profile NAME` asks the model the way a manifest's
+//! `prompt_profile` does (`bonsai_2`), for the evidence pipeline only. The
+//! default is none: the request as it always was, which the recordings of
+//! record answer. A profile is part of each prompt's identity, so a
+//! recording made with one replays only with the same one.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -74,7 +80,8 @@ use intern_engine::{
         legacy_validate,
     },
     naming::windows_name_key,
-    prompt::{SYSTEM_INSTRUCTION, evidence_prompt_version},
+    profile::PromptProfile,
+    prompt::{SYSTEM_INSTRUCTION, evidence_prompt_version_with},
     retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -693,6 +700,8 @@ struct EvidenceSettings {
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
     context_tokens: Option<usize>,
+    /// How the model is asked; the evidence pipeline's alone.
+    profile: Option<PromptProfile>,
 }
 
 impl EvidenceSettings {
@@ -716,9 +725,20 @@ impl EvidenceSettings {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
         }
+        let profile = arguments
+            .get("prompt-profile")
+            .map(|word| {
+                PromptProfile::parse(word).ok_or_else(|| {
+                    format!(
+                        "--prompt-profile is {}, not {word}",
+                        PromptProfile::ALL.map(PromptProfile::as_str).join(" or ")
+                    )
+                })
+            })
+            .transpose()?;
         // The instructions and the reply take most of a small context; one
         // with no room left for evidence would fail every document.
-        let least = intern_engine::engine::min_evidence_context_tokens();
+        let least = intern_engine::engine::min_evidence_context_tokens_with(profile);
         let context_tokens = arguments
             .get("context-tokens")
             .map(|value| {
@@ -730,12 +750,18 @@ impl EvidenceSettings {
             })
             .transpose()?;
         if pipeline == Pipeline::Digest
-            && ["id-style", "retrieval-tier", "context-tokens"]
-                .iter()
-                .any(|key| arguments.contains_key(*key))
+            && [
+                "id-style",
+                "retrieval-tier",
+                "context-tokens",
+                "prompt-profile",
+            ]
+            .iter()
+            .any(|key| arguments.contains_key(*key))
         {
             return Err(
-                "--id-style, --retrieval-tier and --context-tokens are for --pipeline evidence"
+                "--id-style, --retrieval-tier, --context-tokens and --prompt-profile are for \
+                 --pipeline evidence"
                     .to_owned(),
             );
         }
@@ -743,6 +769,7 @@ impl EvidenceSettings {
             pipeline,
             retrieval,
             context_tokens,
+            profile,
         })
     }
 
@@ -752,6 +779,7 @@ impl EvidenceSettings {
         engine
             .with_pipeline(self.pipeline)
             .with_retrieval(self.retrieval.clone())
+            .with_prompt_profile(self.profile)
     }
 
     /// The context prompts are fitted to: the one given (the evidence
@@ -774,7 +802,8 @@ impl EvidenceSettings {
     }
 
     fn header_prompt_version(&self) -> Option<String> {
-        self.evidence().then(evidence_prompt_version)
+        self.evidence()
+            .then(|| evidence_prompt_version_with(self.profile))
     }
 
     /// Refuses a recording of the other pipeline, and says when the
@@ -2093,6 +2122,73 @@ mod tests {
 
     fn digest_settings() -> EvidenceSettings {
         EvidenceSettings::parse("new", &HashMap::new()).unwrap()
+    }
+
+    /// `--prompt-profile` asks the model the way a manifest's profile does,
+    /// for the evidence pipeline only; the default asks as the recordings of
+    /// record were made. A recording made with a profile is current only
+    /// when replayed with it, and one made without only without it.
+    #[test]
+    fn a_prompt_profile_is_chosen_by_name_and_keys_its_recordings() {
+        let plain = EvidenceSettings::parse("evidence", &HashMap::new()).unwrap();
+        assert_eq!(plain.profile, None);
+        assert_eq!(
+            plain.header_prompt_version(),
+            Some(intern_engine::prompt::evidence_prompt_version())
+        );
+        let arguments = HashMap::from([("prompt-profile".to_owned(), "bonsai_2".to_owned())]);
+        let profiled = EvidenceSettings::parse("evidence", &arguments).unwrap();
+        assert_eq!(profiled.profile, Some(PromptProfile::Bonsai2));
+        assert_ne!(
+            profiled.header_prompt_version(),
+            plain.header_prompt_version()
+        );
+        assert!(EvidenceSettings::parse("digest", &arguments).is_err());
+        let unknown = HashMap::from([("prompt-profile".to_owned(), "qwen".to_owned())]);
+        assert!(EvidenceSettings::parse("evidence", &unknown).is_err());
+
+        let source = ledger_source();
+        let prepare = |settings: &EvidenceSettings| {
+            let engine = settings.configure(Engine::with_proposer(Box::new(FixedReply(
+                ModelProposal::default(),
+                None,
+                settings.context(),
+            ))));
+            assert_eq!(engine.prompt_profile(), settings.profile);
+            engine.prepare(&source).unwrap().request.sha256()
+        };
+        let (plain_sha, profiled_sha) = (prepare(&plain), prepare(&profiled));
+        assert_ne!(plain_sha, profiled_sha);
+        let recorded = |prompt_sha256: &str| RecordedFixture {
+            file: "ledger.txt".into(),
+            sha256: None,
+            extraction: RecordedExtraction::Parsed {
+                source: source.clone(),
+            },
+            prompt_sha256: Some(prompt_sha256.to_owned()),
+            reply: Some(RecordedReply::Proposed {
+                proposal: ModelProposal::default(),
+                token_confidence: None,
+            }),
+        };
+        let fixture = json!({"file": "ledger.txt"});
+        let replay = |recording: &str, settings: &EvidenceSettings| {
+            replay_evidence(
+                &fixture,
+                "ledger.txt",
+                &source,
+                "txt",
+                &recorded(recording),
+                false,
+                None,
+                settings,
+            )["status"]
+                != json!("stale_prompt")
+        };
+        assert!(replay(&plain_sha, &plain));
+        assert!(replay(&profiled_sha, &profiled));
+        assert!(!replay(&plain_sha, &profiled));
+        assert!(!replay(&profiled_sha, &plain));
     }
 
     /// A context the instructions and the reply already fill is refused

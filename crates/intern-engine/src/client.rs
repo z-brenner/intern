@@ -18,6 +18,7 @@ use crate::domain::{
 };
 use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::evidence::is_valid_iso_date;
+use crate::profile::PromptProfile;
 use crate::prompt::{RESPONSE_GRAMMAR, SYSTEM_INSTRUCTION, build_prompt};
 
 /// Room for the reply plus the grammar's fixed scaffolding.
@@ -63,6 +64,11 @@ pub struct ModelRequest {
     /// The evidence handles the prompt shows, for reading an
     /// evidence-pipeline reply. `None` for the digest pipeline.
     pub evidence: Option<EvidenceHandles>,
+    /// How the model this request is for is asked, when its manifest names
+    /// a profile: the exchanges sent between the system turn and the
+    /// document, and the seed. `None` sends the request as it is, as every
+    /// request before profiles was sent.
+    pub profile: Option<PromptProfile>,
 }
 
 impl ModelRequest {
@@ -90,6 +96,10 @@ impl ModelRequest {
     /// mapping is part of the identity too: the same prompt over units whose
     /// ids changed is a different request. Stable handles are the ids
     /// themselves, already in the prompt, and add nothing.
+    ///
+    /// A prompt profile changes what the model reads, so it is part of the
+    /// identity; a request without one is identified exactly as before
+    /// profiles existed, and the recordings of record still replay.
     pub fn sha256(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.prompt.as_bytes());
@@ -110,6 +120,10 @@ impl ModelRequest {
                 hasher.update([0_u8]);
             }
         }
+        if let Some(profile) = self.profile {
+            hasher.update([0_u8, 3_u8]);
+            hasher.update(profile.identity().as_bytes());
+        }
         format!("{:x}", hasher.finalize())
     }
 
@@ -119,12 +133,13 @@ impl ModelRequest {
     }
 
     /// Every character the model reads for this request beyond the chat
-    /// template: the system turn when it is the request's own, and the
-    /// user turn.
+    /// template: the system turn when it is the request's own, the
+    /// profile's exchanges, and the user turn.
     pub fn input_characters(&self) -> usize {
         self.system
             .as_deref()
             .map_or(0, |system| system.chars().count())
+            + self.profile.map_or(0, PromptProfile::added_characters)
             + self.prompt.chars().count()
     }
 }
@@ -444,12 +459,18 @@ impl ModelClient {
     /// is transport, and the token-probability fields in particular change
     /// no generated token.
     fn completion_request(&self, request: &ModelRequest) -> Value {
+        let mut messages = vec![json!({"role": "system", "content": request.system_turn()})];
+        // A profile's exchanges sit between the instructions and the
+        // document, where the server's prompt cache keeps them with the
+        // system turn from one document to the next.
+        for turn in request.profile.map_or(&[][..], PromptProfile::examples) {
+            messages.push(json!({"role": "user", "content": turn.user}));
+            messages.push(json!({"role": "assistant", "content": turn.assistant}));
+        }
+        messages.push(json!({"role": "user", "content": request.prompt}));
         let mut body = json!({
             "model": self.model_id,
-            "messages": [
-                {"role": "system", "content": request.system_turn()},
-                {"role": "user", "content": request.prompt}
-            ],
+            "messages": messages,
             "stream": false,
             "temperature": 0,
             "top_k": 1,
@@ -461,6 +482,9 @@ impl ModelClient {
             // latency on a CPU.
             "chat_template_kwargs": {"enable_thinking": false}
         });
+        if let Some(seed) = request.profile.and_then(PromptProfile::seed) {
+            body["seed"] = json!(seed);
+        }
         if self.token_confidence {
             // One alternative is the least llama-server accepts; only the
             // chosen token's own probability is read.
@@ -1927,6 +1951,67 @@ mod tests {
             ModelRequest::new("a").sha256(),
             ModelRequest::new("b").sha256()
         );
+    }
+
+    /// A profile's exchange sits between the instructions and the document,
+    /// in the order the qualification sent it, with its seed; and nothing
+    /// else about the request changes.
+    #[test]
+    fn a_profile_adds_its_exchange_and_seed_and_nothing_else() {
+        let client = ModelClient::new("http://127.0.0.1:9/v1/chat/completions", "k", "m").unwrap();
+        let plain = ModelRequest {
+            system: Some("rules".into()),
+            grammar: Some("root ::= \"{}\"".into()),
+            ..ModelRequest::new("evidence")
+        };
+        let profiled = ModelRequest {
+            profile: Some(PromptProfile::Bonsai2),
+            ..plain.clone()
+        };
+        let before = client.completion_request(&plain);
+        let mut after = client.completion_request(&profiled);
+        let example = PromptProfile::Bonsai2.examples()[0];
+        assert_eq!(
+            after["messages"],
+            serde_json::json!([
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": example.user},
+                {"role": "assistant", "content": example.assistant},
+                {"role": "user", "content": "evidence"},
+            ])
+        );
+        assert_eq!(after["seed"], 17);
+        after["messages"] = before["messages"].clone();
+        after.as_object_mut().unwrap().remove("seed");
+        assert_eq!(after, before);
+        assert!(before.get("seed").is_none());
+        assert_eq!(
+            profiled.input_characters(),
+            plain.input_characters() + PromptProfile::Bonsai2.added_characters()
+        );
+    }
+
+    /// A reply recorded for a request without a profile must not be taken
+    /// for the reply to one with it, and every request without one keeps
+    /// the identity it always had, so the recordings of record still replay.
+    #[test]
+    fn a_profile_is_part_of_the_request_identity() {
+        let plain = ModelRequest {
+            system: Some("rules".into()),
+            ..ModelRequest::new("evidence")
+        };
+        let profiled = ModelRequest {
+            profile: Some(PromptProfile::Bonsai2),
+            ..plain.clone()
+        };
+        assert_ne!(plain.sha256(), profiled.sha256());
+        // The identity of a request without a profile, as it was computed
+        // before profiles: prompt, then the system turn's tag and text.
+        let mut hasher = Sha256::new();
+        hasher.update(b"evidence");
+        hasher.update([0_u8, 1_u8]);
+        hasher.update(b"rules");
+        assert_eq!(plain.sha256(), format!("{:x}", hasher.finalize()));
     }
 
     fn ordinal_handles() -> EvidenceHandles {
