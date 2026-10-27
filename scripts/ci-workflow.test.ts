@@ -113,6 +113,18 @@ describe('the Rust (Ubuntu) job', () => {
     expect(windowsPlaceholders).toHaveLength(5);
     expect(linuxPlaceholders.sort()).toEqual(windowsPlaceholders.sort());
   });
+
+  // A Linux build bundles one runtime folder in place of the sidecars and the
+  // Windows DLLs (tauri.linux.conf.json), and its build script refuses to
+  // compile without that folder too.
+  it('stages the runtime folder the Linux bundle names', async () => {
+    const linuxConfig = JSON.parse(await readFile('src-tauri/tauri.linux.conf.json', 'utf8'));
+    expect(linuxConfig.bundle.externalBin).toEqual([]);
+    expect(linuxConfig.bundle.resources['resources/runtime/']).toBe('runtime/');
+    const linux = stepsOf(jobOf(await ci(), 'rust-ubuntu')).find((step) => step.includes('compile-placeholder'))!;
+    expect(linux).toMatch(/^ {10}mkdir -p .* src-tauri\/resources\/runtime$/m);
+    expect(linux).toMatch(/^ {10}touch src-tauri\/resources\/runtime\/compile-placeholder$/m);
+  });
 });
 
 describe('the Rust lock and format check', () => {

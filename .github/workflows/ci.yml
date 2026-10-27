@@ -156,11 +156,13 @@ jobs:
         run: node fixtures/generate-fixtures.mjs
       # Tauri's build script refuses to compile the desktop crate unless every
       # sidecar and resource it bundles exists. The Windows job below stages
-      # the same placeholders under its own target triple.
+      # the same placeholders under its own target triple. A Linux build
+      # bundles its own runtime folder instead (tauri.linux.conf.json), so it
+      # needs a placeholder of its own too.
       - name: Stage parser worker and placeholder sidecars for desktop compile checks
         run: |
           cargo build --locked -p intern-worker
-          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/ocr-models
+          mkdir -p src-tauri/binaries src-tauri/resources/licenses src-tauri/resources/tessdata src-tauri/resources/native/pdfium src-tauri/resources/native/sidecars src-tauri/resources/ocr-models src-tauri/resources/runtime
           cp target/debug/intern-worker src-tauri/binaries/intern-worker-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/llama-server-x86_64-unknown-linux-gnu
           install -m 755 /dev/null src-tauri/binaries/tesseract-x86_64-unknown-linux-gnu
@@ -169,6 +171,7 @@ jobs:
           touch src-tauri/resources/native/pdfium/compile-placeholder.dll
           touch src-tauri/resources/native/sidecars/compile-placeholder.dll
           touch src-tauri/resources/ocr-models/compile-placeholder.onnx
+          touch src-tauri/resources/runtime/compile-placeholder
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --all-targets
 

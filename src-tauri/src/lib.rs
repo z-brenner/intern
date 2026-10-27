@@ -34,7 +34,8 @@ pub fn run() {
         // Autostart entries launch Intern with "--minimized" so a sign-in
         // launch can go straight to the tray (when background mode allows it)
         // instead of opening a window nobody asked for. macOS keeps the
-        // default LaunchAgent mechanism.
+        // default LaunchAgent mechanism; Linux gets an XDG autostart entry in
+        // ~/.config/autostart.
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg("--minimized")
