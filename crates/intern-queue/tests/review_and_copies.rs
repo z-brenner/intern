@@ -897,15 +897,51 @@ fn a_teammates_filing_is_copied_under_its_raw_name_and_a_hostile_name_is_refused
     assert_eq!(rig.filed_name(id), "COPY - 2026-01-02 Lease.PDF");
     assert_eq!(rig.model.calls.load(Ordering::SeqCst), 0);
 
-    *teammate.0.lock().unwrap() = Some(KnownFiling {
-        filename: "..\\..\\escape.pdf".into(),
-        filed_by: Some("Somewhere".into()),
-    });
-    let hostile = rig.drop_in("other.pdf", b"other bytes");
-    let id = rig.add(&hostile);
-    assert_eq!(rig.item(id).status, QueueStatus::NeedsReview);
-    assert_eq!(rig.item(id).error_code, Some(ErrorCode::Duplicate));
-    assert!(hostile.exists());
+    // Every form a name could take that Windows would read as a path, a
+    // drive, a stream or a device - refused on every platform, so nothing
+    // depends on which one the shared folder is read from.
+    for (index, filename) in [
+        "..\\..\\escape.pdf",
+        "../../escape.pdf",
+        "folder\\escape.pdf",
+        "C:escape.pdf",
+        "C:\\Windows\\escape.pdf",
+        "lease.pdf:hidden",
+        "CON",
+        "con.pdf",
+        "LPT1.tar.gz",
+        "COM\u{b9}.pdf",
+        "NUL .pdf",
+        "lease.pdf.",
+        "lease.pdf ",
+        "..",
+        ".",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        *teammate.0.lock().unwrap() = Some(KnownFiling {
+            filename: filename.into(),
+            filed_by: Some("Somewhere".into()),
+        });
+        let hostile = rig.drop_in(
+            &format!("other {index}.pdf"),
+            format!("other bytes {index}").as_bytes(),
+        );
+        let id = rig.add(&hostile);
+        assert_eq!(
+            rig.item(id).status,
+            QueueStatus::NeedsReview,
+            "{filename:?}"
+        );
+        assert_eq!(
+            rig.item(id).error_code,
+            Some(ErrorCode::Duplicate),
+            "{filename:?}"
+        );
+        assert!(hostile.exists(), "{filename:?}");
+    }
+    assert_eq!(names_in(&rig.filed), vec!["COPY - 2026-01-02 Lease.PDF"]);
 }
 
 /// A person who names an undone copy themselves files it as a document of
@@ -1760,9 +1796,10 @@ fn a_reader_check_that_cannot_be_written_stops_the_queue_for_that() {
     let bad = rig.add("a.txt", "CRASH a");
     rig.pipeline.run_next().unwrap();
     assert_eq!(rig.status(bad), QueueStatus::Queued);
-    // The data folder goes away under the running app (the database stays
-    // open), as a removed drive or a cleaned-up folder would.
-    fs::remove_dir_all(rig.temp.path()).unwrap();
+    // The check's folder cannot be made: a file holds its name. (The data
+    // folder itself cannot simply be taken away under the running app - on
+    // Windows the open database keeps it.)
+    fs::write(rig.temp.path().join("reader-check"), b"in the way").unwrap();
     rig.run();
 
     assert_eq!(

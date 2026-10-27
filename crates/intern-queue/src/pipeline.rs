@@ -1209,8 +1209,15 @@ impl Pipeline {
             .extension()
             .and_then(|extension| extension.to_str());
         // A teammate's filing is named from a file anyone with access to the
-        // shared folder can write, so its name must be a plain file name
-        // before it becomes part of a path.
+        // shared folder can write, so its name must be a plain file name -
+        // as it is, before any of it is taken apart: on Windows a name like
+        // `..\..\escape.pdf` would otherwise lose its path to `file_stem`
+        // and come out as a harmless-looking `COPY - escape.pdf`.
+        // Nor is it trimmed into one: a name with a space at either end is
+        // refused, not taken as the name without it.
+        if validate_leaf_filename(&original.name).ok()? != original.name {
+            return None;
+        }
         let filename = validate_leaf_filename(&copy_name(&original.name, extension)).ok()?;
         Some((
             filename,
@@ -2812,20 +2819,24 @@ impl Pipeline {
     }
 
     /// The reader's self-test for text files: a small one Intern writes in
-    /// its own data folder, read without a crash. It proves the reader works
-    /// for text files and nothing else.
+    /// a folder of its own inside its data folder (`reader-check`), read
+    /// without a crash. It proves the reader works for text files and
+    /// nothing else. The folder is removed again once it is empty.
     fn reader_self_test(&self) -> ReaderCheck {
-        let path = self.data_folder.join(format!(
+        let folder = self.data_folder.join(READER_CHECK_FOLDER);
+        let path = folder.join(format!(
             "intern-reader-check-{}.txt",
             self.store.session_id()
         ));
-        if fs::write(&path, READER_CHECK_TEXT).is_err() {
+        if fs::create_dir_all(&folder).is_err() || fs::write(&path, READER_CHECK_TEXT).is_err() {
             let _ = fs::remove_file(&path);
+            let _ = fs::remove_dir(&folder);
             return ReaderCheck::Unwritable;
         }
         let request_id = format!("reader-check-{}", self.store.session_id());
         let read = self.worker.extract(&request_id, &path, &mut |_| {});
         let _ = fs::remove_file(&path);
+        let _ = fs::remove_dir(&folder);
         match read {
             Ok(_) => ReaderCheck::Read,
             Err(error) => {
@@ -4689,6 +4700,9 @@ fn model_error_code(error: &ModelFailure) -> ErrorCode {
 /// before the queue stops to say the machine itself is the problem.
 const FAILURES_BEFORE_PAUSE: u32 = 3;
 
+/// The folder of Intern's data folder the reader's self-test writes in.
+const READER_CHECK_FOLDER: &str = "reader-check";
+
 /// What the reader's self-test reads (see `Pipeline::reader_self_test`).
 const READER_CHECK_TEXT: &str = "Intern reader check: this file was written to test the reader.\n";
 
@@ -5227,11 +5241,47 @@ mod layout_tests {
     }
 }
 
+/// Whether a name is one Windows reserves for a device, whatever follows
+/// its first dot and however it is cased: `CON`, `con.pdf`, `LPT1.tar.gz`,
+/// `COM\u{b9}.txt`. Windows opens the device instead of a file of that name
+/// - in any folder - so such a name is no file name on any platform.
+fn is_reserved_device_name(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or(name).trim_end_matches(' ');
+    let upper = base.to_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|device| {
+        upper.strip_prefix(device).is_some_and(|digit| {
+            matches!(
+                digit,
+                "0" | "1"
+                    | "2"
+                    | "3"
+                    | "4"
+                    | "5"
+                    | "6"
+                    | "7"
+                    | "8"
+                    | "9"
+                    | "\u{b9}"
+                    | "\u{b2}"
+                    | "\u{b3}"
+            )
+        })
+    })
+}
+
+/// A name that can only ever be one plain file name in a folder, on every
+/// platform: no separator of either kind, no drive or stream colon, no
+/// `.`/`..`, no trailing dot or space (Windows drops them, so the name
+/// would land on another), no device name, nothing invisible.
 fn validate_leaf_filename(value: &str) -> PipelineResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.len() > 512 || Path::new(trimmed).components().count() != 1
         || trimmed.contains('/') || trimmed.contains('\\') || matches!(trimmed, "." | "..")
         || trimmed.ends_with(' ') || trimmed.ends_with('.')
+        || is_reserved_device_name(trimmed)
         || trimmed.chars().any(|character| {
             character.is_control()
                 || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
