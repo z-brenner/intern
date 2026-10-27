@@ -5,7 +5,7 @@ import { ConfidenceMeter } from './ConfidenceMeter';
 import { FileKindIcon } from './FileKindIcon';
 import { Icon } from './Icon';
 import { StatusCell } from './StatusCell';
-import { itemActions, keptOriginal } from '../features/review/actions';
+import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
 import type { QueueItem } from '../types';
@@ -86,7 +86,12 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
   // is not part of what can be edited: the field holds the name before it,
   // and the extension sits after the field, locked.
   const sourceExtension = filenameExtension(item.originalFilename);
-  const { stem: proposedStem, extension } = splitFilename(item.proposedFilename ?? '', sourceExtension);
+  // A document Intern could not read has no proposal; the person names it,
+  // starting from the name it arrived with - without the NEEDS REVIEW prefix
+  // Intern gave the file, which the filed name leaves behind.
+  const unreadable = isUnreadable(item) && item.proposedFilename === undefined;
+  const startingName = item.proposedFilename ?? (unreadable ? withoutReviewPrefix(item.originalFilename) : '');
+  const { stem: proposedStem, extension } = splitFilename(startingName, sourceExtension);
   // The name and description being edited belong to one item, and to one
   // revision of its proposal. The panel stays mounted as review moves on, and
   // they used to be put back to the new item's in a passive effect: a task
@@ -235,7 +240,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       </div>}
     </div>
     {editable && <section className="proposal">
-      <h3>Proposed rename</h3>
+      <h3>{unreadable ? 'Name it yourself' : 'Proposed rename'}</h3>
       <label className="filename-label">Filename
         <span className="filename-field">
           <textarea ref={filenameRef} aria-label="Filename" className="filename-input" rows={1} spellCheck={false} autoComplete="off" value={stem}
@@ -304,7 +309,8 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         <dd>{quotes.map((quote) => <q key={quote}>{quote}</q>)}</dd>
       </div>)}</dl></section>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
-    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : 'Reason for review'}</h3><p>{item.reason}</p>
+    {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
+    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed || item.status === 'waiting' ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Reason for review'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
@@ -319,7 +325,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       }}>
         <p>{remove.resolvedFiles
           ? 'This rename stopped part-way, so its files may need putting right by hand. Remove it only once you have: Intern will not touch them again.'
-          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is.</>}</p>
+          : <>Remove <q>{item.originalFilename}</q> from the queue? The file itself stays where it is{isUnreadable(item) ? ', under this name, and Intern leaves it alone' : ''}.</>}</p>
         <button ref={confirmRef} type="button" className="primary" disabled={busy} onClick={decides(() => { setConfirmingRemove(false); onRemove(remove.resolvedFiles); })}>{remove.resolvedFiles ? 'I have resolved the files myself' : remove.label}</button>
         <button type="button" disabled={busy} onClick={cancelRemove}>Cancel</button>
       </div> : <>

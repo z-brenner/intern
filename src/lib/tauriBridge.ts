@@ -90,6 +90,7 @@ interface QueueItemDto {
   keptOriginal?: boolean;
   parked?: boolean;
   omittedParties?: string[];
+  copyOf?: string | null;
 }
 
 interface AddReportDto {
@@ -626,6 +627,7 @@ function normalizeItem(item: QueueItemDto): QueueItem {
     ...(item.nearDuplicateOf === undefined ? {} : { nearDuplicateOf: item.nearDuplicateOf }),
     ...(item.fileModifiedDate === undefined ? {} : { fileModifiedDate: item.fileModifiedDate }),
     ...(item.omittedParties?.length ? { omittedParties: [...item.omittedParties] } : {}),
+    ...(typeof item.copyOf === 'string' ? { copyOf: item.copyOf } : {}),
   };
 }
 

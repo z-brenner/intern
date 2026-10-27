@@ -237,7 +237,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // the page's badge carried is not lost with it. Counted from the rows the
   // filter leaves, the same rows the count's button steps through.
   const needReview = visible.filter((item) => item.status === 'review');
-  const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename);
+  const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename && item.copyOf === undefined);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move

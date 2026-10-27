@@ -37,13 +37,17 @@ const SENTENCES: Record<string, string> = {
   RECONCILIATION_REQUIRED: 'Recovery could not tell which file is the document, and both are still on disk. Compare the two names before deciding.',
   PROPOSAL_MISSING: 'Analysis finished without a usable proposal.',
   IO_ERROR: 'A file operation failed.',
-  PASSWORD_PROTECTED: 'This file is password-protected. Remove the password and add it again.',
-  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so Intern could not read it.',
-  DOCUMENT_TOO_LARGE: 'This document is too large for Intern to read. Split it, or name it yourself.',
+  // The next eight leave a document in review, its file renamed
+  // "NEEDS REVIEW - ..." where it lies (UNREADABLE_CODES in the backend):
+  // Retry reads it again, a name typed for it can be approved, Keep original
+  // gives the file its own name back, and Remove leaves it as it is.
+  PASSWORD_PROTECTED: 'This file is password-protected, so Intern could not read it. Remove the password and retry, or name it yourself.',
+  UNSUPPORTED_CONTENT: 'This file is not what its extension says it is, so Intern could not read it. Name it yourself, or keep its name.',
+  DOCUMENT_TOO_LARGE: 'This document is too large for Intern to read. Name it yourself, or split it and add the parts.',
   OCR_UNAVAILABLE: 'Intern\'s text-recognition files are missing. Reinstall Intern to restore them.',
-  EXTRACTION_FAILED: 'Intern could not read this file. It may be damaged; open it to check, then retry or remove it.',
+  EXTRACTION_FAILED: 'Intern could not read this file. It may be damaged: open it to check, then retry or name it yourself.',
   ANALYSIS_FAILED: 'Intern hit an internal error while reading this document. Retry, or name it yourself.',
-  MODEL_FAILED: 'The model could not finish reading this document. Retry it.',
+  MODEL_FAILED: 'The model could not finish reading this document. Retry it, or name it yourself.',
   MODEL_OUTPUT_INVALID: 'The model\'s answer for this document could not be used. Retry it, or name it yourself.',
   MODEL_INPUT_TOO_LARGE: 'This document is too long for the model to read at once. Name it yourself, or split it.',
   MODEL_REPLY_TRUNCATED: 'The model\'s answer was cut off before it finished. Retry it, or name it yourself.',
@@ -63,7 +67,13 @@ const SENTENCES: Record<string, string> = {
   // Raised before analysis when the content was filed before; the name it was
   // filed under is normally given instead, as "Duplicate of ...". The bare code
   // only reaches here once the record of that filing is gone.
-  DUPLICATE: 'This document\'s content was filed once already. Choose Process anyway to process it all the same, or remove it.',
+  // With an output folder, an exact duplicate is filed there as a copy
+  // instead (EXACT_COPY); this is the one left where it is - no output
+  // folder, a file already in it, a copy the person undid.
+  DUPLICATE: 'This document\'s content was filed once already, so Intern did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.',
+  // An exact duplicate moved into the output folder under the original's
+  // filed name with COPY in front, without being read.
+  EXACT_COPY: 'This file is an exact copy of a document Intern already filed, so Intern filed it as a copy, named after that document, without reading it.',
   // Raised after analysis when the text is nearly the text of a document
   // already filed - a second scan, a re-export, a copy saved again. The
   // inspector names that filing beside this sentence.
@@ -94,6 +104,13 @@ const QUEUE_STOP_SENTENCES: Record<string, string> = {
   MODEL_OUTPUT_INVALID: 'The model\'s answers for several documents in a row could not be used. Check the Model section in Settings, then resume the queue.',
   HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
   HOSTED_MODEL_UNREACHABLE: 'The hosted service could not be reached. Check the connection, then resume the queue.',
+  // Intern's document reader crashed on several documents in a row, or on
+  // several of one kind with none of that kind it could read; the documents
+  // wait under their own names to be read again.
+  READER_CRASHED: 'Intern\'s document reader crashed on several documents. They wait under their own names. Restart Intern, then resume the queue.',
+  // The reader's self-test could not write its small file in Intern's own
+  // data folder, which says nothing about the reader.
+  READER_CHECK_UNWRITABLE: 'Intern could not write a small test file in its own data folder to check its document reader. Make sure that folder can be written to, then resume the queue.',
 };
 
 /**

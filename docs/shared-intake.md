@@ -191,10 +191,18 @@ copy still waits in the queue is not copied twice.
 A copy does not wait for the ten-second settle: Intern made it and checked it,
 so it is handed straight to the queue with `IntakeWatcher::hand_over`, which
 runs what a scan would - the admission check, the origin marker naming this
-machine, an exclusive claim, the enqueue - on the adding thread, and passes
-the claim to the scan loop. The scan that later finds the copy settled sees a
+machine, an exclusive claim, the enqueue - on the adding thread, ties the
+claim to the queue item it handed over (`intake_claims`), and passes the
+claim to the scan loop. The scan that later finds the copy settled sees a
 claim this machine holds and does not hand it over again, and a copy filed
-before any scan saw it still has its claim closed. A copy the queue will not
+before any scan saw it still has its claim closed. Being in the input folder,
+a copy meets every rule a document put there does: one whose content was
+filed before is moved to the output folder as `COPY - <the filing's name>` as
+it is queued, and one Intern cannot read is renamed `NEEDS REVIEW - <name>`
+where it lies - and its tied claim follows it either way, closed as renamed
+or held while it waits, never withdrawn. A `NEEDS REVIEW - ` file is never
+copied in or queued again: an add names it (`NEEDS_REVIEW_FILE`), and setup's
+"Process them too" passes over it. A copy the queue will not
 take is removed again, so the folder is as it was and the report's "left out"
 is true - but only while it is provably still the copy: it is opened for
 deletion and its file identity and fingerprint must match what the copy step
@@ -312,10 +320,16 @@ marker** under `.intern/filed/`, named by the document's content hash — the
 same SHA-256 the queue verifies every rename against — and carrying the
 filename it was filed under, where it was in the folder, and which machine
 filed it. A machine that later enqueues the same bytes, under any name and
-from any uploader, finds the marker and routes the document to review as a
-duplicate: *Duplicate of `2026-03-02 Master Services Agreement between Acme
-and Globex.pdf` (filed from Front desk)*. Nothing is analyzed and nothing is
-renamed unless a person chooses **Retry** to process it anyway. Undoing a
+from any uploader, finds the marker and files the document as a copy of
+that filing: it is moved into the output folder's root as *`COPY - 2026-03-02
+Master Services Agreement between Acme and Globex.pdf`*, under the name the
+marker records (a name that is not a plain file name is refused, and the
+document waits in review as a duplicate instead). Nothing is analyzed. The
+copy leaves no marker of its own, so a later upload is still named after the
+real filing, and Undo puts it back in the intake folder, where it waits in
+review until a person chooses **Process anyway**. The watcher closes the
+copy's claim as renamed, under the copy's name: it has left the folder like
+any filed document. Undoing a
 filing removes the marker it left, and only that one — a marker another
 machine wrote records a filing this machine did not undo. Markers live for a
 year, long enough to outlast the annual re-send of a recurring document, and
@@ -376,9 +390,21 @@ describes the record and the flow that consumes it.
 
 - **Machine dies mid-document**: lease expires, heartbeat goes silent, another
   machine takes over after the full lease period (15 minutes).
-- **Document fails analysis**: after the local retry it is marked done-failed
-  in the shared folder so machines do not ping-pong a poisoned document.
-  Retry it manually from the machine that holds it.
+- **Document Intern cannot read** (password-protected, damaged, mislabeled,
+  too large, or one the model declined - or could not answer for, timed out
+  on, or crashed the reader on again once the machine was shown to work):
+  it waits in review on the machine that read it, and its file is
+  renamed in place to `NEEDS REVIEW - <name>` (never for a document admitted
+  on Microsoft's word about its uploader, whose proof names the file). No
+  machine's scan claims that name, and the claim on the name it arrived under
+  stays held - tied to its queue item, renewed like any review item's, taken
+  back after a restart, never withdrawn - until a person decides: filed (the
+  claim closes as renamed), kept under its own name (the prefix comes off and
+  the claim closes as kept), or removed from the queue (the file stays as it
+  is and Intern leaves it alone).
+- **Document fails for another reason**: after the local retry it is marked
+  done-failed in the shared folder so machines do not ping-pong a poisoned
+  document. Retry it manually from the machine that holds it.
 - **Sync client holds the file open**: OneDrive locks a file while it uploads
   it, and Windows refuses the open with a sharing violation. Intern waits the
   lock out — five attempts over about three seconds — rather than reporting an
@@ -392,7 +418,8 @@ describes the record and the flow that consumes it.
   with the reason shown, but the claim is held rather than tombstoned; the
   document is run again in place once the content arrives.
 - **Sync conflict copy appears**: skipped and counted, never filed.
-- **Same content uploaded again**: flagged as a duplicate of the filed name
-  before analysis, on whichever machine picks it up; retry processes it anyway.
+- **Same content uploaded again**: filed before analysis as `COPY - <filed
+  name>` in the output folder, on whichever machine picks it up; undo puts it
+  back for review, and Process anyway reads it.
 - **Settings misconfiguration**: refused at save time with a specific error,
   not discovered at run time.

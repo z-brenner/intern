@@ -137,6 +137,36 @@ pub trait IntakeHost: Send + Sync {
         false
     }
     fn status_changed(&self, status: &IntakeStatus);
+
+    /// [`Self::enqueue`] for one document a claim keyed `key` holds, so the
+    /// host can tie the claim to the item it hands over. Everything the
+    /// watcher later asks about that claim goes through the methods below,
+    /// and a host that keeps the tie answers for that item, not for
+    /// whatever is newest at the path: the path can come to hold another
+    /// document, and the document can leave the path - renamed
+    /// `NEEDS REVIEW - ...` where it lies - while its claim stays open.
+    fn enqueue_claimed(&self, _key: &str, path: &Path) -> Result<(), String> {
+        self.enqueue(&[path.to_path_buf()])
+    }
+    /// Ties a claim keyed `key` to the item the queue now holds for `path`,
+    /// for a document handed over outside a scan - a copy of a file dropped
+    /// on the window (`IntakeHandle::hand_over`) - whose enqueue the caller
+    /// made itself. Afterwards the claim answers for that item exactly as a
+    /// claim a scan handed over through [`Self::enqueue_claimed`] does. A
+    /// host that keeps no ties does nothing.
+    fn tie_claim(&self, _key: &str, _path: &Path) {}
+    /// [`Self::item_state`] for the item a claim handed over.
+    fn claim_state(&self, _key: &str, path: &Path) -> ItemState {
+        self.item_state(path)
+    }
+    /// [`Self::abandon`] for the item a claim handed over.
+    fn abandon_claim(&self, _key: &str, path: &Path) {
+        self.abandon(path);
+    }
+    /// [`Self::retry`] for the item a claim handed over.
+    fn retry_claim(&self, _key: &str, path: &Path) -> bool {
+        self.retry(path)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,8 +269,11 @@ pub(crate) struct Walk {
 
 /// Recursive walk with the same skip rules as intern-queue's path handling:
 /// dot-names (which covers `.intern` itself), `~$` office lock files,
-/// Intern's own history export, unsupported extensions, zero-byte files, and
-/// symlinks.
+/// Intern's own history export, unsupported extensions, zero-byte files,
+/// symlinks, and a document Intern renamed `NEEDS REVIEW - ...` because it
+/// could not read it - that file is already in the queue, waiting for a
+/// person, and claimed again it would be read as a new upload every time
+/// its name changed.
 ///
 /// Only the root has to be readable. A subfolder that refuses to be listed -
 /// a shared drive grants permissions per folder, and a sync client can remove
@@ -565,7 +598,10 @@ fn skipped_name(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .is_none_or(|name| {
-            name.starts_with('.') || name.starts_with("~$") || intern_core::is_history_export(name)
+            name.starts_with('.')
+                || name.starts_with("~$")
+                || intern_core::is_history_export(name)
+                || intern_core::is_needs_review_name(name)
         })
 }
 

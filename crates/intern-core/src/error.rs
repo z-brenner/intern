@@ -108,6 +108,50 @@ impl ErrorCode {
     }
 }
 
+/// The codes a document waits in review under when Intern could not read it
+/// for a reason of its own - a password, a damaged or mislabeled file, one
+/// too large to read, a model that declined it, could not answer for it, or
+/// could not finish it on either attempt - rather than for anything wrong
+/// with this computer. Such a document stays in the queue for a person, and
+/// its file is renamed in place with [`crate::NEEDS_REVIEW_PREFIX`] so the
+/// input folder shows it too.
+///
+/// What is missing from the list is deliberate: text recognition that is not
+/// installed, a model that cannot be reached or a key it refused, a worker
+/// that will not restart, and a person's or the watcher's cancel are this
+/// computer's problems, and stop or fail the queue as they always did.
+/// `ModelFailed` is here only as the review code of a document the model
+/// timed out on twice; every other model failure stored under it still
+/// fails the document or pauses the queue.
+pub const UNREADABLE_CODES: &[ErrorCode] = &[
+    ErrorCode::PasswordProtected,
+    ErrorCode::UnsupportedContent,
+    ErrorCode::DocumentTooLarge,
+    ErrorCode::ExtractionFailed,
+    ErrorCode::ModelDeclined,
+    ErrorCode::ModelOutputInvalid,
+    ErrorCode::AnalysisFailed,
+    ErrorCode::ModelFailed,
+];
+
+impl ErrorCode {
+    /// Whether a document in review under this code is one Intern could not
+    /// read: one of [`UNREADABLE_CODES`].
+    pub fn marks_unreadable(self) -> bool {
+        UNREADABLE_CODES.contains(&self)
+    }
+}
+
+/// [`UNREADABLE_CODES`] as an SQL list of stored strings, for the queries
+/// that must agree with it.
+pub(crate) fn unreadable_codes_sql() -> String {
+    UNREADABLE_CODES
+        .iter()
+        .map(|code| format!("'{}'", code.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Debug)]
 pub struct InternError {
     code: ErrorCode,

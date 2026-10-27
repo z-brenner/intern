@@ -63,7 +63,7 @@ describe('humanizeReason', () => {
 
   it('explains a bare duplicate flag once the filed name it referred to is gone', () => {
     // Named as the review menu names it: a review item has no Retry.
-    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already. Choose Process anyway to process it all the same, or remove it.');
+    expect(humanizeReason('DUPLICATE')).toBe('This document\'s content was filed once already, so Intern did not file it again. Choose Process anyway to process it all the same, keep it where it is, or remove it.');
   });
 
   it('names the date gate and the hosted-model failures in plain words', () => {
@@ -90,7 +90,7 @@ describe('humanizeReason', () => {
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',
       'HOSTED_MODEL_BILLING', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'ALREADY_NAMED',
-      'INTAKE_WITHDRAWN',
+      'INTAKE_WITHDRAWN', 'EXACT_COPY',
     ];
     for (const code of codes) {
       const sentence = humanizeReason(code);
@@ -105,7 +105,7 @@ describe('describeQueueStop', () => {
   // the same code says to retry that document, or that Intern will retry it,
   // and neither is what a person reading the banner has to do.
   it('says to resume the queue, not to retry a document, for the pauses a document sentence would get wrong', () => {
-    for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE']) {
+    for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE', 'READER_CRASHED', 'READER_CHECK_UNWRITABLE']) {
       const sentence = describeQueueStop(code);
       expect(sentence, code).toMatch(/resume the queue/i);
       expect(sentence, code).not.toMatch(/Retry it|Intern will retry/);

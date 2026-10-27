@@ -147,6 +147,12 @@ pub struct QueueItemDto {
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
+    /// For an exact duplicate filed, or staged to be filed, as a copy: the
+    /// name of the document it repeats. A staged copy waits for nobody's
+    /// decision - the queue files it under its COPY name when it is free -
+    /// so the window neither offers to approve it nor counts it as undecided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copy_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -271,6 +277,19 @@ impl TauriPipelineEvents {
 /// itself for a failure every document would share - an account out of
 /// credit, missing text-recognition files - says which failure, so the
 /// window can say what to fix before resuming.
+/// Why a waiting document in doubt waits (see `PipelineItem::doubt`): it
+/// failed in a way that may be the machine's, and is read again once Intern
+/// has shown it works - for a reader crash, by reading another document of
+/// the same kind.
+fn waiting_in_doubt(item: &PipelineItem) -> Option<&'static str> {
+    let doubt = item.doubt.as_deref()?;
+    Some(if doubt.starts_with("crash:") {
+        "Waiting to be read again once Intern has read another document of this kind."
+    } else {
+        "Waiting to be read again once Intern has shown it can read another document."
+    })
+}
+
 fn queue_changed_payload(paused: bool, reason: Option<&str>) -> serde_json::Value {
     match reason {
         Some(reason) if paused => serde_json::json!({ "paused": true, "error": reason }),
@@ -2782,6 +2801,11 @@ pub struct SkippedDocumentDto {
 /// never a document, and the reason for that differs from "not a supported
 /// format" in what a person should do about it - nothing.
 const TEMPORARY_FILE: &str = "TEMPORARY_FILE";
+
+/// A file named `NEEDS REVIEW - ...`: one Intern renamed because it could
+/// not read it, and which waits for a person in the queue rather than being
+/// taken in again as a new document.
+const NEEDS_REVIEW_FILE: &str = "NEEDS_REVIEW_FILE";
 /// A document with no bytes in it, often a download or a scan that has not
 /// finished.
 const EMPTY_FILE: &str = "EMPTY_FILE";
@@ -2825,6 +2849,9 @@ fn skip_code(input: &Path, error: PipelineError) -> String {
         .unwrap_or_default();
     if name.starts_with("~$") || name.starts_with('.') {
         return TEMPORARY_FILE.into();
+    }
+    if intern_core::is_needs_review_name(name) {
+        return NEEDS_REVIEW_FILE.into();
     }
     let supported = input
         .extension()
@@ -4472,6 +4499,7 @@ pub fn queue_discard_waiting(state: State<'_, AppState>) -> Result<usize, Comman
 }
 
 fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
+    let waiting = waiting_in_doubt(&item);
     let proposal = item.proposal.as_ref();
     let evidence = proposal.map(|record| EvidenceDto {
         date: record.analysis.proposal.evidence.date.clone(),
@@ -4503,12 +4531,20 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
             .to_owned(),
         status: item.status,
         proposed_filename: proposal.map(|record| record.filename.clone()),
-        confidence: proposal.map(|record| record.analysis.proposal.confidence),
+        // A name typed by hand, or a copy's, has no reading behind it to be
+        // confident in.
+        confidence: proposal
+            .filter(|record| !record.is_synthetic())
+            .map(|record| record.analysis.proposal.confidence),
         description: proposal.map(|record| record.description.clone()),
         evidence,
-        reason: proposal
-            .filter(|record| !record.reasons.is_empty())
-            .map(|record| record.reasons.join(", "))
+        reason: waiting
+            .map(str::to_owned)
+            .or_else(|| {
+                proposal
+                    .filter(|record| !record.reasons.is_empty())
+                    .map(|record| record.reasons.join(", "))
+            })
             // A DUPLICATE flag is raised before analysis, so no proposal
             // carries its reason; name the file the content is already
             // filed under.
@@ -4517,7 +4553,12 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
                     .as_deref()
                     .map(|name| format!("Duplicate of {name}"))
             }),
-        error_code: item.error_code.map(|code| code.as_str().to_owned()),
+        // A document waiting in doubt is not in review: the sentence above
+        // says why it waits, and no code offers actions it does not have.
+        error_code: item
+            .error_code
+            .filter(|_| waiting.is_none())
+            .map(|code| code.as_str().to_owned()),
         // The apply that filed the document, not the newest receipt: an undo
         // that was refused and rolled back used to take the Undo button away
         // from a document that was still filed.
@@ -4561,6 +4602,9 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
         omitted_parties: proposal
             .map(|record| record.name_view().1)
             .unwrap_or_default(),
+        copy_of: proposal
+            .and_then(|record| record.copy_of.as_ref())
+            .map(|copy| copy.original.clone()),
     })
 }
 
@@ -5382,6 +5426,25 @@ pub(crate) mod scratch_queue {
         .unwrap();
         (pipeline, changes)
     }
+
+    /// [`queue`] under `settings`, with `oracle` saying what content was
+    /// filed before.
+    pub(super) fn queue_with(
+        data: &Path,
+        settings: SettingsStore,
+        oracle: Arc<dyn intern_queue::pipeline::DuplicateOracle>,
+    ) -> Pipeline {
+        std::fs::create_dir_all(data).unwrap();
+        Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::new(NothingRuns),
+            Arc::new(NothingRuns),
+            Arc::new(Changes::default()),
+            settings,
+        )
+        .unwrap()
+        .with_duplicate_oracle(oracle)
+    }
 }
 
 #[cfg(test)]
@@ -5391,7 +5454,7 @@ mod add_report_tests {
     use super::{
         AddReportDto, Arrival, Folders, LaunchReports, SkippedDocumentDto, copy_with_queue,
         enqueue_arrival, input_folders_for, partition_inputs,
-        scratch_queue::{folder, queue, write},
+        scratch_queue::{folder, queue, queue_with, write},
     };
 
     #[test]
@@ -5424,6 +5487,97 @@ mod add_report_tests {
                 ("gone.pdf".to_owned(), "FILE_MISSING".to_owned()),
             ]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A file Intern renamed because it could not read it waits in the
+    /// queue for a person; added again, it is named as that rather than as
+    /// an unsupported format. Inside a folder it is passed over silently.
+    #[test]
+    fn a_needs_review_file_is_left_out_as_one_already_waiting_for_review() {
+        let root = folder("needs-review");
+        let marked = write(&root, "NEEDS REVIEW - scan.pdf", b"%PDF-1.7 unreadable");
+        let scans = root.join("Scans");
+        std::fs::create_dir_all(&scans).unwrap();
+        write(&scans, "Needs Review - other.pdf", b"%PDF-1.7 unreadable");
+        let scan = write(&scans, "scan.pdf", b"%PDF-1.7 a scan");
+
+        let (files, rejected) = partition_inputs(&[marked, scans]);
+
+        assert_eq!(files, vec![scan.canonicalize().unwrap()]);
+        assert_eq!(
+            rejected,
+            vec![(
+                "NEEDS REVIEW - scan.pdf".to_owned(),
+                "NEEDS_REVIEW_FILE".to_owned()
+            )]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A document dropped on the window whose content was filed before is
+    /// copied into the input folder like any other - and that copy, being in
+    /// the input folder, is filed at once as `COPY - <the filing's name>` in
+    /// the output folder. The input folder is left as it was, and the
+    /// original where it was.
+    #[test]
+    fn a_dropped_exact_duplicate_ends_in_the_output_folder_as_a_copy() {
+        struct FiledBefore;
+        impl intern_queue::pipeline::DuplicateOracle for FiledBefore {
+            fn filed_elsewhere(
+                &self,
+                _source_hash: &str,
+                _source_path: &std::path::Path,
+            ) -> Option<intern_queue::pipeline::KnownFiling> {
+                Some(intern_queue::pipeline::KnownFiling {
+                    filename: "2026-01-02 Lease.pdf".into(),
+                    filed_by: None,
+                })
+            }
+        }
+        let root = folder("drop-copy");
+        let folders = folders(&root);
+        let output = folders.output.clone().unwrap();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let settings = intern_queue::SettingsStore::new(data.join("settings.json"));
+        settings
+            .save(&AppSettings {
+                intake_folder: folders.input.to_string_lossy().into_owned(),
+                intake_enabled: true,
+                destination: output.to_string_lossy().into_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let pipeline = queue_with(&data, settings, std::sync::Arc::new(FiledBefore));
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let lease = write(&downloads, "lease.pdf", b"%PDF-1.7 the lease");
+        let hand_off = |path: &std::path::Path| {
+            enqueue_arrival(&pipeline, path).unwrap_or_else(Arrival::Refused)
+        };
+
+        let report = copy_with_queue(&pipeline, &[lease.clone()], &folders, &|_| None, &hand_off);
+
+        assert_eq!(report.added, 1);
+        assert_eq!(report.copied, Some(1));
+        assert!(lease.exists(), "the original stays where it was");
+        let documents = |folder: &std::path::Path| {
+            let mut names = std::fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| !name.starts_with('.'))
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        assert!(
+            documents(&folders.input).is_empty(),
+            "{:?}",
+            documents(&folders.input)
+        );
+        assert_eq!(documents(&output), vec!["COPY - 2026-01-02 Lease.pdf"]);
+        drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -6263,6 +6417,7 @@ mod document_path_tests {
             filed_receipt: filed,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
     }
 
@@ -8657,6 +8812,7 @@ mod duplicate_reason_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: duplicate_of.map(str::to_owned),
+            doubt: None,
         }
     }
 
@@ -8724,7 +8880,40 @@ mod filed_dto_tests {
             filed_receipt: None,
             unsettled_receipt: None,
             duplicate_of: None,
+            doubt: None,
         }
+    }
+
+    /// A waiting document in doubt is not in review: it says why it waits,
+    /// and carries no code that would offer review's actions.
+    #[test]
+    fn queue_item_dto_says_why_a_doubted_document_waits() {
+        for (doubt, sentence) in [
+            (
+                "timeout",
+                "Waiting to be read again once Intern has shown it can read another document.",
+            ),
+            (
+                "crash:pdf",
+                "Waiting to be read again once Intern has read another document of this kind.",
+            ),
+        ] {
+            let dto = queue_item_dto(PipelineItem {
+                error_code: Some(intern_core::ErrorCode::ModelFailed),
+                doubt: Some(doubt.into()),
+                ..item(QueueStatus::Queued)
+            })
+            .unwrap();
+            assert_eq!(dto.reason.as_deref(), Some(sentence), "{doubt}");
+            assert_eq!(dto.error_code, None, "{doubt}");
+        }
+        // Not in doubt, a waiting document's code is kept as it was.
+        let dto = queue_item_dto(PipelineItem {
+            error_code: Some(intern_core::ErrorCode::IoError),
+            ..item(QueueStatus::Queued)
+        })
+        .unwrap();
+        assert_eq!(dto.error_code.as_deref(), Some("IO_ERROR"));
     }
 
     #[test]
