@@ -24,7 +24,7 @@ fn advance_to_ready(db: &QueueStore, id: i64) {
         .unwrap();
 }
 
-/// Enqueues `source` and completes it through a real journalled apply so the
+/// Enqueues `source` and completes it through a real journaled apply so the
 /// completed row carries an apply/complete receipt naming `destination`.
 fn complete_via_apply(db: &Arc<QueueStore>, source: &Path, destination: &Path) -> i64 {
     let hash = StdFileSystem.hash(source).unwrap();
@@ -849,7 +849,7 @@ fn a_copy_filing_never_answers_for_a_later_duplicate() {
     assert_eq!(found.filed_path, Some(filed.join("2026-01-02 Lease.pdf")));
 }
 
-/// An operation whose rename cannot land. The undo it refuses is journalled,
+/// An operation whose rename cannot land. The undo it refuses is journaled,
 /// fails, and reconciles as rolled back - which leaves the item's newest
 /// receipt a rolled-back undo sitting on top of the apply that filed it.
 struct RenameRefusedFileSystem;
@@ -917,7 +917,7 @@ fn duplicate_report_names_the_applied_file_after_a_rolled_back_undo() {
     let filed = temp.path().join("2024 - Filed Agreement.pdf");
     let completed_id = complete_via_apply(&db, &original, &filed);
 
-    // An undo that cannot rename is journalled, fails, and reconciles as rolled
+    // An undo that cannot rename is journaled, fails, and reconciles as rolled
     // back. The content never moved: it is still at the filed name.
     db.begin_applying(completed_id, QueueStatus::Completed)
         .unwrap();

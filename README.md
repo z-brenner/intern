@@ -480,7 +480,7 @@ stale and needs a live re-record;
 | `intern-engine` | Document understanding: the evidence index and retrieval, the prompt and its grammar, local model client and server, fact validation against the document, composition of the filename and description, the digest pipeline the optional hosted-model client reads through, house style learned from review, model installation, and the corpus evaluator with its record-and-replay mode. |
 | `intern-intake` | Shared intake folders: the multi-machine claim protocol, cloud sync-root detection, and the polling watcher. |
 | `intern-queue` | The durable queue: ordering, leases, retries, the review/apply workflow, and the spellings it learns from approvals. |
-| `intern-core` | Crash-safe queue storage and journalled file operations. |
+| `intern-core` | Crash-safe queue storage and journaled file operations. |
 | `intern-worker` | The out-of-process parser: PDFium, OCR, Office, and Outlook message extraction. |
 | `intern-app` | The Tauri desktop shell, including the switch between the local and hosted models and the credential store the hosted key lives in. |
 | `intern-release-verifier` | The offline release gate: verifies the installer's updater signature against the public key committed in `tauri.conf.json`, and binds it to `latest.json`, before anything is published. Not shipped in the app. |

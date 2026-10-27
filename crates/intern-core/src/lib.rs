@@ -1,7 +1,7 @@
 //! Durable queue state and safe file operations.
 //!
 //! This crate owns everything that must survive a crash: the queue database,
-//! the leases, and the journalled rename/move machinery. It knows nothing about
+//! the leases, and the journaled rename/move machinery. It knows nothing about
 //! documents, models, or filenames - that lives in `intern-engine`.
 
 #![deny(unsafe_code)]

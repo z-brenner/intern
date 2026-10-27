@@ -585,7 +585,7 @@ that finishes the earlier rename, the document is filed under the name that
 rename gave it, and an approval that asked for another name or sentence is
 refused with that name rather than reported as applied. A rename rolled back
 into review takes the approval off its proposal, and a document read again
-since its old rename was journalled stays in review when that rename is
+since its old rename was journaled stays in review when that rename is
 rolled back. Every file operation and the reconciliation after it run one at
 a time, so the recovery pass - every 65 seconds by the clock, however often
 new documents wake the scheduler - never reconciles an operation still in

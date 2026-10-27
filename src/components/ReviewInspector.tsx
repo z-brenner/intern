@@ -263,7 +263,7 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       </p>}
       {/*
         The same for a party the evidence names and the name does not: the
-        person's own organisation, left out so the name says who the
+        person's own organization, left out so the name says who the
         document is with.
       */}
       {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">

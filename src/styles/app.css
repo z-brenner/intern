@@ -243,7 +243,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .status.review, .confidence.review { color: var(--review); }
 .status.waiting { color: var(--waiting); }
 .status.processing { color: var(--processing); }
-/* Failed carried an icon and no colour at all, in the one state that most
+/* Failed carried an icon and no color at all, in the one state that most
    needs to be spotted from across the table. */
 .status.failed { color: var(--failed); }
 .status.processing svg { animation: spin 1s linear infinite; }
@@ -347,7 +347,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .review-menu { display: grid; gap: 8px; }
 .review-menu button { min-height: 36px; justify-content: flex-start; }
 /* The key that does the same, said quietly at the end of the button. The
-   panel's own buttons keep their label centred, with the key pushed to the
+   panel's own buttons keep their label centered, with the key pushed to the
    edge; a menu entry stays aligned with the entries around it. */
 .shortcut { margin-left: auto; padding: 1px 6px; border: 1px solid currentColor; border-radius: 4px; font-family: var(--font-ui); font-size: 11px; font-weight: 500; line-height: 1.4; opacity: .6; }
 .inspector-actions button:has(.shortcut) { justify-content: flex-start; }
@@ -461,7 +461,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .drop-overlay { position: fixed; inset: 0; z-index: 6; display: grid; place-items: center; padding: 24px; pointer-events: none; background: rgba(23, 26, 31, .22); }
 .drop-overlay p { margin: 0; padding: 18px 26px; border: 2px dashed var(--accent); border-radius: var(--radius-lg); background: var(--surface); color: var(--brand-navy); font-family: var(--font-display); font-size: 20px; font-weight: 600; box-shadow: var(--shadow-dialog); }
 /* The outcome of a queue action, at the bottom left of the queue. The error
-   banner this replaces was centred on the window, so in the narrow window it
+   banner this replaces was centered on the window, so in the narrow window it
    sat over the drawer's own buttons; the drawer (z-index 3) now sits above
    these, and beside the wide panel they stop short of it. */
 .toasts { position: absolute; z-index: 2; left: 20px; bottom: 16px; display: grid; justify-items: start; gap: 8px; max-width: min(520px, calc(100% - 40px)); pointer-events: none; }

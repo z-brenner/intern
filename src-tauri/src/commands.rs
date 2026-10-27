@@ -119,7 +119,7 @@ pub struct QueueItemDto {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dates_in_document: Vec<String>,
     /// The file's own last-modified date, in this machine's calendar - a
-    /// last resort for a document that states no date, labelled as such.
+    /// last resort for a document that states no date, labeled as such.
     #[serde(skip_serializing_if = "Option::is_none")]
     file_modified_date: Option<String>,
     /// The reviewer's own spellings applied to the proposed name, so the
@@ -143,7 +143,7 @@ pub struct QueueItemDto {
     /// is what moves the item on.
     parked: bool,
     /// The parties left out of the proposed name because they are the
-    /// person's own organisation, as the document spells them, so the
+    /// person's own organization, as the document spells them, so the
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
@@ -3107,9 +3107,9 @@ pub fn queue_resume(state: State<'_, AppState>) -> Result<(), CommandError> {
     state.schedule()
 }
 
-/// Stops the document being analysed.
+/// Stops the document being analyzed.
 ///
-/// Blocking: cancelling the local model kills llama-server and starts it
+/// Blocking: canceling the local model kills llama-server and starts it
 /// again, which reloads 1.19 GiB and waits for the new process to answer, so
 /// this cannot run on the thread WebView2 delivers invokes on.
 #[tauri::command]
@@ -3457,7 +3457,7 @@ pub(crate) trait SettingsRuntime {
     /// already in the folder again; see `starts_a_new_watch`.
     fn restart_intake(&self, settings: &AppSettings, first_look: bool) -> Result<(), CommandError>;
     fn emit_intake_changed(&self) -> Result<(), CommandError>;
-    /// The organisation's names as just saved: documents still waiting that
+    /// The organization's names as just saved: documents still waiting that
     /// were named under another list are named by the other side, or by
     /// every side again, at once. Asked after every save, so a rename an
     /// earlier save never reached is finished by the next; one already
@@ -3688,7 +3688,7 @@ fn save_settings_with_microsoft_protection(
     // Asked on every save, not only when the list differs from the one
     // stored before: the list is stored first, so when a step above (or the
     // rename itself) failed, the next save found nothing different, and the
-    // documents waiting kept the old organisation's names until the list
+    // documents waiting kept the old organization's names until the list
     // was edited again. Documents already named by this list are not
     // touched, so a save that changes nothing renames nothing.
     let renamed = state.own_names_changed(&settings.our_names);
@@ -8371,10 +8371,10 @@ mod model_source_settings_tests {
 
     /// The model's answer waits for the end of the save, and the end of the
     /// save is also where the waiting documents are renamed by the
-    /// organisation: a busy local model must not keep that rename from
+    /// organization: a busy local model must not keep that rename from
     /// happening, nor a rename that failed hide the model's answer.
     #[test]
-    fn a_busy_local_model_still_renames_by_the_organisation() {
+    fn a_busy_local_model_still_renames_by_the_organization() {
         let dir = scratch("source-busy-own-names");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime.store.save(&hosted()).unwrap();
@@ -9047,7 +9047,7 @@ mod own_names_tests {
         dir
     }
 
-    /// Naming the organisation renames what is waiting, so the queue hears
+    /// Naming the organization renames what is waiting, so the queue hears
     /// the list after every save - stored the way it is matched, so stray
     /// spaces and blank lines are not a different list. The queue leaves a
     /// document already named by the list as it is, so hearing the same
@@ -9160,11 +9160,11 @@ mod own_names_tests {
     }
 
     /// Putting back the settings stored before a failed SharePoint
-    /// activation puts back the organisation the waiting documents are named
+    /// activation puts back the organization the waiting documents are named
     /// by - every time, like the tray and the watcher, because the queue
     /// need not be named by what was stored when the activation failed.
     #[test]
-    fn restoring_settings_renames_by_the_restored_organisation() {
+    fn restoring_settings_renames_by_the_restored_organization() {
         let dir = scratch("own-names-restore");
         let runtime = RecordingRuntime::new(dir.join("settings.json"));
         runtime
