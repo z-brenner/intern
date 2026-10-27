@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { clickCell, openDetails, selectRow } from './gridTesting';
 import type { SelectionBoundary, SelectionResult } from '../../lib/bridge';
 import { createBrowserSelectionBoundary, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
@@ -34,7 +35,7 @@ const ready: QueueItem = {
     render(<App bridge={{ ...base, listItems }} />);
     expect(await screen.findByRole('alert', { name: 'Queue connection error' })).toHaveTextContent('Database is temporarily busy.');
     fireEvent.click(screen.getByRole('button', { name: 'Retry queue connection' }));
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
     expect(screen.queryByRole('alert', { name: 'Queue connection error' })).not.toBeInTheDocument();
   });
 
@@ -59,7 +60,7 @@ const ready: QueueItem = {
     render(<App bridge={createInMemoryBridge({ items: [ready] })} selection={selection({ resolveDrop: async () => { throw new Error('Dropped file is unavailable.'); } })} />);
     fireEvent.drop(await screen.findByRole('region', { name: /drag files/i }));
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Dropped file is unavailable.');
-    expect(screen.getByRole('button', { name: 'Select agreement.pdf' })).toBeVisible();
+    expect(screen.getByRole('gridcell', { name: 'agreement.pdf' })).toBeVisible();
   });
 
   it('reports an import failure after a successful selection', async () => {
@@ -67,7 +68,7 @@ const ready: QueueItem = {
     render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), addFiles }} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Add files$/i }));
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('The shared folder is offline.');
-    expect(screen.getByRole('button', { name: 'Select agreement.pdf' })).toBeVisible();
+    expect(screen.getByRole('gridcell', { name: 'agreement.pdf' })).toBeVisible();
     expect(addFiles).toHaveBeenCalledOnce();
   });
 
@@ -101,12 +102,13 @@ const ready: QueueItem = {
     const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); return { added: 1, alreadyQueued: 0, skipped: [] }; });
     const bridge = { ...createInMemoryBridge({ items: [] }), listItems: async () => [...items], addFiles };
     render(<App bridge={bridge} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Select agreement.pdf' }));
+    clickCell(await screen.findByRole('gridcell', { name: 'agreement.pdf' }));
+    await openDetails();
     fireEvent.click(screen.getByRole('button', { name: /^Add files$/i }));
     await waitFor(() => expect(addFiles).toHaveBeenCalledOnce());
-    fireEvent.click(screen.getByRole('button', { name: 'Select second.pdf' }));
+    selectRow('second.pdf');
     await act(async () => { pending.resolve(); await pending.promise; });
-    await screen.findByRole('button', { name: 'Select new.pdf' });
+    await screen.findByRole('gridcell', { name: 'new.pdf' });
     expect(screen.getByRole('complementary', { name: 'Review item' })).toHaveTextContent('second.pdf');
   });
 
@@ -121,7 +123,7 @@ const ready: QueueItem = {
       subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
     };
     render(<App bridge={bridge} />);
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     act(() => listener({ type: 'changed', error: 'HOSTED_MODEL_UNAUTHORIZED' }));
 
@@ -142,7 +144,7 @@ const ready: QueueItem = {
       subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
     };
     render(<App bridge={bridge} />);
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_BILLING' }));
 
@@ -162,7 +164,7 @@ const ready: QueueItem = {
       subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
     };
     render(<App bridge={bridge} />);
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     act(() => listener({ type: 'changed', paused: true, error: 'HOSTED_MODEL_RATE_LIMITED' }));
 
@@ -183,7 +185,7 @@ const ready: QueueItem = {
       subscribeQueue: async (next: typeof listener) => { listener = next; return () => {}; },
     };
     render(<App bridge={bridge} />);
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     act(() => listener({ type: 'changed', paused: true, error: 'MODEL_FAILED' }));
 
@@ -204,7 +206,7 @@ const ready: QueueItem = {
     const addFiles = vi.fn(async () => { throw new Error('The shared folder is offline.'); });
     const dropping = selection({ subscribeDrops: async (listener: typeof drop) => { drop = listener; return () => {}; } } as Partial<SelectionBoundary>);
     render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), addFiles }} selection={dropping} />);
-    await screen.findByRole('button', { name: 'Select agreement.pdf' });
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     await act(async () => { drop({ files: [{ path: 'C:\Docs\dropped.pdf', displayName: 'dropped.pdf' }] }); });
 
@@ -243,7 +245,8 @@ const ready: QueueItem = {
     const base = createInMemoryBridge({ items: [ready] });
     const listItems = vi.fn(base.listItems);
     render(<App bridge={{ ...base, listItems }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Select agreement.pdf' }));
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
+    await openDetails('agreement.pdf');
     listItems.mockRejectedValueOnce(new Error('Queue database is busy.'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply rename' }));
@@ -269,7 +272,8 @@ const ready: QueueItem = {
     const pending = deferred<void>();
     const approve = vi.fn(() => pending.promise);
     render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), approve }} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Select agreement.pdf' }));
+    await screen.findByRole('gridcell', { name: 'agreement.pdf' });
+    await openDetails('agreement.pdf');
     const apply = screen.getByRole('button', { name: 'Apply rename' });
     act(() => { fireEvent.click(apply); fireEvent.click(apply); });
     expect(approve).toHaveBeenCalledOnce();

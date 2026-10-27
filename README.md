@@ -126,6 +126,14 @@ Intern has ever applied, exportable as CSV. A long queue has a filter box
 above it that narrows the rows by original name, proposed name, or a word
 from the description.
 
+Clicking a row selects it; the **Details** button above the table opens the
+review panel for the selected row, and it stays open, following the selection,
+until it is closed. Everything still in progress is in **Queue**, with a count
+of what needs review in its toolbar. The table selects cells like a
+spreadsheet (click, Shift+click, drag, Ctrl+A), and Ctrl+C or **Copy** puts
+them on the clipboard as both tab-separated text and an HTML table, so they
+paste into Excel or Google Sheets one value to a cell. Status is never copied.
+
 Every rename carries a date. A name that does not start with the document's
 date as `YYYY-MM-DD` is refused, in the inspector and again in the queue, so
 nothing undated is ever filed. When the model read a date that Intern could

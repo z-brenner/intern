@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { openDetails, queueCell } from './grid';
 
 test('mixed batch can be reviewed, approved, and undone entirely in memory', async ({ page }) => {
   await page.goto('/?fixtureBatch=1');
@@ -21,7 +22,7 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /unsupported\.zip/i })).toHaveCount(0);
   await expect(page.getByRole('row', { name: /~\$nda\.docx/i })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Select duplicate-invoice-b.pdf' }).click();
+  await openDetails(page, 'duplicate-invoice-b.pdf');
   await expect(page.getByText(/different path.*separate/i)).toBeVisible();
 
   await page.getByRole('region', { name: 'Drag files or folders here to add to the queue' }).evaluate((dropZone) => {
@@ -30,24 +31,25 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
     dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toHaveCount(1);
+  // The open panel follows the selection to the document dropped again.
   await expect(page.getByRole('complementary', { name: 'Review item' }).getByText('duplicate-invoice-a.pdf', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Needs Review' }).click();
-  await page.getByRole('button', { name: 'Select duplicate-invoice-a.pdf' }).click();
+  await expect(page.getByRole('button', { name: '2 need review' })).toBeVisible();
+  await queueCell(page, 'duplicate-invoice-a.pdf').click();
   // The extension is locked beside the field; only the name before it is typed.
   await page.getByLabel('Filename').fill('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co');
   await page.getByLabel('Description').fill('Invoice INV-2048 dated April 30, 2025 for Atlas Threadworks LLC.');
   await page.getByRole('button', { name: 'Approve & rename' }).click();
 
-  await page.getByRole('button', { name: 'Completed' }).click();
+  await page.getByRole('button', { name: /^Completed, / }).click();
   const completed = page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i });
   await expect(completed).toContainText('2025-04-30 Invoice INV-2048 from Nimbus Orchard Supply Co.pdf');
-  await completed.getByRole('button', { name: /Select/ }).click();
+  await openDetails(page, 'duplicate-invoice-a.pdf');
   // The panel's Undo: the toast from the rename offers one for the same item.
   await page.getByRole('complementary', { name: 'Review item' }).getByRole('button', { name: 'Undo', exact: true }).click();
 
-  await page.getByRole('button', { name: 'Needs Review' }).click();
-  await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toBeVisible();
+  await page.getByRole('button', { name: /^Queue, / }).click();
+  await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toContainText('Needs review');
 });
 
 test('naming your organization in Settings files a waiting proposal by the other side', async ({ page }) => {
@@ -66,8 +68,7 @@ test('naming your organization in Settings files a waiting proposal by the other
   // The queue shows the new name at once, by the counterparty alone, and the
   // inspector says why the evidence names a party the name does not.
   await expect(lease).toContainText('2023-09-15 Lease Agreement with ABC Properties LLC.pdf');
-  await page.getByRole('button', { name: 'Select Lease Agreement - 123 Main St.pdf' }).click();
-  const inspector = page.getByRole('complementary', { name: 'Review item' });
+  const inspector = await openDetails(page, 'Lease Agreement - 123 Main St.pdf');
   // The extension is locked beside the field; the field holds the name before it.
   await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
   await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organization, so it is left out of the name. Change this under Settings.');

@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../App';
+import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
 
-const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
+const selectRow = openRow;
 
 const respelled: QueueItem = {
   id: 'sow',
@@ -20,7 +21,7 @@ const respelled: QueueItem = {
 describe('a name in the reviewer\'s own spelling', () => {
   it('says which spelling was applied while the evidence keeps the document\'s words', async () => {
     render(<App bridge={createInMemoryBridge({ items: [respelled] })} />);
-    selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Learned spellings applied' });
     expect(note).toHaveTextContent('Uses your spelling: Contoso Worldwide, Inc. written as Contoso. Change or forget it under Settings.');
@@ -31,7 +32,7 @@ describe('a name in the reviewer\'s own spelling', () => {
 
   it('shows no note for a name in the document\'s own words', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     expect(screen.queryByRole('note', { name: 'Learned spellings applied' })).not.toBeInTheDocument();
   });
 });
