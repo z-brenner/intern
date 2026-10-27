@@ -133,7 +133,8 @@ straight into the page-sized copy, and only then turned upright, so a
 
 Scans are read by PP-OCR, a text-detection network, an English recognizer and
 a page-orientation classifier run through ONNX Runtime, when the runtime and
-models are installed beside the worker, as they are in the Windows package. On
+models are installed beside the worker, as they are in the Windows and Linux
+packages. On
 InternBench's scans it makes a fifth of Tesseract's character errors and reads
 more of the dates and identifiers, at about three times Tesseract's CPU per
 page, which OCR's share of a document's time absorbs. Without those files - a
@@ -753,7 +754,6 @@ updater's before-exit hook — Tauri's `cleanup_before_exit`, reached through a
 guard parked in the app's resource table — does the same before the installer
 is launched. The job object is the backstop, not the plan.
 
-Launch never reads the model file. Tauri's setup hook asks only whether it is
 Linux has no job objects; there each child asks the kernel, before it runs
 anything, for `SIGKILL` when its parent ends (`PR_SET_PDEATHSIG`), which a
 `SIGKILL` of Intern itself sets off as surely as an orderly exit. The kernel's
@@ -762,6 +762,7 @@ is started from one thread kept for nothing else, which ends only with Intern:
 started from a pipeline thread, a warm model server would die with that
 thread. A child that finds Intern already gone by then does not start at all.
 
+Launch never reads the model file. Tauri's setup hook asks only whether it is
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest

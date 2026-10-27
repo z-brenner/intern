@@ -415,7 +415,9 @@ stages ONNX Runtime 1.30.0 (from its PyPI wheel, pinned by size and
 SHA-256, and the library inside checked against its own digest) and the
 three models (by the same pins as the Windows package) into a runtime
 directory. Add PDFium and Tesseract as `docs/evaluation.md` describes, and
-point `INTERN_RUNTIME_DIR` at it. Then:
+point `INTERN_RUNTIME_DIR` at it - or stage the Linux package's whole runtime,
+which carries all of it, with `scripts/fetch-linux-assets.sh` and
+`scripts/stage-linux-runtime.sh` ([Linux](linux.md)). Then:
 
 ```sh
 cargo test -p intern-worker --features windows-native --test paddle_ocr
