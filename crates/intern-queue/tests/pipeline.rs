@@ -872,14 +872,14 @@ fn non_retryable_extraction_failure_is_terminal_with_its_code() {
 }
 
 /// A failure the worker says may pass keeps its second attempt. A crash
-/// waits in doubt, with nothing counted, until the reader is shown to work:
-/// with nothing else left to read, by a small text file it reads for the
-/// purpose - and then it is read again.
+/// waits in doubt, with nothing counted, until the reader is shown to work
+/// for that kind of file: for a text file with nothing else left to read,
+/// by a small text file of Intern's own - and then it is read again.
 #[test]
 fn crashed_extraction_is_retried_once_the_reader_is_proven() {
     let temp = tempdir().unwrap();
     let files = Arc::new(FakeFiles::default());
-    let paths = documents(temp.path(), &files, &["crashes-once.pdf", "busy-disk.pdf"]);
+    let paths = documents(temp.path(), &files, &["crashes-once.txt", "busy-disk.pdf"]);
     let worker = Arc::new(FakeWorker::new(vec![
         Err(WorkerFailure::crashed()),
         Err(WorkerFailure::reported(

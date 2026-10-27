@@ -10,7 +10,7 @@ use std::{
 use intern_core::{
     ErrorCode, FileApplier, FileSystem, InternError, OperationDirection, OperationReceipt,
     OperationStage, QueueItem, QueueStatus, QueueStore, ReviewMark, StdFileSystem, copy_name,
-    source_path_key,
+    crash_doubt_kind, source_path_key,
 };
 use intern_engine::{
     DocumentAnalysis, DocumentSource, ExtractProgress, HouseRule, HouseStyle, ProposalStatus,
@@ -807,6 +807,9 @@ pub struct Pipeline {
     /// copy still being verified. Taken after `run_lock`, never before it,
     /// and never held twice.
     file_ops: Mutex<()>,
+    /// Intern's own data folder - the queue database's - where the reader's
+    /// self-test writes its file.
+    data_folder: PathBuf,
 }
 
 /// Which waiting renames one scheduler pass applies.
@@ -839,7 +842,14 @@ impl Pipeline {
         let store = Arc::new(QueueStore::open(database)?);
         let repository = PipelineRepository::open(database)?;
         Ok(Self::assemble(
-            store, repository, worker, model, files, events, settings,
+            store,
+            repository,
+            worker,
+            model,
+            files,
+            events,
+            settings,
+            database.parent().unwrap_or(Path::new(".")).to_path_buf(),
         ))
     }
 
@@ -881,7 +891,14 @@ impl Pipeline {
             filesystem,
         ));
         Ok(Self::assemble(
-            store, repository, worker, model, files, events, settings,
+            store,
+            repository,
+            worker,
+            model,
+            files,
+            events,
+            settings,
+            database.parent().unwrap_or(Path::new(".")).to_path_buf(),
         ))
     }
 
@@ -893,6 +910,7 @@ impl Pipeline {
         files: Arc<dyn FileActions>,
         events: Arc<dyn PipelineEventSink>,
         settings: SettingsStore,
+        data_folder: PathBuf,
     ) -> Self {
         Self {
             store,
@@ -916,6 +934,7 @@ impl Pipeline {
             lease_renewal_interval: LEASE_RENEWAL_INTERVAL,
             run_lock: Mutex::new(()),
             file_ops: Mutex::new(()),
+            data_folder,
         }
     }
 
@@ -1612,7 +1631,7 @@ impl Pipeline {
                 if error.crashed && !restart_failed {
                     self.doubt_or_review(
                         &item,
-                        STREAK_CRASH,
+                        &crash_doubt_kind(&item.source_path),
                         ErrorCode::ExtractionFailed,
                         proof.as_deref(),
                         verified,
@@ -1639,11 +1658,21 @@ impl Pipeline {
                 return Ok(true);
             }
         };
-        // The reader read a document, so it is not crashing on everything:
-        // a document in doubt over a crash is due its proof attempt.
-        let _ = self.store.end_failure_runs(Some(STREAK_CRASH));
-        let _ = self.store.prove_doubts(&[STREAK_CRASH], Some(item.id));
-        if proof.as_deref() == Some(STREAK_CRASH) {
+        // The reader read a document of this kind, so it is not crashing on
+        // every one: a document of the same kind in doubt over a crash is
+        // due its proof attempt. One of another kind is not - a reader that
+        // crashes on every PDF still reads text - and this one is no longer
+        // in doubt over a crash.
+        let crash_kind = crash_doubt_kind(&item.source_path);
+        let _ = self.store.end_failure_runs(Some(&crash_kind));
+        let _ = self.store.prove_doubts(&[&crash_kind], Some(item.id));
+        if self
+            .store
+            .doubt_kind(item.id)
+            .ok()
+            .flatten()
+            .is_some_and(|kind| kind.starts_with("crash:"))
+        {
             let _ = self.store.forget_doubt(item.id);
         }
         self.ensure_lease(&lease)?;
@@ -1696,12 +1725,14 @@ impl Pipeline {
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => {
                 self.forget_missing_model();
-                // A document read successfully shows the reader and the
-                // model working now, so every document in doubt is due its
-                // proof attempt - and this one is no longer in doubt.
-                let _ = self.store.end_failure_runs(None);
+                // A document read successfully shows the model working now,
+                // so every document in doubt over the model is due its proof
+                // attempt - and this one is no longer in doubt.
+                for kind in MODEL_DOUBTS {
+                    let _ = self.store.end_failure_runs(Some(kind));
+                }
                 let _ = self.store.forget_doubt(item.id);
-                let _ = self.store.prove_doubts(STREAK_KINDS, Some(item.id));
+                let _ = self.store.prove_doubts(MODEL_DOUBTS, Some(item.id));
                 analysis
             }
             Err(error) => {
@@ -2668,11 +2699,19 @@ impl Pipeline {
     /// Shows the machine working, when only documents in doubt are left to
     /// read and nothing else will: the model's self-test - the calibration
     /// document every model must read correctly before Intern uses it - for
-    /// doubts over the model, and a small text read for doubts over the
-    /// reader. Passing, the documents in doubt are due their proof attempt,
-    /// and the queue goes on. Failing, the machine is what is wrong: the
-    /// queue stops and says so, and the documents stay in doubt under their
-    /// own names. Says whether there is more to do.
+    /// doubts over the model, and a small text file read for doubts over the
+    /// reader on text files. Passing, the documents in doubt are due their
+    /// proof attempt, and the queue goes on. Failing, the machine is what is
+    /// wrong: the queue stops and says so, and the documents stay in doubt
+    /// under their own names. Says whether there is more to do.
+    ///
+    /// A reader crash on any other kind of file has no self-test: a reader
+    /// that crashes on every PDF reads a text file fine, so only a PDF read
+    /// successfully proves it works for PDFs. Those documents wait, under
+    /// their own names, for a document of their kind; several of one kind
+    /// waiting with none to prove it stop the queue to say the reader may be
+    /// what is wrong. Resuming gives each one more attempt, which proves
+    /// nothing (`QueueStore::allow_unproven_crash_attempts`).
     fn prove_the_machine(&self) -> PipelineResult<bool> {
         let doubts = self.store.unproven_doubts()?;
         if doubts.is_empty() || self.paused.load(Ordering::SeqCst) {
@@ -2680,8 +2719,8 @@ impl Pipeline {
         }
         let model_kinds = doubts
             .iter()
-            .map(String::as_str)
-            .filter(|kind| *kind != STREAK_CRASH)
+            .map(|(kind, _)| kind.as_str())
+            .filter(|kind| MODEL_DOUBTS.contains(kind))
             .collect::<Vec<_>>();
         if !model_kinds.is_empty() {
             match self.model_self_test() {
@@ -2702,13 +2741,32 @@ impl Pipeline {
                 }
             }
         }
-        if doubts.iter().any(|kind| kind == STREAK_CRASH) {
-            if self.reader_self_test() {
-                self.store.prove_doubts(&[STREAK_CRASH], None)?;
-            } else {
-                self.pause_for(READER_CRASHED);
-                return Ok(false);
+        let text_crashes = crash_doubt_kind(Path::new("check.txt"));
+        if doubts.iter().any(|(kind, _)| *kind == text_crashes) {
+            match self.reader_self_test() {
+                ReaderCheck::Read => self.store.prove_doubts(&[&text_crashes], None)?,
+                ReaderCheck::Failed => {
+                    self.pause_for(READER_CRASHED);
+                    return Ok(false);
+                }
+                ReaderCheck::Unwritable => {
+                    self.pause_for(READER_CHECK_UNWRITABLE);
+                    return Ok(false);
+                }
             }
+        }
+        let unprovable = doubts
+            .iter()
+            .filter(|(kind, _)| kind.starts_with("crash:") && *kind != text_crashes)
+            .collect::<Vec<_>>();
+        if unprovable.len() == doubts.len() {
+            if unprovable
+                .iter()
+                .any(|(_, waiting)| *waiting >= SEVERAL_WAITING_ON_THE_READER)
+            {
+                self.pause_for(READER_CRASHED);
+            }
+            return Ok(false);
         }
         self.events.queue_changed();
         Ok(true)
@@ -2741,29 +2799,28 @@ impl Pipeline {
         Ok(())
     }
 
-    /// The reader's self-test: a small text file Intern writes for it, read
-    /// without a crash. A reader that cannot read that cannot read
-    /// anything.
-    fn reader_self_test(&self) -> bool {
-        let folder = std::env::temp_dir();
-        let path = folder.join(format!(
-            "intern-reader-check-{}-{}.txt",
-            std::process::id(),
+    /// The reader's self-test for text files: a small one Intern writes in
+    /// its own data folder, read without a crash. It proves the reader works
+    /// for text files and nothing else.
+    fn reader_self_test(&self) -> ReaderCheck {
+        let path = self.data_folder.join(format!(
+            "intern-reader-check-{}.txt",
             self.store.session_id()
         ));
         if fs::write(&path, READER_CHECK_TEXT).is_err() {
-            return false;
+            let _ = fs::remove_file(&path);
+            return ReaderCheck::Unwritable;
         }
         let request_id = format!("reader-check-{}", self.store.session_id());
         let read = self.worker.extract(&request_id, &path, &mut |_| {});
         let _ = fs::remove_file(&path);
         match read {
-            Ok(_) => true,
+            Ok(_) => ReaderCheck::Read,
             Err(error) => {
                 if error.crashed {
                     let _ = self.worker.restart();
                 }
-                false
+                ReaderCheck::Failed
             }
         }
     }
@@ -2935,8 +2992,11 @@ impl Pipeline {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         // A person resuming starts every run of failures over. Documents in
-        // doubt stay so until the machine is shown to work.
+        // doubt stay so until the machine is shown to work; those in doubt
+        // over a reader crash, which no self-test can clear, get one more
+        // attempt that proves nothing (see `prove_the_machine`).
         let _ = self.store.end_failure_runs(None);
+        let _ = self.store.allow_unproven_crash_attempts();
         self.paused.store(false, Ordering::SeqCst);
         self.events.queue_changed();
     }
@@ -4611,13 +4671,30 @@ const FAILURES_BEFORE_PAUSE: u32 = 3;
 /// What the reader's self-test reads (see `Pipeline::reader_self_test`).
 const READER_CHECK_TEXT: &str = "Intern reader check: this file was written to test the reader.\n";
 
+/// How the reader's self-test went.
+enum ReaderCheck {
+    Read,
+    Failed,
+    /// Its file could not be written, which says nothing about the reader.
+    Unwritable,
+}
+
+/// How many documents of one kind waiting in doubt over a reader crash,
+/// with no document of that kind to prove the reader, stop the queue.
+const SEVERAL_WAITING_ON_THE_READER: u32 = 2;
+
 /// The kinds of failure that may be the machine's rather than a
 /// document's, each doubted and counted on its own (see
-/// `QueueStore::doubt` and `QueueStore::join_failure_run`).
+/// `QueueStore::doubt` and `QueueStore::join_failure_run`). A reader crash
+/// is doubted by the family of file it crashed on (`crash_doubt_kind`).
 const STREAK_REPLY: &str = "reply";
 const STREAK_TIMEOUT: &str = "timeout";
-const STREAK_CRASH: &str = "crash";
-const STREAK_KINDS: &[&str] = &[STREAK_REPLY, STREAK_TIMEOUT, STREAK_CRASH];
+/// The doubts a document the model read successfully clears.
+const MODEL_DOUBTS: &[&str] = &[STREAK_REPLY, STREAK_TIMEOUT];
+
+/// The reason the queue stops when the reader's self-test could not write
+/// its file in Intern's data folder.
+pub const READER_CHECK_UNWRITABLE: &str = "READER_CHECK_UNWRITABLE";
 
 /// The reason the queue stopped for a run of reader crashes, as the window
 /// names it.

@@ -1276,10 +1276,11 @@ fn a_staged_copy_follows_a_changed_output_folder() {
 
 /// Reads a file's bytes as its text: "CRASH" in it crashes the reader, and
 /// "LOCKED" makes it password-protected. While `broken`, it crashes on
-/// everything, its own self-test too.
+/// everything, its own self-test too; while `pdfs_broken`, on every PDF.
 #[derive(Default)]
 struct BytesWorker {
     broken: AtomicBool,
+    pdfs_broken: AtomicBool,
 }
 
 impl WorkerBoundary for BytesWorker {
@@ -1290,6 +1291,11 @@ impl WorkerBoundary for BytesWorker {
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
         if self.broken.load(Ordering::SeqCst) {
+            return Err(WorkerFailure::crashed());
+        }
+        if self.pdfs_broken.load(Ordering::SeqCst)
+            && path.extension().is_some_and(|extension| extension == "pdf")
+        {
             return Err(WorkerFailure::crashed());
         }
         let text = fs::read_to_string(path).unwrap_or_default();
@@ -1644,14 +1650,19 @@ fn one_bad_document_among_good_ones_goes_to_review_renamed() {
 
 /// (c) A lone document that really is bad, with nothing else to show the
 /// machine works: the self-test does - the model's calibration document, or
-/// a small text file for the reader - and its second failure is its own.
-/// Through a restart in the middle, too (e).
+/// for a text file the reader crashed on, a small text file of Intern's own
+/// - and its second failure is its own. Through a restart in the middle,
+/// too (e).
 #[test]
 fn a_lone_bad_document_is_proven_its_own_by_the_self_test() {
     for outage in Outage::ALL {
         for restart in [false, true] {
             let mut rig = TextRig::new();
-            let bad = rig.add("a.pdf", &format!("{} a", outage.word()));
+            let name = match outage {
+                Outage::ReaderCrashes => "a.txt",
+                _ => "a.pdf",
+            };
+            let bad = rig.add(name, &format!("{} a", outage.word()));
             if restart {
                 rig.pipeline.run_next().unwrap();
                 assert_eq!(rig.status(bad), QueueStatus::Queued, "{outage:?}");
@@ -1662,25 +1673,123 @@ fn a_lone_bad_document_is_proven_its_own_by_the_self_test() {
 
             assert!(!rig.pipeline.is_paused(), "{outage:?}");
             assert_eq!(rig.status(bad), QueueStatus::NeedsReview, "{outage:?}");
-            assert_eq!(rig.renamed(), vec!["NEEDS REVIEW - a.pdf"], "{outage:?}");
+            assert_eq!(
+                rig.renamed(),
+                vec![format!("NEEDS REVIEW - {name}")],
+                "{outage:?}"
+            );
+            let checks = names_in(rig.temp.path())
+                .into_iter()
+                .filter(|name| name.starts_with("intern-reader-check"))
+                .count();
+            assert_eq!(checks, 0, "the reader's check file is cleaned up");
         }
     }
 }
 
+/// A reader crash on a PDF has no self-test: a reader that crashes on every
+/// PDF reads a text file fine. A lone PDF that crashes it waits, under its
+/// own name, for another PDF to show the reader works - and only then is a
+/// second crash its own.
+#[test]
+fn a_lone_pdf_that_crashes_the_reader_waits_for_another_pdf() {
+    let rig = TextRig::new();
+    let bad = rig.add("a.pdf", "CRASH a");
+    rig.run();
+    assert!(!rig.pipeline.is_paused());
+    assert_eq!(rig.status(bad), QueueStatus::Queued);
+    assert!(rig.renamed().is_empty());
+
+    // A text file read proves nothing about PDFs.
+    let text = rig.add("notes.txt", "good notes");
+    rig.run();
+    assert_eq!(rig.status(text), QueueStatus::Completed);
+    assert_eq!(rig.status(bad), QueueStatus::Queued);
+    assert!(rig.renamed().is_empty());
+
+    let good = rig.add("b.pdf", "good b");
+    rig.run();
+    assert_eq!(rig.status(good), QueueStatus::Completed);
+    assert_eq!(rig.status(bad), QueueStatus::NeedsReview);
+    assert_eq!(rig.renamed(), vec!["NEEDS REVIEW - a.pdf"]);
+}
+
+/// A reader that crashes on every PDF but reads everything else: the PDFs
+/// wait in doubt and are never renamed, a text file read in between proves
+/// nothing about them, and several PDFs waiting with none to prove the
+/// reader stop the queue for it. Resuming while it is still broken tries
+/// them once more and renames nothing; fixed, they are filed.
+#[test]
+fn a_reader_broken_for_one_kind_of_file_renames_none_of_them() {
+    let rig = TextRig::new();
+    let pdfs = ["a.pdf", "b.pdf"].map(|name| rig.add(name, &format!("good {name}")));
+    let text = rig.add("c.txt", "good c");
+    rig.worker.pdfs_broken.store(true, Ordering::SeqCst);
+    rig.run();
+
+    assert_eq!(rig.status(text), QueueStatus::Completed);
+    assert_eq!(
+        rig.pipeline.pause_reason().as_deref(),
+        Some("READER_CRASHED")
+    );
+    for _ in 0..3 {
+        rig.resume();
+        assert_eq!(
+            rig.pipeline.pause_reason().as_deref(),
+            Some("READER_CRASHED")
+        );
+    }
+    for id in pdfs {
+        assert_eq!(rig.status(id), QueueStatus::Queued);
+    }
+    assert!(rig.renamed().is_empty());
+
+    rig.worker.pdfs_broken.store(false, Ordering::SeqCst);
+    rig.resume();
+    for id in pdfs {
+        assert_eq!(rig.status(id), QueueStatus::Completed);
+    }
+}
+
+/// The reader's check file is written in Intern's own data folder. When it
+/// cannot be, that says nothing about the reader: the queue stops for that
+/// reason, not as if the reader had crashed.
+#[test]
+fn a_reader_check_that_cannot_be_written_stops_the_queue_for_that() {
+    let rig = TextRig::new();
+    let bad = rig.add("a.txt", "CRASH a");
+    rig.pipeline.run_next().unwrap();
+    assert_eq!(rig.status(bad), QueueStatus::Queued);
+    // The data folder goes away under the running app (the database stays
+    // open), as a removed drive or a cleaned-up folder would.
+    fs::remove_dir_all(rig.temp.path()).unwrap();
+    rig.run();
+
+    assert_eq!(
+        rig.pipeline.pause_reason().as_deref(),
+        Some("READER_CHECK_UNWRITABLE")
+    );
+    assert_eq!(rig.status(bad), QueueStatus::Queued);
+}
+
 /// (d) A lone document while the machine is broken: the self-test fails
 /// too, so the queue stops for the machine and the document keeps its name.
-/// Fixed, it is filed. Through a restart in the middle, too (e).
+/// A reader crash on a PDF has no self-test, so the document just waits;
+/// resuming tries it once more, proving nothing. Fixed, it is filed.
+/// Through a restart in the middle, too (e).
 #[test]
 fn a_lone_document_with_a_broken_machine_stops_the_queue_and_keeps_its_name() {
     for outage in Outage::ALL {
         for restart in [false, true] {
             let mut rig = TextRig::new();
             let id = rig.add("a.pdf", "good a");
+            let waits_unpaused = matches!(outage, Outage::ReaderCrashes);
             rig.break_down(outage);
             rig.run();
+            let expected = (!waits_unpaused).then_some(outage.reason());
             assert_eq!(
                 rig.pipeline.pause_reason().as_deref(),
-                Some(outage.reason()),
+                expected,
                 "{outage:?}"
             );
             assert_eq!(rig.status(id), QueueStatus::Queued, "{outage:?}");
@@ -1689,7 +1798,8 @@ fn a_lone_document_with_a_broken_machine_stops_the_queue_and_keeps_its_name() {
                 rig = rig.restart();
             }
             rig.resume();
-            assert!(rig.pipeline.is_paused(), "{outage:?}");
+            assert_eq!(rig.pipeline.is_paused(), !waits_unpaused, "{outage:?}");
+            assert_eq!(rig.status(id), QueueStatus::Queued, "{outage:?}");
             assert!(rig.renamed().is_empty(), "{outage:?}");
 
             rig.fix();

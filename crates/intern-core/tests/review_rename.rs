@@ -13,7 +13,7 @@ use std::{
 
 use intern_core::{
     ErrorCode, FileApplier, FileSystem, LockedFile, QueueStatus, QueueStore, ReviewMark,
-    ReviewRenamePurpose, ReviewRenameStage, StdFileSystem, source_path_key,
+    ReviewRenamePurpose, ReviewRenameStage, StdFileSystem, crash_doubt_kind, source_path_key,
 };
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -692,7 +692,7 @@ fn a_doubted_document_waits_until_the_machine_is_shown_to_work() {
     assert!(store.claim_next().unwrap().is_none());
     assert_eq!(
         store.unproven_doubts().unwrap(),
-        vec!["timeout".to_string()]
+        vec![("timeout".to_string(), 1)]
     );
     store.prove_doubts(&["reply"], None).unwrap();
     store.prove_doubts(&["timeout"], Some(doubted.id)).unwrap();
@@ -750,34 +750,73 @@ fn a_run_of_failures_counts_each_document_once_per_kind() {
 fn a_put_off_mark_from_an_earlier_build_becomes_a_doubt() {
     let temp = TempDir::new().unwrap();
     let folder = inbox(&temp);
-    let (id, path) = {
+    let (id, path, crashed, denied) = {
         let store = QueueStore::open(database(&temp)).unwrap();
-        unreadable(&store, &folder, "slow.pdf", ErrorCode::ModelFailed)
+        let (id, path) = unreadable(&store, &folder, "slow.pdf", ErrorCode::ModelFailed);
+        let (crashed, _) = unreadable(&store, &folder, "scan.pdf", ErrorCode::ExtractionFailed);
+        let denied = store
+            .enqueue(Path::new("/in/denied.pdf"), "denied")
+            .unwrap();
+        assert_eq!(store.claim_next().unwrap().unwrap().id, denied.id);
+        store
+            .transition(
+                denied.id,
+                QueueStatus::Extracting,
+                QueueStatus::NeedsReview,
+                Some(ErrorCode::UploaderUnverified),
+            )
+            .unwrap();
+        (id, path, crashed, denied.id)
     };
-    Connection::open(database(&temp))
-        .unwrap()
-        .execute(
-            "INSERT INTO review_renames(
-               queue_item_id, purpose, from_path, from_path_key, to_path, to_path_key,
-               stage, created_at, updated_at
-             )
-             SELECT id, 'mark', source_path, source_path_key, source_path, source_path_key,
-                    'deferred', 0, 0
-             FROM queue_items WHERE id = ?1",
-            [id],
-        )
-        .unwrap();
+    let connection = Connection::open(database(&temp)).unwrap();
+    for item in [id, crashed, denied] {
+        connection
+            .execute(
+                "INSERT INTO review_renames(
+                   queue_item_id, purpose, from_path, from_path_key, to_path, to_path_key,
+                   stage, created_at, updated_at
+                 )
+                 SELECT id, 'mark', source_path, source_path_key, source_path, source_path_key,
+                        'deferred', 0, 0
+                 FROM queue_items WHERE id = ?1",
+                [item],
+            )
+            .unwrap();
+    }
 
     let store = QueueStore::open(database(&temp)).unwrap();
     let item = row(&store, id);
     assert_eq!(item.status, QueueStatus::Queued);
     assert_eq!(item.processing_failures, 0);
     assert_eq!(item.source_path, path);
+    // A reader crash is doubted by the kind of file it crashed on.
     assert_eq!(
         store.unproven_doubts().unwrap(),
-        vec!["timeout".to_string()]
+        vec![("crash:pdf".to_string(), 1), ("timeout".to_string(), 1)]
     );
+    assert_eq!(row(&store, crashed).status, QueueStatus::Queued);
+    // Only what is in review because it could not be read moves.
+    assert_eq!(row(&store, denied).status, QueueStatus::NeedsReview);
     assert!(stages(&temp).is_empty());
+    drop(store);
+    let store = QueueStore::open(database(&temp)).unwrap();
+    assert_eq!(row(&store, denied).status, QueueStatus::NeedsReview);
+}
+
+#[test]
+fn a_reader_crash_is_doubted_by_the_family_of_file() {
+    for (name, kind) in [
+        ("a.PDF", "crash:pdf"),
+        ("b.jpeg", "crash:image"),
+        ("c.docx", "crash:word"),
+        ("d.csv", "crash:sheet"),
+        ("e.msg", "crash:email"),
+        ("f.md", "crash:text"),
+        ("g.zzz", "crash:zzz"),
+        ("noext", "crash:none"),
+    ] {
+        assert_eq!(crash_doubt_kind(Path::new(name)), kind, "{name}");
+    }
 }
 
 /// The mark of a canceled document whose file is gone is given up rather

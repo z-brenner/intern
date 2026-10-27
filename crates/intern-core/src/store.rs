@@ -384,6 +384,7 @@ impl QueueStore {
                 .map_err(InternError::from)?;
         }
         doubt_deferred_marks(&connection)?;
+        type_crash_doubts(&connection)?;
         let session_id = new_session_id();
         connection
             .execute(
@@ -1771,7 +1772,9 @@ impl QueueStore {
 
     /// The kind of doubt the machine has since been shown to work for, when
     /// `id` is a doubted document due its one proof attempt: failing that
-    /// way again, the failure is its own.
+    /// way again, the failure is its own. Not for an attempt a resume
+    /// allowed ([`Self::allow_unproven_crash_attempts`]), which proves
+    /// nothing.
     pub fn proven_doubt(&self, id: i64) -> InternResult<Option<String>> {
         let connection = self.lock()?;
         connection
@@ -1801,6 +1804,19 @@ impl QueueStore {
         Ok(())
     }
 
+    /// What `id` is in doubt over, if anything, proven or not.
+    pub fn doubt_kind(&self, id: i64) -> InternResult<Option<String>> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT kind FROM doubted_documents WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(InternError::from)
+    }
+
     /// `id` is no longer in doubt: it was read, or its failure was proven
     /// its own.
     pub fn forget_doubt(&self, id: i64) -> InternResult<()> {
@@ -1815,23 +1831,44 @@ impl QueueStore {
     }
 
     /// The kinds of doubt that wait on the machine being shown to work,
-    /// among documents still waiting: what a self-test has to prove before
-    /// they can be read again, when nothing else is left to prove it.
-    pub fn unproven_doubts(&self) -> InternResult<Vec<String>> {
+    /// among documents still waiting, with how many documents wait on each:
+    /// what a self-test has to prove before they can be read again, when
+    /// nothing else is left to prove it.
+    pub fn unproven_doubts(&self) -> InternResult<Vec<(String, u32)>> {
         let connection = self.lock()?;
         let mut statement = connection
             .prepare(
-                "SELECT DISTINCT doubt.kind FROM doubted_documents doubt
+                "SELECT doubt.kind, COUNT(*) FROM doubted_documents doubt
                  JOIN queue_items items ON items.id = doubt.queue_item_id
                  WHERE items.status = 'queued' AND doubt.proven = 0
+                 GROUP BY doubt.kind
                  ORDER BY doubt.kind",
             )
             .map_err(InternError::from)?;
         statement
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
             .map_err(InternError::from)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(InternError::from)
+    }
+
+    /// Gives every document in doubt over a reader crash one attempt that
+    /// proves nothing: a person resumed the queue, and only a document of
+    /// the same kind read successfully can show the reader works for it.
+    /// Failing again, the document goes back into doubt, never to review;
+    /// read, it is no longer in doubt.
+    pub fn allow_unproven_crash_attempts(&self) -> InternResult<()> {
+        let connection = self.lock()?;
+        connection
+            .execute(
+                "UPDATE doubted_documents SET proven = 2
+                 WHERE proven = 0 AND kind LIKE 'crash:%'",
+                [],
+            )
+            .map_err(InternError::from)?;
+        Ok(())
     }
 
     /// Counts a failure of `id` that may be the machine's into the current
@@ -3398,4 +3435,57 @@ fn doubt_deferred_marks(connection: &Connection) -> InternResult<()> {
             codes = unreadable_codes_sql()
         ))
         .map_err(InternError::from)
+}
+
+/// The kind of doubt a reader crash on `path` raises: `crash:` and the
+/// family of files it belongs to. A reader that crashes on every PDF can
+/// still read a text file or a spreadsheet, so only a document of the same
+/// family read successfully shows the reader works for it.
+pub fn crash_doubt_kind(path: &Path) -> String {
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let family = match extension.as_str() {
+        "pdf" => "pdf",
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" | "heic" | "webp" => "image",
+        "doc" | "docx" | "docm" | "dot" | "dotx" | "rtf" | "odt" => "word",
+        "xls" | "xlsx" | "xlsm" | "ods" | "csv" => "sheet",
+        "ppt" | "pptx" | "odp" => "slides",
+        "eml" | "msg" => "email",
+        "txt" | "md" | "markdown" => "text",
+        "" => "none",
+        other => other,
+    };
+    format!("crash:{family}")
+}
+
+/// Doubts over a reader crash carried over from before they named the
+/// family of file (`crash`) get it now.
+fn type_crash_doubts(connection: &Connection) -> InternResult<()> {
+    let untyped = {
+        let mut statement = connection
+            .prepare(
+                "SELECT items.id, items.source_path FROM doubted_documents doubt
+                 JOIN queue_items items ON items.id = doubt.queue_item_id
+                 WHERE doubt.kind = 'crash'",
+            )
+            .map_err(InternError::from)?;
+        statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(InternError::from)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(InternError::from)?
+    };
+    for (id, path) in untyped {
+        connection
+            .execute(
+                "UPDATE doubted_documents SET kind = ?1 WHERE queue_item_id = ?2",
+                params![crash_doubt_kind(Path::new(&path)), id],
+            )
+            .map_err(InternError::from)?;
+    }
+    Ok(())
 }
