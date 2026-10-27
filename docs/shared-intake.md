@@ -191,10 +191,18 @@ copy still waits in the queue is not copied twice.
 A copy does not wait for the ten-second settle: Intern made it and checked it,
 so it is handed straight to the queue with `IntakeWatcher::hand_over`, which
 runs what a scan would - the admission check, the origin marker naming this
-machine, an exclusive claim, the enqueue - on the adding thread, and passes
-the claim to the scan loop. The scan that later finds the copy settled sees a
+machine, an exclusive claim, the enqueue - on the adding thread, ties the
+claim to the queue item it handed over (`intake_claims`), and passes the
+claim to the scan loop. The scan that later finds the copy settled sees a
 claim this machine holds and does not hand it over again, and a copy filed
-before any scan saw it still has its claim closed. A copy the queue will not
+before any scan saw it still has its claim closed. Being in the input folder,
+a copy meets every rule a document put there does: one whose content was
+filed before is moved to the output folder as `COPY - <the filing's name>` as
+it is queued, and one Intern cannot read is renamed `NEEDS REVIEW - <name>`
+where it lies - and its tied claim follows it either way, closed as renamed
+or held while it waits, never withdrawn. A `NEEDS REVIEW - ` file is never
+copied in or queued again: an add names it (`NEEDS_REVIEW_FILE`), and setup's
+"Process them too" passes over it. A copy the queue will not
 take is removed again, so the folder is as it was and the report's "left out"
 is true - but only while it is provably still the copy: it is opened for
 deletion and its file identity and fingerprint must match what the copy step
