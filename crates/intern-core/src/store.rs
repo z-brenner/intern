@@ -505,6 +505,27 @@ impl QueueStore {
         expected: QueueStatus,
         new_hash: Option<&str>,
     ) -> InternResult<QueueItem> {
+        self.requeue_for_analysis_if(id, expected, new_hash, |_| true)?
+            .ok_or_else(|| {
+                InternError::new(
+                    ErrorCode::StateConflict,
+                    "the item changed before it could be analyzed again",
+                )
+            })
+    }
+
+    /// [`QueueStore::requeue_for_analysis`], only while `still` accepts the
+    /// stored proposal's JSON (`None` when there is none) - asked inside the
+    /// same write transaction that moves the item, so nothing written in
+    /// between, an approval above all, is decided without. `None` when
+    /// `still` declines, and nothing changes.
+    pub fn requeue_for_analysis_if(
+        &self,
+        id: i64,
+        expected: QueueStatus,
+        new_hash: Option<&str>,
+        still: impl FnOnce(Option<&str>) -> bool,
+    ) -> InternResult<Option<QueueItem>> {
         if !matches!(expected, QueueStatus::Ready | QueueStatus::NeedsReview) {
             return Err(InternError::new(
                 ErrorCode::InvalidTransition,
@@ -531,6 +552,18 @@ impl QueueStore {
                 ErrorCode::InvalidTransition,
                 "an earlier rename of this document did not finish; check it again first",
             ));
+        }
+        let proposal = transaction
+            .query_row(
+                "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(InternError::from)?;
+        if !still(proposal.as_deref()) {
+            transaction.rollback().map_err(InternError::from)?;
+            return Ok(None);
         }
         let changed = match transaction.execute(
             "UPDATE queue_items
@@ -568,7 +601,7 @@ impl QueueStore {
             .map_err(InternError::from)?;
         let item = query_one(&transaction, "WHERE id = ?1", params![id])?;
         transaction.commit().map_err(InternError::from)?;
-        Ok(item)
+        Ok(Some(item))
     }
 
     pub fn complete_keep_original(
