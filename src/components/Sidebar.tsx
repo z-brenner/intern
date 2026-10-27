@@ -1,19 +1,19 @@
-import { CheckCircle2, CircleAlert, CircleQuestionMark, List, Settings } from 'lucide-react';
+import { CheckCircle2, CircleQuestionMark, List, Settings } from 'lucide-react';
 import { Icon } from './Icon';
 import type { QueueView } from '../types';
 
 const entries = [
   { view: 'queue' as const, label: 'Queue', icon: List },
-  { view: 'review' as const, label: 'Needs Review', icon: CircleAlert },
   { view: 'completed' as const, label: 'Completed', icon: CheckCircle2 },
 ];
 export function Sidebar({ active, items, inert, onChange, onSettings, onHelp }: { active: QueueView; items: { status: string }[]; inert?: boolean; onChange(view: QueueView): void; onSettings(trigger: HTMLButtonElement): void; onHelp(): void }) {
-  const count = (view: QueueView) => view === 'queue' ? items.filter((item) => item.status !== 'completed').length : items.filter((item) => item.status === (view === 'review' ? 'review' : 'completed')).length;
+  // Items needing review are counted in the queue's own toolbar, where they
+  // are worked through; they had a page of their own here once.
+  const count = (view: QueueView) => items.filter((item) => view === 'queue' ? item.status !== 'completed' : item.status === 'completed').length;
   return <nav className="sidebar" aria-label="Queue navigation" inert={inert || undefined}>
     {/*
-      The count is part of the name: a bare aria-label of "Needs Review"
-      replaced the visible "Needs Review 5", so a screen reader never heard how
-      much was waiting. Collapsed, the label goes to a tooltip and the count
+      The count is part of the name: a bare aria-label of "Queue" replaced the
+      visible "Queue 5", so a screen reader never heard how much was waiting. Collapsed, the label goes to a tooltip and the count
       rides on the icon, where it used to be hidden along with everything else.
       `data-view` is what code looks a view's button up by, since the name now
       changes with the queue.

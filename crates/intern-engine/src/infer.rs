@@ -308,7 +308,7 @@ fn continues_sentence(line: &str) -> bool {
 /// Whether the wording before a date merely labels it as the date: "Date:",
 /// "Dated", "Date of this ...", or a bare "DATE" the way a stamped form
 /// writes it. The cues are read as whole words: "Last updated:" and "Status
-/// update:" contain the letters of "dated" and "date:" without labelling
+/// update:" contain the letters of "dated" and "date:" without labeling
 /// anything as the date.
 fn is_generic_label(window: &str) -> bool {
     if labels_another_date(window) {
@@ -978,7 +978,7 @@ Due Date: May 30, 2025",
 
     /// An invoice prints both of its dates on one line. Reading a fixed
     /// distance back from the second one reaches the first one's label, and
-    /// the due date came back labelled as the invoice date.
+    /// the due date came back labeled as the invoice date.
     #[test]
     fn a_label_governs_only_the_date_that_follows_it() {
         let digest = digest_of(
@@ -1292,7 +1292,7 @@ Date: April 1, 2026",
             Some(DateRole::Amendment)
         );
         // A line that ends a sentence, or one that starts a new one, is not
-        // joined to its neighbour: the notice date's label keeps its cue.
+        // joined to its neighbor: the notice date's label keeps its cue.
         assert_eq!(
             wrapped_lines(
                 "Date of this Notice: December 29, 2026\nYour employment will end effective\nJanuary 31, 2027.\nTo: John Smith\nFrom: Harriet Voss"

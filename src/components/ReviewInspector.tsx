@@ -55,6 +55,8 @@ const Shortcut = ({ keys }: { keys: string }) => <kbd className="shortcut" aria-
 
 interface Props {
   item: QueueItem;
+  /** For the Details toggle's aria-controls. */
+  id?: string;
   drawer: boolean;
   busy?: boolean;
   /** How the keyboard shortcuts reach the panel. */
@@ -75,7 +77,7 @@ interface Props {
   onOpen(): void;
   onReveal(): void;
 }
-export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
+export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext, onClose, onApprove, onKeep, onCancel, onRetry, onReanalyze, onRemove, onUndo, onOpen, onReveal }: Props) {
   // Exactly what the backend accepts for this item. Retry on an ordinary
   // review item, and nothing at all for a ready or waiting one, were the
   // two ways this panel used to be wrong (FRONTEND_UX-3, FRONTEND_UX-4).
@@ -211,7 +213,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
     { label: 'Type', quotes: quotations(item.evidence?.type) },
     { label: 'Parties', quotes: quotations(item.evidence?.parties) },
   ].filter((entry) => entry.quotes.length > 0);
-  return <aside ref={inspectorRef} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
+  return <aside ref={inspectorRef} id={id} className="inspector" aria-label="Review item" role={drawer ? 'dialog' : 'complementary'} aria-modal={drawer || undefined} onKeyDown={onKeyDown}>
     {/* A filed document's name is no longer its "current" one; it said so anyway (FRONTEND_UX-8). */}
     {/* Focusable so selecting a row can bring a keyboard user here, past the rest of the queue. */}
     <div className="inspector-title"><h2 ref={headingRef} tabIndex={-1}>{completed ? 'Filed document' : 'Review item'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="Close review"><Icon icon={X} /></button></div>
@@ -265,7 +267,7 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         document is with.
       */}
       {omitted.length > 0 && <p className="check-hint own-names-hint" role="note" aria-label="Filed by the other side">
-        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organisation, so it is' : 'are your organisation, so they are'} left out of the name. Change this under Settings.
+        Filed by the other side: {omitted.map((name, index) => <span key={`${index}-${name}`}>{index === 0 ? '' : index === omitted.length - 1 ? ' and ' : ', '}<q>{name}</q></span>)} {omitted.length === 1 ? 'is your organization, so it is' : 'are your organization, so they are'} left out of the name. Change this under Settings.
       </p>}
       {/*
         The gate above would otherwise be a dead end for the commonest review:

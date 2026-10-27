@@ -12,13 +12,13 @@ const items = [
 describe('queue navigation', () => {
   // At 1100px and below the labels and counts were both hidden and the nav
   // buttons had no tooltip: three bare icons. And at any width the
-  // aria-label replaced the visible "Needs Review 5", so a screen reader
-  // never heard the count.
+  // aria-label replaced the visible "Queue 6", so a screen reader never
+  // heard the count.
   it('collapsed nav has titles and counts', () => {
     render(<Sidebar active="queue" items={items} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
     const nav = screen.getByRole('navigation', { name: 'Queue navigation' });
 
-    for (const [view, label, count] of [['queue', 'Queue', 6], ['review', 'Needs Review', 5], ['completed', 'Completed', 1]] as const) {
+    for (const [view, label, count] of [['queue', 'Queue', 6], ['completed', 'Completed', 1]] as const) {
       const button = within(nav).getByRole('button', { name: `${label}, ${count}` });
       expect(button).toHaveAttribute('title', label);
       expect(button).toHaveAttribute('data-view', view);
@@ -28,15 +28,18 @@ describe('queue navigation', () => {
       expect(badge).toHaveTextContent(String(count));
       expect(badge).toHaveAttribute('aria-hidden', 'true');
     }
+    // Items needing review are counted in the queue's toolbar, not on a page of their own.
+    expect(within(nav).getAllByRole('button')).toHaveLength(4);
+    expect(within(nav).queryByRole('button', { name: /Needs Review/i })).not.toBeInTheDocument();
   });
 
   it('follows the queue as counts change', () => {
-    const view = render(<Sidebar active="review" items={items} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
-    view.rerender(<Sidebar active="review" items={items.slice(1)} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
+    const view = render(<Sidebar active="queue" items={items} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
+    view.rerender(<Sidebar active="queue" items={items.slice(1)} onChange={vi.fn()} onSettings={vi.fn()} onHelp={vi.fn()} />);
 
-    const current = screen.getByRole('button', { name: 'Needs Review, 4' });
+    const current = screen.getByRole('button', { name: 'Queue, 5' });
     expect(current).toHaveAttribute('aria-current', 'page');
-    expect(current.querySelector('.nav-badge')).toHaveTextContent('4');
+    expect(current.querySelector('.nav-badge')).toHaveTextContent('5');
   });
 
   // The view's button is found by data-view, not by its name: the name now

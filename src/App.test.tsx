@@ -79,29 +79,49 @@ describe('desktop drag and drop', () => {
     return { transport, emit, listening };
   }
 
-  it('queues a file from the raw drop payload and shows how many are coming while dragging', async () => {
+  it('copies a dropped file into the input folder, and says so while dragging', async () => {
     const desktop = windowEvents();
     const bridge = createInMemoryBridge({ items: [] });
-    const addFiles = vi.spyOn(bridge, 'addFiles');
+    const copyToInput = vi.spyOn(bridge, 'copyToInput');
     render(<App bridge={bridge} selection={createTauriSelectionBoundary(desktop.transport)} />);
     await screen.findByRole('main', { name: 'Intern' });
     await waitFor(() => expect(desktop.listening('tauri://drag-enter') && desktop.listening('tauri://drag-drop')).toBe(true));
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
-    expect(screen.getByText('Drop to add 1 file')).toBeVisible();
+    expect(await screen.findByText('Drop to copy 1 file into Input')).toBeVisible();
     desktop.emit('tauri://drag-leave', null);
-    expect(screen.queryByText(/Drop to add/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drop to copy/)).not.toBeInTheDocument();
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf', 'C:/Docs/Scans'], position: { x: 1, y: 2 } });
-    expect(screen.getByText('Drop to add 2 files')).toBeVisible();
+    expect(screen.getByText('Drop to copy 2 files into Input')).toBeVisible();
     desktop.emit('tauri://drag-leave', null);
 
     desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
     desktop.emit('tauri://drag-drop', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
 
-    expect(screen.queryByText(/Drop to add/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Drop to copy/)).not.toBeInTheDocument();
     expect(await screen.findByRole('row', { name: /a\.pdf/ })).toBeVisible();
-    expect(addFiles).toHaveBeenCalledWith([{ path: 'C:/Docs/a.pdf', displayName: 'a.pdf' }]);
+    expect(copyToInput).toHaveBeenCalledWith({ files: [{ path: 'C:/Docs/a.pdf', displayName: 'a.pdf' }] });
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 1 file into Input.');
+  });
+
+  // The settings could not be read, so setup was not shown - and there is no
+  // processing a file where it sits to fall back to. The add is refused, and
+  // the refusal says where to choose an input folder.
+  it('refuses a drop when no input folder is set up, and points to Settings', async () => {
+    const desktop = windowEvents();
+    const base = createInMemoryBridge({ items: [], settings: { intakeFolder: '', intakeEnabled: false, destination: '' } });
+    const bridge = { ...base, getSettings: async () => { throw new Error('settings.json could not be read'); } };
+    render(<App bridge={bridge} selection={createTauriSelectionBoundary(desktop.transport)} />);
+    await screen.findByRole('main', { name: 'Intern' });
+    await waitFor(() => expect(desktop.listening('tauri://drag-drop')).toBe(true));
+
+    desktop.emit('tauri://drag-enter', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
+    expect(screen.getByText('Drop to copy 1 file into your input folder')).toBeVisible();
+    desktop.emit('tauri://drag-drop', { paths: ['C:/Docs/a.pdf'], position: { x: 1, y: 2 } });
+
+    expect(await screen.findByText('Nothing was copied: no input folder is set up yet. Choose one in Settings, under Folders.')).toBeVisible();
+    expect(screen.queryByRole('row', { name: /a\.pdf/ })).not.toBeInTheDocument();
   });
 });
 
@@ -187,7 +207,7 @@ const alpha9Settings: AppSettings = {
 /*
   The same file as this build reads it back: every saved value as it was, and
   each field added since alpha.9 at the default the backend's serde gives it -
-  the organisation's names as the empty list, which names nobody, and the
+  the organization's names as the empty list, which names nobody, and the
   update switch as checks on.
 */
 const alpha9SettingsAsRead: AppSettings = { ...alpha9Settings, ourNames: [], skipUpdateChecks: false };

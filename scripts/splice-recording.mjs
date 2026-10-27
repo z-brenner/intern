@@ -17,7 +17,7 @@ import { pathToFileURL } from 'node:url';
  * The recording is spliced as text. `intern-evaluate` writes it with serde's
  * pretty printer, which never puts a raw newline inside a string, so each
  * fixture entry is a run of whole lines: replacing those lines leaves every
- * other byte as it was. Parsing and re-serialising it here would not -
+ * other byte as it was. Parsing and re-serializing it here would not -
  * `1.0` would come back as `1` across every entry. What the splice produced
  * is then parsed and checked against both inputs before anything is written.
  *

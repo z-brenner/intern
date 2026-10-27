@@ -29,7 +29,7 @@ The evaluation's scores equal alpha.10's: date role 14/14, type 18/18,
 description specific 19/19, descriptions covering the expected facts 16/18,
 parties 16/19, review rate 42.1%, and nothing filed under a date or a party the
 corpus marks as a trap. This release's naming changes (accented text near a
-date no longer stopping the queue, a document's own date recognised, due,
+date no longer stopping the queue, a document's own date recognized, due,
 implausible and ambiguous dates sent to review, title-cased letterhead names)
 are held by unit tests and the corpus replay rather than moved by these
 aggregate counts. The release notes' figure of parties rising from 15 to 16 of
@@ -45,7 +45,7 @@ The capture was inspected against the accepted concept:
 - Date-first proposed filenames, right-aligned confidence and em-dashes for
   absent values stay consistent down the column.
 - Ready, Needs review, Proposing a name and Waiting are each distinguishable by
-  icon as well as colour.
+  icon as well as color.
 - Evidence stays attributed under DATE, TYPE and PARTIES headings, with each
   party on its own line.
 - The approve and keep actions sit in a pinned bar at the foot of the panel,
@@ -110,7 +110,7 @@ That evaluation reproduces alpha.9's naming and date scores exactly: date role
 14/14, type 18/18, description specific 19/19, parties 16/19, review rate 42.1%,
 and nothing filed under a date the corpus marks as a trap. Descriptions covered
 the expected facts for 16 of 18 documents, one more than alpha.9's 15. This
-release changes no naming behaviour, and the numbers show it did not.
+release changes no naming behavior, and the numbers show it did not.
 
 The capture is byte-identical to the accepted alpha.9 frame, with the same SHA-256.
 That is expected. The visible additions in this release are the guided SharePoint
@@ -135,7 +135,7 @@ The capture was inspected against the accepted concept:
 - Date-first proposed filenames, right-aligned confidence and em-dashes for
   absent values stay consistent down the column.
 - Ready, Needs review, Processing and Waiting are each distinguishable by icon as
-  well as colour.
+  well as color.
 - Evidence stays attributed under DATE, TYPE and PARTIES headings, with each
   party on its own line.
 - The approve and keep actions sit in a pinned bar at the foot of the panel.
@@ -174,13 +174,13 @@ uninstall smoke with user data retained, and an accepted whole-corpus
 evaluation with real inference. That evaluation reproduces alpha.8's scores
 exactly - date role 14/14, type 18/18, description specific 19/19, parties
 16/19, review rate 42.1%, nothing filed under a date the corpus marks as a trap
-- which is the point: this release changes no naming behaviour, and the numbers
+- which is the point: this release changes no naming behavior, and the numbers
 show it did not.
 
 The capture is materially unchanged from alpha.8's, deliberately. This
 release's one visible change is that a window of 1100 pixels or less no longer
 opens inside a modal review drawer over an inert queue, and this frame is 1536
-wide, where the inspector has always been a side panel. The narrow behaviour is
+wide, where the inspector has always been a side panel. The narrow behavior is
 held by the 1024-pixel browser gate and by a unit test rather than by this
 picture; the frame was re-taken because the release inputs changed, not because
 it was expected to look different.
@@ -199,14 +199,14 @@ as three distinct planes, and the header states the privacy posture beside the
 brand tag. Date-first proposed filenames, right-aligned confidence and
 em-dashes for absent values stay consistent down the column. Ready, Needs
 review, Processing and Waiting are each distinguishable by icon as well as
-colour. Evidence stays attributed under DATE, TYPE and PARTIES headings with
+color. Evidence stays attributed under DATE, TYPE and PARTIES headings with
 each party on its own line, the approve and keep actions sit in a pinned bar at
 the foot of the panel, and the selected row carries an accent bar as well as a
 tint. No clipping, collisions, illegible copy, excessive density or ambiguous
 focus were observed.
 
 This is not a pixel-equality assertion: the reference and implementation can
-differ where supported behaviour requires it. The native title bar, the
+differ where supported behavior requires it. The native title bar, the
 1024-pixel layout, hover states and motion remain covered by the hosted
 automated browser and installed-app gates rather than by a claim that one frame
 captures every state.
@@ -245,7 +245,7 @@ longer describes what would ship.
   `9e91511c12ad9a3e727e3fa56e15b7197de191d2`. The capture is 1536×1024 and
   SHA-256 `1bc7bb1707c743fc87106eb3a2a914d234128cefdc20e92a77c88fa7a6b7fb76`.
 - The capture differs substantially from alpha.5's: alpha.6 rebuilds the review
-  panel. Evidence is now attributed quotations under labelled DATE, TYPE, and
+  panel. Evidence is now attributed quotations under labeled DATE, TYPE, and
   PARTIES headings, each party on its own line so it can be checked separately;
   the model's confidence appears in the panel at all, with an exact percentage
   beside a proportional track; the approve and keep actions sit in a pinned bar
@@ -272,7 +272,7 @@ read as three distinct planes, and the header states the privacy posture in the
 chrome beside the new brand tag. Date-first proposed filenames, right-aligned
 confidence, and em-dashes for absent values stay consistent down the column.
 Ready, Needs review, Processing, and Waiting are each distinguishable by icon
-as well as colour, and this run's automated contrast assertions for the review
+as well as color, and this run's automated contrast assertions for the review
 and waiting statuses passed at 4.5:1 on the brand-tinted selection.
 
 No clipping, collisions, illegible copy, excessive density, or ambiguous

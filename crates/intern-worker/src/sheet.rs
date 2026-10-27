@@ -43,7 +43,7 @@ pub const MAX_CELL_CHARS: usize = 1_000;
 
 /// How many cells may pile up before the window is pruned again. Pruning on
 /// every cell would be quadratic; pruning when the buffer reaches a few times
-/// the rendered window keeps the cost amortised and the memory bounded.
+/// the rendered window keeps the cost amortized and the memory bounded.
 const CELLS_BEFORE_PRUNE: usize = 4 * MAX_SHEET_ROWS * MAX_SHEET_COLS;
 
 /// The most memory opening a binary workbook may have calamine hold at once.
@@ -183,7 +183,7 @@ pub fn extract_xlsx(
 ///
 /// anydoc parses it. Its OpenDocument reader charges every repeated row and
 /// cell against a fixed expansion budget, which a format built on repeat
-/// runs needs: calamine's would materialise a dense range of up to a hundred
+/// runs needs: calamine's would materialize a dense range of up to a hundred
 /// million cells from a few kilobytes of `number-rows-repeated`. Rendered by
 /// anydoc, though, every cell of every sheet went into one page, so a long
 /// ledger was cut at the page cap as `TEXT_TRUNCATED` and could never be
@@ -840,7 +840,7 @@ pub(crate) fn elided_document(mut pages: Vec<ExtractedPage>, elided: bool) -> Ex
 
 /// Streams one worksheet's cells and keeps only the ones the cap can render.
 ///
-/// `worksheet_range` materialises the used range densely — one slot per cell
+/// `worksheet_range` materializes the used range densely — one slot per cell
 /// of the bounding box — before any cap of ours applies. A three-kilobyte
 /// workbook whose only two cells are `A1` and `XFD1048576` therefore asks the
 /// allocator for half a terabyte and aborts the process, which no panic

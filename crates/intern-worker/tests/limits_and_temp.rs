@@ -132,7 +132,7 @@ fn append_png_chunk(bytes: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     bytes.extend_from_slice(&crc32(&crc_data).to_be_bytes());
 }
 
-/// A PNG that declares its size and holds no pixels: 8-bit grey, so a
+/// A PNG that declares its size and holds no pixels: 8-bit gray, so a
 /// decoder that gets as far as allocating allocates one byte a pixel.
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();

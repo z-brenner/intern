@@ -340,11 +340,11 @@ pub const ISSUER_CUES: &[&str] = &[
 // What follows is read only by the evidence index and the retriever.
 
 /// The words a company's or an institution's name ends on: legal forms
-/// ("Inc", "LLC", "N.A.") and the nouns an organisation calls itself by
+/// ("Inc", "LLC", "N.A.") and the nouns an organization calls itself by
 /// ("Bank", "Cooperative", "Authority"). Compared without case or trailing
-/// punctuation; a likely organisation is a run of capitalised words ending
+/// punctuation; a likely organization is a run of capitalized words ending
 /// on one, so recall matters more here than precision.
-pub const ORGANISATION_ENDINGS: &[&str] = &[
+pub const ORGANIZATION_ENDINGS: &[&str] = &[
     "inc",
     "incorporated",
     "llc",

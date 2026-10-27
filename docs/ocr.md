@@ -57,14 +57,14 @@ write to. ONNX Runtime's telemetry is turned off.
    post-processing, reimplemented in `paddle/db.rs`).
 3. **Skew.** The page's skew is the length-weighted median slope of its long
    lines. Each line is cut out along its own slope, so a crooked page reads
-   as well as a level one; only the boxes the reading reports are levelled.
+   as well as a level one; only the boxes the reading reports are leveled.
    Past 10 degrees the page is turned level and detected again.
 4. **Recognition.** Each line is cut out of the full-resolution page,
    48 pixels tall, and read in batches of six lines of similar length. CTC
    decoding gives the text and a probability for every character.
 5. **Second reading.** A line whose least certain character is under 0.9
    and that holds a critical field - a date, an amount, an identifier, a
-   capitalised name of two or more words - or whose date or amount is
+   capitalized name of two or more words - or whose date or amount is
    damaged however sure the recognizer was (`0.7/01/2026`, `$25,o00`,
    `June 31, 2026`), is cut out again with more margin, made black and
    white at Otsu's threshold, and read again. At most 12 lines a page. The
@@ -204,7 +204,7 @@ Synthetic business pages (30), exact-string recall:
 | --- | --- | --- | --- | --- | --- |
 | Tesseract | 0.946 | 0.867 | 0.855 | 0.850 | 0.600 / 0.600 / 0.575 |
 | PP-OCR, detector 960 | 0.982 | 0.944 | 0.968 | 0.933 | 0.833 / 0.916 / 0.825 |
-| **PP-OCR 960, binarised second reading (shipped)** | **0.983** | **0.989** | **0.970** | **0.942** | **0.967 / 0.929 / 0.850** |
+| **PP-OCR 960, binarized second reading (shipped)** | **0.983** | **0.989** | **0.970** | **0.942** | **0.967 / 0.929 / 0.850** |
 | PP-OCR, detector 1600 | 0.979 | 0.922 | 0.970 | 0.942 | 0.767 / 0.916 / 0.850 |
 | newer tiny detector, 960 | 0.979 | 0.956 | 0.959 | 0.917 | 0.867 / 0.884 / 0.775 |
 | newer small detector, 1600 | 0.972 | 0.911 | 0.948 | 0.933 | 0.733 / 0.862 / 0.825 |
@@ -215,7 +215,7 @@ FUNSD forms (50), order-free word scoring:
 | --- | --- | --- | --- | --- |
 | Tesseract (2 threads) | 0.535 | 0.475 | 0.225 | 2.78 |
 | PP-OCR, detector 960 | 0.777 | 0.750 | 0.453 | 2.81 |
-| PP-OCR 960, binarised second reading (shipped) | 0.776 | 0.749 | 0.455 | 3.49 |
+| PP-OCR 960, binarized second reading (shipped) | 0.776 | 0.749 | 0.455 | 3.49 |
 | PP-OCR 960, second reading both ways | 0.778 | 0.751 | 0.457 | 4.08 |
 | PP-OCR, detector 1280 | 0.783 | 0.759 | 0.454 | 2.91 |
 | newer tiny detector, 960 | 0.786 | 0.768 | 0.451 | 2.70 |
@@ -240,13 +240,13 @@ in the same period.
 | --- | --- | --- | --- | --- | --- | --- |
 | none | 0.50% | 1.83% | 29 / 27 / 14 | 85 / 614 / 112 | 25 / 206 / 33 | |
 | as first written (unguarded), both preprocessings | 0.63% | 1.94% | 28 / 27 / 14 | | | +41% |
-| contrast-stretched and binarised | 0.48% | 1.74% | 29 / 27 / 14 | 87 / 620 / 113 | 27 / 213 / 34 | +38% / +42% |
+| contrast-stretched and binarized | 0.48% | 1.74% | 29 / 27 / 14 | 87 / 620 / 113 | 27 / 213 / 34 | +38% / +42% |
 | contrast-stretched only | 0.49% | 1.80% | 29 / 27 / 14 | 87 / 620 / 113 | 27 / 211 / 34 | +22% / +22% |
-| **binarised only** | **0.49%** | **1.78%** | **29 / 27 / 14** | **89 / 615 / 113** | **29 / 209 / 34** | **+20% / +22%** |
+| **binarized only** | **0.49%** | **1.78%** | **29 / 27 / 14** | **89 / 615 / 113** | **29 / 209 / 34** | **+20% / +22%** |
 | both, least certain character under 0.8 | | | | 87 / 621 / 113 | 27 / 212 / 34 | +29% synthetic |
 | both, at most 6 lines a page | | | | 86 / 619 / 113 | 26 / 211 / 34 | +23% synthetic |
 
-The first version of the pass made InternBench worse. A full stop after a
+The first version of the pass made InternBench worse. A period after a
 date (`by 09/30/2026.`) made the date look broken, so its line was re-read,
 and four characters of noise replaced it: holding no date, they held no
 wrong date. Readings that turned `$6.85` into `S6.85` and `$145.00` into
@@ -261,7 +261,7 @@ with at most 12 lines a page chooses 53, among 306 chosen in all (6.7 a
 page). A bar of 0.8 chooses 52 of 271; 0.7, 47 of 226; 0.5, 12 of 23.
 
 On FUNSD's forms the second reading changes next to nothing: word F1
-0.776 binarised and 0.778 both ways, against 0.777 without, digit-word
+0.776 binarized and 0.778 both ways, against 0.777 without, digit-word
 recall 0.455 and 0.457 against 0.453, for 24% and 45% more time. Its
 answers carry no dates or amounts to check, and its noise is in the
 detection, not in a character here and there.
@@ -285,7 +285,7 @@ Both strategies read both documents exactly as well. The classifier is
 ### Skew
 
 The skewed InternBench notice (3 degrees) reads perfectly. To find where
-levelling starts to matter, five InternBench pages (the agreement's first
+leveling starts to matter, five InternBench pages (the agreement's first
 page, the lease's third, the faint letter, the noisy statement, the intake
 form) were turned 2, 4, 6 and 10 degrees and read three ways:
 
@@ -295,12 +295,12 @@ form) were turned 2, 4, 6 and 10 degrees and read three ways:
 | level and detect again past 5 degrees | 0.99% | 0.70% | 0.64% | 0.71% | 73.0 s |
 | level and detect again past 2 degrees | 0.68% | 0.72% | 0.64% | 0.71% | 78.2 s |
 
-Levelling a page and detecting it again cost about a quarter more time on
+Leveling a page and detecting it again cost about a quarter more time on
 each page it was done to. Unturned, the same pages read at about the same
 error. All of the difference at 2 degrees is one noisy page (3.62% against
-1.60%), and levelling was worse at 4; every critical field was within one
+1.60%), and leveling was worse at 4; every critical field was within one
 either way. Cutting each line out along its own slope is enough, so the
-page is levelled and detected again only past 10 degrees, the largest
+page is leveled and detected again only past 10 degrees, the largest
 angle measured.
 
 ### Threads and pages at once
@@ -362,10 +362,10 @@ The shipped configuration:
 | recognizer | English, same generation | the newer generation's recognizers merge widely spaced table columns into one token |
 | detector input | 960 on the longer side | 1280 and 1600 find nothing more, cost 10-20% more, and 30-70% more memory |
 | orientation | classifier first, then the search | one pass for a turned page instead of two to four |
-| levelling | past 10 degrees only | lines are cut along their own slopes; levelling bought nothing up to 10 |
-| second reading | binarised, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
+| leveling | past 10 degrees only | lines are cut along their own slopes; leveling bought nothing up to 10 |
+| second reading | binarized, least certain character under 0.9, at most 12 lines a page | most dates for the time; +20% |
 | threads | 2 a page; pages at once up to half the cores, at most 2 | 1.8 times as fast as one thread; memory caps the pages at once |
-| recognition batch | 6 lines | reading lines one at a time drops trailing full stops and commas at the end of long lines |
+| recognition batch | 6 lines | reading lines one at a time drops trailing periods and commas at the end of long lines |
 
 Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
 27/27, identifiers 14/15, 3.54 s of processor time and 1.95 s wall a page
@@ -386,7 +386,7 @@ SHA-256, and `scripts/fetch-windows-assets.ps1` fetches and verifies each:
   as `llama-server` does.
 * **Models**: the official ONNX exports on Hugging Face, each pinned to a
   commit (`resolve/<sha>/inference.onnx`), staged under `ocr-models/`.
-* **Licences**: ONNX Runtime's MIT license and third-party notices, and
+* **Licenses**: ONNX Runtime's MIT license and third-party notices, and
   the Apache-2.0 text from the PaddleOCR repository at its v3.7.0 tag (the
   model repositories carry no license file of their own), go into
   `licenses/`; `THIRD_PARTY_NOTICES.md` lists all four files.
@@ -403,7 +403,7 @@ falls back to Tesseract, and QA and release run the engine's own tests
 against the staged runtime with `INTERN_REQUIRE_PP_OCR` set.
 
 The install grows by 36.3 MB (34.6 MiB): 16.5 MB of runtime, 19.5 MB of
-models and 0.36 MB of licence text. The installer compresses with LZMA;
+models and 0.36 MB of license text. The installer compresses with LZMA;
 the same files compressed with LZMA (`xz -9`) come to 22.3 MB (21.2 MiB),
 which is about what the installer grows by. The integrator's build will
 say exactly.

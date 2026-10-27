@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
+import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
 
-const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
+const selectRow = openRow;
 
 const undated: QueueItem = {
   id: 'resolution',
@@ -23,7 +24,7 @@ describe('the date gate', () => {
     const baseBridge = createInMemoryBridge();
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     const filename = screen.getByLabelText('Filename');
     fireEvent.change(filename, { target: { value: 'Lease Agreement between ABC Properties LLC and TenantCo Inc' } });
     // The requirement is shown before anyone clicks.
@@ -43,7 +44,7 @@ describe('the date gate', () => {
     const baseBridge = createInMemoryBridge({ items: [undated] });
     const approve = vi.fn(baseBridge.approve);
     render(<App bridge={{ ...baseBridge, approve }} />);
-    selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));
 
     const suggestion = screen.getByRole('group', { name: 'Suggested date' });
     expect(suggestion).toHaveTextContent('2024-06-18');
@@ -68,7 +69,7 @@ describe('the date gate', () => {
       fileModifiedDate: '2024-06-20',
     };
     render(<App bridge={createInMemoryBridge({ items: [stated] })} />);
-    selectRow(await screen.findByRole('row', { name: /Scan 0043.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Scan 0043.pdf/i }));
 
     const choices = screen.getByRole('group', { name: 'Dates to choose from' });
     expect(choices).toHaveTextContent('Dates the document states');
@@ -81,7 +82,7 @@ describe('the date gate', () => {
 
   it('can put the suggested date into the field to edit before renaming', async () => {
     render(<App bridge={createInMemoryBridge({ items: [undated] })} />);
-    selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Scan 0042.pdf/i }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Use this date' }));
 

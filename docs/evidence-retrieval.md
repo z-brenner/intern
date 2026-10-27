@@ -21,7 +21,7 @@ source, an old recording) is segmented exactly the way the worker segments
 text it has no geometry for. `structure::segment` now mirrors the worker's
 `blocks_from_text` - Markdown and capital-line headings (not a line ending
 in a colon), `|` tables with their header row, runs of `Key: value` lines
-as labelled values, list items, paragraphs split after twelve lines at a
+as labeled values, list items, paragraphs split after twelve lines at a
 sentence end - and the worker's contract test
 (`the_engine_segments_text_exactly_as_the_worker_does`) holds the two
 equal, block for block.
@@ -33,7 +33,7 @@ A unit is:
 | Heading | one unit |
 | Paragraph, list item, caption, other | the block, or sentence-bounded chunks of at most `max_unit_chars` (`.s1`, `.s2`, ...) |
 | Table | one unit per row (`.r1`, ...), its `\| a \| b \|` line; the header row (all cells headers, or a first row with no figures) is a `TableHeader` unit every row points to; a two-cell row's first cell is its label |
-| Key-value | one `Field` unit per labelled value (`.f1`, ...), its `Key: value` line, the key as its label |
+| Key-value | one `Field` unit per labeled value (`.f1`, ...), its `Key: value` line, the key as its label |
 | Page header or footer | a running unit |
 
 Every unit keeps its block id and its own id, its page, its kind, its
@@ -48,7 +48,7 @@ Features are read once per unit:
 
 * **Dates**, each with the wording before it read by validation's own
   functions: the role (`role_from_wording` over `window_before`), whether
-  it is labelled a deadline (`labels_a_deadline`) or the issue date
+  it is labeled a deadline (`labels_a_deadline`) or the issue date
   (`labels_the_issue_date`), whether it is another document's date
   (`reference_introduced`), and whether it defines a dated term (`"Closing
   Date" means`). Numeric dates are read in the order the whole document
@@ -60,7 +60,7 @@ Features are read once per unit:
 * **Defined terms**: every `"X" means` entry in a unit, so the definition
   of the Services, the Products or the Premises reads as subject evidence.
 * **Money** (amounts, and whether a label such as Total, Rent or Principal
-  makes one a key fact), **likely organisations** (capitalised runs ending
+  makes one a key fact), **likely organizations** (capitalized runs ending
   in a legal form or an institution word), **likely people** (after a
   courtesy title, "Dear", a party label, `/s/`), **identifiers** (letters
   and figures, or figures a number label introduces).
@@ -88,10 +88,10 @@ components, each weighted in percent:
 | --- | --- |
 | cues | distillation's cue lists: type, party, date-role, subject, signature cues, the boilerplate penalty |
 | bm25 | BM25 (k1 1.2, b 0.75, fixed-point IDF) against the field's lexicon, scaled 0-100 to the best unit |
-| structure | headings and titles, labelled values with a matching label, letterhead, signature block, table header context |
+| structure | headings and titles, labeled values with a matching label, letterhead, signature block, table header context |
 | heading | the section's tags: definitions for a date, parties and recitals for parties, scope for the subject |
 | position | the document's opening and closing, first and last page |
-| features | dates with their roles (deadline -60, reference -80, defined term +60), organisations and people, identifiers, money |
+| features | dates with their roles (deadline -60, reference -80, defined term +60), organizations and people, identifiers, money |
 
 BM25 is implemented and measured but weighted 0 in the default: the sweep
 below found it adds nothing the cue lists do not, and costs subject recall.
@@ -124,7 +124,7 @@ by sixteen.
 A document whose units fit `whole_document_tokens` goes whole (the `Whole`
 tier), still as `[id] text` lines. Otherwise the tier is `Normal`, or
 `Dense` (budgets x1.5) when a trigger fires: six or more candidate dates
-whose two best scores are within 15%, five or more organisations named
+whose two best scores are within 15%, five or more organizations named
 where parties are, or mean OCR confidence under 80.
 
 Hierarchical retrieval scores sections per field first (best unit + a
@@ -302,7 +302,7 @@ What the components do:
 
 * **Filename items** survive any one component's removal (no violation in
   any `without` row, forced or not). Alone, only the features - dates
-  with their roles, organisations, people - keep every one: cue logic
+  with their roles, organizations, people - keep every one: cue logic
   alone loses a date or a party on two documents (nine forced), structure
   alone six, position alone five (dates), BM25 alone two (21 forced), the
   heading component alone fourteen, because it only scores units under
@@ -398,7 +398,7 @@ Where the context carries less of something than the digest:
 
 | Document | Pages | Context lacks | Digest lacks | Why |
 | --- | --- | --- | --- | --- |
-| `inspection-log-ruled-2p` | 2 | fact `FE-032` | - | one of 44 extinguisher ids, in a table row and a long summary line; the identifier budget goes to the letterhead's licence number and the first row |
+| `inspection-log-ruled-2p` | 2 | fact `FE-032` | - | one of 44 extinguisher ids, in a table row and a long summary line; the identifier budget goes to the letterhead's license number and the first row |
 | `services-agreement` | 6 | subject "service levels" | - | the "Service Levels" definition and Exhibit A's heading; the subject takes the recitals and the "Services" definition first |
 | `data-processing-agreement-10p` | 10 | subject "GDPR", "student data" | fact "forty-eight hours" (both) | in the definitions and Annex I; the subject takes the Services definition and the processing description rows |
 | `asset-purchase-agreement-25p` | 25 | subject "earn-out" | fact "$14,250,000.00" | the earn-out schedule's amounts now lose to the purchase price, which the digest missed |
@@ -442,7 +442,7 @@ tokens; the id style is Stage 7's decision.
 The documents that go to retrieval: of the 91, 75 go whole, 7 are
 retrieved at the normal tier and 9 at the dense tier (every long
 InternBench document but the ten-page scan triggers it, by close
-candidate dates or many organisations), 3 of them hierarchically.
+candidate dates or many organizations), 3 of them hierarchically.
 
 ## Flat or hierarchical
 
@@ -482,4 +482,4 @@ a filename item lost to wording that does not match.
 | Type, date and party recall 1.0 wherever `digest_recall` is 1.0 | met on every such document, in both corpora and both recordings without layouts |
 | `context_fact_recall` at least the digest's | met: 99.1% / 98.6% InternBench, 94.4% / 94.4% fixtures, and on both halves |
 | Context tokens at least 40% below the digest's on documents of ten pages or more | met: 66% in total, every document at least 52%, except the 37-token fixture above |
-| Prompts and default behaviour byte-identical | met: nothing in the engine calls the index or the retriever yet; the InternBench replay of `bench/recording.json` against `bench/baseline.json` and the fixture replay against `fixtures/corpus-baseline.json` report no change |
+| Prompts and default behavior byte-identical | met: nothing in the engine calls the index or the retriever yet; the InternBench replay of `bench/recording.json` against `bench/baseline.json` and the fixture replay against `fixtures/corpus-baseline.json` report no change |

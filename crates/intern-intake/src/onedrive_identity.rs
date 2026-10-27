@@ -61,7 +61,7 @@ impl RecordError {
                     .into()
             }
             Self::Malformed(detail) => {
-                format!("OneDrive's sync records are not in a recognised format ({detail}).")
+                format!("OneDrive's sync records are not in a recognized format ({detail}).")
             }
             Self::Conflict(detail) => format!("OneDrive's sync records disagree ({detail})."),
         }

@@ -128,7 +128,7 @@ and accepts it. It is only worth anything if that is true.
 - Open the capture from this run's artifact, at full size, and check it against
   the concept the ledger records: the three planes, the header's privacy
   posture, date-first filenames with right-aligned confidence, statuses told
-  apart by icon as well as colour, attributed evidence, and no clipping,
+  apart by icon as well as color, attributed evidence, and no clipping,
   collisions, illegible text, or ambiguous focus.
 - `reviewer` names the person who accepted it. An assistant may inspect the
   capture first and draft the record, but the notes then say who did what, as

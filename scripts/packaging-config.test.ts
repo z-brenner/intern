@@ -121,8 +121,10 @@ it('keeps the release verifier outside Tauri binary discovery and invokes its wo
 
 // The webview may ask the shell to open a URL only through the opener plugin,
 // and the capability scope is what actually confines it. It names exactly the
-// addresses the bridge hands over - the guide and the two fixed support links -
-// so a new link cannot be added on one side without the other.
+// addresses the bridge hands over - the guide site and the two fixed support
+// links outside it - so a new link cannot be added on one side without the
+// other. The description-flow link is a section of the guide, inside the
+// guide site's entry.
 it('scopes the opener capability to the guide and the fixed support links only', async () => {
   const capability = JSON.parse(await readFile('src-tauri/capabilities/default.json', 'utf8'));
   const opener = (capability.permissions as Array<string | { identifier: string; allow?: Array<{ url: string }> }>)
@@ -137,4 +139,5 @@ it('scopes the opener capability to the guide and the fixed support links only',
     ],
   }]);
   expect(GUIDE_URL.startsWith('https://z-brenner.github.io/intern/')).toBe(true);
+  expect(SUPPORT_LINKS['description-flow'].startsWith('https://z-brenner.github.io/intern/')).toBe(true);
 });

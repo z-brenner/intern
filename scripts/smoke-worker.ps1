@@ -150,7 +150,7 @@ try {
     # narrow glyphs are the least reliable, so the scanned fixtures assert the
     # multi-word alphabetic content that survives, and fixtures/README.md records
     # the fidelity this font actually achieves. Asserting prose that the generator
-    # never rasterised - a comma the font has no glyph for, say - is how these
+    # never rasterized - a comma the font has no glyph for, say - is how these
     # assertions came to be unsatisfiable in the first place.
     Assert-ParsedFixture "employment-agreement.pdf" @("Mira Vale", "February 14, 2025") @("native")
     Assert-ParsedFixture "scanned-lease.pdf" @("lease agreement", "september", "juniper loop") @("ocr")

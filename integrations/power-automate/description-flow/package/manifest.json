@@ -1,0 +1,54 @@
+{
+  "schema": "1.0",
+  "details": {
+    "displayName": "Intern - fill the Description column",
+    "description": "Copies the one-sentence description from each Intern record in a library's .intern/descriptions folder into the Description column of the document it describes.",
+    "createdTime": "2026-10-26T00:00:00.0000000Z",
+    "packageTelemetryId": "18152bfa-e113-47e9-9b29-0026e3c7aaaa",
+    "creator": "Intern",
+    "sourceEnvironment": ""
+  },
+  "resources": {
+    "2fc695c6-70bb-488e-9b34-f962e9aa93bd": {
+      "type": "Microsoft.Flow/flows",
+      "suggestedCreationType": "New",
+      "creationType": "Existing, New, Update",
+      "details": {
+        "displayName": "Intern - fill the Description column"
+      },
+      "configurableBy": "User",
+      "hierarchy": "Root",
+      "dependsOn": [
+        "02de7c06-6aef-45b4-864f-1c0b2fc7eccb",
+        "8072d42b-0d5a-4589-aa38-d255d472ecda"
+      ]
+    },
+    "02de7c06-6aef-45b4-864f-1c0b2fc7eccb": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_sharepointonline",
+      "name": "shared_sharepointonline",
+      "type": "Microsoft.PowerApps/apis",
+      "suggestedCreationType": "Existing",
+      "details": {
+        "displayName": "SharePoint",
+        "iconUri": "https://static.powerapps.com/resource/ppcr/releases/v1.0.1813/1.0.1813.4743/sharepointonline/icon.png"
+      },
+      "configurableBy": "System",
+      "hierarchy": "Child",
+      "dependsOn": []
+    },
+    "8072d42b-0d5a-4589-aa38-d255d472ecda": {
+      "type": "Microsoft.PowerApps/apis/connections",
+      "suggestedCreationType": "Existing",
+      "creationType": "Existing",
+      "details": {
+        "displayName": "SharePoint connection",
+        "iconUri": "https://static.powerapps.com/resource/ppcr/releases/v1.0.1813/1.0.1813.4743/sharepointonline/icon.png"
+      },
+      "configurableBy": "User",
+      "hierarchy": "Child",
+      "dependsOn": [
+        "02de7c06-6aef-45b4-864f-1c0b2fc7eccb"
+      ]
+    }
+  }
+}

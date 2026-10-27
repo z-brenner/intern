@@ -57,7 +57,7 @@ pub fn lines_from_map(
     params: &DbParams,
 ) -> Vec<DetectedLine> {
     assert_eq!(probabilities.len(), width * height, "map size");
-    let mut labelled = vec![false; width * height];
+    let mut labeled = vec![false; width * height];
     let mut lines = Vec::new();
     let mut candidates = 0;
     let mut stack: Vec<usize> = Vec::new();
@@ -71,7 +71,7 @@ pub fn lines_from_map(
     let scale_x = dest_width / width as f32;
     let scale_y = dest_height / height as f32;
     for start in 0..probabilities.len() {
-        if labelled[start] || probabilities[start] <= params.thresh {
+        if labeled[start] || probabilities[start] <= params.thresh {
             continue;
         }
         if candidates >= params.max_candidates {
@@ -79,7 +79,7 @@ pub fn lines_from_map(
         }
         candidates += 1;
         extremes.clear();
-        labelled[start] = true;
+        labeled[start] = true;
         stack.push(start);
         while let Some(index) = stack.pop() {
             let (x, y) = (index % width, index / width);
@@ -92,10 +92,10 @@ pub fn lines_from_map(
             let (y0, y1) = (y.saturating_sub(1), (y + 1).min(height - 1));
             for ny in y0..=y1 {
                 for nx in x0..=x1 {
-                    let neighbour = ny * width + nx;
-                    if !labelled[neighbour] && probabilities[neighbour] > params.thresh {
-                        labelled[neighbour] = true;
-                        stack.push(neighbour);
+                    let neighbor = ny * width + nx;
+                    if !labeled[neighbor] && probabilities[neighbor] > params.thresh {
+                        labeled[neighbor] = true;
+                        stack.push(neighbor);
                     }
                 }
             }
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:?}");
         let line = lines[0];
         assert!((line.score - 0.9).abs() < 1e-4, "{line:?}");
-        // The core spans pixel centres 20..=99 by 30..=39: 79 x 9. Grown by
+        // The core spans pixel centers 20..=99 by 30..=39: 79 x 9. Grown by
         // 79 * 9 * 1.5 / (2 * 88) = 6.06 on every side.
         let [x0, y0, x1, y1] = line.quad.bounds();
         let grow = 79.0 * 9.0 * 1.5 / 176.0;
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn separate_blobs_are_separate_lines_and_diagonal_neighbours_join() {
+    fn separate_blobs_are_separate_lines_and_diagonal_neighbors_join() {
         let mut map = map_with(
             300,
             60,
@@ -258,8 +258,8 @@ mod tests {
         // A 300-pixel line, 12 pixels thick, climbing at four degrees.
         let slope = 4_f32.to_radians().tan();
         for x in 50..350 {
-            let centre = 120.0 - (x as f32 - 50.0) * slope;
-            for y in (centre - 6.0) as usize..(centre + 6.0) as usize {
+            let center = 120.0 - (x as f32 - 50.0) * slope;
+            for y in (center - 6.0) as usize..(center + 6.0) as usize {
                 map[y * width + x] = 0.9;
             }
         }

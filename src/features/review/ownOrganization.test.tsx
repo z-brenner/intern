@@ -1,10 +1,11 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { App } from '../../App';
+import { openRow } from '../queue/gridTesting';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
 
-const selectRow = (row: HTMLElement) => fireEvent.click(within(row).getByRole('button', { name: /select/i }));
+const selectRow = openRow;
 
 const byCounterparty: QueueItem = {
   id: 'sow',
@@ -23,12 +24,12 @@ const byCounterparty: QueueItem = {
   must never quietly drop.
 */
 describe('a name filed by the other side', () => {
-  it('says which party was left out as the organisation, while the evidence keeps it', async () => {
+  it('says which party was left out as the organization, while the evidence keeps it', async () => {
     render(<App bridge={createInMemoryBridge({ items: [byCounterparty] })} />);
-    selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
     const note = screen.getByRole('note', { name: 'Filed by the other side' });
-    expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organisation, so it is left out of the name. Change this under Settings.');
+    expect(note).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc. is your organization, so it is left out of the name. Change this under Settings.');
     expect(within(note).getByText('Contoso Worldwide, Inc.').tagName).toBe('Q');
     expect(screen.getByLabelText('Filename')).toHaveValue('2026-04-01 Statement of Work with Ridgeline Cartography LLC');
     const evidence = screen.getByRole('heading', { name: 'Evidence' }).closest('section')!;
@@ -39,14 +40,14 @@ describe('a name filed by the other side', () => {
   it('names every spelling it left out', async () => {
     const twice = { ...byCounterparty, omittedParties: ['Contoso Worldwide, Inc.', 'Contoso UK', 'CONTOSO'] };
     render(<App bridge={createInMemoryBridge({ items: [twice] })} />);
-    selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /SOW final v3.pdf/i }));
 
-    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc., Contoso UK and CONTOSO are your organisation, so they are left out of the name. Change this under Settings.');
+    expect(screen.getByRole('note', { name: 'Filed by the other side' })).toHaveTextContent('Filed by the other side: Contoso Worldwide, Inc., Contoso UK and CONTOSO are your organization, so they are left out of the name. Change this under Settings.');
   });
 
   it('says nothing when the name carries every party', async () => {
     render(<App bridge={createInMemoryBridge()} />);
-    selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
+    await selectRow(await screen.findByRole('row', { name: /Lease Agreement - 123 Main St.pdf/i }));
     expect(screen.queryByRole('note', { name: 'Filed by the other side' })).not.toBeInTheDocument();
   });
 });

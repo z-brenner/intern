@@ -17,16 +17,16 @@ there returns blocks for every page of every document.
 ## What a layout is
 
 A page layout is the page's blocks in reading order. A block is a heading,
-paragraph, list item, table, labelled values (`key_value`), caption, running
+paragraph, list item, table, labeled values (`key_value`), caption, running
 header, or running footer. Its id is `p{page}.b{n}`, `n` counting blocks in
 reading order from 1; a table's rows are `p{page}.b{n}.r{k}` and its cells
-`….c{j}`; labelled values are fields `….f{k}`, each a key and a value. Every
+`….c{j}`; labeled values are fields `….f{k}`, each a key and a value. Every
 block names the heading it falls under (`section`), across pages, says where
 its text came from (`native` or `ocr`), and carries OCR's mean confidence in
 it when OCR read it. Where the reader knows geometry, every block, line,
 cell, key and value has a box: `[x0, y0, x1, y1]` in tenths of a PDF point
 from the top left of the page as displayed, so everything is an integer and
-serialises the same way every time.
+serializes the same way every time.
 
 Every reader produces one:
 
@@ -46,7 +46,7 @@ agreements' `Page 2 of 10` footers, and leaves a first page's letterhead
 alone.
 
 A page past the protocol's layout budget is sent without one. That budget
-is 16 MiB of serialised layouts per document, or whatever the rest of the
+is 16 MiB of serialized layouts per document, or whatever the rest of the
 response leaves of the host's 64 MiB line, if that is less: escaped text and
 an image document's page image count against it. A page whose text was cut
 is also sent without one. For any such page, the engine's
@@ -67,10 +67,10 @@ over while inspection already has the page open:
   again, and the fresh reading replaces the layer only if it is confident
   (mean ≥ 75) or has fewer OCR-error words; otherwise the layer is kept. The
   engine's lines go through the same analysis as a `layout` page's runs, and
-  the page text is the blocks' linearisation. An engine's own text reads an
+  the page text is the blocks' linearization. An engine's own text reads an
   unruled table down its columns or across a row of boxes and pairs no label
   with its value; on InternBench's 72 documents, reading the blocks instead
-  took labelled values from 90.5% to 99.3%, with table rows (98.2%), reading
+  took labeled values from 90.5% to 99.3%, with table rows (98.2%), reading
   order (100%) and every date, name and identifier the same. A reading with
   no lines keeps the engine's text. OCR measures a line's height by its
   letters, not its type size - a heading in capitals measures smaller than
@@ -86,23 +86,23 @@ over while inspection already has the page open:
   of the page that no text overlaps (a pasted scan of a signature block, a
   stamped certificate). The page is rendered once, the regions cropped and
   read by OCR, and lines read at confidence ≥ 50 (regions at mean ≥ 60) are
-  placed into the page's geometry and analysed with its native text. The page
-  text is the blocks' linearisation. At most four regions are read, largest
+  placed into the page's geometry and analyzed with its native text. The page
+  text is the blocks' linearization. At most four regions are read, largest
   first, and an image a quarter or more of which lies under a larger region
   already chosen is not read again - a scan drawn with a copy over it, a
   thumbnail on its full-size image - since what lies under both would be
   merged into the page twice. A quarter of the smallest region the router
   asks for is still several lines of text; images that only touch, or a
   stamp over a corner of a scan, overlap far less and are both read.
-* **`layout`** — side-by-side flows, table rows, grids of labelled values, or
+* **`layout`** — side-by-side flows, table rows, grids of labeled values, or
   overprinted text: the page's characters are read into runs (characters on
   one baseline with no wide gap) and the page is rebuilt from their geometry —
   reading order by a recursive cut into columns and bands, tables from cells
-  that line up and from ruling lines, labelled values paired with their
+  that line up and from ruling lines, labeled values paired with their
   labels, headings by size and weight, running headers and footers by
-  position. The page text is the blocks' linearisation: blocks separated by a
+  position. The page text is the blocks' linearization: blocks separated by a
   blank line, tables as `| a | b |` rows (which the distiller already treats
-  as tables), labelled values as `Key: value` lines.
+  as tables), labeled values as `Key: value` lines.
 * **`fast`** — everything else. The page text is **exactly** what PDFium
   reads for the page: `page.text().all()`, except on a page turned a quarter
   by `/Rotate`, whose text is the text inside the page's size as drawn
@@ -159,7 +159,7 @@ from the page text.
 The calibration (`cargo run --release -p intern-worker --features
 windows-native --example route_calibration -- FILE.pdf …`) prints, for every
 page, the route, every signal, and what the full geometry analysis finds when
-it reads the page's characters anyway: tables of two or more rows, labelled
+it reads the page's characters anyway: tables of two or more rows, labeled
 values set apart from their labels (a value under its label, or one that
 wraps), and a reading order that jumps back up the page. A page where the
 analysis finds any of those, and the native text would run together, "needs
@@ -199,7 +199,7 @@ So the thresholds (`layout::router::thresholds`) are:
 What the router gets wrong on this corpus, all on the fast route:
 
 * `annual-report-100p.pdf` page 34, `credit-agreement-50p.pdf` page 3 and
-  `board-minutes.pdf` page 1 have labelled values that wrap onto the next
+  `board-minutes.pdf` page 1 have labeled values that wrap onto the next
   line ("Directors present: …" over three lines). The fast route keeps the
   continuation as the following line, in order, so nothing is lost; only the
   field's value is shorter than it could be.
@@ -245,7 +245,7 @@ reads scans with):
   low-confidence warning and the page image come or go with it
   (`scan-noisy-statement.pdf`, `mixed-signature.pdf`,
   `rotated-low-resolution-scan.png`). OCR page text is not compared: it is
-  now the blocks' linearisation, and PP-OCR's.
+  now the blocks' linearization, and PP-OCR's.
 
 The fast route's text is what PDFium reads, as above: `page.text().all()`,
 or the text inside the size as drawn on a page turned a quarter (no page of
@@ -364,7 +364,7 @@ one a sequential read makes; reading with one worker gives the same
 document. Tesseract is started with `OMP_THREAD_LIMIT=1`: a Tesseract built
 with OpenMP starts a thread per core in every process, and two pages at once
 then took 128 s instead of 1.5 s on this machine. The optional page image,
-whose pixels nothing reads, is a 256-pixel grey thumbnail.
+whose pixels nothing reads, is a 256-pixel gray thumbnail.
 
 ## What a page may cost at most
 
@@ -424,7 +424,7 @@ within the document's characters, so the layouts and runs held while a
 document is planned repeat at most its characters and a page.
 
 The character caps do not bound how many objects a layout holds: one for
-every line, table cell and labelled value. Two million characters can be
+every line, table cell and labeled value. Two million characters can be
 hundreds of thousands of one-letter lines or pipes, and a page of
 one-character runs is a line for every character. So every layout a
 document keeps is counted, whatever route its page took. Counting is in
@@ -456,7 +456,7 @@ most; reading a page's characters 0.74 ms at the median.
 
 * Only the OCR engine's lines are geometry on scanned pages (PP-OCR and
   Tesseract both fill `OcrResult::lines` in upright page pixels). An OCR
-  page's text is its blocks' linearisation, built from those lines; a
+  page's text is its blocks' linearization, built from those lines; a
   reading with no lines, or with more than the analysis takes on, keeps
   the engine's own text.
 * Tables are found from alignment and rules, not from a model; borderless
@@ -464,7 +464,7 @@ most; reading a page's characters 0.74 ms at the median.
   route as lines.
 * `ocr_regions` has no corpus document yet; its thresholds are the spec's
   15% and the synthetic page above.
-* A heading inside a table that is neither larger, bold, nor capitalised
+* A heading inside a table that is neither larger, bold, nor capitalized
   stays a row of the table.
 * Running blocks are found by repetition: the corpus's synthetic 100-page
   journal, whose every page is a title, a date and one line

@@ -217,7 +217,7 @@ fn fraction(found: usize, total: usize) -> Option<f64> {
 ///
 /// The targeted checks ask whether each date, name, and identifier drawn on
 /// the scanned pages survives somewhere in the read text: dates and names
-/// compared ignoring case (a capitalised month is the same date),
+/// compared ignoring case (a capitalized month is the same date),
 /// identifiers exactly, because `INV-2O417` is not `INV-20417`.
 ///
 /// A page the extractor did not return - the second frame of a fax it does

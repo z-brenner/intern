@@ -1,5 +1,5 @@
 //! Whether the text Intern reads keeps the page's structure: the reading
-//! order, the tables, the labelled values, and the route each page took.
+//! order, the tables, the labeled values, and the route each page took.
 //!
 //! Everything is measured over the page text the engine receives - the
 //! same text distillation and the prompt are built from - not over the
@@ -8,7 +8,7 @@
 //! `route_correct` reads the layouts, and it is left unscored when there
 //! are none.
 //!
-//! Text is compared after [`normalise`]: every run of whitespace is one
+//! Text is compared after [`normalize`]: every run of whitespace is one
 //! space, typographic quotes are straight and dashes are hyphens, so line
 //! wrapping and OCR's choice of quote mark do not count as errors. Case
 //! counts. A gold string is found only where it stands on its own: one
@@ -18,11 +18,11 @@
 //! the middle of another value.
 //!
 //! The text is read page by page, in page order, as *lines*: each page's
-//! text split at line breaks, normalised, blank lines dropped. A table row
-//! the worker linearised as `| a | b |` is one line.
+//! text split at line breaks, normalized, blank lines dropped. A table row
+//! the worker linearized as `| a | b |` is one line.
 //!
 //! * `reading_order_accuracy`: each snippet's position is its first
-//!   occurrence in the whole text (pages joined, normalised). The snippets
+//!   occurrence in the whole text (pages joined, normalized). The snippets
 //!   in order are the most of the found ones whose positions rise in the
 //!   gold's order (a longest increasing subsequence), and the score is
 //!   their share of every gold snippet: a snippet not found is out of
@@ -51,15 +51,15 @@
 //!   first or last row without one gives way to the nearest row with one.
 //!   Cells are counted with their multiplicity: a value the table prints
 //!   three times must be found three times, without overlap.
-//! * `kv_accuracy`: a labelled value is found when a line holds the label
+//! * `kv_accuracy`: a labeled value is found when a line holds the label
 //!   and, after it but before the next gold label on the line, the value
 //!   (a value after another label is that label's); or when a line holds
-//!   the label and nothing else (colons, bars, dashes and full stops
+//!   the label and nothing else (colons, bars, dashes and periods
 //!   aside) and the next line holds the value; or when a table row
 //!   (`| … |`) holds the label as a whole cell (`CONTRACT DATE` is not the
 //!   cell of `DATE`) and the next line, also a table row, holds the value
 //!   in the cell of the same column - a label set over its value,
-//!   linearised as a table. The score is the share of pairs found.
+//!   linearized as a table. The score is the share of pairs found.
 //! * `route_correct`: the share of the pages with an expected route whose
 //!   layout took that route. A page sent without a layout while others have
 //!   one took no route and is wrong; a document with no layout at all is
@@ -121,7 +121,7 @@ pub fn route_class(source: &DocumentSource) -> &'static str {
 
 /// The text with whitespace collapsed, quotes straightened and dashes made
 /// hyphens.
-pub fn normalise(text: &str) -> String {
+pub fn normalize(text: &str) -> String {
     let mapped = text
         .chars()
         .map(|character| match character {
@@ -241,7 +241,7 @@ impl GoldTable {
             .rows
             .iter()
             .filter_map(|row| {
-                let cells = row.iter().map(|cell| normalise(cell)).collect::<Vec<_>>();
+                let cells = row.iter().map(|cell| normalize(cell)).collect::<Vec<_>>();
                 let blank_lead = cells.first().is_some_and(String::is_empty);
                 let cells = cells
                     .into_iter()
@@ -392,7 +392,7 @@ fn only_separators(rest: &str) -> bool {
         .all(|character| character.is_whitespace() || matches!(character, ':' | '|' | '-' | '.'))
 }
 
-/// The cells of a line linearised as a table row (`| a | b |`), or none
+/// The cells of a line linearized as a table row (`| a | b |`), or none
 /// for any other line. An escaped pipe is part of its cell, as the worker
 /// and the engine read a row.
 fn table_cells(line: &str) -> Option<Vec<&str>> {
@@ -416,7 +416,7 @@ fn table_cells(line: &str) -> Option<Vec<&str>> {
 
 /// Whether a table row holds the label as one whole cell (a colon after it
 /// aside) and the next line, a row of the same table, holds the value in
-/// the cell below it: how a table linearises labels set over their values.
+/// the cell below it: how a table linearizes labels set over their values.
 /// A cell that only contains the label - `CONTRACT DATE` for `DATE` - is
 /// another label.
 fn below_in_table(lines: &[String], key: &str, value: &str) -> bool {
@@ -524,14 +524,14 @@ impl StructureMeasure {
             snippets: truth
                 .reading_order
                 .iter()
-                .filter(|snippet| !normalise(snippet).is_empty())
+                .filter(|snippet| !normalize(snippet).is_empty())
                 .count(),
             rows,
             cells,
             key_values: truth
                 .key_values
                 .iter()
-                .filter(|pair| !normalise(&pair.value).is_empty())
+                .filter(|pair| !normalize(&pair.value).is_empty())
                 .count(),
             route_expected: truth.expected_routes.len(),
             failed: true,
@@ -587,7 +587,7 @@ fn longest_increasing(positions: &[usize]) -> Vec<usize> {
 fn table_counts(truth: &StructureTruth) -> (usize, usize) {
     let cells = |row: &Vec<String>| {
         row.iter()
-            .filter(|cell| !normalise(cell).is_empty())
+            .filter(|cell| !normalize(cell).is_empty())
             .count()
     };
     let rows = truth
@@ -609,7 +609,7 @@ fn table_counts(truth: &StructureTruth) -> (usize, usize) {
 /// gives.
 pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeasure {
     let mut measure = StructureMeasure::default();
-    let text = normalise(
+    let text = normalize(
         &source
             .pages
             .iter()
@@ -621,7 +621,7 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
         .pages
         .iter()
         .flat_map(|page| page.text.split('\n'))
-        .map(normalise)
+        .map(normalize)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
@@ -629,7 +629,7 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
     let snippets = truth
         .reading_order
         .iter()
-        .map(|snippet| normalise(snippet))
+        .map(|snippet| normalize(snippet))
         .filter(|snippet| !snippet.is_empty())
         .collect::<Vec<_>>();
     let positions = snippets
@@ -706,17 +706,17 @@ pub fn measure(truth: &StructureTruth, source: &DocumentSource) -> StructureMeas
         }
     }
 
-    // Labelled values.
+    // Labeled values.
     let labels = truth
         .key_values
         .iter()
-        .map(|pair| normalise(&pair.key))
+        .map(|pair| normalize(&pair.key))
         .filter(|key| !key.is_empty())
         .collect::<Vec<_>>();
     let labels = labels.iter().map(String::as_str).collect::<Vec<_>>();
     for pair in &truth.key_values {
-        let key = normalise(&pair.key);
-        let value = normalise(&pair.value);
+        let key = normalize(&pair.key);
+        let value = normalize(&pair.value);
         if value.is_empty() {
             continue;
         }
@@ -833,11 +833,11 @@ mod tests {
         assert_eq!(find_bounded("Total 2,385.00", "385.00", 0), None);
         assert_eq!(find_bounded("Total $2,385.00", "$2,385.00", 0), Some(6));
         assert_eq!(find_bounded("INV-20417", "20417", 0), Some(4));
-        assert_eq!(find_bounded("Itemised", "Item", 0), None);
-        assert_eq!(find_bounded("Item: Itemised", "Item", 0), Some(0));
+        assert_eq!(find_bounded("Itemized", "Item", 0), None);
+        assert_eq!(find_bounded("Item: Itemized", "Item", 0), Some(0));
         assert_eq!(count_bounded("1 | 1 | 11 | 1", "1"), 3);
         assert_eq!(
-            normalise("\u{201c}Tenant\u{201d}\u{a0}\u{2013}  Suite\n4B"),
+            normalize("\u{201c}Tenant\u{201d}\u{a0}\u{2013}  Suite\n4B"),
             "\"Tenant\" - Suite 4B"
         );
     }
@@ -942,7 +942,7 @@ mod tests {
             ])],
             ..StructureTruth::default()
         };
-        // A linearised table: every row on its own `| … |` line.
+        // A linearized table: every row on its own `| … |` line.
         let table = measure(
             &truth,
             &source(&[
@@ -1168,7 +1168,7 @@ mod tests {
             "{:?}",
             crowded.misses
         );
-        // Labels over their values, linearised as a table: each value is
+        // Labels over their values, linearized as a table: each value is
         // in the cell under its label, and only there.
         let grid = measure(
             &truth,

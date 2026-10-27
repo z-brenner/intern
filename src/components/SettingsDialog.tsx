@@ -1,14 +1,17 @@
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
+import { SharePointDescriptions } from '../features/settings/SharePointDescriptions';
 import { describeSharePointProblem } from '../features/sharepoint/sharePointProblems';
 import { ExternalLink, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
+import type { AppSettings, CloudLocation, CloudRoot, DestinationLayout, HostedModelStatus, HostedProvider, IntakeStatus, LearnedRule } from '../types';
 import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
-import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
+import type { DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
+import { folderSaveProblem, inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
+import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT } from './FolderSetupFlow';
 import { Icon } from './Icon';
 
 /**
@@ -45,12 +48,11 @@ function saveFailure(error: unknown): string {
       : error instanceof Error
         ? error.message
         : undefined;
+  const folders = folderSaveProblem(code);
+  if (folders) return folders;
   switch (code?.trim()) {
-    case 'INTAKE_FOLDER_MISSING': return 'The intake folder could not be found. Choose an existing folder to watch. (INTAKE_FOLDER_MISSING)';
-    case 'INTAKE_NEEDS_DESTINATION': return 'Watched intake needs a destination folder outside the intake folder. (INTAKE_NEEDS_DESTINATION)';
-    case 'DESTINATION_INSIDE_INTAKE': return 'The destination folder is inside the intake folder, so renamed files would be picked up as new documents. Choose a destination outside it. (DESTINATION_INSIDE_INTAKE)';
     case 'AUTOSTART_FAILED': return 'Your system would not let Intern change whether it starts at sign-in, so nothing was saved. Try again. (AUTOSTART_FAILED)';
-    case 'DESCRIPTIONS_NEED_DESTINATION': return 'Description records live in the destination folder, so choose a destination before turning them on. (DESCRIPTIONS_NEED_DESTINATION)';
+    case 'DESCRIPTIONS_NEED_DESTINATION': return 'Description records live in the output folder, so choose an output folder before turning them on. (DESCRIPTIONS_NEED_DESTINATION)';
     case 'DESCRIPTIONS_DISABLED': return 'Turn on description records and save settings first; then records can be written for documents already filed. (DESCRIPTIONS_DISABLED)';
     case 'HOSTED_MODEL_KEY_MISSING': return 'Paste an API key before choosing the hosted model. (HOSTED_MODEL_KEY_MISSING)';
     case 'HOSTED_MODEL_KEY_EMPTY': return 'The API key is empty. (HOSTED_MODEL_KEY_EMPTY)';
@@ -99,19 +101,6 @@ function rootLabel(root: CloudRoot): string {
   return root.displayName;
 }
 
-function formatRecordedTime(at: number | null): string {
-  return at === null ? 'never' : new Date(at * 1000).toLocaleString();
-}
-
-function describeDescriptionsError(error: string): string {
-  // The backend keeps the code and the operating system's own words; the
-  // first is for the guide's troubleshooting table, the second says what
-  // actually happened (a folder that is read-only, a share that went away).
-  return error.startsWith('DESCRIPTION_RETRACT_FAILED')
-    ? `The record for an undone rename could not be removed. ${error}`
-    : `The last description record could not be written. ${error}`;
-}
-
 /**
  * Debounced folder classification: typing pauses ~300ms before the path is
  * looked up, and a stale response never overwrites a newer one.
@@ -137,7 +126,7 @@ function useCloudBadge(classify: (path: string) => Promise<CloudLocation | null>
  * of work would land under, so the choice is concrete rather than abstract.
  */
 const LAYOUTS: Array<{ value: DestinationLayout; label: string; example: string }> = [
-  { value: 'flat', label: 'No subfolders', example: 'Everything directly in the destination folder' },
+  { value: 'flat', label: 'No subfolders', example: 'Everything directly in the output folder' },
   { value: 'year', label: 'By year', example: '2026\\' },
   { value: 'year_type', label: 'By year, then document type', example: '2026\\Statement of Work\\' },
   { value: 'type', label: 'By document type', example: 'Statement of Work\\' },
@@ -208,7 +197,13 @@ interface Props {
   settings: AppSettings;
   bridge: DesktopBridge;
   selection?: SelectionBoundary;
-  onSave(settings: AppSettings): Promise<void>;
+  /**
+   * Save the settings. `after.processExisting`: the person chose a new
+   * input folder and asked for the documents already in it to be processed
+   * too, which can only happen once the folder is saved - and is reported
+   * apart from the save, since the save itself succeeded.
+   */
+  onSave(settings: AppSettings, after?: { processExisting: boolean }): Promise<void>;
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
   onInstallUpdate(onProgress?: UpdateProgressListener): Promise<void>;
@@ -229,6 +224,16 @@ interface Props {
   onChooseFolder?(): void;
 }
 
+/**
+ * The answer to "process what is already there?" for an input folder chosen
+ * here, as setup asks it: how many documents the folder holds, and whether
+ * to process them too. Only new files unless the person says otherwise.
+ */
+interface ExistingDocuments {
+  count: number;
+  process: boolean;
+}
+
 export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
   const shortOwnNames = tooShortOwnNames(next.ourNames);
@@ -243,10 +248,6 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   const [intakeError, setIntakeError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [roots, setRoots] = useState<CloudRoot[]>([]);
-  const [descriptions, setDescriptions] = useState<DescriptionsStatus>();
-  const [backfilling, setBackfilling] = useState(false);
-  const [backfillMessage, setBackfillMessage] = useState('');
-  const [backfillError, setBackfillError] = useState('');
   const [helpError, setHelpError] = useState('');
   const [hostedStatus, setHostedStatus] = useState<HostedModelStatus>();
   // The key is typed here and sent to the credential store on Save or Test;
@@ -266,9 +267,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   // a failed read also leaves the manual controls up, but only an explicit
   // "not in this build" means Microsoft verification can never work here.
   const [sharePointAvailable, setSharePointAvailable] = useState<boolean>();
+  const [folderProblem, setFolderProblem] = useState('');
+  const [existingDocuments, setExistingDocuments] = useState<ExistingDocuments>();
   const busy = checking || installing;
   const dialog = useRef<HTMLElement>(null);
-  const destination = useRef<HTMLInputElement>(null);
+  const destination = useRef<HTMLButtonElement>(null);
   const layout = useRef<HTMLSelectElement>(null);
   // Escape has to reach the latest onClose without the focus effect below
   // depending on its identity.
@@ -297,17 +300,12 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   }, [bridge]);
   useEffect(() => {
     let active = true;
-    // Both are conveniences: a bridge without them (an older desktop build,
-    // a test double) leaves the list empty and the status line quiet.
+    // A convenience: a bridge without it (an older desktop build, a test
+    // double) leaves the list empty.
     void Promise.resolve().then(() => bridge.cloudRoots())
       .then((found) => { if (active) setRoots(found); })
       .catch(() => { if (active) setRoots([]); });
-    void Promise.resolve().then(() => bridge.descriptionsStatus())
-      .then((current) => { if (active) setDescriptions(current); })
-      .catch(() => { /* The section still renders without a status. */ });
-    const source = bridge as DesktopBridge & Partial<DescriptionsEventSource>;
-    const stop = source.subscribeDescriptions?.((current) => { if (active) setDescriptions(current); });
-    return () => { active = false; stop?.(); };
+    return () => { active = false; };
   }, [bridge]);
   useEffect(() => {
     let active = true;
@@ -349,9 +347,45 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     catch (error) { setRulesError(ruleFailure(error)); }
     finally { ruleInFlight.current = false; }
   };
-  const browse = async (apply: (path: string) => void) => {
+  /*
+    The two folders change through a folder picker, never a typed path, and
+    as safely as setup changes them: a pair the backend would refuse is
+    refused here in the same plain words, a new input folder is vouched for
+    the way setup vouches for one (choosing it is the person's word that
+    they alone add documents to it), and one that already holds documents
+    asks setup's question - process them too, or only new files - with only
+    new files the answer until the person says otherwise.
+  */
+  const chooseInputFolder = async (path: string) => {
+    setFolderProblem('');
+    const refused = inputFolderProblem(path, next.destination);
+    if (refused) { setFolderProblem(refused); return; }
+    // Whether the folder is synced decides how its documents are admitted.
+    // A lookup that failed says nothing either way, so the folder is not
+    // changed rather than vouched for as a private local one.
+    let cloud;
+    try { cloud = await bridge.classifyFolder(path); }
+    catch {
+      setFolderProblem('Intern could not check whether that folder is synced by OneDrive, so the input folder was not changed. Try again.');
+      return;
+    }
+    setNext((current) => ({ ...current, intakeFolder: path, intakeEnabled: true, intakeMyFolder: cloud !== null, intakeLocalOnly: cloud === null }));
+    const count = path === settings.intakeFolder ? 0 : await bridge.intakeFolderDocuments(path).catch(() => 0);
+    setExistingDocuments(count > 0 ? { count, process: false } : undefined);
+  };
+  const chooseOutputFolder = async (path: string) => {
+    setFolderProblem('');
+    const refused = outputFolderProblem(next.intakeFolder, path);
+    if (refused) { setFolderProblem(refused); return; }
+    // An output folder in a SharePoint library or OneDrive for work gets
+    // description records for its Description column, as setup turns them
+    // on; elsewhere the setting is left as it was.
+    const cloud = await bridge.classifyFolder(path).catch(() => null);
+    setNext((current) => ({ ...current, destination: path, ...(keepsDescriptionColumn(cloud) ? { recordDescriptions: true } : {}) }));
+  };
+  const browse = async (apply: (path: string) => Promise<void>) => {
     const folder = await selection?.pickFolder();
-    if (folder) apply(folder.path);
+    if (folder) await apply(folder.path);
   };
   const providerDefaults = hostedStatus?.providers.find((entry) => entry.provider === next.hostedProvider);
   // A typed key goes to the credential store first, so that what is saved or
@@ -369,10 +403,9 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     try {
       await storeKeyDraft();
       const draft = withOwnNames(next);
-      // "Only I add documents here" was said about the folder chosen in
-      // folder setup; a different folder typed here has not been vouched for.
-      const vouched = draft.intakeFolder === settings.intakeFolder ? draft : { ...draft, intakeMyFolder: false };
-      await onSave(managed ? withManagedValues(draft, settings) : vouched);
+      const processExisting = !managed && existingDocuments?.process === true && draft.intakeFolder !== settings.intakeFolder;
+      const saved = managed ? withManagedValues(draft, settings) : draft;
+      await (processExisting ? onSave(saved, { processExisting: true }) : onSave(saved));
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }
@@ -401,23 +434,6 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       setHostedStatus(await bridge.hostedModelStatus());
     } catch (error) {
       setTestError(saveFailure(error));
-    }
-  };
-  const runBackfill = async () => {
-    if (backfilling) return;
-    setBackfilling(true);
-    setBackfillError('');
-    setBackfillMessage('');
-    try {
-      const result = await bridge.descriptionsBackfill();
-      setBackfillMessage(result.failed
-        ? `${result.written} ${result.written === 1 ? 'record' : 'records'} written; ${result.failed} could not be written.`
-        : `${result.written} ${result.written === 1 ? 'record' : 'records'} written.`);
-      setDescriptions(await bridge.descriptionsStatus());
-    } catch (error) {
-      setBackfillError(saveFailure(error));
-    } finally {
-      setBackfilling(false);
     }
   };
   const runScanNow = async () => {
@@ -453,12 +469,13 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     catch (error) { setUpdateError(updateFailure(error)); }
     finally { setInstalling(false); }
   };
-  // Focus the destination field once, when the dialog opens. This used to run
-  // whenever `onClose` changed identity, and App recreates that closure on
-  // every render - so every queue progress event pulled the caret out of
-  // whatever field the person was typing in and back to the top of the dialog.
+  // Focus the first folder's Change button once, when the dialog opens. This
+  // used to run whenever `onClose` changed identity, and App recreates that
+  // closure on every render - so every queue progress event pulled the caret
+  // out of whatever field the person was typing in and back to the top of
+  // the dialog.
   useEffect(() => {
-    destination.current?.focus();
+    (destination.current ?? layout.current)?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); close.current(); return; }
       if (event.key !== 'Tab') return;
@@ -496,14 +513,47 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         would otherwise be in a log nobody opens.
       */}
       {settingsFileProblem && <p className="form-error" role="alert" aria-label="Settings file problem">{settingsFileProblem}</p>}
+      {/*
+        The two folders first: they are the whole of how Intern is used, and
+        changing either is the most common reason to open Settings. A managed
+        deployment's are its connection's, shown but not changed here.
+      */}
+      <section className="settings-group" role="group" aria-label="Folders">
+        <h3>Folders</h3>
+        <div className="folder-setting">
+          <div className="folder-setting-text">
+            <p className="field-label">Input folder</p>
+            <p className="folder-path" title={next.intakeFolder}>{next.intakeFolder.trim() || 'Not chosen yet'}</p>
+            <p className="check-hint">{INPUT_FOLDER_HINT}</p>
+          </div>
+          {managed !== true && selection && <button ref={destination} type="button" aria-label="Change input folder" onClick={() => void browse(chooseInputFolder)}>Change…</button>}
+        </div>
+        {intakeCloud && <p className="cloud-badge">{cloudBadgeText(intakeCloud)}</p>}
+        {managed === false && intake && next.intakeFolder === settings.intakeFolder && <IntakeHealthNotice status={intake} myFolder={Boolean(settings.intakeMyFolder)} bridge={bridge} onChooseFolder={onChooseFolder} />}
+        {existingDocuments && <fieldset className="existing-choice">
+          <legend>This folder already has {existingDocuments.count === 1 ? '1 file' : `${existingDocuments.count} files`} in it. Process {existingDocuments.count === 1 ? 'it' : 'them'} too?</legend>
+          <label className="check-label"><input type="radio" name="existing-documents" checked={!existingDocuments.process} onChange={() => setExistingDocuments({ ...existingDocuments, process: false })} />Only new files</label>
+          <label className="check-label"><input type="radio" name="existing-documents" checked={existingDocuments.process} onChange={() => setExistingDocuments({ ...existingDocuments, process: true })} />Process {existingDocuments.count === 1 ? 'it' : 'them'} too</label>
+        </fieldset>}
+        <div className="folder-setting">
+          <div className="folder-setting-text">
+            <p className="field-label">Output folder</p>
+            <p className="folder-path" title={next.destination}>{next.destination.trim() || 'Not chosen yet'}</p>
+            <p className="check-hint">{OUTPUT_FOLDER_HINT}</p>
+          </div>
+          {managed !== true && selection && <button type="button" aria-label="Change output folder" onClick={() => void browse(chooseOutputFolder)}>Change…</button>}
+        </div>
+        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}
+        {folderProblem && <p className="form-error" role="alert">{folderProblem}</p>}
+        {(intakeError || (intake?.error && !settingsFileProblem)) && <p className="form-error" role="alert">{intakeError || intake?.error}</p>}
+        {managed && <p className="check-hint">Your organization set these folders up with SharePoint, so they cannot be changed here. Upload files to the input folder in SharePoint, or drop them on Intern’s window.</p>}
+        {managed === false && onChooseFolder && <div className="update-actions">
+          <button type="button" onClick={onChooseFolder}>Set up folders step by step…</button>
+        </div>}
+      </section>
       <section className="settings-group">
         <h3>Filing</h3>
-        <p className="section-lead">Where renamed documents are put, and when Intern may file one without asking.</p>
-        {!managed && <><div className="folder-row">
-          <label>Destination folder<input ref={destination} value={next.destination} onChange={(event) => setNext({ ...next, destination: event.target.value })} /></label>
-          {selection && <button type="button" aria-label="Browse for destination folder" onClick={() => void browse((path) => setNext((current) => ({ ...current, destination: path })))}>Browse…</button>}
-        </div>
-        {destinationCloud && <p className="cloud-badge">{cloudBadgeText(destinationCloud)}</p>}</>}
+        <p className="section-lead">How processed files are named and arranged in your output folder, and when Intern may rename one without asking.</p>
         {/*
           A year of contracts in one folder is a thousand files nobody can
           scan. Each layout names its folders from facts the filename already
@@ -521,11 +571,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           firm goes by several. Kept as typed while editing; trimmed, without
           blank lines, on save.
         */}
-        <label>Your organisation's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
+        <label>Your organization's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
         <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
         {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>
-        <p className="check-hint">Anything Intern is less sure about still waits for you in Needs Review.</p>
+        <p className="check-hint">Anything Intern is less sure about still waits for you in the queue.</p>
       </section>
       <section className="settings-group">
         <h3>Spellings Intern has learned</h3>
@@ -588,35 +638,31 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <h3>This computer</h3>
         <p className="section-lead">How Intern behaves when the window is closed, and when you sign in.</p>
         <label className="check-label"><input type="checkbox" checked={next.runInBackground} onChange={(event) => setNext({ ...next, runInBackground: event.target.checked })} />Run in background</label>
-        <p className="check-hint">Keep Intern in the system tray when the window is closed — watched folders keep working.</p>
+        <p className="check-hint">Keep Intern in the system tray when the window is closed, so files in your input folder are still processed.</p>
         <label className="check-label"><input type="checkbox" checked={next.startAtLogin} onChange={(event) => setNext({ ...next, startAtLogin: event.target.checked })} />Start Intern when you sign in</label>
         {/* Without the tray a minimized start would leave no way back to the
             window, so the checkbox is only offered while background mode is on. */}
         <label className="check-label"><input type="checkbox" disabled={!next.runInBackground} checked={next.startMinimized} onChange={(event) => setNext({ ...next, startMinimized: event.target.checked })} />Start minimized</label>
         {!next.runInBackground && <p className="check-hint">Available when “Run in background” is on, so the tray can bring the window back.</p>}
       </section>
-      <section className="settings-group">
-        <h3>Shared intake</h3>
+      {/*
+        Everything else about the input folder is for a folder shared with
+        other computers, or for support: folded away, so the dialog reads
+        simply for the person who has one folder of their own.
+      */}
+      <details className="settings-group settings-advanced">
+        <summary>Advanced: shared folders and support details</summary>
         {/*
-          The watched folder may be a OneDrive/SharePoint synced folder shared by
+          The input folder may be a OneDrive/SharePoint synced folder shared by
           several machines. Coordination happens through small files the sync
           client replicates. Microsoft upload verification separately reads account
           and file metadata after explicit sign-in.
         */}
-        <p className="section-lead">Intern can watch a folder — including a OneDrive or SharePoint folder shared with other machines — and process documents that appear in it. Watched intake needs a destination folder outside the intake folder.</p>
-        {onChooseFolder && <div className="update-actions">
-          <button type="button" onClick={onChooseFolder}>Set up a folder step by step…</button>
-        </div>}
-        <label className="check-label"><input type="checkbox" checked={next.intakeEnabled} onChange={(event) => setNext({ ...next, intakeEnabled: event.target.checked })} />Watch a folder for new documents</label>
-        <div className="folder-row">
-          <label>Intake folder<input value={next.intakeFolder} onChange={(event) => setNext({ ...next, intakeFolder: event.target.value })} /></label>
-          {selection && <button type="button" aria-label="Browse for intake folder" onClick={() => void browse((path) => setNext((current) => ({ ...current, intakeFolder: path })))}>Browse…</button>}
-        </div>
-        {intakeCloud && <p className="cloud-badge">{cloudBadgeText(intakeCloud)}</p>}
+        <p className="section-lead">For an input folder shared with other computers through OneDrive or SharePoint, and for support. You don’t need any of this for a folder of your own.</p>
         <label className="check-label"><input type="checkbox" checked={next.processOthersUploads} onChange={(event) => setNext({ ...next, processOthersUploads: event.target.checked })} />Also process documents uploaded by others</label>
         <p className="check-hint">Off by default: only your verified uploads are eligible. Turning this on accepts other verified uploaders too, never unknown ones.</p>
-        <label className="check-label"><input type="checkbox" checked={Boolean(next.intakeLocalOnly)} disabled={Boolean(intakeCloud)} onChange={(event) => setNext({ ...next, intakeLocalOnly: event.target.checked })} />This is a private local intake, not a shared or synced folder</label>
-        <p className="check-hint">Private local mode does not verify Microsoft uploaders. Never use it for shared intake. Previously paired Microsoft folders remain protected.</p>
+        <label className="check-label"><input type="checkbox" checked={Boolean(next.intakeLocalOnly)} disabled={Boolean(intakeCloud)} onChange={(event) => setNext({ ...next, intakeLocalOnly: event.target.checked })} />This is a private local input folder, not a shared or synced folder</label>
+        <p className="check-hint">Private local mode does not verify Microsoft uploaders. Never use it for a shared folder. Previously paired Microsoft folders remain protected.</p>
         {/*
           Not in a build without the SharePoint deployment: Microsoft upload
           verification reads the same provisioned identifiers, so the panel
@@ -630,8 +676,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           profile with a name they never chose ("C:\Users\pat\Contoso\Legal -
           Documents"), and finding it in a folder dialog is the step people got
           stuck on. The sync client's own configuration already knows every
-          such folder, so they are offered here as one-click starting points;
-          a subfolder can still be typed or browsed afterwards.
+          such folder, so they are offered here as one-click starting points,
+          checked exactly as a folder chosen with Change… is.
         */}
         {roots.length > 0 && <div className="synced-locations" role="group" aria-label="Synced locations on this computer">
           <p className="field-label">Synced locations on this computer</p>
@@ -639,51 +685,22 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
             <span className="synced-name">{rootLabel(root)}</span>
             <span className="synced-path" title={root.path}>{root.path}</span>
             <span className="synced-actions">
-              <button type="button" aria-label={`Use ${rootLabel(root)} as the intake folder`} onClick={() => setNext((current) => ({ ...current, intakeFolder: root.path }))}>Intake</button>
-              <button type="button" aria-label={`Use ${rootLabel(root)} as the destination folder`} onClick={() => setNext((current) => ({ ...current, destination: root.path }))}>Destination</button>
+              <button type="button" aria-label={`Use ${rootLabel(root)} as the input folder`} onClick={() => void chooseInputFolder(root.path)}>Input</button>
+              <button type="button" aria-label={`Use ${rootLabel(root)} as the output folder`} onClick={() => void chooseOutputFolder(root.path)}>Output</button>
             </span>
           </li>)}</ul>
         </div>}
         {next.intakeEnabled && <div className="intake-status">
-          {intake && <IntakeHealthNotice status={intake} myFolder={Boolean(settings.intakeMyFolder)} bridge={bridge} onChooseFolder={onChooseFolder} />}
           <p role="status" aria-label="Intake status" aria-live="polite">{intake
             ? `${intake.watching ? 'Watching' : 'Not watching'} · ${activeMachines} ${activeMachines === 1 ? 'machine' : 'machines'} active · ${intake.heldForOthers} held for others · ${intake.uploaderUnknown ?? 0} uploader unknown · Last scan: ${formatScanTime(intake.lastScanAt)}`
-            : 'Checking intake status…'}</p>
+            : 'Checking the input folder…'}</p>
           {intake && intake.syncConflicts > 0 && <p className="check-hint" role="status">{intake.syncConflicts === 1 ? '1 file is' : `${intake.syncConflicts} files are`} a sync conflict copy left behind by OneDrive or SharePoint. Intern leaves {intake.syncConflicts === 1 ? 'it' : 'them'} alone — resolve the conflict in the folder and the surviving document is picked up on the next scan.</p>}
           {intake && intake.awaitingHydration > 0 && <p className="check-hint" role="status">{intake.awaitingHydration === 1 ? '1 document is' : `${intake.awaitingHydration} documents are`} waiting for OneDrive to download {intake.awaitingHydration === 1 ? 'its' : 'their'} contents. Intern is holding {intake.awaitingHydration === 1 ? 'it' : 'them'} rather than failing {intake.awaitingHydration === 1 ? 'it' : 'them'}; connect this machine and the next scan picks {intake.awaitingHydration === 1 ? 'it' : 'them'} up.</p>}
           {intake && intake.unreadableFolders > 0 && <p className="check-hint" role="status">{intake.unreadableFolders === 1 ? '1 subfolder' : `${intake.unreadableFolders} subfolders`} could not be read on the last scan — usually a folder this account has no permission to open. Everything else was scanned; documents in {intake.unreadableFolders === 1 ? 'that folder' : 'those folders'} are not.</p>}
-          {(intakeError || (intake?.error && !settingsFileProblem)) && <p className="form-error" role="alert">{intakeError || intake?.error}</p>}
           <button type="button" disabled={scanning} onClick={() => void runScanNow()}>{scanning ? 'Scanning…' : 'Scan now'}</button>
         </div>}
-      </section></>}
-      <section className="settings-group">
-        <h3>Descriptions for SharePoint</h3>
-        {/*
-          The sentence Intern writes about a document used to live only in the
-          queue. A SharePoint library has a column for it; the sync client that
-          carries the file can carry a small record beside it; and a flow (the
-          guide has the recipe) copies the sentence into the column. Intern
-          itself still makes no network request for this.
-        */}
-        <p className="section-lead">Intern can leave a small record beside each document it files — the one-sentence description and the date, type, and parties behind the name — so a SharePoint library column can be filled from it. Records go in <code>.intern\descriptions</code> under the destination folder; nothing is sent anywhere by Intern.</p>
-        <label className="check-label"><input type="checkbox" checked={Boolean(next.recordDescriptions)} onChange={(event) => setNext({ ...next, recordDescriptions: event.target.checked })} />Write a description record for each filed document</label>
-        <p className="check-hint">Needs a destination folder. The guide's “Descriptions in a SharePoint column” section shows the Power Automate flow that fills the column from these records.</p>
-        {descriptions && <div className="descriptions-status">
-          <p role="status" aria-label="Description records status" aria-live="polite">{descriptions.enabled
-            ? `On · ${descriptions.recordedThisSession} ${descriptions.recordedThisSession === 1 ? 'record' : 'records'} written since Intern started · Last: ${formatRecordedTime(descriptions.lastRecordedAt)}`
-            : 'Off · no records are being written'}{descriptions.folder ? ` · ${descriptions.folder}` : ''}</p>
-          {descriptions.lastError && <p className="form-error" role="alert">{describeDescriptionsError(descriptions.lastError)}</p>}
-          {backfillMessage && <p role="status" aria-label="Backfill status" aria-live="polite">{backfillMessage}</p>}
-          {backfillError && <p className="form-error" role="alert">{backfillError}</p>}
-          {/*
-            Only once the saved settings have records on: the backend refuses
-            otherwise, and an enabled button that always fails is worse than a
-            hint saying what to do first.
-          */}
-          <button type="button" disabled={backfilling || !settings.recordDescriptions} onClick={() => void runBackfill()}>{backfilling ? 'Writing…' : 'Write records for documents already filed'}</button>
-          {!settings.recordDescriptions && <p className="check-hint">Save with records on, then write records for what was filed before.</p>}
-        </div>}
-      </section>
+      </details></>}
+      <SharePointDescriptions bridge={bridge} savedEnabled={Boolean(settings.recordDescriptions)} draftEnabled={Boolean(next.recordDescriptions)} onDraftEnabledChange={(enabled) => setNext((current) => ({ ...current, recordDescriptions: enabled }))} />
       <section className="settings-group">
         <h3>Updates</h3>
         {/*

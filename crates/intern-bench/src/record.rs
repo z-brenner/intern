@@ -21,7 +21,7 @@ use crate::{
     timing::{self, Timings},
 };
 
-/// Analysed, named, and scored.
+/// Analyzed, named, and scored.
 pub const COMPLETED: &str = "completed";
 /// The worker could not read the document. Scored as a miss.
 pub const EXTRACTION_FAILED: &str = "extraction_failed";
@@ -245,7 +245,7 @@ pub fn scored_record(document: &GoldDocument, observation: Observation<'_>) -> D
                 .and_then(|confidence| serde_json::to_value(confidence).ok());
             let proposal = &analysis.proposal;
             Outcome {
-                analysed: true,
+                analyzed: true,
                 filename: Some(&analysis.filename),
                 description: &analysis.description,
                 document_type: proposal.document_type.as_deref(),

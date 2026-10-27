@@ -1,7 +1,7 @@
 //! Seeded random pages through the evidence index and retrieval.
 //!
 //! Index and retrieval run before the analysis guard and slice text by
-//! byte offset - dates, labels, sentence chunks, organisation names - so
+//! byte offset - dates, labels, sentence chunks, organization names - so
 //! they get the treatment validation gets in `validation_fuzz.rs`: random
 //! text from what extraction hands over (accents, symbols, CJK, Hangul,
 //! emoji, combining marks, direction marks, ligatures), the wording the
@@ -220,7 +220,7 @@ fn boundary(rng: &mut Rng, text: &str) -> usize {
     rng.pick(&boundaries)
 }
 
-/// A line the segmenter reads as structure: a heading, a labelled value, a
+/// A line the segmenter reads as structure: a heading, a labeled value, a
 /// table row or separator, a list item, or plain text.
 fn structured_line(rng: &mut Rng) -> String {
     let line = random_line(rng);

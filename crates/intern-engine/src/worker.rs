@@ -193,14 +193,14 @@ pub struct ExtractionTimings {
     /// Measuring a PDF page's image coverage and deciding whether it is a
     /// scan.
     pub analysis_micros: u64,
-    /// PDFium rasterising pages: the ones that go to OCR, and the rare page
+    /// PDFium rasterizing pages: the ones that go to OCR, and the rare page
     /// rendered only to be the page image.
     pub render_micros: u64,
     /// Decoding a standalone image file, scaling and turning it.
     pub image_decode_micros: u64,
     /// All OCR for the document: every recognition and orientation pass.
     pub ocr_micros: u64,
-    /// Of `ocr_micros`: turning pages grey and encoding the PNGs Tesseract
+    /// Of `ocr_micros`: turning pages gray and encoding the PNGs Tesseract
     /// is handed.
     pub ocr_encode_micros: u64,
     /// Of `ocr_micros`: waiting on Tesseract processes.
@@ -524,7 +524,7 @@ impl SupervisedWorker {
                 // command reaching it kills the worker first, which is why the
                 // write failed. That is the cancellation the person asked for,
                 // not a crash: reporting a crash restarts the worker and puts
-                // the document they just cancelled back in the queue.
+                // the document they just canceled back in the queue.
                 if self.was_canceled(request_id) {
                     return Err(ExtractFailure::canceled());
                 }
@@ -947,7 +947,7 @@ mod tests {
         // does.
         worker
             .cancel("r1")
-            .expect("an active request is cancellable");
+            .expect("an active request is cancelable");
 
         // Extraction had taken its handle on that same worker before the
         // cancel landed, so the parse command it is about to write is going to

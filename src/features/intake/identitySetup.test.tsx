@@ -11,9 +11,11 @@ it('keeps the machine label and leaves out Microsoft identity in a build without
   render(<App bridge={createInMemoryBridge()} />);
   fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
   const dialog = screen.getByRole('dialog', { name: 'Settings' });
-  // The shared-intake section appears once Settings knows this build is not managed.
+  // The shared-folder options appear, under Advanced, once Settings knows this build is not managed.
+  fireEvent.click(await within(dialog).findByText('Advanced: shared folders and support details'));
   expect(await within(dialog).findByLabelText("This machine's name")).toBeVisible();
-  expect(within(dialog).getByLabelText('Intake folder')).toBeVisible();
+  expect(within(dialog).getByRole('button', { name: 'Set up folders step by step…' })).toBeVisible();
+  expect(within(dialog).getByText('C:\\Intern\\Input')).toBeVisible();
   expect(within(dialog).queryByRole('group', { name: 'Microsoft upload identity' })).not.toBeInTheDocument();
   expect(within(dialog).queryByText(/browser preview/i)).not.toBeInTheDocument();
 });

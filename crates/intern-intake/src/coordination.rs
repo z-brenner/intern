@@ -324,6 +324,15 @@ impl ClaimStore {
     /// behind means the owner has been silent for a whole lease period as
     /// observed from here.
     pub fn acquire(&self, doc: &DocumentFacts) -> AcquireOutcome {
+        self.acquire_reporting(doc).0
+    }
+
+    /// `acquire`, and whether this call created the claim it reports as
+    /// acquired - as opposed to finding one this machine already held. Only
+    /// a caller that created a claim may give it back when what it meant to
+    /// do with it fails; asking before acquiring races a scan that claims
+    /// the same document in between.
+    pub fn acquire_reporting(&self, doc: &DocumentFacts) -> (AcquireOutcome, bool) {
         let key = doc.key();
         let path = self.claim_path(&key);
         for _ in 0..3 {
@@ -331,45 +340,49 @@ impl ClaimStore {
                 Stored::Missing => {
                     let bytes = match encode(&self.fresh_claim(doc, &key)) {
                         Ok(bytes) => bytes,
-                        Err(error) => return AcquireOutcome::Failed(error),
+                        Err(error) => return (AcquireOutcome::Failed(error), false),
                     };
                     match fsatomic::create_exclusive(&path, &bytes) {
-                        Ok(()) => return AcquireOutcome::Acquired,
+                        Ok(()) => return (AcquireOutcome::Acquired, true),
                         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                        Err(error) => return AcquireOutcome::Failed(error),
+                        Err(error) => return (AcquireOutcome::Failed(error), false),
                     }
                 }
                 Stored::Unreadable => {
-                    return AcquireOutcome::Failed(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "claim file is unreadable or from a newer version",
-                    ));
+                    return (
+                        AcquireOutcome::Failed(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "claim file is unreadable or from a newer version",
+                        )),
+                        false,
+                    );
                 }
                 Stored::Parsed(claim) => {
                     if claim.state == ClaimState::Done {
-                        return AcquireOutcome::Done(claim);
+                        return (AcquireOutcome::Done(claim), false);
                     }
                     if claim.machine_id == self.identity.id {
-                        return AcquireOutcome::Acquired;
+                        return (AcquireOutcome::Acquired, false);
                     }
                     if !self.is_takeable(&claim) {
-                        return AcquireOutcome::HeldByOther(claim);
+                        return (AcquireOutcome::HeldByOther(claim), false);
                     }
                     match self.take_over(&path, &key, &claim, doc) {
-                        TakeOver::Acquired => return AcquireOutcome::Acquired,
+                        TakeOver::Acquired => return (AcquireOutcome::Acquired, true),
                         TakeOver::Lost => continue,
-                        TakeOver::Failed(error) => return AcquireOutcome::Failed(error),
+                        TakeOver::Failed(error) => return (AcquireOutcome::Failed(error), false),
                     }
                 }
             }
         }
-        match load::<ClaimInfo>(&path) {
+        let outcome = match load::<ClaimInfo>(&path) {
             Stored::Parsed(claim) if claim.state == ClaimState::Done => AcquireOutcome::Done(claim),
             Stored::Parsed(claim) => AcquireOutcome::HeldByOther(claim),
             _ => AcquireOutcome::Failed(io::Error::other(
                 "claim acquisition kept losing races and gave up",
             )),
-        }
+        };
+        (outcome, false)
     }
 
     /// Whether another machine's claim has gone stale enough to take over:
@@ -697,7 +710,7 @@ impl ClaimStore {
     /// person's decision to leave the document where it is - kept under its
     /// own name, canceled, removed from the queue, discarded while waiting -
     /// and the tombstone is the only record of it: expired, the document was
-    /// picked up again as new and analysed once more a month after someone
+    /// picked up again as new and analyzed once more a month after someone
     /// decided against it. Once the document is moved, deleted or rewritten
     /// its key is one nothing will see again, and the tombstone goes as
     /// before. Other outcomes keep the plain retention: a failure is tried

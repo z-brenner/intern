@@ -1,7 +1,7 @@
 //! Every page of a document as blocks with stable ids.
 //!
 //! The parser worker sends each page's layout beside its text: headings,
-//! paragraphs, list items, tables with their rows and cells, and labelled
+//! paragraphs, list items, tables with their rows and cells, and labeled
 //! values, in reading order, each with an id (`p{page}.b{n}`), where it sits
 //! on the page when the reader knows, where its text came from, and how
 //! sure OCR was of it. These are the worker's own types, mirrored rather
@@ -13,12 +13,12 @@
 //! one stored before layouts existed, one past the worker's layout budget,
 //! one built from plain text by a test or a tool - is segmented from its
 //! text exactly as the worker segments a page it has no geometry for, with
-//! the same ids, kinds and labelled values. Either way every block falls
+//! the same ids, kinds and labeled values. Either way every block falls
 //! under the nearest heading above it, across pages.
 //!
 //! Coordinates are tenths of a PDF point from the top left of the page as
 //! displayed; confidence is 0-100. Everything is an integer, so the types
-//! keep `Eq` and serialise the same way every time.
+//! keep `Eq` and serialize the same way every time.
 
 use serde::{Deserialize, Serialize};
 
@@ -166,7 +166,7 @@ pub struct LayoutCell {
     pub header: bool,
 }
 
-/// A labelled value.
+/// A labeled value.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct KeyValue {
     /// `p{page}.b{n}.f{field}`.
@@ -266,7 +266,7 @@ const MAX_DOCUMENT_LAYOUT_PARTS: usize = 200_000;
 /// The most bytes of a page's text one of its [`stretches`] holds.
 const STRETCH_BYTES: usize = 4_096;
 
-/// How many lines, table cells and labelled values blocks hold, as the
+/// How many lines, table cells and labeled values blocks hold, as the
 /// worker counts a layout's. The layouts a document arrived with count
 /// against [`MAX_DOCUMENT_LAYOUT_PARTS`] too, so the pages segmented here
 /// get only what they leave.
@@ -352,7 +352,7 @@ const MAX_PARAGRAPH_LINES: usize = 12;
 /// blank line ends a block; a Markdown heading, or a short line nearly all
 /// capitals that does not end in a colon, is a heading; consecutive `|`
 /// lines are a table, the row above a `| --- |` separator its header;
-/// consecutive `Key: value` lines are labelled values; a bulleted or
+/// consecutive `Key: value` lines are labeled values; a bulleted or
 /// enumerated line starts a list item; anything else is a paragraph, split
 /// after twelve lines where a line ends a sentence. Blocks are numbered the
 /// worker's way, so a page stored before layouts existed reads exactly
@@ -392,8 +392,8 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
                 while index < lines.len() && kinds[index] == LineKind::KeyValue {
                     index += 1;
                 }
-                let mut labelled = block(BlockKind::KeyValue, text, &lines[start..index], source);
-                labelled.fields = lines[start..index]
+                let mut labeled = block(BlockKind::KeyValue, text, &lines[start..index], source);
+                labeled.fields = lines[start..index]
                     .iter()
                     .filter_map(|line| {
                         let (key, value) = split_key_value(line.trim())?;
@@ -406,7 +406,7 @@ fn segment(page_number: usize, text: &str, origin: PageOrigin) -> Vec<LayoutBloc
                         })
                     })
                     .collect();
-                blocks.push(labelled);
+                blocks.push(labeled);
             }
             LineKind::Heading => {
                 index += 1;
@@ -610,7 +610,7 @@ fn table_cells(line: &str) -> Vec<String> {
     cells
 }
 
-/// Whether a line starts with a bullet or a parenthesised enumerator.
+/// Whether a line starts with a bullet or a parenthesized enumerator.
 fn is_list_item(line: &str) -> bool {
     let mut characters = line.chars();
     let Some(first) = characters.next() else {

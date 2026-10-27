@@ -27,11 +27,16 @@
      is too dark for; the sidebar active state uses --brand-tint directly. */
   --surface-selected: #f4f7fd;
   --selected-border: #c3d3f2;
+  /* Selected cells in the queue table: the brand tint, ruled round in brand
+     blue as a spreadsheet's selection is. On this fill muted text moves to
+     --text-soft and the status colors to their -strong shades, all >= 4.5:1. */
+  --cell-selected: #e3ecfb;
+  --cell-selected-edge: var(--brand-blue);
   --border: #d9dee8;
   --border-strong: #c4cad5;
   --text: #171a1f;
   /* Quoted evidence and body prose: quieter than --text, but 7.5:1 on white
-     and on --surface-subtle, so it is never merely decorative grey. */
+     and on --surface-subtle, so it is never merely decorative gray. */
   --text-soft: #4a5163;
   --text-muted: #667085;
   --accent: var(--brand-blue);
@@ -40,9 +45,11 @@
   --primary-hover: #142544;
   --ready: #14804a;
   --review: #a45f00;
+  --review-strong: #8f5200;
+  --ready-strong: #0f7040;
   --waiting: #667085;
   --processing: #0b5cff;
-  /* Failed had no colour at all: an XCircle glyph in ordinary body text, the
+  /* Failed had no color at all: an XCircle glyph in ordinary body text, the
      one status a person most needs to spot. Same red as form errors. */
   --failed: #b42318;
   --track: #e4e9f1;

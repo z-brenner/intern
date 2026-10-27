@@ -67,11 +67,12 @@ describe('a document Intern could not read', () => {
   });
 
   it('is renamed NEEDS REVIEW in the demo, and gets back only the name Intern took', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...unreadable }], settings: { intakeFolder: 'C:\\Inbox' } });
-    await bridge.addFiles([{ path: 'C:\\Inbox\\Lease password.pdf', displayName: 'Lease password.pdf' }]);
-    // Outside the input folder it waits in review under its own name.
-    await bridge.addFiles([{ path: 'C:\\Elsewhere\\Other password.pdf', displayName: 'Other password.pdf' }]);
-    expect((await bridge.listItems())[2]).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'Other password.pdf' });
+    const bridge = createInMemoryBridge({ items: [{ ...unreadable }], settings: { intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\Lease password.pdf', displayName: 'Lease password.pdf' }] });
+    // Dropped from elsewhere, it is copied into the input folder first, and
+    // renamed there.
+    await bridge.copyToInput({ files: [{ path: 'C:\\Elsewhere\\Other password.pdf', displayName: 'Other password.pdf' }] });
+    expect((await bridge.listItems())[2]).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'NEEDS REVIEW - Other password.pdf' });
     const added = (await bridge.listItems())[1];
     expect(added).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'NEEDS REVIEW - Lease password.pdf' });
     await bridge.keepOriginal(added.id);
@@ -84,9 +85,10 @@ describe('a document Intern could not read', () => {
   });
 
   it('is never taken in again when added', async () => {
-    const bridge = createInMemoryBridge({ items: [] });
-    const report = await bridge.addFiles([{ path: 'C:\\Inbox\\NEEDS REVIEW - scan.pdf', displayName: 'NEEDS REVIEW - scan.pdf' }]);
-    expect(report).toEqual({ added: 0, alreadyQueued: 0, skipped: [{ name: 'NEEDS REVIEW - scan.pdf', code: 'NEEDS_REVIEW_FILE' }] });
+    const bridge = createInMemoryBridge({ items: [], settings: { intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
+    const report = await bridge.copyToInput({ files: [{ path: 'C:\\Downloads\\NEEDS REVIEW - scan.pdf', displayName: 'NEEDS REVIEW - scan.pdf' }] });
+    expect(report).toMatchObject({ added: 0, alreadyQueued: 0, skipped: [{ name: 'NEEDS REVIEW - scan.pdf', code: 'NEEDS_REVIEW_FILE' }] });
+    expect(report.copied ?? 0).toBe(0);
     expect(describeAddReport(report)).toContain('its name marks it as waiting for review');
   });
 });
@@ -98,17 +100,17 @@ describe('an exact duplicate', () => {
   };
 
   it('is filed at once as a copy named after the original, numbered after the first', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed' } });
-    await bridge.addFiles([{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
-    await bridge.addFiles([{ path: 'C:\\Inbox\\again\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
+    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed', intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }] });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\again\\lease scan.pdf', displayName: 'lease scan.pdf' }] });
     const [, first, second] = await bridge.listItems();
     expect(first).toMatchObject({ status: 'completed', filedName: 'COPY - 2026-01-02 Lease.pdf', filedPath: 'C:\\Filed\\2026\\COPY - 2026-01-02 Lease.pdf', undoable: true, keptOriginal: false, reason: humanizeReason('EXACT_COPY') });
     expect(second).toMatchObject({ status: 'completed', filedName: 'COPY - 2026-01-02 Lease (2).pdf' });
   });
 
   it('waits in review as a duplicate once undone, and Process anyway reads it', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed' } });
-    await bridge.addFiles([{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
+    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed', intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }] });
     const copy = (await bridge.listItems())[1];
     await bridge.undo(copy.id);
     const undone = (await bridge.listItems())[1];
@@ -120,9 +122,9 @@ describe('an exact duplicate', () => {
   });
 
   it('waits staged while the queue is paused, for nobody to decide, and is filed when it runs', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed' } });
+    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed', intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
     await bridge.pauseQueue();
-    await bridge.addFiles([{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }] });
     const staged = (await bridge.listItems())[1];
     expect(staged).toMatchObject({ status: 'ready', proposedFilename: 'COPY - 2026-01-02 Lease.pdf', copyOf: '2026-01-02 Lease.pdf' });
     // No decision is offered or awaited: Apply all ready and review pass it by.
@@ -133,8 +135,8 @@ describe('an exact duplicate', () => {
   });
 
   it('stays in review untouched with no output folder to file a copy into', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: '' } });
-    await bridge.addFiles([{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
+    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: '', intakeEnabled: true, intakeFolder: 'C:\\Inbox' } });
+    await bridge.copyToInput({ files: [{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }] });
     expect((await bridge.listItems())[1]).toMatchObject({ status: 'review', errorCode: 'DUPLICATE', reason: 'Duplicate of 2026-01-02 Lease.pdf' });
   });
 

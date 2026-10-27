@@ -130,7 +130,7 @@ fn is_transient_hold(error: &io::Error) -> bool {
         return true;
     }
     // ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION have no `ErrorKind` of
-    // their own, so they are recognised by number.
+    // their own, so they are recognized by number.
     matches!(error.raw_os_error(), Some(32) | Some(33))
 }
 

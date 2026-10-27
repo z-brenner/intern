@@ -260,7 +260,7 @@ struct PartyClause {
     connector: &'static str,
     text: String,
     /// The parties in the clause, as the proposal spells them, with the
-    /// sanitised segment each contributed to the name.
+    /// sanitized segment each contributed to the name.
     parties: Vec<(String, String)>,
 }
 

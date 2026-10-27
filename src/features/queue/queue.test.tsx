@@ -6,34 +6,48 @@ import { createFixtureBatchBridge, createInMemoryBridge } from '../../lib/inMemo
 import type { DesktopBridge, LaunchReportSource } from '../../lib/bridge';
 import type { AddReport, QueueItem } from '../../types';
 import type { QueueBridgeEvent } from '../../lib/tauriBridge';
+import { clickCell, openDetails, queueCell } from './gridTesting';
+
+/**
+ * An install from an earlier release that files in place, with no output
+ * folder: approving the name a document already has then has nowhere to move
+ * it. The window is shown a pair of folders so it opens past setup; the
+ * bridge underneath still files in place.
+ */
+function filingInPlace(items: QueueItem[]): DesktopBridge {
+  const base = createInMemoryBridge({ items, settings: { destination: '' } });
+  return { ...base, getSettings: async () => ({ ...(await base.getSettings()), destination: 'C:\\Intern\\Output' }) };
+}
 
 describe('queue interactions', () => {
+  // Selects the row and opens the Details panel for it, as a reviewer does.
   const selectRow = async (row: HTMLElement) => {
-    const select = within(row).getByRole('button', { name: /select/i });
-    const filename = select.getAttribute('aria-label')?.replace(/^Select /, '');
-    fireEvent.click(select);
+    const cell = row.querySelector<HTMLElement>('[data-column="original"]')!;
+    clickCell(cell);
+    await openDetails();
     const inspector = await screen.findByRole('complementary', { name: 'Review item' });
-    if (filename) await waitFor(() => expect(inspector).toHaveTextContent(filename));
+    await waitFor(() => expect(inspector).toHaveTextContent(cell.textContent ?? ''));
   };
   it('keeps identical bytes from different paths separate and deduplicates only the same path', async () => {
     const bridge = createFixtureBatchBridge();
 
-    const report = await bridge.addFiles([
+    const report = await bridge.copyToInput({ files: [
       { path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' },
       { path: 'browser://duplicate-invoice-b.pdf', displayName: 'duplicate-invoice-b.pdf' },
       { path: 'browser://unsupported.zip', displayName: 'unsupported.zip' },
       { path: 'browser://~$nda.docx', displayName: '~$nda.docx' },
-    ]);
+    ] });
 
     const items = await bridge.listItems();
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')).toMatchObject({ status: 'review', proposedFilename: '2025-04-30 Invoice from Nimbus Orchard Supply Co.pdf' });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')).toMatchObject({ status: 'review', reason: expect.stringMatching(/different path.*separate/i) });
     expect(items.find((item) => item.originalFilename === 'duplicate-invoice-b.pdf')?.id).not.toBe(items.find((item) => item.originalFilename === 'duplicate-invoice-a.pdf')?.id);
     // What the desktop leaves out is reported, not queued as a failed row.
-    expect(report).toEqual({ added: 2, alreadyQueued: 0, skipped: [{ name: 'unsupported.zip', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
+    expect(report).toEqual({ added: 2, alreadyQueued: 0, copied: 2, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'unsupported.zip', code: 'UNSUPPORTED_FORMAT' }, { name: '~$nda.docx', code: 'TEMPORARY_FILE' }] });
     expect(items.map((item) => item.originalFilename)).toEqual(['duplicate-invoice-a.pdf', 'duplicate-invoice-b.pdf']);
 
-    expect(await bridge.addFiles([{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }])).toEqual({ added: 0, alreadyQueued: 1, skipped: [] });
+    // Its copy still waits in the queue, so the same file is not copied twice.
+    expect(await bridge.copyToInput({ files: [{ path: 'browser://duplicate-invoice-a.pdf', displayName: 'duplicate-invoice-a.pdf' }] })).toEqual({ added: 0, alreadyQueued: 1, copied: 0, inputFolder: 'C:\\Intern\\Input', skipped: [] });
     expect(await bridge.listItems()).toHaveLength(2);
   });
 
@@ -50,7 +64,7 @@ describe('queue interactions', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add files' }));
 
-    const message = 'Added 24 documents. Skipped 1: notes.zip (not a supported format).';
+    const message = 'Copied 24 files into Input. Skipped 1: notes.zip (not a supported format).';
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message));
     expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
     expect(await screen.findByRole('row', { name: /Invoice 24\.pdf/ })).toBeVisible();
@@ -63,21 +77,22 @@ describe('queue interactions', () => {
 
   it('reports a backend add in the same words, and keeps a clean add off the screen', async () => {
     const base = createInMemoryBridge({ items: [] });
-    const reports = [
-      { added: 198, alreadyQueued: 0, skipped: [{ name: 'scan-57.pdf', code: 'SOURCE_LOCKED' }, { name: 'empty.pdf', code: 'EMPTY_FILE' }] },
-      { added: 1, alreadyQueued: 2, skipped: [] },
+    const reports: AddReport[] = [
+      { added: 198, alreadyQueued: 0, copied: 198, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'scan-57.pdf', code: 'SOURCE_LOCKED' }, { name: 'empty.pdf', code: 'EMPTY_FILE' }] },
+      { added: 1, alreadyQueued: 2, copied: 1, inputFolder: 'C:\\Intern\\Input', skipped: [] },
     ];
-    const addFolder = vi.fn(async () => reports.shift()!);
+    const copyToInput = vi.fn(async () => reports.shift()!);
     const folder = { path: 'C:/Inbox/Scans', displayName: 'Scans' };
-    render(<App bridge={{ ...base, addFolder }} selection={{ pickFiles: async () => [], pickFolder: async () => folder, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
+    render(<App bridge={{ ...base, copyToInput }} selection={{ pickFiles: async () => [], pickFolder: async () => folder, pickExistingModelFiles: async () => undefined, resolveDrop: async () => ({}) }} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
-    const skipped = 'Added 198 documents. Skipped 2: scan-57.pdf (another program has it open), empty.pdf (the file is empty).';
+    await waitFor(() => expect(copyToInput).toHaveBeenCalledWith({ folder }));
+    const skipped = 'Copied 198 files into Input. Skipped 2: scan-57.pdf (another program has it open), empty.pdf (the file is empty).';
     await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(skipped));
     expect(screen.getByRole('note', { name: 'Files not added' })).toHaveTextContent(skipped);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add folder' }));
-    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Added 1 document. 2 were already in the queue.'));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 1 file into Input. 2 were already in the queue.'));
     // Nothing was left out this time, so the earlier notice goes with it.
     expect(screen.queryByRole('note', { name: 'Files not added' })).not.toBeInTheDocument();
   });
@@ -94,9 +109,9 @@ describe('queue interactions', () => {
     await screen.findByRole('main', { name: 'Intern' });
     await waitFor(() => expect(deliver).toBeDefined());
 
-    act(() => deliver!({ added: 1, alreadyQueued: 0, skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
+    act(() => deliver!({ added: 1, alreadyQueued: 0, copied: 1, inputFolder: 'C:\\Intern\\Input', skipped: [{ name: 'Contract.doc', code: 'UNSUPPORTED_FORMAT' }, { name: 'blank.pdf', code: 'EMPTY_FILE' }] }));
 
-    const message = 'Added 1 document. Skipped 2: Contract.doc (not a supported format), blank.pdf (the file is empty).';
+    const message = 'Copied 1 file into Input. Skipped 2: Contract.doc (not a supported format), blank.pdf (the file is empty).';
     expect(await screen.findByRole('note', { name: 'Files not added' })).toHaveTextContent(message);
     expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent(message);
     view.unmount();
@@ -110,13 +125,16 @@ describe('queue interactions', () => {
     render(<App bridge={bridge} selection={{ pickFiles: async () => [], pickFolder: async () => undefined, pickExistingModelFiles: async () => undefined, resolveDrop }} />);
     const zone = await screen.findByRole('region', { name: /drag files/i });
 
+    // The added row is selected; selecting never opens the Details panel.
     fireEvent.drop(zone);
-    expect(await screen.findByRole('complementary', { name: 'Review item' })).toHaveTextContent('duplicate-invoice-a.pdf');
+    await waitFor(() => expect(queueCell('duplicate-invoice-a.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
+    expect(await openDetails()).toHaveTextContent('duplicate-invoice-a.pdf');
     fireEvent.click(screen.getByRole('button', { name: 'Close review' }));
     fireEvent.drop(zone);
 
-    expect(await screen.findByRole('complementary', { name: 'Review item' })).toHaveTextContent('duplicate-invoice-a.pdf');
-    expect(screen.getAllByRole('button', { name: 'Select duplicate-invoice-a.pdf' })).toHaveLength(1);
+    await waitFor(() => expect(queueCell('duplicate-invoice-a.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(screen.getAllByRole('gridcell', { name: 'duplicate-invoice-a.pdf' }).filter((cell) => cell.dataset.column === 'original')).toHaveLength(1);
   });
 
   it('describes supported formats without adding a nonfunctional keyboard stop', async () => {
@@ -400,8 +418,9 @@ describe('queue interactions', () => {
 
     render(<App bridge={bridge} />);
 
+    // Proposed filename, description and confidence; Status says "Waiting".
     const row = await screen.findByRole('row', { name: /Invoice INV-1001.pdf/i });
-    expect(within(row).getAllByText('—')).toHaveLength(2);
+    expect(within(row).getAllByText('—')).toHaveLength(3);
   });
 
   it('opens the review inspector after selecting a review item', async () => {
@@ -426,8 +445,8 @@ describe('queue interactions', () => {
 
   it('passes exact serializable path selections from the injected picker to the bridge', async () => {
     const baseBridge = createInMemoryBridge({ items: [] });
-    const addFiles = vi.fn(baseBridge.addFiles);
-    const bridge = { ...baseBridge, addFiles };
+    const copyToInput = vi.fn(baseBridge.copyToInput);
+    const bridge = { ...baseBridge, copyToInput };
     const first = { path: 'C:/Inbox/Alpha.pdf', displayName: 'Alpha.pdf' };
     const second = { path: 'C:/Inbox/Beta.txt', displayName: 'Beta.txt' };
     const pickFiles = vi.fn(async () => [first, second]);
@@ -436,27 +455,37 @@ describe('queue interactions', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add files' }));
 
     await waitFor(() => expect(pickFiles).toHaveBeenCalledOnce());
-    await waitFor(() => expect(addFiles).toHaveBeenCalledWith([first, second]));
+    await waitFor(() => expect(copyToInput).toHaveBeenCalledWith({ files: [first, second] }));
     expect(await screen.findByRole('row', { name: /Alpha.pdf/i })).toBeVisible();
     expect(screen.getByRole('row', { name: /Beta.txt/i })).toBeVisible();
   });
 
-  it('preserves folder identity for a dropped directory instead of fabricating a PDF row', async () => {
+  // A dropped folder is flattened into the input folder: its documents, not
+  // the folder, become rows, a name taken twice is numbered, and what is not
+  // a document is passed over as Add folder always has.
+  it('copies a dropped directory flat into the input folder', async () => {
     const baseBridge = createInMemoryBridge({ items: [] });
-    const addFolder = vi.fn(baseBridge.addFolder);
-    const bridge = { ...baseBridge, addFolder };
-    const folder = { path: 'C:/Inbox/Contracts', displayName: 'Contracts', files: [] };
+    const copyToInput = vi.fn(baseBridge.copyToInput);
+    const bridge = { ...baseBridge, copyToInput };
+    const folder = { path: 'C:/Inbox/Contracts', displayName: 'Contracts', files: [
+      { path: 'C:/Inbox/Contracts/Lease.pdf', displayName: 'Contracts/Lease.pdf' },
+      { path: 'C:/Inbox/Contracts/Old/Lease.pdf', displayName: 'Contracts/Old/Lease.pdf' },
+      { path: 'C:/Inbox/Contracts/notes.zip', displayName: 'Contracts/notes.zip' },
+    ] };
     const resolveDrop = vi.fn(async () => ({ folder }));
     render(<App bridge={bridge} selection={{ pickFiles: async () => [], pickFolder: async () => undefined, pickExistingModelFiles: async () => undefined, resolveDrop }} />);
 
-    fireEvent.drop(await screen.findByLabelText('Drag files or folders here to add to the queue'), {
+    fireEvent.drop(await screen.findByLabelText('Drag files or folders here to copy them into Input'), {
       dataTransfer: { files: [], items: [{ kind: 'file', getAsFileSystemHandle: async () => ({ kind: 'directory', name: 'Contracts' }) }] },
     });
 
     await waitFor(() => expect(resolveDrop).toHaveBeenCalledOnce());
-    await waitFor(() => expect(addFolder).toHaveBeenCalledWith(folder));
-    expect(await screen.findByRole('row', { name: /Contracts\//i })).toBeVisible();
-    expect(screen.queryByRole('row', { name: /Contracts folder.pdf/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(copyToInput).toHaveBeenCalledWith({ folder }));
+    expect(await screen.findByRole('gridcell', { name: 'Lease.pdf' })).toBeVisible();
+    expect(screen.getByRole('gridcell', { name: 'Lease (2).pdf' })).toBeVisible();
+    expect(screen.queryByRole('row', { name: /Contracts\//i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('row', { name: /notes\.zip/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 2 files into Input.');
   });
 
   it('uses the refreshed selected item rather than stale inspector data', async () => {
@@ -523,7 +552,7 @@ describe('queue interactions', () => {
     expect(screen.queryByRole('button', { name: /^Undo these/ })).not.toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Undid 3 renames.');
     // Undo left with its toast; focus goes to the first document put back.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Select Employment Agreement - John Smith.pdf' })).toHaveFocus());
+    await waitFor(() => expect(queueCell('Employment Agreement - John Smith.pdf')).toHaveFocus());
   });
 
   it('reports an undo the backend refuses and still undoes the rest', async () => {
@@ -596,7 +625,7 @@ describe('queue interactions', () => {
       { id: 'named', originalFilename: '2024-05-01 Lease.pdf', status: 'ready', proposedFilename: '2024-05-01 Lease.pdf' },
       { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
     ];
-    render(<App bridge={createInMemoryBridge({ items })} />);
+    render(<App bridge={filingInPlace(items)} />);
     await selectRow(await screen.findByRole('row', { name: /2024-05-01 Lease\.pdf/ }));
 
     fireEvent.click(screen.getByRole('button', { name: /Apply rename/ }));
@@ -612,7 +641,7 @@ describe('queue interactions', () => {
       { id: 'memo', originalFilename: 'memo.pdf', status: 'ready', proposedFilename: '2024-05-02 Memo.pdf' },
       { id: 'notice', originalFilename: 'notice.pdf', status: 'ready', proposedFilename: '2024-05-03 Notice.pdf' },
     ];
-    const base = createInMemoryBridge({ items });
+    const base = filingInPlace(items);
     const undo = vi.fn(base.undo);
     render(<App bridge={{ ...base, undo }} />);
 

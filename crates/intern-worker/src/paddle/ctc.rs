@@ -3,7 +3,7 @@
 //! The recognizer reads a line as a sequence of narrow columns and gives,
 //! for each, a probability for every character it knows plus a "blank" for
 //! no character at all. Greedy CTC decoding takes the likeliest class in
-//! each column, merges a class repeated across neighbouring columns into
+//! each column, merges a class repeated across neighboring columns into
 //! one character, and drops the blanks: "--HH-ee-ll-ll-oo" reads "Hello".
 //! What it keeps for each character is the probability it was read with,
 //! which is what decides whether a line is worth reading again.
