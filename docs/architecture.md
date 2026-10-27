@@ -707,8 +707,9 @@ said so. Both statements could not be true.
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
 Windows stutter — the product's premise is that it runs while you work. For the
-same reason both sidecars run at below-normal priority on Windows: they still
-get every cycle nothing else wants, and the window in front never waits on them.
+same reason both sidecars run at below-normal priority on Windows, and ten
+steps of niceness below Intern on Linux: they still get every cycle nothing
+else wants, and the window in front never waits on them.
 
 A reply may run to 1,024 tokens. The grammar's closing brace ends it long
 before that - the corpus's longest is about 200 - but a contract whose opening
@@ -753,6 +754,14 @@ guard parked in the app's resource table — does the same before the installer
 is launched. The job object is the backstop, not the plan.
 
 Launch never reads the model file. Tauri's setup hook asks only whether it is
+Linux has no job objects; there each child asks the kernel, before it runs
+anything, for `SIGKILL` when its parent ends (`PR_SET_PDEATHSIG`), which a
+`SIGKILL` of Intern itself sets off as surely as an orderly exit. The kernel's
+"parent" is the thread that started the child, not the process, so every child
+is started from one thread kept for nothing else, which ends only with Intern:
+started from a pipeline thread, a warm model server would die with that
+thread. A child that finds Intern already gone by then does not start at all.
+
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest

@@ -693,8 +693,7 @@ fn launch_logged(
         use std::os::windows::process::CommandExt;
         command.creation_flags(crate::process::sidecar_creation_flags());
     }
-    let mut child = command.spawn().map_err(|_| ExtractFailure::crashed())?;
-    crate::process::tie_to_this_process(&child);
+    let mut child = crate::process::spawn_tied(command).map_err(|_| ExtractFailure::crashed())?;
     let input = match child.stdin.take() {
         Some(input) => input,
         None => {

@@ -380,8 +380,7 @@ impl ProcessLauncher for StdProcessLauncher {
             use std::os::windows::process::CommandExt;
             command.creation_flags(crate::process::sidecar_creation_flags());
         }
-        let child = command.spawn().map_err(|_| start_failed())?;
-        crate::process::tie_to_this_process(&child);
+        let child = crate::process::spawn_tied(command).map_err(|_| start_failed())?;
         Ok(Box::new(StdChildProcess(child)))
     }
 }
