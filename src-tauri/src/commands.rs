@@ -831,6 +831,12 @@ impl RuntimeModel {
     /// again, keeping what this session verified of its file. A tier set
     /// aside for its file or its self-test is not retried this way: that is
     /// what downloading it again is for.
+    ///
+    /// Retrying the accurate model is also evidence enough to send the
+    /// readings the fast one made in its place back to it. Without that, an
+    /// upgrade spent on a pass whose re-reads found the accurate model would
+    /// not start left them provisional for good: nothing else arms it but a
+    /// new document. One person's click arms it once, so it cannot loop.
     fn retry_tier(&self, tier: ModelTier) -> bool {
         let retried = {
             let mut checks = self.checks();
@@ -842,6 +848,9 @@ impl RuntimeModel {
             start_failure
         };
         if retried {
+            if tier == ModelTier::Accurate {
+                self.upgrade_armed.store(true, Ordering::SeqCst);
+            }
             self.notify();
         }
         retried
@@ -10006,6 +10015,9 @@ mod runtime_tests {
             assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
         }
         assert_eq!(rig.refused.load(Ordering::SeqCst), 1, "not tried again");
+        // As if an upgrade pass had already been spent on readings that then
+        // found the accurate model would not start.
+        runtime.upgrade_armed.store(false, Ordering::SeqCst);
 
         // Try again, once it would start: the file is not fetched again, and
         // the next document is the accurate model's.
@@ -10023,6 +10035,8 @@ mod runtime_tests {
             .find(|tier| tier.tier == ModelTier::Accurate)
             .unwrap();
         assert_eq!((accurate.state, accurate.error), (SetupStatus::Ready, None));
+        // The fast model's stand-in readings go back to the accurate one.
+        assert!(runtime.take_provisional_upgrade());
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!(reading.tier, ModelTier::Accurate);
     }
