@@ -436,7 +436,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // is numbered the way the desktop backend numbers one; and what each
   // original was copied as, so the same file added again while its copy
   // still waits is copied once.
-  const inputNames = new Set(items.map((item) => fileNameKey(item.originalFilename)));
+  // Seeded with what is still waiting, which is in the input folder; a filed
+  // document has left it.
+  const inputNames = new Set(items.filter((item) => item.status !== 'completed').map((item) => fileNameKey(item.originalFilename)));
   const copyOf = new Map<string, string>();
   const inputFolder = () => {
     if (!settings.intakeEnabled || !settings.intakeFolder.trim()) throw { code: 'INPUT_FOLDER_NOT_SET', message: 'no input folder is set up; choose one in Settings' };
@@ -457,11 +459,15 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // name, a folder is flattened (passing over silently what is not a
   // document, as Add folder always has), a clash is numbered, a file already
   // in the input folder is queued where it is, and a filed one in the output
-  // folder is not copied back.
+  // folder is not copied back. In the simulated deployment's verified Inbox a
+  // copy is held, as the backend holds one until OneDrive has uploaded it.
+  // There are no bytes here, so the same content under two names is two
+  // documents.
   const copyToInput = (selection: SelectionResult): AddReport => {
     const input = inputFolder();
     const separator = input.includes('\\') ? '\\' : '/';
     const report: AddReport = { added: 0, alreadyQueued: 0, skipped: [], copied: 0, inputFolder: input };
+    const verifiedInbox = sharePointEnabled && within(libraryRoot, input);
     const files: FileSelection[] = [...(selection.files ?? [])];
     if (selection.folder?.files) files.push(...selection.folder.files.filter((file) => skipCode(file) === undefined));
     else if (selection.folder) report.skipped.push({ name: selection.folder.displayName, code: 'FOLDER_UNAVAILABLE' });
@@ -469,20 +475,25 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const name = file.displayName.split('/').at(-1) ?? file.displayName;
       const code = skipCode(file);
       if (code) { report.skipped.push({ name, code }); continue; }
-      if (settings.destination.trim() && within(settings.destination, file.path)) { report.skipped.push({ name, code: 'IN_OUTPUT_FOLDER' }); continue; }
       if (within(input, file.path)) {
         if (idByPath.has(file.path)) report.alreadyQueued += 1;
         else { queueAt(file.path, name); report.added += 1; report.inPlace = (report.inPlace ?? 0) + 1; }
         continue;
       }
+      if (settings.destination.trim() && within(settings.destination, file.path)) { report.skipped.push({ name, code: 'IN_OUTPUT_FOLDER' }); continue; }
       if (waitingCopy(file.path)) { report.alreadyQueued += 1; continue; }
       let index = 1;
       while (inputNames.has(fileNameKey(numberedName(name, index)))) index += 1;
       const copy = numberedName(name, index);
       inputNames.add(fileNameKey(copy));
+      report.copied = (report.copied ?? 0) + 1;
+      if (verifiedInbox) {
+        report.held = (report.held ?? 0) + 1;
+        report.heldReason = 'AWAITING_MICROSOFT';
+        continue;
+      }
       copyOf.set(file.path, queueAt(`${input}${separator}${copy}`, copy).id);
       report.added += 1;
-      report.copied = (report.copied ?? 0) + 1;
     }
     return report;
   };

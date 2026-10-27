@@ -503,6 +503,20 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   const refreshAfterSettings = async () => {
     try { await refresh(); } catch { /* Reported as a queue connection error. */ }
   };
+  // A new input folder chosen in Settings, with "Process them too": queued
+  // once the save has made it the input folder. The save already succeeded,
+  // so a failure here is said as what it is, not as a failed save.
+  const queueWhatIsThere = async () => {
+    try {
+      const report = await bridge.queueInputFolder();
+      const message = describeAddReport(report);
+      setActionMessage(message);
+      if (report.skipped.length > 0) setSkippedNotice(message);
+    } catch (error) {
+      setActionError(`Your settings were saved, but the files already in your input folder could not be added to the queue. ${describeActionError(error)}`);
+    }
+    await refreshAfterSettings();
+  };
   // The click is not the moment Intern closes. The download comes first and
   // can take minutes, and a rename can begin its move meanwhile, which the
   // disabled button cannot see. So once every byte is in and verified, the
@@ -650,6 +664,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
   // overlay to say where an add goes. Empty until the settings are read.
   const inputName = settingsLoaded && settings.intakeFolder.trim() ? folderName(settings.intakeFolder) : '';
   const outputName = settingsLoaded && settings.destination.trim() ? folderName(settings.destination) : '';
+  const verifiedInbox = useVerifiedInbox(bridge, managed, settingsLoaded ? settings.intakeFolder : '');
   // Opened from Settings. The queue stays subscribed underneath, and the
   // saved settings are read back afterwards so Settings shows the new folder.
   if (folderSetupOpen) return <FolderSetupFlow bridge={bridge} selection={selection} onCancel={() => setFolderSetupOpen(false)} onDone={async () => {
@@ -712,7 +727,7 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         four column headings with nothing under them. The same drop target
         grows into the whole panel and says what to do with it.
       */}
-      <DropZone variant={items.length === 0 ? 'hero' : 'bar'} inputFolder={inputName} outputFolder={outputName} automaticRename={Boolean(settings.automaticRename)} managed={managed} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
+      <DropZone variant={items.length === 0 ? 'hero' : 'bar'} inputFolder={inputName} outputFolder={outputName} automaticRename={Boolean(settings.automaticRename)} verifiedInbox={verifiedInbox} onDrop={(payload) => { if (selection) void importSelection(() => selection.resolveDrop(payload)); }} />
       {/*
         The way out of a folder chosen by mistake. Pointing the queue at a large
         directory used to be unrecoverable from inside the app: pausing stops it
@@ -760,8 +775,28 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
         onClose={closeReview} onApprove={(filename, description) => void decide(selected, 'approve', () => bridge.approve(selected.id, filename, description))} onKeep={() => void decide(selected, 'keep', () => bridge.keepOriginal(selected.id))} onCancel={() => void refreshAndClear(() => bridge.cancel(selected.id), 'Processing canceled.')} onRetry={() => void retryItem(selected)} onReanalyze={() => void refreshAndClear(() => bridge.reanalyze(selected.id), 'Sent back to be analyzed again.')} onRemove={(confirmed) => void decide(selected, 'remove', () => confirmed ? bridge.remove(selected.id, { confirmed: true }) : bridge.remove(selected.id))} onUndo={() => void refreshAndClear(() => bridge.undo(selected.id), 'Operation undone.')} onOpen={() => void openDocument(selected.id, false)} onReveal={() => void openDocument(selected.id, true)} />}
     </div>
     {historyOpen && <HistoryDialog bridge={bridge} selection={selection} filedItems={new Set(items.filter((item) => item.status === 'completed').map((item) => item.id))} onClose={closeHistory} />}
-    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next) => { await saveSettings(next); closeSettings(); void refreshAfterSettings(); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
+    {settingsOpen && <SettingsDialog settings={settings} bridge={bridge} selection={selection} onClose={closeSettings} onChooseFolder={() => { setSettingsOpen(false); setFolderSetupOpen(true); }} onSave={async (next, after) => { await saveSettings(next); closeSettings(); void (after?.processExisting ? queueWhatIsThere() : refreshAfterSettings()); }} onCheckForUpdate={() => bridge.checkForUpdate()} onInstallUpdate={installUpdateBetweenRenames} renameApplying={renameApplying} />}
   </main>;
+}
+
+/**
+ * Whether the input folder is the verified team Inbox: the build carries the
+ * deployment (`managed`) and Microsoft verification is bound to this very
+ * folder. Only there does a dropped copy wait for Microsoft before it joins
+ * the queue, so only there does the drop target say so.
+ */
+function useVerifiedInbox(bridge: DesktopBridge, managed: boolean, inputFolder: string) {
+  const [verified, setVerified] = useState(false);
+  useEffect(() => {
+    if (!managed || !inputFolder.trim() || !bridge.microsoftIntakeStatus) { setVerified(false); return; }
+    let active = true;
+    const same = (left: string, right: string) => left.replace(/[\\/]+$/, '').toLowerCase() === right.replace(/[\\/]+$/, '').toLowerCase();
+    void bridge.microsoftIntakeStatus()
+      .then((status) => { if (active) setVerified(Boolean(status.binding && same(status.binding.localFolder, inputFolder))); })
+      .catch(() => { if (active) setVerified(false); });
+    return () => { active = false; };
+  }, [bridge, managed, inputFolder]);
+  return verified;
 }
 
 /** "Drop to copy 3 files into Input": a drop copies into the input folder, named when it is known. */

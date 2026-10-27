@@ -7,7 +7,7 @@ import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { InMemoryBridgeOptions } from '../../lib/inMemoryBridge';
 import type { AppSettings, IntakeStatus } from '../../types';
 import { outputBeside, folderLabel, rootName } from './folderNames';
-import { outputFolderProblem } from './folderProblems';
+import { inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from './folderProblems';
 import { HEALTH_COPY, intakeHealth } from './IntakeHealth';
 
 const library = 'C:\\Users\\pat\\Contoso\\Legal - Documents';
@@ -64,8 +64,20 @@ describe('folder names', () => {
     expect(outputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/inside your input folder/);
     expect(outputFolderProblem('D:\\Scans', 'd:\\scans\\')).toMatch(/same folder/);
     expect(outputFolderProblem('D:\\Scans', 'D:\\Output')).toBeUndefined();
-    // The other way round is allowed: the input folder may sit inside the output folder.
-    expect(outputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toBeUndefined();
+    // Neither folder may hold the other.
+    expect(outputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/Your input folder is inside that folder/);
+    expect(inputFolderProblem('D:\\Output\\Input', 'D:\\Output')).toMatch(/inside your output folder/);
+    expect(inputFolderProblem('D:\\Scans', 'D:\\Scans\\Done')).toMatch(/Your output folder is inside that folder/);
+    expect(inputFolderProblem('D:\\Scans', 'D:\\Output')).toBeUndefined();
+  });
+
+  it('keeps description records for a SharePoint column to SharePoint and OneDrive for work', () => {
+    expect(keepsDescriptionColumn({ provider: 'sharepoint', displayName: 'Contoso' })).toBe(true);
+    expect(keepsDescriptionColumn({ provider: 'onedrive_business', displayName: 'OneDrive – Contoso' })).toBe(true);
+    // A personal OneDrive has no SharePoint Description column to fill.
+    expect(keepsDescriptionColumn({ provider: 'onedrive_personal', displayName: 'OneDrive - Personal' })).toBe(false);
+    expect(keepsDescriptionColumn({ provider: 'network_share', displayName: '\\\\server\\share' })).toBe(false);
+    expect(keepsDescriptionColumn(null)).toBe(false);
   });
 });
 
@@ -246,6 +258,59 @@ describe('folder setup', () => {
     expect(screen.queryByRole('main', { name: 'Intern' })).not.toBeInTheDocument();
   });
 
+  // Windows can refuse the sign-in entry. That used to fail the save of the
+  // folders with it - and setup cannot be skipped, so nobody could get in.
+  it('saves the folders even when Windows refuses to start Intern at sign-in', async () => {
+    const base = firstRun();
+    const saveSettings = vi.fn(async (next: AppSettings) => {
+      if (next.startAtLogin) throw { code: 'AUTOSTART_FAILED', message: 'starting Intern at sign-in could not be enabled' };
+      await base.saveSettings(next);
+    });
+    const bridge = { ...base, saveSettings };
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans\\Inbox')} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create an “Output” folder next to it' }));
+
+    expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
+    expect(screen.getByRole('note', { name: 'Start at sign-in' })).toHaveTextContent('Your folders are saved, but Windows would not let Intern start when you sign in');
+    expect(await base.getSettings()).toMatchObject({ intakeFolder: 'D:\\Scans\\Inbox', destination: 'D:\\Scans\\Output', intakeEnabled: true, startAtLogin: false });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+  });
+
+  it('opens the app even when completing onboarding cannot be recorded', async () => {
+    const base = firstRun();
+    const bridge = { ...base, completeOnboarding: vi.fn(async () => { throw { code: 'ONBOARDING_STATE_WRITE_FAILED', message: 'disk full' }; }) };
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans\\Inbox')} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create an “Output” folder next to it' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+
+    expect(await screen.findByRole('main', { name: 'Intern' })).toBeInTheDocument();
+    expect(bridge.completeOnboarding).toHaveBeenCalled();
+  });
+
+  // An install from an earlier release made its own choices; setup asks for
+  // the missing folder and changes nothing else.
+  it('keeps an existing install\'s own choices when it asks for the folders', async () => {
+    const bridge = firstRun({ settings: { intakeFolder: '', intakeEnabled: false, destination: 'C:\\Users\\pat\\OneDrive - Contoso\\Filed', runInBackground: false, startAtLogin: false, processOthersUploads: true, recordDescriptions: false } });
+    const saveSettings = vi.spyOn(bridge, 'saveSettings');
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans')} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose folders' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose another folder…' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep using this folder' }));
+
+    expect(await screen.findByRole('heading', { name: 'You’re all set' })).toBeVisible();
+    expect(screen.queryByText(/starts when you sign in/)).not.toBeInTheDocument();
+    expect(saveSettings).toHaveBeenCalledOnce();
+    expect(await bridge.getSettings()).toMatchObject({ intakeFolder: 'D:\\Scans', intakeEnabled: true, intakeLocalOnly: true, runInBackground: false, startAtLogin: false, processOthersUploads: true, recordDescriptions: false });
+  });
+
   it('offers the output folder an existing install already had', async () => {
     const bridge = firstRun({ settings: { intakeFolder: '', intakeEnabled: false, destination: 'D:\\Filed' } });
     render(<App bridge={bridge} selection={selectionPicking('D:\\Scans')} />);
@@ -285,7 +350,6 @@ describe('folders in Settings', () => {
     const bridge = createInMemoryBridge({ existingDocuments: 2 });
     const settings = await bridge.getSettings();
     const picks = ['D:\\Scans', 'C:\\Users\\pat\\OneDrive - Contoso\\Filed'];
-    const queueInputFolder = vi.spyOn(bridge, 'queueInputFolder');
     const onSave = openSettings(bridge, settings, async () => { const path = picks.shift()!; return { path, displayName: path }; }, vi.fn(async (next: AppSettings) => { await bridge.saveSettings(next); }));
 
     const folders = await screen.findByRole('group', { name: 'Folders' });
@@ -309,8 +373,12 @@ describe('folders in Settings', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Write a description record for each filed document' })).toBeChecked());
 
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
-    await waitFor(() => expect(queueInputFolder).toHaveBeenCalledOnce());
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ intakeFolder: 'D:\\Scans', intakeEnabled: true, intakeLocalOnly: true, intakeMyFolder: false, destination: 'C:\\Users\\pat\\OneDrive - Contoso\\Filed', recordDescriptions: true }));
+    // Queued by the window once the save has made it the input folder, and
+    // reported apart from the save.
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ intakeFolder: 'D:\\Scans', intakeEnabled: true, intakeLocalOnly: true, intakeMyFolder: false, destination: 'C:\\Users\\pat\\OneDrive - Contoso\\Filed', recordDescriptions: true }),
+      { processExisting: true },
+    ));
   });
 
   it('refuses an output folder inside the input folder, and an input folder around the output folder', async () => {
@@ -328,6 +396,39 @@ describe('folders in Settings', () => {
     expect(await within(folders).findByRole('alert')).toHaveTextContent('Your output folder is inside that folder');
     expect(within(folders).getByText('C:\\Intern\\Input')).toBeVisible();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // A lookup that failed says nothing about whether the folder is synced,
+  // so the folder is not vouched for as a private local one: it is not
+  // changed at all, and the person is told.
+  it('leaves the input folder as it was when Intern cannot tell whether a new one is synced', async () => {
+    const base = createInMemoryBridge();
+    const bridge = { ...base, classifyFolder: vi.fn(async () => { throw new Error('registry unavailable'); }) };
+    const settings = await base.getSettings();
+    const onSave = openSettings(bridge, settings, async () => ({ path: 'D:\\Scans', displayName: 'Scans' }));
+    const folders = await screen.findByRole('group', { name: 'Folders' });
+
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
+    expect(await within(folders).findByRole('alert')).toHaveTextContent('could not check whether that folder is synced');
+    expect(within(folders).getByText('C:\\Intern\\Input')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ intakeFolder: 'C:\\Intern\\Input', intakeLocalOnly: true })));
+  });
+
+  it('says when the files already in a new input folder could not be queued, without calling the save failed', async () => {
+    const bridge = createInMemoryBridge({ existingDocuments: 2 });
+    const queueInputFolder = vi.spyOn(bridge, 'queueInputFolder').mockRejectedValue(new Error('The folder could not be read.'));
+    render(<App bridge={bridge} selection={selectionPicking('D:\\Scans')} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }));
+    const folders = await screen.findByRole('group', { name: 'Folders' });
+    fireEvent.click(within(folders).getByRole('button', { name: 'Change input folder' }));
+    fireEvent.click(await within(folders).findByRole('radio', { name: 'Process them too' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
+
+    expect(await screen.findByText(/Your settings were saved, but the files already in your input folder could not be added to the queue\. The folder could not be read\./)).toBeVisible();
+    expect(queueInputFolder).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
+    expect((await bridge.getSettings()).intakeFolder).toBe('D:\\Scans');
   });
 
   it('folds the shared-folder options away under Advanced', async () => {

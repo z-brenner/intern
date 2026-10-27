@@ -24,6 +24,10 @@ const SKIP_REASONS: Record<string, string> = {
   CLAIMED_ELSEWHERE: 'another computer is already working on it',
   INPUT_FOLDER_NOT_SET: 'no input folder is set up yet; choose one in Settings',
   INPUT_FOLDER_UNAVAILABLE: 'your input folder could not be opened',
+  SYNC_CONFLICT_COPY: 'a OneDrive conflict copy; resolve the conflict first',
+  CLAIM_IO_FAILED: 'Intern could not note in the shared folder that it is working on it',
+  INTAKE_COORDINATION_UNAVAILABLE: 'the input folder’s shared bookkeeping could not be written',
+  NOT_IN_INTAKE_FOLDER: 'it is not in the input folder Intern is watching',
 };
 
 /** At most this many skipped files are named; the rest are counted. */
@@ -48,7 +52,11 @@ export function describeAddReport(report: AddReport): string {
     if (inPlace > 0) parts.push(`${inPlace} already in ${into} ${inPlace === 1 ? 'was' : 'were'} added to the queue.`);
     if (held > 0) {
       const one = held === 1;
-      parts.push(`${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`);
+      // The usual reason is the verified team Inbox waiting for OneDrive's
+      // upload of the copy; any other is said without promising Microsoft.
+      parts.push(report.heldReason === undefined || report.heldReason === 'AWAITING_MICROSOFT'
+        ? `${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`
+        : `${held} ${one ? 'waits' : 'wait'} in ${into} until Intern can confirm who uploaded ${one ? 'it' : 'them'}.`);
     }
   } else if (report.added > 0) {
     parts.push(`Added ${report.added} ${report.added === 1 ? 'document' : 'documents'}.`);

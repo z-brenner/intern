@@ -13,8 +13,8 @@ interface Props {
   outputFolder?: string;
   /** Whether high-confidence documents are renamed without asking. */
   automaticRename?: boolean;
-  /** The verified team Inbox, which takes a copy only once Microsoft confirms who uploaded it. */
-  managed?: boolean;
+  /** The input folder is the verified team Inbox, which takes a copy only once Microsoft confirms who uploaded it. */
+  verifiedInbox?: boolean;
   onDrop(payload: unknown): void;
 }
 
@@ -31,7 +31,7 @@ interface Props {
  * documents from - and both sizes say so by the folder's name, so nobody
  * takes it for a separate way in, or wonders where the original went.
  */
-export function DropZone({ variant = 'bar', inputFolder = '', outputFolder = '', automaticRename = false, managed = false, onDrop }: Props) {
+export function DropZone({ variant = 'bar', inputFolder = '', outputFolder = '', automaticRename = false, verifiedInbox = false, onDrop }: Props) {
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     onDrop(event.dataTransfer);
@@ -47,7 +47,7 @@ export function DropZone({ variant = 'bar', inputFolder = '', outputFolder = '',
         <p>{automaticRename
           ? 'Documents Intern is sure about are renamed on their own; the rest wait for you to approve them.'
           : 'Nothing is renamed until you approve it.'} Your originals stay where they are.</p>
-        {managed && <p>A copy joins the queue once OneDrive has uploaded it and Microsoft confirms it is yours.</p>}
+        {verifiedInbox && <p>A copy joins the queue once OneDrive has uploaded it and Microsoft confirms it is yours.</p>}
         <p className="drop-alternative">Or use Add files and Add folder above, or put files straight into {input}.</p>
         <small id="supported-formats">{FORMATS}</small>
       </div>

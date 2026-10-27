@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { describeAddReport } from '../lib/addReport';
 import type { DesktopBridge, SelectionBoundary } from '../lib/bridge';
 import { contains, folderLabel, outputBeside, rootName } from '../features/intake/folderNames';
-import { folderSaveProblem, outputFolderProblem } from '../features/intake/folderProblems';
-import type { AddReport, CloudLocation, CloudRoot } from '../types';
+import { folderSaveProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
+import type { AddReport, CloudRoot } from '../types';
 
 type Step = 'welcome' | 'pick' | 'output' | 'existing' | 'ready';
 
@@ -21,11 +21,6 @@ interface Props {
 export const INPUT_FOLDER_HINT = 'Put files here that you want Intern to process.';
 /** What the output folder is for, said the same way everywhere. */
 export const OUTPUT_FOLDER_HINT = 'Processed files end up here, renamed.';
-
-/** A OneDrive or SharePoint location, where description records can fill SharePoint's Description column. */
-export function syncedByOneDrive(location: CloudLocation | null | undefined): boolean {
-  return location?.provider === 'onedrive_business' || location?.provider === 'onedrive_personal' || location?.provider === 'sharepoint';
-}
 
 function codeOf(error: unknown): string | undefined {
   return typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
@@ -64,6 +59,10 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   // being processed while some, or all, were not.
   const [leftOut, setLeftOut] = useState<AddReport>();
   const [describesForSharePoint, setDescribesForSharePoint] = useState(false);
+  // Running in the background and at sign-in, which a first run turns on
+  // once the folders are saved: on, refused by the system, or left as an
+  // existing install had them.
+  const [background, setBackground] = useState<'on' | 'failed' | 'kept'>('kept');
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -94,16 +93,27 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
   };
   const browse = async () => (await selection?.pickFolder())?.path;
   const choose = (path: string) => { setProblem(''); setIntake(path); setStep('output'); };
+  /*
+    The folders are saved on their own, and nothing else the person chose
+    before is touched. A first run - no folder saved at all - also gets the
+    first run's defaults: running in the background and at sign-in, set by a
+    second save once the folders are in, so a system that refuses the sign-in
+    entry (AUTOSTART_FAILED) costs a note on the last step, never the setup
+    nobody can get past. An install from an earlier release keeps its own
+    choices for those, for teammates' uploads, and for description records,
+    which are only switched on here for an output folder chosen now.
+  */
   const save = async (watched: string, filed: string, processExisting: boolean) => {
     const settings = await bridge.getSettings();
+    const firstRun = !settings.intakeFolder.trim() && !settings.destination.trim();
     const cloud = await bridge.classifyFolder(watched);
     // Description records fill SharePoint's Description column through a
-    // flow the guide ships; they only mean something in a library that
-    // OneDrive syncs, so they are switched on for an output folder there and
-    // left as they were anywhere else.
+    // flow the guide ships; they only mean something in a SharePoint
+    // library or OneDrive for work, so they are switched on for an output
+    // folder chosen there and left as they were anywhere else.
     const output = await bridge.classifyFolder(filed).catch(() => null);
-    const describeForSharePoint = syncedByOneDrive(output);
-    await bridge.saveSettings({
+    const describeForSharePoint = keepsDescriptionColumn(output) && (firstRun || filed !== settings.destination.trim());
+    const folders = {
       ...settings,
       intakeFolder: watched,
       destination: filed,
@@ -112,12 +122,21 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       // refused by the backend with its own explanation.
       intakeMyFolder: cloud !== null,
       intakeLocalOnly: cloud === null,
-      processOthersUploads: false,
-      runInBackground: true,
-      startAtLogin: true,
+      ...(firstRun ? { processOthersUploads: false } : {}),
       ...(describeForSharePoint ? { recordDescriptions: true } : {}),
-    });
+    };
+    await bridge.saveSettings(folders);
     setDescribesForSharePoint(describeForSharePoint);
+    if (firstRun && !(folders.runInBackground && folders.startAtLogin)) {
+      try {
+        await bridge.saveSettings({ ...folders, runInBackground: true, startAtLogin: true });
+        setBackground('on');
+      } catch {
+        setBackground('failed');
+      }
+    } else {
+      setBackground(firstRun ? 'on' : 'kept');
+    }
     const report = processExisting ? await bridge.queueInputFolder() : undefined;
     setLeftOut(report && report.skipped.length > 0 ? report : undefined);
     setStep('ready');
@@ -211,7 +230,7 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
       </>}
       {step === 'output' && <>
         <h1 ref={heading} tabIndex={-1}>Choose your output folder</h1>
-        <p><strong>{OUTPUT_FOLDER_HINT}</strong> It has to be outside your input folder.</p>
+        <p><strong>{OUTPUT_FOLDER_HINT}</strong> Neither folder may be inside the other.</p>
         {besideLeavesSync
           ? <p>You chose all of <strong>{label(intake)}</strong>. Intern will make two folders in it: <strong>Input</strong>, for files to process, and <strong>Output</strong>, where processed files end up.</p>
           : <>
@@ -248,8 +267,11 @@ export function FolderSetupFlow({ bridge, selection, welcome = false, onDone, on
           <div><dt>Output folder</dt><dd><strong>{label(destination)}</strong><span>{OUTPUT_FOLDER_HINT}</span></dd></div>
         </dl>
         <p>You can change either folder any time in Settings.</p>
-        <p>Intern keeps running in the system tray and starts when you sign in, so files are processed while its window is closed. You can change this in Settings.</p>
-        {describesForSharePoint && <p>Your output folder is in OneDrive, so Intern also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
+        {background === 'on' && <p>Intern keeps running in the system tray and starts when you sign in, so files are processed while its window is closed. You can change this in Settings.</p>}
+        {background === 'failed' && <div className="note note--review" role="note" aria-label="Start at sign-in">
+          <p>Your folders are saved, but Windows would not let Intern start when you sign in, so it works only while it is open. You can try again in Settings, under This computer.</p>
+        </div>}
+        {describesForSharePoint && <p>Your output folder is in SharePoint, so Intern also leaves a short description of each document there for SharePoint’s Description column. Settings shows how to fill that column.</p>}
         {leftOut && <div className="note note--review" role="note" aria-label="Files not added">
           <p>{describeAddReport(leftOut)} They stay in your input folder.</p>
         </div>}

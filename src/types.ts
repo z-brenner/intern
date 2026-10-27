@@ -346,6 +346,8 @@ export interface AddReport {
    * upload of the copy.
    */
   held?: number;
+  /** Why they are held: AWAITING_MICROSOFT until OneDrive has uploaded the copy and Microsoft can say who did. */
+  heldReason?: string;
   /** Of `added`, how many were already in the input folder and were queued where they are rather than copied. */
   inPlace?: number;
   /** The input folder the files were copied into. */

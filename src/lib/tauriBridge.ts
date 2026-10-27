@@ -98,6 +98,7 @@ interface AddReportDto {
   skipped?: Array<{ name: string; code: string }>;
   copied?: number;
   held?: number;
+  heldReason?: string;
   inPlace?: number;
   inputFolder?: string;
 }
@@ -580,6 +581,7 @@ function normalizeAddReport(report: AddReportDto | undefined): AddReport {
     skipped: (report?.skipped ?? []).map(({ name, code }) => ({ name, code })),
     ...(typeof report?.copied === 'number' ? { copied: report.copied } : {}),
     ...(report?.held ? { held: report.held } : {}),
+    ...(report?.heldReason ? { heldReason: report.heldReason } : {}),
     ...(report?.inPlace ? { inPlace: report.inPlace } : {}),
     ...(report?.inputFolder ? { inputFolder: report.inputFolder } : {}),
   };

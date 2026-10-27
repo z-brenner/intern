@@ -9,9 +9,8 @@ import { GUIDE_URL } from '../lib/bridge';
 import { tooShortOwnNames } from '../lib/ownNames';
 import type { DescriptionsEventSource, DesktopBridge, IntakeEventSource, SelectionBoundary, UpdateProgressListener, UpdateStatus } from '../lib/bridge';
 import { installingLabel } from '../lib/format';
-import { contains } from '../features/intake/folderNames';
-import { folderSaveProblem, outputFolderProblem } from '../features/intake/folderProblems';
-import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT, syncedByOneDrive } from './FolderSetupFlow';
+import { folderSaveProblem, inputFolderProblem, keepsDescriptionColumn, outputFolderProblem } from '../features/intake/folderProblems';
+import { INPUT_FOLDER_HINT, OUTPUT_FOLDER_HINT } from './FolderSetupFlow';
 import { Icon } from './Icon';
 
 /**
@@ -210,7 +209,13 @@ interface Props {
   settings: AppSettings;
   bridge: DesktopBridge;
   selection?: SelectionBoundary;
-  onSave(settings: AppSettings): Promise<void>;
+  /**
+   * Save the settings. `after.processExisting`: the person chose a new
+   * input folder and asked for the documents already in it to be processed
+   * too, which can only happen once the folder is saved - and is reported
+   * apart from the save, since the save itself succeeded.
+   */
+  onSave(settings: AppSettings, after?: { processExisting: boolean }): Promise<void>;
   onClose(): void;
   onCheckForUpdate(): Promise<UpdateStatus>;
   onInstallUpdate(onProgress?: UpdateProgressListener): Promise<void>;
@@ -374,11 +379,17 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
   */
   const chooseInputFolder = async (path: string) => {
     setFolderProblem('');
-    if (next.destination.trim() && contains(path, next.destination)) {
-      setFolderProblem('Your output folder is inside that folder, so processed files would be picked up and processed again. Choose another input folder, or change the output folder first.');
+    const refused = inputFolderProblem(path, next.destination);
+    if (refused) { setFolderProblem(refused); return; }
+    // Whether the folder is synced decides how its documents are admitted.
+    // A lookup that failed says nothing either way, so the folder is not
+    // changed rather than vouched for as a private local one.
+    let cloud;
+    try { cloud = await bridge.classifyFolder(path); }
+    catch {
+      setFolderProblem('Intern could not check whether that folder is synced by OneDrive, so the input folder was not changed. Try again.');
       return;
     }
-    const cloud = await bridge.classifyFolder(path).catch(() => null);
     setNext((current) => ({ ...current, intakeFolder: path, intakeEnabled: true, intakeMyFolder: cloud !== null, intakeLocalOnly: cloud === null }));
     const count = path === settings.intakeFolder ? 0 : await bridge.intakeFolderDocuments(path).catch(() => 0);
     setExistingDocuments(count > 0 ? { count, process: false } : undefined);
@@ -387,11 +398,11 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
     setFolderProblem('');
     const refused = outputFolderProblem(next.intakeFolder, path);
     if (refused) { setFolderProblem(refused); return; }
-    // An output folder OneDrive syncs gets description records for
-    // SharePoint's Description column, as setup turns them on; elsewhere the
-    // setting is left as it was.
+    // An output folder in a SharePoint library or OneDrive for work gets
+    // description records for its Description column, as setup turns them
+    // on; elsewhere the setting is left as it was.
     const cloud = await bridge.classifyFolder(path).catch(() => null);
-    setNext((current) => ({ ...current, destination: path, ...(syncedByOneDrive(cloud) ? { recordDescriptions: true } : {}) }));
+    setNext((current) => ({ ...current, destination: path, ...(keepsDescriptionColumn(cloud) ? { recordDescriptions: true } : {}) }));
   };
   const browse = async (apply: (path: string) => Promise<void>) => {
     const folder = await selection?.pickFolder();
@@ -414,10 +425,8 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
       await storeKeyDraft();
       const draft = withOwnNames(next);
       const processExisting = !managed && existingDocuments?.process === true && draft.intakeFolder !== settings.intakeFolder;
-      await onSave(managed ? withManagedValues(draft, settings) : draft);
-      // Only once the new input folder is saved and watched: before that,
-      // there is no input folder for the backend to queue them from.
-      if (processExisting) await bridge.queueInputFolder();
+      const saved = managed ? withManagedValues(draft, settings) : draft;
+      await (processExisting ? onSave(saved, { processExisting: true }) : onSave(saved));
     }
     catch (error) { setSaveError(saveFailure(error)); }
     finally { setSaving(false); }

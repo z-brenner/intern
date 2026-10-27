@@ -397,3 +397,18 @@ describe('createInMemoryBridge update switch', () => {
     expect((await createInMemoryBridge({ settings: { skipUpdateChecks: true } }).getSettings()).skipUpdateChecks).toBe(true);
   });
 });
+
+describe('copying into the input folder, as input_copy does', () => {
+  it('queues a file already in the input folder where it is, even inside the output folder', async () => {
+    const bridge = createInMemoryBridge({ items: [], settings: { intakeFolder: 'D:\\Docs\\Inbox', destination: 'D:\\Docs' } });
+    const report = await bridge.copyToInput({ files: [{ path: 'D:\\Docs\\Inbox\\scan.pdf', displayName: 'scan.pdf' }] });
+    expect(report).toMatchObject({ added: 1, inPlace: 1, skipped: [] });
+  });
+
+  it('holds a copy into the simulated verified Inbox until OneDrive has uploaded it', async () => {
+    const bridge = createInMemoryBridge({ items: [], sharePoint: 'fake', settings: { intakeFolder: 'C:\\Users\\pat\\Contoso\\InternTestSite - Files\\Inbox', destination: 'C:\\Users\\pat\\Contoso\\InternTestSite - Files\\Filed', intakeEnabled: true } });
+    const report = await bridge.copyToInput({ files: [{ path: 'C:\\Downloads\\scan.pdf', displayName: 'scan.pdf' }] });
+    expect(report).toMatchObject({ added: 0, copied: 1, held: 1, heldReason: 'AWAITING_MICROSOFT' });
+    expect(await bridge.listItems()).toHaveLength(0);
+  });
+});
