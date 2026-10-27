@@ -3,12 +3,16 @@ import { formatBytes } from '../../lib/format';
 import { DownloadProgress } from '../../components/DownloadProgress';
 import { describeSetupError } from '../setup/useModelSetup';
 
-/** What each choice does, in a line. The names come from the backend when it says them. */
+/**
+ * What each choice does, in a line. The names come from the backend when it
+ * says them. The quick model's readings always wait for a check, whichever
+ * choice asked for them, and the lines say so.
+ */
 function choices(fast: string, accurate: string): { value: ModelPreference; label: string; hint: string }[] {
   return [
-    { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} when this computer has the memory to spare, ${fast} when it does not.` },
-    { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document. About twice as slow.` },
-    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. Quicker and lighter, a little less accurate.` },
+    { value: 'automatic', label: 'Automatic (recommended)', hint: `${accurate} reads every document. ${fast}, if you have it, stands in only while this computer is short of memory.` },
+    { value: 'accurate', label: 'Most accurate', hint: `${accurate} for every document, whenever memory allows.` },
+    { value: 'fast', label: 'Fastest', hint: `${fast} for every document. Quicker, but every name it gives waits for you to check it.` },
   ];
 }
 
@@ -46,15 +50,24 @@ function TierLine({ tier, busy, onStart, onPause }: { tier: TierSetup; busy: boo
   return <li aria-label={tier.displayName}>
     <span>{tier.displayName}{size} · {tierStatus(tier)}</span>
     {tier.state === 'downloading' && <DownloadProgress setup={tier} label={`${tier.displayName} download`} />}
-    {tier.state === 'failed' && tier.error && <p className="form-error">{tier.tier !== 'fast' && tier.error === 'MODEL_SELF_TEST_FAILED'
-      ? 'This model did not pass its check on this computer, so the fast model reads instead.'
+    {tier.state === 'failed' && tier.error && <p className="form-error">{tier.error === 'MODEL_SELF_TEST_FAILED'
+      ? 'This model did not pass its check on this computer, so Intern does not use it.'
       : describeSetupError(tier.error)}</p>}
-    {tier.tier !== 'fast' && <>
-      {tier.state === 'downloading' && <button type="button" disabled={busy} onClick={onPause}>Pause download</button>}
-      {tier.state === 'required' && <button type="button" disabled={busy} onClick={onStart}>{started ? 'Resume download' : 'Download'}</button>}
-      {tier.state === 'failed' && <button type="button" disabled={busy} onClick={onStart}>Download again</button>}
-    </>}
+    {tier.state === 'downloading' && <button type="button" disabled={busy} onClick={onPause}>Pause download</button>}
+    {tier.state === 'required' && <button type="button" disabled={busy} onClick={onStart}>{started ? 'Resume download' : downloadLabel(tier)}</button>}
+    {tier.state === 'failed' && <button type="button" disabled={busy} onClick={onStart}>Download again</button>}
   </li>;
+}
+
+/**
+ * The quick model is never fetched without being asked for - someone who
+ * came from the single-model build has only the accurate one - so its
+ * button says what it is for.
+ */
+function downloadLabel(tier: TierSetup): string {
+  if (tier.tier !== 'fast') return 'Download';
+  const size = tier.totalBytes > 0 ? ` (${formatBytes(tier.totalBytes)})` : '';
+  return `Download the quick model${size} for faster first readings and low-memory fallback`;
 }
 
 function tierStatus(tier: TierSetup): string {
@@ -68,7 +81,7 @@ function tierStatus(tier: TierSetup): string {
 
 /**
  * The main window's one line about the accurate model while it arrives:
- * "Improving accuracy: downloading Bonsai 2 4B, 41%". Nothing once it is
+ * "Improving accuracy: downloading Qwen3.5 2B, 41%". Nothing once it is
  * ready, and nothing that asks for a decision.
  */
 export function accuracyStatus(setup: SetupState | undefined): string | undefined {

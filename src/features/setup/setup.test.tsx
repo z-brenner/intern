@@ -93,8 +93,8 @@ describe('setup and queue controls', () => {
       selection={setupSelection(async () => undefined)}
     />);
 
-    expect(await screen.findByText(/Download Bonsai 2 2B \(493 MiB\) to start naming documents/i)).toBeVisible();
-    expect(screen.getByText(/Bonsai 2 4B \(1\.07 GiB\), the more accurate model, then follows in the background/i)).toBeVisible();
+    expect(await screen.findByText(/Download the quick model, Bonsai 2 2B \(493 MiB\), to start naming documents/i)).toBeVisible();
+    expect(screen.getByText(/Qwen3\.5 2B \(1\.19 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, every name waits for you to check it\./i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });
 
@@ -274,7 +274,7 @@ describe('setup and queue controls', () => {
   // shipped manifest.
   it('never asks for model files this build does not use', async () => {
     const names = modelManifest.models.flatMap((model) => model.files.map((file) => file.name));
-    expect(names).toEqual(['Ternary-Bonsai-2-2B-PQ2_0.gguf', 'Ternary-Bonsai-2-4B-PQ2_0.gguf']);
+    expect(names).toEqual(['Ternary-Bonsai-2-2B-PQ2_0.gguf', 'Qwen3.5-2B-Q4_K_M.gguf']);
     const { unmount: done } = render(<App
       bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: PINNED_MODEL_BYTES, error: 'MODEL_FILE_INVALID' } })}
       selection={setupSelection(async () => modelFiles)}

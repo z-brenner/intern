@@ -22,7 +22,7 @@ const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
  * accurate one that follows behind the window.
  */
 export const FAST_MODEL_BYTES = 517_312_992;
-export const ACCURATE_MODEL_BYTES = 1_146_465_120;
+export const ACCURATE_MODEL_BYTES = 1_280_835_840;
 /** What setup downloads before the first document: the fast model. */
 export const PINNED_MODEL_BYTES = FAST_MODEL_BYTES;
 
@@ -119,6 +119,8 @@ export interface InMemoryBridgeOptions {
   setup?: Partial<SetupState>;
   /** The accurate model's own setup, when not what the first model's implies. */
   accurate?: Partial<TierSetup>;
+  /** The quick model's own setup, when it is not what setup is about. */
+  quick?: Partial<TierSetup>;
   /** A hosted-model key already in the (fake) credential store. */
   hostedKey?: string;
   /** Spellings already learned from review. */
@@ -285,15 +287,21 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // the fast one is in place.
   let accurate: TierSetup = {
     tier: 'accurate',
-    displayName: 'Bonsai 2 4B',
+    displayName: 'Qwen3.5 2B',
     ...(setup.state === 'ready'
       ? { state: 'ready', downloadedBytes: ACCURATE_MODEL_BYTES }
       : { state: 'required', downloadedBytes: 0 }),
     totalBytes: ACCURATE_MODEL_BYTES,
     ...options.accurate,
   };
+  // The quick model's own entry, when it is not the one setup is about: as
+  // after an upgrade from the single-model build, which left only the
+  // accurate model and fetches the quick one only when asked.
+  let quick: TierSetup | undefined = options.quick && {
+    tier: 'fast', displayName: 'Bonsai 2 2B', state: 'required', downloadedBytes: 0, totalBytes: FAST_MODEL_BYTES, ...options.quick,
+  };
   const tiers = (): TierSetup[] => [
-    { tier: 'fast', displayName: 'Bonsai 2 2B', state: setup.state, downloadedBytes: setup.downloadedBytes, totalBytes: setup.totalBytes, error: setup.state === 'failed' ? setup.error : undefined },
+    quick ? { ...quick } : { tier: 'fast', displayName: 'Bonsai 2 2B', state: setup.state, downloadedBytes: setup.downloadedBytes, totalBytes: setup.totalBytes, error: setup.state === 'failed' ? setup.error : undefined },
     { ...accurate },
   ];
   // Without a deployment the demo opens straight into the app; pass 0 to walk
@@ -391,6 +399,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const downloadedBytes = Math.min(accurate.totalBytes, accurate.downloadedBytes + accurateStep);
       accurate = { ...accurate, downloadedBytes, state: downloadedBytes >= accurate.totalBytes ? 'ready' : 'downloading' };
       if (accurate.state === 'ready' && accurateTimer) { clearInterval(accurateTimer); accurateTimer = undefined; }
+    }, downloadIntervalMs);
+  };
+  let quickTimer: ReturnType<typeof setInterval> | undefined;
+  const startQuick = () => {
+    if (quickTimer || !quick || quick.state === 'ready') return;
+    quick = { ...quick, state: 'downloading', error: undefined };
+    quickTimer = setInterval(() => {
+      if (!quick) return;
+      const downloadedBytes = Math.min(quick.totalBytes, quick.downloadedBytes + Math.ceil(quick.totalBytes / 4));
+      quick = { ...quick, downloadedBytes, state: downloadedBytes >= quick.totalBytes ? 'ready' : 'downloading' };
+      if (quick.state === 'ready' && quickTimer) { clearInterval(quickTimer); quickTimer = undefined; }
     }, downloadIntervalMs);
   };
   const idByPath = new Map<string, string>();
@@ -626,6 +645,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     ...(sharePointEnabled ? fakeSharePoint : {}),
     startModelDownload: async (tier) => {
       if (tier === 'accurate' && setup.state === 'ready') { startAccurate(); return; }
+      if (tier === 'fast' && quick && setup.state === 'ready') { startQuick(); return; }
       if (setup.state === 'downloading') return;
       setup = { ...setup, state: 'downloading', error: undefined };
       downloadTimer = setInterval(() => {
@@ -635,6 +655,12 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       }, downloadIntervalMs);
     },
     setupCancel: async (tier) => {
+      if (tier === 'fast' && quickTimer && quick) {
+        clearInterval(quickTimer);
+        quickTimer = undefined;
+        quick = { ...quick, state: 'required' };
+        return;
+      }
       if (tier === 'accurate' && accurateTimer) {
         clearInterval(accurateTimer);
         accurateTimer = undefined;

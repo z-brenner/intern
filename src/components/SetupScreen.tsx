@@ -36,13 +36,15 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
       new user saw overstated the download by more than two and a half times.
     */}
     <p>{first
-      ? `Download ${first.displayName}${setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''} to start naming documents`
+      ? `Download the quick model, ${first.displayName}${setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}, to start naming documents`
       : `Download ${setup.totalBytes > 0 ? `${formatBytes(setup.totalBytes)} of ` : ''}model files`}, or choose matching files already on this computer.</p>
     {/*
       The second model is part of what Download fetches, so it is said here,
-      before anything is fetched - and that nobody waits for it.
+      before anything is fetched - that nobody waits for it, and that until
+      it arrives every name waits for a check, which is what the quick
+      model's readings always do.
     */}
-    {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the more accurate model, then follows in the background while you work.</p>}
+    {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the accurate model, then follows in the background while you work. Until it arrives, every name waits for you to check it.</p>}
     <p>Your documents and filenames stay on this device. After setup, processing runs fully locally with no network dependency.</p>
     {operationError && <p className="setup-error" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-label="Setup status" aria-live="polite">Download canceled. Your progress was saved.</p>}

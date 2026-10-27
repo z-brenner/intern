@@ -131,7 +131,7 @@ function ModelStep({ heading, bridge, selection, model, pendingSettings }: { hea
   const closeHosted = () => { setHostedOpen(false); hostedTrigger.current?.focus(); };
   return <>
     <h1 ref={heading} tabIndex={-1}>Get the local model</h1>
-    <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}{accurate && accurate.state !== 'ready' ? `, and a more accurate one${accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''} follows in the background while you work` : ''}.</p>
+    <p>Intern reads documents with a model that runs on this computer, so your documents are never sent anywhere to be read. It downloads once{setup && setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''}{accurate && accurate.state !== 'ready' ? `, and the accurate one${accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''} follows in the background while you work; until it arrives, every name waits for you to check it` : ''}.</p>
     {!setup && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Checking the local model…</p>}
     {operationError && <p className="onboarding-alert" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-live="polite" aria-label="Model setup status">Download canceled. Your progress was saved.</p>}

@@ -123,7 +123,7 @@ export function describeSetupError(error: unknown) {
     // vision projector, so the advice sent people looking for something that
     // does not exist. Name the files the manifest actually pins instead.
     case 'MODEL_FILE_INVALID':
-    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match a model Intern pins. Choose the exact Ternary-Bonsai-2-2B-PQ2_0.gguf or Ternary-Bonsai-2-4B-PQ2_0.gguf file, or let Intern download them. (MODEL_FILE_INVALID)';
+    case 'MODEL_MANIFEST_INVALID': return 'The selected file did not match a model Intern pins. Choose the exact Qwen3.5-2B-Q4_K_M.gguf or Ternary-Bonsai-2-2B-PQ2_0.gguf file, or let Intern download them. (MODEL_FILE_INVALID)';
     // The runtime failures below happen after the model file has passed its
     // checksum, so a fresh download re-hashes the same file and fails the
     // same way. They point at the runtime's own log instead.
