@@ -6620,6 +6620,7 @@ fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
         "undone.pdf",
         "waiting.pdf",
         "gone.pdf",
+        "unfiled.pdf",
         "settled.pdf",
     ];
     let paths = names
@@ -6649,7 +6650,7 @@ fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
     .unwrap();
 
     let ids = pipeline
-        .enqueue_files(&paths[..6])
+        .enqueue_files(&paths[..7])
         .unwrap()
         .into_iter()
         .map(|item| item.id)
@@ -6657,14 +6658,40 @@ fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
     pipeline.run_until_idle().unwrap();
     // The accurate model reads the last one itself.
     model.provisional.store(false, Ordering::SeqCst);
-    let settled = pipeline.enqueue_files(&paths[6..]).unwrap().remove(0).id;
+    let settled = pipeline.enqueue_files(&paths[7..]).unwrap().remove(0).id;
     pipeline.run_until_idle().unwrap();
-    let [untouched, approved, kept, undone, waiting, gone] = ids[..] else {
-        panic!("six documents")
+    let [untouched, approved, kept, undone, waiting, gone, unfiled] = ids[..] else {
+        panic!("seven documents")
     };
-    for id in [untouched, approved, kept, undone, waiting, gone, settled] {
+    for id in [
+        untouched, approved, kept, undone, waiting, gone, unfiled, settled,
+    ] {
         assert_eq!(status_of(&pipeline, id), QueueStatus::Ready);
     }
+
+    // Edited and approved, but the destination cannot be made - it is a
+    // file - so the filing fails and the document goes back to review with
+    // its approval taken back. The name the person gave is still theirs.
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, b"a file, not a folder").unwrap();
+    let store = SettingsStore::new(temp.path().join("settings.json"));
+    store
+        .save(&AppSettings {
+            destination: blocked.join("Filed").to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let edited = "2026-03-01 Employment Agreement - edited by hand.pdf";
+    let _ = pipeline.approve(unfiled, edited, "Edited by hand.");
+    store.save(&AppSettings::default()).unwrap();
+    let demoted = item_of(&pipeline, unfiled);
+    assert_eq!(demoted.status, QueueStatus::NeedsReview);
+    let demoted = demoted.proposal.unwrap();
+    assert!(
+        !demoted.approved,
+        "the failed filing took the approval back"
+    );
+    assert_eq!(demoted.filename, edited);
 
     pipeline
         .approve(undone, AGREEMENT_NAME, "An employment agreement.")
@@ -6694,8 +6721,8 @@ fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
         )
         .unwrap();
     std::fs::remove_file(&paths[5]).unwrap();
-    let before =
-        [approved, kept, undone, waiting, gone, settled].map(|id| (id, status_of(&pipeline, id)));
+    let before = [approved, kept, undone, waiting, gone, unfiled, settled]
+        .map(|id| (id, status_of(&pipeline, id)));
     assert_eq!(status_of(&pipeline, undone), QueueStatus::NeedsReview);
 
     assert_eq!(pipeline.reanalyze_provisional().unwrap(), 1);
@@ -6707,6 +6734,12 @@ fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
         assert_eq!(status_of(&pipeline, id), status, "item {id} was left alone");
     }
     assert!(item_of(&pipeline, waiting).proposal.unwrap().approved);
+    let kept_edit = item_of(&pipeline, unfiled).proposal.unwrap();
+    assert_eq!(
+        (kept_edit.filename.as_str(), kept_edit.description.as_str()),
+        (edited, "Edited by hand."),
+        "the person's edit survives the re-read"
+    );
 
     let calls = model.calls.load(Ordering::SeqCst);
     pipeline.run_until_idle().unwrap();

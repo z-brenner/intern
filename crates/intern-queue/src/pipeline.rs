@@ -597,6 +597,14 @@ pub struct ProposalRecord {
     /// when it is free even with automatic renaming switched off.
     #[serde(default)]
     pub approved: bool,
+    /// Whether a person has ever approved a name for this record, as the
+    /// reading had it or as they edited it. Unlike `approved` it is never
+    /// taken back: a filing that fails - a destination that cannot be made -
+    /// puts the document back in review and clears `approved`, but keeps the
+    /// name and description the person gave, and a record they have touched
+    /// is never thrown away for an automatic reading.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reviewed: bool,
     /// A name a person typed for a document Intern could not read. There
     /// was no analysis to propose one, so `analysis` is empty: nothing here
     /// is the model's, and nothing recomposes the name from it.
@@ -671,6 +679,7 @@ impl ProposalRecord {
             own_names: Vec::new(),
             near_duplicate_of: None,
             approved: false,
+            reviewed: false,
             manual: false,
             copy_of: None,
         }
@@ -1937,6 +1946,7 @@ impl Pipeline {
             own_names,
             near_duplicate_of,
             approved: false,
+            reviewed: false,
             manual: false,
             copy_of: None,
         };
@@ -4550,6 +4560,7 @@ impl PipelineRepository {
         record.status = ProposalStatus::Ready;
         record.reasons.clear();
         record.approved = true;
+        record.reviewed = true;
         record.revision += 1;
         let json = serde_json::to_string(&record)
             .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
@@ -4586,10 +4597,11 @@ impl PipelineRepository {
     }
 }
 
-/// Whether a stored reading is provisional and nobody has acted on it: not
-/// approved, and never filed, kept, or taken back. A person's edits are
-/// approvals - the queue keeps no unapproved draft - so an unapproved reading
-/// holds none.
+/// Whether a stored reading is provisional and nobody has acted on it: never
+/// approved, and never filed, kept, or taken back. A person's edits arrive
+/// with an approval, and `reviewed` remembers it after a failed filing has
+/// taken the approval back: `approved` alone said such a record was untouched
+/// and let a re-read throw the person's name and description away.
 fn untouched_provisional(record: &ProposalRecord) -> bool {
     record
         .analysis
@@ -4598,6 +4610,7 @@ fn untouched_provisional(record: &ProposalRecord) -> bool {
         .as_ref()
         .is_some_and(|reading| reading.provisional)
         && !record.approved
+        && !record.reviewed
         && !record
             .reasons
             .iter()
