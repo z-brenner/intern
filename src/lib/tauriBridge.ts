@@ -3,7 +3,7 @@ import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { listen as tauriListen } from '@tauri-apps/api/event';
 // Types only: the plugin itself is still imported lazily, below.
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, HouseRule, IntakeStatus, LearnedRule, ModelTier, OnboardingStatus, ProcessingStage, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type {
@@ -209,8 +209,8 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
     return { ...status, problem: status.problem ?? null };
   }
   completeOnboarding(): Promise<void> { return this.transport.invoke('onboarding_complete'); }
-  startModelDownload(): Promise<void> { return this.transport.invoke('setup_start'); }
-  setupCancel(): Promise<void> { return this.transport.invoke('setup_cancel'); }
+  startModelDownload(tier?: ModelTier): Promise<void> { return tier ? this.transport.invoke('setup_start', { tier }) : this.transport.invoke('setup_start'); }
+  setupCancel(tier?: ModelTier): Promise<void> { return tier ? this.transport.invoke('setup_cancel', { tier }) : this.transport.invoke('setup_cancel'); }
   setupChooseExisting(files: ExistingModelFiles): Promise<void> {
     return this.transport.invoke('setup_choose_existing', { files });
   }
@@ -298,7 +298,16 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   // The updater plugin is loaded lazily so that importing this module never
   // pulls in update machinery for a session that never asks for it, and so the
   // browser build - which has no Tauri runtime at all - does not fail to load.
+  //
+  // Signed updates are published for Windows alone. A Linux package is
+  // updated by installing the next release's package, and its shell registers
+  // no updater (lib.rs) - so it is asked first, and only a shell that says it
+  // cannot update itself is spared a request that could only fail. One that
+  // cannot answer - a failed start refuses every command of Intern's own, but
+  // not the updater's - checks as it always has.
   async checkForUpdate(): Promise<UpdateStatus> {
+    const supported = await this.transport.invoke<boolean>('updates_supported').catch(() => undefined);
+    if (supported === false) return { state: 'unsupported', reason: 'package' };
     const { check } = await import('@tauri-apps/plugin-updater');
     const { getVersion } = await import('@tauri-apps/api/app');
     const currentVersion = await getVersion();
@@ -479,8 +488,8 @@ export function createTauriSelectionBoundary(transport: TauriTransport = default
       return path ? { path, displayName: displayName(path) } : undefined;
     },
     pickExistingModelFiles: async () => {
-      const modelPath = await openGgufDialog(transport, 'Choose the model GGUF', 'GGUF model files');
-      return modelPath ? { modelPath } : undefined;
+      const modelPaths = await openGgufDialog(transport, 'Choose the model GGUF files', 'GGUF model files');
+      return modelPaths.length ? { modelPaths } : undefined;
     },
     pickHistoryExportPath: async () => {
       const result = await transport.invoke<unknown>('plugin:dialog|save', {
@@ -662,16 +671,17 @@ async function openDialog(transport: TauriTransport, directory: boolean): Promis
   return stringPaths(result);
 }
 
-async function openGgufDialog(transport: TauriTransport, title: string, filterName: string): Promise<string | undefined> {
+/** Either local model, or both: each is recognized by its size. */
+async function openGgufDialog(transport: TauriTransport, title: string, filterName: string): Promise<string[]> {
   const result = await transport.invoke<unknown>('plugin:dialog|open', {
     options: {
-      multiple: false,
+      multiple: true,
       directory: false,
       title,
       filters: [{ name: filterName, extensions: ['gguf'] }],
     },
   });
-  return stringPaths(result)[0];
+  return stringPaths(result).slice(0, 2);
 }
 
 function stringPaths(value: unknown): string[] {

@@ -269,7 +269,7 @@ impl HostedModel {
 
 fn store_error(detail: String) -> CommandError {
     CommandError {
-        code: "SECRET_STORE_UNAVAILABLE".into(),
+        code: crate::secrets::STORE_UNAVAILABLE.into(),
         message: format!("the credential store could not be used ({detail})"),
     }
 }

@@ -17,8 +17,8 @@ use intern_core::{
 };
 use intern_engine::{
     AnalysisTelemetry, DateRole, DigestBudget, DocumentAnalysis, DocumentSource, Evidence,
-    ExtractProgress, ModelProposal, PageOrigin, ParserWarning, PartyRelation, ProposalStatus,
-    SourcePage, distill, engine::finish, fingerprint, validate,
+    ExtractProgress, ModelProposal, ModelReading, ModelTier, PageOrigin, ParserWarning,
+    PartyRelation, ProposalStatus, SourcePage, distill, engine::finish, fingerprint, validate,
 };
 use intern_intake::{
     SharePointDeployment,
@@ -6522,6 +6522,236 @@ fn reanalyze_file_changed_item_gives_fresh_proposal() {
         .approve(id, AGREEMENT_NAME, "An employment agreement.")
         .unwrap();
     assert_eq!(files.applies.lock().unwrap().as_slice(), &[id]);
+}
+
+/// The local runtime as the queue meets it while the accurate model is not
+/// there yet: every reading is the fast model's, marked provisional while
+/// `provisional` is set.
+struct TieredModel {
+    provisional: AtomicBool,
+    calls: AtomicUsize,
+}
+
+impl AnalyzerBoundary for TieredModel {
+    fn analyze(
+        &self,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ModelFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let provisional = self.provisional.load(Ordering::SeqCst);
+        let mut analysis =
+            analyze_locally(source, proposal(0.94, false), extension, existing_names);
+        analysis.telemetry.read_by = Some(ModelReading {
+            tier: if provisional {
+                ModelTier::Fast
+            } else {
+                ModelTier::Accurate
+            },
+            model_id: "test".into(),
+            display_name: "Test".into(),
+            escalated: None,
+            escalation_failed: false,
+            provisional,
+        });
+        Ok(analysis)
+    }
+}
+
+/// When the accurate model arrives, every reading the fast one made in its
+/// place is read again - unless a person has acted on it. An approval, a
+/// rename filed, a name kept, a rename taken back, and an approval still
+/// waiting for the queue are all a person's decision and are left alone; so
+/// is a reading the accurate model made, and a document whose file is gone.
+/// A document sent back to be read again has gone back, whatever happens
+/// to the fingerprint its earlier reading left: forgetting it cannot fail the
+/// pass, and the window always hears that documents moved.
+#[test]
+fn provisional_readings_go_back_and_are_announced_even_when_a_fingerprint_cannot_be_forgotten() {
+    let temp = tempdir().unwrap();
+    let paths = ["one.pdf", "two.pdf"].map(|name| source(temp.path(), name));
+    let worker = Arc::new(FakeWorker::new(
+        (0..4).map(|_| Ok(parsed(SIGNED_AGREEMENT))).collect(),
+    ));
+    let model = Arc::new(TieredModel {
+        provisional: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    let events = Arc::new(RecordingEvents::default());
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::clone(&model) as Arc<dyn AnalyzerBoundary>,
+        Arc::clone(&events) as Arc<dyn PipelineEventSink>,
+        settings,
+    )
+    .unwrap();
+    let ids = pipeline
+        .enqueue_files(&paths)
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    // Nothing can be forgotten: every delete from the table fails.
+    Connection::open(temp.path().join("queue.sqlite3"))
+        .unwrap()
+        .execute_batch("DROP TABLE fingerprints;")
+        .unwrap();
+    let before = events.changed.load(Ordering::SeqCst);
+
+    assert_eq!(pipeline.reanalyze_provisional().unwrap(), 2);
+    for id in &ids {
+        assert_eq!(status_of(&pipeline, *id), QueueStatus::Queued);
+    }
+    assert!(events.changed.load(Ordering::SeqCst) > before, "announced");
+}
+
+#[test]
+fn provisional_readings_nobody_acted_on_are_read_again_and_nothing_else_is() {
+    let temp = tempdir().unwrap();
+    let names = [
+        "untouched.pdf",
+        "approved.pdf",
+        "kept.pdf",
+        "undone.pdf",
+        "waiting.pdf",
+        "gone.pdf",
+        "unfiled.pdf",
+        "settled.pdf",
+    ];
+    let paths = names
+        .iter()
+        .map(|name| source(temp.path(), name))
+        .collect::<Vec<_>>();
+    let worker = Arc::new(FakeWorker::new(
+        (0..names.len() + 1)
+            .map(|_| Ok(parsed(SIGNED_AGREEMENT)))
+            .collect(),
+    ));
+    let model = Arc::new(TieredModel {
+        provisional: AtomicBool::new(true),
+        calls: AtomicUsize::new(0),
+    });
+    let settings = SettingsStore::new(temp.path().join("settings.json"));
+    settings.save(&AppSettings::default()).unwrap();
+    // The real file operations, so a rename is filed, kept and taken back
+    // the way it is in the app.
+    let pipeline = Pipeline::with_local_files(
+        temp.path().join("queue.sqlite3"),
+        worker,
+        Arc::clone(&model) as Arc<dyn AnalyzerBoundary>,
+        Arc::new(RecordingEvents::default()),
+        settings,
+    )
+    .unwrap();
+
+    let ids = pipeline
+        .enqueue_files(&paths[..7])
+        .unwrap()
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    pipeline.run_until_idle().unwrap();
+    // The accurate model reads the last one itself.
+    model.provisional.store(false, Ordering::SeqCst);
+    let settled = pipeline.enqueue_files(&paths[7..]).unwrap().remove(0).id;
+    pipeline.run_until_idle().unwrap();
+    let [untouched, approved, kept, undone, waiting, gone, unfiled] = ids[..] else {
+        panic!("seven documents")
+    };
+    for id in [
+        untouched, approved, kept, undone, waiting, gone, unfiled, settled,
+    ] {
+        assert_eq!(status_of(&pipeline, id), QueueStatus::Ready);
+    }
+
+    // Edited and approved, but the destination cannot be made - it is a
+    // file - so the filing fails and the document goes back to review with
+    // its approval taken back. The name the person gave is still theirs.
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, b"a file, not a folder").unwrap();
+    let store = SettingsStore::new(temp.path().join("settings.json"));
+    store
+        .save(&AppSettings {
+            destination: blocked.join("Filed").to_string_lossy().into_owned(),
+            ..AppSettings::default()
+        })
+        .unwrap();
+    let edited = "2026-03-01 Employment Agreement - edited by hand.pdf";
+    let _ = pipeline.approve(unfiled, edited, "Edited by hand.");
+    store.save(&AppSettings::default()).unwrap();
+    let demoted = item_of(&pipeline, unfiled);
+    assert_eq!(demoted.status, QueueStatus::NeedsReview);
+    let demoted = demoted.proposal.unwrap();
+    assert!(
+        !demoted.approved,
+        "the failed filing took the approval back"
+    );
+    assert_eq!(demoted.filename, edited);
+
+    pipeline
+        .approve(undone, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    pipeline.undo(undone).unwrap();
+    pipeline
+        .approve(approved, AGREEMENT_NAME, "An employment agreement.")
+        .unwrap();
+    assert_eq!(status_of(&pipeline, approved), QueueStatus::Completed);
+    pipeline.keep_original(kept).unwrap();
+    assert_eq!(status_of(&pipeline, kept), QueueStatus::Completed);
+    // Approved while the queue was busy: the approval waits on the record.
+    let database = Connection::open(temp.path().join("queue.sqlite3")).unwrap();
+    let stored: String = database
+        .query_row(
+            "SELECT proposal_json FROM proposals WHERE queue_item_id = ?1",
+            [waiting],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut record: Value = serde_json::from_str(&stored).unwrap();
+    record["approved"] = json!(true);
+    database
+        .execute(
+            "UPDATE proposals SET proposal_json = ?1 WHERE queue_item_id = ?2",
+            rusqlite::params![record.to_string(), waiting],
+        )
+        .unwrap();
+    std::fs::remove_file(&paths[5]).unwrap();
+    let before = [approved, kept, undone, waiting, gone, unfiled, settled]
+        .map(|id| (id, status_of(&pipeline, id)));
+    assert_eq!(status_of(&pipeline, undone), QueueStatus::NeedsReview);
+
+    assert_eq!(pipeline.reanalyze_provisional().unwrap(), 1);
+
+    let queued = item_of(&pipeline, untouched);
+    assert_eq!(queued.status, QueueStatus::Queued);
+    assert!(queued.proposal.is_none(), "the stand-in reading is gone");
+    for (id, status) in before {
+        assert_eq!(status_of(&pipeline, id), status, "item {id} was left alone");
+    }
+    assert!(item_of(&pipeline, waiting).proposal.unwrap().approved);
+    let kept_edit = item_of(&pipeline, unfiled).proposal.unwrap();
+    assert_eq!(
+        (kept_edit.filename.as_str(), kept_edit.description.as_str()),
+        (edited, "Edited by hand."),
+        "the person's edit survives the re-read"
+    );
+
+    let calls = model.calls.load(Ordering::SeqCst);
+    pipeline.run_until_idle().unwrap();
+    assert_eq!(model.calls.load(Ordering::SeqCst), calls + 1);
+    let reread = item_of(&pipeline, untouched);
+    assert_eq!(reread.status, QueueStatus::Ready);
+    let reading = reread.proposal.unwrap().analysis.telemetry.read_by.unwrap();
+    assert_eq!(reading.tier, ModelTier::Accurate);
+    assert!(!reading.provisional);
+
+    // Nothing provisional and untouched is left.
+    assert_eq!(pipeline.reanalyze_provisional().unwrap(), 0);
 }
 
 #[test]

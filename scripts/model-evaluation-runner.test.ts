@@ -18,7 +18,13 @@ it('scores the corpus with the exact model the app installs, text-only', async (
   }
   expect(script).toContain('WorkingSet64');
   expect(script).toContain('docs/qa/model-evaluation.json');
-  expect(manifest.files.some((file: { role: string }) => file.role === 'model')).toBe(true);
+  // One text model per tier, and the runner scores one of them, asked the
+  // way the app asks it.
+  for (const model of manifest.models as { files: { role: string }[] }[]) {
+    expect(model.files.filter((file) => file.role === 'model')).toHaveLength(1);
+  }
+  expect(script).toContain('$_.tier -eq $Tier');
+  expect(script).toContain('--prompt-profile');
 });
 
 it('the evaluator drives the shipping extraction, distillation, and validation path', async () => {

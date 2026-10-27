@@ -14,6 +14,7 @@ use crate::client::{EvidenceHandles, ModelRequest};
 use crate::distill::DocumentDigest;
 use crate::domain::{DateRole, PartyRole};
 use crate::index::EvidenceIndex;
+use crate::profile::PromptProfile;
 use crate::retrieve::{EvidenceContext, IdStyle, Tier};
 
 /// Grammar for the reply. Field order is fixed so the model always reasons
@@ -222,6 +223,7 @@ pub fn build_evidence_request(index: &EvidenceIndex, context: &EvidenceContext) 
         system: Some(evidence_system()),
         grammar: Some(grammar),
         evidence: Some(EvidenceHandles::new(handles)),
+        profile: None,
     }
 }
 
@@ -397,6 +399,12 @@ fn common_prefix<'a>(words: &[&'a str]) -> &'a str {
 /// instructions and the grammar's shape - for a recording to say which
 /// prompt its replies answer.
 pub fn evidence_prompt_version() -> String {
+    evidence_prompt_version_with(None)
+}
+
+/// [`evidence_prompt_version`] for requests asked with `profile`. Without
+/// one it is the version every recording before profiles carries.
+pub fn evidence_prompt_version_with(profile: Option<PromptProfile>) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(evidence_system().as_bytes());
@@ -406,6 +414,10 @@ pub fn evidence_prompt_version() -> String {
     ] {
         hasher.update([0_u8]);
         hasher.update(evidence_grammar(handles, style).as_bytes());
+    }
+    if let Some(profile) = profile {
+        hasher.update([0_u8, 3_u8]);
+        hasher.update(profile.identity().as_bytes());
     }
     format!("{:x}", hasher.finalize())[..12].to_owned()
 }
@@ -889,6 +901,19 @@ mod tests {
         #[test]
         fn the_recordings_of_record_answer_this_prompt() {
             assert_eq!(evidence_prompt_version(), "4425663a8a9e");
+            assert_eq!(evidence_prompt_version_with(None), "4425663a8a9e");
+        }
+
+        /// A recording made with a profile says so in its prompt version,
+        /// and one made without stays current.
+        #[test]
+        fn a_profile_is_a_different_prompt_version() {
+            for profile in PromptProfile::ALL {
+                assert_ne!(
+                    evidence_prompt_version_with(Some(profile)),
+                    evidence_prompt_version()
+                );
+            }
         }
     }
 }

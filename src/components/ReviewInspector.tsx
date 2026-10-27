@@ -8,7 +8,7 @@ import { StatusCell } from './StatusCell';
 import { isUnreadable, itemActions, keptOriginal, withoutReviewPrefix } from '../features/review/actions';
 import type { ReviewInspectorHandle } from '../features/review/useReviewShortcuts';
 import { filenameExtension, joinFilename, leadingDate, splitFilename, validateFilename, withLeadingDate } from '../lib/filenames';
-import type { QueueItem } from '../types';
+import type { ModelReading, QueueItem } from '../types';
 
 /** What the inspector says when a name has no date; the backend says the same in DATE_REQUIRED. */
 export const DATE_REQUIRED_MESSAGE = 'Every rename needs a date. Start the filename with the document\'s date as YYYY-MM-DD.';
@@ -291,6 +291,13 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
         </div>
       </div>}
       {item.confidence !== undefined && <p className={`confidence-readout confidence ${item.status}`}><span className="field-label">Confidence</span><ConfidenceMeter value={item.confidence} status={item.status} variant="panel" /></p>}
+      {/*
+        Which local model read it, in a quiet line: worth knowing when two
+        models can, and the reason a reading may change by itself - one the
+        fast model made in the accurate one's place is read again once the
+        accurate one can, unless someone acts on it first.
+      */}
+      {item.readBy && <p className="check-hint read-by" aria-label="Read by">{readByLine(item.readBy, !item.approved)}</p>}
       <label>Description<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
     </section>}
     {/*
@@ -349,4 +356,13 @@ export function ReviewInspector({ item, id, drawer, busy, ref, position, onNext,
       </>}
     </div>
   </aside>;
+}
+
+/** "Read by Qwen3.5 2B", and anything a reviewer should know about that reading. */
+export function readByLine(reading: ModelReading, pending: boolean): string {
+  const read = `Read by ${reading.displayName}`;
+  if (reading.escalationFailed) return `${read}. The accurate model could not read it again.`;
+  if (reading.escalated) return `${read}, after a second look.`;
+  if (reading.provisional && pending) return `${read}. Provisional — will be re-read by the accurate model.`;
+  return read;
 }

@@ -35,6 +35,7 @@ import { isParked, itemActions, keptOriginal, nextUndecided, undecidedOrder } fr
 import { useReviewShortcuts } from './features/review/useReviewShortcuts';
 import type { ReviewInspectorHandle } from './features/review/useReviewShortcuts';
 import { modelReady, useModelSetup } from './features/setup/useModelSetup';
+import { accuracyStatus } from './features/settings/LocalModel';
 import type { AddReport, AppSettings, QueueItem, QueueView, SetupState } from './types';
 
 type Gate =
@@ -804,6 +805,11 @@ function MainApp({ bridge, selection, demo, managed, pendingSettings, initialSet
       {pipelineError && <div className="note note--failed" role="alert" aria-label="Queue stopped">
         <p>The queue stopped taking new work. {describeQueueStop(pipelineError)}</p>
       </div>}
+      {/*
+        The accurate model arriving behind the window: one quiet line, nothing
+        to decide, gone once it is in place. Settings has the controls.
+      */}
+      {settings.modelSource !== 'hosted' && accuracyStatus(model.setup) && <p className="model-status" role="status" aria-label="Local model status">{accuracyStatus(model.setup)}</p>}
       {/* A note, not a second live region: the status above already reads it out. */}
       {skippedNotice && <div className="note note--review" role="note" aria-label="Files not added">
         <p>{skippedNotice}</p>

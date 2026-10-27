@@ -2,14 +2,14 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import type { ExistingModelFiles, SelectionBoundary } from '../../lib/bridge';
-import { PINNED_MODEL_BYTES, createInMemoryBridge } from '../../lib/inMemoryBridge';
+import { ACCURATE_MODEL_BYTES, FAST_MODEL_BYTES, PINNED_MODEL_BYTES, createInMemoryBridge } from '../../lib/inMemoryBridge';
 import type { SetupState } from '../../types';
 // The manifest the installer ships and the backend reads. Importing the real
 // file is the point: it is what makes the assertion below a drift guard rather
 // than a second copy of the same number.
 import modelManifest from '../../../src-tauri/resources/model-manifest.json';
 
-const modelFiles = { modelPath: 'C:\\Models\\intern-q4.gguf' };
+const modelFiles = { modelPaths: ['C:\\Models\\Ternary-Bonsai-2-2B-PQ2_0.gguf'] };
 
 function setupSelection(pickExistingModelFiles: () => Promise<ExistingModelFiles | undefined>): SelectionBoundary {
   return {
@@ -57,40 +57,44 @@ describe('setup and queue controls', () => {
       const bridge = { ...createInMemoryBridge(), getSetup: async () => ({ ...setup }), subscribeSetup: async (next: typeof listener) => { listener = next; return () => {}; } };
       vi.setSystemTime(0);
       render(<App bridge={bridge} />);
-      expect(await screen.findByText('363 MiB of 1.19 GiB · 29%')).toBeVisible();
+      expect(await screen.findByText('363 MiB of 493 MiB · 73%')).toBeVisible();
       // The first state can show before the screen has subscribed to the
       // ones after it; on a busy runner that left `listener` unset.
       await vi.waitFor(() => expect(listener).toBeTypeOf('function'));
 
-      // Three megabytes a second, by the samples, with 828 MiB still to come.
-      for (const [at, mib] of [[5_000, 378], [10_000, 393]] as const) {
+      // A megabyte a second, by the samples, with 120 MiB still to come.
+      for (const [at, mib] of [[5_000, 368], [10_000, 373]] as const) {
         vi.setSystemTime(at);
         setup = { ...setup, downloadedBytes: mib * MiB };
         act(() => listener({ ...setup }));
       }
 
-      expect(await screen.findByText('393 MiB of 1.19 GiB · 32% · about 5 min left')).toBeVisible();
+      expect(await screen.findByText('373 MiB of 493 MiB · 75% · about 2 min left')).toBeVisible();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('quotes the download size the manifest will actually fetch, not a hardcoded one', async () => {
-    const total = modelManifest.files.reduce((sum, file) => sum + file.size, 0);
+  it('quotes the download sizes the manifest will actually fetch, not hardcoded ones', async () => {
+    const size = (tier: string) => modelManifest.models.find((model) => model.tier === tier)?.files.reduce((sum, file) => sum + file.size, 0);
 
     // The setup screen is the first thing a new user sees, and it used to
     // announce a hardcoded "approximately 3.27 GB" - a model plus a vision
-    // projector from an earlier design - for a download that is one 1.19 GiB
-    // file. Both halves are pinned here: the demo total must equal the shipped
-    // manifest, and the screen must render whatever total it is given.
-    expect(PINNED_MODEL_BYTES).toBe(total);
+    // projector from an earlier design. Both halves are pinned here: the demo
+    // sizes must equal the shipped manifest, and the screen must render
+    // whatever sizes it is given - the fast model's, which is all anyone
+    // waits for, and the accurate one's that follows behind the window.
+    expect(FAST_MODEL_BYTES).toBe(size('fast'));
+    expect(ACCURATE_MODEL_BYTES).toBe(size('accurate'));
+    expect(PINNED_MODEL_BYTES).toBe(FAST_MODEL_BYTES);
 
     render(<App
-      bridge={createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: total } })}
+      bridge={createInMemoryBridge({ setup: { state: 'required', downloadedBytes: 0, totalBytes: FAST_MODEL_BYTES } })}
       selection={setupSelection(async () => undefined)}
     />);
 
-    expect(await screen.findByText(/Download 1\.19 GiB of model files/i)).toBeVisible();
+    expect(await screen.findByText(/Download the quick model, Bonsai 2 2B \(493 MiB\), to start naming documents/i)).toBeVisible();
+    expect(screen.getByText(/Qwen3\.5 2B \(1\.19 GiB\), the accurate model, then follows in the background while you work\. Until it arrives, every name waits for you to check it\./i)).toBeVisible();
     expect(screen.queryByText(/3\.27 GB/i)).not.toBeInTheDocument();
   });
 
@@ -238,7 +242,7 @@ describe('setup and queue controls', () => {
   });
 
   it.each([
-    ['MODEL_FILE_INVALID', /did not match the model Intern pins/i],
+    ['MODEL_FILE_INVALID', /did not match a model Intern pins/i],
     ['MODEL_SELF_TEST_FAILED', /local self-test failed/i],
     ['MODEL_SERVER_START_FAILED', /runtime would not start on this computer/i],
     ['MODEL_SERVER_UNHEALTHY', /did not become ready in time/i],
@@ -264,12 +268,20 @@ describe('setup and queue controls', () => {
   });
 
   // These messages previously told a user to supply "Q4 or Q8 model and mmproj
-  // GGUF files" and reported an "image self-test". This build pins exactly one
-  // file and starts the server with --no-mmproj, so that advice named files that
-  // do not exist. The names it does use must stay tied to the shipped manifest.
+  // GGUF files" and reported an "image self-test". This build pins one file
+  // per model and starts the server with --no-mmproj, so that advice named
+  // files that do not exist. The names it does use must stay tied to the
+  // shipped manifest.
   it('never asks for model files this build does not use', async () => {
-    const names = modelManifest.files.map((file) => file.name);
-    expect(names).toEqual(['Qwen3.5-2B-Q4_K_M.gguf']);
+    const names = modelManifest.models.flatMap((model) => model.files.map((file) => file.name));
+    expect(names).toEqual(['Ternary-Bonsai-2-2B-PQ2_0.gguf', 'Qwen3.5-2B-Q4_K_M.gguf']);
+    const { unmount: done } = render(<App
+      bridge={createInMemoryBridge({ setup: { state: 'failed', downloadedBytes: 40, totalBytes: PINNED_MODEL_BYTES, error: 'MODEL_FILE_INVALID' } })}
+      selection={setupSelection(async () => modelFiles)}
+    />);
+    const named = await screen.findByRole('alert');
+    for (const name of names) expect(named).toHaveTextContent(name);
+    done();
 
     for (const error of ['MODEL_FILE_INVALID', 'MODEL_SELF_TEST_FAILED']) {
       const { unmount } = render(<App

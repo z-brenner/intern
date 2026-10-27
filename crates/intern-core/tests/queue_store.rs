@@ -1497,6 +1497,58 @@ fn requeue_for_analysis_resets_and_rekeys() {
     assert_eq!(again.source_hash, "after-signing");
 }
 
+/// The conditional requeue asks its question of the stored proposal inside
+/// the transaction that moves the item, and a no moves nothing.
+#[test]
+fn requeue_for_analysis_if_moves_only_what_the_proposal_still_allows() {
+    let temp = TempDir::new().unwrap();
+    let database = temp.path().join("queue.sqlite3");
+    let db = store(&temp);
+    let item = db.enqueue(Path::new("C:/scans/fast.pdf"), "fast").unwrap();
+    assert_eq!(db.claim_next().unwrap().unwrap().id, item.id);
+    db.transition(
+        item.id,
+        QueueStatus::Extracting,
+        QueueStatus::Analyzing,
+        None,
+    )
+    .unwrap();
+    db.transition(item.id, QueueStatus::Analyzing, QueueStatus::Ready, None)
+        .unwrap();
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "INSERT INTO proposals(queue_item_id, proposal_json, created_at)
+             VALUES (?1, '{\"approved\":true}', 0)",
+            [item.id],
+        )
+        .unwrap();
+
+    let mut seen = None;
+    let declined = db
+        .requeue_for_analysis_if(item.id, QueueStatus::Ready, Some("new"), |stored| {
+            seen = stored.map(str::to_owned);
+            false
+        })
+        .unwrap();
+    assert!(declined.is_none());
+    assert_eq!(seen.as_deref(), Some("{\"approved\":true}"));
+    assert_eq!(proposal_rows(&database, item.id), 1, "nothing moved");
+    assert_eq!(
+        db.enqueue(Path::new("C:/scans/fast.pdf"), "fast")
+            .unwrap()
+            .status,
+        QueueStatus::Ready
+    );
+
+    let moved = db
+        .requeue_for_analysis_if(item.id, QueueStatus::Ready, None, |stored| stored.is_some())
+        .unwrap()
+        .expect("allowed");
+    assert_eq!(moved.status, QueueStatus::Queued);
+    assert_eq!(proposal_rows(&database, item.id), 0);
+}
+
 #[test]
 fn requeue_refused_with_unsettled_receipt() {
     let temp = TempDir::new().unwrap();

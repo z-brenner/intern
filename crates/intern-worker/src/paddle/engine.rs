@@ -74,6 +74,17 @@ struct Sessions {
     detection: Session,
     recognition: Session,
     orientation: Option<Session>,
+    /// The second reading's own recognizer, where one is configured.
+    reread_recognition: Option<Session>,
+}
+
+/// Which recognizer reads a batch of lines.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reader {
+    /// The page's recognizer.
+    Page,
+    /// The second reading's, which is the page's unless one is configured.
+    Reread,
 }
 
 struct PoolState<T> {
@@ -211,6 +222,8 @@ pub struct PaddleOcr {
     assets: PaddleAssets,
     config: PaddleConfig,
     dictionary: Dictionary,
+    /// The second reading's recognizer's dictionary, where it has its own.
+    reread_dictionary: Option<Dictionary>,
     has_orientation: bool,
     pool: SessionPool,
 }
@@ -292,7 +305,16 @@ impl PaddleOcr {
         let has_orientation = assets.orientation_model.is_file();
         let engine = Self {
             pool: SessionPool::new(config.workers),
-            dictionary: Dictionary::from_lines(RECOGNITION_DICTIONARY),
+            dictionary: Dictionary::from_lines(
+                config
+                    .recognition_dictionary
+                    .as_deref()
+                    .unwrap_or(RECOGNITION_DICTIONARY),
+            ),
+            reread_dictionary: config
+                .reread_recognizer
+                .as_ref()
+                .map(|(_, dictionary)| Dictionary::from_lines(dictionary)),
             assets,
             config,
             has_orientation,
@@ -326,6 +348,10 @@ impl PaddleOcr {
                 Some(session(&self.assets.orientation_model, threads)?)
             } else {
                 None
+            },
+            reread_recognition: match &self.config.reread_recognizer {
+                Some((model, _)) => Some(session(model, threads)?),
+                None => None,
             },
         })
     }
@@ -405,11 +431,13 @@ impl PaddleOcr {
         &self,
         sessions: &mut Sessions,
         crops: &[LineCrop],
+        reader: Reader,
         cancel: &CancellationToken,
     ) -> Result<Vec<DecodedLine>, ExtractionError> {
         let widths: Vec<u32> = crops.iter().map(|crop| crop.width).collect();
         self.recognize_lines(
             sessions,
+            reader,
             &widths,
             |index| Cow::Borrowed(&crops[index]),
             cancel,
@@ -423,10 +451,18 @@ impl PaddleOcr {
     fn recognize_lines<'c>(
         &self,
         sessions: &mut Sessions,
+        reader: Reader,
         widths: &[u32],
         crop: impl Fn(usize) -> Cow<'c, LineCrop>,
         cancel: &CancellationToken,
     ) -> Result<Vec<DecodedLine>, ExtractionError> {
+        let (session, dictionary) = match (reader, sessions.reread_recognition.as_mut()) {
+            (Reader::Reread, Some(session)) => (
+                session,
+                self.reread_dictionary.as_ref().unwrap_or(&self.dictionary),
+            ),
+            _ => (&mut sessions.recognition, &self.dictionary),
+        };
         let mut decoded = vec![DecodedLine::default(); widths.len()];
         // Lines of similar length share a batch, so little of it is padding.
         let mut order: Vec<usize> = (0..widths.len()).collect();
@@ -450,10 +486,7 @@ impl PaddleOcr {
                         input.as_slice(),
                     ))
                     .map_err(run_error)?;
-                    let outputs = sessions
-                        .recognition
-                        .run(ort::inputs![tensor])
-                        .map_err(run_error)?;
+                    let outputs = session.run(ort::inputs![tensor]).map_err(run_error)?;
                     let (shape, probabilities) =
                         outputs[0].try_extract_tensor::<f32>().map_err(run_error)?;
                     let (steps, classes) = match shape.as_ref() {
@@ -462,17 +495,17 @@ impl PaddleOcr {
                             return Err(run_error(format!("recognition output shape {other:?}")));
                         }
                     };
-                    if classes != self.dictionary.classes() {
+                    if classes != dictionary.classes() {
                         return Err(run_error(format!(
                             "recognizer read {classes} classes for a {}-class dictionary",
-                            self.dictionary.classes()
+                            dictionary.classes()
                         )));
                     }
                     Ok((0..chunk.len())
                         .map(|item| {
                             let rows = &probabilities
                                 [item * steps * classes..(item + 1) * steps * classes];
-                            greedy_decode(rows, steps, classes, &self.dictionary).trimmed()
+                            greedy_decode(rows, steps, classes, dictionary).trimmed()
                         })
                         .collect())
                 },
@@ -602,6 +635,7 @@ impl PaddleOcr {
             .collect();
         let mut decoded = self.recognize_lines(
             sessions,
+            Reader::Page,
             &widths,
             |index| Cow::Owned(crop_line(&frame, &quads[index], RECOGNITION_HEIGHT)),
             cancel,
@@ -677,7 +711,7 @@ impl PaddleOcr {
                     .collect()
             },
         );
-        let rereads = self.recognize_crops(sessions, &crops, cancel)?;
+        let rereads = self.recognize_crops(sessions, &crops, Reader::Reread, cancel)?;
         let per_line = settings.preprocessings.len();
         for (position, &index) in chosen.iter().enumerate() {
             let alternatives = &rereads[position * per_line..(position + 1) * per_line];

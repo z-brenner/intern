@@ -5,12 +5,12 @@ use intern_engine::{
     PartyRelation, distill, engine::finish, validate,
 };
 use intern_engine::{
-    ModelFile, ModelManifest, ModelRole,
+    ModelFile, ModelManifest, ModelRole, ModelTier, PromptProfile, TierModel,
     download::{CancellationToken, DISK_RESERVE_BYTES, DiskSpace, SetupStage},
     error::EngineErrorCode as ModelErrorCode,
     setup::{
-        ExistingModelSelection, SetupOperationGate, install_existing_model_files, semantic_probes,
-        validate_semantic_probe,
+        ExistingModelSelection, SetupOperationGate, install_existing_model_files,
+        match_existing_model_files, semantic_probes, validate_semantic_probe,
     },
 };
 use tempfile::tempdir;
@@ -24,18 +24,42 @@ impl DiskSpace for FixedDisk {
     }
 }
 
+/// The bytes each tier's test model holds; their digests were computed once
+/// and pasted in. The two differ in length, as the pinned models do.
+const FAST_BYTES: &[u8] = b"model-bytes";
+const FAST_SHA256: &str = "357e5d6fafa34d27360fec24b4326d3534905e33c6acdee60198fb078b7b79e5";
+const ACCURATE_BYTES: &[u8] = b"the pinned model bytes";
+const ACCURATE_SHA256: &str = "b1f81de2183585b9793c38b27cdd46842ab24247c628b6fbbda1200b9a25ce99";
+
+fn tier(tier: ModelTier, name: &str, bytes: &[u8], sha256: &str) -> TierModel {
+    TierModel {
+        tier,
+        model_id: format!("test-{}", tier.as_str()),
+        display_name: format!("Test {}", tier.as_str()),
+        prompt_profile: Some(PromptProfile::Bonsai2),
+        files: vec![ModelFile {
+            name: name.into(),
+            role: ModelRole::Model,
+            url: format!("https://example.invalid/0123456789abcdef0123456789abcdef01234567/{name}"),
+            size: bytes.len() as u64,
+            sha256: sha256.into(),
+        }],
+    }
+}
+
 fn manifest() -> ModelManifest {
     ModelManifest {
-        schema_version: 2,
-        model_id: "test-model".into(),
+        schema_version: 3,
         served_model_name: "intern-local".into(),
-        files: vec![ModelFile {
-            name: "model.gguf".into(),
-            role: ModelRole::Model,
-            url: "https://example.invalid/model.gguf".into(),
-            size: 11,
-            sha256: "357e5d6fafa34d27360fec24b4326d3534905e33c6acdee60198fb078b7b79e5".into(),
-        }],
+        models: vec![
+            tier(ModelTier::Fast, "fast.gguf", FAST_BYTES, FAST_SHA256),
+            tier(
+                ModelTier::Accurate,
+                "accurate.gguf",
+                ACCURATE_BYTES,
+                ACCURATE_SHA256,
+            ),
+        ],
     }
 }
 
@@ -73,29 +97,127 @@ fn cancel_after_setup_succeeded_is_a_no_op() {
 fn an_existing_model_file_is_validated_and_published_with_progress() {
     let temp = tempdir().unwrap();
     let model = temp.path().join("selected-model.gguf");
-    fs::write(&model, b"model-bytes").unwrap();
+    fs::write(&model, FAST_BYTES).unwrap();
     let destination = temp.path().join("installed");
     let progress = Mutex::new(Vec::new());
+    let mut heard = Vec::new();
 
-    let total = install_existing_model_files(
+    let tiers = install_existing_model_files(
         &manifest(),
-        &ExistingModelSelection { model_path: model },
+        &ExistingModelSelection {
+            model_paths: vec![model],
+        },
         &destination,
         &FixedDisk(DISK_RESERVE_BYTES + 100),
         &CancellationToken::new(),
         |event| progress.lock().unwrap().push(event),
+        |tier| heard.push(tier),
     )
     .unwrap();
 
-    assert_eq!(total, 11);
-    assert_eq!(
-        fs::read(destination.join("model.gguf")).unwrap(),
-        b"model-bytes"
-    );
+    assert_eq!(tiers, [ModelTier::Fast]);
+    assert_eq!(heard, [ModelTier::Fast]);
+    assert_eq!(fs::read(destination.join("fast.gguf")).unwrap(), FAST_BYTES);
+    assert!(!destination.join("accurate.gguf").exists());
     let events = progress.into_inner().unwrap();
     assert_eq!(events.last().unwrap().stage, SetupStage::Complete);
     assert_eq!(events.last().unwrap().completed_bytes, 11);
     assert_eq!(events.last().unwrap().total_bytes, 11);
+}
+
+/// Both tiers chosen at once, in either order: each lands under its own
+/// pinned name, the fast one first, and the progress covers both.
+#[test]
+fn both_tiers_install_from_files_chosen_in_any_order() {
+    let temp = tempdir().unwrap();
+    let fast = temp.path().join("small.gguf");
+    let accurate = temp.path().join("large.gguf");
+    fs::write(&fast, FAST_BYTES).unwrap();
+    fs::write(&accurate, ACCURATE_BYTES).unwrap();
+    let destination = temp.path().join("installed");
+    let progress = Mutex::new(Vec::new());
+
+    let tiers = install_existing_model_files(
+        &manifest(),
+        &ExistingModelSelection {
+            model_paths: vec![accurate, fast],
+        },
+        &destination,
+        &FixedDisk(u64::MAX),
+        &CancellationToken::new(),
+        |event| progress.lock().unwrap().push(event),
+        |_| {},
+    )
+    .unwrap();
+
+    assert_eq!(tiers, [ModelTier::Fast, ModelTier::Accurate]);
+    assert_eq!(fs::read(destination.join("fast.gguf")).unwrap(), FAST_BYTES);
+    assert_eq!(
+        fs::read(destination.join("accurate.gguf")).unwrap(),
+        ACCURATE_BYTES
+    );
+    let events = progress.into_inner().unwrap();
+    let total = (FAST_BYTES.len() + ACCURATE_BYTES.len()) as u64;
+    assert!(events.iter().all(|event| event.total_bytes == total));
+    assert_eq!(events.last().unwrap().completed_bytes, total);
+}
+
+/// A file is recognized by its length and accepted only by its digest. One
+/// that matches no pinned length, two for the same tier, or an empty choice
+/// are refused before anything is copied; one of the right length and the
+/// wrong bytes is refused by its digest, and the tier before it stays
+/// installed.
+#[test]
+fn a_file_that_is_not_a_pinned_model_is_refused() {
+    let temp = tempdir().unwrap();
+    let manifest = manifest();
+    let unknown = temp.path().join("other.gguf");
+    fs::write(&unknown, b"not one of the pinned models").unwrap();
+    let fast = temp.path().join("small.gguf");
+    fs::write(&fast, FAST_BYTES).unwrap();
+    let fast_again = temp.path().join("small-copy.gguf");
+    fs::write(&fast_again, FAST_BYTES).unwrap();
+    let missing = temp.path().join("missing.gguf");
+
+    for paths in [
+        vec![],
+        vec![unknown.clone()],
+        vec![fast.clone(), fast_again],
+        vec![missing],
+        vec![temp.path().to_path_buf()],
+        vec![fast.clone(), unknown.clone(), unknown],
+    ] {
+        let selection = ExistingModelSelection { model_paths: paths };
+        assert_eq!(
+            match_existing_model_files(&manifest, &selection)
+                .unwrap_err()
+                .code(),
+            ModelErrorCode::ModelFileInvalid,
+            "{selection:?}"
+        );
+    }
+
+    // The accurate tier's length, other bytes.
+    let forged = temp.path().join("forged.gguf");
+    fs::write(&forged, b"the pinned model bytez").unwrap();
+    let destination = temp.path().join("installed");
+    let mut heard = Vec::new();
+    let error = install_existing_model_files(
+        &manifest,
+        &ExistingModelSelection {
+            model_paths: vec![forged, fast],
+        },
+        &destination,
+        &FixedDisk(u64::MAX),
+        &CancellationToken::new(),
+        |_| {},
+        |tier| heard.push(tier),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), ModelErrorCode::ModelFileInvalid);
+    assert_eq!(heard, [ModelTier::Fast], "the fast tier went in first");
+    assert!(destination.join("fast.gguf").is_file());
+    assert!(!destination.join("accurate.gguf").exists());
 }
 
 /// Canceling must leave nothing half-installed, and a second attempt must
@@ -105,9 +227,11 @@ fn an_existing_model_file_is_validated_and_published_with_progress() {
 fn a_canceled_install_publishes_nothing_and_can_be_retried() {
     let temp = tempdir().unwrap();
     let model = temp.path().join("selected-model.gguf");
-    fs::write(&model, b"model-bytes").unwrap();
+    fs::write(&model, FAST_BYTES).unwrap();
     let destination = temp.path().join("installed");
-    let selection = ExistingModelSelection { model_path: model };
+    let selection = ExistingModelSelection {
+        model_paths: vec![model],
+    };
     let cancellation = CancellationToken::new();
     cancellation.cancel();
 
@@ -118,11 +242,12 @@ fn a_canceled_install_publishes_nothing_and_can_be_retried() {
         &FixedDisk(u64::MAX),
         &cancellation,
         |_| {},
+        |_| {},
     )
     .unwrap_err();
 
     assert_eq!(error.code(), ModelErrorCode::DownloadCanceled);
-    assert!(!destination.join("model.gguf").exists());
+    assert!(!destination.join("fast.gguf").exists());
 
     install_existing_model_files(
         &manifest(),
@@ -131,12 +256,17 @@ fn a_canceled_install_publishes_nothing_and_can_be_retried() {
         &FixedDisk(u64::MAX),
         &CancellationToken::new(),
         |_| {},
+        |_| {},
     )
     .unwrap();
-    assert_eq!(
-        fs::read(destination.join("model.gguf")).unwrap(),
-        b"model-bytes"
-    );
+    assert_eq!(fs::read(destination.join("fast.gguf")).unwrap(), FAST_BYTES);
+}
+
+#[test]
+fn the_test_manifest_is_a_valid_tiered_manifest() {
+    manifest()
+        .validate()
+        .expect("the helper builds what Intern accepts");
 }
 
 fn analysis(

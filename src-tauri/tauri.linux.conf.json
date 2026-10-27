@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb"],
+    "shortDescription": "Reads a document and tells you what to call it",
+    "externalBin": [],
+    "resources": {
+      "resources/tessdata/*.traineddata": null,
+      "resources/native/pdfium/*.dll": null,
+      "resources/native/sidecars/*.dll": null,
+      "resources/ocr-models/*.onnx": null,
+      "resources/runtime/": "runtime/"
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libgomp1", "libssl3t64 | libssl3", "tesseract-ocr"],
+        "desktopTemplate": "linux/intern.desktop"
+      }
+    }
+  }
+}

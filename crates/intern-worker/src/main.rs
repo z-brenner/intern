@@ -66,9 +66,35 @@ fn select_ocr_backend(
         ));
     }
     Ok(Box::new(ParallelTesseract(TesseractOcr::new(
-        runtime.join("tesseract.exe"),
+        tesseract_executable(runtime, std::env::var_os("PATH")),
         runtime.join("tessdata"),
     )?)))
+}
+
+/// The Tesseract the worker reads scans with when PP-OCR is not there.
+///
+/// The Windows package ships its own build beside the worker. A Linux
+/// package uses the distribution's (`tesseract-ocr`, a dependency of the
+/// package), found on `PATH` - building and carrying Tesseract's image
+/// library closure would only duplicate what the distribution maintains and
+/// patches. A runtime directory that brings its own still wins, so a pinned
+/// build can be dropped in. Either way the traineddata is the runtime's own
+/// pinned `tessdata`.
+fn tesseract_executable(runtime: &Path, search_path: Option<std::ffi::OsString>) -> PathBuf {
+    let bundled = runtime.join(if cfg!(windows) {
+        "tesseract.exe"
+    } else {
+        "tesseract"
+    });
+    if cfg!(windows) || bundled.is_file() {
+        return bundled;
+    }
+    search_path
+        .iter()
+        .flat_map(|path| std::env::split_paths(path))
+        .map(|directory| directory.join("tesseract"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or(bundled)
 }
 
 #[cfg(feature = "onnx-ocr")]
@@ -417,6 +443,33 @@ mod tests {
         if cfg!(feature = "native-tesseract") {
             assert!(selected.is_ok());
         }
+    }
+
+    /// Off Windows a runtime directory's own Tesseract is used when it has
+    /// one, and otherwise the distribution's on `PATH`; with neither, the
+    /// runtime's path is kept, so the error names where it was expected.
+    #[cfg(not(windows))]
+    #[test]
+    fn tesseract_is_the_runtimes_own_then_the_one_on_path() {
+        let runtime = tempfile::tempdir().unwrap();
+        let system = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let installed = system.path().join("tesseract");
+        std::fs::write(&installed, b"").unwrap();
+        let path = std::env::join_paths([elsewhere.path(), system.path()]).unwrap();
+
+        assert_eq!(
+            tesseract_executable(runtime.path(), Some(path.clone())),
+            installed
+        );
+        assert_eq!(
+            tesseract_executable(runtime.path(), None),
+            runtime.path().join("tesseract")
+        );
+
+        let bundled = runtime.path().join("tesseract");
+        std::fs::write(&bundled, b"").unwrap();
+        assert_eq!(tesseract_executable(runtime.path(), Some(path)), bundled);
     }
 
     /// The admission list and the router are two lists that must name the

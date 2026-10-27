@@ -14,6 +14,12 @@ path = "src/main.rs"
 name = "route_calibration"
 required-features = ["native-pdfium"]
 
+# Renders InternBench's scanned pages and reads them with one OCR
+# configuration, for measuring engines (docs/ocr.md).
+[[example]]
+name = "ocr_eval"
+required-features = ["windows-native"]
+
 [features]
 default = []
 native-pdfium = ["dep:pdfium-render"]

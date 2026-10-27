@@ -27,6 +27,35 @@ const MAX_SPAWN_ATTEMPTS: usize = 3;
 /// The server's standard error, under the log directory when one is set.
 const SERVER_LOG: &str = "llama-server.log";
 
+/// Flags every local model is launched with, each measured end to end on
+/// Intern's own requests in the 77-document evaluation
+/// (`bench/reports/bonsai-linux-cpu-2026-10-27`, Prism `b10826`, which has
+/// every one of them):
+///
+/// * `--cache-ram 0`: llama-server otherwise keeps every finished prompt in
+///   an 8 GiB host-memory cache. Intern's prompts never repeat - only the
+///   shared instruction prefix does, and the slot reuses that without the
+///   cache - so the server grew by 80-280 MB a document, toward 10 GB over a
+///   long background session. Off, the replies were identical (12 of 12 for
+///   each model), the prefix was still reused, and the time rose 1-2%.
+/// * `-ub 256`: on the AVX2-only CPU code path most laptops load, documents
+///   took 13-14% less time than with the default 512, with the same replies;
+///   on AVX-512 it made no difference.
+/// * `--prio -1 --poll 0`: low thread priority, and threads that sleep
+///   rather than spin while waiting for work. Intern reads in the background,
+///   and together these cost nothing measurable (-2% to +3% against the
+///   default flags, within the run-to-run noise) with identical replies.
+pub const MEASURED_FLAGS: &[&str] = &[
+    "--cache-ram",
+    "0",
+    "-ub",
+    "256",
+    "--prio",
+    "-1",
+    "--poll",
+    "0",
+];
+
 /// Context window. Large enough for the distillation budget plus the prompt,
 /// small enough that the KV cache stays a few hundred megabytes on CPU.
 pub const CONTEXT_TOKENS: u32 = 8_192;
@@ -50,6 +79,10 @@ pub struct ServerOptions {
     pub threads: usize,
     pub context_tokens: u32,
     pub startup_timeout: Duration,
+    /// Flags for one model in particular, after everything above. Chosen per
+    /// local model tier in [`crate::tiers::server_options`], which is the
+    /// one place they are set.
+    pub extra_arguments: Vec<String>,
 }
 
 impl Default for ServerOptions {
@@ -58,6 +91,7 @@ impl Default for ServerOptions {
             threads: default_threads(),
             context_tokens: CONTEXT_TOKENS,
             startup_timeout: Duration::from_secs(180),
+            extra_arguments: Vec::new(),
         }
     }
 }
@@ -224,6 +258,7 @@ impl LlamaServer {
             "--jinja".into(),
             "--no-webui".into(),
         ];
+        arguments.extend(MEASURED_FLAGS.iter().map(|flag| (*flag).to_owned()));
         match projector {
             Some(projector) => {
                 arguments.push("--mmproj".into());
@@ -233,6 +268,7 @@ impl LlamaServer {
             // megabytes of resident memory on every document.
             None => arguments.push("--no-mmproj".into()),
         }
+        arguments.extend(options.extra_arguments.iter().cloned());
         arguments
     }
 
@@ -380,8 +416,7 @@ impl ProcessLauncher for StdProcessLauncher {
             use std::os::windows::process::CommandExt;
             command.creation_flags(crate::process::sidecar_creation_flags());
         }
-        let child = command.spawn().map_err(|_| start_failed())?;
-        crate::process::tie_to_this_process(&child);
+        let child = crate::process::spawn_tied(command).map_err(|_| start_failed())?;
         Ok(Box::new(StdChildProcess(child)))
     }
 }
@@ -466,7 +501,47 @@ mod tests {
             threads: 6,
             context_tokens: 8_192,
             startup_timeout: Duration::from_secs(30),
+            extra_arguments: Vec::new(),
         }
+    }
+
+    /// A model's own flags come last, after everything every launch sets.
+    #[test]
+    fn extra_arguments_follow_the_common_ones() {
+        let options = ServerOptions {
+            extra_arguments: vec!["--flash-attn".into(), "on".into()],
+            ..options()
+        };
+        let arguments =
+            LlamaServer::arguments_for(Path::new("m.gguf"), None, 51_000, "key", &options);
+        assert_eq!(&arguments[arguments.len() - 2..], ["--flash-attn", "on"]);
+        assert!(arguments.contains(&"--no-mmproj".to_owned()));
+    }
+
+    /// The flags the evaluation measured are on every launch, and the batch
+    /// threads always match the generation threads.
+    #[test]
+    fn every_launch_carries_the_measured_flags() {
+        let arguments =
+            LlamaServer::arguments_for(Path::new("m.gguf"), None, 51_000, "key", &options());
+        let value = |flag: &str| {
+            arguments
+                .iter()
+                .position(|argument| argument == flag)
+                .map(|at| arguments[at + 1].as_str())
+        };
+        assert_eq!(value("--cache-ram"), Some("0"));
+        assert_eq!(value("-ub"), Some("256"));
+        assert_eq!(value("--prio"), Some("-1"));
+        assert_eq!(value("--poll"), Some("0"));
+        assert_eq!(value("--threads"), Some("6"));
+        assert_eq!(value("--threads-batch"), Some("6"));
+        assert_eq!(value("--parallel"), Some("1"));
+        assert_eq!(value("--ctx-size"), Some("8192"));
+        assert_eq!(value("--n-gpu-layers"), Some("0"));
+        // A cold disk took up to 117 seconds to start a model in the
+        // evaluation; the health wait allows more than that.
+        assert!(ServerOptions::default().startup_timeout >= Duration::from_secs(180));
     }
 
     #[test]

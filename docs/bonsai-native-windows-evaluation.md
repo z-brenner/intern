@@ -1,5 +1,14 @@
 # Bonsai 2 Small: native Windows qualification
 
+> **Superseded by the 77-document evaluation.** On the full InternBench corpus
+> ([`bench/reports/bonsai-linux-cpu-2026-10-27`](../bench/reports/bonsai-linux-cpu-2026-10-27/README.md))
+> neither Bonsai model reached Qwen3.5 2B: 37/77 correct names for Bonsai 2 2B,
+> 48 for Bonsai 2 4B at 1.6 times Qwen's time, 52-54 for Qwen. The 12-document
+> cohort below, where 4B led, was too small to show it. Intern now keeps Qwen3.5
+> 2B as its accurate model and offers Bonsai 2 2B as an optional quick model whose
+> readings always go to review; Bonsai 2 4B is not shipped. What follows is
+> kept as the record of the earlier qualification.
+
 Both Bonsai variants run through Intern's current extraction and evidence pipeline on the real Windows guest. Bonsai 2B reduces latency and memory; Bonsai 4B improves strict filename accuracy on this frozen cohort. The results do **not qualify automatic 2B-to-4B routing or a production-default replacement**: accepted summaries still contain false relationships, one 4B filename loses the document issuer, and reliable routing criteria have not been validated.
 
 The implementation adds opt-in [native qualification and request capture](native-model-qualification.md). It does not change the app's model manifest, downloads, defaults or production prompts. The current working backend remains available. No automatic dual-model download, concurrent warm models, merge or release is part of this change.

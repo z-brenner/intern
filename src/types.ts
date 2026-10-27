@@ -72,6 +72,8 @@ export interface QueueItem {
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
+  /** Which local model read the document. Absent for a hosted model and for older readings. */
+  readBy?: ModelReading;
   /**
    * An exact duplicate filed, or staged to be filed, as a copy: the name of
    * the document it repeats. A staged copy waits for nobody's decision - the
@@ -95,6 +97,31 @@ export type DestinationLayout = 'flat' | 'year' | 'year_type' | 'type' | 'party'
  * document text off the machine, and never the default.
  */
 export type ModelSource = 'local' | 'hosted';
+
+/** The two local models: a fast one that downloads first, and an accurate one that follows. */
+export type ModelTier = 'fast' | 'accurate';
+
+/**
+ * Which local model reads documents. `automatic` lets Intern choose - the
+ * accurate model when it is installed and the computer has the memory for
+ * it - and is the default; `accurate` asks for it whenever memory allows;
+ * `fast` always reads with the fast model.
+ */
+export type ModelPreference = 'automatic' | 'accurate' | 'fast';
+
+/** Which local model read a document, as the review panel says it. */
+export interface ModelReading {
+  tier: ModelTier;
+  modelId: string;
+  /** "Bonsai 2 4B". */
+  displayName: string;
+  /** Why the fast model's reading was sent to the accurate one, when it was. */
+  escalated?: 'review_reason' | 'not_ready' | 'low_token_confidence';
+  /** The accurate model could not read it again, so the fast reading stands. */
+  escalationFailed?: boolean;
+  /** The fast model read it standing in for the accurate one, which will read it again unless someone acts on it first. */
+  provisional?: boolean;
+}
 
 /** The wire format a hosted model speaks. */
 export type HostedProvider = 'anthropic' | 'openai_compatible';
@@ -143,6 +170,8 @@ export interface AppSettings {
    */
   recordDescriptions: boolean;
   modelSource: ModelSource;
+  /** Absent from a settings file written before there were two local models: Intern chooses. */
+  modelPreference?: ModelPreference;
   hostedProvider: HostedProvider;
   /** The hosted model's API root; "" = the provider's default. */
   hostedBaseUrl: string;
@@ -297,13 +326,34 @@ export interface IntakeStatus {
   oneDriveRunning?: boolean | null;
 }
 
+export type SetupStatus = 'ready' | 'required' | 'downloading' | 'failed';
+
+/**
+ * The local model's setup. The top-level fields are what stands between a
+ * person and their first document: the first model's download, install or
+ * check. `tiers` says where each model is, including the one that downloads
+ * behind the window afterwards.
+ */
 export interface SetupState {
-  state: 'ready' | 'required' | 'downloading' | 'failed';
+  state: SetupStatus;
   downloadedBytes: number;
   totalBytes: number;
   error?: string;
   /** A hosted model is chosen and configured, so documents can be processed without the local one. */
   hostedModelReady?: boolean;
+  /** Absent from a backend with one local model. */
+  tiers?: TierSetup[];
+}
+
+/** One local model's setup. */
+export interface TierSetup {
+  tier: ModelTier;
+  displayName: string;
+  state: SetupStatus;
+  downloadedBytes: number;
+  totalBytes: number;
+  /** Why it cannot be used: a download that failed, or a model that failed its check. */
+  error?: string | null;
 }
 
 /** Which part of a name a learned spelling rewrites. */

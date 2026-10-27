@@ -38,6 +38,7 @@ use crate::facts::{ValidationScope, validate_facts};
 use crate::fingerprint::{self, source_fingerprint};
 use crate::index::EvidenceIndex;
 use crate::naming::compose_filename;
+use crate::profile::PromptProfile;
 use crate::prompt::build_evidence_request;
 use crate::retrieve::{EvidenceContext, RetrievalConfig, retrieve};
 use crate::validate::validate;
@@ -133,6 +134,7 @@ pub struct Engine {
     min_token_confidence: Option<f32>,
     pipeline: Pipeline,
     retrieval: RetrievalConfig,
+    profile: Option<PromptProfile>,
 }
 
 impl Engine {
@@ -149,6 +151,7 @@ impl Engine {
             min_token_confidence: None,
             pipeline: Pipeline::default(),
             retrieval: RetrievalConfig::default(),
+            profile: None,
         }
     }
 
@@ -170,6 +173,18 @@ impl Engine {
 
     pub fn retrieval(&self) -> &RetrievalConfig {
         &self.retrieval
+    }
+
+    /// Asks the model the way `profile` says (see [`crate::profile`]), or
+    /// with the evidence request alone for `None`, the default. Evidence
+    /// pipeline requests only: the digest pipeline is a hosted model's.
+    pub fn with_prompt_profile(mut self, profile: Option<PromptProfile>) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn prompt_profile(&self) -> Option<PromptProfile> {
+        self.profile
     }
 
     /// Routes a proposal to review when the model's least probable date or
@@ -452,7 +467,7 @@ impl Engine {
         let mut context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
         let mut retrieval_micros = micros_since(retrieval_started);
         let prompt_started = Instant::now();
-        let mut request = build_evidence_request(&index, &context);
+        let mut request = self.evidence_request(&index, &context);
         let mut prompt_micros = micros_since(prompt_started);
         let mut refits = 0_u32;
         if let Some(context_tokens) = self.client.context_tokens() {
@@ -475,7 +490,7 @@ impl Engine {
                 context = guarded(|| retrieve(&index, &self.retrieval, scale_pct))?;
                 retrieval_micros = retrieval_micros.saturating_add(micros_since(started));
                 let started = Instant::now();
-                request = build_evidence_request(&index, &context);
+                request = self.evidence_request(&index, &context);
                 prompt_micros = prompt_micros.saturating_add(micros_since(started));
                 refits += 1;
             }
@@ -490,6 +505,15 @@ impl Engine {
             retrieval_micros,
             prompt_micros,
         })
+    }
+
+    /// The evidence request for `context`, asked the way this engine's
+    /// profile says.
+    fn evidence_request(&self, index: &EvidenceIndex, context: &EvidenceContext) -> ModelRequest {
+        ModelRequest {
+            profile: self.profile,
+            ..build_evidence_request(index, context)
+        }
     }
 
     /// Runs inference, validation and composition over prepared evidence.
@@ -551,6 +575,7 @@ impl Engine {
                     index_units: u32::try_from(prepared.index.units().len()).unwrap_or(u32::MAX),
                     context_units: u32::try_from(prepared.context.units.len()).unwrap_or(u32::MAX),
                     context_tier: Some(prepared.context.tier),
+                    read_by: None,
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);
@@ -621,7 +646,15 @@ pub fn finish_with_dates(
 /// system turn when that is the request's own (the compact evidence reply
 /// carries its instructions there).
 fn request_tokens(request: &ModelRequest) -> usize {
-    estimated_tokens(&request.prompt) + request.system.as_deref().map_or(0, estimated_tokens)
+    estimated_tokens(&request.prompt)
+        + request.system.as_deref().map_or(0, estimated_tokens)
+        + request.profile.map_or(0, |profile| {
+            profile
+                .examples()
+                .iter()
+                .map(|turn| estimated_tokens(turn.user) + estimated_tokens(turn.assistant))
+                .sum()
+        })
 }
 
 /// The least context, in tokens, the evidence pipeline can answer in.
@@ -633,9 +666,18 @@ fn request_tokens(request: &ModelRequest) -> usize {
 /// a full-length line for each field, about what retrieval takes at its
 /// smallest.
 pub fn min_evidence_context_tokens() -> usize {
+    min_evidence_context_tokens_with(None)
+}
+
+/// [`min_evidence_context_tokens`] for requests asked with `profile`, whose
+/// exchanges are spent before any evidence too.
+pub fn min_evidence_context_tokens_with(profile: Option<PromptProfile>) -> usize {
     let index = EvidenceIndex::build(&crate::distill::source_from_text(""));
     let context = retrieve(&index, &RetrievalConfig::default(), 100);
-    let fixed = request_tokens(&build_evidence_request(&index, &context));
+    let fixed = request_tokens(&ModelRequest {
+        profile,
+        ..build_evidence_request(&index, &context)
+    });
     let line = estimated_tokens(&format!(
         "[p100.b100.r100] {}\n",
         "a".repeat(crate::index::DEFAULT_MAX_UNIT_CHARACTERS)
@@ -1507,6 +1549,42 @@ mod tests {
             prepared.scale_pct
         );
         assert!(prepared.scale_pct < 100, "{}", prepared.scale_pct);
+    }
+
+    /// An engine told how its model is asked sends every evidence request
+    /// that way, and counts what the profile adds against the context; one
+    /// told nothing sends the request as it always did. The digest pipeline
+    /// is never profiled.
+    #[test]
+    fn a_profile_rides_on_every_evidence_request_and_is_fitted_for() {
+        let source = source_from_text(
+            "NOTICE OF TERMINATION\n\nDated March 3, 2026.\nTo: Imogen Castellanos\n",
+        );
+        let recording = std::sync::Arc::new(Recording::new(vec![Ok(())]));
+        let plain = Engine::with_proposer(Box::new(std::sync::Arc::clone(&recording)));
+        assert_eq!(plain.prompt_profile(), None);
+        let unprofiled = plain.prepare(&source).unwrap();
+        assert_eq!(unprofiled.request.profile, None);
+
+        let profiled_engine = Engine::with_proposer(Box::new(recording))
+            .with_prompt_profile(Some(PromptProfile::Bonsai2));
+        assert_eq!(
+            profiled_engine.prompt_profile(),
+            Some(PromptProfile::Bonsai2)
+        );
+        let profiled = profiled_engine.prepare(&source).unwrap();
+        assert_eq!(profiled.request.profile, Some(PromptProfile::Bonsai2));
+        assert_eq!(profiled.request.prompt, unprofiled.request.prompt);
+        assert!(request_tokens(&profiled.request) > request_tokens(&unprofiled.request) + 50);
+        assert!(
+            min_evidence_context_tokens_with(Some(PromptProfile::Bonsai2))
+                > min_evidence_context_tokens()
+        );
+
+        let digest = profiled_engine
+            .with_pipeline(Pipeline::Digest)
+            .prepare_digest(&source);
+        assert_eq!(digest.request.profile, None);
     }
 
     /// The digest a caller prepares is the one [`Engine::analyze`] sends:

@@ -165,7 +165,9 @@ describe('TauriBridge', () => {
     await bridge.getSetup();
     await bridge.startModelDownload();
     await bridge.setupCancel();
-    await bridge.setupChooseExisting({ modelPath: 'C:\\Models\\intern-q4.gguf' });
+    await bridge.startModelDownload('accurate');
+    await bridge.setupCancel('accurate');
+    await bridge.setupChooseExisting({ modelPaths: ['C:\\Models\\intern-q4.gguf'] });
     await bridge.getOnboarding();
     await bridge.completeOnboarding();
     await bridge.clearHistory();
@@ -196,7 +198,9 @@ describe('TauriBridge', () => {
       { command: 'setup_get', args: undefined },
       { command: 'setup_start', args: undefined },
       { command: 'setup_cancel', args: undefined },
-      { command: 'setup_choose_existing', args: { files: { modelPath: 'C:\\Models\\intern-q4.gguf' } } },
+      { command: 'setup_start', args: { tier: 'accurate' } },
+      { command: 'setup_cancel', args: { tier: 'accurate' } },
+      { command: 'setup_choose_existing', args: { files: { modelPaths: ['C:\\Models\\intern-q4.gguf'] } } },
       { command: 'onboarding_status', args: undefined },
       { command: 'onboarding_complete', args: undefined },
       { command: 'history_clear', args: undefined },
@@ -641,26 +645,28 @@ describe('TauriBridge', () => {
     expect(fake.calls).toEqual([]);
   });
 
-  it('asks for the model GGUF once and never for a projector', async () => {
+  it('asks once for either model GGUF or both, and never for a projector', async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const transport: TauriTransport = {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
         calls.push({ command, args });
-        return 'C:\\Models\\intern-q4.gguf' as T;
+        return ['C:\\Models\\small.gguf', 'C:\\Models\\large.gguf', 'C:\\Models\\third.gguf'] as T;
       },
       listen: async () => () => undefined,
     };
 
     const files = await createTauriSelectionBoundary(transport).pickExistingModelFiles();
 
-    expect(files).toEqual({ modelPath: 'C:\\Models\\intern-q4.gguf' });
+    // Two at most: there are two models, and the backend tells them apart
+    // by size.
+    expect(files).toEqual({ modelPaths: ['C:\\Models\\small.gguf', 'C:\\Models\\large.gguf'] });
     // Exactly one dialog. Intern loads no vision projector, so asking for one
     // would make the user hunt for a file it would then never read.
     expect(calls).toEqual([
       { command: 'plugin:dialog|open', args: { options: {
-        multiple: false,
+        multiple: true,
         directory: false,
-        title: 'Choose the model GGUF',
+        title: 'Choose the model GGUF files',
         filters: [{ name: 'GGUF model files', extensions: ['gguf'] }],
       } } },
     ]);
@@ -756,6 +762,29 @@ describe('TauriBridge', () => {
     await expect(createTauriSelectionBoundary(transport).subscribeDragState!(vi.fn())).rejects.toThrow('drop listener failed');
     expect(stops.get('tauri://drag-enter')).toHaveBeenCalledOnce();
     expect(stops.get('tauri://drag-leave')).toHaveBeenCalledOnce();
+  });
+
+  // Signed updates are published for Windows alone. A Linux shell says it
+  // cannot update itself, and the updater - which it does not register - is
+  // never asked; a shell that says nothing different asks as it always has.
+  it('asks the updater only when the shell can update itself', async () => {
+    vi.mocked(check).mockClear();
+    const linux = fakeTransport({ updates_supported: false });
+    expect(await new TauriBridge(linux.transport).checkForUpdate()).toEqual({ state: 'unsupported', reason: 'package' });
+    expect(linux.calls).toEqual([{ command: 'updates_supported', args: undefined }]);
+    expect(check).not.toHaveBeenCalled();
+
+    vi.mocked(check).mockResolvedValue(null);
+    const windows = fakeTransport({ updates_supported: true });
+    expect(await new TauriBridge(windows.transport).checkForUpdate()).toEqual({ state: 'current', currentVersion: '0.1.0-alpha.10' });
+    expect(check).toHaveBeenCalledOnce();
+
+    // After a failed start every command of Intern's own is refused, but the
+    // updater still answers, so the check goes ahead.
+    const failedStart = fakeTransport();
+    failedStart.transport.invoke = async () => { throw { code: 'APP_NOT_READY' }; };
+    expect(await new TauriBridge(failedStart.transport).checkForUpdate()).toEqual({ state: 'current', currentVersion: '0.1.0-alpha.10' });
+    expect(check).toHaveBeenCalledTimes(2);
   });
 
   it('reports an update download as the share of its advertised size that has arrived', async () => {

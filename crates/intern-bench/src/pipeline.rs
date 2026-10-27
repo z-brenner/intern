@@ -8,6 +8,9 @@
 //! --id-style stable|ordinal       how the evidence lines are named
 //! --retrieval-tier auto|whole|small|normal|dense
 //! --context-tokens N              the server's context, when not the app's
+//! --prompt-profile NAME           ask the model as a manifest profile does
+//!                                 (bonsai_2); none by default, as the
+//!                                 recordings of record were made
 //! ```
 //!
 //! The evidence pipeline's own measurements are here too
@@ -18,9 +21,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use intern_engine::{
-    DocumentAnalysis, Engine, Pipeline,
-    engine::min_evidence_context_tokens,
-    prompt::evidence_prompt_version,
+    DocumentAnalysis, Engine, Pipeline, PromptProfile,
+    engine::min_evidence_context_tokens_with,
+    prompt::evidence_prompt_version_with,
     retrieve::{IdStyle, RetrievalConfig},
 };
 use serde::{Deserialize, Serialize};
@@ -29,7 +32,13 @@ use serde_json::Value;
 use crate::recording::Recording;
 
 /// The command-line options [`EngineSettings::parse`] reads.
-pub const KEYS: &[&str] = &["pipeline", "id-style", "retrieval-tier", "context-tokens"];
+pub const KEYS: &[&str] = &[
+    "pipeline",
+    "id-style",
+    "retrieval-tier",
+    "context-tokens",
+    "prompt-profile",
+];
 
 /// How a run's engine is configured.
 #[derive(Clone, Debug, PartialEq)]
@@ -40,6 +49,9 @@ pub struct EngineSettings {
     pub retrieval: RetrievalConfig,
     /// The model server's context, when it is not the app's.
     pub context_tokens: Option<usize>,
+    /// How the model is asked (the evidence pipeline's alone); `None` asks
+    /// as the recordings of record were made.
+    pub profile: Option<PromptProfile>,
 }
 
 impl Default for EngineSettings {
@@ -48,6 +60,7 @@ impl Default for EngineSettings {
             pipeline: Pipeline::Evidence,
             retrieval: RetrievalConfig::default(),
             context_tokens: None,
+            profile: None,
         }
     }
 }
@@ -68,10 +81,16 @@ impl EngineSettings {
                 format!("--retrieval-tier is auto, whole, small, normal or dense, not {word}")
             })?;
         }
+        if let Some(word) = values.get("prompt-profile") {
+            if settings.pipeline != Pipeline::Evidence {
+                return Err("--prompt-profile is for --pipeline evidence".to_owned());
+            }
+            settings.profile = Some(word.parse::<PromptProfile>()?);
+        }
         if let Some(value) = values.get("context-tokens") {
             // The instructions and the reply take most of a small context;
             // one with no room left for evidence would fail every document.
-            let least = min_evidence_context_tokens();
+            let least = min_evidence_context_tokens_with(settings.profile);
             settings.context_tokens = Some(
                 value
                     .parse::<usize>()
@@ -90,6 +109,7 @@ impl EngineSettings {
         engine
             .with_pipeline(self.pipeline)
             .with_retrieval(self.retrieval.clone())
+            .with_prompt_profile(self.profile)
     }
 
     /// The context prompts are fitted to: the one given, or the app's.
@@ -107,7 +127,7 @@ impl EngineSettings {
             Pipeline::Evidence => PipelineHeader {
                 pipeline: Some(Pipeline::Evidence),
                 retrieval: Some(self.retrieval.fingerprint()),
-                prompt_version: Some(evidence_prompt_version()),
+                prompt_version: Some(evidence_prompt_version_with(self.profile)),
             },
         }
     }
@@ -279,6 +299,46 @@ mod tests {
                 EngineSettings::parse(&values(&[(key, value)])).is_err(),
                 "{key} {value}"
             );
+        }
+    }
+
+    /// A profile is chosen by its manifest name, for the evidence pipeline
+    /// only, and is part of the prompt version a recording carries; none is
+    /// the default, whose version the recordings of record carry.
+    #[test]
+    fn a_prompt_profile_is_read_by_name_and_stamped_into_the_header() {
+        let profiled = EngineSettings::parse(&values(&[("prompt-profile", "bonsai_2")])).unwrap();
+        assert_eq!(profiled.profile, Some(PromptProfile::Bonsai2));
+        assert_eq!(
+            profiled
+                .configure(Engine::with_proposer(Box::new(NoModel)))
+                .prompt_profile(),
+            Some(PromptProfile::Bonsai2)
+        );
+        assert_ne!(
+            profiled.header().prompt_version,
+            EngineSettings::default().header().prompt_version
+        );
+        assert_eq!(
+            EngineSettings::default().header().prompt_version,
+            Some(intern_engine::prompt::evidence_prompt_version())
+        );
+        for pairs in [
+            &[("prompt-profile", "qwen")][..],
+            &[("pipeline", "digest"), ("prompt-profile", "bonsai_2")][..],
+        ] {
+            assert!(EngineSettings::parse(&values(pairs)).is_err(), "{pairs:?}");
+        }
+    }
+
+    struct NoModel;
+
+    impl intern_engine::Proposer for NoModel {
+        fn propose(
+            &self,
+            _request: &intern_engine::ModelRequest,
+        ) -> intern_engine::EngineResult<intern_engine::ModelProposal> {
+            unreachable!("nothing is read")
         }
     }
 

@@ -125,12 +125,21 @@ cargo build --locked -p intern-worker --release --features windows-native
 Copy-Item target\release\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe
 ./scripts/stage-windows-runtime.ps1 -Destination C:\intern-stage
 npm run fixtures
-./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-2B-Q4_K_M.gguf"
+./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Ternary-Bonsai-2-4B-PQ2_0.gguf"
 ```
+
+The committed recordings were made with the model and request of the build
+that recorded them, without a prompt profile, and CI replays them that way.
+The app asks both Bonsai models through the `bonsai_2` profile; a recording of
+that request is made with `-PromptProfile bonsai_2` (`--prompt-profile
+bonsai_2` to `intern-evaluate`, `intern-analyze` and InternBench), and replays
+only with the same option, since the profile is part of every prompt's
+identity.
 
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
 pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
-8,192-token context, the model's own chat template), records, writes the
+8,192-token context, the model's own chat template, the prompt cache off,
+`-ub 256`), records, writes the
 baseline, and stops the server. It records the evidence pipeline, the
 default; the digest pipeline's recording is made the same way by
 `intern-evaluate --pipeline digest --record fixtures/corpus-recording-digest.json
@@ -141,8 +150,11 @@ report's summary in `docs/model-bakeoff.md`.
 ## Recording elsewhere
 
 The engine and the worker are portable; only the packaged runtime is not. The
-committed recordings were made on Linux with the same pinned model and a
-llama.cpp CPU build from source; the digest pipeline's with PDFium
+committed recordings were made on Linux with the same pinned model (Qwen3.5 2B,
+the accurate tier) and an upstream llama.cpp CPU build from source, before the
+runtime moved to the PrismML fork's `prism-b10826-c9c34bc` release; the
+77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) found that
+release reads the same model the same way, within run-to-run noise; the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer
 ships, the evidence pipeline's with the routing reader and PP-OCR; the
@@ -151,8 +163,10 @@ builds, which is why the OCR fixtures are marked `needs_review` in the gold
 corpus and scored on routing rather than on the digits they misread. A
 recording made on the packaged Windows runtime supersedes it; the workflow is
 the same, with `INTERN_RUNTIME_DIR` pointing at a directory holding
-`libpdfium.so`, a `tesseract.exe` symlink to the Tesseract binary, and
-`tessdata/`.
+`libpdfium.so` and `tessdata/`; the worker uses the Tesseract on `PATH` unless
+the directory holds a `tesseract` of its own. `scripts/fetch-linux-assets.sh`
+and `scripts/stage-linux-runtime.sh` build exactly such a directory, the Linux
+package's runtime ([Linux](linux.md)).
 
 ## Re-recording only some fixtures
 

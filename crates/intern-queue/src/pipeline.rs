@@ -597,6 +597,14 @@ pub struct ProposalRecord {
     /// when it is free even with automatic renaming switched off.
     #[serde(default)]
     pub approved: bool,
+    /// Whether a person has ever approved a name for this record, as the
+    /// reading had it or as they edited it. Unlike `approved` it is never
+    /// taken back: a filing that fails - a destination that cannot be made -
+    /// puts the document back in review and clears `approved`, but keeps the
+    /// name and description the person gave, and a record they have touched
+    /// is never thrown away for an automatic reading.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reviewed: bool,
     /// A name a person typed for a document Intern could not read. There
     /// was no analysis to propose one, so `analysis` is empty: nothing here
     /// is the model's, and nothing recomposes the name from it.
@@ -671,6 +679,7 @@ impl ProposalRecord {
             own_names: Vec::new(),
             near_duplicate_of: None,
             approved: false,
+            reviewed: false,
             manual: false,
             copy_of: None,
         }
@@ -1937,6 +1946,7 @@ impl Pipeline {
             own_names,
             near_duplicate_of,
             approved: false,
+            reviewed: false,
             manual: false,
             copy_of: None,
         };
@@ -3279,8 +3289,95 @@ impl Pipeline {
         let fingerprint = self.files.fingerprint(&item.source_path)?;
         let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
         self.store.requeue_for_analysis(id, item.status, new_hash)?;
-        self.repository.forget_fingerprint(id)?;
+        // The document has gone back already: a fingerprint left behind is
+        // the earlier reading's, which the next one replaces and near-
+        // duplicate matching never compares with its own item. Failing here
+        // only kept the window from hearing that the document moved.
+        let _ = self.repository.forget_fingerprint(id);
         self.events.queue_changed();
+        Ok(())
+    }
+
+    /// Reads again every document whose reading is provisional and that no
+    /// person has acted on, now that the model it was waiting for can read
+    /// it. Says how many went back to be read.
+    ///
+    /// A provisional reading is the fast local model standing in for the
+    /// accurate one - not downloaded yet, or not fitting in memory at the
+    /// time ([`intern_engine::ModelReading::provisional`]). Once the
+    /// accurate model can be used, the reading it stood in for is what the
+    /// document should have had, so the document is read again the way
+    /// Re-analyze reads it: the file fingerprinted as it is now, the earlier
+    /// reading and the text fingerprint it left forgotten.
+    ///
+    /// Never one a person has acted on: an approval - its edits are in the
+    /// name it approved - a rename that was filed, kept or taken back, or
+    /// anything still settling its files. Whether one has is decided in the
+    /// same write transaction that sends the document back, so an approval
+    /// that lands between the look and the requeue is never thrown away. A
+    /// document whose file is gone is left for its person, as it was.
+    pub fn reanalyze_provisional(&self) -> PipelineResult<usize> {
+        let mut requeued = 0;
+        let result = self.requeue_provisional(&mut requeued);
+        // Whatever stopped the pass, the window hears about every document
+        // that did go back.
+        if requeued > 0 {
+            self.events.queue_changed();
+        }
+        result.map(|()| requeued)
+    }
+
+    /// [`Pipeline::reanalyze_provisional`]'s pass, counting into `requeued`
+    /// as it goes so a failure part-way loses no count.
+    fn requeue_provisional(&self, requeued: &mut usize) -> PipelineResult<()> {
+        for item in self.store.list()? {
+            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+                continue;
+            }
+            let untouched = self
+                .repository
+                .load_proposal(item.id)?
+                .is_some_and(|record| untouched_provisional(&record));
+            if !untouched {
+                continue;
+            }
+            let Ok(fingerprint) = self.files.fingerprint(&item.source_path) else {
+                continue;
+            };
+            let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
+            // Re-analyze's own move, decided again inside its transaction: an
+            // approval is a write too, so it lands either before the look -
+            // and is seen - or after the document went back, where its
+            // compare-and-swap on the status refuses it and says the item
+            // changed.
+            let moved =
+                self.store
+                    .requeue_for_analysis_if(item.id, item.status, new_hash, |stored| {
+                        stored
+                            .and_then(|json| serde_json::from_str::<ProposalRecord>(json).ok())
+                            .is_some_and(|record| untouched_provisional(&record))
+                    });
+            match moved {
+                Ok(Some(_)) => {
+                    // As Re-analyze: the document has gone back, and a
+                    // fingerprint left behind is harmless.
+                    let _ = self.repository.forget_fingerprint(item.id);
+                    *requeued += 1;
+                }
+                // Declined, or no longer this document's to move: a rename
+                // left unsettled, the same version of the file queued again,
+                // the item changed. It waits for its person, as it was.
+                Ok(None) => {}
+                Err(error)
+                    if matches!(
+                        error.code(),
+                        intern_core::ErrorCode::InvalidTransition
+                            | intern_core::ErrorCode::Duplicate
+                            | intern_core::ErrorCode::StateConflict
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
     }
 
@@ -4463,6 +4560,7 @@ impl PipelineRepository {
         record.status = ProposalStatus::Ready;
         record.reasons.clear();
         record.approved = true;
+        record.reviewed = true;
         record.revision += 1;
         let json = serde_json::to_string(&record)
             .map_err(|_| PipelineError::new("INVALID_DATA", "proposal could not be stored"))?;
@@ -4497,6 +4595,26 @@ impl PipelineRepository {
             )
         })
     }
+}
+
+/// Whether a stored reading is provisional and nobody has acted on it: never
+/// approved, and never filed, kept, or taken back. A person's edits arrive
+/// with an approval, and `reviewed` remembers it after a failed filing has
+/// taken the approval back: `approved` alone said such a record was untouched
+/// and let a re-read throw the person's name and description away.
+fn untouched_provisional(record: &ProposalRecord) -> bool {
+    record
+        .analysis
+        .telemetry
+        .read_by
+        .as_ref()
+        .is_some_and(|reading| reading.provisional)
+        && !record.approved
+        && !record.reviewed
+        && !record
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
 }
 
 /// The folder a document is filed into: the destination (or, with none set,

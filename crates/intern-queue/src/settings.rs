@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use intern_engine::HostedProvider;
+use intern_engine::{HostedProvider, ModelPreference};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -137,6 +137,11 @@ pub struct AppSettings {
     /// The local model, or a hosted one behind an API key.
     #[serde(default)]
     pub model_source: ModelSource,
+    /// Which of the local models reads documents: Intern's choice, the most
+    /// accurate, or the fastest. A file written before there were two local
+    /// models has none, and Intern chooses.
+    #[serde(default)]
+    pub model_preference: ModelPreference,
     /// The wire format the hosted model speaks.
     #[serde(default)]
     pub hosted_provider: HostedProvider,

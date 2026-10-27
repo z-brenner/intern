@@ -17,7 +17,7 @@ under `ocr-models/`, because reading a scan must work offline from the first run
 
 | Component | Pinned source | License | Copyright / project |
 | --- | --- | --- | --- |
-| llama.cpp | `b10361`, Windows CPU x64 archive | MIT | llama.cpp contributors |
+| llama.cpp, PrismML fork | `prism-b10826-c9c34bc` (commit `c9c34bc9c4042c13a31598ebf43461cd0ad8f00d`) of `PrismML-Eng/llama.cpp`, the release's Windows CPU x64 archive (Linux: its Ubuntu x64 archive) | MIT | The ggml authors and llama.cpp contributors |
 | PDFium binaries | `chromium/7881`, Windows x64 | BSD-3-Clause | The PDFium Authors / Chromium Authors |
 | Tesseract OCR | 5.5.2, built with vcpkg baseline `644588ca32576d86325fb3fe3b6020042bee61b8` | Apache-2.0 | Tesseract OCR contributors |
 | tessdata_fast English and OSD data | commit `87416418657359cb625c412a48b6e1d6d41c29bd` | Apache-2.0 | Tesseract OCR contributors |

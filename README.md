@@ -33,14 +33,14 @@ inference fallback. This is the complete list of what Intern sends anywhere:
 
 | Request | When | What it carries |
 | --- | --- | --- |
-| Model download | Once, when you start it (or never, if you choose existing model files) | A request for the pinned model file. Nothing about the machine or its documents. |
+| Model download | Once, when you start it (or never, if you choose existing model files) | A request for each pinned model file. Nothing about the machine or its documents. |
 | Update check | When Intern starts, every 6 hours while it runs, and when you press **Check for updates**. The automatic check can be switched off in Settings. | A request for the GitHub release manifest. Nothing about the machine or its documents. |
 | Hosted model | Only if you turn it on, under your own API key | The condensed text of each document, to the service you name. |
 | Microsoft sign-in and Graph (`login.microsoftonline.com`, `graph.microsoft.com`) | Only in a build an administrator provisioned for the SharePoint deployment | Sign-in and its renewal, then account and file metadata for upload verification, never document content. The build published here has none. |
 
 The first two are all a default install ever sends, and neither carries
-document information. The model file is 1.19 GiB, the text model and nothing
-else. The update check asks only "is there a newer, signed build"; untick
+document information. The model files are Qwen3.5 2B (1.19 GiB) and, if you
+want it, the quick Bonsai 2 2B (0.48 GiB): two text models and nothing else. The update check asks only "is there a newer, signed build"; untick
 **Check for updates automatically** in Settings and only the button asks. A
 found update is never installed by the check itself: installing is always a
 separate, explicit click, and only ever happens if the update is signed by this
@@ -106,11 +106,35 @@ as the installer, so whoever could replace one could replace both. The
 attestation is the part that establishes where the file came from.
 
 On first launch Intern shows a setup screen and asks to download the one thing
-the installer deliberately leaves out: the pinned model file, 1.19 GiB. That
-download is resumable, it transfers no document information, and the file becomes active only after its exact length and SHA-256 match the manifest
-built into the installer. If you already have the file, **Choose existing model
-files** points Intern at it and skips the download. Nothing else needs
-installing — PDF text extraction, OCR, and inference all ship inside the app.
+the installer deliberately leaves out: the local model. The model that names
+your documents is **Qwen3.5 2B** (1.19 GiB). So that a new install can start at
+once, setup first fetches **Bonsai 2 2B** (0.48 GiB), a quick model, and opens
+the queue as soon as it has passed its checks; Qwen3.5 2B then downloads in the
+background while you work, and the window says so in one quiet line. A name the
+quick model gives is never filed on its own: it always waits in review, saying
+so, and Qwen3.5 2B reads the document again once it can - unless you have acted
+on it first. Both downloads are resumable, they transfer no document
+information, and a file becomes active only after its exact length and SHA-256
+match the manifest built into the installer. If you already have the files,
+**Choose existing model files** points Intern at either or both and skips
+those downloads. Nothing else needs installing — PDF text extraction, OCR, and
+inference all ship inside the app.
+
+Upgrading from a build that had only Qwen3.5 2B, nothing is downloaded: the
+model you have is the accurate model, and the queue opens on it. The quick
+model is offered in Settings, for faster first readings and as a fallback when
+the computer is short of memory, and is fetched only if you ask.
+
+**Settings > Model** chooses which local model reads: **Automatic**
+(recommended) reads every document with Qwen3.5 2B, the quick model standing in
+only while the computer is short of memory; **Most accurate** asks for Qwen3.5
+2B whenever memory allows; **Fastest** reads everything with the quick model,
+and every name it gives still waits for your check. One model is loaded at a
+time, and it is unloaded after ten minutes without a document. The choice rests
+on a 77-document evaluation
+([`bench/reports/bonsai-linux-cpu-2026-10-27`](bench/reports/bonsai-linux-cpu-2026-10-27/README.md)):
+Qwen3.5 2B named 52-54 documents correctly, Bonsai 2 2B 37 and the larger
+Bonsai 2 4B 48, at 1.6 times Qwen's time.
 
 Then Intern asks for **two folders**, and it cannot be used until both are
 chosen — there is no skipping it:
@@ -211,6 +235,27 @@ If Intern cannot start, a dialog says why and names its data folder
 (`%LOCALAPPDATA%\com.intern.app`), and the same is written to
 `logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:
 where and when it happened, never what the document said.
+
+### Linux (Ubuntu 24.04)
+
+Intern also builds, runs, and is tested on Ubuntu 24.04, x86-64, as a `.deb`
+that CI builds from the same pinned runtime and smoke-tests installed. No Linux
+build is published as a release yet, and Linux builds do not update
+themselves. Install a package from a CI run's `intern-linux-…` artifact, or
+build one, with apt:
+
+```sh
+sudo apt install ./Intern_0.1.0-alpha.11_amd64.deb
+```
+
+apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
+`libgomp1`, OpenSSL). First run, the queue, background mode and sign-in start
+work as above; data is in `~/.local/share/com.intern.app`, the hosted model's key in
+the Secret Service, and a file manager's **Open With** takes the place of
+**Send to**. Microsoft sign-in, the OneDrive client, and the SharePoint
+deployment are Windows-only. [Linux](docs/linux.md) has the build, where
+everything lives, how to test it headless (Xvfb, or the pipeline with no
+window at all), and the rest of what differs.
 
 ## Input and output folders, OneDrive, and SharePoint
 
@@ -346,9 +391,10 @@ last column for anyone who would rather paste.
 document
   -> text/Markdown extraction (native text first; OCR only when there is none)
   -> whole-document distillation (every page read, redundancy removed)
-  -> one local inference
+  -> one local inference (Qwen3.5 2B; the quick model only as a stand-in)
   -> evidence validation
   -> filename + description + review decision
+     (a quick-model reading always goes to review)
 ```
 
 The distillation stage is the part that matters. Intern does **not** send the
@@ -501,7 +547,8 @@ results.
 
 ## Windows runtime assets and installer
 
-From PowerShell on Windows, fetch the exact llama.cpp b10361, PDFium
+From PowerShell on Windows, fetch the exact llama.cpp build (the PrismML fork's
+`prism-b10826-c9c34bc` release, which both local models run on), PDFium
 chromium/7881, Tesseract 5.5.2, tessdata, ONNX Runtime 1.30.0 and OCR model
 assets ([OCR](docs/ocr.md) says which models and why):
 
@@ -537,7 +584,10 @@ CI runs fixture generation, TypeScript/Vitest/Vite, Playwright, Rust format,
 Clippy with warnings denied, workspace tests, native fixture integration, asset
 verification, the Windows Tauri build, and the installer smoke test. A separate
 **Rust (Ubuntu)** job runs format, Clippy, and the workspace tests in minutes,
-for feedback before the Windows job finishes. Runtime and dependency caches are
+for feedback before the Windows job finishes. A **Linux desktop package and
+smoke** job fetches and verifies the pinned Linux runtime, smoke-tests it and the
+worker, builds the `.deb`, installs it with apt, and starts the installed app
+under Xvfb ([Linux](docs/linux.md)). Runtime and dependency caches are
 keyed by lockfiles and the runtime asset manifest.
 
 `scripts/run-model-evaluation.ps1` scores the whole gold corpus through the

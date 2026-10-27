@@ -29,7 +29,12 @@ param(
     [Parameter(Mandatory = $true)][string]$ModelPath,
     [int]$Port = 8090,
     [int]$Threads = [Math]::Max(1, [Environment]::ProcessorCount - 1),
-    [string]$Note = ""
+    [string]$Note = "",
+    # Ask the model the way a manifest profile does (bonsai_2), as the app asks
+    # the Bonsai models. Empty records the request alone, as the recordings CI
+    # replays were made; a profiled recording replays only with the same
+    # --prompt-profile.
+    [string]$PromptProfile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +53,7 @@ foreach ($Required in @("intern-worker.exe", "llama-server.exe", "pdfium.dll", "
 
 $Manifest = Get-Content -LiteralPath (Join-Path $RepositoryRoot "src-tauri/resources/model-manifest.json") -Raw | ConvertFrom-Json
 $ModelHash = (Get-FileHash -LiteralPath $Model -Algorithm SHA256).Hash.ToLowerInvariant()
-$Pinned = @($Manifest.files | Where-Object { $_.sha256 -eq $ModelHash })
+$Pinned = @($Manifest.models | ForEach-Object { $_.files } | Where-Object { $_.sha256 -eq $ModelHash })
 if ($Pinned.Count -eq 0) {
     throw "The model at $Model is not the one model-manifest.json pins; a recording of another model would be scored as if it were the shipped one"
 }
@@ -59,11 +64,13 @@ if ($Note) { $Description = "$Description; $Note" }
 
 $ApiKey = [Guid]::NewGuid().ToString("N")
 # The same flags src/server.rs passes: one slot, CPU only, the model's own
-# chat template so the no-thinking switch reaches it, no web UI, no projector.
+# chat template so the no-thinking switch reaches it, no web UI, no projector,
+# and the measured flags every launch adds (MEASURED_FLAGS).
 $ServerArguments = @(
     "--host", "127.0.0.1", "--port", "$Port", "--api-key", $ApiKey, "--model", $Model,
     "--parallel", "1", "--ctx-size", "8192", "--n-gpu-layers", "0",
-    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj"
+    "--threads", "$Threads", "--threads-batch", "$Threads", "--jinja", "--no-webui", "--no-mmproj",
+    "--cache-ram", "0", "-ub", "256", "--prio", "-1", "--poll", "0"
 )
 $Server = Start-Process -FilePath (Join-Path $Runtime "llama-server.exe") -ArgumentList $ServerArguments -PassThru -WindowStyle Hidden
 try {
@@ -75,6 +82,8 @@ try {
     if ($null -eq $Health -or $Health.status -ne "ok") { throw "llama-server did not become healthy on port $Port" }
 
     $env:INTERN_RUNTIME_DIR = $Runtime
+    $ProfileArguments = @()
+    if ($PromptProfile) { $ProfileArguments = @("--prompt-profile", $PromptProfile) }
     & cargo run --locked -p intern-engine --bin intern-evaluate -- `
         --fixtures $Fixtures --expected (Join-Path $RepositoryRoot "fixtures/expected.json") `
         --worker (Join-Path $Runtime "intern-worker.exe") `
@@ -82,7 +91,8 @@ try {
         --record (Join-Path $RepositoryRoot "fixtures/corpus-recording.json") `
         --write-baseline (Join-Path $RepositoryRoot "fixtures/corpus-baseline.json") `
         --output (Join-Path $RepositoryRoot "corpus-report.json") `
-        --note $Description
+        --note $Description `
+        @ProfileArguments
     if ($LASTEXITCODE -ne 0) { throw "intern-evaluate exited with $LASTEXITCODE" }
     Write-Host "Recorded fixtures/corpus-recording.json and fixtures/corpus-baseline.json; the full report is corpus-report.json"
 }

@@ -85,12 +85,12 @@ describe('humanizeReason', () => {
 
   it('has a plain sentence for every failure and review code the backend can store', () => {
     const codes = [
-      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS',
+      'DATE_IMPLAUSIBLE', 'DATE_IS_DEADLINE', 'DATE_AMBIGUOUS', 'FAST_MODEL_READING',
       'PASSWORD_PROTECTED', 'UNSUPPORTED_CONTENT', 'DOCUMENT_TOO_LARGE', 'OCR_UNAVAILABLE',
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',
       'HOSTED_MODEL_BILLING', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'ALREADY_NAMED',
-      'INTAKE_WITHDRAWN', 'EXACT_COPY',
+      'INTAKE_WITHDRAWN', 'SECRET_SERVICE_UNAVAILABLE', 'EXACT_COPY',
     ];
     for (const code of codes) {
       const sentence = humanizeReason(code);
@@ -118,5 +118,11 @@ describe('describeQueueStop', () => {
     expect(describeQueueStop('HOSTED_MODEL_BILLING')).toBe(humanizeReason('HOSTED_MODEL_BILLING'));
     expect(describeQueueStop('OCR_UNAVAILABLE')).toBe(humanizeReason('OCR_UNAVAILABLE'));
     expect(describeQueueStop('LEASE_LOST')).toBe('LEASE_LOST');
+  });
+});
+
+describe('a quick-model reading', () => {
+  it('says who read it and what the person can do', () => {
+    expect(humanizeReason('FAST_MODEL_READING')).toBe('Read by the quick model — check it, or wait for the accurate model to read it again.');
   });
 });

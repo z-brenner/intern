@@ -1,3 +1,5 @@
+import { LocalModel } from '../features/settings/LocalModel';
+import { useModelSetup } from '../features/setup/useModelSetup';
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
@@ -68,6 +70,8 @@ function saveFailure(error: unknown): string {
     case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
     case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
+    // Linux only: there the credential store is the desktop's Secret Service, which a minimal or headless session may not run.
+    case 'SECRET_SERVICE_UNAVAILABLE': return 'No credential store answered on this desktop, so the key was not saved. Intern keeps it in the Secret Service: start and unlock GNOME Keyring or KWallet, or use the local model. (SECRET_SERVICE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
@@ -236,6 +240,8 @@ interface ExistingDocuments {
 
 export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
+  // Where each local model is, live while one downloads behind the window.
+  const localModel = useModelSetup(bridge, selection);
   const shortOwnNames = tooShortOwnNames(next.ourNames);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -611,6 +617,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="section-lead">Which model reads your documents. The local model keeps every document on this computer. A hosted model sends the text of each document to the service you name, under your own API key.</p>
         <label className="check-label"><input type="radio" name="model-source" value="local" checked={next.modelSource === 'local'} onChange={() => setNext({ ...next, modelSource: 'local' })} />Local model on this computer (recommended)</label>
         <label className="check-label"><input type="radio" name="model-source" value="hosted" checked={next.modelSource === 'hosted'} onChange={() => setNext({ ...next, modelSource: 'hosted' })} />Hosted model with my API key</label>
+        {next.modelSource === 'local' && <LocalModel next={next} onChange={(modelPreference) => setNext({ ...next, modelPreference })} setup={localModel.setup} busy={localModel.busy} onStartTier={localModel.startTier} onPauseTier={localModel.pauseTier} />}
         {next.modelSource === 'hosted' && <div className="hosted-model" role="group" aria-label="Hosted model">
           <p className="privacy-warning" role="note">With this on, the text Intern reads from each document — not the file, but the words in it, condensed — is sent to this service to be named. It is the only setting that sends document text off this computer. Your key, your account, your provider's terms.</p>
           <label>Provider<select value={next.hostedProvider} onChange={(event) => { const value = event.target.value; if (isProvider(value)) setNext({ ...next, hostedProvider: value }); }}>
@@ -718,7 +725,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <label className="check-label"><input type="checkbox" checked={!next.skipUpdateChecks} onChange={(event) => setNext({ ...next, skipUpdateChecks: !event.target.checked })} />Check for updates automatically (when Intern starts and every 6 hours)</label>
         <p className="check-hint">{next.skipUpdateChecks ? 'Off: Intern asks only when you press Check for updates.' : 'Turn this off and Intern asks only when you press Check for updates.'}</p>
         {status?.state === 'current' && <p role="status" aria-label="Update status" aria-live="polite">Intern {status.currentVersion} is the latest release.</p>}
-        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">Updates are available in the installed desktop application.</p>}
+        {status?.state === 'unsupported' && <p role="status" aria-label="Update status" aria-live="polite">{status.reason === 'package' ? 'Intern on Linux does not update itself. Install the newer release\'s package to update it.' : 'Updates are available in the installed desktop application.'}</p>}
         {status?.state === 'available' && <p role="status" aria-label="Update status" aria-live="polite">Version {status.version} is available. You have {status.currentVersion}.</p>}
         {updateError && <p className="form-error" role="alert">{updateError}</p>}
         <div className="update-actions">

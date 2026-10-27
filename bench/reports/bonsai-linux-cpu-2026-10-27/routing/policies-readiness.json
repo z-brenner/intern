@@ -1,0 +1,200 @@
+{
+ "never (2B always) / take4b": {
+  "correct": 37,
+  "ready": 54,
+  "unsafe": 23,
+  "needless": 2,
+  "match": 59,
+  "escalated": 0,
+  "infer": 1085.497
+ },
+ "always (both models on every doc) / take4b": {
+  "correct": 48,
+  "ready": 63,
+  "unsafe": 22,
+  "needless": 4,
+  "match": 65,
+  "escalated": 77,
+  "infer": 3814.3280000000004
+ },
+ "always (both models on every doc) / sticky": {
+  "correct": 48,
+  "ready": 48,
+  "unsafe": 14,
+  "needless": 9,
+  "match": 54,
+  "escalated": 77,
+  "infer": 3814.3280000000004
+ },
+ "always (both models on every doc) / agree": {
+  "correct": 48,
+  "ready": 27,
+  "unsafe": 4,
+  "needless": 17,
+  "match": 40,
+  "escalated": 77,
+  "infer": 3814.3280000000004
+ },
+ "2B review / take4b": {
+  "correct": 41,
+  "ready": 69,
+  "unsafe": 31,
+  "needless": 1,
+  "match": 70,
+  "escalated": 23,
+  "infer": 1821.5719999999997
+ },
+ "2B review / sticky": {
+  "correct": 41,
+  "ready": 54,
+  "unsafe": 23,
+  "needless": 6,
+  "match": 59,
+  "escalated": 23,
+  "infer": 1821.5719999999997
+ },
+ "2B review / agree": {
+  "correct": 41,
+  "ready": 54,
+  "unsafe": 23,
+  "needless": 6,
+  "match": 59,
+  "escalated": 23,
+  "infer": 1821.5719999999997
+ },
+ "2B parties<2 / take4b": {
+  "correct": 44,
+  "ready": 56,
+  "unsafe": 21,
+  "needless": 5,
+  "match": 61,
+  "escalated": 21,
+  "infer": 1818.2980000000002
+ },
+ "2B parties<2 / sticky": {
+  "correct": 44,
+  "ready": 51,
+  "unsafe": 18,
+  "needless": 7,
+  "match": 56,
+  "escalated": 21,
+  "infer": 1818.2980000000002
+ },
+ "2B parties<2 / agree": {
+  "correct": 44,
+  "ready": 41,
+  "unsafe": 12,
+  "needless": 10,
+  "match": 49,
+  "escalated": 21,
+  "infer": 1818.2980000000002
+ },
+ "2B review OR parties<2 / take4b": {
+  "correct": 46,
+  "ready": 66,
+  "unsafe": 26,
+  "needless": 4,
+  "match": 67,
+  "escalated": 37,
+  "infer": 2291.6730000000002
+ },
+ "2B review OR parties<2 / sticky": {
+  "correct": 46,
+  "ready": 51,
+  "unsafe": 18,
+  "needless": 9,
+  "match": 56,
+  "escalated": 37,
+  "infer": 2291.6730000000002
+ },
+ "2B review OR parties<2 / agree": {
+  "correct": 46,
+  "ready": 41,
+  "unsafe": 12,
+  "needless": 12,
+  "match": 49,
+  "escalated": 37,
+  "infer": 2291.6730000000002
+ },
+ "2B conf_min<0.7 / take4b": {
+  "correct": 44,
+  "ready": 59,
+  "unsafe": 22,
+  "needless": 5,
+  "match": 61,
+  "escalated": 40,
+  "infer": 2586.335000000001
+ },
+ "2B conf_min<0.7 / sticky": {
+  "correct": 44,
+  "ready": 49,
+  "unsafe": 16,
+  "needless": 7,
+  "match": 54,
+  "escalated": 40,
+  "infer": 2586.335000000001
+ },
+ "2B conf_min<0.7 / agree": {
+  "correct": 44,
+  "ready": 37,
+  "unsafe": 11,
+  "needless": 12,
+  "match": 46,
+  "escalated": 40,
+  "infer": 2586.335000000001
+ },
+ "2B review OR conf_min<0.7 / take4b": {
+  "correct": 46,
+  "ready": 64,
+  "unsafe": 24,
+  "needless": 4,
+  "match": 65,
+  "escalated": 47,
+  "infer": 2777.1840000000007
+ },
+ "2B review OR conf_min<0.7 / sticky": {
+  "correct": 46,
+  "ready": 49,
+  "unsafe": 16,
+  "needless": 9,
+  "match": 54,
+  "escalated": 47,
+  "infer": 2777.1840000000007
+ },
+ "2B review OR conf_min<0.7 / agree": {
+  "correct": 46,
+  "ready": 37,
+  "unsafe": 11,
+  "needless": 14,
+  "match": 46,
+  "escalated": 47,
+  "infer": 2777.1840000000007
+ },
+ "2B review OR parties<2 OR conf_min<0.7 / take4b": {
+  "correct": 45,
+  "ready": 64,
+  "unsafe": 25,
+  "needless": 4,
+  "match": 65,
+  "escalated": 52,
+  "infer": 2933.9760000000006
+ },
+ "2B review OR parties<2 OR conf_min<0.7 / sticky": {
+  "correct": 45,
+  "ready": 49,
+  "unsafe": 17,
+  "needless": 9,
+  "match": 54,
+  "escalated": 52,
+  "infer": 2933.9760000000006
+ },
+ "2B review OR parties<2 OR conf_min<0.7 / agree": {
+  "correct": 45,
+  "ready": 33,
+  "unsafe": 8,
+  "needless": 14,
+  "match": 44,
+  "escalated": 52,
+  "infer": 2933.9760000000006
+ }
+}

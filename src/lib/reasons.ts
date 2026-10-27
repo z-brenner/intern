@@ -22,6 +22,10 @@ const SENTENCES: Record<string, string> = {
   DATE_IMPLAUSIBLE: 'The date\'s year looks wrong for a document, often a misread such as 2625 for 2025. Check it against the document.',
   DATE_IS_DEADLINE: 'The date the model chose is a due, renewal, or expiry date, not the date the document was issued. Check the date.',
   DATE_AMBIGUOUS: 'The date is written only as numbers that could be read day-first or month-first. Check which one the document means.',
+  // The optional quick model read it. Its readings are never filed on their
+  // own; the accurate model reads the document again when it can, unless a
+  // person has acted on it first.
+  FAST_MODEL_READING: 'Read by the quick model — check it, or wait for the accurate model to read it again.',
   // Approving such a document sends it back here rather than filing a name
   // that described the earlier version; reading it again is the way on, and
   // the refusal of the approval says the same (actionErrors.ts).
@@ -59,6 +63,9 @@ const SENTENCES: Record<string, string> = {
   MODEL_DECLINED: 'The hosted model declined to answer about this document. Name it yourself, or keep the original.',
   HOSTED_MODEL_MISCONFIGURED: 'The hosted model\'s address, model name, or key is not usable. Check the Model section in Settings.',
   HOSTED_MODEL_KEY_MISSING: 'No API key is stored for the hosted model. Paste one in the Model section in Settings.',
+  // Linux only: the hosted model's key lives in the Secret Service, and this
+  // desktop is not running one.
+  SECRET_SERVICE_UNAVAILABLE: 'The hosted model\'s key could not be read because no credential store answered on this desktop. Start and unlock GNOME Keyring or KWallet, or use the local model.',
   HOSTED_MODEL_UNAUTHORIZED: 'The hosted service rejected the API key. Check the key in Settings.',
   HOSTED_MODEL_UNREACHABLE: 'The hosted service could not be reached. Check the connection and try again.',
   HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Intern will retry.',
