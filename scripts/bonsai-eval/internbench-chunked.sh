@@ -17,7 +17,7 @@ set -uo pipefail
 # chunk: with other agents' shared holders coming and going, re-queueing for every
 # chunk starves. A restart still loses at most the chunk in progress.
 if [ -n "${LOCK:-}" ] && [ -z "${HOLDING_LOCK:-}" ]; then
-  HOLDING_LOCK=1 exec flock -x "$LOCK" "$0" "$@"
+  HOLDING_LOCK=1 exec flock -x "$(dirname "$LOCK")/bench.turnstile" flock -x "$LOCK" "$0" "$@"
 fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN="${1:?run directory}"

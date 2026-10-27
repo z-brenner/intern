@@ -17,7 +17,8 @@ fi
 TMP=$(mktemp "$(dirname "$OUT")/.lb.XXXXXX")
 ERR="$(dirname "$OUT")/llama-bench.$LABEL.stderr.log"
 if [ -n "${LOCK:-}" ]; then
-  flock -x "$LOCK" "$BIN/llama-bench" -m "$MODEL" -o jsonl "$@" > "$TMP" 2> "$ERR"
+  # turnstile: while this measurement waits, new shared holders queue behind it
+  flock -x "$(dirname "$LOCK")/bench.turnstile" flock -x "$LOCK" "$BIN/llama-bench" -m "$MODEL" -o jsonl "$@" > "$TMP" 2> "$ERR"
 else
   "$BIN/llama-bench" -m "$MODEL" -o jsonl "$@" > "$TMP" 2> "$ERR"
 fi

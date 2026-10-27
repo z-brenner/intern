@@ -14,7 +14,7 @@ WARM=$Q/real-scan-noisy-statement.json
 sb() { # label model threads requests extra [serverbench options...]
   local label=$1 model=$2 th=$3 reqs=$4 extra=$5; shift 5
   if [ -f "$OUT" ] && grep -q "\"label\": \"$label\"" "$OUT"; then echo "$label skipped"; return; fi
-  flock -x "$S/bench.lock" python3 -I "$W/scripts/bonsai-eval/serverbench.py" --server "$P26/llama-server" \
+  flock -x "$S/bench.turnstile" flock -x "$S/bench.lock" python3 -I "$W/scripts/bonsai-eval/serverbench.py" --server "$P26/llama-server" \
     --model "$model" --threads "$th" --label "$label" --out "$OUT" --requests "$reqs" --extra "$extra" "$@"
 }
 M2=$C/Ternary-Bonsai-2-2B-PQ2_0.gguf
