@@ -116,8 +116,8 @@ Then Intern asks for **two folders**, and it cannot be used until both are
 chosen — there is no skipping it:
 
 - **Input folder** — put files here that you want Intern to process.
-- **Output folder** — processed files end up here, renamed. It has to be
-  outside the input folder.
+- **Output folder** — processed files end up here, renamed. Neither folder
+  may be inside the other.
 
 Setup lists the OneDrive and SharePoint folders already on the computer and
 can make an *Output* folder beside the input folder; both folders can be
@@ -174,13 +174,17 @@ files, Add folder, a drop, Send to — copies into the input folder: a folder is
 flattened, a name already taken gets " (2)", " (3)", a file already in the
 input folder is not copied again, and the originals are never changed. Each
 copy is written under a hidden temporary name, checked against the original,
-and only then given its real name, so the folder never holds half a copy; it
-joins the queue at once rather than after the watcher's settle time. An add is
+and only then given its real name, so the folder never holds half a copy (one
+a crash leaves behind is swept away an hour later); it joins the queue at once
+rather than after the watcher's settle time. Two identical files in one drop
+are copied once. An add is
 never refused as a batch: a file Intern cannot read (a `.zip`, an empty file,
 an Office lock file, a scan another program still has open) is left out and
 named in the window, with the reason, and everything else is copied and
 queued. With no input folder set up, an add is refused and points to
-Settings; nothing is ever processed where it sits. Installing an update
+Settings; nothing is ever processed where it sits. Documents sent with **Send
+to > Intern** before setup has chosen the folders wait, and are copied in as
+soon as it has. Installing an update
 restarts Intern without sending those documents again.
 
 If Intern cannot start, a dialog says why and names its data folder
@@ -209,10 +213,13 @@ folders. Nothing asks for a tenant, a site, or an account.
    added with **Add shortcut to My files**, and your own OneDrive all work.
 2. **Choose your output folder.** Intern creates an *Output* folder next to
    the input folder, keeps the output folder you already had, or you choose
-   another — never one inside the input folder. Chosen whole, a synced
+   another — neither folder may be inside the other. Chosen whole, a synced
    location gets an *Input* and an *Output* folder inside it, so both stay
-   synced. An output folder in OneDrive or SharePoint also turns on the
-   description records below.
+   synced. An output folder chosen in a SharePoint library or OneDrive for
+   work also turns on the description records below. A first run also turns
+   on running in the background and at sign-in, once the folders are saved;
+   an install from an earlier release keeps its own choices for everything
+   but the folders.
 3. **Decide about what is already there.** If the input folder already holds
    documents, Intern asks once whether to process them too. The default is
    only new files.

@@ -153,7 +153,8 @@ as waiting for OneDrive or as could not be read. A placeholder does not wait out
 its pause once the connection is back: each scan asks the sync client for its
 content, and the document is handed over as soon as the content arrives.
 
-The input folder requires an output folder **outside** it. A processed
+The input folder requires an output folder, and neither may be inside the
+other. A processed
 document landing back in the input folder would reappear as a new document;
 Intern refuses the configuration at save time - and setup and Settings refuse
 the pick before that - rather than discovering the loop at run time.
@@ -165,9 +166,13 @@ are given into the input folder (`input_copy`, in `src-tauri/src/input_folder.rs
 A folder is flattened, with the same rules an add always had for what counts
 as a document: unsupported, empty, temporary, and hidden files are reported as
 left out, never copied. Each copy is written under a dot-prefixed temporary
-name - the scan skips dot-names, so it never sees a half-written copy -
-checked against the original's fingerprint, and only then published onto its
-real name with a rename that refuses to replace anything. A name already taken
+name ending `.intern-copy` - the scan skips dot-names, so it never sees a
+half-written copy, and on Windows the file is hidden too - checked against the
+original's fingerprint, and only then published onto its real name with a
+rename that refuses to replace anything. A temporary copy a crash left behind
+is removed when the watcher next starts, once it is an hour old; nothing else
+is touched by that sweep, a filing's own temporary files included. Two files
+with the same content in one add are copied once. A name already taken
 in the folder, or one the queue has held a document at before, gets " (2)",
 " (3)", and so on. A file already inside the input folder is not copied; one
 inside the output folder is refused, since it is filed already. The originals
@@ -185,8 +190,14 @@ take is removed again, so the folder is as it was and the report's "left out"
 is true. Where the admission check holds a document - the verified team Inbox,
 before Microsoft has heard of the upload - the copy stays in the folder,
 unclaimed, for the scans to ask about again, and the window says it is waiting
-rather than queued. With no input folder set up, an add is refused whole
-(`INPUT_FOLDER_NOT_SET`); nothing is ever processed where it sits.
+rather than queued. A verdict instead - someone else's upload, or an uploader
+that cannot be known - leaves the document out, and a copy is taken back out
+of the folder. A claim this machine already held is never released by a
+hand-over the queue refuses. With no input folder set up, an add is refused
+whole (`INPUT_FOLDER_NOT_SET`); nothing is ever processed where it sits.
+"Send to > Intern" before setup has chosen the folders keeps its documents
+and copies them in once the save that chooses them succeeds. "Process them
+too" follows the scan's rules: a conflict copy is named and left alone.
 
 A subfolder the scan cannot list — a folder this account has no permission to
 open, or one the sync client removed between the listing and the descent — is
