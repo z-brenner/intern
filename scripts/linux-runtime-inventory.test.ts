@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { INVENTORY, stageInventory, verifyInventory, writeInventory } from './linux-runtime-inventory.mjs';
 
+/**
+ * Whether this file system keeps an executable bit. The inventory is written
+ * and verified on Linux, where a server without the bit cannot start; the
+ * Windows job runs these tests too, and NTFS has no such bit to record or to
+ * lose, so there the inventory's other checks are what is tested.
+ */
+const POSIX = process.platform !== 'win32';
+
 const llamaCpp = { repository: 'https://example.invalid/llama.cpp', release: 'test', archive: 'llama-test-bin-ubuntu-x64.tar.gz', url: 'https://example.invalid/llama-test-bin-ubuntu-x64.tar.gz', size: 1, sha256: '0'.repeat(64) };
 
 /** A staged package: a server, a library, a model, and one license. */
@@ -32,7 +40,7 @@ describe('the Linux runtime inventory', () => {
       'runtime/libllama.so.0', 'runtime/llama-server', 'runtime/ocr-models/text-detection.onnx',
     ]);
     expect(inventory.bundled_files.find((file: { path: string }) => file.path === 'runtime/llama-server'))
-      .toMatchObject({ executable: true, size: 6, packages: [{ name: 'llama.cpp', version: 'test' }] });
+      .toMatchObject({ executable: POSIX, size: 6, packages: [{ name: 'llama.cpp', version: 'test' }] });
     expect(inventory.license_files).toEqual([expect.objectContaining({ path: 'licenses/llama.cpp-LICENSE.txt', size: 3 })]);
     expect(JSON.parse(await readFile(join(root, INVENTORY), 'utf8')).llama_cpp).toEqual(llamaCpp);
 
@@ -54,14 +62,21 @@ describe('the Linux runtime inventory', () => {
     ['a changed file', (root: string) => writeFile(join(root, 'runtime/libllama.so.0'), 'librarx'), /SHA-256 mismatch: runtime\/libllama\.so\.0/],
     ['a truncated file', (root: string) => writeFile(join(root, 'runtime/libllama.so.0'), 'lib'), /size mismatch: runtime\/libllama\.so\.0/],
     ['a missing license', (root: string) => writeFile(join(root, 'licenses/llama.cpp-LICENSE.txt'), 'MIT!'), /licenses\/llama\.cpp-LICENSE\.txt/],
-    // A package step that drops the executable bit leaves a server nothing can start.
-    ['a lost executable bit', (root: string) => chmod(join(root, 'runtime/llama-server'), 0o644), /lost its executable bit: runtime\/llama-server/],
     ['an unlisted file', (root: string) => writeFile(join(root, 'runtime/libextra.so'), 'extra'), /not in the inventory: runtime\/libextra\.so/],
   ])('refuses %s', async (_label, tamper, message) => {
     const { root, packages } = await staged();
     await writeInventory(root, { packages, llamaCpp });
     await tamper(root);
     await expect(verifyInventory(root)).rejects.toThrow(message);
+  });
+
+  // A package step that drops the executable bit leaves a server nothing can
+  // start. Only a file system with the bit can lose it.
+  it.runIf(POSIX)('refuses a lost executable bit', async () => {
+    const { root, packages } = await staged();
+    await writeInventory(root, { packages, llamaCpp });
+    await chmod(join(root, 'runtime/llama-server'), 0o644);
+    await expect(verifyInventory(root)).rejects.toThrow(/lost its executable bit: runtime\/llama-server/);
   });
 
   it('refuses a listed path that leaves the package', async () => {
