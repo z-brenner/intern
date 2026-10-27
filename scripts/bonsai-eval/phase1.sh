@@ -23,11 +23,11 @@ for sz in 2B 4B; do
     $SW $OUT C-$sz-PQ2_0-b10777-source-native $B/prism-b10777-native/bin $M "${A[@]}"
     $SW $OUT C-$sz-PQ2_0-b10777-source-haswell $B/prism-b10777-portable-only-haswell $M "${A[@]}"
   fi
-  for q in PTQ1_0 Q2_0; do
-    M=$C/Ternary-Bonsai-2-$sz-$q.gguf
-    $SW $OUT C-$sz-$q-b10826-prebuilt-auto $P26 $M "${A[@]}"
-    $SW $OUT C-$sz-$q-b10826-prebuilt-haswell $B/prebuilt-prism-b10826-only-haswell $M "${A[@]}"
-  done
+  M=$C/Ternary-Bonsai-2-$sz-PTQ1_0.gguf
+  $SW $OUT C-$sz-PTQ1_0-b10826-prebuilt-auto $P26 $M "${A[@]}"
+  $SW $OUT C-$sz-PTQ1_0-b10826-prebuilt-haswell $B/prebuilt-prism-b10826-only-haswell $M "${A[@]}"
+  # Q2_0 on the Prism fork's CPU path runs at ~3-5 tok/s (measured on 2B): one row is enough.
+  [ $sz = 2B ] && $SW $OUT C-$sz-Q2_0-b10826-prebuilt-auto $P26 $C/Ternary-Bonsai-2-$sz-Q2_0.gguf "${A[@]}"
   $SW $OUT C-$sz-PTQ1_0-b10777-prebuilt-auto $P77 $C/Ternary-Bonsai-2-$sz-PTQ1_0.gguf "${A[@]}"
   $SW $OUT C-$sz-Q2_0-upstream-b11912-avx2 $B/upstream-b11912-avx2/bin $C/Ternary-Bonsai-2-$sz-Q2_0.gguf "${A[@]}"
 done
