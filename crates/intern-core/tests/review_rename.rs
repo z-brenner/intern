@@ -522,27 +522,15 @@ fn a_settled_plan_cannot_be_committed_or_settled_again() {
 }
 
 #[test]
-fn a_failure_that_uses_up_its_attempts_goes_to_review_only_when_asked() {
+fn retry_takes_back_only_an_unreadable_document() {
     let temp = TempDir::new().unwrap();
     let store = QueueStore::open(database(&temp)).unwrap();
     let crashed = store.enqueue(Path::new("/in/crashes.pdf"), "a").unwrap();
     let busy = store.enqueue(Path::new("/in/busy.pdf"), "b").unwrap();
-    for _ in 0..2 {
-        let claimed = store.claim_next().unwrap().unwrap();
-        assert_eq!(claimed.id, crashed.id);
-        store
-            .record_retryable_failure(
-                crashed.id,
-                ErrorCode::IoError,
-                Some((ErrorCode::ExtractionFailed, ReviewMark::Defer)),
-            )
-            .unwrap();
-    }
-    let item = store.get(crashed.id).unwrap().unwrap();
-    assert_eq!(item.status, QueueStatus::NeedsReview);
-    assert_eq!(item.error_code, Some(ErrorCode::ExtractionFailed));
-    assert_eq!(item.processing_failures, 2);
-
+    assert_eq!(store.claim_next().unwrap().unwrap().id, crashed.id);
+    store
+        .record_unreadable(crashed.id, ErrorCode::ExtractionFailed, ReviewMark::Never)
+        .unwrap();
     for _ in 0..2 {
         store.claim_next().unwrap().unwrap();
         store
@@ -553,7 +541,6 @@ fn a_failure_that_uses_up_its_attempts_goes_to_review_only_when_asked() {
     assert_eq!(item.status, QueueStatus::Failed);
     assert_eq!(item.error_code, Some(ErrorCode::IoError));
 
-    // Retry takes an unreadable document back to the queue, and nothing else.
     assert!(store.retry_unreadable(busy.id, None).is_err());
     let retried = store.retry_unreadable(crashed.id, None).unwrap();
     assert_eq!(retried.status, QueueStatus::Queued);
@@ -647,18 +634,17 @@ fn a_marked_document_that_is_canceled_or_fails_gets_its_name_back() {
     assert_eq!(row(&store, waiting).source_path, waiting_marked);
 }
 
-/// A mark decided against, or put off, is recorded with the review, so
-/// recovery - which marks any document in review that has no mark at all -
-/// never makes it.
+/// A mark decided against is recorded with the review, so recovery - which
+/// marks any document in review that has no mark at all - never makes it.
 #[test]
-fn a_mark_put_off_or_decided_against_is_never_made_by_recovery() {
+fn a_mark_decided_against_is_never_made_by_recovery() {
     let temp = TempDir::new().unwrap();
     let store = Arc::new(QueueStore::open(database(&temp)).unwrap());
     let folder = inbox(&temp);
     let mut ids = Vec::new();
     for (name, mark) in [
         ("never.pdf", ReviewMark::Never),
-        ("later.pdf", ReviewMark::Defer),
+        ("now.pdf", ReviewMark::Now),
     ] {
         let path = folder.join(name);
         fs::write(&path, name).unwrap();
@@ -671,99 +657,127 @@ fn a_mark_put_off_or_decided_against_is_never_made_by_recovery() {
     }
     let applier = FileApplier::local(Arc::clone(&store));
     applier.reconcile_review_renames().unwrap();
-    for (id, path) in &ids {
-        assert_eq!(&row(&store, *id).source_path, path);
-        assert!(path.exists());
-    }
-
-    // A later success proves the put-off one was the document's problem.
-    assert_eq!(store.promote_deferred_marks().unwrap(), vec![ids[1].0]);
-    assert!(store.promote_deferred_marks().unwrap().is_empty());
-    applier.reconcile_review_renames().unwrap();
+    assert_eq!(row(&store, ids[0].0).source_path, ids[0].1);
+    assert!(ids[0].1.exists());
     assert_eq!(
         row(&store, ids[1].0).source_path,
-        folder.join("NEEDS REVIEW - later.pdf")
+        folder.join("NEEDS REVIEW - now.pdf")
     );
-    assert_eq!(row(&store, ids[0].0).source_path, ids[0].1);
 }
 
-/// A run of failures that stops the queue puts its own documents back to
-/// wait - and only those - under their own names, with nothing counted. A
-/// document is counted once however often it failed, and one a run put
-/// back never counts again, so a resumed queue cannot stop on it again.
+/// A document whose failure may be the machine's waits in doubt: back in
+/// the queue under its own name with nothing counted, behind every other
+/// document, and not read again at all until the machine is shown to work
+/// for that kind of failure - by another document, or the self-test.
 #[test]
-fn a_run_that_stops_the_queue_requeues_its_own_documents_once() {
+fn a_doubted_document_waits_until_the_machine_is_shown_to_work() {
     let temp = TempDir::new().unwrap();
     let store = QueueStore::open(database(&temp)).unwrap();
-    let days_ago = store.enqueue(Path::new("/in/old.pdf"), "old").unwrap();
-    let put_off = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
-    let decided = store.enqueue(Path::new("/in/b.pdf"), "b").unwrap();
-    let retrying = store.enqueue(Path::new("/in/c.pdf"), "c").unwrap();
-
-    // A put-off document from an earlier run, which a resume ended.
-    assert_eq!(store.claim_next().unwrap().unwrap().id, days_ago.id);
+    let doubted = store.enqueue(Path::new("/in/a.pdf"), "a").unwrap();
+    let other = store.enqueue(Path::new("/in/b.pdf"), "b").unwrap();
+    assert_eq!(store.claim_next().unwrap().unwrap().id, doubted.id);
     store
-        .record_unreadable(
-            days_ago.id,
-            ErrorCode::ModelOutputInvalid,
-            ReviewMark::Defer,
+        .doubt(doubted.id, "timeout", ErrorCode::ModelFailed)
+        .unwrap();
+    let waiting = row(&store, doubted.id);
+    assert_eq!(waiting.status, QueueStatus::Queued);
+    assert_eq!(waiting.processing_failures, 0);
+    assert_eq!(waiting.error_code, Some(ErrorCode::ModelFailed));
+
+    assert_eq!(store.claim_next().unwrap().unwrap().id, other.id);
+    store
+        .record_unreadable(other.id, ErrorCode::PasswordProtected, ReviewMark::Never)
+        .unwrap();
+    // Only the doubted document is left, and nothing proved the machine.
+    assert!(store.claim_next().unwrap().is_none());
+    assert_eq!(
+        store.unproven_doubts().unwrap(),
+        vec!["timeout".to_string()]
+    );
+    store.prove_doubts(&["reply"], None).unwrap();
+    store.prove_doubts(&["timeout"], Some(doubted.id)).unwrap();
+    assert!(store.claim_next().unwrap().is_none());
+    assert_eq!(store.proven_doubt(doubted.id).unwrap(), None);
+
+    // Shown to work: due its one proof attempt, behind any new document.
+    store.prove_doubts(&["timeout"], None).unwrap();
+    assert!(store.unproven_doubts().unwrap().is_empty());
+    let newer = store.enqueue(Path::new("/in/c.pdf"), "c").unwrap();
+    assert_eq!(store.claim_next().unwrap().unwrap().id, newer.id);
+    store
+        .record_unreadable(newer.id, ErrorCode::PasswordProtected, ReviewMark::Never)
+        .unwrap();
+    assert_eq!(
+        store.proven_doubt(doubted.id).unwrap().as_deref(),
+        Some("timeout")
+    );
+    assert_eq!(store.claim_next().unwrap().unwrap().id, doubted.id);
+    // Failing again, it goes to review and is no longer in doubt.
+    store
+        .record_unreadable(doubted.id, ErrorCode::ModelFailed, ReviewMark::Now)
+        .unwrap();
+    assert_eq!(store.proven_doubt(doubted.id).unwrap(), None);
+    assert!(store.unproven_doubts().unwrap().is_empty());
+}
+
+/// A run of failures counts documents, each kind on its own, however often
+/// one fails.
+#[test]
+fn a_run_of_failures_counts_each_document_once_per_kind() {
+    let temp = TempDir::new().unwrap();
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let ids = ["a", "b", "c"].map(|name| {
+        store
+            .enqueue(Path::new(&format!("/in/{name}.pdf")), name)
+            .unwrap()
+            .id
+    });
+    assert_eq!(store.join_failure_run(ids[0], "timeout").unwrap(), 1);
+    assert_eq!(store.join_failure_run(ids[0], "timeout").unwrap(), 1);
+    assert_eq!(store.join_failure_run(ids[0], "reply").unwrap(), 1);
+    assert_eq!(store.join_failure_run(ids[1], "timeout").unwrap(), 2);
+    store.end_failure_runs(Some("timeout")).unwrap();
+    assert_eq!(store.join_failure_run(ids[1], "timeout").unwrap(), 1);
+    assert_eq!(store.join_failure_run(ids[2], "reply").unwrap(), 2);
+    store.end_failure_runs(None).unwrap();
+    assert_eq!(store.join_failure_run(ids[2], "reply").unwrap(), 1);
+}
+
+/// Earlier builds sent such a document to review with its rename put off
+/// until a later document was read. Opened now, it waits in doubt instead,
+/// under its own name, never renamed by a later success.
+#[test]
+fn a_put_off_mark_from_an_earlier_build_becomes_a_doubt() {
+    let temp = TempDir::new().unwrap();
+    let folder = inbox(&temp);
+    let (id, path) = {
+        let store = QueueStore::open(database(&temp)).unwrap();
+        unreadable(&store, &folder, "slow.pdf", ErrorCode::ModelFailed)
+    };
+    Connection::open(database(&temp))
+        .unwrap()
+        .execute(
+            "INSERT INTO review_renames(
+               queue_item_id, purpose, from_path, from_path_key, to_path, to_path_key,
+               stage, created_at, updated_at
+             )
+             SELECT id, 'mark', source_path, source_path_key, source_path, source_path_key,
+                    'deferred', 0, 0
+             FROM queue_items WHERE id = ?1",
+            [id],
         )
         .unwrap();
-    assert_eq!(
-        store.join_failure_streak(days_ago.id, "reply").unwrap(),
-        Some(1)
-    );
-    store.end_failure_streaks(None, None).unwrap();
 
-    for (item, mark) in [(&put_off, ReviewMark::Defer), (&decided, ReviewMark::Now)] {
-        assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
-        store
-            .record_unreadable(item.id, ErrorCode::ModelOutputInvalid, mark)
-            .unwrap();
-    }
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let item = row(&store, id);
+    assert_eq!(item.status, QueueStatus::Queued);
+    assert_eq!(item.processing_failures, 0);
+    assert_eq!(item.source_path, path);
     assert_eq!(
-        store.join_failure_streak(put_off.id, "reply").unwrap(),
-        Some(1)
+        store.unproven_doubts().unwrap(),
+        vec!["timeout".to_string()]
     );
-    // Twice is still one document; another kind is another run.
-    assert_eq!(
-        store.join_failure_streak(put_off.id, "reply").unwrap(),
-        Some(1)
-    );
-    assert_eq!(store.claim_next().unwrap().unwrap().id, retrying.id);
-    store
-        .record_processing_failure(retrying.id, ErrorCode::ModelFailed)
-        .unwrap();
-    assert_eq!(
-        store.join_failure_streak(retrying.id, "timeout").unwrap(),
-        Some(1)
-    );
-
-    assert_eq!(store.requeue_failure_streak().unwrap(), 2);
-    let requeued = row(&store, put_off.id);
-    assert_eq!(requeued.status, QueueStatus::Queued);
-    assert_eq!(requeued.error_code, None);
-    assert_eq!(requeued.processing_failures, 0);
-    assert_eq!(row(&store, retrying.id).processing_failures, 0);
-    assert_eq!(row(&store, decided.id).status, QueueStatus::NeedsReview);
-    // The earlier run's document still waits in review for its person.
-    assert_eq!(row(&store, days_ago.id).status, QueueStatus::NeedsReview);
-    assert_eq!(store.promote_deferred_marks().unwrap(), vec![days_ago.id]);
-
-    // Put back once, they never count towards a run again, until read.
-    assert_eq!(
-        store.join_failure_streak(put_off.id, "reply").unwrap(),
-        None
-    );
-    assert_eq!(
-        store.join_failure_streak(retrying.id, "reply").unwrap(),
-        None
-    );
-    store.end_failure_streaks(None, Some(put_off.id)).unwrap();
-    assert_eq!(
-        store.join_failure_streak(put_off.id, "reply").unwrap(),
-        Some(1)
-    );
+    assert!(stages(&temp).is_empty());
 }
 
 /// The mark of a canceled document whose file is gone is given up rather
@@ -813,15 +827,32 @@ fn a_mark_that_cannot_be_taken_back_is_not_tried_for_ever() {
     // journal still holds only the latest refusal.
     assert!(store.marked_but_settled().unwrap().is_empty());
     let connection = Connection::open(database(&temp)).unwrap();
-    connection
-        .execute(
-            "UPDATE review_renames SET updated_at = updated_at - 3600",
-            [],
-        )
-        .unwrap();
+    let wait_over = || {
+        connection
+            .execute(
+                "UPDATE review_renames SET updated_at = updated_at - 3600",
+                [],
+            )
+            .unwrap();
+    };
+    wait_over();
     assert_eq!(store.marked_but_settled().unwrap().len(), 1);
     applier.reconcile_review_renames().unwrap();
     assert_eq!(stages(&temp).len(), 3);
+
+    // A folder that cannot be looked in - an offline share, an unmounted
+    // sync root - hides the file without it being gone: not given up on.
+    filesystem.refuse.store(false, Ordering::SeqCst);
+    let away = folder.with_file_name("Away");
+    fs::rename(&folder, &away).unwrap();
+    wait_over();
+    applier.reconcile_review_renames().unwrap();
+    assert_eq!(store.marked_but_settled().unwrap().len(), 0, "backing off");
+    fs::rename(&away, &folder).unwrap();
+    wait_over();
+    applier.reconcile_review_renames().unwrap();
+    assert!(folder.join("held.pdf").exists());
+    assert!(store.marked_but_settled().unwrap().is_empty());
 }
 
 /// Clearing the history never clears away a canceled document whose file
@@ -848,14 +879,24 @@ fn clearing_the_history_keeps_a_document_whose_name_is_not_back_yet() {
     store
         .transition(plain.id, QueueStatus::Queued, QueueStatus::Canceled, None)
         .unwrap();
+    let unseen = store
+        .enqueue(Path::new("/in/unseen.pdf"), "unseen")
+        .unwrap();
+    store.record_intake_claim("unseen", unseen.id).unwrap();
+    store
+        .transition(unseen.id, QueueStatus::Queued, QueueStatus::Canceled, None)
+        .unwrap();
 
-    assert_eq!(store.clear_terminal().unwrap(), 1);
+    assert_eq!(store.clear_terminal().unwrap(), 2);
     assert!(store.get(marked).unwrap().is_some());
-    // The cleared item's claim reads as gone for one round, then goes.
+    // A cleared item's claim reads as gone until the intake watcher has
+    // seen it gone, and only then goes with a later clearing.
     assert_eq!(store.find_by_intake_claim("plain").unwrap(), Some(None));
     applier.unmark_settled(marked).unwrap().unwrap();
     assert_eq!(store.clear_terminal().unwrap(), 1);
     assert_eq!(store.find_by_intake_claim("plain").unwrap(), None);
+    store.clear_terminal().unwrap();
+    assert_eq!(store.find_by_intake_claim("unseen").unwrap(), Some(None));
 }
 
 /// Retry after the person fixed the file - removed the password, saved it

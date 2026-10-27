@@ -86,27 +86,17 @@ impl ReviewRenamePurpose {
 }
 
 /// Whether the file of a document going to review because it could not be
-/// read is renamed `NEEDS REVIEW - ...`, decided when it goes there.
+/// read is renamed `NEEDS REVIEW - ...`, decided when it goes there. A
+/// document only goes to review once its failure is known to be its own
+/// (see [`QueueStore::doubt`] for one that may be the machine's).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReviewMark {
-    /// Rename it now: the reason is the document's own by its nature - a
-    /// password, a file that is not what it says, one too large, a parse
-    /// failure, a refusal.
+    /// Rename it now.
     Now,
-    /// Not yet: the reason - a reply that could not be used, a time limit, a
-    /// crash, an internal failure - is just as often the model's or the
-    /// reader's as the document's. It is renamed once a later document is
-    /// read successfully, which proves the machine is fine; a run of such
-    /// failures that stops the queue puts it back to wait instead.
-    Defer,
     /// Never: the document is not in the input folder, or it was admitted on
     /// a proof (Microsoft's word on its uploader) that names it by its file
     /// name, which a rename would break for good.
     Never,
-    /// Never renamed, as for `Never`, but the reason is one that could as
-    /// well be the machine's, as for `Defer`: a run of such failures that
-    /// stops the queue still puts the document back to wait.
-    Hold,
 }
 
 /// How far a rename in place got.
@@ -126,13 +116,6 @@ pub enum ReviewRenameStage {
     /// A mark decided against for good ([`ReviewMark::Never`]): nothing is
     /// renamed, and recovery does not make up for it.
     Skipped,
-    /// A mark put off ([`ReviewMark::Defer`]) until a later document is read
-    /// successfully.
-    Deferred,
-    /// No mark, and a failure not yet proven the document's own
-    /// ([`ReviewMark::Hold`]); becomes `Skipped` once a later document is
-    /// read successfully.
-    Held,
     /// A mark that can no longer be taken back: the item was canceled or
     /// failed and its marked file is gone.
     Abandoned,
@@ -150,8 +133,6 @@ impl ReviewRenameStage {
             Self::RolledBack => "rolled_back",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
-            Self::Deferred => "deferred",
-            Self::Held => "held",
             Self::Abandoned => "abandoned",
         }
     }
@@ -163,8 +144,6 @@ impl ReviewRenameStage {
             "rolled_back" => Some(Self::RolledBack),
             "failed" => Some(Self::Failed),
             "skipped" => Some(Self::Skipped),
-            "deferred" => Some(Self::Deferred),
-            "held" => Some(Self::Held),
             "abandoned" => Some(Self::Abandoned),
             _ => None,
         }
@@ -356,24 +335,44 @@ impl QueueStore {
                  CREATE TABLE IF NOT EXISTS intake_claims (
                    claim_key TEXT PRIMARY KEY,
                    queue_item_id INTEGER REFERENCES queue_items(id) ON DELETE SET NULL,
-                   created_at INTEGER NOT NULL
+                   created_at INTEGER NOT NULL,
+                   seen_gone INTEGER NOT NULL DEFAULT 0
                  );
-                 -- The documents of a run of failures that may be the
-                 -- machine's (`kind`: unusable replies, time-outs, reader
-                 -- crashes), one row per document however often it failed.
-                 -- A run that stops the queue puts its documents back to
-                 -- wait and flags them (`requeued`): failing the same way
-                 -- again, they go to review and never start a run of their
-                 -- own, so a resumed queue cannot stop on them for good.
-                 CREATE TABLE IF NOT EXISTS failure_streaks (
+                 -- Documents whose failure may be the machine's rather than
+                 -- theirs (`kind`: an unusable reply, a time-out, a reader
+                 -- crash). They wait, behind the rest, under their own
+                 -- names, until the machine is shown to work (`proven`): a
+                 -- later document read successfully, or the self-test. Only
+                 -- a failure after that is the document's own.
+                 CREATE TABLE IF NOT EXISTS doubted_documents (
                    queue_item_id INTEGER PRIMARY KEY
                      REFERENCES queue_items(id) ON DELETE CASCADE,
                    kind TEXT NOT NULL,
-                   requeued INTEGER NOT NULL DEFAULT 0,
+                   proven INTEGER NOT NULL DEFAULT 0,
                    created_at INTEGER NOT NULL
-                 );",
+                 );
+                 -- The documents of the current run of such failures, by
+                 -- kind: one row per document, however often it failed. A
+                 -- run long enough stops the queue.
+                 CREATE TABLE IF NOT EXISTS failure_runs (
+                   queue_item_id INTEGER NOT NULL
+                     REFERENCES queue_items(id) ON DELETE CASCADE,
+                   kind TEXT NOT NULL,
+                   created_at INTEGER NOT NULL,
+                   PRIMARY KEY (queue_item_id, kind)
+                 );
+                 DROP TABLE IF EXISTS failure_streaks;",
             )
             .map_err(InternError::from)?;
+        if !column_exists(&connection, "intake_claims", "seen_gone")? {
+            connection
+                .execute(
+                    "ALTER TABLE intake_claims ADD COLUMN seen_gone INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )
+                .map_err(InternError::from)?;
+        }
+        doubt_deferred_marks(&connection)?;
         let session_id = new_session_id();
         connection
             .execute(
@@ -443,7 +442,15 @@ impl QueueStore {
                  SELECT 1 FROM queue_items active
                  WHERE active.status IN ('extracting', 'analyzing', 'applying')
                )
-             ORDER BY id LIMIT 1",
+               AND NOT EXISTS (
+                 SELECT 1 FROM doubted_documents doubt
+                 WHERE doubt.queue_item_id = queue_items.id AND doubt.proven = 0
+               )
+             ORDER BY EXISTS (
+                 SELECT 1 FROM doubted_documents doubt
+                 WHERE doubt.queue_item_id = queue_items.id
+               ), id
+             LIMIT 1",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -769,15 +776,20 @@ impl QueueStore {
         transaction
             .execute(
                 "DELETE FROM review_renames
-                 WHERE queue_item_id = ?1 AND stage IN ('deferred', 'skipped', 'held')",
+                 WHERE queue_item_id = ?1 AND stage = 'skipped'",
                 params![id],
             )
             .map_err(InternError::from)?;
-        // A person's retry is a fresh start: no longer one a run of
-        // failures put back.
+        // A person's retry is a fresh start.
         transaction
             .execute(
-                "DELETE FROM failure_streaks WHERE queue_item_id = ?1",
+                "DELETE FROM failure_runs WHERE queue_item_id = ?1",
+                params![id],
+            )
+            .map_err(InternError::from)?;
+        transaction
+            .execute(
+                "DELETE FROM doubted_documents WHERE queue_item_id = ?1",
                 params![id],
             )
             .map_err(InternError::from)?;
@@ -1673,7 +1685,9 @@ impl QueueStore {
     /// The item a claim handed over: `None` when the claim was never
     /// recorded (one taken before claims were recorded), `Some(None)` when
     /// it was and the item is gone - removed from the queue, or cleared with
-    /// the history - and `Some(Some(item))` otherwise.
+    /// the history - and `Some(Some(item))` otherwise. A claim answered as
+    /// gone has been seen gone by the intake watcher, and only then may
+    /// [`Self::clear_terminal`] drop it.
     pub fn find_by_intake_claim(&self, claim_key: &str) -> InternResult<Option<Option<QueueItem>>> {
         let connection = self.lock()?;
         let Some(id) = connection
@@ -1688,6 +1702,12 @@ impl QueueStore {
             return Ok(None);
         };
         let Some(id) = id else {
+            connection
+                .execute(
+                    "UPDATE intake_claims SET seen_gone = 1 WHERE claim_key = ?1",
+                    params![claim_key],
+                )
+                .map_err(InternError::from)?;
             return Ok(Some(None));
         };
         Ok(Some(
@@ -1699,147 +1719,143 @@ impl QueueStore {
         ))
     }
 
-    /// Settles every mark that was put off ([`ReviewMark::Defer`]): a
-    /// document was read successfully since, so whatever made them fail was
-    /// theirs, not the machine's. Returns the items still waiting in review
-    /// under an unreadable code, whose files are now to be marked.
-    pub fn promote_deferred_marks(&self) -> InternResult<Vec<i64>> {
+    /// Puts owned processing work back to wait as doubted: it failed in a
+    /// way that may be the machine's rather than its own (`kind`: an
+    /// unusable reply, a time-out, a reader crash), and nobody can yet tell
+    /// which. Nothing is counted against it and nothing is renamed; it keeps
+    /// `error` to say why it waits. It is not read again until the machine
+    /// is shown to work ([`Self::prove_doubts`]), and then behind every
+    /// document not in doubt.
+    pub fn doubt(&self, id: i64, kind: &str, error: ErrorCode) -> InternResult<()> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(InternError::from)?;
-        let ids = {
-            let mut statement = transaction
-                .prepare(&format!(
-                    "SELECT DISTINCT renames.queue_item_id
-                     FROM review_renames renames
-                     JOIN queue_items items ON items.id = renames.queue_item_id
-                     WHERE renames.stage = 'deferred' AND items.status = 'needs_review'
-                       AND items.error_code IN ({})
-                     ORDER BY renames.queue_item_id",
-                    unreadable_codes_sql()
-                ))
-                .map_err(InternError::from)?;
-            statement
-                .query_map([], |row| row.get::<_, i64>(0))
-                .map_err(InternError::from)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(InternError::from)?
-        };
-        transaction
-            .execute("DELETE FROM review_renames WHERE stage = 'deferred'", [])
-            .map_err(InternError::from)?;
-        // Proven the documents' own as well, and never to be marked.
-        transaction
+        let changed = transaction
             .execute(
-                "UPDATE review_renames SET stage = 'skipped', updated_at = ?1 WHERE stage = 'held'",
-                params![now()],
+                "UPDATE queue_items
+                 SET status = 'queued', processing_failures = 0, error_code = ?1,
+                     owner_session = NULL, lease_expires_at = NULL, updated_at = ?2
+                 WHERE id = ?3 AND status IN ('extracting', 'analyzing') AND owner_session = ?4",
+                params![error.as_str(), now(), id, self.session_id],
             )
             .map_err(InternError::from)?;
-        transaction.commit().map_err(InternError::from)?;
-        Ok(ids)
-    }
-
-    /// Counts a failure of `id` that may be the machine's rather than the
-    /// document's into the current run of its `kind`, and returns how many
-    /// documents that run now holds. A document is counted once however
-    /// often it fails, so a document tried twice is not two in a row.
-    /// `None` for a document a run already put back once (see
-    /// [`Self::requeue_failure_streak`]): it never counts again.
-    pub fn join_failure_streak(&self, id: i64, kind: &str) -> InternResult<Option<u32>> {
-        let connection = self.lock()?;
-        let requeued = connection
-            .query_row(
-                "SELECT requeued FROM failure_streaks WHERE queue_item_id = ?1",
-                params![id],
-                |row| row.get::<_, bool>(0),
-            )
-            .optional()
-            .map_err(InternError::from)?;
-        if requeued == Some(true) {
-            return Ok(None);
+        if changed != 1 {
+            transaction.rollback().map_err(InternError::from)?;
+            return Err(InternError::new(
+                ErrorCode::StateConflict,
+                "item is not owned processing work",
+            ));
         }
-        connection
+        transaction
             .execute(
-                "INSERT OR IGNORE INTO failure_streaks(queue_item_id, kind, requeued, created_at)
-                 VALUES (?1, ?2, 0, ?3)",
+                "INSERT INTO doubted_documents(queue_item_id, kind, proven, created_at)
+                 VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT(queue_item_id) DO UPDATE SET kind = excluded.kind, proven = 0",
                 params![id, kind, now()],
             )
             .map_err(InternError::from)?;
+        transaction.commit().map_err(InternError::from)
+    }
+
+    /// The kind of doubt the machine has since been shown to work for, when
+    /// `id` is a doubted document due its one proof attempt: failing that
+    /// way again, the failure is its own.
+    pub fn proven_doubt(&self, id: i64) -> InternResult<Option<String>> {
+        let connection = self.lock()?;
         connection
             .query_row(
-                "SELECT COUNT(*) FROM failure_streaks WHERE kind = ?1 AND requeued = 0",
-                params![kind],
-                |row| row.get::<_, u32>(0),
+                "SELECT kind FROM doubted_documents WHERE queue_item_id = ?1 AND proven = 1",
+                params![id],
+                |row| row.get::<_, String>(0),
             )
-            .map(Some)
+            .optional()
             .map_err(InternError::from)
     }
 
-    /// Ends the current runs of failures: of `kind`, or of every kind with
-    /// `None`. Their documents stay where they are. A document `read`
-    /// successfully is also no longer one a run put back.
-    pub fn end_failure_streaks(&self, kind: Option<&str>, read: Option<i64>) -> InternResult<()> {
+    /// The machine was shown to work for these `kinds` of failure: a
+    /// document other than `except` was read, or the self-test passed. The
+    /// documents in doubt of those kinds are due their one proof attempt.
+    pub fn prove_doubts(&self, kinds: &[&str], except: Option<i64>) -> InternResult<()> {
+        let connection = self.lock()?;
+        for kind in kinds {
+            connection
+                .execute(
+                    "UPDATE doubted_documents SET proven = 1
+                     WHERE kind = ?1 AND (?2 IS NULL OR queue_item_id <> ?2)",
+                    params![kind, except],
+                )
+                .map_err(InternError::from)?;
+        }
+        Ok(())
+    }
+
+    /// `id` is no longer in doubt: it was read, or its failure was proven
+    /// its own.
+    pub fn forget_doubt(&self, id: i64) -> InternResult<()> {
         let connection = self.lock()?;
         connection
             .execute(
-                "DELETE FROM failure_streaks
-                 WHERE (requeued = 0 AND (?1 IS NULL OR kind = ?1)) OR queue_item_id = ?2",
-                params![kind, read],
+                "DELETE FROM doubted_documents WHERE queue_item_id = ?1",
+                params![id],
             )
             .map_err(InternError::from)?;
         Ok(())
     }
 
-    /// Puts the documents of the run of failures that stopped the queue
-    /// back to wait - and only those: the machine, not they, was the likely
-    /// problem, so they are read again once the queue is resumed, under
-    /// their own names and with nothing counted against them. A document
-    /// whose mark was put off days ago, outside this run, stays in review
-    /// for the person it waits for. Each is flagged as put back, so failing
-    /// the same way again it goes to review rather than into a new run: a
-    /// queue resumed onto the same documents moves past them. Returns how
-    /// many went back.
-    pub fn requeue_failure_streak(&self) -> InternResult<usize> {
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(InternError::from)?;
-        let requeued = transaction
-            .execute(
-                &format!(
-                    "UPDATE queue_items
-                     SET status = 'queued', processing_failures = 0, error_code = NULL,
-                         owner_session = NULL, lease_expires_at = NULL, updated_at = ?1
-                     WHERE id IN (SELECT queue_item_id FROM failure_streaks WHERE requeued = 0)
-                       AND (status = 'queued'
-                            OR (status = 'needs_review' AND error_code IN ({})
-                                AND NOT EXISTS (
-                                  SELECT 1 FROM proposals WHERE queue_item_id = queue_items.id
-                                )))",
-                    unreadable_codes_sql()
-                ),
-                params![now()],
+    /// The kinds of doubt that wait on the machine being shown to work,
+    /// among documents still waiting: what a self-test has to prove before
+    /// they can be read again, when nothing else is left to prove it.
+    pub fn unproven_doubts(&self) -> InternResult<Vec<String>> {
+        let connection = self.lock()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT doubt.kind FROM doubted_documents doubt
+                 JOIN queue_items items ON items.id = doubt.queue_item_id
+                 WHERE items.status = 'queued' AND doubt.proven = 0
+                 ORDER BY doubt.kind",
             )
             .map_err(InternError::from)?;
-        transaction
+        statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(InternError::from)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(InternError::from)
+    }
+
+    /// Counts a failure of `id` that may be the machine's into the current
+    /// run of its `kind`, and returns how many documents the run holds. A
+    /// document is counted once however often it fails, so a document
+    /// tried twice is not two in a row.
+    pub fn join_failure_run(&self, id: i64, kind: &str) -> InternResult<u32> {
+        let connection = self.lock()?;
+        connection
             .execute(
-                "DELETE FROM review_renames
-                 WHERE stage IN ('deferred', 'held')
-                   AND queue_item_id IN (
-                     SELECT queue_item_id FROM failure_streaks WHERE requeued = 0
-                   )",
-                [],
+                "INSERT OR IGNORE INTO failure_runs(queue_item_id, kind, created_at)
+                 VALUES (?1, ?2, ?3)",
+                params![id, kind, now()],
             )
             .map_err(InternError::from)?;
-        transaction
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM failure_runs WHERE kind = ?1",
+                params![kind],
+                |row| row.get::<_, u32>(0),
+            )
+            .map_err(InternError::from)
+    }
+
+    /// Ends the current runs of failures: of `kind`, or of every kind with
+    /// `None`. Their documents stay where they are.
+    pub fn end_failure_runs(&self, kind: Option<&str>) -> InternResult<()> {
+        let connection = self.lock()?;
+        connection
             .execute(
-                "UPDATE failure_streaks SET requeued = 1 WHERE requeued = 0",
-                [],
+                "DELETE FROM failure_runs WHERE ?1 IS NULL OR kind = ?1",
+                params![kind],
             )
             .map_err(InternError::from)?;
-        transaction.commit().map_err(InternError::from)?;
-        Ok(requeued)
+        Ok(())
     }
 
     /// Records that an item's file is not to be renamed after all - it is
@@ -2160,7 +2176,7 @@ impl QueueStore {
             )
             .optional()
             .map_err(InternError::from)?
-            .is_some_and(|stage| matches!(stage.as_str(), "deferred" | "skipped" | "held")))
+            .is_some_and(|stage| stage == "skipped"))
     }
 
     /// Items in review under an unreadable code whose file was never marked:
@@ -2369,13 +2385,16 @@ impl QueueStore {
     /// Clears finished items away. A canceled or failed item whose file
     /// still carries Intern's `NEEDS REVIEW` mark stays until its name is
     /// back: cleared, nothing would be left to give it back, and every scan
-    /// would skip the file for good. Claims whose item was cleared by an
-    /// earlier clearing go too; this clearing's stay one more round, for the
-    /// intake watcher to read the item as gone.
+    /// would skip the file for good. Claims whose item is gone go too, once
+    /// the intake watcher has seen it gone; until then they stay, so the
+    /// watcher never reads a later document at the same path as the claim's.
     pub fn clear_terminal(&self) -> InternResult<usize> {
         let connection = self.lock()?;
         connection
-            .execute("DELETE FROM intake_claims WHERE queue_item_id IS NULL", [])
+            .execute(
+                "DELETE FROM intake_claims WHERE queue_item_id IS NULL AND seen_gone = 1",
+                [],
+            )
             .map_err(InternError::from)?;
         connection
             .execute(
@@ -2417,25 +2436,6 @@ impl QueueStore {
         id: i64,
         error: ErrorCode,
     ) -> InternResult<QueueStatus> {
-        self.record_retryable_failure(id, error, None)
-    }
-
-    /// [`Self::record_processing_failure`], and when this failure uses up
-    /// the document's last attempt and `review_when_exhausted` names a code,
-    /// the document goes to review under that code instead of failing.
-    ///
-    /// For a failure that is this document's own when it happens twice -
-    /// a parser that crashed on it both times, a model that timed out on it
-    /// both times - but may pass on a second attempt. The first attempt is
-    /// counted and queued as before; the second hands the document to a
-    /// person rather than leaving it failed behind the rest, with `mark`
-    /// deciding whether its file is renamed for it (see [`ReviewMark`]).
-    pub fn record_retryable_failure(
-        &self,
-        id: i64,
-        error: ErrorCode,
-        review_when_exhausted: Option<(ErrorCode, ReviewMark)>,
-    ) -> InternResult<QueueStatus> {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -2456,10 +2456,10 @@ impl QueueStore {
                 )
             })?
             + 1;
-        let (status, error, mark) = match (failures >= 2, review_when_exhausted) {
-            (true, Some((review, mark))) => (QueueStatus::NeedsReview, review, Some(mark)),
-            (true, None) => (QueueStatus::Failed, error, None),
-            (false, _) => (QueueStatus::Queued, error, None),
+        let status = if failures >= 2 {
+            QueueStatus::Failed
+        } else {
+            QueueStatus::Queued
         };
         transaction
             .execute(
@@ -2477,9 +2477,6 @@ impl QueueStore {
                 ],
             )
             .map_err(InternError::from)?;
-        if let Some(mark) = mark {
-            note_review_mark(&transaction, id, mark)?;
-        }
         transaction.commit().map_err(InternError::from)?;
         Ok(status)
     }
@@ -2503,9 +2500,9 @@ impl QueueStore {
     /// [`Self::record_terminal_failure`], with the document left in review -
     /// in the queue, where it can be retried, named by hand, kept or
     /// removed - instead of failed. `mark` says whether its file is renamed
-    /// for it, now, later, or never; a decision other than now is recorded
-    /// in the same transaction, so recovery never makes a mark that was
-    /// decided against or put off.
+    /// for it; a decision against is recorded in the same transaction, so
+    /// recovery never makes a mark that was decided against. The document
+    /// is no longer in doubt.
     pub fn record_unreadable(
         &self,
         id: i64,
@@ -2545,6 +2542,12 @@ impl QueueStore {
         }
         if let Some(mark) = mark {
             note_review_mark(&transaction, id, mark)?;
+            transaction
+                .execute(
+                    "DELETE FROM doubted_documents WHERE queue_item_id = ?1",
+                    params![id],
+                )
+                .map_err(InternError::from)?;
         }
         transaction.commit().map_err(InternError::from)
     }
@@ -3099,16 +3102,14 @@ fn migrate_legacy_schema(connection: &mut Connection) -> InternResult<()> {
     transaction.commit().map_err(InternError::from)
 }
 
-/// Records a decision not to mark a document now - put off, or decided
-/// against - as a journal entry that moves nothing, so recovery, which marks
-/// a document in review that has no mark at all, leaves it alone. A
-/// decision to mark now records nothing here: the mark journals itself.
+/// Records a decision not to mark a document as a journal entry that moves
+/// nothing, so recovery, which marks a document in review that has no mark
+/// at all, leaves it alone. A decision to mark now records nothing here:
+/// the mark journals itself.
 fn note_review_mark(connection: &Connection, id: i64, mark: ReviewMark) -> InternResult<()> {
     let stage = match mark {
         ReviewMark::Now => return Ok(()),
-        ReviewMark::Defer => ReviewRenameStage::Deferred,
         ReviewMark::Never => ReviewRenameStage::Skipped,
-        ReviewMark::Hold => ReviewRenameStage::Held,
     };
     connection
         .execute(
@@ -3348,4 +3349,39 @@ fn windows_path_key(path: &str) -> String {
 /// need to compare against `source_path_key` (e.g. duplicate lookups).
 pub fn source_path_key(path: &Path) -> String {
     windows_path_key(&path.to_string_lossy())
+}
+
+/// Earlier builds of this branch sent a document whose failure may have
+/// been the machine's to review with its rename put off ('deferred', or
+/// 'held' outside the input folder) until a later document was read. A
+/// later success says the machine works now, not that it worked then, so
+/// those documents go back to wait as doubted instead, under their own
+/// names, to be tried again once the machine is shown to work.
+fn doubt_deferred_marks(connection: &Connection) -> InternResult<()> {
+    connection
+        .execute_batch(&format!(
+            "BEGIN IMMEDIATE;
+             INSERT OR IGNORE INTO doubted_documents(queue_item_id, kind, proven, created_at)
+               SELECT DISTINCT items.id,
+                      CASE items.error_code
+                        WHEN 'MODEL_FAILED' THEN 'timeout'
+                        WHEN 'EXTRACTION_FAILED' THEN 'crash'
+                        ELSE 'reply'
+                      END,
+                      0, strftime('%s', 'now')
+               FROM review_renames renames
+               JOIN queue_items items ON items.id = renames.queue_item_id
+               WHERE renames.stage IN ('deferred', 'held')
+                 AND items.status = 'needs_review' AND items.error_code IN ({codes})
+                 AND NOT EXISTS (SELECT 1 FROM proposals WHERE queue_item_id = items.id);
+             UPDATE queue_items
+               SET status = 'queued', processing_failures = 0,
+                   owner_session = NULL, lease_expires_at = NULL
+               WHERE status = 'needs_review'
+                 AND id IN (SELECT queue_item_id FROM doubted_documents);
+             DELETE FROM review_renames WHERE stage IN ('deferred', 'held');
+             COMMIT;",
+            codes = unreadable_codes_sql()
+        ))
+        .map_err(InternError::from)
 }

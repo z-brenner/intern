@@ -530,6 +530,29 @@ fn proposal(confidence: f32, needs_review: bool) -> ModelProposal {
     }
 }
 
+/// What a working model answers for the calibration document of its
+/// self-test (`intern_engine::setup::semantic_probes`), which the queue runs
+/// when only documents in doubt are left.
+fn calibration_reply() -> ModelProposal {
+    let party = "Northstar Calibration Holdings LLC";
+    ModelProposal {
+        document_type: Some("Notice of Calibration".into()),
+        document_date: Some("2024-01-02".into()),
+        date_role: Some(DateRole::Notice),
+        parties: vec![party.into()],
+        party_relation: PartyRelation::To,
+        description: format!("Notice of calibration confirming the model path works for {party}."),
+        confidence: 0.99,
+        needs_review: false,
+        evidence: Evidence {
+            date: Some("Date of this Notice: January 2, 2024".into()),
+            document_type: Some("NOTICE OF CALIBRATION".into()),
+            parties: vec![format!("To: {party}")],
+        },
+        facts: None,
+    }
+}
+
 fn source(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, name.as_bytes()).unwrap();
@@ -744,17 +767,21 @@ fn an_account_out_of_credit_pauses_the_queue_instead_of_failing_the_backlog() {
     assert_eq!(items[1].processing_failures, 0);
 }
 
+/// A crash may be the reader's or the document's. The document waits in
+/// doubt behind the next, which the restarted reader reads; that proves the
+/// reader, so a second crash on the first is its own, and it goes to
+/// review.
 #[test]
-fn a_crashing_item_does_not_block_the_next_and_worker_restarts_only_once() {
+fn a_crashing_item_does_not_block_the_next_and_goes_to_review_once_the_reader_works() {
     let temp = tempdir().unwrap();
     let first = source(temp.path(), "crashes.pdf");
     let second = source(temp.path(), "continues.pdf");
     let worker = Arc::new(FakeWorker::new(vec![
         Err(WorkerFailure::crashed()),
-        Err(WorkerFailure::crashed()),
         Ok(parsed(
             "Employment Agreement signed April 12, 2024 by John Smith and Acme Corporation.",
         )),
+        Err(WorkerFailure::crashed()),
     ]));
     let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
     let files = Arc::new(FakeFiles::default());
@@ -772,9 +799,7 @@ fn a_crashing_item_does_not_block_the_next_and_worker_restarts_only_once() {
     pipeline.run_until_idle().unwrap();
 
     let items = pipeline.list().unwrap();
-    assert_eq!(worker.restarts.load(Ordering::SeqCst), 1);
-    // A parser that crashed on the document on both attempts could not read
-    // it: it waits in review, not failed, and the next document goes on.
+    assert_eq!(worker.restarts.load(Ordering::SeqCst), 2, "once per crash");
     assert_eq!(items[0].status, QueueStatus::NeedsReview);
     assert_eq!(items[0].error_code, Some(ErrorCode::ExtractionFailed));
     assert_eq!(items[1].status, QueueStatus::Ready);
@@ -846,25 +871,30 @@ fn non_retryable_extraction_failure_is_terminal_with_its_code() {
     assert!(!pipeline.is_paused());
 }
 
-/// A crash, or a failure the worker says may pass, keeps its second attempt.
+/// A failure the worker says may pass keeps its second attempt. A crash
+/// waits in doubt, with nothing counted, until the reader is shown to work:
+/// with nothing else left to read, by a small text file it reads for the
+/// purpose - and then it is read again.
 #[test]
-fn crashed_extraction_is_retried_once() {
+fn crashed_extraction_is_retried_once_the_reader_is_proven() {
     let temp = tempdir().unwrap();
     let files = Arc::new(FakeFiles::default());
     let paths = documents(temp.path(), &files, &["crashes-once.pdf", "busy-disk.pdf"]);
     let worker = Arc::new(FakeWorker::new(vec![
         Err(WorkerFailure::crashed()),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+        Err(WorkerFailure::reported(
+            "PARSE_FAILED",
+            "the file could not be read",
+            true,
+        )),
+        // The reader's self-test.
+        Ok(parsed("Intern reader check")),
         Ok(parsed(READABLE)),
-        Err(WorkerFailure::reported(
-            "PARSE_FAILED",
-            "the file could not be read",
-            true,
-        )),
-        Err(WorkerFailure::reported(
-            "PARSE_FAILED",
-            "the file could not be read",
-            true,
-        )),
     ]));
     let model = Arc::new(FakeModel::new(vec![Ok(proposal(0.94, false))]));
     let pipeline = pipeline(
@@ -878,11 +908,11 @@ fn crashed_extraction_is_retried_once() {
     pipeline.enqueue_files(&paths).unwrap();
     pipeline.run_until_idle().unwrap();
 
-    assert_eq!(worker.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(worker.calls.load(Ordering::SeqCst), 5);
     assert_eq!(worker.restarts.load(Ordering::SeqCst), 1);
     let items = pipeline.list().unwrap();
     assert_eq!(items[0].status, QueueStatus::Ready);
-    assert_eq!(items[0].processing_failures, 1);
+    assert_eq!(items[0].processing_failures, 0);
     assert_eq!(items[1].status, QueueStatus::Failed);
     assert_eq!(items[1].error_code, Some(ErrorCode::IoError));
     assert_eq!(items[1].processing_failures, 2);
@@ -924,9 +954,11 @@ fn native_assets_missing_pauses() {
     assert_eq!(pipeline.pause_reason(), None);
 }
 
-/// A refusal, a document too long for the model, and an internal failure on
-/// one document are that document's answer. Each used to be re-queued - and,
-/// on a hosted model, re-sent and re-billed - before failing anyway.
+/// A refusal and a document too long for the model are that document's
+/// answer. Each used to be re-queued - and, on a hosted model, re-sent and
+/// re-billed - before failing anyway. An internal failure may as well be
+/// the model's: it is asked once more after another document is read, and
+/// failing again, it is the document's.
 #[test]
 fn refused_and_too_large_are_terminal_and_do_not_pause() {
     let cases = [
@@ -942,13 +974,14 @@ fn refused_and_too_large_are_terminal_and_do_not_pause() {
         &["refused.pdf", "too-long.pdf", "internal.pdf", "fine.pdf"],
     );
     let worker = Arc::new(FakeWorker::new(
-        (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+        (0..=paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
     ));
     let mut replies = cases
         .iter()
         .map(|(code, _)| Err(ModelFailure::fatal(*code)))
         .collect::<Vec<_>>();
     replies.push(Ok(proposal(0.94, false)));
+    replies.push(Err(ModelFailure::fatal("ANALYSIS_FAILED")));
     let model = Arc::new(FakeModel::new(replies));
     let pipeline = pipeline(
         temp.path(),
@@ -961,8 +994,7 @@ fn refused_and_too_large_are_terminal_and_do_not_pause() {
     pipeline.enqueue_files(&paths).unwrap();
     pipeline.run_until_idle().unwrap();
 
-    assert_eq!(model.calls.load(Ordering::SeqCst), paths.len());
-    assert_eq!(worker.calls.load(Ordering::SeqCst), paths.len());
+    assert_eq!(model.calls.load(Ordering::SeqCst), paths.len() + 1);
     let items = pipeline.list().unwrap();
     for (item, (code, expected)) in items.iter().zip(cases) {
         assert_eq!(item.status, QueueStatus::NeedsReview, "{code}");
@@ -973,10 +1005,13 @@ fn refused_and_too_large_are_terminal_and_do_not_pause() {
     assert_eq!(pipeline.pause_reason(), None);
 }
 
-/// One reply that cannot be used sends that document to review. A model that keeps
-/// answering that way is broken for every document, so the third in a row
-/// stops the queue - but only in a row: a document read successfully in
-/// between starts the count again.
+/// One reply that cannot be used may be the model's: the document waits in
+/// doubt until the model is shown to work - by a document read after it, or
+/// with nothing else left, the self-test - and only a reply as bad after
+/// that sends it to review. A model that keeps answering that way is broken
+/// for every document, so the third document in a row stops the queue - but
+/// only in a row: a document read successfully in between starts the count
+/// again.
 #[test]
 fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
     let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
@@ -986,7 +1021,7 @@ fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
         let files = Arc::new(FakeFiles::default());
         let paths = documents(temp.path(), &files, names);
         let worker = Arc::new(FakeWorker::new(
-            (0..paths.len()).map(|_| Ok(parsed(READABLE))).collect(),
+            (0..paths.len() * 2).map(|_| Ok(parsed(READABLE))).collect(),
         ));
         let model = Arc::new(FakeModel::new(replies));
         let pipeline = pipeline(
@@ -1017,13 +1052,21 @@ fn three_consecutive_invalid_replies_pause_but_a_success_resets() {
             Ok(proposal(0.94, false)),
             invalid(),
             truncated(),
+            // a and b again, after c was read: still bad, so theirs.
+            invalid(),
+            truncated(),
+            // Only d and e are left, in doubt: the self-test proves the
+            // model, and their replies are still bad.
+            Ok(calibration_reply()),
+            invalid(),
+            truncated(),
         ],
     );
     assert!(
         !paused,
         "two, a success, and two more is never three in a row"
     );
-    assert_eq!(calls, 5, "each document is asked once");
+    assert_eq!(calls, 10);
     let statuses = items.iter().map(|item| item.status).collect::<Vec<_>>();
     assert_eq!(
         statuses,

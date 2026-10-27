@@ -18,6 +18,7 @@ use intern_engine::{
     evidence::is_valid_iso_date,
     fingerprint::{self, NEAR_DUPLICATE_DISTANCE},
     lesson_from_edit, sanitize_folder_name,
+    setup::{semantic_probes, validate_semantic_probe},
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -1454,8 +1455,14 @@ impl Pipeline {
 
     fn run_next_inner(&self) -> PipelineResult<bool> {
         let Some(item) = self.claim_next()? else {
-            return Ok(false);
+            // Nothing left but documents in doubt, if anything: only proof
+            // that the machine works lets them be tried again.
+            return self.prove_the_machine();
         };
+        // Whether this attempt is a doubted document's one proof attempt,
+        // decided as it starts: the machine was shown to work for this kind
+        // of failure after the document last failed (`QueueStore::doubt`).
+        let proof = self.store.proven_doubt(item.id)?;
         let extraction_evidence = match self.authorize_item(&item, AdmissionStage::Extract) {
             Ok(evidence) => evidence,
             Err(error) if error.is_retryable() => {
@@ -1574,7 +1581,7 @@ impl Pipeline {
                         // The document's own problem, by its nature: it
                         // waits in review, renamed so the input folder says
                         // so too.
-                        let mark = self.review_mark(&item, verified, true);
+                        let mark = self.review_mark(&item, verified);
                         self.hold_unreadable(item.id, code, mark)?;
                     } else {
                         self.store.record_terminal_failure(item.id, code)?;
@@ -1592,33 +1599,30 @@ impl Pipeline {
                 let restart_failed = error.crashed
                     && item.processing_failures == 0
                     && self.worker.restart().is_err();
-                // A parser that crashed on this document on both attempts
-                // could not read it: it waits in review. A crash is as often
-                // the reader's fault as the document's, so its file is not
-                // renamed until a later document is read successfully, and
-                // a reader that crashes on several documents in a row stops
-                // the queue instead (below). Any other failure that may pass
-                // - the worker's own reading of the file, a placeholder whose
-                // content is still in the cloud, a busy worker - fails as
-                // before; the intake watcher hands such a document over
-                // again once its content arrives.
-                let review_when_exhausted = error.crashed.then(|| {
-                    (
+                // A crash is as often the reader's fault as the
+                // document's, and one document cannot tell which: the
+                // document goes back to wait in doubt (see `doubt_or_review`)
+                // unless the reader was shown to work since it last
+                // crashed on it. A worker that will not come back, and any
+                // other failure that may pass - the worker's own reading of
+                // the file, a placeholder whose content is still in the
+                // cloud, a busy worker - fails as before; the intake watcher
+                // hands such a document over again once its content
+                // arrives.
+                if error.crashed && !restart_failed {
+                    self.doubt_or_review(
+                        &item,
+                        STREAK_CRASH,
                         ErrorCode::ExtractionFailed,
-                        self.review_mark(&item, verified, false),
-                    )
-                });
-                match self
-                    .store
-                    .record_retryable_failure(item.id, code, review_when_exhausted)?
-                {
-                    QueueStatus::NeedsReview => self.mark_unreadable(item.id),
-                    QueueStatus::Failed => self.unmark_if_marked(item.id),
-                    _ => {}
+                        proof.as_deref(),
+                        verified,
+                        READER_CRASHED,
+                    )?;
+                    self.events.queue_changed();
+                    return Ok(true);
                 }
-                if error.crashed && self.streak_with(item.id, STREAK_CRASH) >= CRASHES_BEFORE_PAUSE
-                {
-                    self.pause_for_streak(READER_CRASHED);
+                if self.store.record_processing_failure(item.id, code)? == QueueStatus::Failed {
+                    self.unmark_if_marked(item.id);
                 }
                 // A worker that will not come back cannot read this
                 // document on a second attempt either, so the failure is
@@ -1635,8 +1639,13 @@ impl Pipeline {
                 return Ok(true);
             }
         };
-        // The reader read a document, so it is not crashing on everything.
-        let _ = self.store.end_failure_streaks(Some(STREAK_CRASH), None);
+        // The reader read a document, so it is not crashing on everything:
+        // a document in doubt over a crash is due its proof attempt.
+        let _ = self.store.end_failure_runs(Some(STREAK_CRASH));
+        let _ = self.store.prove_doubts(&[STREAK_CRASH], Some(item.id));
+        if proof.as_deref() == Some(STREAK_CRASH) {
+            let _ = self.store.forget_doubt(item.id);
+        }
         self.ensure_lease(&lease)?;
         if self.paused.load(Ordering::SeqCst) {
             lease.stop_and_check()?;
@@ -1686,12 +1695,13 @@ impl Pipeline {
         }
         let analysis = match self.analyze_with_deadline(&source, &extension, &existing) {
             Ok(analysis) => {
-                let _ = self.store.end_failure_streaks(None, Some(item.id));
                 self.forget_missing_model();
-                // A document read successfully proves the model and the
-                // reader are working, so the documents whose marks were put
-                // off failed for reasons of their own: mark them now.
-                self.promote_deferred_marks();
+                // A document read successfully shows the reader and the
+                // model working now, so every document in doubt is due its
+                // proof attempt - and this one is no longer in doubt.
+                let _ = self.store.end_failure_runs(None);
+                let _ = self.store.forget_doubt(item.id);
+                let _ = self.store.prove_doubts(STREAK_KINDS, Some(item.id));
                 analysis
             }
             Err(error) => {
@@ -1760,27 +1770,23 @@ impl Pipeline {
                         // again, so it is settled now and the queue moves
                         // on: in review, for a person to retry, name by
                         // hand, keep or remove. A refusal or a document too
-                        // large is the document's own by its nature, and is
-                        // marked at once; a reply that could not be used, or
-                        // an internal failure, can as well be the model's, and
-                        // waits for a later success before it is.
-                        let by_nature =
-                            !is_unreadable_reply(&error.code) && code != ErrorCode::AnalysisFailed;
-                        let mark = self.review_mark(
-                            &item,
-                            extraction_evidence.verified_hash().is_some(),
-                            by_nature,
-                        );
-                        self.hold_unreadable(item.id, code, mark)?;
-                        // One reply that cannot be used is that document's
-                        // problem. Several documents in a row is the
-                        // model's, and every document behind them would
-                        // fail the same way.
-                        if is_unreadable_reply(&error.code)
-                            && self.streak_with(item.id, STREAK_REPLY)
-                                >= UNREADABLE_REPLIES_BEFORE_PAUSE
-                        {
-                            self.pause_for_streak(pause_reason_code(&error.code, code));
+                        // large is the document's own by its nature. A
+                        // reply that could not be used, or an internal
+                        // failure, can as well be the model's: the document
+                        // waits in doubt until the model is shown to work.
+                        let verified = extraction_evidence.verified_hash().is_some();
+                        if is_unreadable_reply(&error.code) || code == ErrorCode::AnalysisFailed {
+                            self.doubt_or_review(
+                                &item,
+                                STREAK_REPLY,
+                                code,
+                                proof.as_deref(),
+                                verified,
+                                pause_reason_code(&error.code, code),
+                            )?;
+                        } else {
+                            let mark = self.review_mark(&item, verified);
+                            self.hold_unreadable(item.id, code, mark)?;
                         }
                     }
                     ModelFailureAction::Pause => {
@@ -1798,41 +1804,27 @@ impl Pipeline {
                         self.pause_for(pause_reason_code(&error.code, code));
                     }
                     ModelFailureAction::Retry => {
-                        // A model that ran out of time on this document
-                        // twice could not finish it, and the next document
-                        // is no reason to think otherwise: it waits in
-                        // review, its mark put off until a later document is
-                        // read, since a model that is too slow for everything
-                        // looks the same from one document - and several
-                        // time-outs in a row stop the queue instead. Every
-                        // other failure here - an unhealthy server, a
-                        // rejected request, settings that could not be read
-                        // - is this computer's, and fails as it always did
-                        // once the second attempt is used.
-                        let timed_out = error.code == "MODEL_TIMEOUT";
-                        let review_when_exhausted = timed_out.then(|| {
-                            (
+                        // A model that ran out of time on a document is as
+                        // often too slow for everything as stuck on that
+                        // one: the document waits in doubt until the model
+                        // is shown to work. Every other failure here - an
+                        // unhealthy server, a rejected request, settings
+                        // that could not be read - is this computer's, and
+                        // fails as it always did once the second attempt is
+                        // used.
+                        if error.code == "MODEL_TIMEOUT" {
+                            self.doubt_or_review(
+                                &item,
+                                STREAK_TIMEOUT,
                                 ErrorCode::ModelFailed,
-                                self.review_mark(
-                                    &item,
-                                    extraction_evidence.verified_hash().is_some(),
-                                    false,
-                                ),
-                            )
-                        });
-                        match self.store.record_retryable_failure(
-                            item.id,
-                            code,
-                            review_when_exhausted,
-                        )? {
-                            QueueStatus::NeedsReview => self.mark_unreadable(item.id),
-                            QueueStatus::Failed => self.unmark_if_marked(item.id),
-                            _ => {}
-                        }
-                        if timed_out
-                            && self.streak_with(item.id, STREAK_TIMEOUT) >= TIMEOUTS_BEFORE_PAUSE
+                                proof.as_deref(),
+                                extraction_evidence.verified_hash().is_some(),
+                                ErrorCode::ModelFailed.as_str(),
+                            )?;
+                        } else if self.store.record_processing_failure(item.id, code)?
+                            == QueueStatus::Failed
                         {
-                            self.pause_for_streak(ErrorCode::ModelFailed.as_str());
+                            self.unmark_if_marked(item.id);
                         }
                     }
                 }
@@ -2605,8 +2597,8 @@ impl Pipeline {
         Ok(())
     }
 
-    /// Whether, and when, the file of a document going to review because it
-    /// could not be read is renamed `NEEDS REVIEW - ...` (see [`ReviewMark`]).
+    /// Whether the file of a document going to review because it could not
+    /// be read is renamed `NEEDS REVIEW - ...` (see [`ReviewMark`]).
     ///
     /// Never for a document admitted on Microsoft's word about its uploader
     /// (`verified`): that proof names the file - its name in the library,
@@ -2614,68 +2606,157 @@ impl Pipeline {
     /// asks for it again, so a renamed file could never be retried, named or
     /// filed. Such a document waits in review under its own name. Never,
     /// either, for a file outside the input folder: Intern renames only
-    /// what was put there for it. Otherwise now when the reason is the
-    /// document's own by its nature (`by_nature`), and later when it could
-    /// as well be the machine's.
-    fn review_mark(&self, item: &QueueItem, verified: bool, by_nature: bool) -> ReviewMark {
-        let never = verified || !self.in_input_folder(&item.source_path);
-        match (by_nature, never) {
-            (true, false) => ReviewMark::Now,
-            (true, true) => ReviewMark::Never,
-            (false, false) => ReviewMark::Defer,
-            // Not renamed, but still one of a run that may stop the queue.
-            (false, true) => ReviewMark::Hold,
+    /// what was put there for it. When Settings cannot be read to say,
+    /// nothing is decided: the mark is made, or decided against, once they
+    /// can be (see `mark_unreadable` and `recover`).
+    fn review_mark(&self, item: &QueueItem, verified: bool) -> ReviewMark {
+        if verified || self.input_folder_holds(&item.source_path) == Some(false) {
+            ReviewMark::Never
+        } else {
+            ReviewMark::Now
         }
     }
 
-    /// Whether `path` is inside the input folder Settings names. Intern
-    /// renames and moves on its own only what was put there for it.
-    fn in_input_folder(&self, path: &Path) -> bool {
-        self.settings.load().is_ok_and(|settings| {
-            let folder = settings.intake_folder.trim();
-            !folder.is_empty() && is_within(path, Path::new(folder))
-        })
+    /// Whether `path` is inside the input folder Settings names: `None`
+    /// when Settings cannot be read to say. Intern renames and moves on its
+    /// own only what was put there for it.
+    fn input_folder_holds(&self, path: &Path) -> Option<bool> {
+        let settings = self.settings.load().ok()?;
+        let folder = settings.intake_folder.trim();
+        Some(!folder.is_empty() && is_within(path, Path::new(folder)))
     }
 
-    /// Marks the documents whose marks were put off, now that a document
-    /// was read successfully. The decisions are settled first, so a crash
-    /// in between leaves documents recovery marks.
-    fn promote_deferred_marks(&self) {
-        if let Ok(ids) = self.store.promote_deferred_marks() {
-            for id in ids {
-                self.mark_unreadable(id);
+    /// [`Self::input_folder_holds`], with "cannot say" read as no.
+    fn in_input_folder(&self, path: &Path) -> bool {
+        self.input_folder_holds(path) == Some(true)
+    }
+
+    /// Settles a failure that may be the machine's rather than the
+    /// document's: an unusable reply or an internal failure (`reply`), a
+    /// time-out (`timeout`), a reader crash (`crash`).
+    ///
+    /// One document cannot tell those apart, and a later success says the
+    /// machine works now, not that it worked when this document failed. So
+    /// the document is judged only on an attempt that started after the
+    /// machine was shown to work for this kind of failure - another document
+    /// read, or the self-test passed (`proof`). Failing so, the failure is
+    /// its own: it goes to review, renamed under the usual rules. Otherwise
+    /// it goes back to wait in doubt, under its own name and with nothing
+    /// counted against it, behind every document not in doubt; and it is
+    /// one more document in a run of such failures, which stops the queue
+    /// with `reason` once it is long enough.
+    fn doubt_or_review(
+        &self,
+        item: &QueueItem,
+        kind: &str,
+        code: ErrorCode,
+        proof: Option<&str>,
+        verified: bool,
+        reason: &str,
+    ) -> PipelineResult<()> {
+        if proof == Some(kind) {
+            let mark = self.review_mark(item, verified);
+            return self.hold_unreadable(item.id, code, mark);
+        }
+        self.store.doubt(item.id, kind, code)?;
+        if self.store.join_failure_run(item.id, kind).unwrap_or(0) >= FAILURES_BEFORE_PAUSE {
+            self.pause_for(reason);
+        }
+        Ok(())
+    }
+
+    /// Shows the machine working, when only documents in doubt are left to
+    /// read and nothing else will: the model's self-test - the calibration
+    /// document every model must read correctly before Intern uses it - for
+    /// doubts over the model, and a small text read for doubts over the
+    /// reader. Passing, the documents in doubt are due their proof attempt,
+    /// and the queue goes on. Failing, the machine is what is wrong: the
+    /// queue stops and says so, and the documents stay in doubt under their
+    /// own names. Says whether there is more to do.
+    fn prove_the_machine(&self) -> PipelineResult<bool> {
+        let doubts = self.store.unproven_doubts()?;
+        if doubts.is_empty() || self.paused.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        let model_kinds = doubts
+            .iter()
+            .map(String::as_str)
+            .filter(|kind| *kind != STREAK_CRASH)
+            .collect::<Vec<_>>();
+        if !model_kinds.is_empty() {
+            match self.model_self_test() {
+                Ok(()) => self.store.prove_doubts(&model_kinds, None)?,
+                Err(None) => return Ok(false),
+                Err(Some(reason)) => {
+                    self.pause_for(&reason);
+                    return Ok(false);
+                }
             }
         }
+        if doubts.iter().any(|kind| kind == STREAK_CRASH) {
+            if self.reader_self_test() {
+                self.store.prove_doubts(&[STREAK_CRASH], None)?;
+            } else {
+                self.pause_for(READER_CRASHED);
+                return Ok(false);
+            }
+        }
+        self.events.queue_changed();
+        Ok(true)
     }
 
-    /// Stops the queue for a run of failures that is the machine's rather
-    /// than any one document's - replies that could not be used, time-outs,
-    /// reader crashes - and puts the documents of that run whose marks were
-    /// put off back to wait, under their own names and with nothing counted
-    /// against them. Sent to review, they would wait there for a person over
-    /// a fault that is fixed by resuming; renamed, their names would say so
-    /// in the input folder too.
-    ///
-    /// The run counts documents, not attempts - a document that timed out
-    /// on both of its attempts is one - and the documents it puts back are
-    /// flagged: failing the same way once the queue is resumed, they go to
-    /// review under the usual rules and start no new run, so the documents
-    /// behind them are read. Without that, the same few documents, read
-    /// first after every resume, stopped the queue for good.
-    fn pause_for_streak(&self, reason: &str) {
-        self.pause_for(reason);
-        let _ = self.store.requeue_failure_streak();
+    /// The model's self-test, as setup runs it: the calibration document,
+    /// read and checked. `Err(None)` when no model is loaded to ask yet,
+    /// which says nothing about the model; `Err(Some(reason))` when it
+    /// failed, with the reason the queue stops for.
+    fn model_self_test(&self) -> Result<(), Option<String>> {
+        let probes =
+            semantic_probes().map_err(|_| Some(ErrorCode::ModelFailed.as_str().to_owned()))?;
+        for probe in probes {
+            let analysis = match self.analyze_with_deadline(&probe.document, "pdf", &[]) {
+                Ok(analysis) => analysis,
+                Err(error) => {
+                    if model_failure_action(&error.code) == ModelFailureAction::Requeue {
+                        return Err(None);
+                    }
+                    self.forget_missing_model();
+                    let code = model_error_code(&error);
+                    return Err(Some(pause_reason_code(&error.code, code).to_owned()));
+                }
+            };
+            self.forget_missing_model();
+            if validate_semantic_probe(&probe, &analysis).is_err() {
+                return Err(Some(ErrorCode::ModelFailed.as_str().to_owned()));
+            }
+        }
+        Ok(())
     }
 
-    /// Counts `item_id`'s failure into the current run of `kind` and
-    /// returns how many documents the run holds: none for a document a run
-    /// already put back once, or when the count cannot be kept.
-    fn streak_with(&self, item_id: i64, kind: &str) -> u32 {
-        self.store
-            .join_failure_streak(item_id, kind)
-            .ok()
-            .flatten()
-            .unwrap_or(0)
+    /// The reader's self-test: a small text file Intern writes for it, read
+    /// without a crash. A reader that cannot read that cannot read
+    /// anything.
+    fn reader_self_test(&self) -> bool {
+        let folder = std::env::temp_dir();
+        let path = folder.join(format!(
+            "intern-reader-check-{}-{}.txt",
+            std::process::id(),
+            self.store.session_id()
+        ));
+        if fs::write(&path, READER_CHECK_TEXT).is_err() {
+            return false;
+        }
+        let request_id = format!("reader-check-{}", self.store.session_id());
+        let read = self.worker.extract(&request_id, &path, &mut |_| {});
+        let _ = fs::remove_file(&path);
+        match read {
+            Ok(_) => true,
+            Err(error) => {
+                if error.crashed {
+                    let _ = self.worker.restart();
+                }
+                false
+            }
+        }
     }
 
     /// Gives a canceled or failed item's file its own name back when Intern
@@ -2701,22 +2782,20 @@ impl Pipeline {
     /// marked.
     fn mark_unreadable(&self, item_id: i64) {
         let _files = self.hold_file_ops();
-        if !self.withheld_outside_input_folder(item_id) {
-            let _ = self.files.mark_for_review(item_id);
-        }
-    }
-
-    /// Records the mark of `item_id` as never to be made when its file is no
-    /// longer in the input folder, and says whether it did.
-    fn withheld_outside_input_folder(&self, item_id: i64) -> bool {
         let Ok(Some(item)) = self.store.get(item_id) else {
-            return false;
+            return;
         };
-        if self.in_input_folder(&item.source_path) {
-            return false;
+        match self.input_folder_holds(&item.source_path) {
+            Some(true) => {
+                let _ = self.files.mark_for_review(item_id);
+            }
+            Some(false) => {
+                let _ = self.store.withhold_review_mark(item_id);
+            }
+            // Settings cannot be read to say: the recovery pass decides
+            // once they can.
+            None => {}
         }
-        let _ = self.store.withhold_review_mark(item_id);
-        true
     }
 
     /// Puts an item an undo returned to ready back in review, as undone: a
@@ -2846,9 +2925,9 @@ impl Pipeline {
             .pause_reason
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        // A person resuming starts every run of failures over; the documents
-        // a run put back stay flagged, so they cannot stop the queue again.
-        let _ = self.store.end_failure_streaks(None, None);
+        // A person resuming starts every run of failures over. Documents in
+        // doubt stay so until the machine is shown to work.
+        let _ = self.store.end_failure_runs(None);
         self.paused.store(false, Ordering::SeqCst);
         self.events.queue_changed();
     }
@@ -3476,15 +3555,19 @@ impl Pipeline {
             // pass, and is no reason to leave the rest of recovery undone.
             let _files = self.hold_file_ops();
             // A mark recovery would make up for, on a file the input folder
-            // no longer holds, is never made.
-            if let Ok(awaiting) = self.store.awaiting_review_mark() {
-                for item in awaiting {
-                    if !self.in_input_folder(&item.source_path) {
-                        let _ = self.store.withhold_review_mark(item.id);
+            // no longer holds, is never made. With Settings unreadable
+            // nobody can say which files those are, so this waits for a
+            // pass that can.
+            if self.settings.load().is_ok() {
+                if let Ok(awaiting) = self.store.awaiting_review_mark() {
+                    for item in awaiting {
+                        if self.input_folder_holds(&item.source_path) == Some(false) {
+                            let _ = self.store.withhold_review_mark(item.id);
+                        }
                     }
                 }
+                let _ = self.files.reconcile_review_renames();
             }
-            let _ = self.files.reconcile_review_renames();
         }
         let interrupted = self
             .store
@@ -4511,23 +4594,21 @@ fn model_error_code(error: &ModelFailure) -> ErrorCode {
     }
 }
 
-/// How many documents in a row may come back with a reply that cannot be
-/// used before the queue stops to say the model itself is the problem.
-const UNREADABLE_REPLIES_BEFORE_PAUSE: u32 = 3;
+/// How many documents in a row may fail the same way that may be the
+/// machine's - replies that cannot be used, time-outs, reader crashes -
+/// before the queue stops to say the machine itself is the problem.
+const FAILURES_BEFORE_PAUSE: u32 = 3;
 
-/// How many model requests in a row may run out of time before the queue
-/// stops to say the model is too slow for anything.
-const TIMEOUTS_BEFORE_PAUSE: u32 = 3;
+/// What the reader's self-test reads (see `Pipeline::reader_self_test`).
+const READER_CHECK_TEXT: &str = "Intern reader check: this file was written to test the reader.\n";
 
-/// How many reader crashes in a row stop the queue: the reader, not the
-/// documents, is broken.
-const CRASHES_BEFORE_PAUSE: u32 = 3;
-
-/// The kinds of runs of failures, each counted on its own (see
-/// `QueueStore::join_failure_streak`).
+/// The kinds of failure that may be the machine's rather than a
+/// document's, each doubted and counted on its own (see
+/// `QueueStore::doubt` and `QueueStore::join_failure_run`).
 const STREAK_REPLY: &str = "reply";
 const STREAK_TIMEOUT: &str = "timeout";
 const STREAK_CRASH: &str = "crash";
+const STREAK_KINDS: &[&str] = &[STREAK_REPLY, STREAK_TIMEOUT, STREAK_CRASH];
 
 /// The reason the queue stopped for a run of reader crashes, as the window
 /// names it.

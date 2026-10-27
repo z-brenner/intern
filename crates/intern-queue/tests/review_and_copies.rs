@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -60,6 +60,60 @@ fn proposal() -> ModelProposal {
     }
 }
 
+/// What a working model answers for the calibration document of its
+/// self-test (`intern_engine::setup::semantic_probes`), which the queue runs
+/// when only documents in doubt are left.
+fn calibration_reply() -> ModelProposal {
+    let party = "Northstar Calibration Holdings LLC";
+    ModelProposal {
+        document_type: Some("Notice of Calibration".into()),
+        document_date: Some("2024-01-02".into()),
+        date_role: Some(DateRole::Notice),
+        parties: vec![party.into()],
+        party_relation: PartyRelation::To,
+        description: format!("Notice of calibration confirming the model path works for {party}."),
+        confidence: 0.99,
+        needs_review: false,
+        evidence: Evidence {
+            date: Some("Date of this Notice: January 2, 2024".into()),
+            document_type: Some("NOTICE OF CALIBRATION".into()),
+            parties: vec![format!("To: {party}")],
+        },
+        facts: None,
+    }
+}
+
+fn is_calibration(source: &DocumentSource) -> bool {
+    source
+        .pages
+        .iter()
+        .any(|page| page.text.contains("NOTICE OF CALIBRATION"))
+}
+
+/// The small text file the queue writes for the reader's self-test.
+fn is_reader_check(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with("intern-reader-check"))
+}
+
+fn analyzed(
+    source: &DocumentSource,
+    reply: ModelProposal,
+    extension: &str,
+    existing_names: &[&str],
+) -> DocumentAnalysis {
+    let digest = distill(source, DigestBudget::default());
+    let mut analysis = finish(
+        validate(reply, &digest),
+        &digest,
+        extension,
+        existing_names,
+        AnalysisTelemetry::default(),
+    );
+    analysis.text_fingerprint = fingerprint::source_fingerprint(source).map(fingerprint::encode);
+    analysis
+}
+
 /// Reads what it is told to, in order, and the readable agreement once the
 /// script runs out.
 #[derive(Default)]
@@ -84,6 +138,9 @@ impl WorkerBoundary for ScriptedWorker {
         path: &Path,
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
+        if is_reader_check(path) {
+            return Ok(parsed("reader check"));
+        }
         self.read.lock().unwrap().push(path.to_path_buf());
         self.script
             .lock()
@@ -123,6 +180,14 @@ impl AnalyzerBoundary for ScriptedModel {
         extension: &str,
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
+        if is_calibration(source) {
+            return Ok(analyzed(
+                source,
+                calibration_reply(),
+                extension,
+                existing_names,
+            ));
+        }
         self.calls.fetch_add(1, Ordering::SeqCst);
         let reply = self
             .script
@@ -304,11 +369,12 @@ fn names_in(folder: &Path) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 /// Every reason that is the document's own leaves it in the queue, in
-/// review under that reason. A reason that is the document's by its nature
-/// renames its file where it lies at once; one that could as well be the
-/// model's (a reply that could not be used, an internal failure) renames it
-/// only once a later document is read successfully. The queue goes on to the
-/// next document either way.
+/// review under that reason, its file renamed where it lies. A reason that
+/// is the document's by its nature does so at once. One that could as well
+/// be the model's (a reply that could not be used, an internal failure)
+/// leaves it waiting in doubt until the model is shown to work - here, with
+/// nothing else left, by the self-test - and does so only when it fails the
+/// same way after that. The queue goes on to the next document either way.
 #[test]
 fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
     let extraction = [
@@ -327,10 +393,13 @@ fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
         .iter()
         .map(|(code, _)| Err(WorkerFailure::reported(*code, "the worker's words", false)))
         .collect::<Vec<_>>();
-    let replies = model
+    let mut replies = model
         .iter()
         .map(|(code, _)| Err(ModelFailure::fatal(*code)))
         .collect::<Vec<_>>();
+    // The two in doubt, asked again once the self-test proved the model.
+    replies.push(Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID")));
+    replies.push(Err(ModelFailure::fatal("ANALYSIS_FAILED")));
     let rig = Rig::new(reads, replies, |settings| settings.automatic_rename = false);
     let ids = (0..extraction.len() + model.len())
         .map(|index| {
@@ -344,8 +413,6 @@ fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
     rig.pipeline.run_until_idle().unwrap();
 
     assert!(!rig.pipeline.is_paused());
-    let marked_now =
-        |index: usize| index < extraction.len() || matches!(index - extraction.len(), 0 | 2);
     for ((index, id), (code, expected)) in ids
         .iter()
         .enumerate()
@@ -355,24 +422,9 @@ fn a_document_that_cannot_be_read_waits_in_review_under_a_needs_review_name() {
         assert_eq!(item.status, QueueStatus::NeedsReview, "{code}");
         assert_eq!(item.error_code, Some(*expected), "{code}");
         assert!(item.proposal.is_none(), "{code}");
-        let name = if marked_now(index) {
-            format!("NEEDS REVIEW - doc-{index}.pdf")
-        } else {
-            format!("doc-{index}.pdf")
-        };
+        let name = format!("NEEDS REVIEW - doc-{index}.pdf");
         assert_eq!(item.source_path, rig.inbox.join(&name), "{code}");
         assert!(rig.inbox.join(&name).exists(), "{code}");
-    }
-
-    // A document read successfully proves the model works: the two whose
-    // marks were put off were their own problem after all.
-    let fine = rig.add(&rig.drop_in("fine.pdf", b"a fine document"));
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(rig.item(fine).status, QueueStatus::Ready);
-    for index in [extraction.len() + 1, extraction.len() + 3] {
-        let marked = rig.inbox.join(format!("NEEDS REVIEW - doc-{index}.pdf"));
-        assert_eq!(rig.item(ids[index]).source_path, marked);
-        assert!(marked.exists());
     }
 }
 
@@ -421,22 +473,24 @@ fn machine_problems_fail_or_pause_and_rename_nothing() {
     );
 }
 
-/// Two attempts that each fail in a way that may pass - a parser crash, a
-/// model running out of time - are the document's problem once both are
-/// used: it waits in review rather than failing. Whether it was the
-/// document's or the machine's shows only when a later document is read, so
-/// the file keeps its name until then.
+/// A parser crash, or a model running out of time, may be the machine's or
+/// the document's. The document waits in doubt, under its own name, until
+/// the machine is shown to work for that kind of failure - another document
+/// read, or the self-test - and only failing the same way after that is it
+/// the document's: in review, renamed.
 #[test]
-fn a_document_that_crashes_the_parser_or_times_out_twice_goes_to_review() {
+fn a_document_that_crashes_the_parser_or_times_out_after_the_machine_works_goes_to_review() {
     let rig = Rig::new(
         vec![
             Err(WorkerFailure::crashed()),
+            // slow.pdf is read, which proves the reader...
+            Ok(parsed(READABLE)),
+            // ...and crashes.pdf crashes it again: its own.
             Err(WorkerFailure::crashed()),
-            Ok(parsed(READABLE)),
-            Ok(parsed(READABLE)),
         ],
         vec![
             Err(ModelFailure::fatal("MODEL_TIMEOUT")),
+            // Asked again after the self-test proved the model.
             Err(ModelFailure::fatal("MODEL_TIMEOUT")),
         ],
         |_| {},
@@ -450,23 +504,14 @@ fn a_document_that_crashes_the_parser_or_times_out_twice_goes_to_review() {
     let item = rig.item(crashing);
     assert_eq!(item.status, QueueStatus::NeedsReview);
     assert_eq!(item.error_code, Some(ErrorCode::ExtractionFailed));
-    assert_eq!(item.source_path, rig.inbox.join("crashes.pdf"));
+    assert_eq!(
+        item.source_path,
+        rig.inbox.join("NEEDS REVIEW - crashes.pdf")
+    );
     let item = rig.item(slow);
     assert_eq!(item.status, QueueStatus::NeedsReview);
     assert_eq!(item.error_code, Some(ErrorCode::ModelFailed));
-    assert_eq!(item.source_path, rig.inbox.join("slow.pdf"));
-
-    let fine = rig.add(&rig.drop_in("fine.pdf", b"a fine document"));
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(rig.item(fine).status, QueueStatus::Completed);
-    assert_eq!(
-        rig.item(crashing).source_path,
-        rig.inbox.join("NEEDS REVIEW - crashes.pdf")
-    );
-    assert_eq!(
-        rig.item(slow).source_path,
-        rig.inbox.join("NEEDS REVIEW - slow.pdf")
-    );
+    assert_eq!(item.source_path, rig.inbox.join("NEEDS REVIEW - slow.pdf"));
 }
 
 /// Retry reads the renamed file again. Read successfully this time, it is
@@ -893,9 +938,9 @@ fn naming_an_undone_copy_files_it_as_a_document_of_its_own() {
 /// Replies that cannot be used, several in a row, are the model's problem:
 /// the queue stops, and the documents of that run go back to wait under
 /// their own names - nothing renamed, nothing counted - and resuming the
-/// queue reads them again. One still unusable after the resume is that
-/// document's own: it goes to review, the rest are read, and its file is
-/// marked once they are.
+/// queue reads them again. The model is still broken for one more document
+/// after the resume, which waits in doubt too; once the model answers, every
+/// document in doubt is read again, and filed.
 #[test]
 fn a_run_of_unusable_replies_stops_the_queue_and_renames_nothing() {
     let invalid = || Err(ModelFailure::fatal("MODEL_RESPONSE_INVALID"));
@@ -932,19 +977,13 @@ fn a_run_of_unusable_replies_stops_the_queue_and_renames_nothing() {
         assert_eq!(item.processing_failures, 0);
     }
 
-    // After the resume the first document's reply is still unusable: put
-    // back once, it goes to review and starts no new run, and the rest are
-    // read - which proves the reply its own, so its file is marked.
     rig.pipeline.resume();
     rig.pipeline.run_until_idle().unwrap();
     assert!(!rig.pipeline.is_paused());
-    let first = rig.item(ids[0]);
-    assert_eq!(first.status, QueueStatus::NeedsReview);
-    assert_eq!(first.error_code, Some(ErrorCode::ModelOutputInvalid));
-    for id in &ids[1..] {
+    for id in &ids {
         assert_eq!(rig.item(*id).status, QueueStatus::Completed);
     }
-    assert_eq!(rig.inbox_names(), vec!["NEEDS REVIEW - d0.pdf"]);
+    assert!(rig.inbox_names().is_empty(), "nothing was renamed");
 }
 
 /// A model too slow for anything times out on every document. It used to
@@ -1233,11 +1272,15 @@ fn a_staged_copy_follows_a_changed_output_folder() {
     );
 }
 
-// ---- runs of failures, keyed on the documents' own words ----------------
+// ---- doubt and proof, keyed on the documents' own words -------------------
 
 /// Reads a file's bytes as its text: "CRASH" in it crashes the reader, and
-/// "LOCKED" makes it password-protected.
-struct BytesWorker;
+/// "LOCKED" makes it password-protected. While `broken`, it crashes on
+/// everything, its own self-test too.
+#[derive(Default)]
+struct BytesWorker {
+    broken: AtomicBool,
+}
 
 impl WorkerBoundary for BytesWorker {
     fn extract(
@@ -1246,6 +1289,9 @@ impl WorkerBoundary for BytesWorker {
         path: &Path,
         _progress: &mut dyn FnMut(ExtractProgress),
     ) -> Result<DocumentSource, WorkerFailure> {
+        if self.broken.load(Ordering::SeqCst) {
+            return Err(WorkerFailure::crashed());
+        }
         let text = fs::read_to_string(path).unwrap_or_default();
         if text.contains("CRASH") {
             return Err(WorkerFailure::crashed());
@@ -1268,8 +1314,13 @@ impl WorkerBoundary for BytesWorker {
 }
 
 /// Answers from the document's text: "INVALID" gets a reply that cannot be
-/// used, "SLOW" a time-out, anything else the agreement's proposal.
-struct TextModel;
+/// used, "SLOW" a time-out, the calibration document its right answer, and
+/// anything else the agreement's proposal. During an `outage` every request
+/// - the self-test's too - fails with that code.
+#[derive(Default)]
+struct TextModel {
+    outage: Mutex<Option<&'static str>>,
+}
 
 impl AnalyzerBoundary for TextModel {
     fn analyze(
@@ -1278,6 +1329,17 @@ impl AnalyzerBoundary for TextModel {
         extension: &str,
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
+        if let Some(code) = *self.outage.lock().unwrap() {
+            return Err(ModelFailure::fatal(code));
+        }
+        if is_calibration(source) {
+            return Ok(analyzed(
+                source,
+                calibration_reply(),
+                extension,
+                existing_names,
+            ));
+        }
         let text = source
             .pages
             .iter()
@@ -1289,25 +1351,51 @@ impl AnalyzerBoundary for TextModel {
         if text.contains("SLOW") {
             return Err(ModelFailure::fatal("MODEL_TIMEOUT"));
         }
-        let digest = distill(source, DigestBudget::default());
-        let mut analysis = finish(
-            validate(proposal(), &digest),
-            &digest,
-            extension,
-            existing_names,
-            AnalysisTelemetry::default(),
-        );
-        analysis.text_fingerprint =
-            fingerprint::source_fingerprint(source).map(fingerprint::encode);
-        Ok(analysis)
+        Ok(analyzed(source, proposal(), extension, existing_names))
+    }
+}
+
+/// The ways the machine can be broken for every document, with the reason
+/// the queue stops for.
+#[derive(Clone, Copy, Debug)]
+enum Outage {
+    TimesOut,
+    AnswersGarbage,
+    ReaderCrashes,
+}
+
+impl Outage {
+    const ALL: [Outage; 3] = [
+        Outage::TimesOut,
+        Outage::AnswersGarbage,
+        Outage::ReaderCrashes,
+    ];
+
+    fn reason(self) -> &'static str {
+        match self {
+            Outage::TimesOut => "MODEL_FAILED",
+            Outage::AnswersGarbage => "MODEL_OUTPUT_INVALID",
+            Outage::ReaderCrashes => "READER_CRASHED",
+        }
+    }
+
+    /// What a document says to fail this way on its own.
+    fn word(self) -> &'static str {
+        match self {
+            Outage::TimesOut => "SLOW",
+            Outage::AnswersGarbage => "INVALID",
+            Outage::ReaderCrashes => "CRASH",
+        }
     }
 }
 
 /// An input folder and a queue whose reader and model answer from each
-/// document's own words.
+/// document's own words, and can be broken for everything.
 struct TextRig {
     temp: TempDir,
     inbox: PathBuf,
+    worker: Arc<BytesWorker>,
+    model: Arc<TextModel>,
     pipeline: Pipeline,
 }
 
@@ -1327,10 +1415,14 @@ impl TextRig {
             ..AppSettings::default()
         };
         TextRig::settings(&temp).save(&settings).unwrap();
-        let pipeline = TextRig::open(&temp);
+        let worker = Arc::new(BytesWorker::default());
+        let model = Arc::new(TextModel::default());
+        let pipeline = TextRig::open(&temp, &worker, &model);
         TextRig {
             temp,
             inbox,
+            worker,
+            model,
             pipeline,
         }
     }
@@ -1339,16 +1431,52 @@ impl TextRig {
         SettingsStore::new(temp.path().join("settings.json"))
     }
 
-    /// The queue over this rig's database, as the app opens it on start.
-    fn open(temp: &TempDir) -> Pipeline {
+    fn open(temp: &TempDir, worker: &Arc<BytesWorker>, model: &Arc<TextModel>) -> Pipeline {
         Pipeline::with_local_files(
             temp.path().join("queue.sqlite3"),
-            Arc::new(BytesWorker),
-            Arc::new(TextModel),
+            worker.clone(),
+            model.clone(),
             Arc::new(Quiet),
             TextRig::settings(temp),
         )
         .unwrap()
+    }
+
+    /// Quits the app and starts it again over the same database, as after
+    /// a crash or a restart.
+    fn restart(self) -> TextRig {
+        let TextRig {
+            temp,
+            inbox,
+            worker,
+            model,
+            pipeline,
+        } = self;
+        drop(pipeline);
+        let pipeline = TextRig::open(&temp, &worker, &model);
+        pipeline.recover().unwrap();
+        TextRig {
+            temp,
+            inbox,
+            worker,
+            model,
+            pipeline,
+        }
+    }
+
+    fn break_down(&self, outage: Outage) {
+        match outage {
+            Outage::TimesOut => *self.model.outage.lock().unwrap() = Some("MODEL_TIMEOUT"),
+            Outage::AnswersGarbage => {
+                *self.model.outage.lock().unwrap() = Some("MODEL_RESPONSE_INVALID")
+            }
+            Outage::ReaderCrashes => self.worker.broken.store(true, Ordering::SeqCst),
+        }
+    }
+
+    fn fix(&self) {
+        *self.model.outage.lock().unwrap() = None;
+        self.worker.broken.store(false, Ordering::SeqCst);
     }
 
     fn add(&self, name: &str, body: &str) -> i64 {
@@ -1360,6 +1488,15 @@ impl TextRig {
             .pop()
             .unwrap()
             .id
+    }
+
+    fn run(&self) {
+        self.pipeline.run_until_idle().unwrap();
+    }
+
+    fn resume(&self) {
+        self.pipeline.resume();
+        self.run();
     }
 
     fn status(&self, id: i64) -> QueueStatus {
@@ -1375,6 +1512,13 @@ impl TextRig {
             .unwrap()
     }
 
+    fn renamed(&self) -> Vec<String> {
+        names_in(&self.inbox)
+            .into_iter()
+            .filter(|name| name.starts_with("NEEDS REVIEW"))
+            .collect()
+    }
+
     fn journal_rows(&self, id: i64) -> i64 {
         rusqlite::Connection::open(self.temp.path().join("queue.sqlite3"))
             .unwrap()
@@ -1387,151 +1531,248 @@ impl TextRig {
     }
 }
 
-/// Two documents in a row that the model is too slow for, or that crash the
-/// reader, each fail twice: that is two documents, not four failures, and
-/// never a run that stops the queue. The good one behind them is filed, and
-/// that success proves the failures theirs, so both are marked.
+/// (a) The machine breaks for everything - a model that times out or
+/// answers garbage, a reader that crashes - and a person resumes the queue
+/// again and again before it is fixed. Every stop is the machine's, and
+/// nothing is ever renamed. Once it is fixed, every document is filed.
+/// Through a restart in the middle, too (e).
 #[test]
-fn two_failing_documents_tried_twice_each_are_not_a_run() {
-    for (bad, pause) in [("SLOW", "MODEL_FAILED"), ("CRASH", "READER_CRASHED")] {
+fn an_outage_renames_nothing_however_often_the_queue_is_resumed() {
+    for outage in Outage::ALL {
+        for restart in [false, true] {
+            let mut rig = TextRig::new();
+            let ids = (0..9)
+                .map(|index| rig.add(&format!("d{index}.pdf"), &format!("good {index}")))
+                .collect::<Vec<_>>();
+            rig.break_down(outage);
+            rig.run();
+            assert_eq!(
+                rig.pipeline.pause_reason().as_deref(),
+                Some(outage.reason()),
+                "{outage:?}"
+            );
+            if restart {
+                rig = rig.restart();
+            }
+            for _ in 0..4 {
+                rig.resume();
+                assert_eq!(
+                    rig.pipeline.pause_reason().as_deref(),
+                    Some(outage.reason()),
+                    "{outage:?}: still broken"
+                );
+                assert!(rig.renamed().is_empty(), "{outage:?}: {:?}", rig.renamed());
+            }
+            for id in &ids {
+                let item = rig.item(*id);
+                assert_eq!(item.status, QueueStatus::Queued, "{outage:?}");
+                assert_eq!(item.processing_failures, 0, "{outage:?}");
+            }
+
+            rig.fix();
+            rig.resume();
+            assert!(!rig.pipeline.is_paused(), "{outage:?}");
+            for id in &ids {
+                assert_eq!(rig.status(*id), QueueStatus::Completed, "{outage:?}");
+            }
+            assert!(names_in(&rig.inbox).is_empty(), "{outage:?}: all filed");
+        }
+    }
+}
+
+/// The reviewer's sequence: one resume while still broken, then fixed with
+/// documents not yet tried - one of those, read, proves the machine, and
+/// every document in doubt is read and filed.
+#[test]
+fn an_outage_fixed_mid_backlog_files_everything() {
+    for outage in Outage::ALL {
         let rig = TextRig::new();
-        let a = rig.add("a.pdf", &format!("{bad} a"));
-        let b = rig.add("b.pdf", &format!("{bad} b"));
+        let ids = (0..9)
+            .map(|index| rig.add(&format!("d{index}.pdf"), &format!("good {index}")))
+            .collect::<Vec<_>>();
+        rig.break_down(outage);
+        rig.run();
+        rig.resume();
+        assert!(rig.pipeline.is_paused(), "{outage:?}");
+        rig.fix();
+        rig.resume();
+        assert!(!rig.pipeline.is_paused(), "{outage:?}");
+        for id in &ids {
+            assert_eq!(rig.status(*id), QueueStatus::Completed, "{outage:?}");
+        }
+        assert!(rig.renamed().is_empty(), "{outage:?}");
+    }
+}
+
+/// (b) One document that really is bad among good ones: the good ones
+/// prove the machine works, so its second failure is its own - in review,
+/// renamed. Through a restart in the middle, too (e).
+#[test]
+fn one_bad_document_among_good_ones_goes_to_review_renamed() {
+    for outage in Outage::ALL {
+        for restart in [false, true] {
+            let mut rig = TextRig::new();
+            let first = rig.add("a.pdf", "good a");
+            let bad = rig.add("b.pdf", &format!("{} b", outage.word()));
+            if restart {
+                // Stop after the bad document's first failure.
+                rig.pipeline.run_next().unwrap();
+                rig.pipeline.run_next().unwrap();
+                assert_eq!(rig.status(bad), QueueStatus::Queued, "{outage:?}");
+                rig = rig.restart();
+            }
+            let last = rig.add("c.pdf", "good c");
+            rig.run();
+
+            assert!(!rig.pipeline.is_paused(), "{outage:?}");
+            assert_eq!(rig.status(first), QueueStatus::Completed, "{outage:?}");
+            assert_eq!(rig.status(last), QueueStatus::Completed, "{outage:?}");
+            assert_eq!(rig.status(bad), QueueStatus::NeedsReview, "{outage:?}");
+            assert_eq!(rig.renamed(), vec!["NEEDS REVIEW - b.pdf"], "{outage:?}");
+        }
+    }
+}
+
+/// (c) A lone document that really is bad, with nothing else to show the
+/// machine works: the self-test does - the model's calibration document, or
+/// a small text file for the reader - and its second failure is its own.
+/// Through a restart in the middle, too (e).
+#[test]
+fn a_lone_bad_document_is_proven_its_own_by_the_self_test() {
+    for outage in Outage::ALL {
+        for restart in [false, true] {
+            let mut rig = TextRig::new();
+            let bad = rig.add("a.pdf", &format!("{} a", outage.word()));
+            if restart {
+                rig.pipeline.run_next().unwrap();
+                assert_eq!(rig.status(bad), QueueStatus::Queued, "{outage:?}");
+                assert!(rig.renamed().is_empty(), "{outage:?}");
+                rig = rig.restart();
+            }
+            rig.run();
+
+            assert!(!rig.pipeline.is_paused(), "{outage:?}");
+            assert_eq!(rig.status(bad), QueueStatus::NeedsReview, "{outage:?}");
+            assert_eq!(rig.renamed(), vec!["NEEDS REVIEW - a.pdf"], "{outage:?}");
+        }
+    }
+}
+
+/// (d) A lone document while the machine is broken: the self-test fails
+/// too, so the queue stops for the machine and the document keeps its name.
+/// Fixed, it is filed. Through a restart in the middle, too (e).
+#[test]
+fn a_lone_document_with_a_broken_machine_stops_the_queue_and_keeps_its_name() {
+    for outage in Outage::ALL {
+        for restart in [false, true] {
+            let mut rig = TextRig::new();
+            let id = rig.add("a.pdf", "good a");
+            rig.break_down(outage);
+            rig.run();
+            assert_eq!(
+                rig.pipeline.pause_reason().as_deref(),
+                Some(outage.reason()),
+                "{outage:?}"
+            );
+            assert_eq!(rig.status(id), QueueStatus::Queued, "{outage:?}");
+            assert!(rig.renamed().is_empty(), "{outage:?}");
+            if restart {
+                rig = rig.restart();
+            }
+            rig.resume();
+            assert!(rig.pipeline.is_paused(), "{outage:?}");
+            assert!(rig.renamed().is_empty(), "{outage:?}");
+
+            rig.fix();
+            rig.resume();
+            assert_eq!(rig.status(id), QueueStatus::Completed, "{outage:?}");
+        }
+    }
+}
+
+/// Two documents in a row that fail are two, not one per attempt, and never
+/// a run that stops the queue. The good one behind them is filed, and shows
+/// the machine works, so their failures on the next attempt are their own.
+#[test]
+fn two_failing_documents_are_not_a_run() {
+    for outage in [Outage::TimesOut, Outage::ReaderCrashes] {
+        let rig = TextRig::new();
+        let word = outage.word();
+        let a = rig.add("a.pdf", &format!("{word} a"));
+        let b = rig.add("b.pdf", &format!("{word} b"));
         let c = rig.add("c.pdf", "good c");
 
-        rig.pipeline.run_until_idle().unwrap();
+        rig.run();
 
-        assert!(!rig.pipeline.is_paused(), "{bad}: stopped for {pause}");
-        assert_eq!(rig.status(c), QueueStatus::Completed, "{bad}");
-        assert_eq!(rig.status(a), QueueStatus::NeedsReview, "{bad}");
-        assert_eq!(rig.status(b), QueueStatus::NeedsReview, "{bad}");
+        assert!(!rig.pipeline.is_paused(), "{outage:?}");
+        assert_eq!(rig.status(c), QueueStatus::Completed, "{outage:?}");
+        assert_eq!(rig.status(a), QueueStatus::NeedsReview, "{outage:?}");
+        assert_eq!(rig.status(b), QueueStatus::NeedsReview, "{outage:?}");
         assert_eq!(
-            names_in(&rig.inbox),
+            rig.renamed(),
             vec!["NEEDS REVIEW - a.pdf", "NEEDS REVIEW - b.pdf"],
-            "{bad}"
+            "{outage:?}"
         );
     }
 }
 
-/// Three documents in a row that fail the same way stop the queue, and go
-/// back to wait. Resumed, they fail again: put back once, they go to review
-/// and start no new run, so the good document behind them is filed - and
-/// however often the queue is resumed, it never stops on them again.
+/// Three documents in a row that fail the same way stop the queue and wait
+/// in doubt. Resumed, the good document behind them is read, which shows
+/// the machine works: failing again, theirs is their own. However often the
+/// queue is resumed, it does not stop on them again.
 #[test]
 fn a_resumed_queue_moves_past_the_documents_that_stopped_it() {
-    for (bad, pause) in [
-        ("SLOW", "MODEL_FAILED"),
-        ("CRASH", "READER_CRASHED"),
-        ("INVALID", "MODEL_OUTPUT_INVALID"),
-    ] {
+    for outage in Outage::ALL {
         let rig = TextRig::new();
         let failing = ["a.pdf", "b.pdf", "c.pdf"]
             .into_iter()
-            .map(|name| rig.add(name, &format!("{bad} {name}")))
+            .map(|name| rig.add(name, &format!("{} {name}", outage.word())))
             .collect::<Vec<_>>();
         let good = rig.add("d.pdf", "good d");
 
-        rig.pipeline.run_until_idle().unwrap();
-        assert_eq!(rig.pipeline.pause_reason().as_deref(), Some(pause), "{bad}");
+        rig.run();
+        assert_eq!(
+            rig.pipeline.pause_reason().as_deref(),
+            Some(outage.reason()),
+            "{outage:?}"
+        );
         for id in &failing {
             let item = rig.item(*id);
-            assert_eq!(item.status, QueueStatus::Queued, "{bad}");
-            assert_eq!(item.processing_failures, 0, "{bad}");
+            assert_eq!(item.status, QueueStatus::Queued, "{outage:?}");
+            assert_eq!(item.processing_failures, 0, "{outage:?}");
         }
-        assert_eq!(rig.status(good), QueueStatus::Queued, "{bad}");
-        assert_eq!(
-            names_in(&rig.inbox),
-            vec!["a.pdf", "b.pdf", "c.pdf", "d.pdf"],
-            "{bad}"
-        );
+        assert!(rig.renamed().is_empty(), "{outage:?}");
 
         for _ in 0..3 {
-            rig.pipeline.resume();
-            rig.pipeline.run_until_idle().unwrap();
-            assert!(!rig.pipeline.is_paused(), "{bad}: stopped again");
+            rig.resume();
+            assert!(!rig.pipeline.is_paused(), "{outage:?}: stopped again");
         }
-        assert_eq!(rig.status(good), QueueStatus::Completed, "{bad}");
+        assert_eq!(rig.status(good), QueueStatus::Completed, "{outage:?}");
         for id in &failing {
-            assert_eq!(rig.status(*id), QueueStatus::NeedsReview, "{bad}");
+            assert_eq!(rig.status(*id), QueueStatus::NeedsReview, "{outage:?}");
         }
         assert_eq!(
-            names_in(&rig.inbox),
+            rig.renamed(),
             vec![
                 "NEEDS REVIEW - a.pdf",
                 "NEEDS REVIEW - b.pdf",
                 "NEEDS REVIEW - c.pdf"
             ],
-            "{bad}"
+            "{outage:?}"
         );
     }
 }
 
-/// A run that stops the queue puts back only its own documents. One whose
-/// mark was put off before the run - and before a person resumed, which
-/// starts every run over - stays in review for that person.
+/// A document found to be its own problem after the input folder changed
+/// in Settings is not renamed: Intern renames only what the input folder
+/// holds now.
 #[test]
-fn a_run_puts_back_only_its_own_documents() {
-    let rig = TextRig::new();
-    let earlier = rig.add("earlier.pdf", "INVALID earlier");
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(rig.status(earlier), QueueStatus::NeedsReview);
-    rig.pipeline.pause();
-    rig.pipeline.resume();
-
-    let run = ["a.pdf", "b.pdf", "c.pdf"]
-        .into_iter()
-        .map(|name| rig.add(name, &format!("INVALID {name}")))
-        .collect::<Vec<_>>();
-    rig.pipeline.run_until_idle().unwrap();
-
-    assert_eq!(
-        rig.pipeline.pause_reason().as_deref(),
-        Some("MODEL_OUTPUT_INVALID")
-    );
-    assert_eq!(rig.status(earlier), QueueStatus::NeedsReview);
-    for id in &run {
-        assert_eq!(rig.status(*id), QueueStatus::Queued);
-    }
-}
-
-/// A put-off mark outlives a restart, and is made once a document is read.
-#[test]
-fn a_put_off_mark_is_made_after_a_restart_once_a_document_is_read() {
+fn a_document_outside_the_input_folder_by_the_time_it_is_judged_keeps_its_name() {
     let rig = TextRig::new();
     let slow = rig.add("a.pdf", "SLOW a");
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
-    assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
-
-    let TextRig {
-        temp,
-        inbox,
-        pipeline,
-    } = rig;
-    drop(pipeline);
-    let rig = TextRig {
-        pipeline: TextRig::open(&temp),
-        temp,
-        inbox,
-    };
-    rig.pipeline.recover().unwrap();
-    assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
-    let good = rig.add("b.pdf", "good b");
-    rig.pipeline.run_until_idle().unwrap();
-
-    assert_eq!(rig.status(good), QueueStatus::Completed);
-    assert_eq!(names_in(&rig.inbox), vec!["NEEDS REVIEW - a.pdf"]);
-}
-
-/// A put-off mark that comes due after the input folder changed in
-/// Settings is not made: Intern renames only what the input folder holds
-/// now.
-#[test]
-fn a_put_off_mark_is_not_made_once_the_input_folder_moved() {
-    let rig = TextRig::new();
-    let slow = rig.add("a.pdf", "SLOW a");
-    rig.pipeline.run_until_idle().unwrap();
-    assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
+    rig.break_down(Outage::TimesOut);
+    rig.run();
+    assert!(rig.pipeline.is_paused());
 
     let elsewhere = rig.temp.path().join("Elsewhere");
     fs::create_dir_all(&elsewhere).unwrap();
@@ -1539,19 +1780,10 @@ fn a_put_off_mark_is_not_made_once_the_input_folder_moved() {
     let mut changed = settings.load().unwrap();
     changed.intake_folder = elsewhere.to_string_lossy().into_owned();
     settings.save(&changed).unwrap();
-    let good = elsewhere.join("b.pdf");
-    fs::write(&good, "good b").unwrap();
-    let good = rig
-        .pipeline
-        .enqueue_files(&[good])
-        .unwrap()
-        .pop()
-        .unwrap()
-        .id;
-    rig.pipeline.run_until_idle().unwrap();
+    rig.fix();
+    rig.resume();
     rig.pipeline.recover().unwrap();
 
-    assert_eq!(rig.status(good), QueueStatus::Completed);
     assert_eq!(rig.status(slow), QueueStatus::NeedsReview);
     assert_eq!(names_in(&rig.inbox), vec!["a.pdf"]);
 }
@@ -1563,7 +1795,7 @@ fn a_put_off_mark_is_not_made_once_the_input_folder_moved() {
 fn a_canceled_document_whose_file_is_gone_is_not_unmarked_for_ever() {
     let rig = TextRig::new();
     let id = rig.add("locked.pdf", "LOCKED");
-    rig.pipeline.run_until_idle().unwrap();
+    rig.run();
     let marked = rig.inbox.join("NEEDS REVIEW - locked.pdf");
     assert!(marked.exists());
     let before = rig.journal_rows(id);
@@ -1585,7 +1817,7 @@ fn a_canceled_document_whose_file_is_gone_is_not_unmarked_for_ever() {
 fn a_canceled_and_cleared_document_has_its_own_name() {
     let rig = TextRig::new();
     let id = rig.add("locked.pdf", "LOCKED");
-    rig.pipeline.run_until_idle().unwrap();
+    rig.run();
     assert_eq!(names_in(&rig.inbox), vec!["NEEDS REVIEW - locked.pdf"]);
     rig.pipeline.cancel(id).unwrap();
     rig.pipeline.clear_history().unwrap();

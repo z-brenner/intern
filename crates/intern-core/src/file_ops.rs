@@ -1559,9 +1559,18 @@ impl FileApplier {
             return Ok(None);
         }
         // The marked file is gone - deleted, or moved away by hand - so
-        // there is no name to give back, now or on any later pass.
+        // there is no name to give back, now or on any later pass. Only when
+        // its folder can be looked in and the file is not there: an offline
+        // share, an unmounted sync root or a removed drive hides the file
+        // too, and it gets its name back once it can be reached (the rename
+        // is refused meanwhile, and tried again now and then).
+        let folder_readable = item
+            .source_path
+            .parent()
+            .is_some_and(|folder| matches!(self.filesystem.try_exists(folder), Ok(true)));
         if self.store.current_review_mark(queue_item_id)?.is_some()
-            && !self.filesystem.exists(&item.source_path)
+            && folder_readable
+            && matches!(self.filesystem.try_exists(&item.source_path), Ok(false))
         {
             self.store.abandon_review_mark(queue_item_id)?;
             return Ok(None);
