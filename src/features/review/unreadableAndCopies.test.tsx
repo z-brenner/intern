@@ -67,8 +67,11 @@ describe('a document Intern could not read', () => {
   });
 
   it('is renamed NEEDS REVIEW in the demo, and gets back only the name Intern took', async () => {
-    const bridge = createInMemoryBridge({ items: [{ ...unreadable }] });
+    const bridge = createInMemoryBridge({ items: [{ ...unreadable }], settings: { intakeFolder: 'C:\\Inbox' } });
     await bridge.addFiles([{ path: 'C:\\Inbox\\Lease password.pdf', displayName: 'Lease password.pdf' }]);
+    // Outside the input folder it waits in review under its own name.
+    await bridge.addFiles([{ path: 'C:\\Elsewhere\\Other password.pdf', displayName: 'Other password.pdf' }]);
+    expect((await bridge.listItems())[2]).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'Other password.pdf' });
     const added = (await bridge.listItems())[1];
     expect(added).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'NEEDS REVIEW - Lease password.pdf' });
     await bridge.keepOriginal(added.id);

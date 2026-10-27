@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-// A document Intern cannot read waits in review under a NEEDS REVIEW name,
-// and a person can name it themselves and file it. The browser build stands
-// a file whose name says it is password-protected in for one.
-test('an unreadable document is renamed for review, named by hand, and filed', async ({ page }) => {
+// A document Intern cannot read waits in review, and a person can name it
+// themselves and file it. The browser build stands a file whose name says it
+// is password-protected in for one. A dropped file is not in the input
+// folder, so it keeps its name: only files there are renamed NEEDS REVIEW.
+test('an unreadable document waits in review, is named by hand, and filed', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
 
@@ -13,9 +14,10 @@ test('an unreadable document is renamed for review, named by hand, and filed', a
     dropZone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
   });
 
-  const row = page.getByRole('row', { name: /NEEDS REVIEW - Lease password\.pdf/ });
+  const row = page.getByRole('row', { name: /Lease password\.pdf/ });
   await expect(row).toContainText('Needs review');
-  await page.getByRole('button', { name: 'Select NEEDS REVIEW - Lease password.pdf' }).click();
+  await expect(page.getByText('NEEDS REVIEW - Lease password.pdf')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Select Lease password.pdf' }).click();
   const panel = page.getByRole('complementary', { name: 'Review item' });
   await expect(panel.getByRole('heading', { name: 'Name it yourself' })).toBeVisible();
   await expect(panel.getByText(/password-protected/)).toBeVisible();
@@ -25,5 +27,5 @@ test('an unreadable document is renamed for review, named by hand, and filed', a
   await panel.getByRole('button', { name: 'Approve & rename' }).click();
 
   await page.getByRole('button', { name: 'Completed' }).click();
-  await expect(page.getByRole('row', { name: /NEEDS REVIEW - Lease password\.pdf/ })).toContainText('2026-01-02 Lease.pdf');
+  await expect(page.getByRole('row', { name: /Lease password\.pdf/ })).toContainText('2026-01-02 Lease.pdf');
 });

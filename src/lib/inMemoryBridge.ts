@@ -427,15 +427,24 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const marks = new Map<string, string>();
   // A document the demo cannot read. The bridge has no bytes to try, so a
   // file whose name says it is password-protected stands in for one: it
-  // waits in review, its file renamed "NEEDS REVIEW - ..." where it lies,
-  // as the backend renames a document in the input folder - where, once the
-  // input folder is set up, everything added is.
+  // waits in review, and - as the backend does, only for a file in the
+  // input folder (Pipeline::review_mark) - its file is renamed
+  // "NEEDS REVIEW - ..." where it lies.
   const unreadableFrom = (file: FileSelection): QueueItem | undefined => {
     const name = file.displayName.split('/').at(-1) ?? file.displayName;
     if (!/password/i.test(name)) return undefined;
     const id = `file-${crypto.randomUUID()}`;
+    const item: QueueItem = { id, originalFilename: name, status: 'review', errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED') };
+    if (!inInputFolder(file.path)) return item;
     marks.set(id, name);
-    return { id, originalFilename: `NEEDS REVIEW - ${name}`, status: 'review', errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED') };
+    return { ...item, originalFilename: `NEEDS REVIEW - ${name}` };
+  };
+  // Whether a path is inside the input folder Settings names, compared as
+  // the backend compares them: separators alike, case ignored.
+  const inInputFolder = (path: string): boolean => {
+    const key = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    const folder = key(settings.intakeFolder.trim());
+    return folder !== '' && key(path).startsWith(`${folder}/`);
   };
   // Pipeline::file_duplicate, for a document whose bytes are already filed.
   // The bridge has no bytes to compare, so a file named like the original of
