@@ -210,6 +210,13 @@ pub struct PaddleConfig {
     pub reread: Option<RereadSettings>,
     /// Lines recognized in one batch.
     pub recognition_batch: usize,
+    /// The recognizer's characters, one per line in class order, when the
+    /// recognition model is not the one [`RECOGNITION_DICTIONARY`] belongs
+    /// to. For measuring other recognizers; `None` ships.
+    pub recognition_dictionary: Option<String>,
+    /// A recognizer used only for the second reading, and its dictionary.
+    /// `None`, as shipped: the second reading uses the page's recognizer.
+    pub reread_recognizer: Option<(PathBuf, String)>,
 }
 
 impl Default for PaddleConfig {
@@ -229,6 +236,8 @@ impl Default for PaddleConfig {
             redetect_skew_degrees: REDETECT_SKEW_DEGREES,
             reread: Some(RereadSettings::default()),
             recognition_batch: 6,
+            recognition_dictionary: None,
+            reread_recognizer: None,
         }
     }
 }

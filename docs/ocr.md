@@ -371,6 +371,56 @@ Shipped together: InternBench CER 0.49%, WER 1.78%, dates 29/30, names
 27/27, identifiers 14/15, 3.54 s of processor time and 1.95 s wall a page
 on two threads (contended), 599 MB peak.
 
+### Measured again: newer models and other engines
+
+In October 2026 the shipped configuration was measured against every
+English-capable PP-OCR export then published (PP-OCRv6 tiny, small and
+medium detectors and recognizers, the v5 server detector and recognizer,
+the v5 Latin and multilingual recognizers, and a stronger recognizer used
+only for the second reading) and against two other engines, Indra OCR
+1.1.2 and Falcon-OCR 1.5, on all 19 scanned InternBench documents (55
+pages; the 12 above are 47 pages now that the worker reads the fax's
+second frame). The scorer was intern-bench's OCR measure plus every
+printed amount and every printed token holding a digit. The pages and the
+harness are `crates/intern-worker/examples/ocr_eval.rs` (`render`, then
+`read` with one configuration) and `crates/intern-bench/examples/ocr_score.rs`.
+
+| Configuration | Critical fields, of 297 | Digit tokens, of 807 | CER | CPU s | Wall s | Peak RSS |
+| --- | --- | --- | --- | --- | --- | --- |
+| **shipped** | **293** | **796** | **0.72%** | 4.33 | 2.39 | 632 MB |
+| newer small recognizer | 294 | 789 | 0.75% | 4.09 | 2.37 | 832 MB |
+| newer medium recognizer | 290 | 793 | 0.69% | 13.08 | 7.06 | 1,061 MB |
+| newer small recognizer, second reading only | 294 | 799 | 0.73% | 5.37 | 2.99 | 956 MB |
+| Latin recognizer | 290 | 794 | 0.69% | 5.43 | 3.00 | 610 MB |
+| server detector, 960 | 292 | 797 | 0.74% | 14.72 | 8.08 | 1,292 MB |
+| newer medium detector, 960 | 290 | 794 | 0.73% | 8.34 | 4.56 | 851 MB |
+| Indra OCR, lines in the worker's row order | 293 | 796 | 0.66% | 0.81 | 0.34 | 581 MB |
+
+Critical fields are the gold dates, names and identifiers and every
+printed amount. CPU and wall are per page on two threads, on a machine
+shared with other benchmarks, so costs compare only within about a third.
+
+None of them is better where it matters. The shipped configuration finds
+every gold date, name and identifier; its four missing amounts are
+intermediate balances on the speckled statement and one invoice line on
+the 120 DPI remittance, not totals. The newer recognizers still run
+widely spaced columns together (`67240334.60`, `09/08/2026Time`) - 6 to
+17 merged tokens across the set against none - and the v5 server
+recognizer takes about 280 s of processor time for a page. The newer
+medium detector loses two issuers' names. The small recognizer as the
+second reading's reader finds one more statement balance and introduces a
+phone-number misread the guards do not cover, for a quarter more time and
+a third more memory.
+
+Indra OCR reads the same fields at a fifth of the processor time, but its
+own reading order puts a form's labels in one run and their values in
+another (CER 2.75%; the row above re-joins its lines with this engine's
+row rule), its weights carry a restrictive modified OpenRAIL-M licence,
+and using it would mean porting its Python pipeline to Rust. Falcon-OCR
+read every field on the 12 hardest pages, but took 177 s of wall time and
+4.8 GB a page on four threads, and replaced a purchase order's letterhead
+with a second "PURCHASE ORDER". The shipped configuration stays.
+
 ## Packaging
 
 `src-tauri/resources/runtime-assets.json` pins every file by URL, size and
