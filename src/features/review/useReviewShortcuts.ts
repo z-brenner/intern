@@ -29,6 +29,8 @@ export interface ReviewShortcutOptions {
   onOpen(item: QueueItem): void;
   /** Focus the filter box; false when there is none to focus. */
   onFilter(): boolean;
+  /** Whether the queue table's selected cells span more than one row, when Delete is ignored. */
+  selectionSpansRows?(): boolean;
 }
 
 const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
@@ -53,7 +55,8 @@ function isTextField(target: Element | null): boolean {
  * - Ctrl+Enter approves and Alt+K keeps the original - from the review
  *   panel's own fields too, since after each decision the caret is already
  *   in the next item's name;
- * - Delete removes, after asking;
+ * - Delete removes, after asking - but not while the table has cells of
+ *   several rows selected, which it would seem to remove as well;
  * - "/" goes to the filter.
  *
  * Approve, keep and remove act only while the Details panel is open, and
@@ -72,7 +75,7 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
   useLayoutEffect(() => { latest.current = options; });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const { enabled, rows, selected, inspector, onMove, onOpen, onFilter } = latest.current;
+      const { enabled, rows, selected, inspector, onMove, onOpen, onFilter, selectionSpansRows } = latest.current;
       // A key a field or dialog already handled (Enter in the name, Escape
       // in the filter) is not a shortcut as well.
       if (!enabled || event.defaultPrevented || event.isComposing) return;
@@ -128,7 +131,7 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
           onOpen(selected);
           return;
         case 'Delete':
-          if (!actions?.remove) return;
+          if (!actions?.remove || selectionSpansRows?.()) return;
           event.preventDefault();
           if (!event.repeat) inspector.current?.requestRemove();
           return;

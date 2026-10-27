@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { selectedBlock, tableBlock, toHtml, toTsv } from './grid';
-import type { CopiedBlock, GridSelection } from './grid';
+import { cellBlock, selectedBlock, tableBlock, toHtml, toTsv } from './grid';
+import type { ColumnKey, CopiedBlock } from './grid';
+import { selectionOf, useGridValue } from './gridStore';
+import type { GridStore } from './gridStore';
 import type { QueueItem } from '../../types';
 
 /** Both formats of one copy: tab-separated text, and the same cells as an HTML table. */
@@ -64,35 +66,35 @@ export async function writeClipboard(payload: ClipboardPayload): Promise<void> {
 interface Options {
   /** The rows the table shows, in its order. */
   rows: QueueItem[];
-  selection?: GridSelection;
+  store: GridStore;
   onCopied(block: CopiedBlock): void;
   onFailed(error: unknown): void;
 }
 
 /**
  * Copying from the queue table: Ctrl+C (or Cmd+C) while a cell has focus, and
- * the toolbar's Copy button. Both copy the selected cells, or the whole table
- * as shown, headings first, when no cell is selected.
+ * the toolbar's Copy button. Both copy the selected cells. With none
+ * selected, Ctrl+C copies the cell it is pressed on, as a spreadsheet does,
+ * and the button - which then says "Copy table" - copies the whole table as
+ * shown, headings first.
  *
  * Ctrl+C is answered from the document's copy event rather than a keydown, so
  * it also follows the platform's own copy command and never needs clipboard
  * permission. It acts only when focus is on a cell of the table: anywhere
  * else, and in any text field, copying is the browser's as ever.
  */
-export function useGridClipboard({ rows, selection, onCopied, onFailed }: Options) {
-  const latest = useRef({ rows, selection, onCopied, onFailed });
-  useLayoutEffect(() => { latest.current = { rows, selection, onCopied, onFailed }; });
-  const block = () => {
-    const { rows: shown, selection: selected } = latest.current;
-    return selectedBlock(selected, shown) ?? tableBlock(shown);
-  };
+export function useGridClipboard({ rows, store, onCopied, onFailed }: Options) {
+  const latest = useRef({ rows, onCopied, onFailed });
+  useLayoutEffect(() => { latest.current = { rows, onCopied, onFailed }; });
+  const selected = () => selectedBlock(selectionOf(store.get()), latest.current.rows);
   useEffect(() => {
     const onCopy = (event: ClipboardEvent) => {
       if (event.defaultPrevented) return;
       const focused = document.activeElement;
-      if (!(focused instanceof HTMLElement) || !focused.closest('.queue-grid [data-column]')) return;
-      const copied = block();
-      if (!copied.rows.length) return;
+      const cell = focused instanceof HTMLElement ? focused.closest<HTMLElement>('.queue-grid [data-item-id][data-column]') : null;
+      if (!cell) return;
+      const copied = selected() ?? cellBlock({ id: cell.dataset.itemId!, column: cell.dataset.column as ColumnKey }, latest.current.rows);
+      if (!copied?.rows.length) return;
       if (fillCopyEvent(event, payloadFor(copied))) latest.current.onCopied(copied);
     };
     document.addEventListener('copy', onCopy);
@@ -100,9 +102,9 @@ export function useGridClipboard({ rows, selection, onCopied, onFailed }: Option
   }, []);
   /** The Copy button. Starts the copy within the click, as the clipboard requires. */
   const copy = () => {
-    const copied = block();
+    const copied = selected() ?? tableBlock(latest.current.rows);
     if (!copied.rows.length) return;
     writeClipboard(payloadFor(copied)).then(() => latest.current.onCopied(copied), (error: unknown) => latest.current.onFailed(error));
   };
-  return { copy, hasSelection: Boolean(selectedBlock(selection, rows)) };
+  return { copy, hasSelection: useGridValue(store, (state) => Boolean(state.anchor)) };
 }

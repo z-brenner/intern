@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../App';
 import { createInMemoryBridge, createReviewBatchBridge } from '../../lib/inMemoryBridge';
 import type { QueueItem } from '../../types';
-import { clickCell, detailsToggle, queueCell } from './gridTesting';
+import { clickCell, detailsToggle, openDetails, queueCell } from './gridTesting';
 
 /*
   The queue table behaves like a spreadsheet's cells: click, Shift+click,
@@ -32,9 +32,9 @@ const selectedCells = () => screen.getAllByRole('gridcell').filter((cell) => cel
 
 async function start(items?: QueueItem[]) {
   render(<App bridge={items ? createInMemoryBridge({ items }) : createReviewBatchBridge()} />);
-  const grid = await screen.findByRole('grid', { name: 'Queue' });
+  const grid = await screen.findByRole('grid', { name: 'Queue' }, { timeout: 5000 });
   // Intern selects the first item needing review once the queue is read.
-  if (!items || items.some((item) => item.status === 'review')) await waitFor(() => expect(grid.querySelector('tr[aria-current]')).not.toBeNull());
+  if (!items || items.some((item) => item.status === 'review')) await waitFor(() => expect(grid.querySelector('tr[aria-current]')).not.toBeNull(), { timeout: 5000 });
   return grid;
 }
 
@@ -75,6 +75,25 @@ describe('queue cells', () => {
     expect(selectedCells()).toEqual([]);
     expect(queueCell('Scan 0105.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByRole('button', { name: 'Copy table' })).toBeInTheDocument();
+  });
+
+  // Intern selects the first item to decide once the queue is read. A click
+  // landing in the moment after that, before React ran its effects, used to
+  // be undone by the active cell catching up with the earlier selection.
+  it('keeps a click made as the launch selection appears', async () => {
+    render(<App bridge={createInMemoryBridge({ items: tricky })} />);
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (!document.querySelector('.queue-grid tr[aria-current]')) return;
+        observer.disconnect();
+        clickCell(queueCell('Scan 2 東京.pdf', 'proposed'));
+        resolve();
+      });
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(selectedCells()).toEqual(['Scan 2 東京.pdf:proposed']);
+    expect(queueCell('Scan 2 東京.pdf', 'proposed')).toHaveAttribute('tabindex', '0');
   });
 
   it('selects by dragging, and a column from its heading', async () => {
@@ -149,6 +168,42 @@ describe('queue cells', () => {
     expect(selectedCells()).toEqual(['Scan 0101.pdf:original', 'Scan 0101.pdf:proposed', 'Scan 0101.pdf:description', 'Scan 0101.pdf:confidence']);
   });
 
+  // The active cell is the end of the selection that moves, and keyboard
+  // focus and Tab are always on it. Ctrl+A and Shift+Space used to move that
+  // end without moving focus, so Tab jumped and the next Shift+arrow grew
+  // the selection from somewhere else.
+  it('keeps focus on the active end of the selection after Ctrl+A and Shift+Space', async () => {
+    await start();
+    const start0101 = queueCell('Scan 0101.pdf');
+    start0101.focus();
+    fireEvent.keyDown(start0101, { key: 'a', ctrlKey: true });
+    expect(selectedCells()).toHaveLength(28);
+    // Focus is on the far corner, the one Tab returns to.
+    expect(queueCell('Scan 0107.pdf', 'confidence')).toHaveFocus();
+    expect(queueCell('Scan 0107.pdf', 'confidence')).toHaveAttribute('tabindex', '0');
+    expect(screen.getAllByRole('gridcell').filter((cell) => cell.getAttribute('tabindex') === '0')).toHaveLength(1);
+    // As in a spreadsheet, Shift+Up then gives back the last row.
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp', shiftKey: true });
+    expect(selectedCells()).toHaveLength(24);
+    expect(selectedCells().some((cell) => cell.startsWith('Scan 0107.pdf'))).toBe(false);
+
+    const cell = queueCell('Scan 0102.pdf', 'proposed');
+    clickCell(cell);
+    fireEvent.keyDown(cell, { key: ' ', shiftKey: true });
+    expect(queueCell('Scan 0102.pdf', 'confidence')).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown', shiftKey: true });
+    expect(selectedCells()).toEqual([
+      'Scan 0102.pdf:original', 'Scan 0102.pdf:proposed', 'Scan 0102.pdf:description', 'Scan 0102.pdf:confidence',
+      'Scan 0103.pdf:original', 'Scan 0103.pdf:proposed', 'Scan 0103.pdf:description', 'Scan 0103.pdf:confidence',
+    ]);
+    // The active cell of a selection of several is marked as a spreadsheet marks it.
+    expect(queueCell('Scan 0103.pdf', 'confidence')).toHaveClass('cell-active');
+    expect(document.querySelectorAll('.cell-active')).toHaveLength(1);
+    // A single selected cell needs no marker of its own.
+    clickCell(queueCell('Scan 0104.pdf'));
+    expect(document.querySelectorAll('.cell-active')).toHaveLength(0);
+  });
+
   it('copies the selection on Ctrl+C as tab-separated text and an HTML table, without Status', async () => {
     await start(tricky);
     clickCell(queueCell('Scan 1.pdf'));
@@ -185,12 +240,45 @@ describe('queue cells', () => {
     ]);
   });
 
-  it('leaves copying anywhere else to the browser', async () => {
+  // A spreadsheet's Ctrl+C with nothing more selected copies the cell it is on.
+  it('copies the active cell on Ctrl+C when no cells are selected', async () => {
     await start(tricky);
-    const { event } = copyFrom(screen.getByRole('button', { name: 'Copy table' }));
+    clickCell(queueCell('Scan 1.pdf'));
+    clickCell(queueCell('Scan 2 東京.pdf', 'proposed'), { shiftKey: true });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(selectedCells()).toEqual([]);
+
+    const { data } = copyFrom(document.activeElement!);
+    expect(data.get('text/plain')).toBe('2024-02-03 Invoice — Café.pdf');
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Copied 1 cell.'));
+    // The button, labeled for it, still copies the whole table.
+    expect(screen.getByRole('button', { name: 'Copy table' })).toBeInTheDocument();
+  });
+
+  // Copying is the table's only while a cell has focus. A text field reached
+  // after working in the table copies its own text, as ever.
+  it('leaves copying in a text field to the browser, even after the table had cells selected', async () => {
+    const items = [...tricky, ...Array.from({ length: 5 }, (_, index): QueueItem => ({ id: `w${index}`, originalFilename: `Wait ${index}.pdf`, status: 'waiting' }))];
+    await start(items);
+    clickCell(queueCell('Scan 1.pdf'));
+    clickCell(queueCell('Scan 2 東京.pdf', 'description'), { shiftKey: true });
+    expect(selectedCells()).toHaveLength(6);
+
+    const fields = async () => {
+      const filter = screen.getByRole('searchbox', { name: 'Filter queue' });
+      fireEvent.change(filter, { target: { value: 'Scan' } });
+      const panel = await openDetails();
+      return [filter, within(panel).getByLabelText('Filename'), within(panel).getByLabelText('Description')];
+    };
+    for (const field of await fields()) {
+      field.focus();
+      expect(field).toHaveFocus();
+      const { data, event } = copyFrom(field);
+      expect(event.defaultPrevented, field.getAttribute('aria-label') ?? field.tagName).toBe(false);
+      expect(data.size).toBe(0);
+    }
+    const { event } = copyFrom(screen.getByRole('button', { name: /^Copy/ }));
     expect(event.defaultPrevented).toBe(false);
-    const filter = { event: copyFrom(document.body).event };
-    expect(filter.event.defaultPrevented).toBe(false);
   });
 
   it('copies the whole table with headings from the Copy button when nothing is selected', async () => {
@@ -243,35 +331,53 @@ describe('queue cells', () => {
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('Intern could not copy to the clipboard.');
   });
 
-  it('counts what needs review where the Needs Review page used to, and goes to each in turn', async () => {
+  it('counts what needs review where the Needs Review page used to, and steps through them from the count', async () => {
     await start();
     expect(screen.queryByRole('button', { name: /Needs Review,/ })).not.toBeInTheDocument();
     const count = screen.getByRole('button', { name: '4 need review' });
+    count.focus();
 
     fireEvent.click(count);
-    // After the selected Scan 0101, the next one needing review; selecting, not opening.
-    await waitFor(() => expect(queueCell('Scan 0102.pdf')).toHaveFocus());
-    expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
+    // After the selected Scan 0101, the next one needing review; selecting,
+    // not opening, and the count keeps focus so the next press goes on.
+    await waitFor(() => expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(count).toHaveFocus();
+    expect(queueCell('Scan 0102.pdf')).toHaveAttribute('tabindex', '0');
     expect(screen.queryByRole('complementary', { name: 'Review item' })).not.toBeInTheDocument();
     fireEvent.click(count);
-    await waitFor(() => expect(queueCell('Scan 0104.pdf')).toHaveFocus());
+    await waitFor(() => expect(queueCell('Scan 0104.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
     fireEvent.click(count);
     fireEvent.click(count);
     // Round again to the first.
-    await waitFor(() => expect(queueCell('Scan 0101.pdf')).toHaveFocus());
+    await waitFor(() => expect(queueCell('Scan 0101.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    expect(count).toHaveFocus();
+  });
+
+  it('counts the review items the filter leaves, the ones it steps through', async () => {
+    await start();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter queue' }), { target: { value: 'Fabrikam' } });
+    const count = screen.getByRole('button', { name: '1 needs review' });
+    fireEvent.click(count);
+    await waitFor(() => expect(queueCell('Scan 0102.pdf').closest('tr')).toHaveAttribute('aria-current', 'true'));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter queue' }), { target: { value: 'Contoso' } });
+    expect(screen.queryByRole('button', { name: /need(s)? review/ })).not.toBeInTheDocument();
   });
 
   it('shows no count when nothing needs review, or in Completed', async () => {
-    await start([tricky[1], tricky[2], { id: 'done', originalFilename: 'Done.pdf', status: 'completed', proposedFilename: '2024-01-01 Done.pdf', filedName: '2024-01-01 Done.pdf', undoable: true }]);
+    await start([tricky[1], tricky[2]]);
     expect(screen.queryByRole('button', { name: /need(s)? review/ })).not.toBeInTheDocument();
-    cleanupAndStartWithReview();
+    cleanup();
+
+    // Review items in the queue, and one filed document: Completed holds
+    // nothing to review, so the count stays with the queue.
+    await start([...tricky, { id: 'done', originalFilename: 'Done.pdf', status: 'completed', proposedFilename: '2024-01-01 Done.pdf', filedName: '2024-01-01 Done.pdf', undoable: true }]);
+    expect(screen.getByRole('button', { name: '1 needs review' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    await screen.findByRole('gridcell', { name: 'Done.pdf' });
+    expect(screen.queryByRole('button', { name: /need(s)? review/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Queue items' })).getByRole('button', { name: 'Copy table' })).toBeEnabled();
+    expect(detailsToggle()).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Queue, / }));
+    expect(screen.getByRole('button', { name: '1 needs review' })).toBeInTheDocument();
   });
 });
-
-function cleanupAndStartWithReview() {
-  // Completed holds nothing to review, so the count stays with the queue.
-  fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
-  expect(screen.queryByRole('button', { name: /need(s)? review/ })).not.toBeInTheDocument();
-  expect(within(screen.getByRole('region', { name: 'Queue items' })).getByRole('button', { name: 'Copy table' })).toBeEnabled();
-  expect(detailsToggle()).toBeDisabled();
-}

@@ -383,7 +383,7 @@ describe('review actions', () => {
     expect(screen.getByLabelText('Filename')).toHaveValue('2024-03-01 Non-Disclosure Agreement with Acme Corp');
   });
 
-  it('turns the narrow inspector into a contained drawer and restores focus to what opened it', async () => {
+  it('turns the narrow inspector into a contained drawer and restores focus to the current cell', async () => {
     stubNarrowWindow();
     render(<App bridge={createInMemoryBridge()} />);
 
@@ -404,22 +404,28 @@ describe('review actions', () => {
     expect(screen.getByRole('button', { name: 'Close review' })).toHaveFocus();
     fireEvent.keyDown(initialDrawer, { key: 'Escape' });
 
-    // Closed: back to the Details button, the row still selected.
+    // Closed: back to the row being worked on, which is still selected.
     expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
-    await waitFor(() => expect(detailsToggle()).toHaveFocus());
+    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
     expect(detailsToggle()).toHaveAttribute('aria-expanded', 'false');
     expect(queueCell('Lease Agreement - 123 Main St.pdf').closest('tr')).toHaveAttribute('aria-current', 'true');
 
-    // Enter on a cell opens it too, and closing goes back to that cell.
+    // Enter on a cell opens it too. J in the drawer moves to the next row,
+    // and closing goes back to that row's cell - the current one, not the
+    // cell the drawer was opened from.
     const cell = queueCell('Lease Agreement - 123 Main St.pdf');
     cell.focus();
     fireEvent.keyDown(cell, { key: 'Enter' });
     const reopenedDrawer = await screen.findByRole('dialog', { name: 'Review item' });
     await waitFor(() => expect(screen.getByLabelText('Filename')).toHaveFocus());
+    const heading = within(reopenedDrawer).getByRole('heading', { name: 'Review item' });
+    heading.focus();
+    fireEvent.keyDown(heading, { key: 'j' });
+    await waitFor(() => expect(reopenedDrawer).toHaveTextContent('NDA - Acme Corp.docx'));
     fireEvent.click(within(reopenedDrawer).getByRole('button', { name: 'Close review' }));
 
     expect(screen.queryByRole('dialog', { name: 'Review item' })).not.toBeInTheDocument();
-    await waitFor(() => expect(queueCell('Lease Agreement - 123 Main St.pdf')).toHaveFocus());
+    await waitFor(() => expect(queueCell('NDA - Acme Corp.docx')).toHaveFocus());
   });
 
   it('moves focus to a visible queue control when refresh removes the invoking row', async () => {

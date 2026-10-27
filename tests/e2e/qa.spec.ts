@@ -213,7 +213,8 @@ test.describe('whole-product browser QA', () => {
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'Close review' })).toBeFocused();
     await page.keyboard.press('Escape');
-    await expect(detailsToggle(page)).toBeFocused();
+    // Back to the cell of the row being worked on.
+    await expect(queueCell(page, 'Lease Agreement - 123 Main St.pdf')).toBeFocused();
 
     // Enter on a cell opens it too; Escape goes back to that cell.
     const trigger = queueCell(page, 'Lease Agreement - 123 Main St.pdf');

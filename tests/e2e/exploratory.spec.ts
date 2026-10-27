@@ -98,7 +98,7 @@ test('the queue, the drawer, and the filter behave as a person drives them', asy
   await shot(page, 'narrow-drawer-is-modal');
   await page.keyboard.press('Escape');
   await expect(modal).toBeHidden();
-  await expect(detailsToggle(page)).toBeFocused();
+  await expect(queueCell(page, 'Lease Agreement - 123 Main St.pdf')).toBeFocused();
   await shot(page, 'narrow-drawer-closed-by-escape');
   await page.setViewportSize({ width: 1280, height: 800 });
 });

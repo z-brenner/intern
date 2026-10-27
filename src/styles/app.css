@@ -204,10 +204,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
    never text; a cell's text is copied whole with Ctrl+C. Status is never
    selected: inside a selection it keeps its own background, so the gap
    shows it will not be copied. */
-.queue-grid td { -webkit-user-select: none; user-select: none; cursor: cell; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent); }
+.queue-grid td { -webkit-user-select: none; user-select: none; cursor: cell; box-shadow: var(--row-bar, 0 0 transparent), var(--edge-top, 0 0 transparent), var(--edge-bottom, 0 0 transparent), var(--edge-left, 0 0 transparent), var(--edge-right, 0 0 transparent), var(--active-ring, 0 0 transparent); }
 .queue-grid td.col-status { cursor: default; }
 .queue-grid th.col-original, .queue-grid th.col-proposed, .queue-grid th.col-description, .queue-grid th.col-confidence { cursor: pointer; -webkit-user-select: none; user-select: none; }
 .queue-grid td.cell-selected { background: var(--cell-selected); }
+/* The active cell of a selection of several, as a spreadsheet marks it:
+   unfilled, inside a ring of its own. Shift+arrow moves this corner. */
+.queue-grid td.cell-selected.cell-active { background: var(--surface); --active-ring: inset 0 0 0 2px var(--cell-selected-edge); }
 .queue-grid td.edge-top { --edge-top: inset 0 2px 0 var(--cell-selected-edge); }
 .queue-grid td.edge-bottom { --edge-bottom: inset 0 -2px 0 var(--cell-selected-edge); }
 .queue-grid td.edge-left { --edge-left: inset 2px 0 0 var(--cell-selected-edge); }
@@ -221,6 +224,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .queue-grid td:focus-visible { outline: 2px solid var(--brand-navy); outline-offset: -2px; }
 @media (forced-colors: active) {
   .queue-grid td.cell-selected { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .queue-grid td.cell-selected.cell-active { background: Canvas; color: CanvasText; outline: 3px solid Highlight; outline-offset: -3px; }
+  .queue-grid td.cell-selected.cell-active * { color: CanvasText !important; }
   .queue-grid td.cell-selected * { color: HighlightText !important; }
   .queue-grid td:focus-visible { outline-color: CanvasText; }
 }
