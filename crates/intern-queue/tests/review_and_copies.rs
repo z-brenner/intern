@@ -1649,10 +1649,10 @@ fn one_bad_document_among_good_ones_goes_to_review_renamed() {
 }
 
 /// (c) A lone document that really is bad, with nothing else to show the
-/// machine works: the self-test does - the model's calibration document, or
-/// for a text file the reader crashed on, a small text file of Intern's own
-/// - and its second failure is its own. Through a restart in the middle,
-/// too (e).
+/// machine works: the self-test does (the model's calibration document, or
+/// for a text file the reader crashed on, a small text file of Intern's
+/// own), and its second failure is its own. Through a restart in the
+/// middle, too (e).
 #[test]
 fn a_lone_bad_document_is_proven_its_own_by_the_self_test() {
     for outage in Outage::ALL {

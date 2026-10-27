@@ -908,6 +908,7 @@ impl Pipeline {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn assemble(
         store: Arc<QueueStore>,
         repository: PipelineRepository,
