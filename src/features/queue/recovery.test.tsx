@@ -64,20 +64,20 @@ const ready: QueueItem = {
   });
 
   it('reports an import failure after a successful selection', async () => {
-    const addFiles = vi.fn(async () => { throw new Error('The shared folder is offline.'); });
-    render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), addFiles }} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
+    const copyToInput = vi.fn(async () => { throw new Error('The shared folder is offline.'); });
+    render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), copyToInput }} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Add files$/i }));
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('The shared folder is offline.');
     expect(screen.getByRole('gridcell', { name: 'agreement.pdf' })).toBeVisible();
-    expect(addFiles).toHaveBeenCalledOnce();
+    expect(copyToInput).toHaveBeenCalledOnce();
   });
 
   it('treats a canceled picker as a no-op, not a successful import or an error', async () => {
-    const addFiles = vi.fn(async () => ({ added: 0, alreadyQueued: 0, skipped: [] }));
-    render(<App bridge={{ ...createInMemoryBridge({ items: [] }), addFiles }} selection={selection()} />);
+    const copyToInput = vi.fn(async () => ({ added: 0, alreadyQueued: 0, skipped: [] }));
+    render(<App bridge={{ ...createInMemoryBridge({ items: [] }), copyToInput }} selection={selection()} />);
     fireEvent.click(await screen.findByRole('button', { name: /^Add files$/i }));
     await waitFor(() => expect(screen.getByRole('button', { name: /^Add files$/i })).toBeEnabled());
-    expect(addFiles).not.toHaveBeenCalled();
+    expect(copyToInput).not.toHaveBeenCalled();
     expect(screen.queryByRole('alert', { name: 'Action error' })).not.toBeInTheDocument();
     expect(screen.getByRole('status', { name: 'Action status' })).toBeEmptyDOMElement();
   });
@@ -99,13 +99,13 @@ const ready: QueueItem = {
     const second = { ...ready, id: 'second', originalFilename: 'second.pdf' };
     const imported: QueueItem = { id: 'imported', originalFilename: 'new.pdf', status: 'waiting' };
     const items: QueueItem[] = [ready, second];
-    const addFiles = vi.fn(async () => { await pending.promise; items.push(imported); return { added: 1, alreadyQueued: 0, skipped: [] }; });
-    const bridge = { ...createInMemoryBridge({ items: [] }), listItems: async () => [...items], addFiles };
+    const copyToInput = vi.fn(async () => { await pending.promise; items.push(imported); return { added: 1, alreadyQueued: 0, skipped: [] }; });
+    const bridge = { ...createInMemoryBridge({ items: [] }), listItems: async () => [...items], copyToInput };
     render(<App bridge={bridge} selection={selection({ pickFiles: async () => [{ path: 'browser://new.pdf', displayName: 'new.pdf' }] })} />);
     clickCell(await screen.findByRole('gridcell', { name: 'agreement.pdf' }));
     await openDetails();
     fireEvent.click(screen.getByRole('button', { name: /^Add files$/i }));
-    await waitFor(() => expect(addFiles).toHaveBeenCalledOnce());
+    await waitFor(() => expect(copyToInput).toHaveBeenCalledOnce());
     selectRow('second.pdf');
     await act(async () => { pending.resolve(); await pending.promise; });
     await screen.findByRole('gridcell', { name: 'new.pdf' });
@@ -203,15 +203,15 @@ const ready: QueueItem = {
   // swallowed and a drop during another action started a second import.
   it('reports a desktop drop the backend refuses', async () => {
     let drop!: (result: SelectionResult) => void;
-    const addFiles = vi.fn(async () => { throw new Error('The shared folder is offline.'); });
+    const copyToInput = vi.fn(async () => { throw new Error('The shared folder is offline.'); });
     const dropping = selection({ subscribeDrops: async (listener: typeof drop) => { drop = listener; return () => {}; } } as Partial<SelectionBoundary>);
-    render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), addFiles }} selection={dropping} />);
+    render(<App bridge={{ ...createInMemoryBridge({ items: [ready] }), copyToInput }} selection={dropping} />);
     await screen.findByRole('gridcell', { name: 'agreement.pdf' });
 
     await act(async () => { drop({ files: [{ path: 'C:\Docs\dropped.pdf', displayName: 'dropped.pdf' }] }); });
 
     expect(await screen.findByRole('alert', { name: 'Action error' })).toHaveTextContent('The shared folder is offline.');
-    expect(addFiles).toHaveBeenCalledOnce();
+    expect(copyToInput).toHaveBeenCalledOnce();
   });
 
   // Browsers report a dismissed file dialog as a `cancel` event and nothing

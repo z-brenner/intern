@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { App } from '../../App';
 import { TauriBridge, type TauriEvent, type TauriTransport } from '../../lib/tauriBridge';
 
-const settings = { destination: 'C:\\Filed', destinationLayout: 'flat' as const, startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local' as const, hostedProvider: 'anthropic' as const, hostedBaseUrl: '', hostedModel: '' };
+const settings = { destination: 'C:\\Filed', destinationLayout: 'flat' as const, startMinimized: false, automaticRename: false, intakeFolder: 'C:\\Scans', intakeEnabled: true, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, recordDescriptions: false, modelSource: 'local' as const, hostedProvider: 'anthropic' as const, hostedBaseUrl: '', hostedModel: '' };
 
 function desktopTransport() {
   const commands: string[] = [];

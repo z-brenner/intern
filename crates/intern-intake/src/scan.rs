@@ -569,7 +569,7 @@ fn skipped_name(path: &Path) -> bool {
         })
 }
 
-fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
+pub(crate) fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
     let relative = path.strip_prefix(root).ok()?;
     let parts: Vec<String> = relative
         .components()

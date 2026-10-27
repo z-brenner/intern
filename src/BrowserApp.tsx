@@ -16,8 +16,9 @@ function browserBridge() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('fixtureBatch') === '1') return createFixtureBatchBridge();
   if (import.meta.env.DEV && params.get('sharePoint') === 'fake') return createInMemoryBridge({ sharePoint: 'fake' });
-  // A first run without the deployment, for walking folder setup.
-  if (import.meta.env.DEV && params.get('folderSetup') === 'fake') return createInMemoryBridge({ completedOnboardingVersion: 0 });
+  // A first run without the deployment, for walking folder setup: no input
+  // or output folder chosen yet.
+  if (import.meta.env.DEV && params.get('folderSetup') === 'fake') return createInMemoryBridge({ completedOnboardingVersion: 0, settings: { intakeFolder: '', intakeEnabled: false, intakeLocalOnly: false, destination: '' } });
   // An update on offer, for checking where its banner sits in the window.
   if (import.meta.env.DEV && params.get('update') === 'available') return createInMemoryBridge({ update: { state: 'available', currentVersion: '0.1.0', version: '0.2.0' } });
   // A morning's scans to clear from the keyboard, six of them undecided.

@@ -605,7 +605,7 @@
         <li><a href="#first-document"><span class="n">04</span>Your first document</a></li>
         <li><a href="#everyday"><span class="n">05</span>Everyday use</a></li>
         <li><a href="#onedrive"><span class="n">06</span>OneDrive &amp; SharePoint</a></li>
-        <li><a href="#watch"><span class="n">07</span>Watch a folder</a></li>
+        <li><a href="#watch"><span class="n">07</span>The input folder</a></li>
         <li><a href="#team"><span class="n">08</span>Working as a team</a></li>
         <li><a href="#troubleshooting"><span class="n">09</span>Troubleshooting</a></li>
         <li><a href="#updates"><span class="n">10</span>Updates</a></li>
@@ -752,6 +752,20 @@
         </dl>
 
         <p class="note">Nothing else needs installing. PDF reading, OCR, and inference all ship inside the app.</p>
+
+        <h3 class="sym-group">YOUR TWO FOLDERS</h3>
+        <p class="prose">Then Intern asks for two folders. It cannot be used until both are chosen, and there is nothing to skip:</p>
+        <dl class="kv">
+          <div>
+            <dt>Input folder</dt>
+            <dd>Put files here that you want Intern to process. Files you drop on Intern's window, or add with <strong>Add files</strong>, <strong>Add folder</strong>, or <strong>Send to &gt; Intern</strong>, are copied here; the originals stay where they were.</dd>
+          </div>
+          <div>
+            <dt>Output folder</dt>
+            <dd>Processed files end up here, renamed. Neither folder may be inside the other.</dd>
+          </div>
+        </dl>
+        <p class="note">Setup lists the OneDrive and SharePoint folders already on this computer and can make an <em>Output</em> folder for you (<a href="#onedrive">section 06</a>). Change either folder later in Settings, under <strong>Folders</strong>. An install from an earlier release with no input folder asks for one on its next launch, offering the output folder it already had.</p>
       </section>
 
       <!-- ====================== 04 FIRST DOCUMENT ===================== -->
@@ -765,7 +779,7 @@
         <ol class="steps">
           <li>
             <b>Drag one PDF onto the window.</b>
-            <p>Or use <strong>Add files</strong>. One document is enough to see the whole flow.</p>
+            <p>Or use <strong>Add files</strong>, or put it straight into your input folder. A file you drop or add is copied into the input folder; the original stays where it was. One document is enough to see the whole flow.</p>
           </li>
           <li>
             <b>Watch it change status.</b>
@@ -777,7 +791,7 @@
           </li>
           <li>
             <b>Approve it.</b>
-            <p>Only now is anything renamed on disk. Changed your mind? Undo it from <strong>Completed</strong>.</p>
+            <p>Only now is anything renamed: the document moves out of your input folder into your output folder under its new name. Changed your mind? Undo it from <strong>Completed</strong>.</p>
           </li>
         </ol>
 
@@ -831,7 +845,14 @@
           <p class="sec-num">05</p>
           <h2>Everyday use</h2>
         </div>
-        <p class="lead">Drag files or folders onto the window, or use <strong>Add files</strong> and <strong>Add folder</strong>.</p>
+        <p class="lead">Put files in your input folder — or drag files or folders onto the window, or use <strong>Add files</strong> and <strong>Add folder</strong>, which copy them there for you.</p>
+        <p class="prose">
+          A dropped or added folder is flattened into the input folder: its
+          documents are copied in side by side, and a name already there gets
+          “(2)”, “(3)”, and so on. A file already in the input folder is not
+          copied again, and the originals are never changed. Copies join the
+          queue at once.
+        </p>
 
         <h3 class="sym-group">FORMATS IT READS</h3>
         <ul class="formats">
@@ -868,7 +889,7 @@
           </div>
           <div>
             <dt>Send to Intern</dt>
-            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. They join the queue whether or not Intern is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is queued.</dd>
+            <dd>The installer adds Intern to Explorer's <strong>Send to</strong> menu. Select documents — attachments saved from Outlook, a folder of scans — right-click, and choose <strong>Send to &gt; Intern</strong>. Intern copies them into your input folder and queues them, whether or not it is already open. A file Intern cannot read is left out and named in the window with the reason; everything else is copied and queued.</dd>
           </div>
           <div>
             <dt>Your organization's names</dt>
@@ -889,7 +910,7 @@
           <div>
             <dt>Where files land</dt>
             <dd>
-              <p>Settings has a destination folder. Leave it empty and files are renamed in place; set it and renamed files are moved there.</p>
+              <p>Processed files are moved out of the input folder into your output folder under their new names. Change the output folder in Settings, under <strong>Folders</strong>.</p>
               <p><strong>Arrange filed documents</strong> can sort them into subfolders by year, by year and type, by type, or by first party. Folders appear as documents arrive and go away again when an undo empties them.</p>
             </dd>
           </div>
@@ -982,51 +1003,44 @@
           </figcaption>
         </figure>
 
-        <h3 class="sym-group">SET UP A FOLDER: THREE CLICKS</h3>
+        <h3 class="sym-group">CHOOSE YOUR TWO FOLDERS</h3>
         <p class="prose">
-          The first time Intern opens it offers to watch a folder for you; later,
-          open Settings and choose <strong>Set up a folder step by step…</strong>
-          under <strong>Shared intake</strong>. Nothing asks for a tenant, a site,
-          or an account. First make sure the folder is on your disk: your own
-          OneDrive already is, and for a SharePoint library you open it in the
-          browser and click <strong>Sync</strong> or <strong>Add shortcut to My
+          The first time Intern opens it asks for an input folder and an output
+          folder, and it cannot be used until both are chosen. Later, open
+          Settings and use <strong>Change…</strong> beside either folder, or
+          <strong>Set up folders step by step…</strong>, under
+          <strong>Folders</strong>. Nothing asks for a tenant, a site, or an
+          account. First make sure the folder is on your disk: your own OneDrive
+          already is, and for a SharePoint library you open it in the browser and
+          click <strong>Sync</strong> or <strong>Add shortcut to My
           files</strong>.
         </p>
         <ol class="steps">
           <li>
-            <b>Choose a folder.</b>
-            <p>Intern lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, or browse to a folder inside it. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Check again</strong>.</p>
+            <b>Choose your input folder.</b>
+            <p>Put files here that you want Intern to process. Intern lists the OneDrive and SharePoint folders already on this computer, such as <em>Legal - Documents</em> or <em>OneDrive – Contoso</em>. Use one, browse to a folder inside it, or choose any folder on this computer. Folders synced with <strong>Sync</strong>, folders added with <strong>Add shortcut to My files</strong>, and your own OneDrive all work. If none is listed, click Sync (or Add shortcut to My files) in SharePoint and choose <strong>Look for OneDrive folders again</strong>.</p>
           </li>
           <li>
-            <b>Say where renamed documents go.</b>
-            <p>Intern creates a <em>Filed</em> folder next to the one you chose, or you choose another. Choose the top folder of a synced location and Intern makes an <em>Inbox</em> to watch and a <em>Filed</em> folder inside it, so renamed documents stay synced.</p>
+            <b>Choose your output folder.</b>
+            <p>Processed files end up here, renamed. Intern can create an <em>Output</em> folder next to the input folder, keep the output folder you already had, or you choose another — neither folder may be inside the other. Choose the top folder of a synced location and Intern makes an <em>Input</em> and an <em>Output</em> folder inside it, so both stay synced. An output folder chosen in a SharePoint library or OneDrive for work also turns on the description records below, for the library's Description column.</p>
           </li>
           <li>
             <b>Decide about what is already there.</b>
-            <p>If the folder already holds documents, Intern asks once whether to rename them too. The default is to rename only new ones.</p>
+            <p>If the input folder already holds files, Intern asks once whether to process them too. The default is only new files.</p>
           </li>
         </ol>
 
         <div class="callout">
           <svg class="ico" aria-hidden="true"><use href="#i-shield"/></svg>
           <div>
-            <b>Pick a folder that only you add documents to.</b>
-            <p>Choosing it here is how Intern knows the documents in it are yours,
-            so it does not ask Microsoft who uploaded them. Intern then keeps
-            running in the system tray and starts when you sign in, so documents
-            are filed while its window is closed.</p>
+            <b>Pick an input folder that only you add documents to.</b>
+            <p>Choosing it — in setup, or with <strong>Change…</strong> in
+            Settings — is how Intern knows the documents in it are yours, so it
+            does not ask Microsoft who uploaded them. Intern then keeps running
+            in the system tray and starts when you sign in, so documents are
+            filed while its window is closed.</p>
           </div>
         </div>
-
-        <div class="warn">
-          <svg class="ico" aria-hidden="true"><use href="#i-warn"/></svg>
-          <div>
-            <b>Don't type a OneDrive or SharePoint folder into Settings by hand.</b>
-            <p>A synced folder chosen that way has not been vouched for, so its
-            documents are held as <em>uploader unknown</em> and none is renamed:
-            the published build cannot ask Microsoft who uploaded them. Use
-            <strong>Set up a folder step by step…</strong> instead.</p>
-          </div>
         </div>
 
         <p class="note">
@@ -1116,36 +1130,36 @@
       <section id="watch">
         <div class="sec-head">
           <p class="sec-num">07</p>
-          <h2>Watch a folder</h2>
+          <h2>The input folder</h2>
         </div>
-        <p class="lead">A plain folder on this computer works too: tick <strong>This is a private local intake</strong>.</p>
+        <p class="lead">Intern always watches the input folder: whatever is put there is processed, however it got there.</p>
 
         <ol class="steps">
           <li>
-            <b>Choose the folder.</b>
-            <p>In Settings, under <strong>Shared intake</strong>, turn on <strong>Watch a folder for new documents</strong> and choose the intake folder.</p>
+            <b>A plain folder works.</b>
+            <p>Any folder on this computer can be the input folder. One that no OneDrive or SharePoint client syncs is treated as a private local input folder: only you put documents there, so they are processed without asking anyone who added them.</p>
           </li>
           <li>
-            <b>Say it is yours.</b>
-            <p>Tick <strong>This is a private local intake, not a shared or synced folder</strong>. That tells Intern only you put documents there, so it processes them without asking anyone who added them. The box is refused for a OneDrive, SharePoint, or network-share folder; for those, use <strong>Set up a folder step by step…</strong> (<a href="#onedrive">section 06</a>).</p>
+            <b>Change it any time.</b>
+            <p>In Settings, under <strong>Folders</strong>, choose <strong>Change…</strong> beside <strong>Input folder</strong>. If the new folder already holds files, Settings asks whether to process them too; the default is only new files.</p>
           </li>
           <li>
-            <b>Choose a destination and save.</b>
-            <p>Renamed documents go to the destination folder.</p>
+            <b>The rest is under Advanced.</b>
+            <p><strong>This is a private local input folder, not a shared or synced folder</strong> is refused for a OneDrive, SharePoint, or network-share folder; for those, use <strong>Set up folders step by step…</strong> (<a href="#onedrive">section 06</a>). Advanced also has this machine's name, the folder's scan status, and <strong>Scan now</strong>.</p>
           </li>
         </ol>
 
         <p class="prose">
-          A watched folder that is neither set up step by step nor ticked as a
-          private local intake is treated as shared: its documents are held as
-          <em>uploader unknown</em> until Microsoft confirms who uploaded them,
-          which only a provisioned build can do. Settings counts them.
+          An input folder typed into Settings in an earlier release may still be
+          treated as shared: its documents are held as <em>uploader unknown</em>
+          until Microsoft confirms who uploaded them, which only a provisioned
+          build can do. Choose it again with <strong>Change…</strong>.
         </p>
         <p class="prose">Two rules are enforced when you save, rather than discovered while running:</p>
 
         <ul class="bullets">
-          <li><strong>Watching requires a destination folder.</strong></li>
-          <li><strong>The destination must be outside the intake folder.</strong> Renaming in place inside a watched folder would make every result reappear as new work, so Intern refuses that configuration up front.</li>
+          <li><strong>Intern needs both folders.</strong></li>
+          <li><strong>Neither folder may be inside the other.</strong> A processed file landing back in the input folder would be picked up as new work, so Intern refuses that up front, and the other way round too when you choose the folders.</li>
         </ul>
 
         <dl class="kv">
@@ -1155,7 +1169,7 @@
           </div>
           <div>
             <dt>Half-copied files</dt>
-            <dd>A file is only picked up once its size and modified time have held still for about ten seconds, so a file still being copied is never read. <strong>Scan now</strong> does not shorten that wait.</dd>
+            <dd>A file is only picked up once its size and modified time have held still for about ten seconds, so a file still being copied is never read. <strong>Scan now</strong> does not shorten that wait. A file you drop on the window or add is different: Intern makes the copy itself, checks it, and queues it at once.</dd>
           </div>
           <div>
             <dt>Folders you cannot open</dt>
@@ -1442,7 +1456,7 @@
             <summary>Settings says “subfolders could not be read”</summary>
             <div class="answer">
               <p>
-                The intake folder has a subfolder this Windows account cannot
+                The input folder has a subfolder this Windows account cannot
                 open — common on a shared drive where permissions are set per
                 folder. Documents in it are not seen; everything else is. Ask
                 for read permission on that folder, or move the documents out
@@ -1454,19 +1468,21 @@
             <summary>Settings says documents are “uploader unknown” and nothing is renamed</summary>
             <div class="answer">
               <p>
-                The watched folder was chosen by hand, so Intern does not know the
-                documents in it are yours and is waiting for Microsoft to say who
-                uploaded them — which the published build cannot ask. For a
-                OneDrive or SharePoint folder, run <strong>Set up a folder step
-                by step…</strong> in Settings and pick the same folder
-                (<a href="#onedrive">section 06</a>). For a plain local folder,
-                tick <strong>This is a private local intake</strong>
-                (<a href="#watch">section 07</a>).
+                The input folder was typed into Settings in an earlier release,
+                so Intern does not know the documents in it are yours and is
+                waiting for Microsoft to say who uploaded them — which the
+                published build cannot ask. In Settings, under
+                <strong>Folders</strong>, choose <strong>Change…</strong> beside
+                <strong>Input folder</strong> and pick the same folder again, or
+                run <strong>Set up folders step by step…</strong>
+                (<a href="#onedrive">section 06</a>). For a plain local folder you
+                can also tick <strong>This is a private local input
+                folder</strong> under Advanced (<a href="#watch">section 07</a>).
               </p>
             </div>
           </details>
           <details>
-            <summary>A file in my watched folder is being ignored</summary>
+            <summary>A file in my input folder is being ignored</summary>
             <div class="answer">
               <p>Work through the usual causes:</p>
               <ul class="bullets">
@@ -1479,12 +1495,12 @@
             </div>
           </details>
           <details>
-            <summary>The watched folder settings won't save</summary>
+            <summary>The folder settings won't save</summary>
             <div class="answer">
               <p>
-                The destination folder must exist and must be outside the intake
-                folder. Intern refuses the loop at save time and tells you which
-                rule was hit.
+                Both folders must exist, and the output folder must be outside
+                the input folder. Intern refuses the loop at save time and tells
+                you which rule was hit.
               </p>
             </div>
           </details>
