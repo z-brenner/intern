@@ -9,6 +9,18 @@ OUT=$S/results/bonsai/microbench/flag-sweep.jsonl
 C=$S/cache/bonsai
 P26=$S/build/prebuilt-prism-b10826/llama-prism-b10826-c9c34bc
 H26=$S/build/prebuilt-prism-b10826-only-haswell
+# Prebuilt (GCC 11) vs own source build (GCC 13) of the same commit looked different in the runtime
+# matrix; repeat both, interleaved, three times.
+P77=$S/build/prebuilt-prism-b10777/llama-prism-b10777-e3de715
+SRC=$S/build/prism-b10777-portable/bin
+for rep in 1 2 3; do
+  for sz in 2B 4B; do
+    M=$C/Ternary-Bonsai-2-$sz-PQ2_0.gguf
+    $SW $OUT X-$sz-b10777-prebuilt-rep$rep $P77 $M -p 512 -n 64 -t 2,4 -r 3
+    $SW $OUT X-$sz-b10777-source-rep$rep $SRC $M -p 512 -n 64 -t 2,4 -r 3
+    $SW $OUT X-$sz-b10826-prebuilt-rep$rep $P26 $M -p 512 -n 64 -t 2,4 -r 3
+  done
+done
 for sz in 2B 4B; do
   M=$C/Ternary-Bonsai-2-$sz-PQ2_0.gguf
   # prefill vs micro-batch (-b 2048) at an Intern-sized prompt
