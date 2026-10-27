@@ -104,6 +104,9 @@ const QUEUE_STOP_SENTENCES: Record<string, string> = {
   MODEL_OUTPUT_INVALID: 'The model\'s answers for several documents in a row could not be used. Check the Model section in Settings, then resume the queue.',
   HOSTED_MODEL_RATE_LIMITED: 'The hosted service asked for a slower pace. Wait a minute, then resume the queue.',
   HOSTED_MODEL_UNREACHABLE: 'The hosted service could not be reached. Check the connection, then resume the queue.',
+  // Intern's document reader crashed on several documents in a row; the
+  // documents wait to be read again.
+  READER_CRASHED: 'Intern\'s document reader crashed on several documents in a row. Restart Intern, then resume the queue.',
 };
 
 /**

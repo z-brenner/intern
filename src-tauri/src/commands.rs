@@ -150,6 +150,12 @@ pub struct QueueItemDto {
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
+    /// For an exact duplicate filed, or staged to be filed, as a copy: the
+    /// name of the document it repeats. A staged copy waits for nobody's
+    /// decision - the queue files it under its COPY name when it is free -
+    /// so the window neither offers to approve it nor counts it as undecided.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copy_of: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4160,6 +4166,9 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
         omitted_parties: proposal
             .map(|record| record.name_view().1)
             .unwrap_or_default(),
+        copy_of: proposal
+            .and_then(|record| record.copy_of.as_ref())
+            .map(|copy| copy.original.clone()),
     })
 }
 

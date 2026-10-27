@@ -199,7 +199,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   const filterShown = filtered.length > FILTER_THRESHOLD || query.length > 0;
   const selected = items.find((item) => item.id === selectedId);
   const drawerOpen = Boolean(selected && selectedByPerson && narrowInspector);
-  const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename);
+  const readyItems = items.filter((item) => item.status === 'ready' && item.proposedFilename && item.copyOf === undefined);
   // Installing an update hands Intern to the installer, which closes it. A
   // rename in its applying stage is the one piece of work that cannot be
   // canceled, and closing underneath it leaves the journal to finish the move

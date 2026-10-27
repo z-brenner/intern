@@ -87,7 +87,8 @@ export function reanalyzeAccepted(item: QueueItem): boolean {
  * round to it after the next one.
  */
 export function undecided(item: QueueItem): boolean {
-  if (item.status === 'ready') return item.approved !== true;
+  // A staged copy is filed by the queue, under its COPY name, without anyone.
+  if (item.status === 'ready') return item.approved !== true && item.copyOf === undefined;
   return item.status === 'review' && !isParked(item);
 }
 
@@ -162,6 +163,9 @@ export function itemActions(item: QueueItem): ItemActions {
       };
     }
     case 'ready':
+      // A staged copy has no name to decide on: the queue files it as soon
+      // as it is free. It can still be taken out of the queue.
+      if (item.copyOf !== undefined) return { ...none, remove: { label: 'Remove from queue', resolvedFiles: false }, open: true, reveal: true };
       return { ...none, approve: item.proposedFilename !== undefined, keep: true, reanalyze: reanalyzeAccepted(item), remove: { label: 'Remove from queue', resolvedFiles: false }, open: true, reveal: true };
     case 'waiting':
       return { ...none, remove: { label: 'Remove from queue', resolvedFiles: false } };

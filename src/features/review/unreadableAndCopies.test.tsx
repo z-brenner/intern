@@ -6,7 +6,7 @@ import { describeAddReport } from '../../lib/addReport';
 import { createInMemoryBridge } from '../../lib/inMemoryBridge';
 import { humanizeReason } from '../../lib/reasons';
 import type { QueueItem } from '../../types';
-import { isUnreadable, itemActions, retryAccepted, withoutReviewPrefix } from './actions';
+import { isUnreadable, itemActions, retryAccepted, undecided, withoutReviewPrefix } from './actions';
 import type { ReviewInspectorHandle } from './useReviewShortcuts';
 
 function handlers() {
@@ -66,10 +66,16 @@ describe('a document Intern could not read', () => {
     }
   });
 
-  it('keeps its own name back without the prefix, in the in-memory bridge as in the backend', async () => {
+  it('is renamed NEEDS REVIEW in the demo, and gets back only the name Intern took', async () => {
     const bridge = createInMemoryBridge({ items: [{ ...unreadable }] });
+    await bridge.addFiles([{ path: 'C:\\Inbox\\Lease password.pdf', displayName: 'Lease password.pdf' }]);
+    const added = (await bridge.listItems())[1];
+    expect(added).toMatchObject({ status: 'review', errorCode: 'PASSWORD_PROTECTED', originalFilename: 'NEEDS REVIEW - Lease password.pdf' });
+    await bridge.keepOriginal(added.id);
+    expect((await bridge.listItems())[1]).toMatchObject({ status: 'completed', keptOriginal: true, originalFilename: 'Lease password.pdf' });
+    // A file that arrived with the prefix keeps it: Intern did not put it there.
     await bridge.keepOriginal('locked');
-    expect((await bridge.listItems())[0]).toMatchObject({ status: 'completed', keptOriginal: true, originalFilename: 'Lease scan.pdf' });
+    expect((await bridge.listItems())[0]).toMatchObject({ status: 'completed', originalFilename: 'NEEDS REVIEW - Lease scan.pdf' });
     expect(withoutReviewPrefix('needs review - a.pdf')).toBe('a.pdf');
     expect(withoutReviewPrefix('a.pdf')).toBe('a.pdf');
   });
@@ -108,6 +114,19 @@ describe('an exact duplicate', () => {
     expect(itemActions(undone)).toMatchObject({ approve: false, retry: { label: 'Process anyway' } });
     await bridge.retry(copy.id);
     expect((await bridge.listItems())[1]).toMatchObject({ status: 'waiting' });
+  });
+
+  it('waits staged while the queue is paused, for nobody to decide, and is filed when it runs', async () => {
+    const bridge = createInMemoryBridge({ items: [{ ...filed }], settings: { destination: 'C:\\Filed' } });
+    await bridge.pauseQueue();
+    await bridge.addFiles([{ path: 'C:\\Inbox\\lease scan.pdf', displayName: 'lease scan.pdf' }]);
+    const staged = (await bridge.listItems())[1];
+    expect(staged).toMatchObject({ status: 'ready', proposedFilename: 'COPY - 2026-01-02 Lease.pdf', copyOf: '2026-01-02 Lease.pdf' });
+    // No decision is offered or awaited: Apply all ready and review pass it by.
+    expect(undecided(staged)).toBe(false);
+    expect(itemActions(staged)).toMatchObject({ approve: false, keep: false, remove: { label: 'Remove from queue' } });
+    await bridge.resumeQueue();
+    expect((await bridge.listItems())[1]).toMatchObject({ status: 'completed', filedName: 'COPY - 2026-01-02 Lease.pdf', filedPath: 'C:\\Filed\\2026\\COPY - 2026-01-02 Lease.pdf' });
   });
 
   it('stays in review untouched with no output folder to file a copy into', async () => {

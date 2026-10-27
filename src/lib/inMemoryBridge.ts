@@ -8,7 +8,7 @@ import { humanizeReason } from './reasons';
 import type { QueueBridgeEvent } from './tauriBridge';
 import { filedBeside, rootFor } from '../features/intake/folderNames';
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import { isParked, isUnreadable, retryAccepted, withoutReviewPrefix } from '../features/review/actions';
+import { isParked, retryAccepted, withoutReviewPrefix } from '../features/review/actions';
 
 /** Review codes raised when a document arrives, before it is read: reading it again does not raise them. */
 const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
@@ -416,6 +416,27 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // Items filed as a copy of another (Pipeline::file_duplicate). A copy is
   // never what a later duplicate is named after.
   const copyIds = new Set<string>();
+  // Where each copy goes: beside the original, or the output folder's root.
+  const copyPaths = new Map<string, string>();
+  // Whether a person paused the queue: a duplicate added meanwhile is staged
+  // as a copy, and filed once the queue runs again.
+  let paused = false;
+  // The names NEEDS REVIEW marks took away, by item (the backend's
+  // review_renames journal): Keep original gives back only a name Intern
+  // took, never a prefix the file arrived with.
+  const marks = new Map<string, string>();
+  // A document the demo cannot read. The bridge has no bytes to try, so a
+  // file whose name says it is password-protected stands in for one: it
+  // waits in review, its file renamed "NEEDS REVIEW - ..." where it lies,
+  // as the backend renames a document in the input folder - where, once the
+  // input folder is set up, everything added is.
+  const unreadableFrom = (file: FileSelection): QueueItem | undefined => {
+    const name = file.displayName.split('/').at(-1) ?? file.displayName;
+    if (!/password/i.test(name)) return undefined;
+    const id = `file-${crypto.randomUUID()}`;
+    marks.set(id, name);
+    return { id, originalFilename: `NEEDS REVIEW - ${name}`, status: 'review', errorCode: 'PASSWORD_PROTECTED', reason: humanizeReason('PASSWORD_PROTECTED') };
+  };
   // Pipeline::file_duplicate, for a document whose bytes are already filed.
   // The bridge has no bytes to compare, so a file named like the original of
   // a filed document stands in for the same bytes added again. With an output
@@ -444,7 +465,23 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     const folder = filedFolder || settings.destination.replace(/[\\/]+$/, '');
     const separator = folder.includes('/') && !folder.includes('\\') ? '/' : '\\';
     copyIds.add(id);
-    return { id, originalFilename: name, status: 'completed', proposedFilename: copy, filedName: copy, filedPath: `${folder}${separator}${copy}`, undoable: true, keptOriginal: false, reason: humanizeReason('EXACT_COPY') };
+    copyPaths.set(id, `${folder}${separator}${copy}`);
+    // Paused, the copy is staged and waits for the queue, filed by nobody's
+    // decision (Pipeline::apply_pending_ready); otherwise it is filed now.
+    if (paused) return { id, originalFilename: name, status: 'ready', proposedFilename: copy, approved: true, copyOf: filedAs, reason: humanizeReason('EXACT_COPY') };
+    return { id, originalFilename: name, status: 'completed', proposedFilename: copy, filedName: copy, filedPath: `${folder}${separator}${copy}`, undoable: true, keptOriginal: false, copyOf: filedAs, reason: humanizeReason('EXACT_COPY') };
+  };
+  // The scheduler's pass once the queue runs again: staged copies are filed.
+  const fileStagedCopies = () => {
+    items = items.map((item) => {
+      if (item.status !== 'ready' || item.copyOf === undefined || !copyIds.has(item.id)) return item;
+      const { approved: _approved, ...rest } = item;
+      const filed: QueueItem = { ...rest, status: 'completed', undoable: true, keptOriginal: false };
+      if (item.proposedFilename !== undefined) filed.filedName = item.proposedFilename;
+      const filedPath = copyPaths.get(item.id);
+      if (filedPath !== undefined) filed.filedPath = filedPath;
+      return filed;
+    });
   };
   // Mirrors the backend's partial add: what it would leave out is reported by
   // name, everything else is queued, and a path already queued says so.
@@ -453,7 +490,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const code = skipCode(file);
       if (code) { report.skipped.push({ name: file.displayName.split('/').at(-1) ?? file.displayName, code }); continue; }
       if (idByPath.has(file.path)) { report.alreadyQueued += 1; continue; }
-      const item = duplicateOf(file) ?? itemFromFile(file, fixtureBatch);
+      const item = duplicateOf(file) ?? unreadableFrom(file) ?? itemFromFile(file, fixtureBatch);
       idByPath.set(file.path, item.id);
       pathById.set(item.id, file.path);
       items = [...items, item];
@@ -476,8 +513,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     listItems: async () => items.map((item) => ({ ...item })),
     addFiles: async (files) => addSelections(files, { added: 0, alreadyQueued: 0, skipped: [] }),
     addFolder: async (folder) => addFolder(folder),
-    pauseQueue: async () => { items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
-    resumeQueue: async () => { const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
+    pauseQueue: async () => { paused = true; items = items.map((item) => item.status === 'processing' ? { ...item, status: 'waiting' as const, stage: undefined, progress: undefined } : item); },
+    resumeQueue: async () => { paused = false; fileStagedCopies(); const item = items.find((entry) => entry.status === 'waiting'); if (item) update(item.id, { status: 'processing', stage: 'reading' }); },
     cancel: async (id) => update(id, { status: 'failed', stage: undefined, progress: undefined, reason: 'Canceled.' }),
     // Mirrors Pipeline::approve, in its order: the name itself, its date,
     // then whether this item can take it - its files settled, the source's
@@ -532,7 +569,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       const item = find(id);
       if (isParked(item)) throw parkedRefusal();
       if (item.status !== 'review' && item.status !== 'ready') throw { code: 'INVALID_TRANSITION', message: 'only ready or review items can keep their original name' };
-      const originalFilename = isUnreadable(item) ? withoutReviewPrefix(item.originalFilename) : item.originalFilename;
+      const originalFilename = marks.get(id) ?? item.originalFilename;
+      marks.delete(id);
       update(id, { status: 'completed', keptOriginal: true, undoable: false, originalFilename });
     },
     // Pipeline::retry: failed and canceled items, and only the review items

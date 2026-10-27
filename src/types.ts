@@ -72,6 +72,13 @@ export interface QueueItem {
    * spells them. The evidence still shows them.
    */
   omittedParties?: string[];
+  /**
+   * An exact duplicate filed, or staged to be filed, as a copy: the name of
+   * the document it repeats. A staged copy waits for nobody's decision - the
+   * queue files it under its COPY name when it is free - so it is neither
+   * offered for approval nor counted among the items to decide.
+   */
+  copyOf?: string;
 }
 
 /**
