@@ -3603,6 +3603,15 @@ impl Pipeline {
             }
         }
         let removed = self.store.clear_terminal()?;
+        // A claim waits for the intake watcher to see its item gone; with
+        // the watcher off, it never will.
+        if self
+            .settings
+            .load()
+            .is_ok_and(|settings| !settings.intake_enabled)
+        {
+            let _ = self.store.forget_orphan_intake_claims();
+        }
         self.events.queue_changed();
         Ok(removed)
     }

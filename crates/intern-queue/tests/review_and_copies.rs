@@ -1930,6 +1930,36 @@ fn a_canceled_document_whose_file_is_gone_is_not_unmarked_for_ever() {
     assert_eq!(rig.pipeline.clear_history().unwrap(), 1);
 }
 
+/// A claim of the intake watcher waits for the watcher to see its item
+/// gone; with the watcher turned off, clearing the history drops it.
+#[test]
+fn clearing_the_history_with_intake_off_drops_claims_on_cleared_items() {
+    let rig = TextRig::new();
+    let id = rig.add("locked.pdf", "LOCKED");
+    rig.pipeline.record_intake_claim("claim", id).unwrap();
+    rig.pipeline.remove(id, false).unwrap();
+    let claims = || -> i64 {
+        rusqlite::Connection::open(rig.temp.path().join("queue.sqlite3"))
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM intake_claims", [], |row| row.get(0))
+            .unwrap()
+    };
+    rig.pipeline.clear_history().unwrap();
+    rig.pipeline.clear_history().unwrap();
+    assert_eq!(
+        claims(),
+        1,
+        "kept while the watcher is on and has not looked"
+    );
+
+    let settings = TextRig::settings(&rig.temp);
+    let mut off = settings.load().unwrap();
+    off.intake_enabled = false;
+    settings.save(&off).unwrap();
+    rig.pipeline.clear_history().unwrap();
+    assert_eq!(claims(), 0);
+}
+
 /// Canceling a marked document and clearing the history leaves its file
 /// under its own name, so the next scan takes it in again.
 #[test]

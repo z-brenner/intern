@@ -1681,6 +1681,15 @@ impl QueueStore {
     /// NEEDS REVIEW name - and the claim on the first must never be settled
     /// by the second. Handing the same claim over again points it at the row
     /// the queue returned.
+    /// Drops every claim whose item is gone, seen gone or not: with the
+    /// intake watcher off, nobody will ever look.
+    pub fn forget_orphan_intake_claims(&self) -> InternResult<usize> {
+        let connection = self.lock()?;
+        connection
+            .execute("DELETE FROM intake_claims WHERE queue_item_id IS NULL", [])
+            .map_err(InternError::from)
+    }
+
     pub fn record_intake_claim(&self, claim_key: &str, id: i64) -> InternResult<()> {
         let connection = self.lock()?;
         connection
