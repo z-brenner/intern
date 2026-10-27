@@ -556,6 +556,28 @@ pub fn validate_facts_at(
             replaced = true;
         }
     }
+    // An agreement is made when its last party signs it. A date the
+    // document states only in its signature blocks, with a later one in
+    // another of them, is an earlier party's signature: "Date: August 18,
+    // 2026" under the licensor's name when the licensee signed on August 21
+    // and the amendment "is effective on the date of the last signature".
+    // It gives way to the latest - unless a stated effective date already
+    // replaced it above. Ported from #26, where it moved Bonsai 4B's and
+    // Qwen3.5-2B's trap date on InternBench's mixed-signature-region.
+    if !replaced
+        && matches!(
+            DocumentClass::of(document_type.as_deref()),
+            DocumentClass::Agreement | DocumentClass::Amendment
+        )
+        && let Some(date) = document_date.clone()
+        && only_in_signatures(scope.index, &date)
+        && let Some((latest, line)) = latest_signature_date(scope, &date)
+    {
+        document_date = Some(latest);
+        date_role = Some(DateRole::Execution);
+        date_line = Some(line);
+        replaced = true;
+    }
     if document_date.is_none() && date_supported && !withheld_as_deadline {
         push(&mut reasons, ReviewReason::DateMissing);
     }
@@ -1556,6 +1578,48 @@ fn scope_name(context: bool, document: bool) -> String {
         _ => "document",
     }
     .to_owned()
+}
+
+/// True when every unit that states `date` stands in or just after a
+/// signature block, and one does. Running headers and footers are not read.
+fn only_in_signatures(index: &EvidenceIndex, date: &str) -> bool {
+    let mut stated = false;
+    for unit in index.units() {
+        if unit.running || date_match_positions(date, &unit.normalized).is_empty() {
+            continue;
+        }
+        if !unit.features.position.signature {
+            return false;
+        }
+        stated = true;
+    }
+    stated
+}
+
+/// The latest date later than `date` that the document states only in its
+/// signature blocks, with the line it stands on. ISO dates order as text.
+fn latest_signature_date(scope: &ValidationScope<'_>, date: &str) -> Option<(String, String)> {
+    let mut latest: Option<(String, String)> = None;
+    for unit in scope.index.units() {
+        if unit.running || !unit.features.position.signature {
+            continue;
+        }
+        for candidate in stated_dates(&scope.view(&[unit])) {
+            if candidate.as_str() > date
+                && latest
+                    .as_ref()
+                    .is_none_or(|(kept, _)| candidate.as_str() > kept.as_str())
+                && only_in_signatures(scope.index, &candidate)
+            {
+                let line = line_where(unit, |line| {
+                    !date_match_positions(&candidate, line).is_empty()
+                })
+                .unwrap_or_else(|| unit.text.trim().to_owned());
+                latest = Some((candidate, line));
+            }
+        }
+    }
+    latest
 }
 
 /// The one alternate both views agree on, when each has exactly one and it
@@ -3901,6 +3965,89 @@ Payment terms: net 30. Remit to Halvorsen Fixture Works LLC.";
                 .guard_scope
                 .as_deref(),
             Some("both")
+        );
+    }
+
+    /// InternBench's mixed-signature-region, as its text reads: the
+    /// amendment takes effect on the last signature, and each party's
+    /// signature block carries its own date.
+    const SIGNED_AMENDMENT: &str = "FIRST AMENDMENT TO SOFTWARE LICENSE AGREEMENT\n\n\
+This First Amendment (this \"Amendment\") is between Corvane Analytics Inc. (\"Licensor\") and \
+Pellworth County Water Authority (\"Licensee\"), and amends the Software License and Services \
+Agreement between them dated September 30, 2024. This Amendment is effective on the date of the \
+last signature below.\n\n\
+IN WITNESS WHEREOF, the parties have signed this Amendment on the dates written below.\n\n\
+CORVANE ANALYTICS INC.\nBy:\nName: Rosalind Achterberg\nTitle: Chief Revenue Officer\nDate: August 18, 2026\n\n\
+PELLWORTH COUNTY WATER AUTHORITY\nBy:\nName: Barnaby Quist\nTitle: General Manager\nDate: August 21, 2026";
+
+    fn amendment_facts(index: &EvidenceIndex, date: &str, cited: &str) -> ModelFacts {
+        let parties_line = id_of(index, "This First Amendment");
+        ModelFacts {
+            document_type: Some("First Amendment to Software License Agreement".into()),
+            type_evidence: vec![id_of(index, "FIRST AMENDMENT")],
+            document_date: Some(date.into()),
+            date_role: Some(DateRole::Amendment),
+            date_evidence: vec![id_of(index, cited)],
+            parties: vec![
+                party(
+                    "Corvane Analytics Inc.",
+                    Some(PartyRole::Licensor),
+                    &[parties_line.clone()],
+                ),
+                party(
+                    "Pellworth County Water Authority",
+                    Some(PartyRole::Licensee),
+                    &[parties_line],
+                ),
+            ],
+            ..ModelFacts::default()
+        }
+    }
+
+    /// An agreement is made when its last party signs it: an earlier
+    /// signature's date gives way to the latest.
+    #[test]
+    fn an_earlier_signature_gives_way_to_the_last() {
+        let index = index_of(SIGNED_AMENDMENT);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+        // The last signature's own date stands as it is.
+        let outcome = check(
+            amendment_facts(&index, "2026-08-21", "August 21"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-21")
+        );
+    }
+
+    /// A date the document also states outside its signature blocks is
+    /// not only a signature's, and stands: here the amendment says it is
+    /// dated the day the first party signed.
+    #[test]
+    fn a_signature_date_the_body_states_too_stands() {
+        let text = SIGNED_AMENDMENT.replace(
+            "This Amendment is effective on the date of the last signature below.",
+            "This Amendment is dated August 18, 2026.",
+        );
+        let index = index_of(&text);
+        let outcome = check(
+            amendment_facts(&index, "2026-08-18", "is dated August 18"),
+            &whole(&index),
+            &index,
+        );
+        assert_eq!(
+            outcome.proposal.document_date.as_deref(),
+            Some("2026-08-18")
         );
     }
 
