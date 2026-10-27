@@ -611,3 +611,15 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, tr:focus-visi
 .intake-health--synced { border-left-color: #2f7d4f; }
 .intake-health--waiting { border-left-color: #b7791f; }
 .intake-health--onedrive_stopped, .intake-health--not_synced { border-left-color: #b23b2e; }
+
+/* The local model: three choices and a line per model, calm and short. */
+.local-model { margin: 4px 0 8px 26px; }
+.local-model .check-label > span { display: flex; flex-direction: column; gap: 2px; }
+.local-model .check-label .check-hint { margin: 0; }
+.local-model-tiers { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; font-size: 13px; }
+.local-model-tiers li { display: grid; gap: 4px; justify-items: start; }
+.local-model-tiers progress { width: 100%; }
+.local-model-tiers p { margin: 0; }
+/* The accurate model arriving behind the window: a line, not a banner. */
+.model-status { color: var(--text-muted); font-size: 12px; margin: 0 0 8px; }
+.read-by { margin: 4px 0 12px; }

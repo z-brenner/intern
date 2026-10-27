@@ -44,6 +44,7 @@ pub mod naming;
 pub mod own_names;
 pub(crate) mod phrases;
 mod process;
+pub mod profile;
 pub mod prompt;
 pub mod retrieve;
 pub mod server;
@@ -52,6 +53,7 @@ pub mod structure;
 #[cfg(test)]
 mod test_support;
 pub mod text;
+pub mod tiers;
 pub mod validate;
 pub mod worker;
 
@@ -62,11 +64,13 @@ pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_p
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
-pub use manifest::{ModelFile, ModelManifest, ModelRole};
+pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, RetiredFile, TierModel};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
+pub use profile::PromptProfile;
 pub use server::{LlamaServer, ServerOptions};
 pub use structure::{StructuredDocument, StructuredPage, structured};
+pub use tiers::{EscalationReason, ModelPreference, TierPlan};
 pub use validate::validate;
 pub use worker::{
     DocumentExtractor, ExtractFailure, ExtractProgress, ExtractionTimings, SupervisedWorker,
@@ -82,7 +86,10 @@ pub use worker::{
 /// retrieval figures in [`AnalysisTelemetry`]. Every addition reads as absent
 /// from an analysis stored under 1, and none refuses a field it does not
 /// know, so a version-1 reader still reads a version-2 analysis.
-pub const ENGINE_CONTRACT_VERSION: u32 = 2;
+///
+/// 3 added, the same way, which local model read a document
+/// ([`AnalysisTelemetry::read_by`]).
+pub const ENGINE_CONTRACT_VERSION: u32 = 3;
 
 #[cfg(feature = "benchmark-transport")]
 pub mod benchmark_transport;

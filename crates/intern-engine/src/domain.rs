@@ -7,8 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::manifest::ModelTier;
 use crate::retrieve::Tier;
 use crate::structure::{PageLayout, TextSource};
+use crate::tiers::EscalationReason;
 
 /// Where a page's text came from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -722,7 +724,7 @@ pub struct ComposedName {
 /// Every field after `inference_millis` arrived later than the analyses a
 /// queue may already hold, so each reads as zero, or absent, from one stored
 /// without it.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisTelemetry {
     pub source_characters: usize,
@@ -775,6 +777,44 @@ pub struct AnalysisTelemetry {
     /// pipeline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_tier: Option<Tier>,
+    /// Which local model read the document, and why that one. Absent for a
+    /// hosted model, for a caller that is not the desktop app's local
+    /// runtime, and for analyses stored before there was more than one local
+    /// model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_by: Option<ModelReading>,
+}
+
+/// The local model that produced an analysis.
+///
+/// What a reviewer is told ("Read by Bonsai 2 4B"), and what decides whether
+/// a reading is read again once the accurate model can be used: a provisional
+/// one is, unless a person has acted on it first.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelReading {
+    pub tier: ModelTier,
+    /// The manifest's identifier for the model.
+    pub model_id: String,
+    /// The model's name as a person reads it, kept with the reading so it
+    /// still reads after a later build pins other models.
+    pub display_name: String,
+    /// Why the fast model's reading was read again by this one, when it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalated: Option<EscalationReason>,
+    /// The fast model's reading was due to be read again, and the accurate
+    /// model failed to: this is the fast model's reading, kept.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub escalation_failed: bool,
+    /// A reading the model policy would not settle for: the accurate model
+    /// was wanted but was not installed yet or did not fit in memory.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provisional: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
@@ -871,7 +911,9 @@ mod tests {
             }
         );
         assert_eq!(stored.model, None);
-        let written = serde_json::to_value(stored).unwrap();
+        assert_eq!(stored.read_by, None);
+        let written = serde_json::to_value(&stored).unwrap();
+        assert!(written.get("readBy").is_none(), "{written}");
         assert!(written.get("model").is_none(), "{written}");
         assert_eq!(written["promptMicros"], 0);
         assert_eq!(written["estimatedPromptTokens"], 0);
@@ -888,13 +930,64 @@ mod tests {
             }),
             ..stored
         };
-        let written = serde_json::to_value(measured).unwrap();
+        let written = serde_json::to_value(&measured).unwrap();
         assert_eq!(written["model"]["cachedTokens"], 1_210);
         assert_eq!(written["model"]["generationMicros"], 16_131_292);
         assert_eq!(written["redistillations"], 1);
         assert_eq!(
             serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),
             measured
+        );
+    }
+
+    /// Which model read a document is recorded beside its timings, and an
+    /// analysis stored before there were two local models reads as one no
+    /// model is named for: nothing to show, and nothing to read again.
+    #[test]
+    fn the_model_that_read_a_document_is_recorded_and_optional() {
+        let reading = ModelReading {
+            tier: ModelTier::Accurate,
+            model_id: "ternary-bonsai-2-4b-pq2_0".into(),
+            display_name: "Bonsai 2 4B".into(),
+            escalated: Some(EscalationReason::ReviewReason),
+            escalation_failed: false,
+            provisional: false,
+        };
+        let telemetry = AnalysisTelemetry {
+            inference_millis: 5,
+            read_by: Some(reading.clone()),
+            ..AnalysisTelemetry::default()
+        };
+        let written = serde_json::to_value(&telemetry).unwrap();
+        assert_eq!(
+            written["readBy"],
+            serde_json::json!({
+                "tier": "accurate",
+                "modelId": "ternary-bonsai-2-4b-pq2_0",
+                "displayName": "Bonsai 2 4B",
+                "escalated": "review_reason"
+            }),
+            "flags that are off are left out"
+        );
+        assert_eq!(
+            serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),
+            telemetry
+        );
+
+        let provisional = ModelReading {
+            tier: ModelTier::Fast,
+            escalated: None,
+            escalation_failed: true,
+            provisional: true,
+            ..reading
+        };
+        let written = serde_json::to_value(&provisional).unwrap();
+        assert_eq!(written["provisional"], true);
+        assert_eq!(written["escalationFailed"], true);
+        assert!(written.get("escalated").is_none());
+        assert_eq!(
+            serde_json::from_value::<ModelReading>(written).unwrap(),
+            provisional
         );
     }
 
@@ -1001,7 +1094,7 @@ mod tests {
             context_tier: Some(Tier::Normal),
             ..AnalysisTelemetry::default()
         };
-        let written = serde_json::to_value(telemetry).unwrap();
+        let written = serde_json::to_value(&telemetry).unwrap();
         assert_eq!(written["contextTier"], "normal");
         assert_eq!(
             serde_json::from_value::<AnalysisTelemetry>(written).unwrap(),

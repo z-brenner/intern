@@ -125,8 +125,16 @@ cargo build --locked -p intern-worker --release --features windows-native
 Copy-Item target\release\intern-worker.exe src-tauri\binaries\intern-worker-x86_64-pc-windows-msvc.exe
 ./scripts/stage-windows-runtime.ps1 -Destination C:\intern-stage
 npm run fixtures
-./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Qwen3.5-2B-Q4_K_M.gguf"
+./scripts/record-corpus.ps1 -RuntimeDirectory C:\intern-stage -ModelPath "$env:LOCALAPPDATA\Intern\models\Ternary-Bonsai-2-4B-PQ2_0.gguf"
 ```
+
+The committed recordings were made with the model and request of the build
+that recorded them, without a prompt profile, and CI replays them that way.
+The app asks both Bonsai models through the `bonsai_2` profile; a recording of
+that request is made with `-PromptProfile bonsai_2` (`--prompt-profile
+bonsai_2` to `intern-evaluate`, `intern-analyze` and InternBench), and replays
+only with the same option, since the profile is part of every prompt's
+identity.
 
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
 pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,

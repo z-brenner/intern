@@ -1,6 +1,6 @@
 use std::fs;
 
-use intern_engine::HostedProvider;
+use intern_engine::{HostedProvider, ModelPreference};
 use intern_queue::settings::{AppSettings, DestinationLayout, ModelSource, SettingsStore};
 use tempfile::tempdir;
 
@@ -35,6 +35,7 @@ fn settings_saved_before_the_intake_fields_existed_load_with_defaults() {
             skip_update_checks: false,
             record_descriptions: false,
             model_source: ModelSource::Local,
+            model_preference: ModelPreference::Automatic,
             hosted_provider: HostedProvider::Anthropic,
             hosted_base_url: String::new(),
             hosted_model: String::new(),
@@ -66,6 +67,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         skip_update_checks: true,
         record_descriptions: true,
         model_source: ModelSource::Hosted,
+        model_preference: ModelPreference::Fast,
         hosted_provider: HostedProvider::OpenAiCompatible,
         hosted_base_url: "https://gateway.example.com/v1".into(),
         hosted_model: "filing-model".into(),
@@ -88,6 +90,7 @@ fn save_replaces_existing_content_atomically_and_round_trips_the_intake_fields()
         "\"destinationLayout\": \"year_type\"",
         "\"ourNames\": [",
         "\"modelSource\": \"hosted\"",
+        "\"modelPreference\": \"fast\"",
         "\"hostedProvider\": \"openai_compatible\"",
         "\"hostedBaseUrl\": \"https://gateway.example.com/v1\"",
         "\"hostedModel\": \"filing-model\"",
@@ -107,6 +110,51 @@ fn every_layout_round_trips_through_its_snake_case_name() {
         );
     }
     assert_eq!(DestinationLayout::default(), DestinationLayout::Flat);
+}
+
+/// Every model preference is stored by its name and read back; a file from
+/// before there were two local models reads as Automatic, and a preference a
+/// later build added reads as Automatic too, named among what could not be
+/// read, rather than taking the rest of the file down with it.
+#[test]
+fn the_model_preference_round_trips_and_defaults_to_automatic() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("settings.json");
+    let store = SettingsStore::new(&path);
+    for preference in ModelPreference::ALL {
+        let settings = AppSettings {
+            destination: "/somewhere/out".into(),
+            model_preference: preference,
+            ..AppSettings::default()
+        };
+        store.save(&settings).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains(&format!("\"modelPreference\": \"{}\"", preference.as_str()))
+        );
+        assert_eq!(store.load().unwrap(), settings);
+    }
+
+    fs::write(
+        &path,
+        br#"{ "destination": "/somewhere/out", "modelSource": "local" }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        store.load().unwrap().model_preference,
+        ModelPreference::Automatic
+    );
+
+    fs::write(
+        &path,
+        br#"{ "destination": "/somewhere/out", "modelPreference": "turbo", "automaticRename": true }"#,
+    )
+    .unwrap();
+    let loaded = store.load_with_report().unwrap();
+    assert_eq!(loaded.settings.model_preference, ModelPreference::Automatic);
+    assert!(loaded.settings.automatic_rename);
+    assert_eq!(loaded.unreadable, ["modelPreference"]);
 }
 
 #[test]

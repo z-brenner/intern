@@ -687,8 +687,8 @@ named as it was keeps whatever the reviewer had typed.
 
 | | |
 | --- | --- |
-| Model | Qwen3.5-2B-Instruct, Q4_K_M GGUF (1.19 GiB) |
-| Runtime | llama.cpp `b10361`, CPU only |
+| Models | Two tiers: Bonsai 2 2B (fast, 0.48 GiB) and Bonsai 2 4B (accurate, 1.07 GiB), ternary PQ2_0 GGUF, one loaded at a time |
+| Runtime | the PrismML llama.cpp fork the PQ2_0 kernels need, CPU only |
 | Context | 8,192 tokens |
 | Threads | half the logical processors, clamped to 2–12 |
 | Vision | none. No projector is pinned, downloaded, or loaded, and the request type has no field for an image |
@@ -702,8 +702,78 @@ read goes to review.
 
 This paragraph used to describe the runtime reloading once with a projector when
 a document arrived with an image and little text. No such path exists — the
-manifest pins one file, `ModelRole` has one variant, and the table above already
-said so. Both statements could not be true.
+manifest pins one file per model, `ModelRole` has one variant, and the table
+above already said so. Both statements could not be true.
+
+### Two models, one at a time
+
+The manifest (schema 3) pins two models, one per tier, each a single GGUF at an
+immutable Hugging Face revision with its length and SHA-256: a fast one small
+enough to download first and read on any laptop, and an accurate one that files
+more documents correctly - 11 of 12 against 8 of 12 in the [native Windows
+qualification](bonsai-native-windows-evaluation.md) - for about twice the time
+and memory. Both together stay under 2 GiB, and the manifest refuses itself if
+they do not. It also lists the file the previous build pinned
+(`Qwen3.5-2B-Q4_K_M.gguf`) as retired: once a new model has passed its own
+check, setup removes that file - only when its name, length and digest are all
+exactly the retired file's - and nothing else in the folder.
+
+Which model reads a document is a pure decision in `intern_engine::tiers`,
+asked before every document, so a choice in Settings, a model that finished
+downloading or memory that came back takes effect at the next document with
+nothing restarted. Settings offers **Automatic** (the default), **Most
+accurate** and **Fastest**. Automatic reads with the accurate model when it is
+installed and fits (`AUTOMATIC_STRATEGY = AccurateFirst`); the alternative, a
+cascade that reads with the fast model and sends a reading to the accurate one
+when it carries a review reason, is not ready or has a low-probability token
+(`tiers::escalation`), is implemented and tested but not the default: the
+qualification found wrong readings marked ready, which no signal there catches.
+Every threshold - the memory each tier needs available, the token probability,
+the idle time - is one named constant.
+
+The memory guard: a model is loaded only when the machine reports enough
+available memory for it (`MemAvailable` on Linux, `GlobalMemoryStatusEx` on
+Windows; memory that cannot be read counts as enough). A loaded model's own
+footprint counts as available, since unloading it gives that back. When the
+accurate model is wanted - by Automatic or by name - but is not installed yet
+or does not fit, the fast model reads instead and its reading is marked
+**provisional**. Once the accurate model can read - its download verified, or
+memory back - the queue sends every provisional reading nobody has acted on
+back to be read again (`Pipeline::reanalyze_provisional`); an approval, an
+edit, a kept name or an undone rename is a person's decision and is never
+overwritten.
+
+One llama-server runs at a time. A document planned onto the model that is not
+loaded unloads it and loads the other under the same `lifecycle` lock and
+generation discipline as every other start and stop, so two models are never
+resident together and a cancel or a hosted model chosen mid-swap behaves as it
+does mid-request. A model unused for ten minutes is unloaded, giving its memory
+back; the next document loads it again without reading the file, since this
+session already checked it. The review panel says which model read a document,
+and that a provisional reading will be read again.
+
+First run downloads only the fast model and opens the queue as soon as it has
+passed its digest and its semantic self-test. The accurate model downloads
+behind the window with the same resumable, verified downloader - Settings shows
+its progress and can pause, resume or retry it, and the main window says, in
+one line, "Improving accuracy: downloading Bonsai 2 4B, 41%". Its digest is
+checked when the download ends and its self-test runs the first time a document
+loads it; a model that fails is set aside for the session, the fast one keeps
+reading, and Settings offers to download it again. **Choose existing model
+files** accepts either file or both, each recognised by its length and accepted
+only once its digest matches.
+
+Both models are asked through the `bonsai_2` prompt profile
+(`intern_engine::profile`): the production evidence instructions, unchanged,
+followed by one neutral demonstration exchange - a fictional dispatch note and
+the reply that files it - then the document, greedy, with thinking switched
+off. It is the "few-shot greedy" profile the native qualification froze for
+both Bonsai models, and a test holds it to the frozen files. Without the
+exchange, Bonsai 2B copied the instructions' own placeholder words into its
+replies. The profile is part of every request's identity and of the prompt
+version a recording carries, so a recording made without it - the corpus
+recordings of record - replays only without it, and `--prompt-profile` on
+`intern-evaluate`, `intern-analyze` and InternBench chooses it explicitly.
 
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
@@ -762,18 +832,23 @@ is started from one thread kept for nothing else, which ends only with Intern:
 started from a pipeline thread, a warm model server would die with that
 thread. A child that finds Intern already gone by then does not start at all.
 
-Launch never reads the model file. Tauri's setup hook asks only whether it is
+Launch never reads a model file. Tauri's setup hook asks only whether each is
 there at the size the manifest pins; the digest is checked behind the window,
 on the setup thread, and used to be read twice in the hook, a white window for
 five seconds or more on an office laptop. A model that has passed its digest
 and the semantic self-test is stamped in `models/.verified.json` with its size
 and modification time, the digest it was checked against, the llama-server
-binary's size and date, and the version of Intern that checked it. While all of
-that still matches, the next launch starts the server with neither check; when
-any of it changes, the model is hashed and self-tested once and stamped again,
-and a failed self-test removes the stamp. Within a session the digest is read
-at most once: restarts - a cancel, a recovery - start a file that still looks
-exactly as it did when it was checked, and refuse one that does not. The
+binary's size and date, and the version of Intern that checked it. The stamp
+has an entry for each tier's file, and an entry records whether that model has
+passed the self-test or only its digest - the accurate model is digest-checked
+when its download ends and self-tested the first time a document loads it.
+While all of that still matches, the next launch starts the server with neither
+check; when any of it changes, the model is hashed and self-tested once and
+stamped again, and a failed self-test removes its entry. A stamp from the
+single-model build vouches for nothing. Within a session the digest is read
+at most once: restarts - a cancel, a recovery, a swap, a reload after idle -
+start a file that still looks exactly as it did when it was checked, and refuse
+one that does not. The
 setup thread is started only once the rest of launch has succeeded: a launch
 that fails later waits behind a dialog that says why, and a server started
 earlier went on loading the model for an app that could not run. Until then
@@ -807,8 +882,8 @@ ends that pass with nothing counted against the document; counted, it used to
 fail as a file error the second time it met a restart.
 
 Choosing a hosted model stops the local server, and a launch with a hosted
-model chosen never starts it: it would hold 1.3 to 2.6 GB with nothing to ask
-it. Choosing the local model again starts and verifies it as a launch does, and
+model chosen never starts it: it would hold one to two gigabytes with nothing
+to ask it. Choosing the local model again starts and verifies it as a launch does, and
 the queue waits until that has finished. A request the switch interrupts goes
 back to be read again, by the hosted model. While a model downloads, the window
 hears about it at most about four times a second, besides every change of
@@ -975,7 +1050,7 @@ ordinary applications running:
 | Median document, end to end | 12.4-27.7 s across four runs of the same corpus on the same machine |
 | 29,000-character contract | 42 s |
 | Peak model process memory | 2,470-2,590 MB |
-| First-run download | 1.19 GiB, the text model and nothing else |
+| First-run download | 0.48 GiB, the fast text model, before the first document; the accurate one, 1.07 GiB, follows behind the window |
 
 Quote the latency as a range. Four runs of the same corpus on this machine gave
 medians of 12.4, 16.6, 19.6, and 27.7 seconds depending on what else was
