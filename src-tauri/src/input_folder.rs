@@ -1104,7 +1104,9 @@ mod tests {
         );
         let handed = std::cell::RefCell::new(Vec::new());
         let hand_off = |path: &Path| {
-            handed.borrow_mut().push(crate::commands::document_name(path));
+            handed
+                .borrow_mut()
+                .push(crate::commands::document_name(path));
             Arrival::Added
         };
         let report = queue_existing(&folders.input, &|_| None, &hand_off).unwrap();
