@@ -2,7 +2,7 @@
 # Resumable live InternBench run for a candidate model: the 77 documents in
 # chunks of CHUNK (default 8), each chunk one run of
 # scripts/run-internbench-candidate.sh (fresh llama-server, warm-up, its own
-# recording) under an exclusive lock. A chunk whose report.json exists is
+# recording); the whole run holds the exclusive LOCK. A chunk whose report.json exists is
 # skipped, so a run killed by a restart resumes where it stopped. When every
 # chunk is done the recordings are merged (intern-bench merge-recordings) and
 # replayed into one report whose timings are the live ones.
@@ -13,6 +13,12 @@
 #   [INTERN_BENCH_TOKEN_CONFIDENCE=1] [SAMPLE_RSS=1] [ONLY=id,id] \
 #     scripts/bonsai-eval/internbench-chunked.sh RUN_DIR
 set -uo pipefail
+# Hold the exclusive lock for the whole run (the run is one measurement), not per
+# chunk: with other agents' shared holders coming and going, re-queueing for every
+# chunk starves. A restart still loses at most the chunk in progress.
+if [ -n "${LOCK:-}" ] && [ -z "${HOLDING_LOCK:-}" ]; then
+  HOLDING_LOCK=1 exec flock -x "$LOCK" "$0" "$@"
+fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN="${1:?run directory}"
 CHUNK="${CHUNK:-8}"
@@ -33,11 +39,7 @@ while [ $i -lt $n ]; do
   else
     rm -rf "$dir"
     echo "chunk $c: $ids  ($(date -u +%H:%M:%S))"
-    if [ -n "${LOCK:-}" ]; then
-      flock -x "$LOCK" "$REPO/scripts/run-internbench-candidate.sh" "$dir" -- --only "$ids"
-    else
-      "$REPO/scripts/run-internbench-candidate.sh" "$dir" -- --only "$ids"
-    fi
+    "$REPO/scripts/run-internbench-candidate.sh" "$dir" -- --only "$ids"
     echo "chunk $c exit $? ($(date -u +%H:%M:%S))"
   fi
   i=$((i + CHUNK)); c=$((c + 1))
