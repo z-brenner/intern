@@ -71,7 +71,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for _ in $(seq 1 600); do
+for _ in $(seq 1 3000); do  # up to ~5 min: a cold 4B load from a slow disk takes > 60 s
   if curl -sf --noproxy '*' "http://127.0.0.1:$PORT/health" | grep -q '"ok"'; then break; fi
   kill -0 "$SERVER" 2>/dev/null || { echo "llama-server exited; see $OUT_DIR/llama-server.log" >&2; exit 1; }
   sleep 0.1
