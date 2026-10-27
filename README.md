@@ -124,9 +124,11 @@ the input folder, both of which say so in the file's name. A document Intern
 cannot read (a password, a damaged or mislabeled file, one too large to read,
 one the model could not answer for) stays in the queue for review and its
 file is renamed in place to `NEEDS REVIEW - <name>`, so the folder shows it
-too - at once when the reason is the document's by nature, and only once a
-later document is read successfully when it could as well be the model's or
-the reader's (a run of those stops the queue instead and renames nothing); Retry reads it again, or
+too. When the failure could as well be the model's or the reader's (an
+unusable answer, a time-out, a crash), Intern first checks the machine - by
+reading other documents, or with its own self-test - and blames the document
+only if it fails again once the machine is known to work; an outage stops the
+queue and renames nothing. Retry reads it again, or
 type a name for it and approve that, and Keep original takes the prefix off
 again. A document whose bytes Intern has already filed is moved into the
 output folder as `COPY - <the original's filed name>`, with ` (2)`, ` (3)` for

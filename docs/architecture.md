@@ -614,7 +614,9 @@ document that is canceled, or fails after a retry, gets its own name back the
 same way, so clearing the history never leaves a file every scan skips: one
 whose name is refused back stays in the history and is tried again every
 fifteen minutes, keeping one refusal in the journal, and one whose marked file
-is gone is given up. Every scan
+is gone - its folder can be read and the file is not in it - is given up. A
+folder that cannot be read (an offline share, an unmounted sync root) is not
+taken for a deleted file. Every scan
 and add skips the prefix, in any case. The intake watcher's claims are tied
 to the queue item each one handed over (`intake_claims`), so a claim follows
 its own document - renamed for review, given its name back as `name (2)`, or
@@ -871,41 +873,62 @@ Each failure is stored under a code that says what went wrong, and the code
 decides what happens next. A failure that would come out the same on a second
 attempt settles the document at once: a password-protected file, a file that is
 not what its extension says, a document past the extraction limits or too long
-for the model, a damaged file the parser rejects, an internal failure on that
-one document, and a model refusal. Each of these is the document's own
-problem, so it does not fail: it waits in review under its code
-(`UNREADABLE_CODES` in `intern-core`), and its file in the input folder is
-renamed in place to `NEEDS REVIEW - <name>` so the folder shows it too. A
-parser that crashed on the document on both attempts, and a model that timed
-out on it on both, send it to review the same way.
+for the model, a damaged file the parser rejects, and a model refusal. Each
+of these is the document's own problem by its nature, so it does not fail: it
+waits in review under its code (`UNREADABLE_CODES` in `intern-core`), and its
+file in the input folder is renamed in place to `NEEDS REVIEW - <name>` at
+once, so the folder shows it too.
 
-Only reasons that are the document's by their nature - a password, a file that
-is not what it says, one too large, a parse failure that is not a crash, a
-refusal - rename it at once. A reply that could not be used, an internal
-failure, a time-out and a crash look the same from one document whether the
-document or the machine is at fault, so the rename is put off until a later
-document is read successfully; three documents in a row failing so (replies,
-time-outs, or reader crashes, each counted on its own, and a document once
-however often it failed) stop the queue instead, and the documents of that
-run - only those - go back to wait under their own names with nothing counted
-against them (`failure_streaks`). Resuming starts every run over, and a
-document a run put back that fails the same way again goes to review under
-the usual rules without starting a new run, so a resumed queue always moves
-past it. Nothing is renamed outside the input folder - asked again when a
-put-off mark comes due, in case Settings moved it - and
-nothing admitted on Microsoft's word about its uploader: that proof names the
+A reply that could not be used, an internal failure, a model time-out and a
+reader crash are different: from one document they look the same whether the
+document or the machine is at fault, and a later success only says the
+machine works now, not that it worked when the document failed. So Intern
+blames the document only for a failure that happened while the machine was
+known to be working. The rule, in plain words:
+
+- The first time a document fails this way, nothing is renamed and nothing is
+  counted against it. It goes back to wait "in doubt" (`doubted_documents`),
+  under its own name, behind every document that is not in doubt, and is not
+  tried again until the machine is shown to work.
+- The machine is shown to work when another document is read successfully
+  (any success clears doubts over the model and the reader; a document that
+  is only extracted clears doubts over the reader). If nothing else is left
+  to read, Intern runs its own self-test: for the model, the same calibration
+  document every model must read correctly at setup; for the reader, a small
+  text file Intern writes and has it read.
+- Once the machine has been shown to work, each document in doubt gets one
+  more attempt. If it fails the same way again, the failure is its own: it
+  goes to review and its file is renamed, under the usual rules below. If it
+  is read, it goes on like any other document.
+- If the self-test fails too, it is the machine: the queue stops and says
+  why, and the documents in doubt keep their names and wait.
+- Three different documents in a row failing the same way (unusable replies,
+  time-outs and reader crashes are each counted on their own, and a document
+  once however often it failed) stop the queue as well (`failure_runs`).
+  Resuming starts the count over; it does not clear any doubt.
+
+So an outage - a model that times out on everything, or answers garbage, or a
+reader that crashes - never renames anything, however often a person resumes
+the queue before it is fixed; once it is fixed, every document in doubt is read
+again and filed. A document still in review with its rename put off from an
+earlier build goes back to wait in doubt instead.
+
+Nothing is renamed outside the input folder - asked again when the rename is
+made, in case Settings moved it, and put off rather than decided when Settings
+cannot be read - and nothing admitted on Microsoft's word about its uploader: that proof names the
 file - its name in the library - and every later stage asks for it again, so a
 renamed file could never be retried, named or filed; such a document waits in
 review under its own name. Asking again would only re-read the file —
 thirty minutes of it, for a scan that hit the time limit — or re-send and
-re-bill the request. A worker crash, a failure the worker says may pass, and a
-model request that timed out or was called off get one more attempt. A failure
+re-bill the request. A failure the worker says may pass and a model request
+that was called off get one more attempt; a worker crash and a time-out wait in
+doubt as above. A failure
 that every following document would share pauses the queue and names the
 reason in the window: the hosted-model failures above, a local model server
 that cannot be started or recovered, and missing text-recognition files. A
-model reply that cannot be used sends that document to review; three documents in a row
-with such a reply pause the queue, since by then the model is the problem, and
-any document read successfully starts the count again. A document that meets
+model reply that cannot be used puts that document in doubt; three documents in
+a row with such a reply pause the queue, since by then the model is the
+problem, and any document read successfully starts the count again. A document that meets
 no model at all — the moment while Settings switches between the hosted and
 the local one, before the local server's start has begun — goes back to wait
 with nothing counted against it. A request that finds a start or a restart

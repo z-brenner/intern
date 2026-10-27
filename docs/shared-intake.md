@@ -304,8 +304,9 @@ describes the record and the flow that consumes it.
 - **Machine dies mid-document**: lease expires, heartbeat goes silent, another
   machine takes over after the full lease period (15 minutes).
 - **Document Intern cannot read** (password-protected, damaged, mislabeled,
-  too large, or one the model declined, could not answer for, or timed out on
-  twice): it waits in review on the machine that read it, and its file is
+  too large, or one the model declined - or could not answer for, timed out
+  on, or crashed the reader on again once the machine was shown to work):
+  it waits in review on the machine that read it, and its file is
   renamed in place to `NEEDS REVIEW - <name>` (never for a document admitted
   on Microsoft's word about its uploader, whose proof names the file). No
   machine's scan claims that name, and the claim on the name it arrived under
