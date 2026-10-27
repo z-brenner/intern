@@ -2520,3 +2520,41 @@ fn a_handle_knows_a_conflict_copy_by_the_scan_s_rule() {
     assert!(handle.is_conflict_copy(&rig.temp.path().join("report-here.pdf")));
     assert!(!handle.is_conflict_copy(&rig.temp.path().join("Invoice-ACME.pdf")));
 }
+
+/// A document a person dropped whose name happens to look like this host's
+/// conflict copy ("Report-here.pdf") is still the claim this machine took:
+/// the scan shepherds it to done instead of counting it as a conflict and
+/// leaving the lease to lapse.
+#[test]
+fn a_handed_over_document_named_like_a_conflict_copy_is_still_shepherded() {
+    let rig = Rig::start(false, &[]);
+    let path = rig.write("Report-here.pdf", b"dropped on purpose");
+    let key = facts_for(rig.temp.path(), "Report-here.pdf").key();
+    let outcome = rig
+        .watcher
+        .hand_over(&path, |path| rig.host.enqueue(&[path.to_path_buf()]));
+    assert_eq!(outcome, HandOver::Queued(()));
+    rig.step();
+    rig.step();
+    rig.host.set_state(
+        &path,
+        ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("2024 Report.pdf".to_string()),
+        },
+    );
+    rig.step();
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Done);
+    assert_eq!(rig.watcher.status().sync_conflicts, 0);
+}
+
+/// A handle kept past the watcher it came from says so, so a caller takes a
+/// fresh one rather than handing documents to a watcher that has stopped.
+#[test]
+fn a_handle_knows_when_its_watcher_has_stopped() {
+    let rig = Rig::start(false, &[]);
+    let handle = rig.watcher.handle();
+    assert!(handle.is_running());
+    drop(rig);
+    assert!(!handle.is_running());
+}

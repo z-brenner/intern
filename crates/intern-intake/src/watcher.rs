@@ -239,11 +239,11 @@ impl IntakeHandle {
         // A claim this machine already holds - a scan took it, or an earlier
         // hand-over did - is not this call's to give back: releasing it when
         // the queue refuses the document now (it is being read, so it is
-        // locked) would let the next scan withdraw work under way.
-        let already_ours = store.read(&key).is_some_and(|claim| {
-            claim.machine_id == self.identity.id && claim.state == ClaimState::Claimed
-        });
-        match store.acquire(&doc) {
+        // locked) would let the next scan withdraw work under way. The store
+        // says whether this call created the claim, in the same step that
+        // takes it, so a scan claiming it a moment earlier cannot be missed.
+        let (acquired, created) = store.acquire_reporting(&doc);
+        match acquired {
             AcquireOutcome::Acquired if store.verify(&key) => {}
             AcquireOutcome::Acquired | AcquireOutcome::HeldByOther(_) => {
                 return HandOver::ClaimedElsewhere;
@@ -262,12 +262,19 @@ impl IntakeHandle {
                 HandOver::Queued(queued)
             }
             Err(message) => {
-                if !already_ours {
+                if created {
                     let _ = store.release(&key);
                 }
                 HandOver::Refused(message)
             }
         }
+    }
+
+    /// Whether the watcher this handle belongs to is still running. A handle
+    /// kept past a restart of the watcher reaches one that no longer scans,
+    /// and a claim handed to it would never be shepherded.
+    pub fn is_running(&self) -> bool {
+        !self.shared.shutdown.load(Ordering::SeqCst)
     }
 
     /// Whether `path` is a sync client's conflict copy, by the rule a scan
@@ -584,8 +591,11 @@ impl Scanner<'_> {
         self.backlog.note(&key, &facts.relative_path);
         // A conflict copy is the sync client's bookkeeping, not a new document.
         // Naming it would file a second copy of something already filed, so it
-        // is counted and left where it is for a person to resolve.
-        if is_conflict_copy(&facts.path, &self.machines) {
+        // is counted and left where it is for a person to resolve - unless
+        // this machine holds its claim: a document a person dropped whose name
+        // merely looks like one ("Report-<this host>.pdf") was handed over
+        // on purpose, and its claim must still be renewed and closed.
+        if is_conflict_copy(&facts.path, &self.machines) && !self.holds_claim(&key) {
             self.status.sync_conflicts += 1;
             return;
         }
@@ -639,6 +649,15 @@ impl Scanner<'_> {
             }
             None => self.consider_admission(&doc, &key, facts),
         }
+    }
+
+    /// Whether this machine holds the claim on `key`: one this run owns, or
+    /// one left in the store by an earlier run or a hand-over.
+    fn holds_claim(&self, key: &str) -> bool {
+        self.owned.contains_key(key)
+            || self.store.read(key).is_some_and(|claim| {
+                claim.machine_id == self.identity.id && claim.state == ClaimState::Claimed
+            })
     }
 
     /// What this machine may do with a document nobody is processing: ask the
