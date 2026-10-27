@@ -351,6 +351,17 @@ impl QueueStore {
                    proven INTEGER NOT NULL DEFAULT 0,
                    created_at INTEGER NOT NULL
                  );
+                 -- A doubt is about the document's next attempt. One that
+                 -- goes anywhere but back to wait or to be read - to review,
+                 -- ready, failed, canceled, completed - is no longer in
+                 -- doubt, whatever took it there; so a person's retry, from
+                 -- any of those, always starts it afresh.
+                 CREATE TRIGGER IF NOT EXISTS doubt_ends_with_the_wait
+                 AFTER UPDATE OF status ON queue_items
+                 WHEN NEW.status NOT IN ('queued', 'extracting', 'analyzing')
+                 BEGIN
+                   DELETE FROM doubted_documents WHERE queue_item_id = NEW.id;
+                 END;
                  -- The documents of the current run of such failures, by
                  -- kind: one row per document, however often it failed. A
                  -- run long enough stops the queue.
@@ -3377,8 +3388,11 @@ fn doubt_deferred_marks(connection: &Connection) -> InternResult<()> {
              UPDATE queue_items
                SET status = 'queued', processing_failures = 0,
                    owner_session = NULL, lease_expires_at = NULL
-               WHERE status = 'needs_review'
-                 AND id IN (SELECT queue_item_id FROM doubted_documents);
+               WHERE status = 'needs_review' AND error_code IN ({codes})
+                 AND NOT EXISTS (SELECT 1 FROM proposals WHERE queue_item_id = queue_items.id)
+                 AND id IN (
+                   SELECT queue_item_id FROM review_renames WHERE stage IN ('deferred', 'held')
+                 );
              DELETE FROM review_renames WHERE stage IN ('deferred', 'held');
              COMMIT;",
             codes = unreadable_codes_sql()

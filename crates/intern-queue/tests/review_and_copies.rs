@@ -1320,6 +1320,8 @@ impl WorkerBoundary for BytesWorker {
 #[derive(Default)]
 struct TextModel {
     outage: Mutex<Option<&'static str>>,
+    /// How often the self-test's calibration document was asked about.
+    calibrations: AtomicUsize,
 }
 
 impl AnalyzerBoundary for TextModel {
@@ -1329,6 +1331,9 @@ impl AnalyzerBoundary for TextModel {
         extension: &str,
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
+        if is_calibration(source) {
+            self.calibrations.fetch_add(1, Ordering::SeqCst);
+        }
         if let Some(code) = *self.outage.lock().unwrap() {
             return Err(ModelFailure::fatal(code));
         }
@@ -1848,4 +1853,28 @@ fn doubted_documents_with_no_model_loaded_stop_the_queue_after_the_grace() {
     assert_eq!(rig.pipeline.pause_reason().as_deref(), Some("MODEL_FAILED"));
     assert_eq!(rig.status(slow), QueueStatus::Queued);
     assert!(rig.renamed().is_empty());
+}
+
+/// A document in doubt that a person cancels and then retries starts afresh:
+/// it is read in its turn like any new document, needing no proof that the
+/// machine works.
+#[test]
+fn a_doubted_document_canceled_and_retried_is_read_afresh() {
+    let rig = TextRig::new();
+    let id = rig.add("a.pdf", "good a");
+    rig.break_down(Outage::TimesOut);
+    rig.pipeline.run_next().unwrap();
+    assert_eq!(rig.status(id), QueueStatus::Queued);
+    rig.pipeline.cancel(id).unwrap();
+    rig.fix();
+    rig.pipeline.retry(id).unwrap();
+    rig.run();
+
+    assert_eq!(rig.status(id), QueueStatus::Completed);
+    assert!(!rig.pipeline.is_paused());
+    assert_eq!(
+        rig.model.calibrations.load(Ordering::SeqCst),
+        0,
+        "no proof was asked for"
+    );
 }

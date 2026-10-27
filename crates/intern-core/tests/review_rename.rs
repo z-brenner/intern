@@ -946,3 +946,55 @@ fn an_intake_claim_follows_its_own_item() {
         Some(second.id)
     );
 }
+
+/// A doubt is about the document's next attempt only. Sent anywhere but
+/// back to wait - to review for any reason, canceled, failed - it is no
+/// longer in doubt, so a person's retry starts it afresh and the next open
+/// of the database never takes it out of review.
+#[test]
+fn a_doubt_ends_when_the_document_leaves_the_wait() {
+    let temp = TempDir::new().unwrap();
+    let doubted = |store: &QueueStore, name: &str| {
+        let item = store
+            .enqueue(Path::new(&format!("/in/{name}")), name)
+            .unwrap();
+        assert_eq!(store.claim_next().unwrap().unwrap().id, item.id);
+        store
+            .doubt(item.id, "timeout", ErrorCode::ModelFailed)
+            .unwrap();
+        item.id
+    };
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let canceled = doubted(&store, "canceled.pdf");
+    let denied = doubted(&store, "denied.pdf");
+    let waiting = doubted(&store, "waiting.pdf");
+    store
+        .transition(canceled, QueueStatus::Queued, QueueStatus::Canceled, None)
+        .unwrap();
+    // A proof attempt refused at the door, as an uploader that cannot be
+    // verified is.
+    store.prove_doubts(&["timeout"], None).unwrap();
+    assert_eq!(store.claim_next().unwrap().unwrap().id, denied);
+    store
+        .transition(
+            denied,
+            QueueStatus::Extracting,
+            QueueStatus::NeedsReview,
+            Some(ErrorCode::UploaderUnverified),
+        )
+        .unwrap();
+    assert_eq!(store.proven_doubt(canceled).unwrap(), None);
+    assert_eq!(store.proven_doubt(denied).unwrap(), None);
+    assert_eq!(
+        store.proven_doubt(waiting).unwrap().as_deref(),
+        Some("timeout")
+    );
+    drop(store);
+
+    let store = QueueStore::open(database(&temp)).unwrap();
+    let item = row(&store, denied);
+    assert_eq!(item.status, QueueStatus::NeedsReview);
+    assert_eq!(item.error_code, Some(ErrorCode::UploaderUnverified));
+    assert_eq!(row(&store, waiting).status, QueueStatus::Queued);
+    assert_eq!(store.claim_next().unwrap().unwrap().id, waiting);
+}
