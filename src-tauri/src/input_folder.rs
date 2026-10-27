@@ -1089,6 +1089,53 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// A `NEEDS REVIEW - ` file is one Intern renamed because it could not
+    /// read it, and it waits in the queue already: "Process them too" passes
+    /// over it, and a drop names it rather than copying it in a second time.
+    #[test]
+    fn a_needs_review_file_is_never_queued_or_copied_again() {
+        let root = folder("copy-needs-review");
+        let folders = folders(&root);
+        write(&folders.input, "a.pdf", b"%PDF-1.7 a");
+        write(
+            &folders.input,
+            "NEEDS REVIEW - locked.pdf",
+            b"%PDF-1.7 locked",
+        );
+        let handed = std::cell::RefCell::new(Vec::new());
+        let hand_off = |path: &Path| {
+            handed.borrow_mut().push(crate::commands::document_name(path));
+            Arrival::Added
+        };
+        let report = queue_existing(&folders.input, &|_| None, &hand_off).unwrap();
+        assert_eq!(report.added, 1);
+        assert!(report.skipped.is_empty());
+        assert_eq!(*handed.borrow(), vec!["a.pdf".to_owned()]);
+
+        let elsewhere = root.join("Downloads");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let marked = write(&elsewhere, "NEEDS REVIEW - scan.pdf", b"%PDF-1.7 scan");
+        let copied = copy_into_input(
+            &[marked],
+            &folders,
+            &StdFileSystem,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &hand_off,
+        );
+        assert_eq!(copied.copied, Some(0));
+        assert_eq!(
+            copied.skipped,
+            vec![SkippedDocumentDto {
+                name: "NEEDS REVIEW - scan.pdf".into(),
+                code: "NEEDS_REVIEW_FILE".into(),
+            }]
+        );
+        assert!(!folders.input.join("NEEDS REVIEW - scan.pdf").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The wire shape: copy reports carry the copy count and the folder;
     /// setup's report of what was already there does not.
     #[test]
