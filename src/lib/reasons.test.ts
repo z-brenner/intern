@@ -90,7 +90,7 @@ describe('humanizeReason', () => {
       'EXTRACTION_FAILED', 'ANALYSIS_FAILED', 'MODEL_FAILED', 'MODEL_OUTPUT_INVALID',
       'MODEL_INPUT_TOO_LARGE', 'MODEL_REPLY_TRUNCATED', 'HOSTED_MODEL_UNAVAILABLE',
       'HOSTED_MODEL_BILLING', 'STATE_CONFLICT', 'INVALID_TRANSITION', 'ALREADY_NAMED',
-      'INTAKE_WITHDRAWN',
+      'INTAKE_WITHDRAWN', 'SECRET_SERVICE_UNAVAILABLE',
     ];
     for (const code of codes) {
       const sentence = humanizeReason(code);

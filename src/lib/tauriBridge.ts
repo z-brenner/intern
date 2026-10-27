@@ -290,7 +290,16 @@ export class TauriBridge implements DesktopBridge, QueueEventSource, SetupEventS
   // The updater plugin is loaded lazily so that importing this module never
   // pulls in update machinery for a session that never asks for it, and so the
   // browser build - which has no Tauri runtime at all - does not fail to load.
+  //
+  // Signed updates are published for Windows alone. A Linux package is
+  // updated by installing the next release's package, and its shell registers
+  // no updater (lib.rs) - so it is asked first, and only a shell that says it
+  // cannot update itself is spared a request that could only fail. One that
+  // cannot answer - a failed start refuses every command of Intern's own, but
+  // not the updater's - checks as it always has.
   async checkForUpdate(): Promise<UpdateStatus> {
+    const supported = await this.transport.invoke<boolean>('updates_supported').catch(() => undefined);
+    if (supported === false) return { state: 'unsupported', reason: 'package' };
     const { check } = await import('@tauri-apps/plugin-updater');
     const { getVersion } = await import('@tauri-apps/api/app');
     const currentVersion = await getVersion();

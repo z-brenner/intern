@@ -138,3 +138,42 @@ it('scopes the opener capability to the guide and the fixed support links only',
   }]);
   expect(GUIDE_URL.startsWith('https://z-brenner.github.io/intern/')).toBe(true);
 });
+
+// A Linux package keeps llama-server, the parser worker, and everything they
+// load in one runtime folder under /usr/lib/Intern rather than in /usr/bin,
+// where llama-server and tesseract would collide with the distribution's own
+// and the CPU backends could not be found beside the server. What it does not
+// carry - Tesseract, the OpenMP runtime, and the OpenSSL llama-server is
+// linked against (libssl3t64 on Ubuntu 24.04, libssl3 before it) - it depends
+// on.
+it('bundles the Linux runtime as one folder and leaves the Windows layout to Windows', async () => {
+  const [base, linux] = await Promise.all([
+    readFile('src-tauri/tauri.conf.json', 'utf8').then(JSON.parse),
+    readFile('src-tauri/tauri.linux.conf.json', 'utf8').then(JSON.parse),
+  ]);
+  expect(base.bundle.targets).toEqual(['nsis']);
+  expect(linux.bundle.targets).toEqual(['deb']);
+  expect(linux.bundle.externalBin).toEqual([]);
+  expect(linux.bundle.resources['resources/runtime/']).toBe('runtime/');
+  // Merged as a JSON merge patch: null removes a Windows mapping, anything
+  // not named is kept as the base config has it.
+  for (const source of Object.keys(base.bundle.resources)) {
+    const windowsOnly = /\.(dll|traineddata|onnx)$/.test(source);
+    expect(linux.bundle.resources[source], source).toBe(windowsOnly ? null : undefined);
+  }
+  expect(linux.bundle.linux.deb.depends).toEqual(['libgomp1', 'libssl3t64 | libssl3', 'tesseract-ocr']);
+  // The license tree ships on Linux under the same path as on Windows.
+  expect(base.bundle.resources['resources/licenses/']).toBe('licenses/');
+});
+
+// The Linux counterpart of Send to > Intern: a launcher that accepts files is
+// one a file manager offers under Open With, and one documents can be dropped
+// on. Tauri's own template starts Intern with no files at all.
+it('lets a Linux file manager open documents with Intern', async () => {
+  const linux = JSON.parse(await readFile('src-tauri/tauri.linux.conf.json', 'utf8'));
+  const template = await readFile(`src-tauri/${linux.bundle.linux.deb.desktopTemplate}`, 'utf8');
+  expect(template).toMatch(/^Exec=\{\{exec\}\} %F$/m);
+  // No MimeType of its own: declaring PDF or Word documents would offer Intern
+  // as their default application, and opening a document is not filing it.
+  expect(template).not.toMatch(/^MimeType=(?!\{\{mime_type\}\})/m);
+});

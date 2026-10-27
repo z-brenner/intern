@@ -31,3 +31,21 @@ it('expects each rejected smoke fixture to fail with the code expected.json reco
     expect(code ?? defaultCode, file).toBe(fixture!.expected_error);
   }
 });
+
+// The Node port the Linux smoke runs holds the same refusals to the same codes.
+it('expects each rejected fixture in the Node port to fail with the code expected.json records', async () => {
+  const [script, expected] = await Promise.all([
+    readFile('scripts/smoke-worker.mjs', 'utf8'),
+    readFile('fixtures/expected.json', 'utf8').then(JSON.parse) as Promise<{ fixtures: ExpectedFixture[] }>,
+  ]);
+  const declared = /async function assertRejected\(file, code = '([A-Z_]+)'\)/.exec(script);
+  expect(declared, 'assertRejected declares a default code').not.toBeNull();
+
+  const calls = [...script.matchAll(/^\s*await assertRejected\('([^']+)'(?:, '([A-Z_]+)')?\);$/gm)];
+  expect(calls.map(([, file]) => file).sort()).toEqual(['encrypted.pdf', 'malformed.pdf']);
+  for (const [, file, code] of calls) {
+    const fixture = expected.fixtures.find((entry) => entry.file === file);
+    expect(fixture, `${file} is in fixtures/expected.json`).toBeDefined();
+    expect(code ?? declared![1], file).toBe(fixture!.expected_error);
+  }
+});

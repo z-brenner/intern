@@ -751,6 +751,29 @@ describe('TauriBridge', () => {
     expect(stops.get('tauri://drag-leave')).toHaveBeenCalledOnce();
   });
 
+  // Signed updates are published for Windows alone. A Linux shell says it
+  // cannot update itself, and the updater - which it does not register - is
+  // never asked; a shell that says nothing different asks as it always has.
+  it('asks the updater only when the shell can update itself', async () => {
+    vi.mocked(check).mockClear();
+    const linux = fakeTransport({ updates_supported: false });
+    expect(await new TauriBridge(linux.transport).checkForUpdate()).toEqual({ state: 'unsupported', reason: 'package' });
+    expect(linux.calls).toEqual([{ command: 'updates_supported', args: undefined }]);
+    expect(check).not.toHaveBeenCalled();
+
+    vi.mocked(check).mockResolvedValue(null);
+    const windows = fakeTransport({ updates_supported: true });
+    expect(await new TauriBridge(windows.transport).checkForUpdate()).toEqual({ state: 'current', currentVersion: '0.1.0-alpha.10' });
+    expect(check).toHaveBeenCalledOnce();
+
+    // After a failed start every command of Intern's own is refused, but the
+    // updater still answers, so the check goes ahead.
+    const failedStart = fakeTransport();
+    failedStart.transport.invoke = async () => { throw { code: 'APP_NOT_READY' }; };
+    expect(await new TauriBridge(failedStart.transport).checkForUpdate()).toEqual({ state: 'current', currentVersion: '0.1.0-alpha.10' });
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
   it('reports an update download as the share of its advertised size that has arrived', async () => {
     updateDownloading([
       { event: 'Started', data: { contentLength: 200 } },

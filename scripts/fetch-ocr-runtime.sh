@@ -10,7 +10,9 @@
 #
 # RUNTIME_DIR receives libonnxruntime.so and ocr-models/*.onnx, which is
 # where the worker looks for them (alongside PDFium, Tesseract and tessdata,
-# which this does not fetch). Point INTERN_RUNTIME_DIR at it.
+# which this does not fetch). Point INTERN_RUNTIME_DIR at it. Their license
+# texts go to RUNTIME_DIR/licenses/, under the names the Windows package
+# gives them; scripts/fetch-linux-assets.sh takes them from there.
 #
 # The models are pinned by src-tauri/resources/runtime-assets.json - the
 # same URL, size and SHA-256 the Windows package uses. ONNX Runtime comes
@@ -107,6 +109,13 @@ if ! matches "$STAGE/libonnxruntime.so" "$ORT_LIBRARY_SIZE" "$ORT_LIBRARY_SHA256
   echo "the ONNX Runtime library in the pinned wheel does not match its pinned digest" >&2
   exit 1
 fi
+# Its license and third-party notices, from the same verified wheel.
+mkdir -p "$STAGE/licenses"
+unzip -p "$CACHE/$(basename "$ORT_WHEEL_URL")" onnxruntime/LICENSE > "$STAGE/licenses/onnxruntime-LICENSE.txt"
+unzip -p "$CACHE/$(basename "$ORT_WHEEL_URL")" onnxruntime/ThirdPartyNotices.txt > "$STAGE/licenses/onnxruntime-ThirdPartyNotices.txt"
+for notice in "$STAGE"/licenses/onnxruntime-*.txt; do
+  [ -s "$notice" ] || { echo "the pinned ONNX Runtime wheel has no $(basename "$notice")" >&2; exit 1; }
+done
 
 # The model pins, read from the manifest the Windows package is built from.
 mkdir -p "$STAGE/ocr-models"
@@ -129,9 +138,23 @@ if [ "$(find "$STAGE/ocr-models" -name '*.onnx' | wc -l)" -ne 3 ]; then
   exit 1
 fi
 
-mkdir -p "$RUNTIME_DIR/ocr-models"
+# The models carry no license file of their own; their Apache-2.0 text is
+# pinned from the PaddleOCR repository, as for the Windows package.
+IFS=$'\t' read -r url size sha256 < <(node -e '
+  const manifest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const pin = manifest.downloads.find((download) => download.id === "paddleocr-license");
+  if (!pin) { console.error("runtime-assets.json has no paddleocr-license pin"); process.exit(1); }
+  console.log([pin.url, pin.size, pin.sha256].join("\t"));
+' "$MANIFEST")
+fetch "$url" PaddleOCR-LICENSE.txt "$size" "$sha256"
+cp "$CACHE/PaddleOCR-LICENSE.txt" "$STAGE/licenses/PaddleOCR-models-LICENSE.txt"
+
+mkdir -p "$RUNTIME_DIR/ocr-models" "$RUNTIME_DIR/licenses"
 install -m 0644 "$STAGE/libonnxruntime.so" "$RUNTIME_DIR/libonnxruntime.so"
 for model in "$STAGE"/ocr-models/*.onnx; do
   install -m 0644 "$model" "$RUNTIME_DIR/ocr-models/$(basename "$model")"
+done
+for license in "$STAGE"/licenses/*.txt; do
+  install -m 0644 "$license" "$RUNTIME_DIR/licenses/$(basename "$license")"
 done
 echo "Staged ONNX Runtime 1.30.0 and the PP-OCR models in $RUNTIME_DIR"

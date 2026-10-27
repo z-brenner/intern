@@ -24,9 +24,12 @@ intern-engine = { path = "../crates/intern-engine" }
 intern-intake = { path = "../crates/intern-intake" }
 intern-queue = { path = "../crates/intern-queue" }
 # The hosted model's API key lives in the operating system's credential store
-# (Windows Credential Manager, the macOS Keychain, the kernel keyring on
-# Linux), never in settings.json. Native backends only: no D-Bus, no daemon.
-keyring = { version = "=3.6.3", default-features = false, features = ["windows-native", "apple-native", "linux-native"] }
+# (Windows Credential Manager, the macOS Keychain, the desktop's Secret
+# Service on Linux), never in settings.json. On Linux that is the one store
+# that survives signing out, the kernel keyring does not; it is reached over
+# the D-Bus that tao already links, with the secret encrypted in transit by
+# pure-Rust crypto rather than OpenSSL.
+keyring = { version = "=3.6.3", default-features = false, features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 # Jitter for the hosted model's retry wait. Already built for intern-engine.
 rand = "=0.8.5"
 serde = { version = "=1.0.228", features = ["derive"] }

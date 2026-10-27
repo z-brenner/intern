@@ -260,5 +260,9 @@ export type UpdateProgressListener = (fraction: number | undefined) => void;
 export type UpdateStatus =
   | { state: 'current'; currentVersion: string }
   | { state: 'available'; currentVersion: string; version: string; notes?: string; date?: string }
-  /** Running outside the desktop shell, where there is nothing to update. */
-  | { state: 'unsupported' };
+  /**
+   * Running outside the desktop shell, where there is nothing to update - or,
+   * with `reason: 'package'`, in a Linux package, which its package manager
+   * updates rather than Intern.
+   */
+  | { state: 'unsupported'; reason?: 'package' };

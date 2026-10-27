@@ -5,9 +5,14 @@
 //! copy-paste from the wrong inbox. The operating system already keeps a
 //! store for exactly this - Windows Credential Manager, the macOS Keychain -
 //! where the key is encrypted to the signed-in user and visible to them under
-//! Intern's name, to inspect or delete without Intern's help. On Linux, which
-//! Intern does not ship for, the kernel keyring stands in and lasts only until
-//! sign-out; a developer there re-enters the key per session.
+//! Intern's name, to inspect or delete without Intern's help. On Linux the
+//! desktop's Secret Service is that store - GNOME Keyring, or KWallet - seen
+//! in Passwords and Keys (Seahorse) under the same name.
+//!
+//! A Linux session can lack one entirely: a minimal desktop, a server, the
+//! virtual machine an agent drives under Xvfb. Nothing else in Intern needs
+//! it, so its absence costs only the hosted model, and is reported with a code
+//! of its own that says what is missing.
 //!
 //! The store is a seam so tests never touch a real credential manager.
 
@@ -15,6 +20,15 @@ use std::{collections::HashMap, sync::Mutex};
 
 /// The one secret Intern keeps.
 pub const HOSTED_MODEL_API_KEY: &str = "hosted-model-api-key";
+
+/// The error code for a credential store that could not be used. On Linux
+/// the only store is the Secret Service, so a failure there means no Secret
+/// Service is running or it is locked, and the code says so.
+pub const STORE_UNAVAILABLE: &str = if cfg!(target_os = "linux") {
+    "SECRET_SERVICE_UNAVAILABLE"
+} else {
+    "SECRET_STORE_UNAVAILABLE"
+};
 
 const SERVICE: &str = "Intern";
 

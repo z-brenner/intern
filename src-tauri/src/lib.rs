@@ -16,7 +16,7 @@ pub mod tray;
 pub fn run() {
     // First, so that even a panic inside Tauri's own setup leaves a record.
     startup::install_panic_hook();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // One Intern per machine, and registered first as the plugin
         // requires. Autostart at sign-in followed by a click on the shortcut
         // otherwise runs two local models, two intake watchers, and two trays
@@ -34,20 +34,28 @@ pub fn run() {
         // Autostart entries launch Intern with "--minimized" so a sign-in
         // launch can go straight to the tray (when background mode allows it)
         // instead of opening a window nobody asked for. macOS keeps the
-        // default LaunchAgent mechanism.
+        // default LaunchAgent mechanism; Linux gets an XDG autostart entry in
+        // ~/.config/autostart.
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .arg("--minimized")
                 .build(),
-        )
-        // Checking for an update is automatic (at launch and on a timer) as
-        // well as user-initiated from Settings; installing one never is - the
-        // frontend only ever calls the installer after its own click, and the
-        // plugin refuses anything not signed with this build's key regardless
-        // of which path found it. Microsoft upload verification and hosted
-        // inference are separate opt-in network integrations; see their
-        // explicit permissions/privacy notices.
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        );
+    // Checking for an update is automatic (at launch and on a timer) as
+    // well as user-initiated from Settings; installing one never is - the
+    // frontend only ever calls the installer after its own click, and the
+    // plugin refuses anything not signed with this build's key regardless
+    // of which path found it. Microsoft upload verification and hosted
+    // inference are separate opt-in network integrations; see their
+    // explicit permissions/privacy notices.
+    //
+    // Signed updates are published for Windows alone. A Linux package is
+    // updated by its package manager, so there the updater is not registered
+    // and Intern never asks for the release manifest at all
+    // (`commands::updates_supported` tells the window why).
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         .setup(|app| {
             let data = app.path().app_local_data_dir().ok();
             if let Some(data) = &data {
@@ -147,6 +155,7 @@ pub fn run() {
             commands::queue_add_folder,
             commands::queue_take_launch_report,
             commands::update_relaunch_expected,
+            commands::updates_supported,
             commands::queue_pause,
             commands::queue_resume,
             commands::queue_cancel,

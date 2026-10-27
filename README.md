@@ -164,6 +164,27 @@ If Intern cannot start, a dialog says why and names its data folder
 `logs\startup-error.log` there. A crash leaves one line in `logs\intern.log`:
 where and when it happened, never what the document said.
 
+### Linux (Ubuntu 24.04)
+
+Intern also builds, runs, and is tested on Ubuntu 24.04, x86-64, as a `.deb`
+that CI builds from the same pinned runtime and smoke-tests installed. No Linux
+build is published as a release yet, and Linux builds do not update
+themselves. Install a package from a CI run's `intern-linux-…` artifact, or
+build one, with apt:
+
+```sh
+sudo apt install ./Intern_0.1.0-alpha.11_amd64.deb
+```
+
+apt brings what it depends on (WebKitGTK, AppIndicator, `tesseract-ocr`,
+`libgomp1`, OpenSSL). First run, the queue, background mode and sign-in start
+work as above; data is in `~/.local/share/com.intern.app`, the hosted model's key in
+the Secret Service, and a file manager's **Open With** takes the place of
+**Send to**. Microsoft sign-in, the OneDrive client, and the SharePoint
+deployment are Windows-only. [Linux](docs/linux.md) has the build, where
+everything lives, how to test it headless (Xvfb, or the pipeline with no
+window at all), and the rest of what differs.
+
 ## Watched intake folders, OneDrive, and SharePoint
 
 Instead of dragging documents in, Settings can point Intern at an **intake
@@ -456,7 +477,10 @@ CI runs fixture generation, TypeScript/Vitest/Vite, Playwright, Rust format,
 Clippy with warnings denied, workspace tests, native fixture integration, asset
 verification, the Windows Tauri build, and the installer smoke test. A separate
 **Rust (Ubuntu)** job runs format, Clippy, and the workspace tests in minutes,
-for feedback before the Windows job finishes. Runtime and dependency caches are
+for feedback before the Windows job finishes. A **Linux desktop package and
+smoke** job fetches and verifies the pinned Linux runtime, smoke-tests it and the
+worker, builds the `.deb`, installs it with apt, and starts the installed app
+under Xvfb ([Linux](docs/linux.md)). Runtime and dependency caches are
 keyed by lockfiles and the runtime asset manifest.
 
 `scripts/run-model-evaluation.ps1` scores the whole gold corpus through the

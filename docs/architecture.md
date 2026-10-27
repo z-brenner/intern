@@ -133,7 +133,8 @@ straight into the page-sized copy, and only then turned upright, so a
 
 Scans are read by PP-OCR, a text-detection network, an English recognizer and
 a page-orientation classifier run through ONNX Runtime, when the runtime and
-models are installed beside the worker, as they are in the Windows package. On
+models are installed beside the worker, as they are in the Windows and Linux
+packages. On
 InternBench's scans it makes a fifth of Tesseract's character errors and reads
 more of the dates and identifiers, at about three times Tesseract's CPU per
 page, which OCR's share of a document's time absorbs. Without those files - a
@@ -707,8 +708,9 @@ said so. Both statements could not be true.
 Threads are half the logical processors on purpose. llama.cpp scales with
 physical cores rather than SMT threads, and taking every core makes the rest of
 Windows stutter — the product's premise is that it runs while you work. For the
-same reason both sidecars run at below-normal priority on Windows: they still
-get every cycle nothing else wants, and the window in front never waits on them.
+same reason both sidecars run at below-normal priority on Windows, and ten
+steps of niceness below Intern on Linux: they still get every cycle nothing
+else wants, and the window in front never waits on them.
 
 A reply may run to 1,024 tokens. The grammar's closing brace ends it long
 before that - the corpus's longest is about 200 - but a contract whose opening
@@ -751,6 +753,14 @@ that: Tauri's exit events stop the pipeline while it is still whole, and the
 updater's before-exit hook — Tauri's `cleanup_before_exit`, reached through a
 guard parked in the app's resource table — does the same before the installer
 is launched. The job object is the backstop, not the plan.
+
+Linux has no job objects; there each child asks the kernel, before it runs
+anything, for `SIGKILL` when its parent ends (`PR_SET_PDEATHSIG`), which a
+`SIGKILL` of Intern itself sets off as surely as an orderly exit. The kernel's
+"parent" is the thread that started the child, not the process, so every child
+is started from one thread kept for nothing else, which ends only with Intern:
+started from a pipeline thread, a warm model server would die with that
+thread. A child that finds Intern already gone by then does not start at all.
 
 Launch never reads the model file. Tauri's setup hook asks only whether it is
 there at the size the manifest pins; the digest is checked behind the window,
@@ -879,7 +889,10 @@ operation record with a status, direction or stage a newer build wrote is left
 out of the listing rather than failing it.
 
 The key is stored in the operating system's credential store under Intern's
-name, never in the settings file, and never travels anywhere but the address
+name (on Linux, the desktop's Secret Service: GNOME Keyring or KWallet; a
+session without one, such as a headless VM, cannot keep a key, and says so
+with `SECRET_SERVICE_UNAVAILABLE`), never in the settings file, and never
+travels anywhere but the address
 that was configured — redirects are refused. Plain HTTP is accepted only to
 this machine, so a local server can be used without a certificate and a
 remote one cannot be used without one; the same judgement takes the machine's

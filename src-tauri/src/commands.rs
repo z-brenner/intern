@@ -1771,6 +1771,43 @@ fn starts_a_new_watch(previous: &AppSettings, settings: &AppSettings) -> bool {
             || previous.intake_my_folder != settings.intake_my_folder)
 }
 
+/// The folder llama-server and the parser worker are started from, which the
+/// worker also loads PDFium, ONNX Runtime, and the OCR models from.
+///
+/// The Windows installer puts them beside Intern itself. A Linux package keeps
+/// them out of `/usr/bin` - where `llama-server` would collide with a
+/// distribution's own, and could not find its CPU backends beside it - in a
+/// `runtime` folder among the app's resources: `/usr/lib/Intern/runtime` from
+/// the .deb, `$APPDIR/usr/lib/Intern/runtime` in an AppImage, and
+/// `target/<profile>/runtime` under `tauri dev`. There `INTERN_RUNTIME_DIR`
+/// names a runtime staged anywhere else, as it already does for the worker.
+#[cfg(windows)]
+fn sidecar_directory(_app: &AppHandle) -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
+#[cfg(not(windows))]
+fn sidecar_directory(app: &AppHandle) -> Option<PathBuf> {
+    runtime_directory_from(
+        std::env::var_os("INTERN_RUNTIME_DIR"),
+        app.path().resource_dir().ok(),
+    )
+}
+
+/// [`sidecar_directory`] off Windows, apart from the environment and the app.
+#[cfg_attr(windows, allow(dead_code))]
+fn runtime_directory_from(
+    named: Option<std::ffi::OsString>,
+    resources: Option<PathBuf>,
+) -> Option<PathBuf> {
+    named
+        .filter(|directory| !directory.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| resources.map(|resources| resources.join("runtime")))
+}
+
 impl AppState {
     pub fn initialize(app: &AppHandle) -> Result<Self, CommandError> {
         let data = app.path().app_local_data_dir().map_err(|_| CommandError {
@@ -1782,13 +1819,14 @@ impl AppState {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "local application data directory could not be created".into(),
         })?;
-        let executable_directory = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-            .ok_or_else(|| CommandError {
-                code: "SIDECAR_UNAVAILABLE".into(),
-                message: "application executable directory is unavailable".into(),
-            })?;
+        let executable_directory = sidecar_directory(app).ok_or_else(|| CommandError {
+            code: "SIDECAR_UNAVAILABLE".into(),
+            message: if cfg!(windows) {
+                "application executable directory is unavailable".into()
+            } else {
+                "application runtime directory is unavailable".into()
+            },
+        })?;
         let worker_name = if cfg!(windows) {
             "intern-worker.exe"
         } else {
@@ -2302,6 +2340,15 @@ const UPDATE_RELAUNCH_SECONDS: i64 = 60 * 60;
 struct UpdateRelaunch {
     arguments: Vec<String>,
     at: i64,
+}
+
+/// Whether this build can update itself. Signed updates are published for
+/// Windows alone: a Linux package is updated by installing the next release's
+/// package, and the updater is not registered there (lib.rs), so the window
+/// says so instead of asking a release manifest that names no Linux build.
+#[tauri::command]
+pub fn updates_supported() -> bool {
+    !cfg!(target_os = "linux")
 }
 
 /// Records, before an update installs, that the next launch is the
@@ -5375,6 +5422,34 @@ mod quit_tests {
             .find("std::process::exit(0)")
             .expect("the quit path exits");
         assert!(removal < exit, "the icon must go before the process does");
+    }
+}
+
+#[cfg(test)]
+mod runtime_directory_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::runtime_directory_from;
+
+    /// Off Windows the sidecars are in the resources' `runtime` folder, unless
+    /// `INTERN_RUNTIME_DIR` names another - and an empty one names nothing.
+    #[test]
+    fn the_runtime_is_the_resources_runtime_folder_unless_one_is_named() {
+        let resources = Some(PathBuf::from("/usr/lib/Intern"));
+        assert_eq!(
+            runtime_directory_from(None, resources.clone()).as_deref(),
+            Some(Path::new("/usr/lib/Intern/runtime"))
+        );
+        assert_eq!(
+            runtime_directory_from(Some("/opt/intern-runtime".into()), resources.clone())
+                .as_deref(),
+            Some(Path::new("/opt/intern-runtime"))
+        );
+        assert_eq!(
+            runtime_directory_from(Some("".into()), resources).as_deref(),
+            Some(Path::new("/usr/lib/Intern/runtime"))
+        );
+        assert_eq!(runtime_directory_from(None, None), None);
     }
 }
 
