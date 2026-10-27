@@ -10,10 +10,11 @@
 //!
 //! Folders are flattened into the input folder, with the same rules an add
 //! always had for what counts as a document. A copy is written under a
-//! dot-prefixed temporary name the scanner never looks at, checked against the
-//! original byte for byte, and only then published onto its real name with a
-//! rename that refuses to replace anything - so a crash leaves at most a hidden
-//! temporary file, never a half-written document for the scanner to find. A
+//! temporary name inside the input folder's own hidden `.intern/incoming`
+//! folder, which the scanner never enters, checked against the original byte
+//! for byte, and only then published onto its real name with a rename that
+//! refuses to replace anything - so a crash leaves at most a temporary file out
+//! of sight, never a half-written document for the scanner to find. A
 //! name already taken, on disk or by a document the queue has seen at that
 //! path before, gets " (2)", " (3)", and so on. A file that is already in the
 //! input folder is not copied again; it is handed to the queue where it is.
@@ -27,7 +28,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use intern_core::{FileSystem, LockRetry, is_transient_lock, set_hidden};
+use intern_core::{FileIdentity, FileSystem, LockRetry, is_transient_lock, set_hidden};
 use intern_queue::paths::{collect_supported_files, display_path};
 
 use crate::commands::{AddReportDto, CommandError, SkippedDocumentDto, document_name};
@@ -70,11 +71,39 @@ static COPY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// thousand copies of one name is not one a person is adding to by hand.
 const NAME_ATTEMPTS: u32 = 10_000;
 
-/// The two folders an add works between, both canonical.
+/// The two folders an add works between, both canonical, and the machine
+/// copying into them.
 #[derive(Clone, Debug)]
 pub(crate) struct Folders {
     pub(crate) input: PathBuf,
     pub(crate) output: Option<PathBuf>,
+    /// This machine's tag in the names of its temporary copies (see
+    /// `machine_tag`), so it only ever sweeps its own.
+    pub(crate) machine: String,
+}
+
+/// The part of a machine id a temporary copy's name carries. The id is
+/// random hex; sixteen characters of it tell this machine's copies from a
+/// teammate's in the same synced folder.
+pub(crate) fn machine_tag(machine_id: &str) -> String {
+    machine_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(16)
+        .collect()
+}
+
+/// Where copies are written before they are published: inside the input
+/// folder's `.intern` folder, which the scan never enters, on the same volume
+/// so publishing is a rename. The folder is hidden on Windows, so a copy a
+/// crash interrupts is out of sight from the moment it is created, and the
+/// published document - which is a different directory entry - never
+/// inherits the attribute.
+fn incoming_folder(input: &Path) -> io::Result<PathBuf> {
+    let incoming = input.join(".intern").join("incoming");
+    std::fs::create_dir_all(&incoming)?;
+    let _ = set_hidden(&incoming, true);
+    Ok(incoming)
 }
 
 /// What became of one document once it was in the input folder.
@@ -85,9 +114,9 @@ pub(crate) enum Arrival {
     /// The queue already had it.
     AlreadyQueued,
     /// In the input folder, but not this machine's to take yet, for the
-    /// reason given (`AWAITING_MICROSOFT`, `UPLOADER_UNVERIFIED`): the verified
+    /// reason given (`AWAITING_MICROSOFT`, `UPLOADER_OTHER`): the verified
     /// team Inbox admits a document only once Microsoft confirms who uploaded
-    /// it, and the watcher keeps asking.
+    /// it, and the watcher keeps asking. A held copy is never taken back.
     Held(String),
     /// Another computer watching the same folder is working on it.
     ClaimedElsewhere,
@@ -157,19 +186,23 @@ pub(crate) fn copy_into_input(
             continue;
         }
         let already = |fingerprint: &str| waiting(fingerprint) || copied_now.contains(fingerprint);
-        match copy_one(&source, &folders.input, filesystem, known, &already) {
+        match copy_one(&source, folders, filesystem, known, &already) {
             Ok(Copied::Already) => report.tally(name, Arrival::AlreadyQueued),
-            Ok(Copied::To(copy, fingerprint)) => {
+            Ok(Copied::To(copy, fingerprint, identity)) => {
                 let arrival = hand_off(&copy);
                 // A copy the queue refused, or one another computer took in the
                 // moment between, is taken back out, so the report is the
                 // truth: it is not counted as copied, the input folder is as it
                 // was, and adding the document again later does not leave a
-                // second copy beside a forgotten first.
-                if matches!(arrival, Arrival::Refused(_) | Arrival::ClaimedElsewhere) {
-                    let _ = std::fs::remove_file(&copy);
-                } else {
+                // second copy beside a forgotten first. Only what is provably
+                // still this copy is taken: in a synced folder the name can
+                // meanwhile hold a teammate's document, and deleting that would
+                // delete it for everyone.
+                let refused = matches!(arrival, Arrival::Refused(_) | Arrival::ClaimedElsewhere);
+                if !(refused && take_back(filesystem, &copy, &fingerprint, &identity)) {
                     report.copied = report.copied.map(|count| count.saturating_add(1));
+                }
+                if !refused {
                     copied_now.insert(fingerprint);
                 }
                 report.tally(name, arrival);
@@ -182,8 +215,8 @@ pub(crate) fn copy_into_input(
 
 /// What `copy_one` did.
 enum Copied {
-    /// Copied to this path, with this content fingerprint.
-    To(PathBuf, String),
+    /// Copied to this path, with this content fingerprint and file identity.
+    To(PathBuf, String, FileIdentity),
     /// A copy with exactly this content is already there.
     Already,
 }
@@ -210,20 +243,43 @@ pub(crate) fn queue_existing(
     Ok(report)
 }
 
-/// Removes copies a crash left part-written in the input folder: top-level
-/// files named exactly as `copy_temp_path` names them, stamped more than
-/// `STALE_COPY_AGE` before `now`. Anything else, however it is named, stays.
-pub(crate) fn sweep_stale_copies(input: &Path, now: SystemTime) {
-    let Ok(entries) = std::fs::read_dir(input) else {
+/// Takes back a copy that was not queued - but only while it is provably
+/// still the copy: the same file (by its identity on disk) with the same
+/// content. True when it was removed.
+fn take_back(
+    filesystem: &dyn FileSystem,
+    copy: &Path,
+    fingerprint: &str,
+    identity: &FileIdentity,
+) -> bool {
+    let Ok(mut locked) = filesystem.lock_for_delete(copy) else {
+        return false;
+    };
+    let ours = locked.identity().is_ok_and(|found| found == *identity)
+        && locked.hash().is_ok_and(|found| found == fingerprint);
+    ours && locked.delete().is_ok()
+}
+
+/// Removes copies a crash left part-written in the input folder: files in
+/// its incoming folder named exactly as `copy_temp_path` names them, written
+/// by this machine (`machine`), stamped more than `STALE_COPY_AGE` before
+/// `now`, by a process that is no longer running. The incoming folder is
+/// synced like the rest, so a teammate's copies are there too; their clocks
+/// and their copies are theirs, and are never judged here. Anything else,
+/// however it is named, stays.
+pub(crate) fn sweep_stale_copies(input: &Path, machine: &str, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(input.join(".intern").join("incoming")) else {
         return;
     };
     let now = now.duration_since(UNIX_EPOCH).unwrap_or_default();
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(stamped) = name.to_str().and_then(copy_stamp) else {
+        let Some(stamp) = name.to_str().and_then(copy_stamp) else {
             continue;
         };
-        if now.saturating_sub(stamped) >= STALE_COPY_AGE
+        if stamp.machine == machine
+            && !process_running(stamp.process)
+            && now.saturating_sub(stamp.started) >= STALE_COPY_AGE
             && entry.file_type().is_ok_and(|kind| kind.is_file())
         {
             let _ = std::fs::remove_file(entry.path());
@@ -231,26 +287,64 @@ pub(crate) fn sweep_stale_copies(input: &Path, now: SystemTime) {
     }
 }
 
-/// When a temporary copy named `name` was started, or `None` for any name
-/// `copy_temp_path` did not make: `.<name>.<process>.<nanoseconds>.<sequence>.intern-copy`.
-fn copy_stamp(name: &str) -> Option<Duration> {
+/// Whether the process that wrote a copy may still be writing it. Intern
+/// runs once per user, and a machine tag belongs to one user's data, so the
+/// only Intern that can be writing this machine's copies is this one; where
+/// the system says which processes are alive, that is asked as well.
+fn process_running(process: u32) -> bool {
+    if process == std::process::id() {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Path::new(&format!("/proc/{process}")).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+/// What a temporary copy's name says about it.
+#[derive(Debug, Eq, PartialEq)]
+struct CopyStamp {
+    machine: String,
+    process: u32,
+    started: Duration,
+}
+
+/// What a temporary copy named `name` says, or `None` for any name
+/// `copy_temp_path` did not make:
+/// `.<name>.<machine>.<process>.<nanoseconds>.<sequence>.intern-copy`.
+fn copy_stamp(name: &str) -> Option<CopyStamp> {
     let inner = name.strip_prefix('.')?.strip_suffix(COPY_SUFFIX)?;
-    let mut parts = inner.rsplitn(4, '.');
+    let mut parts = inner.rsplitn(5, '.');
     let sequence = parts.next()?;
     let nanos = parts.next()?;
     let process = parts.next()?;
+    let machine = parts.next()?;
     let original = parts.next()?;
     let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    if original.is_empty() || !digits(sequence) || !digits(process) || !digits(nanos) {
+    if original.is_empty()
+        || machine.is_empty()
+        || !machine.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !digits(sequence)
+        || !digits(process)
+        || !digits(nanos)
+    {
         return None;
     }
-    Some(Duration::from_nanos(nanos.parse::<u64>().ok()?))
+    Some(CopyStamp {
+        machine: machine.to_owned(),
+        process: process.parse().ok()?,
+        started: Duration::from_nanos(nanos.parse::<u64>().ok()?),
+    })
 }
 
-/// A unique, dot-prefixed, hidden-to-the-scan name in `input` to write a copy
-/// of `name` under before it is published, carrying at most
-/// `COPY_NAME_CHARS` of the name so a long one still fits.
-fn copy_temp_path(input: &Path, name: &OsStr, now: SystemTime) -> PathBuf {
+/// A unique, dot-prefixed name in `incoming` to write a copy of `name` under
+/// before it is published, carrying at most `COPY_NAME_CHARS` of the name so
+/// a long one still fits, and the copying machine's tag.
+fn copy_temp_path(incoming: &Path, name: &OsStr, machine: &str, now: SystemTime) -> PathBuf {
     let short: String = name
         .to_string_lossy()
         .chars()
@@ -261,8 +355,8 @@ fn copy_temp_path(input: &Path, name: &OsStr, now: SystemTime) -> PathBuf {
         .unwrap_or_default()
         .as_nanos();
     let sequence = COPY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    input.join(format!(
-        ".{short}.{}.{nanos}.{sequence}{COPY_SUFFIX}",
+    incoming.join(format!(
+        ".{short}.{machine}.{}.{nanos}.{sequence}{COPY_SUFFIX}",
         std::process::id()
     ))
 }
@@ -280,7 +374,7 @@ impl AddReportDto {
                 self.held = self.held.saturating_add(1);
                 // One reason for the batch: waiting for Microsoft is the
                 // usual one, and any other outranks it.
-                if self.held_reason.as_deref() != Some(UPLOADER_UNVERIFIED) {
+                if matches!(self.held_reason.as_deref(), None | Some(AWAITING_MICROSOFT)) {
                     self.held_reason = Some(reason);
                 }
             }
@@ -294,17 +388,16 @@ impl AddReportDto {
 /// numbered one free, and returns where the copy is - or `Already` when a
 /// copy of exactly this content is already there (`already`).
 ///
-/// On Windows the temporary copy is also hidden, since a leading dot hides
-/// nothing in Explorer, and a copy a crash abandoned would otherwise sit in
-/// view - and be uploaded by a sync client - until the next sweep; the
-/// published copy is shown again.
+/// The copy is written in the incoming folder (see `incoming_folder`) and
+/// published into the input folder with a rename that replaces nothing.
 fn copy_one(
     source: &Path,
-    input: &Path,
+    folders: &Folders,
     filesystem: &dyn FileSystem,
     known: &dyn Fn(&Path) -> bool,
     already: &dyn Fn(&str) -> bool,
 ) -> Result<Copied, String> {
+    let input = folders.input.as_path();
     let name = source.file_name().ok_or_else(|| COPY_FAILED.to_owned())?;
     let retry = LockRetry::default();
     let original = retry
@@ -313,7 +406,8 @@ fn copy_one(
     if already(&original) {
         return Ok(Copied::Already);
     }
-    let temporary = copy_temp_path(input, name, SystemTime::now());
+    let incoming = incoming_folder(input).map_err(|_| COPY_FAILED.to_owned())?;
+    let temporary = copy_temp_path(&incoming, name, &folders.machine, SystemTime::now());
     let mut copy = retry
         .run(|| filesystem.copy_new_locked(source, &temporary))
         .map_err(|error| {
@@ -337,22 +431,19 @@ fn copy_one(
             return Err(COPY_FAILED.into());
         }
     }
+    let Ok(identity) = copy.identity() else {
+        let _ = copy.delete();
+        return Err(COPY_FAILED.into());
+    };
     // The handle shares reading only, and the rename below needs it gone.
     drop(copy);
-    let _ = set_hidden(&temporary, true);
     for index in 1..=NAME_ATTEMPTS {
         let candidate = input.join(numbered(name, index));
         if filesystem.exists(&candidate) || known(&candidate) {
             continue;
         }
         match retry.run(|| filesystem.rename_no_replace(&temporary, &candidate)) {
-            Ok(()) => {
-                // A copy left hidden is still a document - the scan does not
-                // look at the attribute - so failing to show it is no reason
-                // to refuse the add.
-                let _ = set_hidden(&candidate, false);
-                return Ok(Copied::To(candidate, original));
-            }
+            Ok(()) => return Ok(Copied::To(candidate, original, identity)),
             // Taken between the look and the rename, or by a name that only
             // differs in case: the next number.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -414,13 +505,17 @@ mod tests {
         Folders {
             input,
             output: Some(output),
+            machine: "here0123456789ab".into(),
         }
     }
 
+    /// The documents in a folder: what a person sees, without Intern's own
+    /// `.intern` folder.
     fn names(folder: &Path) -> Vec<String> {
         let mut names = std::fs::read_dir(folder)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with('.'))
             .collect::<Vec<_>>();
         names.sort();
         names
@@ -647,6 +742,7 @@ mod tests {
         let folders = Folders {
             input,
             output: Some(root.clone()),
+            machine: "here0123456789ab".into(),
         };
         let report = copy_into_input(
             &[inside],
@@ -738,30 +834,143 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// A copy a crash left behind is swept once it is stale; a copy being
-    /// written now, a filing's own temporary file, and anything else that
-    /// merely starts with a dot stay.
+    /// A copy a crash left behind on this machine is swept once it is stale.
+    /// A teammate's copy in the same synced folder - whatever its stamp says
+    /// against this machine's clock - a copy this process is writing, a
+    /// filing's own temporary file, and anything else that merely starts with
+    /// a dot all stay.
     #[test]
-    fn only_stale_copies_of_intern_s_own_naming_are_swept() {
+    fn only_this_machine_s_stale_copies_are_swept() {
         let root = folder("copy-sweep");
+        let incoming = root.join(".intern").join("incoming");
+        std::fs::create_dir_all(&incoming).unwrap();
         let now = std::time::SystemTime::now();
-        let stale = super::copy_temp_path(
-            &root,
-            "Lease.pdf".as_ref(),
-            now - std::time::Duration::from_secs(2 * 60 * 60),
+        let hours_ago = (now - std::time::Duration::from_secs(2 * 60 * 60))
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        // 3999999999 is no running process.
+        let stale = write(
+            &incoming,
+            &format!(".Lease.pdf.here0123456789ab.3999999999.{hours_ago}.0.intern-copy"),
+            b"half",
         );
-        let fresh = super::copy_temp_path(&root, "Lease.pdf".as_ref(), now);
-        std::fs::write(&stale, b"half").unwrap();
+        let teammate = write(
+            &incoming,
+            &format!(".Lease.pdf.elsewhere0000000.3999999999.{hours_ago}.0.intern-copy"),
+            b"theirs",
+        );
+        let running = write(
+            &incoming,
+            &format!(
+                ".Lease.pdf.here0123456789ab.{}.{hours_ago}.1.intern-copy",
+                std::process::id()
+            ),
+            b"being written",
+        );
+        let fresh = super::copy_temp_path(&incoming, "Lease.pdf".as_ref(), "here0123456789ab", now);
         std::fs::write(&fresh, b"half").unwrap();
-        let filing = write(&root, ".Lease.pdf.12.34.0.intern-tmp", b"a filing's temp");
-        let dotted = write(&root, ".Lease.pdf.12.34.0.intern-copy.bak", b"not ours");
-        let odd = write(&root, ".x.y.z.intern-copy", b"not numeric");
-        super::sweep_stale_copies(&root, now);
+        let filing = write(
+            &incoming,
+            ".Lease.pdf.12.34.0.intern-tmp",
+            b"a filing's temp",
+        );
+        let dotted = write(
+            &incoming,
+            ".Lease.pdf.here0123456789ab.1.2.0.intern-copy.bak",
+            b"not ours",
+        );
+        let odd = write(&incoming, ".x.y.z.w.intern-copy", b"not numeric");
+        super::sweep_stale_copies(&root, "here0123456789ab", now);
         assert!(!stale.exists());
+        assert!(teammate.exists(), "a teammate's copy is theirs");
+        assert!(running.exists(), "this process may still be writing it");
         assert!(fresh.exists());
         assert!(filing.exists());
         assert!(dotted.exists());
         assert!(odd.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A refused copy is taken back only while it is provably the copy. In a
+    /// synced folder the name can meanwhile hold a teammate's document - here,
+    /// written in its place while the hand-over ran - and deleting that would
+    /// delete it for everyone.
+    #[test]
+    fn a_refused_copy_is_taken_back_only_while_it_is_still_the_copy() {
+        let root = folder("copy-replaced");
+        let folders = folders(&root);
+        let source = write(&root, "lease.pdf", b"%PDF-1.7 ours");
+        let report = copy_into_input(
+            &[source],
+            &folders,
+            &StdFileSystem,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &|path| {
+                std::fs::remove_file(path).unwrap();
+                std::fs::write(path, b"%PDF-1.7 a teammate's document").unwrap();
+                Arrival::Refused("UPLOADER_UNVERIFIED".into())
+            },
+        );
+        assert_eq!(
+            std::fs::read(folders.input.join("lease.pdf")).unwrap(),
+            b"%PDF-1.7 a teammate's document"
+        );
+        assert_eq!(
+            report.copied,
+            Some(1),
+            "it is still there, so it is not taken back"
+        );
+
+        // The same bytes, but another file: a teammate saved the same scan
+        // under the same name. Still not this copy.
+        let again = write(&root, "deed.pdf", b"%PDF-1.7 the same deed");
+        let report = copy_into_input(
+            &[again],
+            &folders,
+            &StdFileSystem,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &|path| {
+                let theirs = path.with_file_name("theirs.tmp");
+                std::fs::write(&theirs, b"%PDF-1.7 the same deed").unwrap();
+                std::fs::rename(&theirs, path).unwrap();
+                Arrival::Refused("UPLOADER_UNVERIFIED".into())
+            },
+        );
+        assert!(folders.input.join("deed.pdf").exists());
+        assert_eq!(report.copied, Some(1));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The copy is written inside the input folder's own `.intern` folder and
+    /// published from there, so nothing half-written ever sits among the
+    /// documents, and the published document is an ordinary file.
+    #[test]
+    fn a_copy_is_written_out_of_sight_and_published_among_the_documents() {
+        let root = folder("copy-incoming");
+        let folders = folders(&root);
+        let source = write(&root, "a.pdf", b"%PDF-1.7 a");
+        let seen = RefCell::new(Vec::new());
+        copy_into_input(
+            &[source],
+            &folders,
+            &StdFileSystem,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &|path| {
+                seen.borrow_mut().push(path.to_path_buf());
+                Arrival::Added
+            },
+        );
+        assert_eq!(*seen.borrow(), vec![folders.input.join("a.pdf")]);
+        let incoming = folders.input.join(".intern").join("incoming");
+        assert!(incoming.is_dir());
+        assert_eq!(std::fs::read_dir(incoming).unwrap().count(), 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 

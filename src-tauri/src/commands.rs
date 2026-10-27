@@ -43,7 +43,8 @@ use intern_queue::{
 
 use crate::input_folder::{
     AWAITING_MICROSOFT, Arrival, Folders, INPUT_FOLDER_NOT_SET, INPUT_FOLDER_UNAVAILABLE,
-    UPLOADER_OTHER, UPLOADER_UNVERIFIED, copy_into_input, queue_existing, sweep_stale_copies,
+    UPLOADER_OTHER, UPLOADER_UNVERIFIED, copy_into_input, machine_tag, queue_existing,
+    sweep_stale_copies,
 };
 
 /// A sync client's conflict copy, which the watcher never takes.
@@ -1885,6 +1886,7 @@ impl AppState {
                 code: "APP_DATA_UNAVAILABLE".into(),
                 message: "machine identity could not be created".into(),
             })?;
+        let pending_launch = PendingLaunch::load(data.join(PENDING_LAUNCH));
         let state = Self {
             pipeline,
             settings,
@@ -1902,7 +1904,7 @@ impl AppState {
             settings_gate: Mutex::new(()),
             sharepoint_activation: AtomicBool::new(false),
             launch_reports: LaunchReports::default(),
-            pending_launch: PendingLaunch::default(),
+            pending_launch,
         };
         state.refresh_hosted_active(&startup_settings);
         if state.setup.model_ready.load(Ordering::SeqCst) {
@@ -1932,7 +1934,13 @@ impl AppState {
     /// input folder is refused rather than processing anything where it is.
     fn input_folders(&self) -> Result<Folders, CommandError> {
         let settings = self.settings.load()?;
-        input_folders_for(&settings)
+        let machine = self
+            .identity
+            .lock()
+            .map_err(|_| intake_state_conflict())?
+            .id
+            .clone();
+        input_folders_for(&settings, &machine)
     }
 
     /// The running watcher's hand-over handle, taken under the intake lock
@@ -1944,6 +1952,19 @@ impl AppState {
             .lock()
             .ok()
             .and_then(|watcher| watcher.as_ref().map(IntakeWatcher::handle))
+    }
+
+    /// The hand-over handle of the watcher running now, taken afresh for each
+    /// document an add hands over: a copy can take minutes, a settings save
+    /// restarts the watcher meanwhile, and a handle kept from before would
+    /// claim the document for a scan loop that has stopped - one whose
+    /// adoption nobody drains. A handle whose watcher stopped in the moment
+    /// after it was taken is taken once more.
+    fn live_intake_handle(&self) -> Option<IntakeHandle> {
+        match self.intake_handle() {
+            Some(handle) if !handle.is_running() => self.intake_handle(),
+            handle => handle,
+        }
     }
 
     /// Tells setup whether a hosted model is chosen and able to answer, so
@@ -1979,8 +2000,13 @@ impl AppState {
         if settings.intake_enabled {
             match canonical_folder(Path::new(&settings.intake_folder)) {
                 Ok(folder) => {
-                    // Copies a crash left part-written, from an earlier run.
-                    sweep_stale_copies(&folder, std::time::SystemTime::now());
+                    // Copies a crash left part-written, from an earlier run
+                    // on this machine. Never a teammate's.
+                    sweep_stale_copies(
+                        &folder,
+                        &machine_tag(&identity.id),
+                        std::time::SystemTime::now(),
+                    );
                     let config = intake_config(folder, settings, &self.data_dir, first_look);
                     let host = Arc::new(PipelineIntakeHost::new(
                         Arc::clone(&self.pipeline),
@@ -2205,7 +2231,13 @@ fn add_launch_documents(
     add: impl FnOnce(&[PathBuf]) -> Result<AddReportDto, CommandError>,
 ) -> Option<AddReportDto> {
     let documents = launch_documents(arguments, cwd);
-    match add(&documents) {
+    let outcome = add(&documents);
+    if !matches!(&outcome, Err(error) if error.code == INPUT_FOLDER_NOT_SET) {
+        // Sent again once there were folders, and dealt with now: what was
+        // kept of these from before setup is not copied a second time.
+        pending.forget(&documents);
+    }
+    match outcome {
         Ok(report) => Some(report),
         // Before setup has chosen the folders: kept, and copied once it has.
         Err(error) if error.code == INPUT_FOLDER_NOT_SET => {
@@ -2266,58 +2298,157 @@ pub(crate) fn queue_launch_documents(app: &AppHandle, arguments: Vec<String>, cw
     });
 }
 
+/// Where the documents launches named before setup are kept, in the app's
+/// own data.
+const PENDING_LAUNCH: &str = "pending-launch.json";
+
 /// Documents a launch named before the folders were chosen: "Send to >
 /// Intern" on a fresh install, while setup is on screen. There is no input
 /// folder to copy them into yet, and refusing them left a report telling the
 /// person to set up folders they were setting up. They wait here instead and
-/// are copied once a save gives Intern an input folder.
+/// are copied once a save gives Intern an input folder - or, if that save
+/// came and went without them, the next time the window asks for what
+/// launches came to. The list is kept in the app's own data, so closing
+/// Intern before setup is finished does not lose them.
 #[derive(Debug, Default)]
-pub(crate) struct PendingLaunch(Mutex<Vec<PathBuf>>);
+pub(crate) struct PendingLaunch {
+    documents: Mutex<Vec<PathBuf>>,
+    /// Where the list is kept; `None` keeps it in memory only.
+    file: Option<PathBuf>,
+    /// Held while the list is copied, so it is never copied twice at once.
+    copying: Mutex<()>,
+}
 
 impl PendingLaunch {
+    /// The list kept in `file`, or an empty one kept there from now on.
+    pub(crate) fn load(file: PathBuf) -> Self {
+        let documents = std::fs::read(&file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<PathBuf>>(&bytes).ok())
+            .unwrap_or_default();
+        Self {
+            documents: Mutex::new(documents),
+            file: Some(file),
+            copying: Mutex::new(()),
+        }
+    }
+
     fn keep(&self, documents: &[PathBuf]) {
-        if let Ok(mut pending) = self.0.lock() {
+        if let Ok(mut pending) = self.documents.lock() {
             for document in documents {
                 if !pending.contains(document) {
                     pending.push(document.clone());
                 }
             }
+            self.save(&pending);
         }
     }
 
-    fn take(&self) -> Vec<PathBuf> {
-        self.0
+    fn forget(&self, documents: &[PathBuf]) {
+        if let Ok(mut pending) = self.documents.lock() {
+            let before = pending.len();
+            pending.retain(|document| !documents.contains(document));
+            if pending.len() != before {
+                self.save(&pending);
+            }
+        }
+    }
+
+    fn documents(&self) -> Vec<PathBuf> {
+        self.documents
             .lock()
-            .map(|mut pending| std::mem::take(&mut *pending))
+            .map(|pending| pending.clone())
             .unwrap_or_default()
     }
 
     fn is_empty(&self) -> bool {
-        self.0
+        self.documents
             .lock()
             .map(|pending| pending.is_empty())
             .unwrap_or(true)
     }
+
+    /// Writes the list beside the app's other data, whole or not at all.
+    fn save(&self, documents: &[PathBuf]) {
+        let Some(file) = &self.file else {
+            return;
+        };
+        let written = if documents.is_empty() {
+            match std::fs::remove_file(file) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            }
+        } else {
+            let temporary = file.with_extension("json.tmp");
+            serde_json::to_vec(documents)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| std::fs::write(&temporary, bytes))
+                .and_then(|()| std::fs::rename(&temporary, file))
+        };
+        if let Err(error) = written {
+            crate::startup::log_line(&format!(
+                "documents a launch named could not be kept for after setup: {:?}",
+                error.kind()
+            ));
+        }
+    }
 }
 
-/// Copies what launches named before there was an input folder, now that a
-/// save has made one, and holds the report for the window, whatever it says:
-/// the person sent these before setup, and this is the first they hear of
-/// them.
+/// Copies what launches named before there was an input folder with `add`,
+/// and returns what came of it for the window, whatever it says: the person
+/// sent these before setup, and this is the first they hear of them. Still no
+/// input folder: kept for the next try. Any other failure names every
+/// document with the reason, as a launch does, and lets them go.
+fn copy_pending(
+    pending: &PendingLaunch,
+    add: impl FnOnce(&[PathBuf]) -> Result<AddReportDto, CommandError>,
+) -> Option<AddReportDto> {
+    // Another caller is copying them right now.
+    let Ok(_copying) = pending.copying.try_lock() else {
+        return None;
+    };
+    let documents = pending.documents();
+    if documents.is_empty() {
+        return None;
+    }
+    let report = match add(&documents) {
+        Err(error) if error.code == INPUT_FOLDER_NOT_SET => return None,
+        Ok(report) => report,
+        Err(error) => {
+            crate::startup::log_line(&format!(
+                "documents a launch named before setup could not be added: {}",
+                error.code
+            ));
+            refused_launch(&documents, &error.code)
+        }
+    };
+    pending.forget(&documents);
+    Some(report)
+}
+
+/// Copies what launches named before there was an input folder, now that
+/// there may be one, and holds the report for the window. Blocking.
 fn copy_pending_launch(state: &AppState) {
-    if state.pending_launch.is_empty() || state.input_folders().is_err() {
+    if let Some(report) = copy_pending(&state.pending_launch, |documents| {
+        copy_and_wake(state, documents)
+    }) && state.launch_reports.keep(report)
+    {
+        let _ = state.app.emit(LAUNCH_REPORT_EVENT, ());
+    }
+}
+
+/// Tries the documents launches named before setup again, off the calling
+/// thread, when there are any.
+fn retry_pending_launch(state: &AppState) {
+    if state.pending_launch.is_empty() {
         return;
     }
-    let documents = state.pending_launch.take();
-    match copy_and_wake(state, &documents) {
-        Ok(report) => {
-            if state.launch_reports.keep(report) {
-                let _ = state.app.emit(LAUNCH_REPORT_EVENT, ());
-            }
+    let app = state.app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(state) = app.try_state::<AppState>() {
+            copy_pending_launch(&state);
         }
-        // Raced a save that took the folder away again: keep them for the next.
-        Err(_) => state.pending_launch.keep(&documents),
-    }
+    });
 }
 
 /// Says the window has a launch report to take.
@@ -2382,6 +2513,9 @@ impl LaunchReports {
 pub fn queue_take_launch_report(
     state: State<'_, AppState>,
 ) -> Result<Option<AddReportDto>, CommandError> {
+    // The window asks on opening and whenever a report is ready: the moment
+    // to copy what launches sent before setup, if a save has not already.
+    retry_pending_launch(&state);
     Ok(state.launch_reports.take())
 }
 
@@ -2747,13 +2881,12 @@ fn enqueue_arrival(pipeline: &Pipeline, path: &Path) -> Result<Arrival, String> 
 /// here. Blocking - every file is read twice and written once.
 fn copy_and_wake(state: &AppState, inputs: &[PathBuf]) -> Result<AddReportDto, CommandError> {
     let folders = state.input_folders()?;
-    let watcher = state.intake_handle();
     let report = copy_with_queue(
         &state.pipeline,
         inputs,
         &folders,
-        &|path| excluded_by_watcher(watcher.as_ref(), path),
-        &|path| hand_off(&state.pipeline, watcher.as_ref(), path),
+        &|path| excluded_by_watcher(state.live_intake_handle().as_ref(), path),
+        &|path| hand_off(&state.pipeline, state.live_intake_handle().as_ref(), path),
     );
     Ok(woken(report, || state.schedule()))
 }
@@ -2786,15 +2919,18 @@ fn hand_off(pipeline: &Pipeline, watcher: Option<&IntakeHandle>, path: &Path) ->
     }
 }
 
-/// What a hand-over came to, as an add reports it. Only "Microsoft could not
+/// What a hand-over came to, as an add reports it. "Microsoft could not
 /// answer yet" is held: that is a copy OneDrive has not uploaded, and the
-/// scans will ask again. A verdict that the document is someone else's, or
-/// that its uploader cannot be known, is the document's reason for being
-/// left out - and a copy left out that way is taken back out of the folder.
+/// scans will ask again. So is "Microsoft says someone else uploaded it": in
+/// the shared Inbox that name can be a teammate's document by now, so the
+/// copy is left where it is, never taken back, and the person is told it
+/// waits. A verdict that its uploader cannot be known is the document's
+/// reason for being left out - and a copy left out that way is taken back
+/// out of the folder, if it is still provably the copy.
 fn arrival_of(outcome: HandOver<Arrival>) -> Arrival {
     match outcome {
         HandOver::Queued(arrival) => arrival,
-        HandOver::Held(IntakeAdmission::Other) => Arrival::Refused(UPLOADER_OTHER.into()),
+        HandOver::Held(IntakeAdmission::Other) => Arrival::Held(UPLOADER_OTHER.into()),
         HandOver::Held(IntakeAdmission::Retryable) => Arrival::Held(AWAITING_MICROSOFT.into()),
         HandOver::Held(_) => Arrival::Refused(UPLOADER_UNVERIFIED.into()),
         HandOver::ClaimedElsewhere => Arrival::ClaimedElsewhere,
@@ -2883,11 +3019,10 @@ pub async fn intake_queue_existing(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let folders = state.input_folders()?;
-        let watcher = state.intake_handle();
         let report = queue_existing(
             &folders.input,
-            &|path| excluded_by_watcher(watcher.as_ref(), path),
-            &|path| hand_off(&state.pipeline, watcher.as_ref(), path),
+            &|path| excluded_by_watcher(state.live_intake_handle().as_ref(), path),
+            &|path| hand_off(&state.pipeline, state.live_intake_handle().as_ref(), path),
         )?;
         Ok(woken(report, || state.schedule()))
     })
@@ -2898,7 +3033,7 @@ pub async fn intake_queue_existing(
 /// The input and output folders `settings` name, canonical. Refused with
 /// `INPUT_FOLDER_NOT_SET` when no input folder is being watched, and with
 /// `INPUT_FOLDER_UNAVAILABLE` when it cannot be reached.
-fn input_folders_for(settings: &AppSettings) -> Result<Folders, CommandError> {
+fn input_folders_for(settings: &AppSettings, machine_id: &str) -> Result<Folders, CommandError> {
     if !settings.intake_enabled || settings.intake_folder.trim().is_empty() {
         return Err(CommandError {
             code: INPUT_FOLDER_NOT_SET.into(),
@@ -2914,7 +3049,11 @@ fn input_folders_for(settings: &AppSettings) -> Result<Folders, CommandError> {
     let output = Some(settings.destination.trim())
         .filter(|destination| !destination.is_empty())
         .and_then(|destination| canonical_folder(Path::new(destination)).ok());
-    Ok(Folders { input, output })
+    Ok(Folders {
+        input,
+        output,
+        machine: machine_tag(machine_id),
+    })
 }
 
 #[tauri::command]
@@ -3456,7 +3595,7 @@ fn save_settings_with_microsoft_protection(
     protect_microsoft: bool,
 ) -> Result<(), CommandError> {
     let previous = state.load_settings().unwrap_or_default();
-    validate_intake_settings(&mut settings, &previous.intake_folder, &|path| {
+    validate_intake_settings(&mut settings, &previous, &|path| {
         state.canonical_folder(path).ok()
     })?;
     // With intake enabled the destination was already canonicalized (with the
@@ -3725,12 +3864,13 @@ fn apply_autostart(app: &AppHandle, enabled: bool) -> Result<(), CommandError> {
 /// the intake folder. Canonical forms are written back so later comparisons
 /// and the containment check are component-wise, never string-prefix.
 /// `canonicalize` is `canonical_folder` in production and a seam for tests;
-/// `stored` is the intake folder as it is saved now.
+/// `previous` is the settings as they are saved now.
 fn validate_intake_settings(
     settings: &mut AppSettings,
-    stored: &str,
+    previous: &AppSettings,
     canonicalize: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> Result<(), CommandError> {
+    let stored = previous.intake_folder.as_str();
     if settings.intake_folder.trim().is_empty() {
         if settings.intake_enabled {
             return Err(CommandError {
@@ -3780,7 +3920,14 @@ fn validate_intake_settings(
     // input folder inside the output folder sits where layouts make folders
     // and undo moves documents back to, and an add's "already filed" and
     // "already in the input folder" would both be true of the same file.
-    if Path::new(&settings.intake_folder).starts_with(&destination) {
+    // Asked only of a save that chooses the folders - watching turned on, or
+    // either folder changed. Installs from before the rule can have an Inbox
+    // inside the folder they file to, and must still be able to save their
+    // other settings; an add copes with that layout (see `copy_into_input`).
+    let chooses_folders = !previous.intake_enabled
+        || previous.intake_folder != settings.intake_folder
+        || Path::new(&previous.destination) != destination;
+    if chooses_folders && Path::new(&settings.intake_folder).starts_with(&destination) {
         return Err(CommandError {
             code: "INTAKE_INSIDE_DESTINATION".into(),
             message: "the intake folder cannot live inside the destination".into(),
@@ -4463,6 +4610,12 @@ mod intake_tests {
         }
     }
 
+    /// Settings as saved before a save: watching `intake_folder` (when it is
+    /// not blank) and filing into `destination`.
+    fn saved(intake_folder: &str, destination: &str) -> AppSettings {
+        settings(!intake_folder.is_empty(), intake_folder, destination)
+    }
+
     fn error_code(result: Result<(), super::CommandError>) -> String {
         result.expect_err("validation should fail").code
     }
@@ -4472,12 +4625,20 @@ mod intake_tests {
         let fs = canonicalizer(&[("/out", "/out")]);
         let mut blank = settings(true, "  ", "/out");
         assert_eq!(
-            error_code(validate_intake_settings(&mut blank, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut blank,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
         let mut missing = settings(true, "/gone", "/out");
         assert_eq!(
-            error_code(validate_intake_settings(&mut missing, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut missing,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
     }
@@ -4529,12 +4690,20 @@ mod intake_tests {
         let fs = canonicalizer(&[("/in", "/in")]);
         let mut blank = settings(true, "/in", "");
         assert_eq!(
-            error_code(validate_intake_settings(&mut blank, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut blank,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_NEEDS_DESTINATION"
         );
         let mut missing = settings(true, "/in", "/gone");
         assert_eq!(
-            error_code(validate_intake_settings(&mut missing, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut missing,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_NEEDS_DESTINATION"
         );
     }
@@ -4549,19 +4718,27 @@ mod intake_tests {
         ]);
         let mut equal = settings(true, "/a/b", "/a/b");
         assert_eq!(
-            error_code(validate_intake_settings(&mut equal, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut equal,
+                &AppSettings::default(),
+                &fs
+            )),
             "DESTINATION_INSIDE_INTAKE"
         );
         let mut inside = settings(true, "/a/b", "/a/b/c");
         assert_eq!(
-            error_code(validate_intake_settings(&mut inside, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut inside,
+                &AppSettings::default(),
+                &fs
+            )),
             "DESTINATION_INSIDE_INTAKE"
         );
         // `/a/bc` shares the string prefix `/a/b` but is a sibling, not a child.
         let mut sibling = settings(true, "/a/b", "/a/bc");
-        assert!(validate_intake_settings(&mut sibling, "", &fs).is_ok());
+        assert!(validate_intake_settings(&mut sibling, &AppSettings::default(), &fs).is_ok());
         let mut outside = settings(true, "/a/b", "/a/other");
-        assert!(validate_intake_settings(&mut outside, "", &fs).is_ok());
+        assert!(validate_intake_settings(&mut outside, &AppSettings::default(), &fs).is_ok());
     }
 
     /// Neither folder may hold the other: an input folder inside the output
@@ -4575,11 +4752,44 @@ mod intake_tests {
         ]);
         let mut nested = settings(true, "/docs/inbox", "/docs");
         assert_eq!(
-            error_code(validate_intake_settings(&mut nested, "", &fs)),
+            error_code(validate_intake_settings(
+                &mut nested,
+                &AppSettings::default(),
+                &fs
+            )),
             "INTAKE_INSIDE_DESTINATION"
         );
         let mut sibling = settings(true, "/docs/inbox", "/docsx");
-        assert!(validate_intake_settings(&mut sibling, "", &fs).is_ok());
+        assert!(validate_intake_settings(&mut sibling, &AppSettings::default(), &fs).is_ok());
+    }
+
+    /// An install from before the rule, watching an Inbox inside the folder it
+    /// files to, can still save its other settings: the rule is asked only of
+    /// a save that chooses the folders. Moving either folder, or turning
+    /// watching back on, is choosing them.
+    #[test]
+    fn an_existing_nested_pair_saves_until_the_folders_are_chosen_again() {
+        let fs = canonicalizer(&[
+            ("/docs", "/docs"),
+            ("/docs/inbox", "/docs/inbox"),
+            ("/docs/other", "/docs/other"),
+        ]);
+        let stored = saved("/docs/inbox", "/docs");
+        let mut unchanged = settings(true, "/docs/inbox", "/docs");
+        unchanged.machine_label = "Front desk".into();
+        assert!(validate_intake_settings(&mut unchanged, &stored, &fs).is_ok());
+        let mut moved = settings(true, "/docs/other", "/docs");
+        assert_eq!(
+            error_code(validate_intake_settings(&mut moved, &stored, &fs)),
+            "INTAKE_INSIDE_DESTINATION"
+        );
+        let mut off = stored.clone();
+        off.intake_enabled = false;
+        let mut back_on = settings(true, "/docs/inbox", "/docs");
+        assert_eq!(
+            error_code(validate_intake_settings(&mut back_on, &off, &fs)),
+            "INTAKE_INSIDE_DESTINATION"
+        );
     }
 
     #[test]
@@ -4589,13 +4799,15 @@ mod intake_tests {
             ("/out-entered", "/out/canonical"),
         ]);
         let mut enabled = settings(true, "/in-entered", "/out-entered");
-        validate_intake_settings(&mut enabled, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut enabled, &AppSettings::default(), &fs)
+            .expect("valid settings");
         assert_eq!(enabled.intake_folder, "/in/canonical");
         assert_eq!(enabled.destination, "/out/canonical");
         // A non-blank intake folder is canonicalized even while disabled, so
         // the stored form stays the one every later comparison uses.
         let mut disabled = settings(false, "/in-entered", "");
-        validate_intake_settings(&mut disabled, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut disabled, &AppSettings::default(), &fs)
+            .expect("valid settings");
         assert_eq!(disabled.intake_folder, "/in/canonical");
     }
 
@@ -4607,17 +4819,22 @@ mod intake_tests {
         // with intake must go through, and the folder keeps the spelling
         // already stored - still canonical for when intake is turned back on.
         let mut disabled = settings(false, "//server/share", "");
-        validate_intake_settings(&mut disabled, "/in/canonical", &fs).expect("valid settings");
+        validate_intake_settings(&mut disabled, &saved("/in/canonical", ""), &fs)
+            .expect("valid settings");
         assert_eq!(disabled.intake_folder, "/in/canonical");
         // With nothing stored yet, what the person chose is kept rather than
         // silently cleared.
         let mut fresh = settings(false, "//server/share", "");
-        validate_intake_settings(&mut fresh, "", &fs).expect("valid settings");
+        validate_intake_settings(&mut fresh, &AppSettings::default(), &fs).expect("valid settings");
         assert_eq!(fresh.intake_folder, "//server/share");
         // Turning intake on is still refused: that folder would be watched.
         let mut enabled = settings(true, "//server/share", "/out-entered");
         assert_eq!(
-            error_code(validate_intake_settings(&mut enabled, "/in/canonical", &fs)),
+            error_code(validate_intake_settings(
+                &mut enabled,
+                &saved("/in/canonical", ""),
+                &fs
+            )),
             "INTAKE_FOLDER_MISSING"
         );
     }
@@ -5213,6 +5430,7 @@ mod add_report_tests {
         Folders {
             input: input.canonicalize().unwrap(),
             output: Some(output.canonicalize().unwrap()),
+            machine: "here0123456789ab".into(),
         }
     }
 
@@ -5302,18 +5520,18 @@ mod add_report_tests {
     fn an_add_without_an_input_folder_is_refused() {
         let mut settings = AppSettings::default();
         assert_eq!(
-            input_folders_for(&settings).unwrap_err().code,
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
             "INPUT_FOLDER_NOT_SET"
         );
         settings.intake_folder = "/nowhere/at/all/Input".into();
         assert_eq!(
-            input_folders_for(&settings).unwrap_err().code,
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
             "INPUT_FOLDER_NOT_SET",
             "a folder that is not being watched is not an input folder"
         );
         settings.intake_enabled = true;
         assert_eq!(
-            input_folders_for(&settings).unwrap_err().code,
+            input_folders_for(&settings, "machine-id").unwrap_err().code,
             "INPUT_FOLDER_UNAVAILABLE"
         );
         let root = folder("input-folders");
@@ -5325,9 +5543,13 @@ mod add_report_tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let found = input_folders_for(&settings).unwrap();
+        let found = input_folders_for(&settings, "machine-id").unwrap();
         assert_eq!(found.input, folders.input);
         assert_eq!(found.output, folders.output);
+        assert_eq!(
+            found.machine, "machineid",
+            "the tag its temporary copies carry"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -5349,10 +5571,13 @@ mod add_report_tests {
         assert_eq!(woken, report);
     }
 
-    /// Only "Microsoft could not answer yet" holds a copy; a verdict is the
-    /// document's reason for being left out.
+    /// "Microsoft could not answer yet" and "Microsoft says someone else
+    /// uploaded it" hold a copy - in the shared Inbox the second can be a
+    /// teammate's document under that name, and it is never taken back. Only
+    /// an uploader that cannot be known is the document's reason for being
+    /// left out.
     #[test]
-    fn a_hand_over_held_by_a_verdict_is_a_refusal_and_only_a_wait_is_held() {
+    fn a_hand_over_held_for_microsoft_s_word_or_another_uploader_is_held() {
         use intern_intake::{HandOver, IntakeAdmission};
         assert_eq!(
             super::arrival_of(HandOver::Held(IntakeAdmission::Retryable)),
@@ -5360,7 +5585,7 @@ mod add_report_tests {
         );
         assert_eq!(
             super::arrival_of(HandOver::Held(IntakeAdmission::Other)),
-            Arrival::Refused("UPLOADER_OTHER".into())
+            Arrival::Held("UPLOADER_OTHER".into())
         );
         for verdict in [IntakeAdmission::Unknown, IntakeAdmission::Revoked] {
             assert_eq!(
@@ -5447,8 +5672,8 @@ mod second_instance_tests {
     use intern_queue::{AppSettings, Pipeline, SettingsStore};
 
     use super::{
-        Arrival, CommandError, Folders, LaunchReports, LaunchTarget, PendingLaunch,
-        SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents, copy_with_queue,
+        AddReportDto, Arrival, CommandError, Folders, LaunchReports, LaunchTarget, PendingLaunch,
+        SkippedDocumentDto, UPDATE_RELAUNCH, add_launch_documents, copy_pending, copy_with_queue,
         enqueue_arrival, expect_update_relaunch, forget_update_relaunch, is_short_windows_switch,
         is_update_relaunch, launch_documents, launch_names_documents, launch_starts_hidden,
         refused_launch,
@@ -5595,6 +5820,7 @@ mod second_instance_tests {
             Some(Folders {
                 input: input.canonicalize().unwrap(),
                 output: None,
+                machine: "here0123456789ab".into(),
             }),
         );
         // What Explorer's "Send to > Intern" hands the second process, and
@@ -5666,7 +5892,104 @@ mod second_instance_tests {
         assert_eq!(app.told.get(), 0, "nothing to tell yet");
         assert_eq!(app.reports.take(), None);
         assert!(pipeline.list().unwrap().is_empty());
-        assert_eq!(app.pending.take(), vec![scan]);
+        assert_eq!(app.pending.documents(), vec![scan]);
+        drop(pipeline);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// What a launch sent before setup survives Intern being closed before
+    /// setup is finished, and is gone from the app's data once dealt with.
+    #[test]
+    fn documents_kept_from_before_setup_survive_a_restart() {
+        let root = folder("launch-pending-kept");
+        let file = root.join(super::PENDING_LAUNCH);
+        let scan = root.join("scan.pdf");
+        let pending = PendingLaunch::load(file.clone());
+        pending.keep(std::slice::from_ref(&scan));
+        pending.keep(std::slice::from_ref(&scan));
+        drop(pending);
+
+        let reopened = PendingLaunch::load(file.clone());
+        assert_eq!(reopened.documents(), vec![scan.clone()]);
+        reopened.forget(&[scan]);
+        assert!(reopened.is_empty());
+        assert!(!file.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Still no input folder: kept for the next try. Copied: reported and let
+    /// go. Refused for any other reason: every document named, and let go -
+    /// never kept and silently retried for ever.
+    #[test]
+    fn documents_kept_from_before_setup_are_copied_once_and_always_reported() {
+        let error = |code: &str| CommandError {
+            code: code.into(),
+            message: "test".into(),
+        };
+        let scan = PathBuf::from("/drop/scan.pdf");
+        let pending = PendingLaunch::default();
+        pending.keep(std::slice::from_ref(&scan));
+
+        assert_eq!(
+            copy_pending(&pending, |_| Err(error("INPUT_FOLDER_NOT_SET"))),
+            None
+        );
+        assert_eq!(pending.documents(), vec![scan.clone()]);
+
+        let report = copy_pending(&pending, |_| Err(error("INPUT_FOLDER_UNAVAILABLE")))
+            .expect("the person hears of them");
+        assert_eq!(report.skipped[0].code, "INPUT_FOLDER_UNAVAILABLE");
+        assert!(pending.is_empty());
+
+        pending.keep(std::slice::from_ref(&scan));
+        let copied = AddReportDto {
+            added: 1,
+            copied: Some(1),
+            ..AddReportDto::default()
+        };
+        assert_eq!(
+            copy_pending(&pending, |documents| {
+                assert_eq!(documents, std::slice::from_ref(&scan));
+                Ok(copied.clone())
+            }),
+            Some(copied.clone())
+        );
+        assert_eq!(copy_pending(&pending, |_| Ok(copied.clone())), None);
+    }
+
+    /// A document sent before setup and sent again once there are folders is
+    /// copied by the second launch, and not a second time from the list.
+    #[test]
+    fn a_document_sent_again_after_setup_is_not_copied_twice() {
+        let root = folder("launch-sent-again");
+        let input = root.join("Input");
+        std::fs::create_dir_all(&input).unwrap();
+        let scan = write(&root, "scan.pdf", b"%PDF-1.7 a scan");
+        let (pipeline, _changes) = queue(&root.join("data"));
+        let before = ScratchApp::new(&pipeline, None);
+        second_launch(
+            &before,
+            args(&["intern.exe", "scan.pdf"]),
+            root.to_string_lossy().into_owned(),
+        );
+        assert_eq!(before.pending.documents(), vec![scan.clone()]);
+
+        let mut after = ScratchApp::new(
+            &pipeline,
+            Some(Folders {
+                input: input.canonicalize().unwrap(),
+                output: None,
+                machine: "here0123456789ab".into(),
+            }),
+        );
+        after.pending = before.pending;
+        second_launch(
+            &after,
+            args(&["intern.exe", "scan.pdf"]),
+            root.to_string_lossy().into_owned(),
+        );
+        assert!(after.pending.is_empty());
+        assert_eq!(pipeline.list().unwrap().len(), 1);
         drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
     }
