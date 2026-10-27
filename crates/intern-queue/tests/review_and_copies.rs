@@ -1431,6 +1431,9 @@ impl TextRig {
         SettingsStore::new(temp.path().join("settings.json"))
     }
 
+    /// The queue over this rig's database, as the app opens it on start. A
+    /// model missing at one moment is missing for good at the next: the
+    /// grace a switch between models is given is the clock's, not a test's.
     fn open(temp: &TempDir, worker: &Arc<BytesWorker>, model: &Arc<TextModel>) -> Pipeline {
         Pipeline::with_local_files(
             temp.path().join("queue.sqlite3"),
@@ -1440,6 +1443,7 @@ impl TextRig {
             TextRig::settings(temp),
         )
         .unwrap()
+        .with_model_missing_grace(std::time::Duration::ZERO)
     }
 
     /// Quits the app and starts it again over the same database, as after
@@ -1824,4 +1828,24 @@ fn a_canceled_and_cleared_document_has_its_own_name() {
 
     assert_eq!(names_in(&rig.inbox), vec!["locked.pdf"]);
     assert!(rig.pipeline.list().unwrap().is_empty());
+}
+
+/// Only documents in doubt are left, and no model is loaded for the
+/// self-test to ask. As for a document that meets no model, the moment of a
+/// switch between models passes; a model still missing after it stops the
+/// queue and says so, rather than leaving the documents waiting in silence.
+#[test]
+fn doubted_documents_with_no_model_loaded_stop_the_queue_after_the_grace() {
+    let rig = TextRig::new();
+    let slow = rig.add("a.pdf", "SLOW a");
+    rig.pipeline.run_next().unwrap();
+    assert_eq!(rig.status(slow), QueueStatus::Queued);
+    *rig.model.outage.lock().unwrap() = Some("MODEL_NOT_READY");
+
+    rig.run();
+    assert!(!rig.pipeline.is_paused(), "the moment of a switch");
+    rig.run();
+    assert_eq!(rig.pipeline.pause_reason().as_deref(), Some("MODEL_FAILED"));
+    assert_eq!(rig.status(slow), QueueStatus::Queued);
+    assert!(rig.renamed().is_empty());
 }

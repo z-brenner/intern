@@ -2686,7 +2686,16 @@ impl Pipeline {
         if !model_kinds.is_empty() {
             match self.model_self_test() {
                 Ok(()) => self.store.prove_doubts(&model_kinds, None)?,
-                Err(None) => return Ok(false),
+                // No model loaded to ask: as for a document that meets
+                // none, the moment of a switch passes, and a model still
+                // missing once it has stops the queue and says so rather
+                // than leaving the documents in doubt waiting in silence.
+                Err(None) => {
+                    if self.model_missing_too_long() {
+                        self.pause_for(ErrorCode::ModelFailed.as_str());
+                    }
+                    return Ok(false);
+                }
                 Err(Some(reason)) => {
                     self.pause_for(&reason);
                     return Ok(false);
