@@ -888,7 +888,10 @@ operation record with a status, direction or stage a newer build wrote is left
 out of the listing rather than failing it.
 
 The key is stored in the operating system's credential store under Intern's
-name, never in the settings file, and never travels anywhere but the address
+name (on Linux, the desktop's Secret Service: GNOME Keyring or KWallet; a
+session without one, such as a headless VM, cannot keep a key, and says so
+with `SECRET_SERVICE_UNAVAILABLE`), never in the settings file, and never
+travels anywhere but the address
 that was configured — redirects are refused. Plain HTTP is accepted only to
 this machine, so a local server can be used without a certificate and a
 remote one cannot be used without one; the same judgement takes the machine's

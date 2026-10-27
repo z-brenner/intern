@@ -77,4 +77,20 @@ describe('the hosted model setting', () => {
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('The service rejected the API key');
   });
+
+  // A Linux session with no Secret Service - a server, a VM under Xvfb - has
+  // nowhere to keep the key, and says what is missing.
+  it('names a missing Secret Service rather than a generic failure', async () => {
+    const base = createInMemoryBridge();
+    const hostedModelSetKey = vi.fn(async () => { throw { code: 'SECRET_SERVICE_UNAVAILABLE', message: 'the credential store could not be used' }; });
+    render(<App bridge={{ ...base, hostedModelSetKey }} />);
+    const dialog = await openSettings();
+    fireEvent.click(within(dialog).getByLabelText('Hosted model with my API key'));
+    fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'sk-ant-api03-example-key-9876' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test connection' }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('No credential store answered on this desktop, so the key was not saved');
+    expect(alert).toHaveTextContent('GNOME Keyring or KWallet');
+  });
 });

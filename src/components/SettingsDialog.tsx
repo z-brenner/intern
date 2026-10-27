@@ -66,6 +66,8 @@ function saveFailure(error: unknown): string {
     case 'SHAREPOINT_MANAGED_SETTINGS_UNAVAILABLE':
     case 'SHAREPOINT_ACTIVATION_IN_PROGRESS': return `${describeSharePointProblem(code.trim()).action} (${code.trim()})`;
     case 'SECRET_STORE_UNAVAILABLE': return 'Your operating system\'s credential store could not be used, so the key was not saved. (SECRET_STORE_UNAVAILABLE)';
+    // Linux only: there the credential store is the desktop's Secret Service, which a minimal or headless session may not run.
+    case 'SECRET_SERVICE_UNAVAILABLE': return 'No credential store answered on this desktop, so the key was not saved. Intern keeps it in the Secret Service: start and unlock GNOME Keyring or KWallet, or use the local model. (SECRET_SERVICE_UNAVAILABLE)';
   }
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'object' && error && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message.trim();
