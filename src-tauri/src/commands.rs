@@ -1906,6 +1906,11 @@ struct SetupManager {
     model_ready: Arc<AtomicBool>,
     local_ready: AtomicBool,
     hosted_active: AtomicBool,
+    /// The tiers shown as failed because the runtime set them aside, rather
+    /// than because a download failed. Settings' Try again clears the
+    /// runtime's verdict, and only a tier marked here is shown ready again
+    /// for it: a failed download stays failed until it is downloaded.
+    overlaid: Mutex<std::collections::HashSet<ModelTier>>,
 }
 
 impl SetupManager {
@@ -1973,6 +1978,7 @@ impl SetupManager {
             model_ready: Arc::new(AtomicBool::new(installed)),
             local_ready: AtomicBool::new(installed),
             hosted_active: AtomicBool::new(false),
+            overlaid: Mutex::new(std::collections::HashSet::new()),
         });
         // A model the runtime sets aside outside any setup operation - one
         // that failed its self-test the first time a document loaded it -
@@ -2041,15 +2047,34 @@ impl SetupManager {
     }
 
     /// Shows a tier the runtime has set aside - it failed its digest or its
-    /// self-test - as failed, with why, unless it is downloading again.
+    /// self-test, or its server would not start - as failed, with why,
+    /// unless it is downloading again. A tier shown failed this way is shown
+    /// ready again once the runtime lifts its verdict: Try again does that
+    /// for a server that would not start, and a model set aside only after
+    /// its file had passed its checks is installed. It used to stay "Not
+    /// usable" with the old error after it had read documents again, and
+    /// Try again then did nothing visible at all.
     fn overlay_failures(&self, state: &mut SetupStateDto) {
+        let mut overlaid = self
+            .overlaid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for tier in &mut state.tiers {
             if tier.state == SetupStatus::Downloading {
+                overlaid.remove(&tier.tier);
                 continue;
             }
-            if let Some(code) = self.runtime.tier_failure(tier.tier) {
-                tier.state = SetupStatus::Failed;
-                tier.error = Some(code);
+            match self.runtime.tier_failure(tier.tier) {
+                Some(code) => {
+                    tier.state = SetupStatus::Failed;
+                    tier.error = Some(code);
+                    overlaid.insert(tier.tier);
+                }
+                None if overlaid.remove(&tier.tier) && tier.state == SetupStatus::Failed => {
+                    tier.state = SetupStatus::Ready;
+                    tier.error = None;
+                }
+                None => {}
             }
         }
     }
@@ -9989,6 +10014,15 @@ mod runtime_tests {
         assert!(setup.background.begin().is_ok(), "no download began");
         setup.background.finish();
         assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        // And Settings says so: the model is ready again, its old error gone.
+        let accurate = setup
+            .get()
+            .unwrap()
+            .tiers
+            .into_iter()
+            .find(|tier| tier.tier == ModelTier::Accurate)
+            .unwrap();
+        assert_eq!((accurate.state, accurate.error), (SetupStatus::Ready, None));
         let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
         assert_eq!(reading.tier, ModelTier::Accurate);
     }
