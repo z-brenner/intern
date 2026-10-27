@@ -765,10 +765,21 @@ Windows; memory that cannot be read counts as enough): its server's resident
 set with the prompt cache off as the evaluation measured it (Bonsai 2 2B about
 1.4 GB, Qwen3.5 2B about 2.2 GB), the parser worker's 0.71 GB OCR peak, and
 1 GiB left for the person's own work - 3.2 GiB for the quick model, 4 GiB for
-the accurate one. A loaded model's own footprint counts as available, since
-unloading it gives that back. When the accurate model is wanted - by Automatic
-or by name - but is not installed yet or does not fit, the quick model reads
-instead, provisionally.
+the accurate one. What unloading the loaded model would free counts as
+available too - its context and buffers, not its mapped weights, which the
+machine already reports as reclaimable. When the accurate model is wanted - by
+Automatic or by name - but is not installed yet or does not fit, the quick
+model reads instead, provisionally; its readings are sent back to the accurate
+model only on evidence that it can read - it was just verified, or it just read
+a document - never on a memory reading alone, which could send the same
+documents round and round. Under Fastest a quick reading stands in for nothing
+and is not read again, though it still waits for a check.
+
+A model whose server will not start is set aside for the session, with the
+error on its line in Settings and a Try again there, and the other installed
+model reads; with no other model, setup reports the failure as it always has.
+A paused download stays paused across restarts (a `<model>.paused` marker
+beside its partial file).
 
 One llama-server runs at a time. A document planned onto the model that is not
 loaded unloads it and loads the other under the same `lifecycle` lock and
