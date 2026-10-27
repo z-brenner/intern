@@ -92,7 +92,9 @@ against the system's OpenSSL 3, `libgomp` and `libstdc++`, which the package
 depends on.
 
 The release is one pin: `LLAMA_CPP_RELEASE` at the top of
-`scripts/fetch-linux-assets.sh`, `prism-b10777-e3de715` today. The table under
+`scripts/fetch-linux-assets.sh`, `prism-b10826-c9c34bc` today - the build the
+77-document evaluation ran both shipped models on, and the one the Windows
+package carries too. The table under
 it holds the archive size and SHA-256 of every release that may be staged -
 `prism-b10777-e3de715` and `prism-b10826-c9c34bc` - so moving to one already
 there is a one-word change, and to a new one a new row from its release page.

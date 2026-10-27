@@ -159,19 +159,29 @@ try {
     Expand-Archive -LiteralPath $Downloads["llama.cpp"] -DestinationPath $LlamaExtract
     $LlamaServer = @(Get-ChildItem -LiteralPath $LlamaExtract -Recurse -File -Filter "llama-server.exe")
     if ($LlamaServer.Count -ne 1) { throw "Expected exactly one llama-server.exe in the pinned archive" }
+    $LlamaVersion = [string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version
     $LlamaDestination = Join-Path $BinariesDirectory "llama-server-$TargetTriple.exe"
     Copy-RuntimeFile $LlamaServer[0].FullName $LlamaDestination
-    Register-RuntimePackage $LlamaDestination "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
-    # The release zip is flat and also contains impl DLLs for every CLI tool;
-    # stage only llama-server's dependency closure (server impl, core llama/ggml
-    # runtime, and the OpenMP runtime), not the other tools' private DLLs.
-    Get-ChildItem -LiteralPath $LlamaServer[0].Directory.FullName -File -Filter "*.dll" |
-        Where-Object { $_.Name -eq "llama-server-impl.dll" -or $_.Name -notmatch '-impl\.dll$' } |
-        ForEach-Object {
-            Copy-SidecarDll $_.FullName "llama.cpp" ([string]($Manifest.downloads | Where-Object id -eq "llama.cpp").version)
-        }
-    # llama.cpp binary releases ship no license text inside the archive, so the
-    # MIT license is pinned as its own download from the same upstream tag.
+    Register-RuntimePackage $LlamaDestination "llama.cpp" $LlamaVersion
+    # The release zip is flat and also carries every CLI tool, their private
+    # impl DLLs, an RPC backend and server, and an OpenMP runtime nothing in
+    # the CPU build imports. Stage exactly llama-server's import closure -
+    # llama-server.exe -> llama-server-impl.dll -> llama-common, mtmd, llama,
+    # ggml, ggml-base - and every CPU backend variant, which ggml loads at
+    # start-up by picking the best one for the processor (AVX2, AVX-512 and
+    # so on); without the right one a laptop runs on the slowest or none.
+    $LlamaDirectory = $LlamaServer[0].Directory.FullName
+    $LlamaRequired = @("llama-server-impl.dll", "llama-common.dll", "mtmd.dll", "llama.dll", "ggml.dll", "ggml-base.dll")
+    foreach ($Name in $LlamaRequired) {
+        $Source = Join-Path $LlamaDirectory $Name
+        if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "The pinned llama.cpp archive has no $Name" }
+        Copy-SidecarDll $Source "llama.cpp" $LlamaVersion
+    }
+    $CpuBackends = @(Get-ChildItem -LiteralPath $LlamaDirectory -File -Filter "ggml-cpu-*.dll")
+    if ($CpuBackends.Count -eq 0) { throw "The pinned llama.cpp archive carries no CPU backend" }
+    foreach ($Backend in $CpuBackends) { Copy-SidecarDll $Backend.FullName "llama.cpp" $LlamaVersion }
+    # The fork's Windows release ships no license text inside the archive, so
+    # its MIT license is pinned as its own download from the same tag.
     Copy-RuntimeFile $Downloads["llama.cpp-license"] (Join-Path $LicensesDirectory "llama.cpp-LICENSE.txt")
 
     $PdfiumExtract = Join-Path $WorkDirectory "pdfium"

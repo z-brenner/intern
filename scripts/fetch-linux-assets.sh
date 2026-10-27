@@ -45,7 +45,7 @@ fi
 # the table below it (add a row for a new one). LLAMA_CPP_RELEASE in the
 # environment picks another pinned release for a trial build, and the
 # inventory always records which one was staged.
-LLAMA_CPP_RELEASE="${LLAMA_CPP_RELEASE:-prism-b10777-e3de715}"
+LLAMA_CPP_RELEASE="${LLAMA_CPP_RELEASE:-prism-b10826-c9c34bc}"
 case "$LLAMA_CPP_RELEASE" in
   prism-b10777-e3de715) LLAMA_CPP_SIZE=17882710 LLAMA_CPP_SHA256="3f97b6fbec0065fede2be92f05df531c1050636fc2613e1ba0d975249df19713" ;;
   prism-b10826-c9c34bc) LLAMA_CPP_SIZE=17912930 LLAMA_CPP_SHA256="66a250f38c3f8e2064e2f913b3a26ff5bae10955b67e8ff38c72ab48cbecf28c" ;;

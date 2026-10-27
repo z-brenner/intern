@@ -177,3 +177,20 @@ it('lets a Linux file manager open documents with Intern', async () => {
   // as their default application, and opening a document is not filing it.
   expect(template).not.toMatch(/^MimeType=(?!\{\{mime_type\}\})/m);
 });
+
+// The PrismML release zip is flat: llama-server sits beside every CLI tool,
+// their impl DLLs, an RPC backend and an OpenMP runtime nothing in the CPU
+// build imports. The Windows package takes llama-server's import closure and
+// every CPU backend variant - ggml picks the one the processor can run at
+// start-up - and nothing else.
+it('stages exactly llama-server, its import closure and the CPU backend variants', async () => {
+  const fetch = await readFile('scripts/fetch-windows-assets.ps1', 'utf8');
+  const required = /\$LlamaRequired = @\(([^)]*)\)/.exec(fetch)?.[1];
+  expect(required?.split(',').map((name) => name.trim().replace(/"/g, ''))).toEqual([
+    'llama-server-impl.dll', 'llama-common.dll', 'mtmd.dll', 'llama.dll', 'ggml.dll', 'ggml-base.dll',
+  ]);
+  expect(fetch).toContain('-Filter "ggml-cpu-*.dll"');
+  expect(fetch).toContain('carries no CPU backend');
+  expect(fetch).not.toMatch(/-notmatch '-impl\\\.dll\$'/);
+  for (const unwanted of ['ggml-rpc.dll', 'libomp140']) expect(fetch).not.toContain(`"${unwanted}`);
+});

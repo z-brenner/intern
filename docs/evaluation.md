@@ -138,7 +138,8 @@ identity.
 
 The script refuses a model whose SHA-256 is not the one `model-manifest.json`
 pins, starts `llama-server` with the flags the app itself uses (one slot, CPU,
-8,192-token context, the model's own chat template), records, writes the
+8,192-token context, the model's own chat template, the prompt cache off,
+`-ub 256`), records, writes the
 baseline, and stops the server. It records the evidence pipeline, the
 default; the digest pipeline's recording is made the same way by
 `intern-evaluate --pipeline digest --record fixtures/corpus-recording-digest.json
@@ -149,8 +150,11 @@ report's summary in `docs/model-bakeoff.md`.
 ## Recording elsewhere
 
 The engine and the worker are portable; only the packaged runtime is not. The
-committed recordings were made on Linux with the same pinned model and a
-llama.cpp CPU build from source; the digest pipeline's with PDFium
+committed recordings were made on Linux with the same pinned model (Qwen3.5 2B,
+the accurate tier) and an upstream llama.cpp CPU build from source, before the
+runtime moved to the PrismML fork's `prism-b10826-c9c34bc` release; the
+77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) found that
+release reads the same model the same way, within run-to-run noise; the digest pipeline's with PDFium
 `chromium/7881` for Linux, the same pinned `tessdata_fast` files, and the
 distribution's Tesseract 5.3.4 rather than the vcpkg 5.5.2 the installer
 ships, the evidence pipeline's with the routing reader and PP-OCR; the
