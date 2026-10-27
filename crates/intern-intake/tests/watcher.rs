@@ -51,6 +51,8 @@ struct FakeHost {
     /// What the host says about the item each claim handed over, by claim
     /// key, when it is told: the real host follows the item, not the path.
     claim_states: Mutex<HashMap<String, ItemState>>,
+    /// The claims tied to an item outside a scan (`tie_claim`): key, path.
+    ties: Mutex<Vec<(String, PathBuf)>>,
 }
 
 impl FakeHost {
@@ -155,6 +157,13 @@ impl IntakeHost for FakeHost {
             *state = ItemState::Unknown;
             self.withdrawn.lock().unwrap().insert(path.to_path_buf());
         }
+    }
+
+    fn tie_claim(&self, key: &str, path: &Path) {
+        self.ties
+            .lock()
+            .unwrap()
+            .push((key.to_owned(), path.to_path_buf()));
     }
 
     fn claim_state(&self, key: &str, path: &Path) -> ItemState {
@@ -2824,4 +2833,72 @@ fn a_handle_knows_when_its_watcher_has_stopped() {
     assert!(handle.is_running());
     drop(rig);
     assert!(!handle.is_running());
+}
+
+/// A document handed over by a drop has its claim tied to the queue's item
+/// at once, as a scan's would be. The copy can leave the intake folder in
+/// the same moment - an exact copy of a filed document is moved to the
+/// output folder as `COPY - ...` as it is queued - and its claim follows it
+/// there: closed as renamed, never withdrawn, and never handed over twice.
+#[test]
+fn a_handed_over_copy_moved_away_at_once_closes_its_claim_as_renamed() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("lease.pdf", b"bytes filed once already");
+    let key = facts_for(rig.temp.path(), "lease.pdf").key();
+
+    let outcome = rig.watcher.hand_over(&path, |path| {
+        rig.host.enqueue(&[path.to_path_buf()])?;
+        Ok(())
+    });
+    assert_eq!(outcome, HandOver::Queued(()));
+    assert_eq!(
+        *rig.host.ties.lock().unwrap(),
+        vec![(key.clone(), path.clone())]
+    );
+
+    // Filed as a copy: gone from the folder, and the item says so.
+    fs::remove_file(&path).unwrap();
+    rig.host.set_claim_state(
+        &key,
+        ItemState::Done {
+            outcome: DoneOutcome::Renamed,
+            result_filename: Some("COPY - 2026-01-02 Lease.pdf".to_string()),
+        },
+    );
+    rig.step();
+    rig.step();
+
+    let claim = rig.read_claim(&key);
+    assert_eq!(claim.state, ClaimState::Done);
+    assert_eq!(claim.outcome, Some(DoneOutcome::Renamed));
+    assert!(rig.host.abandoned().is_empty(), "nothing was withdrawn");
+    assert_eq!(rig.host.enqueue_calls.load(Ordering::SeqCst), 1);
+}
+
+/// A handed-over copy the queue could not read is renamed NEEDS REVIEW where
+/// it lies: its claim stays held while it waits, and the new name is never
+/// handed over as a document of its own.
+#[test]
+fn a_handed_over_copy_renamed_for_review_keeps_its_claim() {
+    let rig = Rig::start(false, &[]);
+    rig.step();
+    let path = rig.write("locked.pdf", b"password-protected");
+    let key = facts_for(rig.temp.path(), "locked.pdf").key();
+    let outcome = rig.watcher.hand_over(&path, |path| {
+        rig.host.enqueue(&[path.to_path_buf()])?;
+        Ok(())
+    });
+    assert_eq!(outcome, HandOver::Queued(()));
+
+    let marked = mark_for_review(&rig, &path);
+    rig.host.set_claim_state(&key, ItemState::NeedsReview);
+    for _ in 0..4 {
+        rig.step_by(CLAIM_LEASE_SECONDS / 2);
+    }
+
+    assert!(marked.exists());
+    assert_eq!(rig.host.enqueued(), vec![path]);
+    assert!(rig.host.abandoned().is_empty());
+    assert_eq!(rig.read_claim(&key).state, ClaimState::Claimed);
 }

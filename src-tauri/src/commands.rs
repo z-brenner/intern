@@ -5426,6 +5426,25 @@ pub(crate) mod scratch_queue {
         .unwrap();
         (pipeline, changes)
     }
+
+    /// [`queue`] under `settings`, with `oracle` saying what content was
+    /// filed before.
+    pub(super) fn queue_with(
+        data: &Path,
+        settings: SettingsStore,
+        oracle: Arc<dyn intern_queue::pipeline::DuplicateOracle>,
+    ) -> Pipeline {
+        std::fs::create_dir_all(data).unwrap();
+        Pipeline::with_local_files(
+            data.join("queue.sqlite3"),
+            Arc::new(NothingRuns),
+            Arc::new(NothingRuns),
+            Arc::new(Changes::default()),
+            settings,
+        )
+        .unwrap()
+        .with_duplicate_oracle(oracle)
+    }
 }
 
 #[cfg(test)]
@@ -5435,7 +5454,7 @@ mod add_report_tests {
     use super::{
         AddReportDto, Arrival, Folders, LaunchReports, SkippedDocumentDto, copy_with_queue,
         enqueue_arrival, input_folders_for, partition_inputs,
-        scratch_queue::{folder, queue, write},
+        scratch_queue::{folder, queue, queue_with, write},
     };
 
     #[test]
@@ -5493,6 +5512,72 @@ mod add_report_tests {
                 "NEEDS_REVIEW_FILE".to_owned()
             )]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A document dropped on the window whose content was filed before is
+    /// copied into the input folder like any other - and that copy, being in
+    /// the input folder, is filed at once as `COPY - <the filing's name>` in
+    /// the output folder. The input folder is left as it was, and the
+    /// original where it was.
+    #[test]
+    fn a_dropped_exact_duplicate_ends_in_the_output_folder_as_a_copy() {
+        struct FiledBefore;
+        impl intern_queue::pipeline::DuplicateOracle for FiledBefore {
+            fn filed_elsewhere(
+                &self,
+                _source_hash: &str,
+                _source_path: &std::path::Path,
+            ) -> Option<intern_queue::pipeline::KnownFiling> {
+                Some(intern_queue::pipeline::KnownFiling {
+                    filename: "2026-01-02 Lease.pdf".into(),
+                    filed_by: None,
+                })
+            }
+        }
+        let root = folder("drop-copy");
+        let folders = folders(&root);
+        let output = folders.output.clone().unwrap();
+        let data = root.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let settings = intern_queue::SettingsStore::new(data.join("settings.json"));
+        settings
+            .save(&AppSettings {
+                intake_folder: folders.input.to_string_lossy().into_owned(),
+                intake_enabled: true,
+                destination: output.to_string_lossy().into_owned(),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        let pipeline = queue_with(&data, settings, std::sync::Arc::new(FiledBefore));
+        let downloads = root.join("Downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        let lease = write(&downloads, "lease.pdf", b"%PDF-1.7 the lease");
+        let hand_off = |path: &std::path::Path| {
+            enqueue_arrival(&pipeline, path).unwrap_or_else(Arrival::Refused)
+        };
+
+        let report = copy_with_queue(&pipeline, &[lease.clone()], &folders, &|_| None, &hand_off);
+
+        assert_eq!(report.added, 1);
+        assert_eq!(report.copied, Some(1));
+        assert!(lease.exists(), "the original stays where it was");
+        let documents = |folder: &std::path::Path| {
+            let mut names = std::fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| !name.starts_with('.'))
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        assert!(
+            documents(&folders.input).is_empty(),
+            "{:?}",
+            documents(&folders.input)
+        );
+        assert_eq!(documents(&output), vec!["COPY - 2026-01-02 Lease.pdf"]);
+        drop(pipeline);
         std::fs::remove_dir_all(root).unwrap();
     }
 

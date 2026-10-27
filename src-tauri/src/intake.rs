@@ -455,6 +455,17 @@ fn enqueue_claimed_for_intake(pipeline: &Pipeline, key: &str, path: &Path) -> Re
     Ok(())
 }
 
+/// Ties a claim to the item the queue holds for `path`, for a document
+/// handed over outside a scan (see `IntakeHost::tie_claim`). The newest row
+/// the path ever held is the one just queued: a document filed as a copy of
+/// one already filed keeps its row at the path it arrived under, and one
+/// renamed for review is still found by that name.
+fn tie_claim_for_intake(pipeline: &Pipeline, key: &str, path: &Path) {
+    if let Ok(Some(item)) = pipeline.find_by_intake_path(path) {
+        let _ = pipeline.record_intake_claim(key, item.id);
+    }
+}
+
 /// What became of the item a claim handed over.
 ///
 /// The claim follows its own item, not whatever is newest at the path it
@@ -618,6 +629,10 @@ impl IntakeHost for PipelineIntakeHost {
         enqueue_claimed_for_intake(&self.pipeline, key, path)?;
         self.wake_scheduler();
         Ok(())
+    }
+
+    fn tie_claim(&self, key: &str, path: &Path) {
+        tie_claim_for_intake(&self.pipeline, key, path);
     }
 
     fn claim_state(&self, key: &str, path: &Path) -> ItemState {
@@ -1202,7 +1217,8 @@ mod watcher_host_tests {
 
     use super::{
         claim_item_state, enqueue_claimed_for_intake, enqueue_for_intake, intake_item_state,
-        retry_failed, screen_lookup, withdraw_claim_for_intake, withdraw_for_intake,
+        retry_failed, screen_lookup, tie_claim_for_intake, withdraw_claim_for_intake,
+        withdraw_for_intake,
     };
 
     /// An extractor that can read nothing, so every document fails.
@@ -1557,6 +1573,44 @@ mod watcher_host_tests {
         assert_eq!(
             claim_item_state(&pipeline, "never-recorded", &dir.join("x.pdf")),
             ItemState::Unknown
+        );
+
+        drop(pipeline);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    /// A document handed over by a drop - queued by its caller, outside a
+    /// scan - has its claim tied afterwards, and the claim then follows the
+    /// item exactly as a scan's does: renamed for review where it lies, it
+    /// still answers for the claim, and a new upload under the old name
+    /// never does.
+    #[test]
+    fn a_handed_over_claim_is_tied_to_its_item_afterwards() {
+        let (dir, _) = queue("hand-over-tie");
+        let pipeline = Pipeline::with_local_files(
+            dir.join("queue.sqlite3"),
+            Arc::new(Locked),
+            Arc::new(NeverAnalyze),
+            Arc::new(NoEvents),
+            settings_watching(&dir),
+        )
+        .unwrap();
+        let document = dir.join("locked.pdf");
+        fs::write(&document, b"an encrypted document").unwrap();
+        enqueue_for_intake(&pipeline, std::slice::from_ref(&document)).unwrap();
+        tie_claim_for_intake(&pipeline, "dropped", &document);
+        pipeline.run_next().unwrap();
+        assert!(dir.join("NEEDS REVIEW - locked.pdf").exists());
+
+        fs::write(&document, b"another document entirely").unwrap();
+        enqueue_claimed_for_intake(&pipeline, "later", &document).unwrap();
+        assert_eq!(
+            claim_item_state(&pipeline, "dropped", &document),
+            ItemState::NeedsReview
+        );
+        assert_eq!(
+            claim_item_state(&pipeline, "later", &document),
+            ItemState::Active
         );
 
         drop(pipeline);

@@ -258,6 +258,13 @@ impl IntakeHandle {
         }
         match enqueue(path) {
             Ok(queued) => {
+                // Tied to the item now, as a scan's claim is when it hands a
+                // document over: the copy can leave this path at once - an
+                // exact copy of a filed document is moved to the output
+                // folder as it is queued, an unreadable one renamed
+                // NEEDS REVIEW - and the claim must follow it there rather
+                // than read it as withdrawn.
+                self.host.tie_claim(&key, path);
                 lock(&self.shared.adopted).push((root, key, path.to_path_buf()));
                 HandOver::Queued(queued)
             }

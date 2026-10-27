@@ -148,6 +148,13 @@ pub trait IntakeHost: Send + Sync {
     fn enqueue_claimed(&self, _key: &str, path: &Path) -> Result<(), String> {
         self.enqueue(&[path.to_path_buf()])
     }
+    /// Ties a claim keyed `key` to the item the queue now holds for `path`,
+    /// for a document handed over outside a scan - a copy of a file dropped
+    /// on the window (`IntakeHandle::hand_over`) - whose enqueue the caller
+    /// made itself. Afterwards the claim answers for that item exactly as a
+    /// claim a scan handed over through [`Self::enqueue_claimed`] does. A
+    /// host that keeps no ties does nothing.
+    fn tie_claim(&self, _key: &str, _path: &Path) {}
     /// [`Self::item_state`] for the item a claim handed over.
     fn claim_state(&self, _key: &str, path: &Path) -> ItemState {
         self.item_state(path)
