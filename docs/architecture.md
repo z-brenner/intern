@@ -611,7 +611,10 @@ with the same journal, completing the item in the same commit, and Retry -
 which fingerprints the file again, since removing a password changes it - and
 approval read and file the document from wherever its file now is. A marked
 document that is canceled, or fails after a retry, gets its own name back the
-same way, so clearing the history never leaves a file every scan skips. Every scan
+same way, so clearing the history never leaves a file every scan skips: one
+whose name is refused back stays in the history and is tried again every
+fifteen minutes, keeping one refusal in the journal, and one whose marked file
+is gone is given up. Every scan
 and add skips the prefix, in any case. The intake watcher's claims are tied
 to the queue item each one handed over (`intake_claims`), so a claim follows
 its own document - renamed for review, given its name back as `name (2)`, or
@@ -881,10 +884,15 @@ is not what it says, one too large, a parse failure that is not a crash, a
 refusal - rename it at once. A reply that could not be used, an internal
 failure, a time-out and a crash look the same from one document whether the
 document or the machine is at fault, so the rename is put off until a later
-document is read successfully; three such failures in a row (replies,
-time-outs, or reader crashes, each counted on its own) stop the queue instead,
-and the documents of that run go back to wait under their own names with
-nothing counted against them. Nothing is renamed outside the input folder, and
+document is read successfully; three documents in a row failing so (replies,
+time-outs, or reader crashes, each counted on its own, and a document once
+however often it failed) stop the queue instead, and the documents of that
+run - only those - go back to wait under their own names with nothing counted
+against them (`failure_streaks`). Resuming starts every run over, and a
+document a run put back that fails the same way again goes to review under
+the usual rules without starting a new run, so a resumed queue always moves
+past it. Nothing is renamed outside the input folder - asked again when a
+put-off mark comes due, in case Settings moved it - and
 nothing admitted on Microsoft's word about its uploader: that proof names the
 file - its name in the library - and every later stage asks for it again, so a
 renamed file could never be retried, named or filed; such a document waits in
