@@ -62,7 +62,25 @@ impl PromptProfile {
             .into_iter()
             .find(|profile| profile.as_str() == word.trim())
     }
+}
 
+/// The `--prompt-profile` option every command-line tool takes
+/// (`intern-evaluate`, `intern-analyze`, InternBench), read in one place so
+/// they accept the same names and refuse the rest with the same words.
+impl std::str::FromStr for PromptProfile {
+    type Err = String;
+
+    fn from_str(word: &str) -> Result<Self, Self::Err> {
+        Self::parse(word).ok_or_else(|| {
+            format!(
+                "--prompt-profile is {}, not {word}",
+                Self::ALL.map(Self::as_str).join(" or ")
+            )
+        })
+    }
+}
+
+impl PromptProfile {
     /// The exchanges shown between the system turn and the document, in
     /// order.
     pub const fn examples(self) -> &'static [ExampleTurn] {
@@ -219,6 +237,14 @@ mod tests {
             );
         }
         assert_eq!(PromptProfile::parse("bonsai2"), None);
+        assert_eq!(
+            "bonsai_2".parse::<PromptProfile>(),
+            Ok(PromptProfile::Bonsai2)
+        );
+        assert_eq!(
+            "qwen".parse::<PromptProfile>(),
+            Err("--prompt-profile is bonsai_2, not qwen".to_owned())
+        );
         assert_eq!(PromptProfile::parse(""), None);
         assert!(serde_json::from_value::<PromptProfile>("bonsai2".into()).is_err());
     }

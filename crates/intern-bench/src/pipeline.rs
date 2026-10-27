@@ -85,12 +85,7 @@ impl EngineSettings {
             if settings.pipeline != Pipeline::Evidence {
                 return Err("--prompt-profile is for --pipeline evidence".to_owned());
             }
-            settings.profile = Some(PromptProfile::parse(word).ok_or_else(|| {
-                format!(
-                    "--prompt-profile is {}, not {word}",
-                    PromptProfile::ALL.map(PromptProfile::as_str).join(" or ")
-                )
-            })?);
+            settings.profile = Some(word.parse::<PromptProfile>()?);
         }
         if let Some(value) = values.get("context-tokens") {
             // The instructions and the reply take most of a small context;

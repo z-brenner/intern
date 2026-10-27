@@ -135,14 +135,7 @@ fn run() -> Result<Value, String> {
 fn prompt_profile(arguments: &HashMap<String, String>) -> Result<Option<PromptProfile>, String> {
     arguments
         .get("prompt-profile")
-        .map(|word| {
-            PromptProfile::parse(word).ok_or_else(|| {
-                format!(
-                    "--prompt-profile is {}, not {word}",
-                    PromptProfile::ALL.map(PromptProfile::as_str).join(" or ")
-                )
-            })
-        })
+        .map(|word| word.parse::<PromptProfile>())
         .transpose()
 }
 

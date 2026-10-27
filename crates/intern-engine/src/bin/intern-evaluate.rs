@@ -727,14 +727,7 @@ impl EvidenceSettings {
         }
         let profile = arguments
             .get("prompt-profile")
-            .map(|word| {
-                PromptProfile::parse(word).ok_or_else(|| {
-                    format!(
-                        "--prompt-profile is {}, not {word}",
-                        PromptProfile::ALL.map(PromptProfile::as_str).join(" or ")
-                    )
-                })
-            })
+            .map(|word| word.parse::<PromptProfile>())
             .transpose()?;
         // The instructions and the reply take most of a small context; one
         // with no room left for evidence would fail every document.
