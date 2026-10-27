@@ -4,10 +4,16 @@
 //! ever download cannot be changed at runtime. Every file is accepted only if
 //! its byte length and SHA-256 both match.
 //!
-//! There are two models, one per [`ModelTier`]: a fast one, small enough to
-//! download first and read with on any laptop, and an accurate one that reads
-//! better and costs twice the time and memory. Which of them reads a document
-//! is [`crate::tiers`]'s decision; this module only says what they are.
+//! There are two models, one per [`ModelTier`]: the accurate one, Qwen3.5 2B,
+//! which reads every document it can, and an optional quick one, Bonsai 2 2B,
+//! a third of the download and about two thirds of the time, whose readings
+//! always go to a person (see [`crate::tiers`]). The 77-document evaluation in
+//! `bench/reports/bonsai-linux-cpu-2026-10-27` chose them: 52-54 correct
+//! names for Qwen against 37 for Bonsai 2 2B and 48 for Bonsai 2 4B, at 1.6
+//! times Qwen's time. Which of them reads a document is [`crate::tiers`]'s
+//! decision; this module only says what they are. Nothing here, nor anywhere
+//! in setup, deletes a model file: an earlier build's model is this one's
+//! accurate tier.
 
 use std::{collections::HashSet, ffi::OsStr, path::Path};
 
@@ -17,7 +23,7 @@ use crate::error::{EngineError, EngineErrorCode, EngineResult};
 use crate::profile::PromptProfile;
 
 /// The manifest schema this build reads. 2 pinned one model; 3 pins one per
-/// tier, and names the files of earlier pins that may be cleaned away.
+/// tier. Schema 2's model is schema 3's accurate tier, file for file.
 pub const MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// The most a first-run setup may ever ask a person to download: every file
@@ -38,8 +44,9 @@ pub enum ModelRole {
 
 /// Which of the pinned models a manifest entry is.
 ///
-/// Ordered by cost: the fast tier downloads first and is what makes Intern
-/// usable at all; the accurate tier arrives after it.
+/// Ordered by size: for someone setting Intern up for the first time the fast
+/// tier downloads first and makes Intern usable at once, and the accurate tier
+/// arrives after it.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTier {
@@ -67,12 +74,6 @@ pub struct ModelManifest {
     pub served_model_name: String,
     /// One entry per tier, each tier exactly once.
     pub models: Vec<TierModel>,
-    /// Files an earlier manifest pinned and this one does not. Setup removes
-    /// one from the model folder only when its name and length are exactly
-    /// these - and its digest too, when that is affordable - and never
-    /// anything else.
-    #[serde(default)]
-    pub retired_files: Vec<RetiredFile>,
 }
 
 /// The model one tier runs.
@@ -82,7 +83,7 @@ pub struct TierModel {
     pub tier: ModelTier,
     /// A stable identifier, recorded with every analysis the model makes.
     pub model_id: String,
-    /// The model's name as a person reads it: "Bonsai 2 4B".
+    /// The model's name as a person reads it: "Qwen3.5 2B".
     pub display_name: String,
     /// How this model is asked. Absent: the engine's evidence request as it
     /// is, with nothing added.
@@ -97,15 +98,6 @@ pub struct ModelFile {
     pub name: String,
     pub role: ModelRole,
     pub url: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-/// A file an earlier manifest pinned, by the exact identity cleanup demands.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RetiredFile {
-    pub name: String,
     pub size: u64,
     pub sha256: String,
 }
@@ -169,18 +161,6 @@ impl ModelManifest {
                 {
                     return Err(invalid());
                 }
-            }
-        }
-        // Cleanup deletes by these, so they must be names inside the model
-        // folder, never a file this manifest still pins, and a digest that
-        // could actually be compared.
-        for retired in &self.retired_files {
-            if !is_safe_filename(&retired.name)
-                || retired.size == 0
-                || !names.insert(retired.name.as_str())
-                || !is_lowercase_digest(&retired.sha256)
-            {
-                return Err(invalid());
             }
         }
         if self.total_bytes() >= MAX_TOTAL_DOWNLOAD_BYTES {
@@ -282,8 +262,18 @@ mod tests {
             assert_eq!(model.tier, tier);
             assert!(model.model().is_some());
             assert_eq!(model.files.len(), 1);
-            assert_eq!(model.prompt_profile, Some(PromptProfile::Bonsai2));
         }
+        // The quick model is asked the way its qualification froze; the
+        // accurate one with the production request alone, which is what the
+        // recordings of record answer.
+        assert_eq!(
+            manifest.tier(ModelTier::Fast).unwrap().prompt_profile,
+            Some(PromptProfile::Bonsai2)
+        );
+        assert_eq!(
+            manifest.tier(ModelTier::Accurate).unwrap().prompt_profile,
+            None
+        );
         assert_eq!(
             manifest.tiers().map(|model| model.tier).collect::<Vec<_>>(),
             ModelTier::ALL
@@ -295,20 +285,38 @@ mod tests {
                 file.url
             );
         }
-        // The fast tier is what a person waits for before the first
+        // The fast tier is what a new person waits for before the first
         // document, so it must be the smaller download.
         assert!(
             manifest.tier(ModelTier::Fast).unwrap().total_bytes()
                 < manifest.tier(ModelTier::Accurate).unwrap().total_bytes()
         );
+    }
+
+    /// Everyone who installed an earlier build has its one model on disk, and
+    /// it is this build's accurate tier exactly: the same file, revision,
+    /// length and digest. That is what lets an upgrade go straight to the
+    /// queue, with no download and nothing deleted.
+    #[test]
+    fn the_accurate_tier_is_the_model_the_single_model_build_installed() {
+        let manifest = embedded();
+        let accurate = manifest.tier(ModelTier::Accurate).unwrap();
+        assert_eq!(accurate.model_id, "qwen3.5-2b-instruct-q4-k-m");
+        assert_eq!(accurate.display_name, "Qwen3.5 2B");
+        let file = accurate.model().unwrap();
+        assert_eq!(file.name, "Qwen3.5-2B-Q4_K_M.gguf");
+        assert_eq!(file.size, 1_280_835_840);
         assert_eq!(
-            manifest
-                .retired_files
-                .iter()
-                .map(|file| file.name.as_str())
-                .collect::<Vec<_>>(),
-            ["Qwen3.5-2B-Q4_K_M.gguf"]
+            file.sha256,
+            "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
         );
+        assert_eq!(
+            file.url,
+            "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/\
+             f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf"
+        );
+        let fast = manifest.tier(ModelTier::Fast).unwrap();
+        assert_eq!(fast.model().unwrap().name, "Ternary-Bonsai-2-2B-PQ2_0.gguf");
     }
 
     #[test]
@@ -372,29 +380,18 @@ mod tests {
     }
 
     /// One model folder holds every tier, so one tier's download must never
-    /// be able to overwrite another's model - nor cleanup delete a file this
-    /// manifest still pins.
+    /// be able to overwrite another's model.
     #[test]
-    fn file_names_are_unique_across_tiers_and_retired_files() {
+    fn file_names_are_unique_across_tiers() {
         let mut shared = embedded();
         shared.models[1].files[0].name = shared.models[0].files[0].name.clone();
         assert!(shared.validate().is_err());
 
-        let mut retiring_a_pin = embedded();
-        retiring_a_pin.retired_files[0].name = retiring_a_pin.models[1].files[0].name.clone();
-        assert!(retiring_a_pin.validate().is_err());
-
-        let mut traversal = embedded();
-        traversal.retired_files[0].name = "../settings.json".into();
-        assert!(traversal.validate().is_err());
-
-        let mut digest = embedded();
-        digest.retired_files[0].sha256 = "A".repeat(64);
-        assert!(digest.validate().is_err());
-
-        let mut empty = embedded();
-        empty.retired_files[0].size = 0;
-        assert!(empty.validate().is_err());
+        // Nothing names files to clean away: the field a manifest that did
+        // would carry is refused.
+        let mut value: serde_json::Value = serde_json::from_str(embedded_manifest_json()).unwrap();
+        value["retired_files"] = serde_json::json!([]);
+        assert!(ModelManifest::parse(&value.to_string()).is_err());
     }
 
     /// A moving upstream ref makes the pinned digest a promise the manifest
@@ -456,5 +453,8 @@ mod tests {
             .remove("prompt_profile");
         let parsed = ModelManifest::parse(&value.to_string()).unwrap();
         assert_eq!(parsed.tier(ModelTier::Fast).unwrap().prompt_profile, None);
+        // And it is written without the field, as the embedded file is.
+        let written = serde_json::to_value(parsed.tier(ModelTier::Accurate).unwrap()).unwrap();
+        assert!(written.get("prompt_profile").is_none());
     }
 }

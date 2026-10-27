@@ -5,12 +5,12 @@ use intern_engine::{
     PartyRelation, distill, engine::finish, validate,
 };
 use intern_engine::{
-    ModelFile, ModelManifest, ModelRole, ModelTier, PromptProfile, RetiredFile, TierModel,
+    ModelFile, ModelManifest, ModelRole, ModelTier, PromptProfile, TierModel,
     download::{CancellationToken, DISK_RESERVE_BYTES, DiskSpace, SetupStage},
     error::EngineErrorCode as ModelErrorCode,
     setup::{
         ExistingModelSelection, SetupOperationGate, install_existing_model_files,
-        match_existing_model_files, remove_retired_files, semantic_probes, validate_semantic_probe,
+        match_existing_model_files, semantic_probes, validate_semantic_probe,
     },
 };
 use tempfile::tempdir;
@@ -60,7 +60,6 @@ fn manifest() -> ModelManifest {
                 ACCURATE_SHA256,
             ),
         ],
-        retired_files: Vec::new(),
     }
 }
 
@@ -335,43 +334,4 @@ fn the_self_test_requires_the_model_to_read_the_calibration_document() {
             .code(),
         ModelErrorCode::ModelSelfTestFailed
     );
-}
-
-/// Upgrading from a single-model build leaves its model behind. It is
-/// removed only when it is exactly the file that build pinned - name, length
-/// and digest - and nothing else in the folder is touched: not a file of the
-/// same name that differs, not a partial download, not a pinned model.
-#[test]
-fn a_retired_model_is_removed_only_when_it_is_exactly_the_retired_file() {
-    let temp = tempdir().unwrap();
-    let mut manifest = manifest();
-    manifest.retired_files = vec![RetiredFile {
-        name: "old.gguf".into(),
-        size: FAST_BYTES.len() as u64,
-        sha256: FAST_SHA256.into(),
-    }];
-    let folder = temp.path();
-    fs::write(folder.join("fast.gguf"), FAST_BYTES).unwrap();
-    fs::write(folder.join("old.gguf.partial"), FAST_BYTES).unwrap();
-    fs::write(folder.join("unrelated.gguf"), FAST_BYTES).unwrap();
-
-    // Nothing there: nothing to do.
-    assert!(remove_retired_files(&manifest, folder).is_empty());
-
-    // The right name and length, other bytes: not the file Intern put there.
-    fs::write(folder.join("old.gguf"), b"model-bytez").unwrap();
-    assert!(remove_retired_files(&manifest, folder).is_empty());
-    // The right name, another length.
-    fs::write(folder.join("old.gguf"), b"model-bytes and more").unwrap();
-    assert!(remove_retired_files(&manifest, folder).is_empty());
-    assert!(folder.join("old.gguf").exists());
-
-    // Exactly the retired file.
-    fs::write(folder.join("old.gguf"), FAST_BYTES).unwrap();
-    assert_eq!(remove_retired_files(&manifest, folder), ["old.gguf"]);
-    assert!(!folder.join("old.gguf").exists());
-    for kept in ["fast.gguf", "old.gguf.partial", "unrelated.gguf"] {
-        assert!(folder.join(kept).exists(), "{kept} was left alone");
-    }
-    assert!(remove_retired_files(&manifest, folder).is_empty());
 }

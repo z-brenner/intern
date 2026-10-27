@@ -64,7 +64,7 @@ pub use engine::{Engine, Pipeline, PreparedDigest, PreparedEvidence, estimated_p
 pub use error::{EngineError, EngineErrorCode, EngineResult};
 pub use hosted::{HostedClient, HostedModelConfig, HostedProvider};
 pub use house_style::{HouseRule, HouseStyle, RuleKind, compose_styled_filename, lesson_from_edit};
-pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, RetiredFile, TierModel};
+pub use manifest::{ModelFile, ModelManifest, ModelRole, ModelTier, TierModel};
 pub use naming::{compose_filename, sanitize_folder_name};
 pub use own_names::{counterparty_view, is_own_name};
 pub use profile::PromptProfile;

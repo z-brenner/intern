@@ -164,37 +164,6 @@ where
     Ok(tiers)
 }
 
-/// Removes from the model folder the files an earlier manifest pinned and
-/// this one retires, and says which it removed.
-///
-/// Each only when its name, its length and its digest are all exactly the
-/// retired file's: the folder is the person's disk, and a file that differs
-/// in any of them is something Intern cannot say it put there. Nothing else
-/// is touched - not a partial download of a retired file, not a file of any
-/// other name. Called once a model of this manifest has passed its own check,
-/// so that someone whose new model failed to install still has the old one.
-/// Reads the whole of each candidate, which is seconds of CPU once.
-pub fn remove_retired_files(manifest: &ModelManifest, directory: &std::path::Path) -> Vec<String> {
-    let mut removed = Vec::new();
-    for retired in &manifest.retired_files {
-        let path = directory.join(&retired.name);
-        let as_pinned = ModelFile {
-            name: retired.name.clone(),
-            role: ModelRole::Model,
-            url: String::new(),
-            size: retired.size,
-            sha256: retired.sha256.clone(),
-        };
-        let is_exactly_it = std::fs::symlink_metadata(&path)
-            .is_ok_and(|metadata| metadata.is_file() && metadata.len() == retired.size)
-            && crate::download::validate_selected_file(&path, &as_pinned).is_ok();
-        if is_exactly_it && std::fs::remove_file(&path).is_ok() {
-            removed.push(retired.name.clone());
-        }
-    }
-    removed
-}
-
 /// A document the installed model must be able to file correctly before Intern
 /// will use it.
 ///

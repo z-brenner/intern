@@ -27,7 +27,7 @@ use intern_engine::download::{
 };
 use intern_engine::setup::{
     ExistingModelSelection, SetupOperationGate, install_existing_model_files,
-    match_existing_model_files, remove_retired_files, semantic_probes, validate_semantic_probe,
+    match_existing_model_files, semantic_probes, validate_semantic_probe,
 };
 use intern_intake::{IntakeConfig, IntakeWatcher, MachineIdentity};
 use intern_queue::{
@@ -1627,6 +1627,14 @@ impl AnalyzerBoundary for RuntimeModel {
                 Err(_) => reading.escalation_failed = true,
             }
         }
+        // The quick model's reading stands: a person checks it, or the
+        // accurate model reads it again once it can - never filed on its
+        // own, whatever validation made of it, and whatever was asked for.
+        if reading.tier == ModelTier::Fast {
+            tiers::hold_fast_reading(&mut analysis);
+            reading.provisional = true;
+            self.provisional_pending.store(true, Ordering::SeqCst);
+        }
         analysis.telemetry.read_by = Some(reading);
         Ok(analysis)
     }
@@ -1948,13 +1956,15 @@ impl SetupManager {
         self.start_operation(SetupSource::Download)
     }
 
-    /// Starts one tier's download. The tier first use needs - or any tier,
-    /// while nothing is set up yet - is set up the way the setup screen
-    /// does; any other is downloaded behind the window, which is how
-    /// Settings resumes, retries, or downloads again the accurate model.
+    /// Starts one tier's download. While nothing is set up yet, any request
+    /// is setup's, the way the setup screen starts it; once a model reads,
+    /// a tier is downloaded behind the window. That is how Settings resumes,
+    /// retries, or downloads again either model - and how someone who came
+    /// from the single-model build, with only the accurate model, asks for
+    /// the quick one: it is never fetched without being asked for.
     fn start_tier(self: &Arc<Self>, tier: Option<ModelTier>) -> Result<(), CommandError> {
         match tier {
-            Some(tier) if tier != FIRST_USE_TIER && self.setup_complete() => {
+            Some(tier) if self.setup_complete() => {
                 self.background_paused.store(false, Ordering::SeqCst);
                 self.start_background(tier)
             }
@@ -2177,7 +2187,6 @@ impl SetupManager {
         cancellation: &CancellationToken,
     ) -> Result<u64, CommandError> {
         let manifest = self.runtime.manifest();
-        let installs = !matches!(source, SetupSource::Installed);
         match source {
             SetupSource::Installed => {}
             SetupSource::Download => {
@@ -2220,19 +2229,7 @@ impl SetupManager {
             return Err(setup_canceled_error());
         }
         self.runtime.start_verified(cancellation)?;
-        if installs {
-            self.remove_retired();
-        }
         Ok(self.get().map_or(0, |state| state.total_bytes))
-    }
-
-    /// A model of this manifest has passed its check, so the files an earlier
-    /// build pinned and this one retires can go - exactly those, and only
-    /// once they match exactly.
-    fn remove_retired(&self) {
-        for name in remove_retired_files(self.runtime.manifest(), &self.runtime.model_directory) {
-            eprintln!("intern: removed {name}, a model an earlier version used");
-        }
     }
 
     /// Starts, behind the window, the download of every tier still missing.
@@ -2301,7 +2298,6 @@ impl SetupManager {
                     Ok(_) => {
                         manager.runtime.remember_verified(tier);
                         manager.set_tier(tier, SetupStatus::Ready, file.size, None);
-                        manager.remove_retired();
                     }
                     Err(error) if error.code == "MODEL_DOWNLOAD_CANCELED" => {
                         manager.set_tier(tier, SetupStatus::Required, completed, None);
@@ -2345,7 +2341,8 @@ impl SetupManager {
     /// Unloads a model nothing has asked anything for a while; resumes, while
     /// the local model is the one chosen, a background download the person
     /// started in an earlier session and did not pause - one with a partial
-    /// file to resume - unless they asked for the fast model only; and once
+    /// file to resume, of either model; the accurate one not when they asked
+    /// for the fast model only - and once
     /// the accurate model can read, sends back to be read the documents the
     /// fast one read in its place that nobody has acted on.
     fn tick(self: &Arc<Self>, pipeline: &Pipeline, settings: &AppSettings) {
@@ -2353,12 +2350,11 @@ impl SetupManager {
         if settings.model_source != ModelSource::Local {
             return;
         }
-        if settings.model_preference != ModelPreference::Fast
-            && !self.background_paused.load(Ordering::SeqCst)
-            && self.setup_complete()
-        {
+        if !self.background_paused.load(Ordering::SeqCst) && self.setup_complete() {
             for tier in ModelTier::ALL {
-                let resumable = tier != FIRST_USE_TIER
+                let wanted =
+                    tier == ModelTier::Fast || settings.model_preference != ModelPreference::Fast;
+                let resumable = wanted
                     && !self.runtime.tier_installed_quick(tier)
                     && partial_bytes(&self.runtime, tier) > 0
                     && self.tier_state(tier) == Some(SetupStatus::Required);
@@ -7531,7 +7527,9 @@ mod runtime_tests {
             tier,
             model_id: format!("test-{}", tier.as_str()),
             display_name: format!("Test {}", tier.as_str()),
-            prompt_profile: Some(PromptProfile::Bonsai2),
+            // As the embedded manifest: the quick model profiled, the
+            // accurate one asked with the production request alone.
+            prompt_profile: (tier == ModelTier::Fast).then_some(PromptProfile::Bonsai2),
             files: vec![ModelFile {
                 name: name.into(),
                 role: ModelRole::Model,
@@ -7555,7 +7553,6 @@ mod runtime_tests {
                     ACCURATE_SHA256,
                 ),
             ],
-            retired_files: Vec::new(),
         }
     }
 
@@ -8676,6 +8673,69 @@ mod runtime_tests {
         assert_eq!(rig.proposals.load(Ordering::SeqCst), 0);
     }
 
+    /// Someone upgrading from the single-model build has the accurate model
+    /// and nothing else: no setup screen, nothing downloaded, the queue ready
+    /// on it at once, and the quick model only offered.
+    #[test]
+    fn an_upgrade_with_only_the_accurate_model_reads_with_it_and_fetches_nothing() {
+        let install = Install::new("tier-upgrade");
+        std::fs::remove_file(install.model()).unwrap();
+        install.install_accurate();
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, _states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert!(setup.model_ready.load(Ordering::SeqCst));
+        let state = setup.get().unwrap();
+        assert_eq!(state.state, SetupStatus::Ready);
+        let tiers = state
+            .tiers
+            .iter()
+            .map(|tier| (tier.tier, tier.state))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tiers,
+            [
+                (ModelTier::Fast, SetupStatus::Required),
+                (ModelTier::Accurate, SetupStatus::Ready)
+            ]
+        );
+        assert!(setup.background.begin().is_ok(), "no download began");
+        setup.background.finish();
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Accurate, false)
+        );
+        assert!(install.accurate().exists(), "nothing deleted it");
+    }
+
+    /// Whatever validation made of it, a reading by the quick model goes to
+    /// a person, says why, and is provisional; the accurate model's reading
+    /// of the same document is ready as validation left it.
+    #[test]
+    fn a_quick_reading_is_never_ready() {
+        let install = Install::new("tier-quick-review");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+        let quick = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(quick.status, intern_engine::ProposalStatus::NeedsReview);
+        assert_eq!(
+            quick.review_reasons,
+            [intern_engine::ReviewReason::FastModelReading]
+        );
+        assert!(read_by(&quick).provisional);
+
+        install.install_accurate();
+        runtime.remember_verified(ModelTier::Accurate);
+        let accurate = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(read_by(&accurate).tier, ModelTier::Accurate);
+        assert_eq!(accurate.status, intern_engine::ProposalStatus::Ready);
+        assert!(accurate.review_reasons.is_empty());
+    }
+
     /// The fastest model, asked for by name, reads with no stand-in and
     /// nothing to read again; the most accurate, asked for, swaps.
     #[test]
@@ -8688,11 +8748,13 @@ mod runtime_tests {
         let runtime = install.runtime_in(&rig, "1.0.0", &world);
         verified(&runtime);
         assert_eq!(launched(&rig), [ModelTier::Fast]);
-        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
-        assert_eq!(
-            (reading.tier, reading.provisional),
-            (ModelTier::Fast, false)
-        );
+        let fast = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&fast);
+        // Asked for by name, the quick model's reading is still held for a
+        // person; it is not read again while the quick model is what is
+        // asked for.
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(fast.status, intern_engine::ProposalStatus::NeedsReview);
         assert!(!runtime.take_provisional_upgrade());
 
         world.prefer(ModelPreference::Accurate);

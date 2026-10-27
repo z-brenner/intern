@@ -19,25 +19,17 @@
     },
     {
       "tier": "accurate",
-      "model_id": "ternary-bonsai-2-4b-pq2_0",
-      "display_name": "Bonsai 2 4B",
-      "prompt_profile": "bonsai_2",
+      "model_id": "qwen3.5-2b-instruct-q4-k-m",
+      "display_name": "Qwen3.5 2B",
       "files": [
         {
-          "name": "Ternary-Bonsai-2-4B-PQ2_0.gguf",
+          "name": "Qwen3.5-2B-Q4_K_M.gguf",
           "role": "model",
-          "url": "https://huggingface.co/prism-ml/Ternary-Bonsai-2-4B-gguf/resolve/8d6557168168f91ea6697a4a49ed2ef622b53adb/Ternary-Bonsai-2-4B-PQ2_0.gguf",
-          "size": 1146465120,
-          "sha256": "d406b1e912c0d2a4c124ad10bf38a76ae662fdc4d24b176451403dc7b7f30409"
+          "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf",
+          "size": 1280835840,
+          "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
         }
       ]
-    }
-  ],
-  "retired_files": [
-    {
-      "name": "Qwen3.5-2B-Q4_K_M.gguf",
-      "size": 1280835840,
-      "sha256": "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223"
     }
   ]
 }

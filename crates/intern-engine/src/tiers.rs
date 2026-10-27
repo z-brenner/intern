@@ -1,11 +1,15 @@
 //! Which local model reads a document.
 //!
-//! Intern pins two local models (see [`crate::manifest::ModelTier`]): a fast
-//! one that downloads first and reads on any laptop, and an accurate one that
-//! files more documents correctly and costs about twice the time and memory.
-//! Everything here is a pure decision over what is installed and how much
-//! memory is free, so every policy - and every threshold the benchmarks will
-//! move - is one named constant or one function, tested on its own.
+//! Intern pins two local models (see [`crate::manifest::ModelTier`]): the
+//! accurate one, Qwen3.5 2B, and an optional quick one, Bonsai 2 2B, about two
+//! thirds of the accurate one's time and two thirds of its memory. On the
+//! 77-document evaluation (`bench/reports/bonsai-linux-cpu-2026-10-27`) the
+//! quick model named 37 documents correctly to Qwen's 52-54, and marked 23
+//! wrong names ready, so a quick reading is never ready: it always goes to a
+//! person ([`hold_fast_reading`]), and is read again by the accurate model
+//! once it can be. Everything here is a pure decision over what is installed
+//! and how much memory is free, so every policy - and every threshold the
+//! benchmarks move - is one named constant or one function, tested on its own.
 //!
 //! The runtime asks [`plan`] before every document, so a setting changed in
 //! Settings, a model that finished downloading, or memory that came back takes
@@ -13,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{DocumentAnalysis, ProposalStatus};
+use crate::domain::{DocumentAnalysis, ProposalStatus, ReviewReason};
 use crate::manifest::ModelTier;
 use crate::server::ServerOptions;
 
@@ -25,11 +29,12 @@ pub enum ModelPreference {
     /// memory the machine has free.
     #[default]
     Automatic,
-    /// The accurate model whenever it is installed and memory allows: it
-    /// costs about twice the time, and the fast model stands in, read again
-    /// later, only while the machine is short of memory.
+    /// The accurate model whenever it is installed and memory allows; the
+    /// fast model stands in, read again later, only while the machine is
+    /// short of memory.
     Accurate,
-    /// The fast model whenever it is installed.
+    /// The fast model whenever it is installed. Its readings still always go
+    /// to review: asking for speed does not make them safer to file.
     Fast,
 }
 
@@ -54,27 +59,40 @@ pub enum AutomaticStrategy {
     /// Every document is read by the fast model first, and read again by the
     /// accurate one only when the fast reading carries a signal
     /// [`escalation`] recognises. Cheaper on most documents; only as good as
-    /// the signals, which the native qualification found could not yet catch
-    /// every wrong reading that was marked ready.
+    /// the signals. Kept, tested, and off: the 77-document evaluation found
+    /// the quick model's review flag a poor trigger - the documents it sends
+    /// to review are mostly ones a bigger model also gets wrong, and where the
+    /// bigger model helps is on readings the quick one marked ready.
     Cascade,
 }
 
-/// The strategy Automatic uses. AccurateFirst until a benchmark shows the
-/// cascade's signals catch the fast model's mistakes.
+/// The strategy Automatic uses: the accurate model for everything it can
+/// read, the fast one only as a stand-in. See [`AutomaticStrategy::Cascade`]
+/// for why the cascade is off.
 pub const AUTOMATIC_STRATEGY: AutomaticStrategy = AutomaticStrategy::AccurateFirst;
 
 const MIB: u64 = 1024 * 1024;
 
-/// Memory that must be available - free, or reclaimable without paging -
-/// before the fast model is loaded. A placeholder until measured: the model
-/// itself peaked at 0.94 GB in the native qualification, and the rest is the
-/// headroom that keeps the machine responsive while it reads.
-pub const MIN_AVAILABLE_FOR_FAST: u64 = 1_536 * MIB;
+/// The parser worker's peak while it reads a document: 0.71 GB on a 25-page
+/// scan through PP-OCR, the most any InternBench document needed. It runs
+/// beside the model, so a model is judged to fit only with room for it too.
+pub const WORKER_PEAK: u64 = 680 * MIB;
 
-/// Memory that must be available before the accurate model is loaded. A
-/// placeholder until measured: the model peaked at 1.96 GB in the native
-/// qualification.
-pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 2_560 * MIB;
+/// What is left for the person's own work once a model and the worker are
+/// loaded: Intern runs in the background, and the window in front must not
+/// start paging because of it.
+pub const HEADROOM: u64 = 1_024 * MIB;
+
+/// Memory that must be available - free, or reclaimable without paging -
+/// before the fast model is loaded: its server, the worker, and the
+/// headroom. It is the least the machine can be asked for, so it decides
+/// nothing yet; it is here so the fast model's cost is said in one place.
+pub const MIN_AVAILABLE_FOR_FAST: u64 = 3_200 * MIB;
+
+/// Memory that must be available before the accurate model is loaded: its
+/// server, the worker, and the headroom, rounded up to 4 GiB. A 14 GB laptop
+/// with a browser and an office suite open usually has twice that.
+pub const MIN_AVAILABLE_FOR_ACCURATE: u64 = 4_096 * MIB;
 
 /// The memory a tier needs available before it is loaded.
 pub const fn min_available_for(tier: ModelTier) -> u64 {
@@ -84,16 +102,24 @@ pub const fn min_available_for(tier: ModelTier) -> u64 {
     }
 }
 
-/// About what a loaded tier holds, from the native qualification's peak
-/// model working sets (0.941 and 1.957 decimal GB). Unloading the model to
-/// load another gives this back, so the runtime counts it as available when
-/// it plans with a model already loaded: otherwise a loaded accurate model
-/// would be judged not to fit beside itself, and swapped for the fast one
-/// before every document.
+/// About what a loaded tier's server holds, with `--cache-ram 0` (see
+/// [`crate::server::LlamaServer::arguments_for`]), from the 77-document
+/// evaluation's measured resident sets on the AVX-512 CPU variant, the larger
+/// of the two a laptop may load (the AVX2 one repacks less):
+///
+/// * Bonsai 2 2B: 1,418 MiB after twelve real requests (0.9 GB on AVX2).
+/// * Qwen3.5 2B: 2,175-2,185 MiB after load and warm-up in every InternBench
+///   chunk; with the prompt cache off it stops growing from there, as the
+///   Bonsai servers do (2B: about 4 MB a document instead of 80).
+///
+/// Unloading the model to load another gives this back, so the runtime
+/// counts it as available when it plans with a model already loaded:
+/// otherwise a loaded accurate model would be judged not to fit beside
+/// itself, and swapped for the fast one before every document.
 pub const fn resident_estimate(tier: ModelTier) -> u64 {
     match tier {
-        ModelTier::Fast => 941_000_000,
-        ModelTier::Accurate => 1_957_000_000,
+        ModelTier::Fast => 1_420 * MIB,
+        ModelTier::Accurate => 2_200 * MIB,
     }
 }
 
@@ -124,6 +150,20 @@ pub fn server_options(tier: ModelTier) -> ServerOptions {
 /// which costs seconds; holding a gigabyte or two all day for nothing costs
 /// the person working beside it far more.
 pub const IDLE_UNLOAD_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Holds a reading the fast model made for a person: never ready, whatever
+/// validation made of it, and with [`ReviewReason::FastModelReading`] among
+/// its reasons so the review panel can say why. A queue that renames ready
+/// documents on its own never renames one of these.
+pub fn hold_fast_reading(analysis: &mut DocumentAnalysis) {
+    analysis.status = ProposalStatus::NeedsReview;
+    if !analysis
+        .review_reasons
+        .contains(&ReviewReason::FastModelReading)
+    {
+        analysis.review_reasons.push(ReviewReason::FastModelReading);
+    }
+}
 
 /// Whether `tier` fits in `available` bytes. Memory that cannot be measured
 /// is assumed to fit: refusing the better model on a machine whose memory
@@ -576,6 +616,41 @@ mod tests {
                 tokens: 12,
             }),
             facts: None,
+        }
+    }
+
+    /// A fast reading is never ready, whatever validation made of it, and
+    /// says why exactly once, beside any reason it already had.
+    #[test]
+    fn a_fast_reading_always_goes_to_review() {
+        let mut ready = reading(ProposalStatus::Ready, &[], Some(0.99));
+        hold_fast_reading(&mut ready);
+        assert_eq!(ready.status, ProposalStatus::NeedsReview);
+        assert_eq!(ready.review_reasons, [ReviewReason::FastModelReading]);
+
+        let mut doubtful = reading(
+            ProposalStatus::NeedsReview,
+            &[ReviewReason::DateMissing],
+            None,
+        );
+        hold_fast_reading(&mut doubtful);
+        hold_fast_reading(&mut doubtful);
+        assert_eq!(
+            doubtful.review_reasons,
+            [ReviewReason::DateMissing, ReviewReason::FastModelReading]
+        );
+        assert_eq!(
+            ReviewReason::FastModelReading.as_str(),
+            "FAST_MODEL_READING"
+        );
+    }
+
+    /// The memory guard is the model, the worker beside it and the headroom
+    /// the person keeps, and the accurate model needs more of it.
+    #[test]
+    fn each_guard_covers_the_model_the_worker_and_the_headroom() {
+        for tier in ModelTier::ALL {
+            assert!(min_available_for(tier) >= resident_estimate(tier) + WORKER_PEAK + HEADROOM);
         }
     }
 
