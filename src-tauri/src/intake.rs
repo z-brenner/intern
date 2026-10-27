@@ -1150,7 +1150,7 @@ mod fate_tests {
             "/intake/scan.pdf",
             "/dest/2024-03-01 Contract.pdf",
         );
-        // The undo was refused, journalled and rolled back: the newest
+        // The undo was refused, journaled and rolled back: the newest
         // receipt, having moved nothing.
         let refused_undo = receipt(
             2,
@@ -1334,7 +1334,7 @@ mod watcher_host_tests {
     }
 
     /// A file system whose renames never land. An undo asked of it is
-    /// journalled, refused and rolled back, having moved nothing.
+    /// journaled, refused and rolled back, having moved nothing.
     struct RenameRefused;
 
     impl FileSystem for RenameRefused {

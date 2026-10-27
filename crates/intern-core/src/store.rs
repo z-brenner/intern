@@ -202,7 +202,7 @@ pub const HISTORY_LIMIT: usize = 500;
 ///
 /// The stages are named rather than "anything but complete or rolled back":
 /// a stage a newer build wrote is not one this build can settle, or even say
-/// is unfinished, so it is not offered to be checked again. Journalling a new
+/// is unfinished, so it is not offered to be checked again. Journaling a new
 /// operation still refuses while any such receipt exists.
 const UNSETTLED_RECEIPT: &str = "WHERE queue_item_id = ?1
        AND stage IN ('planned', 'copied', 'verified', 'published', 'rollback_required')
