@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "status": "pending",
-  "release_inputs_sha256": "pending",
+  "status": "accepted",
+  "release_inputs_sha256": "649494076b200fc7546e3aa97b605ed77c07626adb917715951d9732f2213126",
   "screenshot_path": "docs/qa/latest-implementation.png",
-  "screenshot_sha256": "pending",
-  "reviewer": "pending",
-  "reviewed_at": "pending",
-  "notes": "Awaiting a fresh alpha.12 capture. The accepted alpha.11 record was bound to release-input digest 7cc3645acd565a349bc58c8cfeab086792c52d282e03704beb0744e17ac1025d at commit 6aa24a522a78475ba7cff02b6b756159b0d67b9b. This release changes the non-QA release inputs, so that digest no longer describes what would ship. This file is deliberately pending rather than stale-accepted. The screenshot named above is still alpha.11's capture until a Whole-product QA evidence run lands and a reviewer accepts its replacement."
+  "screenshot_sha256": "2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d",
+  "reviewer": "Zachary Brenner (maintainer), on the capture from Whole-product QA evidence run 40566145844",
+  "reviewed_at": "2026-10-27T23:33:46Z",
+  "notes": "Fresh 1536x1024 capture from run 40566145844 (attempt 1) at commit cd058571ebe529d4bf434c1abcdebf6fddbbeb57, which is main after the alpha.12 release preparation. The accepted alpha.11 record is superseded because its digest no longer describes what ships. Claude Code inspected the capture first and recorded this file; the maintainer then looked at it and accepted it. Everything the accepted concept asks of the capture still holds. Sidebar counts, the queue table, and the review panel read as three planes. The header states the privacy posture. Proposed filenames stay date-first, with right-aligned confidence and em-dashes for absent values. Ready, Needs review, Proposing a name, and Waiting differ by icon as well as color. Evidence stays attributed under DATE, TYPE, and PARTIES, with each party on its own line. What changed is this release's: one Queue view with a '1 needs review' count in place of the separate Needs Review page; Copy table and Details in the toolbar; the header's 'Copied into Input' and a drop zone that copies into the input folder. As in alpha.11, the review panel's Reason for review sits below the fold under the pinned Approve bar and is reached by scrolling the panel. No collisions, illegible copy, or ambiguous focus were seen, and the run's automated contrast assertions passed. The sign-off is accepted only for the digest and screenshot hash above. Any later change to a non-QA release input invalidates it and requires a new capture and review."
 }

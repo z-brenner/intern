@@ -1,16 +1,90 @@
-# Intern alpha.11 rendered-fidelity ledger
+# Intern alpha.12 rendered-fidelity ledger
 
-**Rendered sign-off status: accepted for alpha.11.**
+**Rendered sign-off status: accepted for alpha.12.**
 `docs/qa/rendered-fidelity-signoff.json` is bound to release-input digest
-`7cc3645acd565a349bc58c8cfeab086792c52d282e03704beb0744e17ac1025d` and to the
+`649494076b200fc7546e3aa97b605ed77c07626adb917715951d9732f2213126` and to the
 1536x1024 capture `docs/qa/latest-implementation.png`, SHA-256
-`f4bf894357019c77d251b0f0ef9c379e71c2665d67b901c10c8976526bc0aee4`, taken by
-Whole-product QA evidence run 37365868306 (attempt 5) at commit
-`6aa24a522a78475ba7cff02b6b756159b0d67b9b`. That commit's tree is identical to
-`main` at `6ee8a404b37fe17ac50d14106affba40d0f53806`, so both carry the same
-digest.
+`2ea19abf6f400ead3d9fa25a4452bed2d44d78f44642f846317d64bd9b9ea52d`, taken by
+Whole-product QA evidence run 40566145844 (attempt 1) at commit
+`cd058571ebe529d4bf434c1abcdebf6fddbbeb57`, `main` after the alpha.12
+release preparation.
 
-## alpha.11 record
+## alpha.12 record
+
+Run 40566145844 passed every gate on Windows:
+
+- frontend checks (71 Vitest files, 716 tests passed and 1 skipped), and the
+  browser QA suite (29 tests) including its contrast assertions;
+- `cargo fmt --check`, workspace clippy with warnings denied, and the Rust
+  workspace tests (1,684);
+- native fixture parsing with the pinned assets, and the verified pinned runtime
+  (54 runtime files, 26 license files), now with the PrismML llama.cpp release
+  `prism-b10826-c9c34bc`;
+- an NSIS build, and installer and uninstall smoke with user data retained;
+- an accepted whole-corpus evaluation with real inference: 19 documents on the
+  pinned Qwen3.5 2B model (the accurate tier), median 7.6 s and at most 24.2 s
+  of inference a document, peak model memory 2,126 MiB.
+
+Against alpha.11's hosted run on the same 19 documents: parties 18/19 (16/19),
+review rate 26.3% (42.1%), and nothing filed under a date or a party the corpus
+marks as a trap, in both. Two counts are one document lower: type 17/18
+(18/18) and description specific 17/19 (19/19); descriptions covering the
+expected facts are 15/18 (16/18). Date role is 15/16, on a denominator the
+evidence pipeline counts differently from alpha.11's 14/14. The release notes'
+accuracy figures come from InternBench and are cited there; these are the
+release gate's own corpus, and every gate is above its floor.
+
+The capture was inspected against the accepted concept:
+
+- Sidebar counts, the queue table and the review panel read as three distinct
+  planes.
+- The header states the privacy posture.
+- Date-first proposed filenames, right-aligned confidence and em-dashes for
+  absent values stay consistent down the column.
+- Ready, Needs review, Proposing a name and Waiting are each distinguishable by
+  icon as well as color.
+- Evidence stays attributed under DATE, TYPE and PARTIES headings, with each
+  party on its own line.
+- The approve and keep actions sit in a pinned bar at the foot of the panel,
+  with their keyboard shortcuts.
+- No collisions, illegible copy, excessive density or ambiguous focus were
+  observed.
+
+What changed in the frame is this release's own: one Queue view, with a
+"1 needs review" count where the separate Needs Review page was; Copy table and
+Details in the toolbar; "Copied into Input" in the header; and a drop zone that
+copies what is dropped into the input folder.
+
+As in alpha.11, the panel's Reason for review sits below the fold under the
+pinned action bar and is reached by scrolling the panel; bringing it above the
+fold for an item in review is still a follow-up.
+
+### Reviewer
+
+Reviewed by the maintainer, Zachary Brenner, who looked at the capture named
+above and accepted it. Claude Code inspected it first and wrote this record and
+the sign-off at the maintainer's direction.
+
+### Freshness boundary
+
+The sign-off is accepted only for the digest and screenshot named above.
+`scripts/hash-release-inputs.mjs` derives that digest from the committed non-QA
+release inputs. Any relevant source change invalidates this record and requires
+a new capture and review. Exact-main validation and the deliberately dispatched
+release workflow must still reproduce and accept their own evidence before a tag
+or publication is allowed.
+
+## Superseded alpha.11 record
+
+The alpha.11 sign-off was bound to release-input digest
+`7cc3645acd565a349bc58c8cfeab086792c52d282e03704beb0744e17ac1025d` at commit
+`6aa24a522a78475ba7cff02b6b756159b0d67b9b`, with the capture SHA-256
+`f4bf894357019c77d251b0f0ef9c379e71c2665d67b901c10c8976526bc0aee4`. Pull
+requests #16 through #34 have changed the non-QA release inputs since, so that
+digest no longer describes what would ship. Its record is kept below for
+history.
+
+### alpha.11 run
 
 Run 37365868306 passed every gate on Windows:
 
