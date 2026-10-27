@@ -14,7 +14,7 @@ on - WebKitGTK 4.1, the AppIndicator library, `tesseract-ocr`, `libgomp1`,
 and OpenSSL 3:
 
 ```sh
-sudo apt install ./Intern_0.1.0-alpha.11_amd64.deb
+sudo apt install ./Intern_0.1.0-alpha.12_amd64.deb
 intern            # or Intern from the applications menu
 ```
 
