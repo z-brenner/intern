@@ -33,6 +33,7 @@ if [ "${1:-}" = block ]; then
     matrix) bash $W/scripts/bonsai-eval/phase1.sh >> $R/logs/phase1.log 2>&1 ;;
     noprofile) ib 4b-t4-noprofile $M4 "" 4 "" 1 ;;
     sweep) bash $W/scripts/bonsai-eval/phase2a.sh >> $R/logs/phase2a.log 2>&1 ;;
+    haswell) bash $W/scripts/bonsai-eval/phase2c.sh >> $R/logs/phase2c.log 2>&1 ;;
   esac
   exit
 fi
