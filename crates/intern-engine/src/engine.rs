@@ -575,6 +575,7 @@ impl Engine {
                     index_units: u32::try_from(prepared.index.units().len()).unwrap_or(u32::MAX),
                     context_units: u32::try_from(prepared.context.units.len()).unwrap_or(u32::MAX),
                     context_tier: Some(prepared.context.tier),
+                    read_by: None,
                 },
             );
             analysis.text_fingerprint = source_fingerprint(source).map(fingerprint::encode);

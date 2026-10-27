@@ -4,7 +4,10 @@
     pipeline with the pinned local model, on this machine, with real inference.
 
 .DESCRIPTION
-    Downloads and verifies the exact model named by the embedded manifest,
+    Downloads and verifies the exact model the embedded manifest pins for one
+    local model tier - the accurate one by default, which is what Automatic
+    reads with on a machine with the memory for it - asks it the way the app
+    does (the tier's prompt profile),
     starts the packaged llama.cpp server text-only on a loopback port with a
     random key, runs every generated fixture through `intern-evaluate`, and
     records accuracy, review rate, latency, and peak model memory.
@@ -22,6 +25,8 @@ param(
     # The shipping pipeline by default: the release gate accepts nothing else.
     # `digest` (or its old name `new`) and `legacy` remain for comparison runs.
     [ValidateSet("evidence", "digest", "new", "legacy")][string]$Pipeline = "evidence",
+    # Which of the two pinned local models is scored.
+    [ValidateSet("fast", "accurate")][string]$Tier = "accurate",
     [int]$Threads = 0
 )
 
@@ -35,8 +40,16 @@ $Evaluate = (Resolve-Path -LiteralPath $EvaluatePath).Path
 $Fixtures = (Resolve-Path -LiteralPath $FixtureDirectory).Path
 $ExpectedPath = Join-Path $Repository "fixtures/expected.json"
 $Manifest = Get-Content -LiteralPath (Join-Path $Repository "src-tauri/resources/model-manifest.json") -Raw | ConvertFrom-Json
-$ModelSpec = $Manifest.files | Where-Object { $_.role -eq "model" } | Select-Object -First 1
+$TierModel = $Manifest.models | Where-Object { $_.tier -eq $Tier } | Select-Object -First 1
+if (-not $TierModel) { throw "The embedded manifest pins no $Tier model" }
+$ModelSpec = $TierModel.files | Where-Object { $_.role -eq "model" } | Select-Object -First 1
 if (-not $ModelSpec) { throw "The embedded manifest names no text model" }
+# The app asks the evidence pipeline's questions the way the tier's profile
+# says; the other pipelines are never profiled.
+$ProfileArguments = @()
+if ($Pipeline -eq "evidence" -and $TierModel.PSObject.Properties["prompt_profile"] -and $TierModel.prompt_profile) {
+    $ProfileArguments = @("--prompt-profile", [string]$TierModel.prompt_profile)
+}
 if ($Threads -le 0) {
     $Logical = [Environment]::ProcessorCount
     $Threads = [Math]::Min(12, [Math]::Max(2, [int]($Logical / 2)))
@@ -123,7 +136,8 @@ try {
         --endpoint "http://127.0.0.1:$Port/v1/chat/completions" `
         --api-key $ApiKey `
         --model-id ([string]$Manifest.served_model_name) `
-        --pipeline $Pipeline
+        --pipeline $Pipeline `
+        @ProfileArguments
     if ($LASTEXITCODE -ne 0) { throw "Corpus evaluation failed" }
     $Elapsed = ((Get-Date) - $Started).TotalSeconds
 } finally {
@@ -157,6 +171,8 @@ $AcceptanceJson = & node (Join-Path $Repository "scripts/validate-model-evaluati
 $AcceptanceExit = $LASTEXITCODE
 $Acceptance = $AcceptanceJson | ConvertFrom-Json
 $Report | Add-Member -NotePropertyName "acceptance" -NotePropertyValue $Acceptance -Force
+$Report | Add-Member -NotePropertyName "model_tier" -NotePropertyValue $Tier -Force
+$Report | Add-Member -NotePropertyName "model_id" -NotePropertyValue ([string]$TierModel.model_id) -Force
 $Report | Add-Member -NotePropertyName "model_file" -NotePropertyValue ([string]$ModelSpec.name) -Force
 $Report | Add-Member -NotePropertyName "model_sha256" -NotePropertyValue ([string]$ModelSpec.sha256) -Force
 $Report | Add-Member -NotePropertyName "model_bytes" -NotePropertyValue ([long]$ModelSpec.size) -Force

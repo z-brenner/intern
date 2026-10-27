@@ -50,6 +50,10 @@ pub struct ServerOptions {
     pub threads: usize,
     pub context_tokens: u32,
     pub startup_timeout: Duration,
+    /// Flags for one model in particular, after everything above. Chosen per
+    /// local model tier in [`crate::tiers::server_options`], which is the
+    /// one place they are set.
+    pub extra_arguments: Vec<String>,
 }
 
 impl Default for ServerOptions {
@@ -58,6 +62,7 @@ impl Default for ServerOptions {
             threads: default_threads(),
             context_tokens: CONTEXT_TOKENS,
             startup_timeout: Duration::from_secs(180),
+            extra_arguments: Vec::new(),
         }
     }
 }
@@ -233,6 +238,7 @@ impl LlamaServer {
             // megabytes of resident memory on every document.
             None => arguments.push("--no-mmproj".into()),
         }
+        arguments.extend(options.extra_arguments.iter().cloned());
         arguments
     }
 
@@ -466,7 +472,21 @@ mod tests {
             threads: 6,
             context_tokens: 8_192,
             startup_timeout: Duration::from_secs(30),
+            extra_arguments: Vec::new(),
         }
+    }
+
+    /// A model's own flags come last, after everything every launch sets.
+    #[test]
+    fn extra_arguments_follow_the_common_ones() {
+        let options = ServerOptions {
+            extra_arguments: vec!["--flash-attn".into(), "on".into()],
+            ..options()
+        };
+        let arguments =
+            LlamaServer::arguments_for(Path::new("m.gguf"), None, 51_000, "key", &options);
+        assert_eq!(&arguments[arguments.len() - 2..], ["--flash-attn", "on"]);
+        assert!(arguments.contains(&"--no-mmproj".to_owned()));
     }
 
     #[test]

@@ -2475,6 +2475,78 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Reads again every document whose reading is provisional and that no
+    /// person has acted on, now that the model it was waiting for can read
+    /// it. Says how many went back to be read.
+    ///
+    /// A provisional reading is the fast local model standing in for the
+    /// accurate one - not downloaded yet, or not fitting in memory at the
+    /// time ([`intern_engine::ModelReading::provisional`]). Once the
+    /// accurate model can be used, the reading it stood in for is what the
+    /// document should have had, so the document is read again the way
+    /// Re-analyze reads it: the file fingerprinted as it is now, the earlier
+    /// reading and the text fingerprint it left forgotten.
+    ///
+    /// Never one a person has acted on: an approval - its edits are in the
+    /// name it approved - a rename that was filed, kept or taken back, or
+    /// anything still settling its files. Whether one has is decided in the
+    /// same write transaction that sends the document back, so an approval
+    /// that lands between the look and the requeue is never thrown away. A
+    /// document whose file is gone is left for its person, as it was.
+    pub fn reanalyze_provisional(&self) -> PipelineResult<usize> {
+        let mut requeued = 0;
+        for item in self.store.list()? {
+            if !matches!(item.status, QueueStatus::NeedsReview | QueueStatus::Ready) {
+                continue;
+            }
+            let untouched = self
+                .repository
+                .load_proposal(item.id)?
+                .is_some_and(|record| untouched_provisional(&record));
+            if !untouched {
+                continue;
+            }
+            let Ok(fingerprint) = self.files.fingerprint(&item.source_path) else {
+                continue;
+            };
+            let new_hash = (fingerprint != item.source_hash).then_some(fingerprint.as_str());
+            // Re-analyze's own move, decided again inside its transaction: an
+            // approval is a write too, so it lands either before the look -
+            // and is seen - or after the document went back, where its
+            // compare-and-swap on the status refuses it and says the item
+            // changed.
+            let moved =
+                self.store
+                    .requeue_for_analysis_if(item.id, item.status, new_hash, |stored| {
+                        stored
+                            .and_then(|json| serde_json::from_str::<ProposalRecord>(json).ok())
+                            .is_some_and(|record| untouched_provisional(&record))
+                    });
+            match moved {
+                Ok(Some(_)) => {
+                    self.repository.forget_fingerprint(item.id)?;
+                    requeued += 1;
+                }
+                // Declined, or no longer this document's to move: a rename
+                // left unsettled, the same version of the file queued again,
+                // the item changed. It waits for its person, as it was.
+                Ok(None) => {}
+                Err(error)
+                    if matches!(
+                        error.code(),
+                        intern_core::ErrorCode::InvalidTransition
+                            | intern_core::ErrorCode::Duplicate
+                            | intern_core::ErrorCode::StateConflict
+                    ) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if requeued > 0 {
+            self.events.queue_changed();
+        }
+        Ok(requeued)
+    }
+
     /// Takes an item out of the queue, with its proposal and receipts.
     ///
     /// An item whose files were left unsettled is removed only once the
@@ -3422,6 +3494,24 @@ impl PipelineRepository {
             )
         })
     }
+}
+
+/// Whether a stored reading is provisional and nobody has acted on it: not
+/// approved, and never filed, kept, or taken back. A person's edits are
+/// approvals - the queue keeps no unapproved draft - so an unapproved reading
+/// holds none.
+fn untouched_provisional(record: &ProposalRecord) -> bool {
+    record
+        .analysis
+        .telemetry
+        .read_by
+        .as_ref()
+        .is_some_and(|reading| reading.provisional)
+        && !record.approved
+        && !record
+            .reasons
+            .iter()
+            .any(|reason| reason == UNDONE || reason == ALREADY_NAMED)
 }
 
 /// The folder a document is filed into: the destination (or, with none set,

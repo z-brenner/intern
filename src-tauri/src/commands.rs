@@ -14,7 +14,8 @@ use intern_core::{
 use intern_engine::HouseRule;
 use intern_engine::{
     DocumentAnalysis, DocumentSource, Engine, EngineErrorCode, LlamaServer, ModelClient, ModelFile,
-    ModelManifest, ServerOptions, SupervisedWorker, prepare_worker_temp_root,
+    ModelManifest, ModelPreference, ModelReading, ModelTier, SupervisedWorker, TierPlan,
+    prepare_worker_temp_root, tiers,
 };
 use intern_queue::{LearnedRule, ModelSource};
 use serde::{Deserialize, Serialize};
@@ -25,8 +26,8 @@ use intern_engine::download::{
     SystemDiskSpace, validate_selected_file,
 };
 use intern_engine::setup::{
-    ExistingModelSelection, SetupOperationGate, install_existing_model_files, semantic_probes,
-    validate_semantic_probe,
+    ExistingModelSelection, SetupOperationGate, install_existing_model_files,
+    match_existing_model_files, remove_retired_files, semantic_probes, validate_semantic_probe,
 };
 use intern_intake::{IntakeConfig, IntakeWatcher, MachineIdentity};
 use intern_queue::{
@@ -65,7 +66,10 @@ pub struct FolderSelectionDto {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingModelFilesDto {
-    pub model_path: String,
+    /// One file per model, in any order: the fast model, the accurate one,
+    /// or both. Each is recognised by its length and accepted only once its
+    /// digest matches.
+    pub model_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,6 +154,12 @@ pub struct QueueItemDto {
     /// inspector can say why a party in the evidence is not in the name.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     omitted_parties: Vec<String>,
+    /// Which local model read the document - and, when it was the fast one
+    /// standing in for the accurate one, that it will be read again - for
+    /// the inspector to say in a line. Absent for a hosted model and for a
+    /// reading stored before there were two local models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    read_by: Option<ModelReading>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -222,6 +232,10 @@ enum SetupStatus {
     Failed,
 }
 
+/// The local model's setup. The top-level fields are what stands between a
+/// person and their first document - the first model's download, install, or
+/// check - and `tiers` says where each model is, including the one that
+/// downloads behind the window once the first is in place.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupStateDto {
@@ -232,6 +246,21 @@ pub struct SetupStateDto {
     /// Whether a hosted model is chosen and configured, which lets documents
     /// be processed whatever the local model's state.
     hosted_model_ready: bool,
+    tiers: Vec<TierSetupDto>,
+}
+
+/// One model's setup, as Settings and the main window's status line show it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TierSetupDto {
+    tier: ModelTier,
+    display_name: String,
+    state: SetupStatus,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    /// Why the model cannot be used: a download that failed, or a model
+    /// that failed its digest or its first-load self-test.
+    error: Option<String>,
 }
 
 struct TauriPipelineEvents {
@@ -297,7 +326,12 @@ impl PipelineEventSink for TauriPipelineEvents {
 /// What brings a local model runtime up: in production llama-server and a
 /// client for it, under test a fake that counts its launches.
 trait RuntimeLauncher: Send + Sync {
-    fn launch(&self, manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError>;
+    /// Launches the server for `tier`'s model.
+    fn launch(
+        &self,
+        manifest: &ModelManifest,
+        tier: ModelTier,
+    ) -> Result<LaunchedRuntime, CommandError>;
 }
 
 /// A runtime that has started and answered its health check.
@@ -329,26 +363,41 @@ impl RuntimeLauncher for LlamaLauncher {
     /// or loaded. Essentially every business document carries usable text, and a
     /// projector for this model is 668,227,264 bytes - 637 MiB - which every
     /// user would download and hold resident for a path almost nothing takes.
-    fn launch(&self, manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError> {
-        let model = manifest.model().ok_or_else(|| CommandError {
-            code: "MODEL_MANIFEST_INVALID".into(),
-            message: "model manifest names no text model".into(),
-        })?;
+    ///
+    /// Each tier gets its own server options ([`tiers::server_options`]) and
+    /// is asked the way its manifest entry's prompt profile says; the fast
+    /// tier asks for token probabilities only when the cascade can escalate
+    /// on them.
+    fn launch(
+        &self,
+        manifest: &ModelManifest,
+        tier: ModelTier,
+    ) -> Result<LaunchedRuntime, CommandError> {
+        let pinned = manifest.tier(tier).ok_or_else(manifest_names_no_model)?;
+        let model = pinned.model().ok_or_else(manifest_names_no_model)?;
         let server = LlamaServer::start(
             &self.executable,
             &self.model_directory.join(&model.name),
             None,
-            &ServerOptions::default(),
+            &tiers::server_options(tier),
         )?;
         let client = ModelClient::new(
             &server.completion_endpoint(),
             server.api_key().to_owned(),
             manifest.served_model_name.clone(),
-        )?;
+        )?
+        .with_token_confidence(tiers::wants_token_confidence(tier));
         Ok(LaunchedRuntime {
             process: Box::new(server),
-            engine: Engine::new(client),
+            engine: Engine::new(client).with_prompt_profile(pinned.prompt_profile),
         })
+    }
+}
+
+fn manifest_names_no_model() -> CommandError {
+    CommandError {
+        code: "MODEL_MANIFEST_INVALID".into(),
+        message: "model manifest names no text model for this tier".into(),
     }
 }
 
@@ -366,16 +415,20 @@ struct VerifiedFile {
     modified: std::time::SystemTime,
 }
 
-/// Where a model that passed its digest and its self-test says so, beside the
-/// model itself.
+/// Where a model that passed its digest - and, it says, its self-test -
+/// says so, beside the models themselves.
 const VERIFICATION_STAMP: &str = ".verified.json";
-const VERIFICATION_STAMP_SCHEMA: u32 = 1;
+/// 2 records each tier's file on its own, and whether that file has passed
+/// the self-test as well as its digest. A stamp of 1 named the one model
+/// earlier builds pinned, and vouches for nothing now.
+const VERIFICATION_STAMP_SCHEMA: u32 = 2;
 
-/// What a launch needs to know to trust the installed model without reading
-/// it again: the files as they were when their digest and the self-test both
-/// passed, the server binary that ran the self-test, and the build that did
-/// the checking. Any of them changing - a replaced file, an updated runtime,
-/// a new Intern - sends the next launch through the full check again.
+/// What a launch needs to know to trust the installed models without reading
+/// them again: each file as it was when its digest passed, whether it has
+/// passed the self-test too, the server binary that ran the self-test, and
+/// the build that did the checking. A changed build or server binary vouches
+/// for nothing; a changed file vouches for nothing about that file. Either
+/// sends it through the full check again.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerificationStamp {
@@ -395,6 +448,21 @@ struct StampedFile {
     /// The digest the manifest pins, which the file was checked against. A
     /// new pin is a different model, whatever the file's size and date.
     sha256: String,
+    /// The model has passed the semantic self-test, not only its digest. A
+    /// model downloaded in the background is digest-checked at once and
+    /// self-tested the first time it is loaded.
+    #[serde(default)]
+    self_tested: bool,
+}
+
+impl StampedFile {
+    /// Whether this records the same file, as it is, under the same pin.
+    fn same_file(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.len == other.len
+            && self.modified_nanos == other.modified_nanos
+            && self.sha256 == other.sha256
+    }
 }
 
 fn modified_nanos(metadata: &std::fs::Metadata) -> Option<u64> {
@@ -426,23 +494,74 @@ enum Launch {
     Held,
 }
 
-/// The engine in the slot, and the generation it was started in.
+/// The engine in the slot, the tier it runs, and the generation it was
+/// started in.
 struct RunningEngine {
     engine: Engine,
+    tier: ModelTier,
     generation: u64,
 }
 
-/// The local model runtime: one llama-server, the engine that talks to it,
-/// and everything that starts, stops, and restarts it.
+/// What this session knows about one tier's model.
+#[derive(Clone, Debug, Default)]
+struct TierCheck {
+    /// The file as it was when its digest last passed - this session, or an
+    /// earlier one by the stamp. A start trusts the file while it still
+    /// looks exactly like this, and refuses it otherwise.
+    verified: Option<VerifiedFile>,
+    /// The model, as verified, has passed the semantic self-test.
+    self_tested: bool,
+    /// Why the model may not be used this session: it failed its digest or
+    /// its self-test. Cleared only by installing it again.
+    failure: Option<String>,
+}
+
+/// What the runtime asks of the world around it: what Settings asks for,
+/// how much memory is free, and the time. Fixed in production, set by tests.
+struct RuntimeSenses {
+    preference: Box<dyn Fn() -> ModelPreference + Send + Sync>,
+    /// How Automatic spends the two models: [`tiers::AUTOMATIC_STRATEGY`],
+    /// except where a test tries the other.
+    strategy: tiers::AutomaticStrategy,
+    /// Memory available for a model to load into, `None` when unknown.
+    available_memory: Box<dyn Fn() -> Option<u64> + Send + Sync>,
+    now: Box<dyn Fn() -> Instant + Send + Sync>,
+}
+
+impl RuntimeSenses {
+    fn of_this_machine(preference: Box<dyn Fn() -> ModelPreference + Send + Sync>) -> Self {
+        Self {
+            preference,
+            strategy: tiers::AUTOMATIC_STRATEGY,
+            available_memory: Box::new(tiers::available_memory_bytes),
+            now: Box::new(Instant::now),
+        }
+    }
+}
+
+/// Why a reading by one tier could not be made.
+enum ReadFailure {
+    /// What the queue is told.
+    Failed(ModelFailure),
+    /// The tier failed its first-load self-test just now: plan again without
+    /// it.
+    Unusable,
+}
+
+/// The local model runtime: one llama-server, running one tier's model at a
+/// time, the engine that talks to it, and everything that starts, stops, and
+/// swaps it.
 ///
 /// Starts and stops are serialized by `lifecycle`. Cancel, recover, and the
 /// setup thread's verified start used to run unserialized, so a cancel and a
 /// recover that overlapped each launched a server - twice the memory while
 /// both loaded - and the loser reported a failure for a cancel that had
-/// worked. `generation` counts the deliberate stops (cancel, hold, shutdown):
-/// a request that fails after one is reported as canceled - or, when the
-/// local model was set aside, handed back - rather than as a server fault,
-/// so nothing restarts the server a second time for it.
+/// worked. A swap from one tier to the other is the same: it unloads the
+/// model under `lifecycle` before it loads the next, so two models are never
+/// resident together. `generation` counts the deliberate stops (cancel, hold,
+/// shutdown): a request that fails after one is reported as canceled - or,
+/// when the local model was set aside, handed back - rather than as a server
+/// fault, so nothing restarts the server a second time for it.
 struct RuntimeModel {
     executable: PathBuf,
     model_directory: PathBuf,
@@ -450,6 +569,7 @@ struct RuntimeModel {
     app_version: String,
     launcher: Arc<dyn RuntimeLauncher>,
     validate: Box<FileValidator>,
+    senses: RuntimeSenses,
     engine: RwLock<Option<RunningEngine>>,
     server: Mutex<Option<Box<dyn RuntimeProcess>>>,
     lifecycle: Mutex<()>,
@@ -461,13 +581,31 @@ struct RuntimeModel {
     /// starts the local server, and a start already under way discards what
     /// it launched.
     held: AtomicBool,
-    /// The model file as it was when this session last checked its digest.
-    /// A start trusts the file while it still looks exactly like that.
-    verified: Mutex<Option<VerifiedFile>>,
+    /// Each tier's model as this session last checked it.
+    checks: Mutex<std::collections::BTreeMap<ModelTier, TierCheck>>,
+    /// Serializes the stamp's read-modify-write: the setup thread and the
+    /// background download both record what they checked.
+    stamp_lock: Mutex<()>,
+    /// The tier started last: what a cancel or a recovery restarts.
+    last_tier: Mutex<Option<ModelTier>>,
+    /// When a model was last started or asked something, for idle unload.
+    last_used: Mutex<Option<Instant>>,
+    /// Some reading may be the fast model standing in for the accurate one,
+    /// and not yet read again. Set at launch - the queue may hold readings
+    /// from an earlier session - and by every provisional reading.
+    provisional_pending: AtomicBool,
+    /// Told when a tier's verdict changes outside a setup operation: a model
+    /// that failed its self-test the first time a document loaded it.
+    on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl RuntimeModel {
-    fn new(executable: PathBuf, model_directory: PathBuf, manifest: ModelManifest) -> Self {
+    fn new(
+        executable: PathBuf,
+        model_directory: PathBuf,
+        manifest: ModelManifest,
+        preference: Box<dyn Fn() -> ModelPreference + Send + Sync>,
+    ) -> Self {
         let launcher = Arc::new(LlamaLauncher {
             executable: executable.clone(),
             model_directory: model_directory.clone(),
@@ -479,6 +617,7 @@ impl RuntimeModel {
             launcher,
             Box::new(validate_selected_file),
             env!("CARGO_PKG_VERSION").to_owned(),
+            RuntimeSenses::of_this_machine(preference),
         )
     }
 
@@ -489,6 +628,7 @@ impl RuntimeModel {
         launcher: Arc<dyn RuntimeLauncher>,
         validate: Box<FileValidator>,
         app_version: String,
+        senses: RuntimeSenses,
     ) -> Self {
         Self {
             executable,
@@ -497,13 +637,19 @@ impl RuntimeModel {
             app_version,
             launcher,
             validate,
+            senses,
             engine: RwLock::new(None),
             server: Mutex::new(None),
             lifecycle: Mutex::new(()),
             generation: AtomicU64::new(0),
             failed_generation: AtomicU64::new(0),
             held: AtomicBool::new(false),
-            verified: Mutex::new(None),
+            checks: Mutex::new(std::collections::BTreeMap::new()),
+            stamp_lock: Mutex::new(()),
+            last_tier: Mutex::new(None),
+            last_used: Mutex::new(None),
+            provisional_pending: AtomicBool::new(true),
+            on_change: Mutex::new(None),
         }
     }
 
@@ -511,19 +657,40 @@ impl RuntimeModel {
         &self.manifest
     }
 
-    /// Whether the manifest's files are in place at the size it pins.
+    /// `tier`'s model file, when its name is one a path may be built from.
+    fn tier_file(&self, tier: ModelTier) -> Option<&ModelFile> {
+        self.manifest
+            .tier(tier)
+            .and_then(intern_engine::TierModel::model)
+            .filter(|file| safe_model_name(&file.name))
+    }
+
+    /// Whether `tier`'s file is in place at the size the manifest pins.
     ///
     /// Metadata only, never a byte of the file. Launch asks this inside
     /// Tauri's setup hook, before the window paints, and used to answer it by
-    /// hashing all 1.19 GiB - twice, so an office laptop without SHA
+    /// hashing the whole model - twice, so an office laptop without SHA
     /// instructions showed a white rectangle for five seconds or more at
     /// every sign-in. The digest is checked on the setup thread instead.
-    fn installed_quick(&self, manifest: &ModelManifest) -> bool {
-        manifest.files.iter().all(|file| {
-            safe_model_name(&file.name)
-                && std::fs::metadata(self.model_directory.join(&file.name))
-                    .is_ok_and(|metadata| metadata.is_file() && metadata.len() == file.size)
+    fn tier_installed_quick(&self, tier: ModelTier) -> bool {
+        self.tier_file(tier).is_some_and(|file| {
+            std::fs::metadata(self.model_directory.join(&file.name))
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == file.size)
         })
+    }
+
+    /// The tiers whose files are in place, in the order setup installs them.
+    fn installed_tiers_quick(&self) -> Vec<ModelTier> {
+        ModelTier::ALL
+            .into_iter()
+            .filter(|tier| self.tier_installed_quick(*tier))
+            .collect()
+    }
+
+    /// Whether any tier's model is in place: whether there is a local model
+    /// to start at all.
+    fn installed_quick(&self) -> bool {
+        !self.installed_tiers_quick().is_empty()
     }
 
     /// Whether a server is up and its engine in the slot.
@@ -545,13 +712,21 @@ impl RuntimeModel {
                 .is_some()
     }
 
+    /// The tier whose model is loaded, if one is.
+    fn loaded_tier(&self) -> Option<ModelTier> {
+        self.engine
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|running| running.tier)
+    }
+
     fn is_held(&self) -> bool {
         self.held.load(Ordering::SeqCst)
     }
 
-    fn model_file_state(&self) -> Option<VerifiedFile> {
-        let model = self.manifest.model()?;
-        let path = self.model_directory.join(&model.name);
+    fn file_state(&self, tier: ModelTier) -> Option<VerifiedFile> {
+        let path = self.model_directory.join(&self.tier_file(tier)?.name);
         let metadata = std::fs::metadata(&path).ok()?;
         Some(VerifiedFile {
             path,
@@ -560,40 +735,139 @@ impl RuntimeModel {
         })
     }
 
-    fn verified_slot(&self) -> std::sync::MutexGuard<'_, Option<VerifiedFile>> {
-        self.verified
+    fn checks(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<ModelTier, TierCheck>> {
+        self.checks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Records that the model file, as it is now, has just passed its digest
-    /// somewhere else - the download and the install of a chosen file both
-    /// check it - so the start that follows need not read it again.
-    fn remember_verified(&self) {
-        *self.verified_slot() = self.model_file_state();
+    fn check(&self, tier: ModelTier) -> TierCheck {
+        self.checks().get(&tier).cloned().unwrap_or_default()
     }
 
-    /// Checks the model's digest, unless this session already has for the
-    /// file exactly as it is now. A mismatch is MODEL_FILE_INVALID, which is
-    /// what setup's existing repair - delete it and download it again - is for.
-    fn verify_files(&self) -> Result<(), CommandError> {
-        let current = self.model_file_state();
-        if current.is_some() && *self.verified_slot() == current {
+    fn update_check(&self, tier: ModelTier, update: impl FnOnce(&mut TierCheck)) {
+        update(self.checks().entry(tier).or_default());
+    }
+
+    /// Why `tier` may not be used this session, when it may not.
+    fn tier_failure(&self, tier: ModelTier) -> Option<String> {
+        self.check(tier).failure
+    }
+
+    /// Sets `tier` aside for this session, and says so to whoever listens.
+    fn set_failure(&self, tier: ModelTier, code: String) {
+        self.update_check(tier, |check| {
+            check.failure = Some(code);
+            check.self_tested = false;
+        });
+        self.notify();
+    }
+
+    fn notify(&self) {
+        let listener = self
+            .on_change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(listener) = listener {
+            listener();
+        }
+    }
+
+    /// Whether a document may be planned onto `tier`: this session checked
+    /// its file, the file still looks exactly as it did then, and nothing
+    /// has set it aside. Metadata only.
+    fn plannable(&self, tier: ModelTier) -> bool {
+        let check = self.check(tier);
+        check.failure.is_none()
+            && check.verified.is_some()
+            && check.verified == self.file_state(tier)
+    }
+
+    fn plannable_tiers(&self) -> Vec<ModelTier> {
+        ModelTier::ALL
+            .into_iter()
+            .filter(|tier| self.plannable(*tier))
+            .collect()
+    }
+
+    /// Whether the queue may hand this runtime documents: it is not held,
+    /// and some tier that has passed its self-test can be loaded - now, or on
+    /// demand after an idle unload.
+    fn serviceable(&self) -> bool {
+        !self.is_held()
+            && ModelTier::ALL
+                .into_iter()
+                .any(|tier| self.plannable(tier) && self.check(tier).self_tested)
+    }
+
+    /// What reads the next document, given what Settings asks for, what is
+    /// installed and checked, and the memory free. A loaded model's own
+    /// memory counts as free: unloading it to load another gives it back.
+    fn plan(&self) -> Option<TierPlan> {
+        let available = (self.senses.available_memory)().map(|available| {
+            available.saturating_add(self.loaded_tier().map_or(0, tiers::resident_estimate))
+        });
+        tiers::plan_with(
+            (self.senses.preference)(),
+            self.senses.strategy,
+            &self.plannable_tiers(),
+            available,
+        )
+    }
+
+    /// Records that `tier`'s file, as it is now, has just passed its digest
+    /// somewhere else - the download and the install of a chosen file both
+    /// check it - so the start that follows need not read it again, and
+    /// neither does the next launch. A tier set aside is given its chance
+    /// again: this is a new install of it.
+    fn remember_verified(&self, tier: ModelTier) {
+        let state = self.file_state(tier);
+        self.update_check(tier, |check| {
+            *check = TierCheck {
+                verified: state.clone(),
+                ..TierCheck::default()
+            };
+        });
+        if let Some(state) = state {
+            self.stamp_tier(tier, &state, false);
+        }
+        self.notify();
+    }
+
+    /// Checks `tier`'s digest, unless this session already has for the file
+    /// exactly as it is now, or the stamp vouches for it. A mismatch is
+    /// MODEL_FILE_INVALID, which is what setup's existing repair - delete it
+    /// and download it again - is for.
+    fn verify_tier(&self, tier: ModelTier) -> Result<(), CommandError> {
+        let current = self.file_state(tier);
+        if current.is_some() && self.check(tier).verified == current {
             return Ok(());
         }
-        *self.verified_slot() = None;
-        for file in &self.manifest.files {
-            if !safe_model_name(&file.name) {
-                return Err(CommandError {
-                    code: "MODEL_FILE_INVALID".into(),
-                    message: "model manifest names an unsafe file".into(),
-                });
-            }
-            (self.validate)(&self.model_directory.join(&file.name), file)?;
+        self.update_check(tier, |check| check.verified = None);
+        let file = self.tier_file(tier).ok_or_else(|| CommandError {
+            code: "MODEL_FILE_INVALID".into(),
+            message: "model manifest names an unsafe file".into(),
+        })?;
+        if let Some(self_tested) = current.as_ref().and_then(|_| self.stamped(tier)) {
+            self.update_check(tier, |check| {
+                check.verified.clone_from(&current);
+                check.self_tested = self_tested;
+            });
+            return Ok(());
         }
+        (self.validate)(&self.model_directory.join(&file.name), file)?;
         // The state from before the digest: a file that changed while it
         // was being read no longer matches it, so nothing trusts the change.
-        *self.verified_slot() = current;
+        self.update_check(tier, |check| {
+            check.verified.clone_from(&current);
+            check.self_tested = false;
+        });
+        if let Some(state) = current {
+            self.stamp_tier(tier, &state, false);
+        }
         Ok(())
     }
 
@@ -601,36 +875,128 @@ impl RuntimeModel {
         self.model_directory.join(VERIFICATION_STAMP)
     }
 
-    /// The stamp the files and server on disk would earn now, or `None` when
-    /// something it records cannot be read.
-    fn current_stamp(&self) -> Option<VerificationStamp> {
-        let files = self
-            .manifest
-            .files
-            .iter()
-            .map(|file| {
-                let metadata = std::fs::metadata(self.model_directory.join(&file.name)).ok()?;
-                Some(StampedFile {
-                    name: file.name.clone(),
-                    len: metadata.len(),
-                    modified_nanos: modified_nanos(&metadata)?,
-                    sha256: file.sha256.clone(),
-                })
-            })
-            .collect::<Option<Vec<_>>>()?;
+    /// A stamp with no files, as this build over this server binary would
+    /// write it, or `None` when the server binary cannot be read.
+    fn stamp_header(&self) -> Option<VerificationStamp> {
         let server = std::fs::metadata(&self.executable).ok()?;
         Some(VerificationStamp {
             schema_version: VERIFICATION_STAMP_SCHEMA,
             app_version: self.app_version.clone(),
-            files,
+            files: Vec::new(),
             server_len: server.len(),
             server_modified_nanos: modified_nanos(&server)?,
         })
     }
 
+    /// The stored stamp, when this build wrote it over this server binary.
+    /// Any other stamp vouches for nothing.
     fn stored_stamp(&self) -> Option<VerificationStamp> {
+        let header = self.stamp_header()?;
         let bytes = std::fs::read(self.stamp_path()).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        let stored: VerificationStamp = serde_json::from_slice(&bytes).ok()?;
+        (stored.schema_version == header.schema_version
+            && stored.app_version == header.app_version
+            && stored.server_len == header.server_len
+            && stored.server_modified_nanos == header.server_modified_nanos)
+            .then_some(stored)
+    }
+
+    /// The stamp entry `tier`'s file would earn as `state` describes it.
+    fn stamp_entry(
+        &self,
+        tier: ModelTier,
+        state: &VerifiedFile,
+        self_tested: bool,
+    ) -> Option<StampedFile> {
+        let file = self.tier_file(tier)?;
+        let modified = state
+            .modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| u64::try_from(since.as_nanos()).ok())?;
+        Some(StampedFile {
+            name: file.name.clone(),
+            len: state.len,
+            modified_nanos: modified,
+            sha256: file.sha256.clone(),
+            self_tested,
+        })
+    }
+
+    /// What the stamp says of `tier`'s file as it is now: `None` when it
+    /// vouches for nothing, otherwise whether the self-test passed as well
+    /// as the digest.
+    fn stamped(&self, tier: ModelTier) -> Option<bool> {
+        let entry = self.stamp_entry(tier, &self.file_state(tier)?, false)?;
+        self.stored_stamp()?
+            .files
+            .iter()
+            .find(|stamped| stamped.same_file(&entry))
+            .map(|stamped| stamped.self_tested)
+    }
+
+    /// Records `tier`'s file in the stamp, as `state` says it was when it
+    /// was checked - only while it still looks exactly like that. Entries
+    /// for files that have since changed, or that this manifest no longer
+    /// pins, are dropped on the way.
+    fn stamp_tier(&self, tier: ModelTier, state: &VerifiedFile, self_tested: bool) {
+        let _stamp = self
+            .stamp_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.file_state(tier).as_ref() != Some(state) {
+            return;
+        }
+        let (Some(mut stamp), Some(entry)) = (
+            self.stamp_header(),
+            self.stamp_entry(tier, state, self_tested),
+        ) else {
+            return;
+        };
+        stamp.files = self.current_entries(Some(&entry.name));
+        stamp.files.push(entry);
+        self.write_stamp(&stamp);
+    }
+
+    /// Takes `tier` out of the stamp: a model that failed its self-test, or
+    /// that the stamp vouched for and would not start, is checked in full
+    /// next time.
+    fn unstamp_tier(&self, tier: ModelTier) {
+        let _stamp = self
+            .stamp_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let name = self.tier_file(tier).map(|file| file.name.clone());
+        let kept = self.current_entries(name.as_ref());
+        match self.stamp_header() {
+            Some(mut stamp) if !kept.is_empty() => {
+                stamp.files = kept;
+                self.write_stamp(&stamp);
+            }
+            _ => {
+                let _ = std::fs::remove_file(self.stamp_path());
+            }
+        }
+    }
+
+    /// The stored stamp's entries that still describe a file this manifest
+    /// pins, as it is on disk now, other than `except`.
+    fn current_entries(&self, except: Option<&String>) -> Vec<StampedFile> {
+        let Some(stored) = self.stored_stamp() else {
+            return Vec::new();
+        };
+        stored
+            .files
+            .into_iter()
+            .filter(|stamped| Some(&stamped.name) != except)
+            .filter(|stamped| {
+                ModelTier::ALL.into_iter().any(|tier| {
+                    self.file_state(tier)
+                        .and_then(|state| self.stamp_entry(tier, &state, false))
+                        .is_some_and(|entry| entry.same_file(stamped))
+                })
+            })
+            .collect()
     }
 
     fn write_stamp(&self, stamp: &VerificationStamp) {
@@ -639,26 +1005,22 @@ impl RuntimeModel {
         }
     }
 
-    fn delete_stamp(&self) {
-        let _ = std::fs::remove_file(self.stamp_path());
-    }
-
-    /// Launches the runtime into the empty slots.
+    /// Launches `tier`'s model into the empty slots.
     ///
     /// Callers hold `lifecycle`, and the guard is asked for to say so. The
     /// slots are checked before anything is launched, so no start can load a
     /// second server only to find the first one there. Never reads the model:
     /// the file must still look exactly as it did when this session checked
-    /// its digest, or nothing starts.
-    fn start(&self, _lifecycle: &std::sync::MutexGuard<'_, ()>) -> Result<Launch, CommandError> {
+    /// its digest, and nothing may have set the tier aside, or nothing starts.
+    fn start(
+        &self,
+        _lifecycle: &std::sync::MutexGuard<'_, ()>,
+        tier: ModelTier,
+    ) -> Result<Launch, CommandError> {
         if self.is_held() {
             return Ok(Launch::Held);
         }
-        let current = self.model_file_state();
-        if !self.installed_quick(&self.manifest)
-            || current.is_none()
-            || *self.verified_slot() != current
-        {
+        if !self.tier_installed_quick(tier) || !self.plannable(tier) {
             return Err(CommandError {
                 code: "MODEL_NOT_READY".into(),
                 message: "model files are not installed, or changed after they were verified"
@@ -681,7 +1043,7 @@ impl RuntimeModel {
                 message: "local model process is already running".into(),
             });
         }
-        let launched = self.launcher.launch(&self.manifest)?;
+        let launched = self.launcher.launch(&self.manifest, tier)?;
         let mut server = self
             .server
             .lock()
@@ -699,20 +1061,38 @@ impl RuntimeModel {
         *server = Some(launched.process);
         *engine = Some(RunningEngine {
             engine: launched.engine,
+            tier,
             generation: self.generation.load(Ordering::SeqCst),
         });
+        *self
+            .last_tier
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tier);
+        self.touch();
         Ok(Launch::Started)
+    }
+
+    /// Notes that the model was just used, for idle unload.
+    fn touch(&self) {
+        *self
+            .last_used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((self.senses.now)());
     }
 
     /// Starts the installed model and makes sure it works, on the setup
     /// thread.
     ///
-    /// A model that passed its digest and the semantic self-test under this
-    /// build, this server binary, and its current size and date is started
-    /// without either: both cost seconds of CPU at every sign-in, and
-    /// nothing they check has changed. Anything else is hashed - unless this
-    /// session already has - started, and self-tested, and only a model that
-    /// passes is stamped.
+    /// Every installed tier's digest is settled first - by the stamp, by
+    /// this session's own check, or by reading it - and a tier whose file
+    /// fails is set aside while the others are used. Then the tier the next
+    /// document would be read by is started. A model that passed the
+    /// semantic self-test under this build, this server binary, and its
+    /// current size and date is started without one: it costs seconds of CPU
+    /// at every sign-in, and nothing it checks has changed. Anything else is
+    /// self-tested, and only a model that passes is stamped as having passed.
+    /// An accurate model that fails is set aside and the fast one started in
+    /// its place.
     fn start_verified(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
         let lifecycle = self
             .lifecycle
@@ -728,52 +1108,79 @@ impl RuntimeModel {
         if self.is_held() {
             return Ok(());
         }
-        let stamp = self.current_stamp();
-        let stamped =
-            stamp.is_some() && self.installed_quick(&self.manifest) && self.stored_stamp() == stamp;
-        if stamped {
-            self.remember_verified();
-        } else {
-            self.verify_files()?;
-        }
-        if cancellation.is_canceled() {
-            return Err(setup_canceled_error());
-        }
-        // A model the stamp vouched for that will not start is checked in
-        // full next time, in case the file is what is wrong with it.
-        if self
-            .start(&lifecycle)
-            .inspect_err(|_| self.delete_stamp())?
-            == Launch::Held
-        {
-            return Ok(());
-        }
-        if stamped {
+        let mut first_error = None;
+        for tier in self.installed_tiers_quick() {
+            if let Err(error) = self.verify_tier(tier) {
+                self.set_failure(tier, error.code.clone());
+                first_error.get_or_insert(error);
+            }
             if cancellation.is_canceled() {
-                let _ = self.stop_runtime();
                 return Err(setup_canceled_error());
             }
-            return Ok(());
         }
-        let result = self.semantic_self_test(cancellation);
-        match (&result, stamp) {
-            (Ok(()), Some(stamp)) if self.current_stamp().as_ref() == Some(&stamp) => {
-                self.write_stamp(&stamp);
+        loop {
+            let Some(plan) = self.plan() else {
+                return Err(first_error.unwrap_or_else(|| CommandError {
+                    code: "MODEL_NOT_READY".into(),
+                    message: "no local model is installed".into(),
+                }));
+            };
+            let tier = plan.first;
+            let stamped = self.stamped(tier) == Some(true);
+            // A model the stamp vouched for that will not start is checked in
+            // full next time, in case the file is what is wrong with it.
+            if self
+                .start(&lifecycle, tier)
+                .inspect_err(|_| self.unstamp_tier(tier))?
+                == Launch::Held
+            {
+                return Ok(());
             }
-            (Ok(()), _) => {}
-            // While this holds `lifecycle`, only a setup cancel - which its
-            // token tells apart - a hold, or shutdown stops the server. A
-            // server stopped under the self-test on purpose says nothing
-            // about the model, and reporting it as a failed self-test told
-            // someone who had just chosen a hosted model that their local one
-            // was broken.
-            (Err(_), _) if !cancellation.is_canceled() && !self.running() => return Ok(()),
-            (Err(_), _) => {
-                self.delete_stamp();
-                let _ = self.stop_runtime();
+            if stamped {
+                if cancellation.is_canceled() {
+                    let _ = self.stop_runtime();
+                    return Err(setup_canceled_error());
+                }
+                self.update_check(tier, |check| check.self_tested = true);
+                return Ok(());
+            }
+            let before = self.file_state(tier);
+            match self.semantic_self_test(cancellation) {
+                Ok(()) => {
+                    self.passed_self_test(tier, before.as_ref());
+                    return Ok(());
+                }
+                // While this holds `lifecycle`, only a setup cancel - which
+                // its token tells apart - a hold, or shutdown stops the
+                // server. A server stopped under the self-test on purpose
+                // says nothing about the model, and reporting it as a failed
+                // self-test told someone who had just chosen a hosted model
+                // that their local one was broken.
+                Err(_) if !cancellation.is_canceled() && !self.running() => return Ok(()),
+                Err(error) => {
+                    self.unstamp_tier(tier);
+                    let _ = self.stop_runtime();
+                    if cancellation.is_canceled() {
+                        return Err(error);
+                    }
+                    self.set_failure(tier, error.code.clone());
+                    // The fast model is what makes Intern usable at all; an
+                    // accurate one that fails leaves it to the fast one.
+                    if tier == ModelTier::Fast || !self.plannable(ModelTier::Fast) {
+                        return Err(error);
+                    }
+                }
             }
         }
-        result
+    }
+
+    /// Records that `tier`, as `before` says its file was, passed the
+    /// self-test.
+    fn passed_self_test(&self, tier: ModelTier, before: Option<&VerifiedFile>) {
+        self.update_check(tier, |check| check.self_tested = true);
+        if let Some(before) = before {
+            self.stamp_tier(tier, before, true);
+        }
     }
 
     fn semantic_self_test(&self, cancellation: &CancellationToken) -> Result<(), CommandError> {
@@ -827,6 +1234,46 @@ impl RuntimeModel {
             .write()
             .map_err(|_| ModelFailure::fatal("MODEL_CANCEL_FAILED"))? = None;
         stop_result.map(|()| was_running)
+    }
+
+    /// Unloads the model when nothing has asked it anything for
+    /// [`tiers::IDLE_UNLOAD_AFTER`], giving its memory back to the machine.
+    /// The next document starts it again (see `ensure`). Says whether it
+    /// unloaded anything.
+    ///
+    /// Waits for nothing: a start or stop under way holds `lifecycle`, and a
+    /// request in flight holds the engine slot for reading, and either means
+    /// the model is not idle. Holding both, nothing can ask the model
+    /// anything while it goes, so no request is interrupted and no
+    /// generation moves.
+    fn unload_if_idle(&self) -> bool {
+        let Ok(_lifecycle) = self.lifecycle.try_lock() else {
+            return false;
+        };
+        let Ok(mut engine) = self.engine.try_write() else {
+            return false;
+        };
+        let last_used = *self
+            .last_used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let idle = last_used.is_none_or(|last| {
+            (self.senses.now)().saturating_duration_since(last) >= tiers::IDLE_UNLOAD_AFTER
+        });
+        if engine.is_none() || !idle {
+            return false;
+        }
+        let process = self
+            .server
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        *engine = None;
+        drop(engine);
+        if let Some(process) = process {
+            let _ = process.stop();
+        }
+        true
     }
 
     /// Stops the local model and keeps it stopped: while a hosted model is
@@ -887,6 +1334,205 @@ impl RuntimeModel {
         // a document someone has just canceled.
         ModelFailure::fatal("MODEL_CANCELED")
     }
+
+    /// Whether a deliberate stop has come since a request read the
+    /// generation as `asked`.
+    fn overtaken_since(&self, asked: u64) -> bool {
+        self.is_held() || self.generation.load(Ordering::SeqCst) != asked
+    }
+
+    /// Makes `tier`'s model the one loaded, for a request that read the
+    /// generation as `asked`: unloads whatever else is loaded first - never
+    /// two models resident at once - and starts `tier`'s, self-testing it
+    /// the first time it is loaded at all.
+    ///
+    /// Under `lifecycle`, like every start. A start that fails hands the
+    /// document back as MODEL_NOT_READY, which the queue counts against
+    /// nothing and which, if it goes on, the queue reports as a local model
+    /// that stopped responding; the failure itself is in the server's log.
+    /// A model that fails its first-load self-test is set aside for the
+    /// session ([`ReadFailure::Unusable`]) and the document planned again
+    /// without it.
+    fn ensure(&self, tier: ModelTier, asked: u64) -> Result<(), ReadFailure> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.overtaken_since(asked) {
+            return Err(ReadFailure::Failed(self.overtaken()));
+        }
+        let ready = self
+            .engine
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|running| running.tier == tier && running.generation == asked);
+        if ready {
+            return Ok(());
+        }
+        let not_ready = || ReadFailure::Failed(ModelFailure::retryable("MODEL_NOT_READY"));
+        self.stop_runtime().map_err(|_| not_ready())?;
+        let vouched = self.check(tier).self_tested || self.stamped(tier) == Some(true);
+        match self.start(&lifecycle, tier) {
+            Ok(Launch::Started) => {}
+            Ok(Launch::Held) => return Err(ReadFailure::Failed(self.overtaken())),
+            Err(error) => {
+                eprintln!(
+                    "intern: the {} local model could not be started: {}",
+                    tier.as_str(),
+                    error.code
+                );
+                self.unstamp_tier(tier);
+                return Err(not_ready());
+            }
+        }
+        if vouched {
+            self.update_check(tier, |check| check.self_tested = true);
+            return Ok(());
+        }
+        let before = self.file_state(tier);
+        match self.semantic_self_test(&CancellationToken::new()) {
+            Ok(()) => {
+                self.passed_self_test(tier, before.as_ref());
+                Ok(())
+            }
+            // Stopped under the self-test on purpose - a hosted model chosen,
+            // or shutdown - which says nothing about the model.
+            Err(_) if !self.running() => Err(ReadFailure::Failed(self.overtaken())),
+            Err(error) => {
+                eprintln!(
+                    "intern: the {} local model failed its self-test: {}",
+                    tier.as_str(),
+                    error.message
+                );
+                self.unstamp_tier(tier);
+                let _ = self.stop_runtime();
+                self.set_failure(tier, error.code);
+                Err(ReadFailure::Unusable)
+            }
+        }
+    }
+
+    /// Reads the document with `tier`'s model, starting it if it is not the
+    /// one loaded.
+    fn read(
+        &self,
+        tier: ModelTier,
+        asked: u64,
+        source: &DocumentSource,
+        extension: &str,
+        existing_names: &[&str],
+    ) -> Result<DocumentAnalysis, ReadFailure> {
+        let mut waited = false;
+        let mut started = false;
+        loop {
+            {
+                let slot = self
+                    .engine
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Only an engine started since the last deliberate stop. One
+                // from before it is the one that stop is about to take away,
+                // and a request sent to it would fail under the stop as if
+                // something were wrong with the document. The slot is held
+                // for reading for the whole request, which is what keeps idle
+                // unload away from a model in use.
+                if let Some(running) = slot
+                    .as_ref()
+                    .filter(|running| running.generation == asked && running.tier == tier)
+                {
+                    let result = running
+                        .engine
+                        .analyze(source, extension, existing_names)
+                        .map_err(|error| {
+                            ReadFailure::Failed(self.failure_for(
+                                error.code().as_str(),
+                                asked,
+                                running.generation,
+                            ))
+                        });
+                    self.touch();
+                    return result;
+                }
+            }
+            // No engine for this tier. Nothing is wrong with the document
+            // either way, so none of this is a failure to count against it.
+            if self.overtaken_since(asked) {
+                return Err(ReadFailure::Failed(self.overtaken()));
+            }
+            if !waited {
+                // A restart under way - a cancel's, or the verified start
+                // that choosing the local model again begins - holds
+                // `lifecycle` from before it empties the slot until the new
+                // engine is in it. A cancel no longer holds the queue while
+                // it restarts the server, so the next document arrives in the
+                // middle of that, and handing it back failed it as a file
+                // error twice over in the seconds the server took to load.
+                // Waiting costs it those seconds instead. Taken with the
+                // engine guard released: a stop needs the slot.
+                drop(
+                    self.lifecycle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+                waited = true;
+                continue;
+            }
+            // Nothing under way, and not this tier: unloaded while idle, the
+            // other tier loaded, or never started. A tier this session has
+            // verified is started now; one it has not - setup has yet to
+            // check it - is the queue's to put back until setup has.
+            if started || !self.plannable(tier) {
+                return Err(ReadFailure::Failed(ModelFailure::retryable(
+                    "MODEL_NOT_READY",
+                )));
+            }
+            self.ensure(tier, asked)?;
+            started = true;
+        }
+    }
+
+    /// Who read a document, as the review panel shows it.
+    fn reading_by(&self, tier: ModelTier, provisional: bool) -> ModelReading {
+        let pinned = self.manifest.tier(tier);
+        ModelReading {
+            tier,
+            model_id: pinned
+                .map(|model| model.model_id.clone())
+                .unwrap_or_default(),
+            display_name: pinned
+                .map(|model| model.display_name.clone())
+                .unwrap_or_default(),
+            escalated: None,
+            escalation_failed: false,
+            provisional,
+        }
+    }
+
+    /// Whether the readings the fast model made in the accurate one's place
+    /// should be read again now: some may be waiting, and the next document
+    /// would not need a stand-in - the accurate model has arrived, or memory
+    /// has come back. Says so once for each such moment;
+    /// [`RuntimeModel::provisional_reread_failed`] asks for it again.
+    fn take_provisional_upgrade(&self) -> bool {
+        if !self.provisional_pending.load(Ordering::SeqCst) || self.is_held() {
+            return false;
+        }
+        // Only a plan that reaches the accurate model reads them any
+        // better: with the fast model asked for, they stay as they are.
+        match self.plan() {
+            Some(plan)
+                if !plan.provisional && (plan.first == ModelTier::Accurate || plan.escalate) =>
+            {
+                self.provisional_pending.swap(false, Ordering::SeqCst)
+            }
+            _ => false,
+        }
+    }
+
+    fn provisional_reread_failed(&self) {
+        self.provisional_pending.store(true, Ordering::SeqCst);
+    }
 }
 
 fn process_state_unavailable() -> CommandError {
@@ -904,6 +1550,12 @@ fn model_state_unavailable() -> CommandError {
 }
 
 impl AnalyzerBoundary for RuntimeModel {
+    /// Plans which tier reads the document ([`tiers::plan`]), reads it with
+    /// that tier's model - swapping models when another is loaded - and, in
+    /// the cascade, reads it once more with the accurate model when the fast
+    /// reading gives a reason to ([`tiers::escalation`]). The same extracted
+    /// source is read both times; nothing is extracted again. The accurate
+    /// reading wins; when it cannot be made, the fast one stands and says so.
     fn analyze(
         &self,
         source: &DocumentSource,
@@ -911,52 +1563,72 @@ impl AnalyzerBoundary for RuntimeModel {
         existing_names: &[&str],
     ) -> Result<DocumentAnalysis, ModelFailure> {
         let asked = self.generation.load(Ordering::SeqCst);
-        let mut waited = false;
-        loop {
-            {
-                let slot = self
-                    .engine
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Only an engine started since the last deliberate stop. One
-                // from before it is the one that stop is about to take away,
-                // and a request sent to it would fail under the stop as if
-                // something were wrong with the document.
-                if let Some(running) = slot.as_ref().filter(|running| running.generation == asked) {
-                    return running
-                        .engine
-                        .analyze(source, extension, existing_names)
-                        .map_err(|error| {
-                            self.failure_for(error.code().as_str(), asked, running.generation)
-                        });
+        let mut plan = match self.plan() {
+            Some(plan) => plan,
+            None => {
+                // Nothing checked yet: a verified start may be under way.
+                drop(
+                    self.lifecycle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+                match self.plan() {
+                    Some(plan) if !self.overtaken_since(asked) => plan,
+                    _ if self.overtaken_since(asked) => return Err(self.overtaken()),
+                    _ => return Err(ModelFailure::retryable("MODEL_NOT_READY")),
                 }
             }
-            // No engine to ask. Nothing is wrong with the document either
-            // way, so none of this is a failure to count against it.
-            if self.is_held() || self.generation.load(Ordering::SeqCst) != asked {
-                return Err(self.overtaken());
+        };
+        let mut replanned = false;
+        let mut analysis = loop {
+            match self.read(plan.first, asked, source, extension, existing_names) {
+                Ok(analysis) => break analysis,
+                Err(ReadFailure::Failed(failure)) => return Err(failure),
+                Err(ReadFailure::Unusable) if !replanned => {
+                    replanned = true;
+                    plan = self
+                        .plan()
+                        .ok_or_else(|| ModelFailure::retryable("MODEL_NOT_READY"))?;
+                }
+                Err(ReadFailure::Unusable) => {
+                    return Err(ModelFailure::retryable("MODEL_NOT_READY"));
+                }
             }
-            if waited {
-                // Nothing under way: never started, a start that failed, or
-                // a verified start whose thread has yet to begin. The
-                // queue's to put back until setup has a server running.
-                return Err(ModelFailure::retryable("MODEL_NOT_READY"));
-            }
-            // A restart under way - a cancel's, or the verified start that
-            // choosing the local model again begins - holds `lifecycle` from
-            // before it empties the slot until the new engine is in it. A
-            // cancel no longer holds the queue while it restarts the server,
-            // so the next document arrives in the middle of that, and handing
-            // it back failed it as a file error twice over in the seconds the
-            // server took to load. Waiting costs it those seconds instead.
-            // Taken with the engine guard released: a stop needs the slot.
-            drop(
-                self.lifecycle
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            );
-            waited = true;
+        };
+        if plan.provisional {
+            self.provisional_pending.store(true, Ordering::SeqCst);
         }
+        let mut reading = self.reading_by(plan.first, plan.provisional);
+        if plan.escalate
+            && plan.first != ModelTier::Accurate
+            && let Some(reason) = tiers::escalation(&analysis)
+        {
+            reading.escalated = Some(reason);
+            match self.read(
+                ModelTier::Accurate,
+                asked,
+                source,
+                extension,
+                existing_names,
+            ) {
+                Ok(better) => {
+                    analysis = better;
+                    reading = ModelReading {
+                        escalated: Some(reason),
+                        ..self.reading_by(ModelTier::Accurate, false)
+                    };
+                }
+                // Canceled, or set aside for a hosted model: the document
+                // goes where a deliberate stop sends it, whatever the fast
+                // model made of it.
+                Err(ReadFailure::Failed(failure)) if self.overtaken_since(asked) => {
+                    return Err(failure);
+                }
+                Err(_) => reading.escalation_failed = true,
+            }
+        }
+        analysis.telemetry.read_by = Some(reading);
+        Ok(analysis)
     }
 
     /// Restarts a server that failed a request. Only once per failure: a
@@ -972,9 +1644,10 @@ impl AnalyzerBoundary for RuntimeModel {
         if self.generation.load(Ordering::SeqCst) != self.failed_generation.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let tier = self.restart_tier();
         self.stop_runtime()
             .map_err(|_| ModelFailure::fatal("MODEL_RECOVERY_FAILED"))?;
-        self.start(&lifecycle)
+        self.start(&lifecycle, tier)
             .map(|_| ())
             .map_err(|_| ModelFailure::fatal("MODEL_RECOVERY_FAILED"))
     }
@@ -989,10 +1662,11 @@ impl AnalyzerBoundary for RuntimeModel {
             .lifecycle
             .lock()
             .map_err(|_| ModelFailure::fatal("MODEL_CANCEL_FAILED"))?;
+        let tier = self.restart_tier();
         if !self.stop_runtime()? {
             return Ok(());
         }
-        self.start(&lifecycle)
+        self.start(&lifecycle, tier)
             .map(|_| ())
             .map_err(|error| ModelFailure::fatal(error.code))
     }
@@ -1005,10 +1679,22 @@ impl AnalyzerBoundary for RuntimeModel {
     }
 }
 
+impl RuntimeModel {
+    /// The tier a restart starts: the one loaded, else the one started last.
+    fn restart_tier(&self) -> ModelTier {
+        self.loaded_tier()
+            .or(*self
+                .last_tier
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner))
+            .unwrap_or(ModelTier::Fast)
+    }
+}
+
 /// How often a download may tell the window how far it has got.
 ///
 /// Every network chunk used to reach the webview as its own event - tens of
-/// thousands over 1.19 GiB, each a React state update - on exactly the slow
+/// thousands over a model, each a React state update - on exactly the slow
 /// laptops where the download already takes longest.
 struct ProgressThrottle {
     last: Option<std::time::Instant>,
@@ -1064,12 +1750,29 @@ fn setup_publisher(app: AppHandle) -> SetupPublisher {
     })
 }
 
+/// The tier a person waits for before Intern names anything: the smaller
+/// download, which setup fetches first. Every other tier follows behind the
+/// window.
+const FIRST_USE_TIER: ModelTier = ModelTier::Fast;
+
 struct SetupManager {
     publish: SetupPublisher,
     runtime: Arc<RuntimeModel>,
     state: Mutex<SetupStateDto>,
     throttle: Mutex<ProgressThrottle>,
+    /// The setup operation the window waits on: the first model's download
+    /// or install, and starting and verifying what is installed.
     operation: SetupOperationGate,
+    /// The download of a model Intern can work without - the accurate one -
+    /// behind the window, so it never makes a person wait or holds up a
+    /// change in Settings.
+    background: SetupOperationGate,
+    /// The tier `background` is downloading.
+    background_tier: Mutex<Option<ModelTier>>,
+    background_throttle: Mutex<ProgressThrottle>,
+    /// The person paused the background download: nothing resumes it on its
+    /// own again this session.
+    background_paused: AtomicBool,
     scheduler: Mutex<Option<std::sync::mpsc::Sender<SchedulerMessage>>>,
     /// Whether the queue may run: the local model is ready, or a hosted one
     /// is chosen and configured. The scheduler reads this.
@@ -1079,32 +1782,85 @@ struct SetupManager {
 }
 
 impl SetupManager {
-    /// `installed` is `RuntimeModel::installed_quick`, asked once by launch:
-    /// whether the files are there, not whether they are right.
-    fn new(publish: SetupPublisher, runtime: Arc<RuntimeModel>, installed: bool) -> Self {
-        let total_bytes = runtime.manifest().total_bytes();
+    /// Reads only what is on disk by name and length, never a model's bytes:
+    /// launch asks this before the window paints.
+    fn new(publish: SetupPublisher, runtime: Arc<RuntimeModel>) -> Arc<Self> {
+        let installed = runtime.installed_quick();
+        let first_use = runtime
+            .manifest()
+            .tier(FIRST_USE_TIER)
+            .map_or(0, intern_engine::TierModel::total_bytes);
+        let tiers = runtime
+            .manifest()
+            .tiers()
+            .map(|model| {
+                let total = model.total_bytes();
+                let here = runtime.tier_installed_quick(model.tier);
+                TierSetupDto {
+                    tier: model.tier,
+                    display_name: model.display_name.clone(),
+                    state: if here {
+                        SetupStatus::Ready
+                    } else {
+                        SetupStatus::Required
+                    },
+                    downloaded_bytes: if here {
+                        total
+                    } else {
+                        partial_bytes(&runtime, model.tier).min(total)
+                    },
+                    total_bytes: total,
+                    error: None,
+                }
+            })
+            .collect::<Vec<_>>();
         let state = SetupStateDto {
             state: if installed {
                 SetupStatus::Ready
             } else {
                 SetupStatus::Required
             },
-            downloaded_bytes: if installed { total_bytes } else { 0 },
-            total_bytes,
+            downloaded_bytes: if installed {
+                first_use
+            } else {
+                tiers
+                    .iter()
+                    .find(|tier| tier.tier == FIRST_USE_TIER)
+                    .map_or(0, |tier| tier.downloaded_bytes)
+            },
+            total_bytes: first_use,
             error: None,
             hosted_model_ready: false,
+            tiers,
         };
-        Self {
+        let manager = Arc::new(Self {
             publish,
-            runtime,
+            runtime: Arc::clone(&runtime),
             state: Mutex::new(state),
             throttle: Mutex::new(ProgressThrottle::new()),
             operation: SetupOperationGate::default(),
+            background: SetupOperationGate::default(),
+            background_tier: Mutex::new(None),
+            background_throttle: Mutex::new(ProgressThrottle::new()),
+            background_paused: AtomicBool::new(false),
             scheduler: Mutex::new(None),
             model_ready: Arc::new(AtomicBool::new(installed)),
             local_ready: AtomicBool::new(installed),
             hosted_active: AtomicBool::new(false),
-        }
+        });
+        // A model the runtime sets aside outside any setup operation - one
+        // that failed its self-test the first time a document loaded it -
+        // reaches Settings at once.
+        let listener = Arc::downgrade(&manager);
+        *runtime
+            .on_change
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(move || {
+            if let Some(manager) = listener.upgrade() {
+                manager.republish();
+            }
+        }));
+        manager
     }
 
     /// Records whether a hosted model stands ready, and lets the queue run
@@ -1114,6 +1870,7 @@ impl SetupManager {
         let ready = self.refresh_ready();
         if let Ok(mut current) = self.state.lock() {
             current.hosted_model_ready = active;
+            self.overlay_failures(&mut current);
             (self.publish)(&current);
         }
         if ready {
@@ -1148,10 +1905,34 @@ impl SetupManager {
             })
     }
 
-    /// Whether the local model needs no setup: it is running, or it is
-    /// installed and held while a hosted model is chosen. A held model is not
-    /// ready for the queue, but it is installed, and setting it up again
-    /// would fetch or copy 1.19 GiB that is already on disk.
+    /// Publishes the state as it stands, with every verdict the runtime has
+    /// reached since.
+    fn republish(&self) {
+        if let Ok(mut current) = self.state.lock() {
+            self.overlay_failures(&mut current);
+            (self.publish)(&current);
+        }
+    }
+
+    /// Shows a tier the runtime has set aside - it failed its digest or its
+    /// self-test - as failed, with why, unless it is downloading again.
+    fn overlay_failures(&self, state: &mut SetupStateDto) {
+        for tier in &mut state.tiers {
+            if tier.state == SetupStatus::Downloading {
+                continue;
+            }
+            if let Some(code) = self.runtime.tier_failure(tier.tier) {
+                tier.state = SetupStatus::Failed;
+                tier.error = Some(code);
+            }
+        }
+    }
+
+    /// Whether the local model needs no setup before first use: it can read
+    /// documents, or it is installed and held while a hosted model is
+    /// chosen. A held model is not ready for the queue, but it is installed,
+    /// and setting it up again would fetch or copy a model that is already on
+    /// disk.
     fn setup_complete(&self) -> bool {
         self.local_ready.load(Ordering::SeqCst)
             || (self.runtime.is_held()
@@ -1165,6 +1946,20 @@ impl SetupManager {
             return Ok(());
         }
         self.start_operation(SetupSource::Download)
+    }
+
+    /// Starts one tier's download. The tier first use needs - or any tier,
+    /// while nothing is set up yet - is set up the way the setup screen
+    /// does; any other is downloaded behind the window, which is how
+    /// Settings resumes, retries, or downloads again the accurate model.
+    fn start_tier(self: &Arc<Self>, tier: Option<ModelTier>) -> Result<(), CommandError> {
+        match tier {
+            Some(tier) if tier != FIRST_USE_TIER && self.setup_complete() => {
+                self.background_paused.store(false, Ordering::SeqCst);
+                self.start_background(tier)
+            }
+            _ => self.start(),
+        }
     }
 
     fn choose_existing(
@@ -1183,7 +1978,7 @@ impl SetupManager {
     /// Starts and verifies a model that is already installed, on the setup
     /// thread.
     ///
-    /// Verification loads 1.19 GiB into llama-server, waits for it to answer
+    /// Verification loads a model into llama-server, waits for it to answer
     /// its health check, and - unless the verification stamp vouches for the
     /// model - hashes it and runs a real inference through it. Launch used to
     /// do that inline in Tauri's setup hook, which runs before the window
@@ -1212,11 +2007,12 @@ impl SetupManager {
 
     /// Follows a change of model in Settings.
     ///
-    /// Choosing a hosted model stops the local one: it holds 1.3-2.6 GB for
-    /// as long as it runs, and nothing would ask it anything. Choosing the
-    /// local model again starts and verifies it like a launch does, and the
-    /// queue waits until that finishes. A setup operation already running is
-    /// reported as SETUP_BUSY.
+    /// Choosing a hosted model stops the local one: it holds 0.9-2 GB for as
+    /// long as it runs, and nothing would ask it anything. Choosing the local
+    /// model again starts and verifies it like a launch does, and the queue
+    /// waits until that finishes. A setup operation already running is
+    /// reported as SETUP_BUSY. A background download goes on either way: it
+    /// is a file on disk, not a model in memory.
     fn model_source_changed(
         self: &Arc<Self>,
         from: ModelSource,
@@ -1235,7 +2031,7 @@ impl SetupManager {
             }
             (ModelSource::Hosted, ModelSource::Local) => {
                 self.runtime.release();
-                if self.runtime.installed_quick(self.runtime.manifest()) {
+                if self.runtime.installed_quick() {
                     self.start_operation(SetupSource::Installed)
                 } else {
                     Ok(())
@@ -1248,10 +2044,35 @@ impl SetupManager {
     fn start_operation(self: &Arc<Self>, source: SetupSource) -> Result<(), CommandError> {
         let completed = self.get()?.downloaded_bytes;
         let cancellation = self.operation.begin()?;
+        // What this operation moves: the first-use model for a download, and
+        // whatever was chosen for an install - recognised by length alone
+        // here, before a byte is read.
+        let total = match &source {
+            SetupSource::Existing(selection) => {
+                match_existing_model_files(self.runtime.manifest(), selection)
+                    .map(|matched| matched.iter().map(|(_, file, _)| file.size).sum::<u64>())
+                    .ok()
+            }
+            SetupSource::Download => self
+                .runtime
+                .manifest()
+                .tier(FIRST_USE_TIER)
+                .map(intern_engine::TierModel::total_bytes),
+            SetupSource::Installed => None,
+        };
+        if let (Some(total), Ok(mut current)) = (total, self.state.lock()) {
+            current.total_bytes = total;
+        }
+        let completed = if matches!(source, SetupSource::Existing(_)) {
+            0
+        } else {
+            completed
+        };
         match setup_progress_status(&source) {
             Some(status) => self.set_state(status, completed, None),
             None => self.hold_local_model(),
         }
+        let downloads = matches!(source, SetupSource::Download);
         let manager = Arc::clone(self);
         std::thread::Builder::new()
             .name("intern-model-setup".into())
@@ -1280,6 +2101,15 @@ impl SetupManager {
                     }
                 };
                 let installed = final_state.0 == SetupStatus::Ready;
+                if downloads && !installed {
+                    manager.set_tier(
+                        FIRST_USE_TIER,
+                        final_state.0,
+                        final_state.1,
+                        final_state.2.clone(),
+                    );
+                }
+                manager.settle_tiers();
                 manager.set_state(final_state.0, final_state.1, final_state.2);
                 manager.operation.finish();
                 // A model this operation left installed but not started -
@@ -1288,6 +2118,12 @@ impl SetupManager {
                 // leaving the queue waiting on a server nothing will start.
                 if installed && !manager.runtime.is_held() && !manager.runtime.running() {
                     manager.verify_installed();
+                }
+                // Pressing Download on the setup screen asked for both
+                // models: the first is in place, and the rest follow behind
+                // the window.
+                if installed && downloads {
+                    manager.start_remaining();
                 }
             })
             .map_err(|_| {
@@ -1303,6 +2139,23 @@ impl SetupManager {
                 }
             })?;
         Ok(())
+    }
+
+    /// Cancels the setup operation the window waits on, or - for a tier
+    /// downloading behind the window - pauses that download.
+    fn cancel_tier(&self, tier: Option<ModelTier>) -> Result<(), CommandError> {
+        let in_background = *self
+            .background_tier
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match tier {
+            Some(tier) if in_background == Some(tier) => {
+                self.background_paused.store(true, Ordering::SeqCst);
+                self.background.cancel();
+                Ok(())
+            }
+            _ => self.cancel(),
+        }
     }
 
     fn cancel(&self) -> Result<(), CommandError> {
@@ -1324,30 +2177,30 @@ impl SetupManager {
         cancellation: &CancellationToken,
     ) -> Result<u64, CommandError> {
         let manifest = self.runtime.manifest();
-        let total = manifest.total_bytes();
+        let installs = !matches!(source, SetupSource::Installed);
         match source {
             SetupSource::Installed => {}
             SetupSource::Download => {
+                let file = manifest
+                    .tier(FIRST_USE_TIER)
+                    .and_then(intern_engine::TierModel::model)
+                    .ok_or_else(manifest_names_no_model)?;
                 let downloader = Downloader::new(ReqwestHttpTransport::new()?, SystemDiskSpace);
-                let mut completed_before = 0;
-                for file in &manifest.files {
-                    let offset = completed_before;
-                    download_with_retry(
-                        &downloader,
-                        file,
-                        &self.runtime.model_directory,
-                        cancellation,
-                        |progress: SetupProgress| {
-                            self.set_state(
-                                SetupStatus::Downloading,
-                                offset + progress.completed_bytes,
-                                None,
-                            );
-                        },
-                    )?;
-                    completed_before += file.size;
-                }
-                self.runtime.remember_verified();
+                download_with_retry(
+                    &downloader,
+                    file,
+                    &self.runtime.model_directory,
+                    cancellation,
+                    |progress: SetupProgress| {
+                        self.note_tier(
+                            FIRST_USE_TIER,
+                            SetupStatus::Downloading,
+                            progress.completed_bytes,
+                        );
+                        self.set_state(SetupStatus::Downloading, progress.completed_bytes, None);
+                    },
+                )?;
+                self.runtime.remember_verified(FIRST_USE_TIER);
             }
             SetupSource::Existing(selection) => {
                 install_existing_model_files(
@@ -1359,22 +2212,264 @@ impl SetupManager {
                     |progress| {
                         self.set_state(SetupStatus::Downloading, progress.completed_bytes, None);
                     },
+                    |tier| self.runtime.remember_verified(tier),
                 )?;
-                self.runtime.remember_verified();
             }
         }
         if cancellation.is_canceled() {
             return Err(setup_canceled_error());
         }
         self.runtime.start_verified(cancellation)?;
-        Ok(total)
+        if installs {
+            self.remove_retired();
+        }
+        Ok(self.get().map_or(0, |state| state.total_bytes))
+    }
+
+    /// A model of this manifest has passed its check, so the files an earlier
+    /// build pinned and this one retires can go - exactly those, and only
+    /// once they match exactly.
+    fn remove_retired(&self) {
+        for name in remove_retired_files(self.runtime.manifest(), &self.runtime.model_directory) {
+            eprintln!("intern: removed {name}, a model an earlier version used");
+        }
+    }
+
+    /// Starts, behind the window, the download of every tier still missing.
+    fn start_remaining(self: &Arc<Self>) {
+        for tier in ModelTier::ALL {
+            if tier != FIRST_USE_TIER && !self.runtime.tier_installed_quick(tier) {
+                let _ = self.start_background(tier);
+            }
+        }
+    }
+
+    /// Downloads `tier`'s model behind the window, with the same resumable,
+    /// digest-checked download setup uses, and makes it available to the
+    /// runtime once its digest passes. Its self-test waits for the first time
+    /// a document loads it. Never touches the model the queue is reading
+    /// with: that is another file, and another operation.
+    fn start_background(self: &Arc<Self>, tier: ModelTier) -> Result<(), CommandError> {
+        let file = self
+            .runtime
+            .tier_file(tier)
+            .cloned()
+            .ok_or_else(manifest_names_no_model)?;
+        if self.runtime.plannable(tier) {
+            return Ok(());
+        }
+        let cancellation = self.background.begin()?;
+        *self
+            .background_tier
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tier);
+        let completed = partial_bytes(&self.runtime, tier);
+        self.set_tier(tier, SetupStatus::Downloading, completed, None);
+        let manager = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("intern-model-download".into())
+            .spawn(move || {
+                let directory = manager.runtime.model_directory.clone();
+                // A model set aside after its self-test passed its digest:
+                // the check would only accept it again. "Download again"
+                // means what it says.
+                if manager.runtime.tier_failure(tier).is_some()
+                    && manager.runtime.tier_installed_quick(tier)
+                {
+                    let _ = std::fs::remove_file(directory.join(&file.name));
+                }
+                let result = ReqwestHttpTransport::new()
+                    .map_err(CommandError::from)
+                    .and_then(|transport| {
+                        download_with_retry(
+                            &Downloader::new(transport, SystemDiskSpace),
+                            &file,
+                            &directory,
+                            &cancellation,
+                            |progress: SetupProgress| {
+                                manager.note_tier(
+                                    tier,
+                                    SetupStatus::Downloading,
+                                    progress.completed_bytes,
+                                );
+                            },
+                        )
+                    });
+                manager.background.settle();
+                let completed = partial_bytes(&manager.runtime, tier);
+                match result {
+                    Ok(_) => {
+                        manager.runtime.remember_verified(tier);
+                        manager.set_tier(tier, SetupStatus::Ready, file.size, None);
+                        manager.remove_retired();
+                    }
+                    Err(error) if error.code == "MODEL_DOWNLOAD_CANCELED" => {
+                        manager.set_tier(tier, SetupStatus::Required, completed, None);
+                    }
+                    Err(error) => {
+                        manager.set_tier(tier, SetupStatus::Failed, completed, Some(error.code));
+                    }
+                }
+                *manager
+                    .background_tier
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+                manager.background.finish();
+                // Readings the fast model made in this one's place can now
+                // be read again; the scheduler's next pass sees to it.
+                manager.wake_scheduler();
+            });
+        if spawned.is_err() {
+            self.set_tier(
+                tier,
+                SetupStatus::Failed,
+                completed,
+                Some("SETUP_UNAVAILABLE".into()),
+            );
+            *self
+                .background_tier
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            self.background.finish();
+            return Err(CommandError {
+                code: "SETUP_UNAVAILABLE".into(),
+                message: "the model download could not start".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// What the scheduler does for the local model between passes over the
+    /// queue, at least every `RECOVER_INTERVAL` and at every wake.
+    ///
+    /// Unloads a model nothing has asked anything for a while; resumes, while
+    /// the local model is the one chosen, a background download the person
+    /// started in an earlier session and did not pause - one with a partial
+    /// file to resume - unless they asked for the fast model only; and once
+    /// the accurate model can read, sends back to be read the documents the
+    /// fast one read in its place that nobody has acted on.
+    fn tick(self: &Arc<Self>, pipeline: &Pipeline, settings: &AppSettings) {
+        self.runtime.unload_if_idle();
+        if settings.model_source != ModelSource::Local {
+            return;
+        }
+        if settings.model_preference != ModelPreference::Fast
+            && !self.background_paused.load(Ordering::SeqCst)
+            && self.setup_complete()
+        {
+            for tier in ModelTier::ALL {
+                let resumable = tier != FIRST_USE_TIER
+                    && !self.runtime.tier_installed_quick(tier)
+                    && partial_bytes(&self.runtime, tier) > 0
+                    && self.tier_state(tier) == Some(SetupStatus::Required);
+                if resumable {
+                    let _ = self.start_background(tier);
+                }
+            }
+        }
+        if self.runtime.take_provisional_upgrade() {
+            match pipeline.reanalyze_provisional() {
+                Ok(0) => {}
+                Ok(count) => {
+                    eprintln!(
+                        "intern: {count} document(s) go back to be read by the accurate model"
+                    );
+                }
+                Err(_) => self.runtime.provisional_reread_failed(),
+            }
+        }
+    }
+
+    fn tier_state(&self, tier: ModelTier) -> Option<SetupStatus> {
+        self.get().ok().and_then(|state| {
+            state
+                .tiers
+                .iter()
+                .find(|entry| entry.tier == tier)
+                .map(|entry| entry.state)
+        })
+    }
+
+    /// Brings every tier's entry up to date with what is installed, after a
+    /// setup operation: a tier now in place is ready, unless the runtime has
+    /// set it aside.
+    fn settle_tiers(&self) {
+        if let Ok(mut current) = self.state.lock() {
+            for entry in &mut current.tiers {
+                if entry.state != SetupStatus::Downloading
+                    && self.runtime.tier_installed_quick(entry.tier)
+                {
+                    entry.state = SetupStatus::Ready;
+                    entry.downloaded_bytes = entry.total_bytes;
+                    entry.error = None;
+                }
+            }
+        }
+    }
+
+    /// Records a tier's progress without publishing: the overall state that
+    /// follows publishes both.
+    fn note_tier(&self, tier: ModelTier, state: SetupStatus, downloaded_bytes: u64) {
+        let in_background = *self
+            .background_tier
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            == Some(tier);
+        let mut emitted = None;
+        if let Ok(mut current) = self.state.lock()
+            && let Some(entry) = current.tiers.iter_mut().find(|entry| entry.tier == tier)
+        {
+            let status_changed = entry.state != state;
+            entry.state = state;
+            entry.downloaded_bytes = downloaded_bytes.min(entry.total_bytes);
+            entry.error = None;
+            // A background download is published on its own, throttled like
+            // the first one; the first one is published with the overall
+            // state.
+            if in_background
+                && self
+                    .background_throttle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .should_emit(
+                        std::time::Instant::now(),
+                        entry.downloaded_bytes,
+                        entry.total_bytes,
+                        status_changed,
+                    )
+            {
+                emitted = Some(current.clone());
+            }
+        }
+        if let Some(state) = emitted {
+            (self.publish)(&state);
+        }
+    }
+
+    /// Sets a tier's entry and publishes it.
+    fn set_tier(
+        &self,
+        tier: ModelTier,
+        state: SetupStatus,
+        downloaded_bytes: u64,
+        error: Option<String>,
+    ) {
+        if let Ok(mut current) = self.state.lock() {
+            if let Some(entry) = current.tiers.iter_mut().find(|entry| entry.tier == tier) {
+                entry.state = state;
+                entry.downloaded_bytes = downloaded_bytes.min(entry.total_bytes);
+                entry.error = error;
+            }
+            self.overlay_failures(&mut current);
+            (self.publish)(&current);
+        }
     }
 
     fn set_state(&self, state: SetupStatus, downloaded_bytes: u64, error: Option<String>) {
-        // Ready means installed; the queue may use the model only while a
-        // server is actually running, which it is not while a hosted model
-        // is chosen.
-        let local_ready = state == SetupStatus::Ready && self.runtime.running();
+        // Ready means installed; the queue may use the model only while it
+        // can serve - a model it checked, loaded or loadable on demand -
+        // which it cannot while a hosted model is chosen.
+        let local_ready = state == SetupStatus::Ready && self.runtime.serviceable();
         self.local_ready.store(local_ready, Ordering::SeqCst);
         let ready = self.refresh_ready();
         let mut emitted = false;
@@ -1384,6 +2479,7 @@ impl SetupManager {
             current.downloaded_bytes = downloaded_bytes.min(current.total_bytes);
             current.error = error;
             current.hosted_model_ready = self.hosted_active.load(Ordering::SeqCst);
+            self.overlay_failures(&mut current);
             // The state itself is always current - the window polls it while
             // a download runs - but only some updates are worth an event.
             emitted = state != SetupStatus::Downloading
@@ -1407,13 +2503,26 @@ impl SetupManager {
     }
 }
 
+/// How much of `tier`'s model a download has already fetched: its partial
+/// file's length, which the next attempt resumes from.
+fn partial_bytes(runtime: &RuntimeModel, tier: ModelTier) -> u64 {
+    runtime.tier_file(tier).map_or(0, |file| {
+        std::fs::metadata(
+            runtime
+                .model_directory
+                .join(format!("{}.partial", file.name)),
+        )
+        .map_or(0, |metadata| metadata.len())
+    })
+}
+
 /// What launch does about the local model, decided by the model the settings
 /// name rather than by whether a model file happens to be installed.
 ///
 /// A person who had chosen a hosted model still got the local one loaded and
 /// self-tested at every launch, and resident for the rest of the day: 1.3 to
 /// 2.6 GB on an 8 GB laptop for a model nothing would ask anything. Nothing
-/// here reads the model file; the setup thread does that.
+/// here reads a model file; the setup thread does that.
 ///
 /// An installed local model is held, not started, and the flag returned says
 /// it waits to be verified: the caller starts that with
@@ -1428,8 +2537,8 @@ fn launch_local_model(
     runtime: Arc<RuntimeModel>,
     source: ModelSource,
 ) -> (Arc<SetupManager>, bool) {
-    let installed = runtime.installed_quick(runtime.manifest());
-    let setup = Arc::new(SetupManager::new(publish, Arc::clone(&runtime), installed));
+    let installed = runtime.installed_quick();
+    let setup = SetupManager::new(publish, Arc::clone(&runtime));
     let verify = match source {
         ModelSource::Hosted => {
             let _ = runtime.hold();
@@ -1448,7 +2557,7 @@ fn model_ready(local_ready: bool, hosted_active: bool) -> bool {
     local_ready || hosted_active
 }
 
-/// A dropped connection partway through 1.19 GiB is ordinary on an unreliable
+/// A dropped connection partway through a model download is ordinary on an unreliable
 /// network and says nothing about whether the download can succeed - only
 /// that this attempt did not. Each retry calls the same resumable download
 /// again, so it picks the partial file back up rather than starting over; a
@@ -1538,7 +2647,7 @@ enum SetupSource {
 /// A download or an install has bytes to move and no model to run, so the
 /// setup screen takes the window. Verifying a model that is already installed
 /// is not a download and must not look like one: the screen would offer to
-/// fetch 1.19 GiB that is already on disk.
+/// fetch a model that is already on disk.
 fn setup_progress_status(source: &SetupSource) -> Option<SetupStatus> {
     match source {
         SetupSource::Download | SetupSource::Existing(_) => Some(SetupStatus::Downloading),
@@ -1621,10 +2730,14 @@ struct PipelineScheduler {
 }
 
 impl PipelineScheduler {
+    /// `tick` runs at the top of every pass, before the queue drains: what
+    /// the local model needs doing between documents
+    /// ([`SetupManager::tick`]).
     fn start(
         pipeline: Arc<Pipeline>,
         model_ready: Arc<AtomicBool>,
         app: AppHandle,
+        tick: Box<dyn Fn(&Pipeline) + Send>,
     ) -> Result<Self, CommandError> {
         let (sender, receiver) = std::sync::mpsc::channel();
         let scheduled_pipeline = Arc::clone(&pipeline);
@@ -1641,6 +2754,7 @@ impl PipelineScheduler {
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => true,
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                     };
+                    tick(&scheduled_pipeline);
                     let (recover, drain) = clock.pass(
                         timed_out,
                         model_ready.load(Ordering::SeqCst),
@@ -1800,12 +2914,22 @@ impl AppState {
             "llama-server"
         };
         let model_directory = data.join("models");
+        let settings = SettingsStore::new(data.join("settings.json"));
+        // Read at every document, so a choice made in Settings takes effect
+        // at the next one with nothing restarted. A file that cannot be read
+        // is Intern's own choice, as it is for everything else.
+        let preference_settings = settings.clone();
         let runtime = Arc::new(RuntimeModel::new(
             executable_directory.join(server_name),
             model_directory,
             ModelManifest::embedded()?,
+            Box::new(move || {
+                preference_settings
+                    .load()
+                    .map(|settings| settings.model_preference)
+                    .unwrap_or_default()
+            }),
         ));
-        let settings = SettingsStore::new(data.join("settings.json"));
         // Defaults are how the window opens on a settings file nothing can
         // read - Settings is where a person repairs it, and the defaults keep
         // automatic renaming off while they do. What must not happen is
@@ -1873,10 +2997,15 @@ impl AppState {
             code: "APP_DATA_UNAVAILABLE".into(),
             message: "the rename history database is unavailable".into(),
         })?;
+        let ticking = Arc::clone(&setup);
+        let tick_settings = settings.clone();
         let scheduler = PipelineScheduler::start(
             Arc::clone(&pipeline),
             Arc::clone(&setup.model_ready),
             app.clone(),
+            Box::new(move |pipeline: &Pipeline| {
+                ticking.tick(pipeline, &tick_settings.load().unwrap_or_default());
+            }),
         )?;
         *setup.scheduler.lock().map_err(|_| CommandError {
             code: "STATE_CONFLICT".into(),
@@ -2694,7 +3823,7 @@ pub fn queue_resume(state: State<'_, AppState>) -> Result<(), CommandError> {
 /// Stops the document being analysed.
 ///
 /// Blocking: cancelling the local model kills llama-server and starts it
-/// again, which reloads 1.19 GiB and waits for the new process to answer, so
+/// again, which reloads the model and waits for the new process to answer, so
 /// this cannot run on the thread WebView2 delivers invokes on.
 #[tauri::command]
 pub async fn queue_cancel(id: String, state: State<'_, AppState>) -> Result<(), CommandError> {
@@ -3747,14 +4876,24 @@ pub fn setup_get(state: State<'_, AppState>) -> Result<SetupStateDto, CommandErr
     state.setup.get()
 }
 
+/// Starts setup, or - with a `tier` - one model's download: how Settings
+/// resumes, retries, or downloads again the model that arrives behind the
+/// window.
 #[tauri::command]
-pub fn setup_start(state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.setup.start()
+pub fn setup_start(
+    tier: Option<ModelTier>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    state.setup.start_tier(tier)
 }
 
+/// Cancels setup, or pauses one model's download behind the window.
 #[tauri::command]
-pub fn setup_cancel(state: State<'_, AppState>) -> Result<(), CommandError> {
-    state.setup.cancel()
+pub fn setup_cancel(
+    tier: Option<ModelTier>,
+    state: State<'_, AppState>,
+) -> Result<(), CommandError> {
+    state.setup.cancel_tier(tier)
 }
 
 #[tauri::command]
@@ -3762,10 +4901,14 @@ pub fn setup_choose_existing(
     files: ExistingModelFilesDto,
     state: State<'_, AppState>,
 ) -> Result<(), CommandError> {
-    let model_path = canonical_model_file(Path::new(&files.model_path))?;
+    let model_paths = files
+        .model_paths
+        .iter()
+        .map(|path| canonical_model_file(Path::new(path)))
+        .collect::<Result<Vec<_>, _>>()?;
     state
         .setup
-        .choose_existing(ExistingModelSelection { model_path })
+        .choose_existing(ExistingModelSelection { model_paths })
 }
 
 /// Blocking: one delete over the whole finished history, and a database
@@ -4148,6 +5291,7 @@ fn queue_item_dto(item: PipelineItem) -> Result<QueueItemDto, CommandError> {
         omitted_parties: proposal
             .map(|record| record.name_view().1)
             .unwrap_or_default(),
+        read_by: proposal.and_then(|record| record.analysis.telemetry.read_by.clone()),
     })
 }
 
@@ -5725,7 +6869,7 @@ mod setup_source_tests {
         );
         assert_eq!(
             setup_progress_status(&SetupSource::Existing(ExistingModelSelection {
-                model_path: PathBuf::from("C:/models/model.gguf"),
+                model_paths: vec![PathBuf::from("C:/models/model.gguf")],
             })),
             Some(SetupStatus::Downloading)
         );
@@ -5977,28 +7121,31 @@ mod scheduler_tests {
     }
 
     #[test]
-    fn existing_model_dto_is_exactly_one_backend_path() {
+    fn existing_model_dto_is_a_list_of_backend_paths() {
         let files: ExistingModelFilesDto = serde_json::from_value(serde_json::json!({
-            "modelPath": "C:\\Models\\model.gguf"
+            "modelPaths": ["C:\\Models\\small.gguf", "C:\\Models\\large.gguf"]
         }))
         .unwrap();
-        assert!(files.model_path.ends_with("model.gguf"));
-        assert!(
-            serde_json::from_value::<ExistingModelFilesDto>(serde_json::json!({
-                "modelPath": { "name": "model.gguf" }
-            }))
-            .is_err()
-        );
-        // A projector path is not merely unused now; offering one must be an
-        // error, so a stale caller cannot quietly ask for a file Intern will
-        // never load.
-        assert!(
-            serde_json::from_value::<ExistingModelFilesDto>(serde_json::json!({
-                "modelPath": "model.gguf",
+        assert_eq!(files.model_paths.len(), 2);
+        assert!(files.model_paths[0].ends_with("small.gguf"));
+        for refused in [
+            // Not a path.
+            serde_json::json!({ "modelPaths": [{ "name": "model.gguf" }] }),
+            // The single-file shape an earlier window sent.
+            serde_json::json!({ "modelPath": "model.gguf" }),
+            // A projector path is not merely unused; offering one must be an
+            // error, so a stale caller cannot quietly ask for a file Intern
+            // will never load.
+            serde_json::json!({
+                "modelPaths": ["model.gguf"],
                 "projectorPath": "projector.gguf"
-            }))
-            .is_err()
-        );
+            }),
+        ] {
+            assert!(
+                serde_json::from_value::<ExistingModelFilesDto>(refused.clone()).is_err(),
+                "{refused}"
+            );
+        }
     }
 }
 
@@ -6016,22 +7163,32 @@ mod runtime_tests {
 
     use intern_engine::{
         DateRole, DocumentSource, Engine, EngineError, EngineErrorCode, EngineResult, Evidence,
-        ModelFacts, ModelFile, ModelManifest, ModelProposal, ModelRequest, ModelRole, PartyFact,
-        PartyRelation, PartyRole, Proposer, download::CancellationToken,
+        ModelFacts, ModelFile, ModelManifest, ModelPreference, ModelProposal, ModelRequest,
+        ModelRole, ModelTier, PartyFact, PartyRelation, PartyRole, PromptProfile, Proposer,
+        TierModel,
+        download::CancellationToken,
         setup::ExistingModelSelection,
+        tiers::{
+            self, AutomaticStrategy, EscalationReason, IDLE_UNLOAD_AFTER,
+            MIN_AVAILABLE_FOR_ACCURATE,
+        },
     };
     use intern_queue::{AnalyzerBoundary, ModelFailure, ModelSource};
 
     use super::{
         CommandError, LaunchedRuntime, ProgressThrottle, RuntimeLauncher, RuntimeModel,
-        RuntimeProcess, SetupManager, SetupStateDto, SetupStatus, VERIFICATION_STAMP,
-        launch_local_model,
+        RuntimeProcess, RuntimeSenses, SetupManager, SetupStateDto, SetupStatus,
+        VERIFICATION_STAMP, launch_local_model,
     };
 
     /// Bytes chosen once and hashed offline; the digest below is theirs, so
-    /// installing a chosen file checks a real digest.
+    /// installing a chosen file checks a real digest. The fast model's.
     const MODEL_BYTES: &[u8] = b"the pinned model bytes";
     const MODEL_SHA256: &str = "b1f81de2183585b9793c38b27cdd46842ab24247c628b6fbbda1200b9a25ce99";
+    /// The accurate model's, of another length as the pinned models are.
+    const ACCURATE_BYTES: &[u8] = b"model-bytes";
+    const ACCURATE_SHA256: &str =
+        "357e5d6fafa34d27360fec24b4326d3534905e33c6acdee60198fb078b7b79e5";
     const SETUP_THREAD: &str = "intern-model-setup";
 
     /// What the fake server answers.
@@ -6050,6 +7207,8 @@ mod runtime_tests {
     /// Everything the fakes count, shared by every server one test launches.
     struct Rig {
         launches: AtomicUsize,
+        /// The tier of every launch, in order.
+        launched: Mutex<Vec<ModelTier>>,
         stops: AtomicUsize,
         alive: AtomicUsize,
         most_alive: AtomicUsize,
@@ -6057,6 +7216,8 @@ mod runtime_tests {
         /// The thread each full digest check ran on, by name.
         hashes: Mutex<Vec<Option<String>>>,
         reply: Mutex<Reply>,
+        /// What the accurate model answers instead, when set.
+        accurate_reply: Mutex<Option<Reply>>,
         /// Set while a hanging request waits for its server to stop.
         in_flight: (Mutex<bool>, Condvar),
         /// When set, a stop waits here until the test opens it.
@@ -6069,12 +7230,14 @@ mod runtime_tests {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 launches: AtomicUsize::new(0),
+                launched: Mutex::new(Vec::new()),
                 stops: AtomicUsize::new(0),
                 alive: AtomicUsize::new(0),
                 most_alive: AtomicUsize::new(0),
                 proposals: AtomicUsize::new(0),
                 hashes: Mutex::new(Vec::new()),
                 reply: Mutex::new(Reply::Calibration),
+                accurate_reply: Mutex::new(None),
                 in_flight: (Mutex::new(false), Condvar::new()),
                 stop_gate: Mutex::new(None),
                 launch_gate: Mutex::new(None),
@@ -6167,12 +7330,17 @@ mod runtime_tests {
     struct FakeProposer {
         server: Arc<FakeServer>,
         rig: Arc<Rig>,
+        tier: ModelTier,
     }
 
     impl Proposer for FakeProposer {
         fn propose(&self, request: &ModelRequest) -> EngineResult<ModelProposal> {
             self.rig.proposals.fetch_add(1, Ordering::SeqCst);
-            let reply = *self.rig.reply.lock().unwrap();
+            let accurate = *self.rig.accurate_reply.lock().unwrap();
+            let reply = match (self.tier, accurate) {
+                (ModelTier::Accurate, Some(reply)) => reply,
+                _ => *self.rig.reply.lock().unwrap(),
+            };
             match reply {
                 Reply::Calibration => Ok(calibration_reply(
                     request,
@@ -6204,11 +7372,16 @@ mod runtime_tests {
     }
 
     impl RuntimeLauncher for FakeLauncher {
-        fn launch(&self, _manifest: &ModelManifest) -> Result<LaunchedRuntime, CommandError> {
+        fn launch(
+            &self,
+            _manifest: &ModelManifest,
+            tier: ModelTier,
+        ) -> Result<LaunchedRuntime, CommandError> {
             let gate = self.rig.launch_gate.lock().unwrap().clone();
             if let Some(gate) = gate {
                 gate.pass();
             }
+            self.rig.launched.lock().unwrap().push(tier);
             self.rig.launches.fetch_add(1, Ordering::SeqCst);
             let alive = self.rig.alive.fetch_add(1, Ordering::SeqCst) + 1;
             self.rig.most_alive.fetch_max(alive, Ordering::SeqCst);
@@ -6221,6 +7394,7 @@ mod runtime_tests {
                 engine: Engine::with_proposer(Box::new(FakeProposer {
                     server,
                     rig: Arc::clone(&self.rig),
+                    tier,
                 })),
             })
         }
@@ -6277,18 +7451,82 @@ mod runtime_tests {
         }
     }
 
+    fn tier_model(tier: ModelTier, name: &str, bytes: &[u8], sha256: &str) -> TierModel {
+        TierModel {
+            tier,
+            model_id: format!("test-{}", tier.as_str()),
+            display_name: format!("Test {}", tier.as_str()),
+            prompt_profile: Some(PromptProfile::Bonsai2),
+            files: vec![ModelFile {
+                name: name.into(),
+                role: ModelRole::Model,
+                url: format!("https://example.invalid/{name}"),
+                size: bytes.len() as u64,
+                sha256: sha256.into(),
+            }],
+        }
+    }
+
     fn manifest() -> ModelManifest {
         ModelManifest {
-            schema_version: 2,
-            model_id: "test-model".into(),
+            schema_version: 3,
             served_model_name: "intern-local".into(),
-            files: vec![ModelFile {
-                name: "model.gguf".into(),
-                role: ModelRole::Model,
-                url: "https://example.invalid/model.gguf".into(),
-                size: MODEL_BYTES.len() as u64,
-                sha256: MODEL_SHA256.into(),
-            }],
+            models: vec![
+                tier_model(ModelTier::Fast, "model.gguf", MODEL_BYTES, MODEL_SHA256),
+                tier_model(
+                    ModelTier::Accurate,
+                    "accurate.gguf",
+                    ACCURATE_BYTES,
+                    ACCURATE_SHA256,
+                ),
+            ],
+            retired_files: Vec::new(),
+        }
+    }
+
+    /// What the runtime sees of the world, set by the test as it goes.
+    #[derive(Clone)]
+    struct World {
+        preference: Arc<Mutex<ModelPreference>>,
+        strategy: Arc<Mutex<AutomaticStrategy>>,
+        memory: Arc<Mutex<Option<u64>>>,
+        now: Arc<Mutex<Instant>>,
+    }
+
+    impl World {
+        fn new() -> Self {
+            Self {
+                preference: Arc::new(Mutex::new(ModelPreference::Automatic)),
+                strategy: Arc::new(Mutex::new(AutomaticStrategy::AccurateFirst)),
+                memory: Arc::new(Mutex::new(None)),
+                now: Arc::new(Mutex::new(Instant::now())),
+            }
+        }
+
+        fn senses(&self) -> RuntimeSenses {
+            let (preference, memory, now) = (
+                Arc::clone(&self.preference),
+                Arc::clone(&self.memory),
+                Arc::clone(&self.now),
+            );
+            RuntimeSenses {
+                preference: Box::new(move || *preference.lock().unwrap()),
+                strategy: *self.strategy.lock().unwrap(),
+                available_memory: Box::new(move || *memory.lock().unwrap()),
+                now: Box::new(move || *now.lock().unwrap()),
+            }
+        }
+
+        fn prefer(&self, preference: ModelPreference) {
+            *self.preference.lock().unwrap() = preference;
+        }
+
+        fn memory(&self, available: Option<u64>) {
+            *self.memory.lock().unwrap() = available;
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.now.lock().unwrap() += by;
         }
     }
 
@@ -6327,8 +7565,27 @@ mod runtime_tests {
                 .unwrap();
         }
 
+        fn accurate(&self) -> PathBuf {
+            self.root.join("models").join("accurate.gguf")
+        }
+
+        /// Puts the accurate model in place beside the fast one.
+        fn install_accurate(&self) {
+            std::fs::write(self.accurate(), ACCURATE_BYTES).unwrap();
+        }
+
         /// A launch of this install: a fresh runtime, as a new process has.
         fn runtime(&self, rig: &Arc<Rig>, app_version: &str) -> Arc<RuntimeModel> {
+            self.runtime_in(rig, app_version, &World::new())
+        }
+
+        /// A launch of this install in the world the test controls.
+        fn runtime_in(
+            &self,
+            rig: &Arc<Rig>,
+            app_version: &str,
+            world: &World,
+        ) -> Arc<RuntimeModel> {
             let counted = Arc::clone(rig);
             Arc::new(RuntimeModel::with_parts(
                 self.root.join("llama-server"),
@@ -6348,6 +7605,7 @@ mod runtime_tests {
                     },
                 ),
                 app_version.to_owned(),
+                world.senses(),
             ))
         }
     }
@@ -6392,6 +7650,16 @@ mod runtime_tests {
         panic!("the setup operation never finished");
     }
 
+    /// Whether the stamp says the fast model passed its self-test.
+    fn stamp_vouches_self_test(install: &Install) -> bool {
+        std::fs::read(install.stamp()).is_ok_and(|bytes| {
+            let stamp: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            stamp["files"].as_array().unwrap().iter().any(|file| {
+                file["name"] == "model.gguf" && file["selfTested"] == serde_json::json!(true)
+            })
+        })
+    }
+
     fn verified(runtime: &RuntimeModel) {
         runtime
             .start_verified(&CancellationToken::new())
@@ -6429,15 +7697,14 @@ mod runtime_tests {
         // for a launch whose verification has not happened yet.
         let rig = Rig::new();
         let runtime = install.runtime(&rig, "1.0.0");
-        assert!(runtime.installed_quick(runtime.manifest()));
-        let _setup =
-            SetupManager::new(Box::new(|_: &SetupStateDto| {}), Arc::clone(&runtime), true);
+        assert!(runtime.installed_quick());
+        let _setup = SetupManager::new(Box::new(|_: &SetupStateDto| {}), Arc::clone(&runtime));
         assert_eq!(rig.hash_count(), 0);
 
         // A file of the wrong size is not installed, and finding that out
         // reads nothing either.
         std::fs::write(install.model(), b"short").unwrap();
-        assert!(!runtime.installed_quick(runtime.manifest()));
+        assert!(!runtime.installed_quick());
         assert_eq!(rig.hash_count(), 0);
     }
 
@@ -7035,7 +8302,7 @@ mod runtime_tests {
         assert!(!verify, "a hosted launch verifies no local model");
         setup
             .choose_existing(ExistingModelSelection {
-                model_path: chosen.clone(),
+                model_paths: vec![chosen.clone()],
             })
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -7060,7 +8327,9 @@ mod runtime_tests {
         let runtime = install.runtime(&rig, "1.0.0");
         let (setup, _states) = manager(&runtime, ModelSource::Hosted);
         setup
-            .choose_existing(ExistingModelSelection { model_path: chosen })
+            .choose_existing(ExistingModelSelection {
+                model_paths: vec![chosen],
+            })
             .unwrap();
         settle(&setup);
         assert_eq!(setup.get().unwrap().state, SetupStatus::Ready);
@@ -7085,7 +8354,9 @@ mod runtime_tests {
         setup.operation.finish();
         assert_eq!(
             setup
-                .choose_existing(ExistingModelSelection { model_path: chosen })
+                .choose_existing(ExistingModelSelection {
+                    model_paths: vec![chosen],
+                })
                 .unwrap_err()
                 .code,
             "SETUP_ALREADY_READY"
@@ -7159,7 +8430,7 @@ mod runtime_tests {
         assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
         assert!(!setup.model_ready.load(Ordering::SeqCst));
         assert!(
-            !install.stamp().exists(),
+            !stamp_vouches_self_test(&install),
             "an unfinished self-test is not a pass"
         );
 
@@ -7172,7 +8443,7 @@ mod runtime_tests {
         settle(&setup);
         assert!(runtime.running());
         assert!(setup.model_ready.load(Ordering::SeqCst));
-        assert!(install.stamp().is_file());
+        assert!(stamp_vouches_self_test(&install));
         assert_eq!(rig.hash_count(), 1);
     }
 
@@ -7217,7 +8488,6 @@ mod runtime_tests {
                 recorded.lock().unwrap().push(state.downloaded_bytes);
             }),
             runtime,
-            false,
         );
         for byte in 0..=MODEL_BYTES.len() as u64 {
             setup.set_state(SetupStatus::Downloading, byte, None);
@@ -7233,7 +8503,6 @@ mod runtime_tests {
                 recorded.lock().unwrap().push(state.downloaded_bytes);
             }),
             install.runtime(&Rig::new(), "1.0.0"),
-            false,
         );
         big.state.lock().unwrap().total_bytes = 1_000_000_000;
         for chunk in 0..1_000_u64 {
@@ -7257,6 +8526,519 @@ mod runtime_tests {
         assert_eq!(published.lock().unwrap().last(), Some(&(999 * 16_384)));
     }
 
+    impl World {
+        fn cascade(&self) {
+            *self.strategy.lock().unwrap() = AutomaticStrategy::Cascade;
+        }
+    }
+
+    fn read_by(analysis: &intern_engine::DocumentAnalysis) -> intern_engine::ModelReading {
+        analysis
+            .telemetry
+            .read_by
+            .clone()
+            .expect("the runtime says who read it")
+    }
+
+    fn launched(rig: &Rig) -> Vec<ModelTier> {
+        rig.launched.lock().unwrap().clone()
+    }
+
+    /// The accurate model arriving behind the window: until it does, the
+    /// fast model reads and says its reading is provisional; once its
+    /// digest has passed, the next document unloads the fast model, loads
+    /// the accurate one - never both at once - self-tests it the first time,
+    /// and reads with it. And the provisional readings are due to be read
+    /// again, once.
+    #[test]
+    fn automatic_moves_to_the_accurate_model_once_it_is_installed() {
+        let install = Install::new("tier-arrives");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+
+        let fast = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&fast);
+        assert_eq!(reading.tier, ModelTier::Fast);
+        assert!(reading.provisional);
+        assert_eq!(reading.display_name, "Test fast");
+        assert!(!runtime.take_provisional_upgrade(), "nothing better yet");
+
+        install.install_accurate();
+        runtime.remember_verified(ModelTier::Accurate);
+        assert!(runtime.take_provisional_upgrade());
+        assert!(!runtime.take_provisional_upgrade(), "once");
+
+        let before = rig.proposals.load(Ordering::SeqCst);
+        let accurate = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&accurate);
+        assert_eq!(
+            (reading.tier, reading.provisional, reading.escalated),
+            (ModelTier::Accurate, false, None)
+        );
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1, "never two models");
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            before + 2,
+            "a self-test the first time it loads, then the document"
+        );
+        assert_eq!(rig.hash_count(), 1, "the download checked the digest");
+
+        // Already loaded: read again, nothing swapped or tested.
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(launched(&rig).len(), 2);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), before + 3);
+
+        // The stamp covers both models now, so the next launch reads neither
+        // and self-tests neither.
+        let rig = Rig::new();
+        let relaunched = install.runtime(&rig, "1.0.0");
+        verified(&relaunched);
+        assert_eq!(launched(&rig), [ModelTier::Accurate]);
+        assert_eq!(rig.hash_count(), 0);
+        assert_eq!(rig.proposals.load(Ordering::SeqCst), 0);
+    }
+
+    /// The fastest model, asked for by name, reads with no stand-in and
+    /// nothing to read again; the most accurate, asked for, swaps.
+    #[test]
+    fn a_named_preference_chooses_the_model() {
+        let install = Install::new("tier-preference");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Fast, false)
+        );
+        assert!(!runtime.take_provisional_upgrade());
+
+        world.prefer(ModelPreference::Accurate);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// Short of memory, the fast model stands in and says so; the accurate
+    /// model's own memory counts as free while it is the one loaded, so it
+    /// is not swapped out for being itself; and the stand-in readings are due
+    /// to be read again when memory comes back.
+    #[test]
+    fn the_memory_guard_stands_the_fast_model_in_until_memory_comes_back() {
+        let install = Install::new("tier-memory");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        // Short even counting what unloading the fast model would give back.
+        world.memory(Some(
+            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Fast) - 1,
+        ));
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert!(!runtime.take_provisional_upgrade(), "memory is still short");
+
+        world.memory(Some(16 * 1024 * 1024 * 1024));
+        assert!(runtime.take_provisional_upgrade());
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(
+            (reading.tier, reading.provisional),
+            (ModelTier::Accurate, false)
+        );
+
+        // Loaded, it holds what it holds: the machine reports that much less
+        // free, and the model is still the one that fits.
+        world.memory(Some(
+            MIN_AVAILABLE_FOR_ACCURATE - tiers::resident_estimate(ModelTier::Accurate) + 1,
+        ));
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(launched(&rig), [ModelTier::Fast, ModelTier::Accurate]);
+    }
+
+    /// The accurate model's digest passed but it fails its self-test the
+    /// first time a document loads it: it is set aside, never loaded again
+    /// this session, Settings hears why, and the document is read by the fast
+    /// model. Installing it again gives it another chance.
+    #[test]
+    fn an_accurate_model_that_fails_its_first_self_test_leaves_the_fast_one_reading() {
+        let install = Install::new("tier-unusable");
+        let rig = Rig::new();
+        let runtime = install.runtime(&rig, "1.0.0");
+        let (setup, states) = manager(&runtime, ModelSource::Local);
+        settle(&setup);
+        install.install_accurate();
+        runtime.remember_verified(ModelTier::Accurate);
+        *rig.accurate_reply.lock().unwrap() = Some(Reply::Wrong);
+        while states.try_recv().is_ok() {}
+
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.provisional), (ModelTier::Fast, true));
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Fast, ModelTier::Accurate, ModelTier::Fast]
+        );
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            runtime.tier_failure(ModelTier::Accurate).as_deref(),
+            Some("MODEL_SELF_TEST_FAILED")
+        );
+        let published = states.try_iter().last().expect("Settings heard");
+        let accurate = published
+            .tiers
+            .iter()
+            .find(|tier| tier.tier == ModelTier::Accurate)
+            .unwrap();
+        assert_eq!(
+            (accurate.state, accurate.error.as_deref()),
+            (SetupStatus::Failed, Some("MODEL_SELF_TEST_FAILED"))
+        );
+        assert!(
+            setup.model_ready.load(Ordering::SeqCst),
+            "the fast one reads"
+        );
+
+        // Not loaded again.
+        runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        assert_eq!(launched(&rig).len(), 3);
+        assert!(!runtime.take_provisional_upgrade());
+
+        // Downloaded again, and this time it works.
+        *rig.accurate_reply.lock().unwrap() = None;
+        runtime.remember_verified(ModelTier::Accurate);
+        assert_eq!(runtime.tier_failure(ModelTier::Accurate), None);
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Accurate);
+    }
+
+    /// At launch the model the next document needs is the one started. An
+    /// accurate model that fails its self-test there is set aside and the
+    /// fast one started in its place, and setup still succeeds.
+    #[test]
+    fn a_verified_start_falls_back_to_the_fast_model() {
+        let install = Install::new("tier-launch-fallback");
+        install.install_accurate();
+        let rig = Rig::new();
+        *rig.accurate_reply.lock().unwrap() = Some(Reply::Wrong);
+        let runtime = install.runtime(&rig, "1.0.0");
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Accurate, ModelTier::Fast]);
+        assert_eq!(rig.hash_count(), 2, "both digests, once each");
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.loaded_tier(), Some(ModelTier::Fast));
+        assert!(runtime.tier_failure(ModelTier::Accurate).is_some());
+        assert!(stamp_vouches_self_test(&install));
+
+        // A fast model that fails is what setup reports.
+        let rig = Rig::new();
+        rig.reply(Reply::Wrong);
+        install.touch_model(60);
+        let error = install
+            .runtime(&rig, "1.0.0")
+            .start_verified(&CancellationToken::new())
+            .unwrap_err();
+        assert_eq!(error.code, "MODEL_SELF_TEST_FAILED");
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
+    }
+
+    /// Nothing asked for ten minutes: the model is unloaded, and the next
+    /// document loads it again without reading the file. Never while a
+    /// request is in flight, and never while a start holds the lifecycle.
+    #[test]
+    fn an_idle_model_is_unloaded_and_the_next_document_loads_it_again() {
+        let install = Install::new("tier-idle");
+        let rig = Rig::new();
+        let world = World::new();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+
+        world.advance(IDLE_UNLOAD_AFTER - Duration::from_secs(1));
+        assert!(!runtime.unload_if_idle());
+        assert!(runtime.running());
+        world.advance(Duration::from_secs(1));
+        assert!(runtime.unload_if_idle());
+        assert!(!runtime.running());
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 0);
+        assert!(!runtime.unload_if_idle(), "nothing left to unload");
+        assert!(runtime.serviceable(), "the queue still runs");
+
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!(reading.tier, ModelTier::Fast);
+        assert_eq!(rig.launches(), 2);
+        assert_eq!(
+            rig.hash_count(),
+            1,
+            "the reload trusted this session's check"
+        );
+        assert_eq!(
+            rig.proposals.load(Ordering::SeqCst),
+            2,
+            "the launch self-test and the document; no second self-test"
+        );
+
+        // A request in flight is the model in use, however long it takes.
+        rig.reply(Reply::HangUntilStopped);
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        rig.wait_in_flight();
+        world.advance(IDLE_UNLOAD_AFTER * 2);
+        assert!(!runtime.unload_if_idle());
+        rig.reply(Reply::Calibration);
+        runtime.cancel().unwrap();
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::fatal("MODEL_CANCELED")
+        );
+
+        // A start under way holds the lifecycle.
+        world.advance(IDLE_UNLOAD_AFTER * 2);
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        gate.wait_reached();
+        assert!(!runtime.unload_if_idle());
+        gate.open();
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+    }
+
+    /// A document whose model must be loaded first, canceled while it loads:
+    /// the document is canceled, not read, and the cancel's restart waits for
+    /// the load rather than starting a second model beside it.
+    #[test]
+    fn a_cancel_during_a_swap_cancels_the_document_and_never_loads_two_models() {
+        let install = Install::new("tier-swap-cancel");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        world.prefer(ModelPreference::Accurate);
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        gate.wait_reached();
+        *rig.launch_gate.lock().unwrap() = None;
+        let canceling = Arc::clone(&runtime);
+        let cancel = std::thread::spawn(move || canceling.cancel());
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!cancel.is_finished(), "the cancel waits for the load");
+        gate.open();
+
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::fatal("MODEL_CANCELED")
+        );
+        assert_eq!(cancel.join().unwrap(), Ok(()));
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1, "never two models");
+        assert_eq!(rig.alive.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Fast, ModelTier::Accurate, ModelTier::Accurate]
+        );
+        assert_eq!(
+            read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap()).tier,
+            ModelTier::Accurate
+        );
+    }
+
+    /// Choosing a hosted model while a document waits for its model to load:
+    /// the load is discarded, and the document goes back to be read again.
+    #[test]
+    fn choosing_hosted_during_a_swap_hands_the_document_back() {
+        let install = Install::new("tier-swap-hold");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.prefer(ModelPreference::Fast);
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        world.prefer(ModelPreference::Accurate);
+
+        let gate = Arc::new(Gate::default());
+        *rig.launch_gate.lock().unwrap() = Some(Arc::clone(&gate));
+        let analyzing = Arc::clone(&runtime);
+        let request = std::thread::spawn(move || analyzing.analyze(&probe(), "pdf", &[]));
+        gate.wait_reached();
+        runtime.hold().unwrap();
+        gate.open();
+        assert_eq!(
+            request.join().unwrap().unwrap_err(),
+            ModelFailure::retryable("MODEL_NOT_READY")
+        );
+        assert_eq!(
+            rig.alive.load(Ordering::SeqCst),
+            0,
+            "the load was discarded"
+        );
+        assert!(
+            runtime.tier_failure(ModelTier::Accurate).is_none(),
+            "a stop on purpose says nothing about the model"
+        );
+    }
+
+    /// The cascade: the fast model reads first, and a reading with a reason
+    /// to doubt it is read again by the accurate model, whose reading wins
+    /// and says why it was asked. When the accurate model cannot read it,
+    /// the fast reading stands and says so.
+    #[test]
+    fn the_cascade_escalates_a_doubtful_fast_reading_once() {
+        let install = Install::new("tier-cascade");
+        install.install_accurate();
+        let rig = Rig::new();
+        let world = World::new();
+        world.cascade();
+        let runtime = install.runtime_in(&rig, "1.0.0", &world);
+        verified(&runtime);
+        assert_eq!(launched(&rig), [ModelTier::Fast]);
+
+        // A sure reading stays the fast model's.
+        let reading = read_by(&runtime.analyze(&probe(), "pdf", &[]).unwrap());
+        assert_eq!((reading.tier, reading.escalated), (ModelTier::Fast, None));
+
+        // A reading naming someone the document does not: escalated.
+        rig.reply(Reply::Wrong);
+        *rig.accurate_reply.lock().unwrap() = Some(Reply::Calibration);
+        let analysis = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&analysis);
+        assert_eq!(reading.tier, ModelTier::Accurate);
+        assert_eq!(reading.escalated, Some(EscalationReason::ReviewReason));
+        assert!(!reading.escalation_failed);
+        assert_eq!(analysis.status, intern_engine::ProposalStatus::Ready);
+        assert_eq!(
+            launched(&rig),
+            [ModelTier::Fast, ModelTier::Accurate],
+            "one model at a time"
+        );
+        assert_eq!(rig.most_alive.load(Ordering::SeqCst), 1);
+
+        // The accurate model fails the request: the fast reading stands.
+        *rig.accurate_reply.lock().unwrap() =
+            Some(Reply::Fail(EngineErrorCode::ModelInputTooLarge));
+        let analysis = runtime.analyze(&probe(), "pdf", &[]).unwrap();
+        let reading = read_by(&analysis);
+        assert_eq!(reading.tier, ModelTier::Fast);
+        assert_eq!(reading.escalated, Some(EscalationReason::ReviewReason));
+        assert!(reading.escalation_failed);
+    }
+
+    /// Setup's state says where each model is: one installed, one whose
+    /// download is part-way, with the bytes it will resume from.
+    #[test]
+    fn setup_reports_each_model_and_what_blocks_first_use() {
+        let install = Install::new("tier-dto");
+        std::fs::write(
+            install.root.join("models").join("accurate.gguf.partial"),
+            &ACCURATE_BYTES[..4],
+        )
+        .unwrap();
+        let runtime = install.runtime(&Rig::new(), "1.0.0");
+        let setup = SetupManager::new(Box::new(|_: &SetupStateDto| {}), runtime);
+        let state = setup.get().unwrap();
+        assert_eq!(state.state, SetupStatus::Ready);
+        assert_eq!(
+            state.total_bytes,
+            MODEL_BYTES.len() as u64,
+            "the first model"
+        );
+        let tiers = state
+            .tiers
+            .iter()
+            .map(|tier| {
+                (
+                    tier.tier,
+                    tier.state,
+                    tier.downloaded_bytes,
+                    tier.total_bytes,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tiers,
+            [
+                (
+                    ModelTier::Fast,
+                    SetupStatus::Ready,
+                    MODEL_BYTES.len() as u64,
+                    MODEL_BYTES.len() as u64
+                ),
+                (
+                    ModelTier::Accurate,
+                    SetupStatus::Required,
+                    4,
+                    ACCURATE_BYTES.len() as u64
+                ),
+            ]
+        );
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["tiers"][1]["tier"], "accurate");
+        assert_eq!(json["tiers"][1]["displayName"], "Test accurate");
+        assert_eq!(json["tiers"][1]["downloadedBytes"], 4);
+
+        // Nothing installed: the first model is what setup is about.
+        std::fs::remove_file(install.model()).unwrap();
+        let setup = SetupManager::new(
+            Box::new(|_: &SetupStateDto| {}),
+            install.runtime(&Rig::new(), "1.0.0"),
+        );
+        let state = setup.get().unwrap();
+        assert_eq!(
+            (state.state, state.downloaded_bytes),
+            (SetupStatus::Required, 0)
+        );
+    }
+
+    /// The stamp written by a build that pinned one model vouches for
+    /// nothing, and is replaced by one that names each tier's file.
+    #[test]
+    fn a_stamp_from_the_single_model_build_vouches_for_nothing() {
+        let install = Install::new("tier-old-stamp");
+        verified(&install.runtime(&Rig::new(), "1.0.0"));
+        let mut stamp: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+        stamp["schemaVersion"] = serde_json::json!(1);
+        stamp["files"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("selfTested");
+        stamp["files"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "Qwen3.5-2B-Q4_K_M.gguf", "len": 1, "modifiedNanos": 1, "sha256": "00"
+            }));
+        std::fs::write(install.stamp(), serde_json::to_vec(&stamp).unwrap()).unwrap();
+
+        let rig = Rig::new();
+        verified(&install.runtime(&rig, "1.0.0"));
+        assert_eq!(
+            (rig.hash_count(), rig.proposals.load(Ordering::SeqCst)),
+            (1, 1)
+        );
+        let rewritten: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(install.stamp()).unwrap()).unwrap();
+        assert_eq!(rewritten["schemaVersion"], 2);
+        assert_eq!(
+            rewritten["files"].as_array().unwrap().len(),
+            1,
+            "{rewritten}"
+        );
+        assert_eq!(rewritten["files"][0]["name"], "model.gguf");
+    }
+
     /// The real llama-server through a whole lifecycle: start and verify,
     /// a document, a cancel in the middle of a request, another document,
     /// and shutdown - with exactly one server process at every step and
@@ -7273,7 +9055,13 @@ mod runtime_tests {
             return;
         };
         let manifest = ModelManifest::embedded().unwrap();
-        let name = manifest.model().unwrap().name.clone();
+        // The model named is read as the fast tier's, whichever it is.
+        let name = manifest
+            .tier(ModelTier::Fast)
+            .and_then(TierModel::model)
+            .unwrap()
+            .name
+            .clone();
         // The model is linked into a scratch folder of its own, so the
         // verification stamp is written there and nowhere shared.
         let directory = std::env::temp_dir().join(format!("intern-live-{}", std::process::id()));
@@ -7284,8 +9072,9 @@ mod runtime_tests {
             PathBuf::from(server),
             directory.clone(),
             manifest,
+            Box::new(|| ModelPreference::Fast),
         ));
-        assert!(runtime.installed_quick(runtime.manifest()));
+        assert!(runtime.installed_quick());
         assert_eq!(servers(), Vec::<u32>::new(), "a server was already running");
 
         runtime
@@ -7786,6 +9575,37 @@ mod approval_dto_tests {
             proposal: Some(proposal),
             ..super::document_path_tests::item(status, None)
         }
+    }
+
+    /// Who read a document reaches the inspector as the reading recorded
+    /// it, and a reading stored before there were two local models - or
+    /// made by a hosted one - says nothing.
+    #[test]
+    fn the_model_that_read_a_document_reaches_the_inspector() {
+        let dto =
+            serde_json::to_value(queue_item_dto(item(QueueStatus::Ready, false)).unwrap()).unwrap();
+        assert!(dto.get("readBy").is_none(), "{dto}");
+
+        let mut read = item(QueueStatus::Ready, false);
+        read.proposal.as_mut().unwrap().analysis.telemetry.read_by =
+            Some(intern_engine::ModelReading {
+                tier: intern_engine::ModelTier::Fast,
+                model_id: "ternary-bonsai-2-2b-pq2_0".into(),
+                display_name: "Bonsai 2 2B".into(),
+                escalated: None,
+                escalation_failed: false,
+                provisional: true,
+            });
+        let dto = serde_json::to_value(queue_item_dto(read).unwrap()).unwrap();
+        assert_eq!(
+            dto["readBy"],
+            serde_json::json!({
+                "tier": "fast",
+                "modelId": "ternary-bonsai-2-2b-pq2_0",
+                "displayName": "Bonsai 2 2B",
+                "provisional": true
+            })
+        );
     }
 
     /// An evidence-pipeline proposal, stored as the queue stores it: its
