@@ -366,7 +366,7 @@ fn each_open_document_sheet_is_a_named_page() {
 
 /// Every page of every reader carries blocks, ids and all, built from its
 /// text: a reader that knows no geometry still says which lines are a
-/// heading, which a table, and which a labelled value. A sheet's rendered
+/// heading, which a table, and which a labeled value. A sheet's rendered
 /// table is a table block whose header is the sheet's first row.
 #[test]
 fn every_format_s_pages_carry_blocks_built_from_their_text() {

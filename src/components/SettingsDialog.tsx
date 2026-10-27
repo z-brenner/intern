@@ -483,7 +483,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
           firm goes by several. Kept as typed while editing; trimmed, without
           blank lines, on save.
         */}
-        <label>Your organisation's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
+        <label>Your organization's names<textarea rows={3} aria-describedby={shortOwnNames.length > 0 ? 'own-names-hint own-names-short' : 'own-names-hint'} value={(next.ourNames ?? []).join('\n')} onChange={(event) => setNext({ ...next, ourNames: event.target.value.split(/\r?\n/) })} /></label>
         <p className="check-hint" id="own-names-hint">Your own firm's names. When a document names your firm and someone else, the filename and the Party folder use the other side.</p>
         {shortOwnNames.length > 0 && <p className="check-hint" id="own-names-short">{shortOwnNames.map((name) => `“${name}”`).join(', ')} {shortOwnNames.length === 1 ? 'is' : 'are'} too short to match safely and will not be used. Add the name as your documents print it in full.</p>}
         <label className="check-label"><input type="checkbox" checked={Boolean(next.automaticRename)} onChange={(event) => setNext({ ...next, automaticRename: event.target.checked })} />Automatically rename high-confidence files</label>

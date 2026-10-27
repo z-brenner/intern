@@ -9,7 +9,7 @@ checklist authorizes a tag or publication.
 ## Hosted QA artifacts and accepted alpha.11 evidence
 
 - Workflow: Whole-product QA evidence, run `37365868306`, attempt `5`. Attempts
-  1 to 4 were cancelled by GitHub before any step ran, during a GitHub Actions
+  1 to 4 were canceled by GitHub before any step ran, during a GitHub Actions
   incident that left jobs without a runner.
 - Commit: `6aa24a522a78475ba7cff02b6b756159b0d67b9b`; runner: `Windows/X64`. Its
   tree is identical to `main` at `6ee8a404b37fe17ac50d14106affba40d0f53806`.

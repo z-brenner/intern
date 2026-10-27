@@ -302,7 +302,7 @@ fn scan_once(
     let hidden = walk.hidden;
     let files = walk.files;
 
-    // Read before the walk is processed so a conflict copy is recognised on the
+    // Read before the walk is processed so a conflict copy is recognized on the
     // same scan it appears, and include this machine: OneDrive names the losing
     // side of a conflict after whichever machine wrote it, which is often us.
     // Hostnames only: a label typed into Settings ("Office", "Jane") is not
@@ -506,7 +506,7 @@ impl Scanner<'_> {
     /// unreachable Microsoft, a throttled connection, metadata that has not
     /// caught up with an upload yet — leaves the claim and the queue item
     /// alone: the queue authorizes again at every stage of its own, so nothing
-    /// is processed on stale evidence, and cancelling here would throw away
+    /// is processed on stale evidence, and canceling here would throw away
     /// work that was legitimately admitted a moment ago.
     fn manage_admitted(&mut self, key: &str, facts: &FileFacts) {
         let admission = self.host.admission(&facts.path);
@@ -688,12 +688,12 @@ impl Scanner<'_> {
     /// this run handed it over or saw it working or in review, a person took
     /// it out of the queue - Remove, or Discard waiting - and that decision is
     /// recorded as `KeptOriginal`: releasing the claim instead put the
-    /// document straight back into the queue on the next scan, to be analysed
+    /// document straight back into the queue on the next scan, to be analyzed
     /// again. If it was never seen live, the claim outlived a crash between
     /// acquire and enqueue, and is released so the next scan hands the
     /// document over. A run that started after the person removed it cannot
-    /// tell the two apart, and hands it over again: analysing a document twice
-    /// is the lesser mistake next to never analysing it.
+    /// tell the two apart, and hands it over again: analyzing a document twice
+    /// is the lesser mistake next to never analyzing it.
     ///
     /// A document whose item failed before its content ever arrived is
     /// released too. Nothing judged it, and Clear history tidying its failed

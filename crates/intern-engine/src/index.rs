@@ -2,7 +2,7 @@
 //! by, each with what it says about the document already read off it.
 //!
 //! A unit is a heading, a paragraph (or a sentence-bounded chunk of a long
-//! one), a list item, one row of a table, or one labelled value. Units come
+//! one), a list item, one row of a table, or one labeled value. Units come
 //! from [`structured`], so the worker's layout is used where a page has
 //! one and the worker's own text segmentation where it does not. Every
 //! unit keeps its block's id (`p3.b7`), its own id (`p3.b7.r4`, `p3.b7.f2`,
@@ -17,7 +17,7 @@
 //!   [`labels_a_deadline`], [`labels_the_issue_date`],
 //!   [`reference_introduced`]), so retrieval and validation agree on what a
 //!   date means.
-//! * **Money**, **likely organisations** and **likely people**, and
+//! * **Money**, **likely organizations** and **likely people**, and
 //!   **identifiers**.
 //! * **Cue counts** from the cue lists distillation and inference use
 //!   ([`crate::cues`]).
@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cues::{
     AMOUNT_LABELS, BOILERPLATE_CUES, CUSTOMER_CUES, DATE_ROLE_CUES, HONORIFICS, IDENTIFIER_LABELS,
-    ISSUER_CUES, NOT_A_TITLE, ORGANISATION_ENDINGS, PARTY_CUES, PARTY_LABELS, SECTION_TAG_WORDS,
+    ISSUER_CUES, NOT_A_TITLE, ORGANIZATION_ENDINGS, PARTY_CUES, PARTY_LABELS, SECTION_TAG_WORDS,
     SIGNATURE_CUES, STOPWORDS, SUBJECT_CUES, TYPE_CUES, TYPE_NOUNS,
 };
 use crate::domain::{DateRole, DocumentSource, PageOrigin};
@@ -62,7 +62,7 @@ const OPENING_UNITS: u32 = 4;
 const CLOSING_UNITS: u32 = 3;
 /// How many units after a signature cue still read as the signature block.
 const SIGNATURE_REACH: u32 = 12;
-/// The legal forms among [`ORGANISATION_ENDINGS`].
+/// The legal forms among [`ORGANIZATION_ENDINGS`].
 const LEGAL_FORMS: &[&str] = &[
     "inc",
     "incorporated",
@@ -147,9 +147,9 @@ pub struct DateMention {
     pub numeric: bool,
     /// The role the wording names (`Invoice Date:`, `effective as of`).
     pub role: Option<DateRole>,
-    /// Labelled due, expiry, renewal or deadline.
+    /// Labeled due, expiry, renewal or deadline.
     pub deadline: bool,
-    /// Labelled the date the document was issued (`Invoice Date:`, `Dated`).
+    /// Labeled the date the document was issued (`Invoice Date:`, `Dated`).
     pub issue_label: bool,
     /// Introduced as another document's date ("the Agreement dated").
     pub reference: bool,
@@ -225,12 +225,12 @@ pub struct UnitFeatures {
     /// Amounts of money as written: `$4,805.98`, `USD 1,200`.
     pub money: Vec<String>,
     /// An amount under a label that makes it a key fact (`Total`, `Rent`).
-    pub money_labelled: bool,
-    /// Likely organisations, loosely normalized.
-    pub organisations: Vec<String>,
+    pub money_labeled: bool,
+    /// Likely organizations, loosely normalized.
+    pub organizations: Vec<String>,
     /// Likely people, loosely normalized.
     pub people: Vec<String>,
-    /// Runs of two or more capitalised words: names of some kind.
+    /// Runs of two or more capitalized words: names of some kind.
     pub proper_names: u8,
     pub identifiers: Vec<Identifier>,
     pub cues: CueCounts,
@@ -271,7 +271,7 @@ pub struct EvidenceUnit {
     pub text: String,
     /// [`normalize`]d text.
     pub normalized: String,
-    /// A labelled value's label, or the first cell of a two-cell row.
+    /// A labeled value's label, or the first cell of a two-cell row.
     pub label: Option<String>,
     /// A heading's level, where it can be told.
     pub level: Option<u8>,
@@ -697,8 +697,8 @@ impl Builder {
         }
     }
 
-    /// A block of labelled values as one unit per value: its `Key: value`
-    /// line, labelled with the key. A line that is no field's - a label
+    /// A block of labeled values as one unit per value: its `Key: value`
+    /// line, labeled with the key. A line that is no field's - a label
     /// with nothing after it - goes with the field before it, or the first.
     fn fields(&mut self, page: usize, block_id: &str, block: &LayoutBlock, confidence: Option<u8>) {
         let lines = block
@@ -902,7 +902,7 @@ impl Builder {
                     .all(|mention| mention.iso == features.dates[0].iso);
             let label = draft.label.as_deref().map(normalize);
             features.money = money_amounts(&draft.text);
-            features.money_labelled = !features.money.is_empty()
+            features.money_labeled = !features.money.is_empty()
                 && AMOUNT_LABELS.iter().any(|word| {
                     label
                         .as_deref()
@@ -910,7 +910,7 @@ impl Builder {
                         || contains_word(text_normalized, word)
                         || header_text.is_some_and(|header| contains_word(header, word))
                 });
-            features.organisations = organisations(&draft.text);
+            features.organizations = organizations(&draft.text);
             features.people = people(&draft.text, label.as_deref());
             features.proper_names = saturate(proper_name_runs(&draft.text));
             features.identifiers = identifiers(&draft.text, label.as_deref());
@@ -1367,7 +1367,7 @@ fn bare(word: &str) -> &str {
     word.trim_matches(|character: char| !character.is_alphanumeric() && character != '&')
 }
 
-fn is_capitalised(word: &str) -> bool {
+fn is_capitalized(word: &str) -> bool {
     let core = bare(word);
     core == "&"
         || (core
@@ -1377,7 +1377,7 @@ fn is_capitalised(word: &str) -> bool {
             && core.chars().any(char::is_alphabetic))
 }
 
-/// A word folded the way the organisation lists are written: no case, no
+/// A word folded the way the organization lists are written: no case, no
 /// trailing period, no quotes, brackets or commas around it.
 fn folded_form(word: &str) -> String {
     word.trim_matches(|character: char| matches!(character, ',' | ';' | ':' | '(' | ')' | '"'))
@@ -1385,8 +1385,8 @@ fn folded_form(word: &str) -> String {
         .to_lowercase()
 }
 
-fn is_organisation_ending(word: &str) -> bool {
-    ORGANISATION_ENDINGS.contains(&folded_form(word).as_str())
+fn is_organization_ending(word: &str) -> bool {
+    ORGANIZATION_ENDINGS.contains(&folded_form(word).as_str())
 }
 
 /// A company's legal form, which a comma may set off from its name.
@@ -1400,27 +1400,27 @@ fn is_initial(word: &str) -> bool {
     core.chars().count() == 1 && core.chars().all(char::is_uppercase)
 }
 
-/// Likely organisations: a run of capitalised words - "&", "and" and "of"
-/// may join them - that ends on an organisation word ("LLC", "Bank",
+/// Likely organizations: a run of capitalized words - "&", "and" and "of"
+/// may join them - that ends on an organization word ("LLC", "Bank",
 /// "Cooperative") where the name ends: before punctuation, a lower-case
 /// word, or the end of the text. A legal form after a comma joins it
 /// ("Halden Bay National Bank, N.A.").
-fn organisations(text: &str) -> Vec<String> {
+fn organizations(text: &str) -> Vec<String> {
     let words = words_of(text);
     let mut found: Vec<String> = Vec::new();
     for (index, word) in words.iter().enumerate() {
-        if !is_capitalised(word) || !is_organisation_ending(word) {
+        if !is_capitalized(word) || !is_organization_ending(word) {
             continue;
         }
         let ends_name = word.ends_with([',', '.', ';', ':', ')', '"'])
             || words
                 .get(index + 1)
-                .is_none_or(|next| !is_capitalised(next) || bare(next).is_empty());
+                .is_none_or(|next| !is_capitalized(next) || bare(next).is_empty());
         if !ends_name {
             continue;
         }
         let mut start = index;
-        let mut capitalised = 0;
+        let mut capitalized = 0;
         while start > 0 && index - start < 7 {
             let previous = words[start - 1];
             let clean = previous.chars().all(|character| {
@@ -1436,8 +1436,8 @@ fn organisations(text: &str) -> Vec<String> {
                 break;
             }
             let core = bare(previous);
-            if is_capitalised(previous) && !matches!(core, "The" | "THE" | "This" | "THIS") {
-                capitalised += 1;
+            if is_capitalized(previous) && !matches!(core, "The" | "THE" | "This" | "THIS") {
+                capitalized += 1;
                 start -= 1;
             } else if matches!(core, "&" | "and" | "of") && start >= 2 {
                 start -= 1;
@@ -1447,15 +1447,15 @@ fn organisations(text: &str) -> Vec<String> {
         }
         while start < index && matches!(bare(words[start]), "&" | "and" | "of") {
             start += 1;
-            capitalised = capitalised.max(1);
+            capitalized = capitalized.max(1);
         }
-        if capitalised == 0 {
+        if capitalized == 0 {
             continue;
         }
         let mut name = words[start..=index].join(" ");
         if word.ends_with(',')
             && let Some(form) = words.get(index + 1)
-            && is_organisation_ending(form)
+            && is_organization_ending(form)
         {
             name.push(' ');
             name.push_str(form);
@@ -1468,7 +1468,7 @@ fn organisations(text: &str) -> Vec<String> {
     found
 }
 
-/// A run of two to four capitalised words with no figures, read from the
+/// A run of two to four capitalized words with no figures, read from the
 /// start of `text`: a person's name as a label's value or after a title.
 fn name_at(words: &[&str]) -> Option<String> {
     let mut taken = Vec::new();
@@ -1477,7 +1477,7 @@ fn name_at(words: &[&str]) -> Option<String> {
         let initial = core.len() == 1 && core.chars().all(char::is_uppercase);
         if core.is_empty()
             || core.chars().any(|character| character.is_ascii_digit())
-            || !(is_capitalised(word) || initial)
+            || !(is_capitalized(word) || initial)
             || core == "&"
         {
             break;
@@ -1487,7 +1487,7 @@ fn name_at(words: &[&str]) -> Option<String> {
             break;
         }
     }
-    (taken.len() >= 2 && !taken.iter().any(|word| is_organisation_ending(word)))
+    (taken.len() >= 2 && !taken.iter().any(|word| is_organization_ending(word)))
         .then(|| normalize_loosely(&taken.join(" ")))
 }
 
@@ -1533,12 +1533,12 @@ fn people(text: &str, label: Option<&str>) -> Vec<String> {
     found
 }
 
-/// How many runs of two or more capitalised words a unit has.
+/// How many runs of two or more capitalized words a unit has.
 fn proper_name_runs(text: &str) -> usize {
     let mut runs = 0;
     let mut length = 0;
     for word in words_of(text) {
-        if is_capitalised(word) && bare(word) != "&" {
+        if is_capitalized(word) && bare(word) != "&" {
             length += 1;
         } else if bare(word) != "&" {
             if length >= 2 {
@@ -1592,7 +1592,7 @@ fn identifiers(text: &str, label: Option<&str>) -> Vec<Identifier> {
                 "no." | "no" | "#" | "number" | "id" | "ref" | "ref."
             ) || previous.ends_with('#')
         };
-        let labelled = label.is_some_and(numbered_label)
+        let labeled = label.is_some_and(numbered_label)
             && text
                 .find(':')
                 .is_some_and(|colon| text[colon..].contains(token));
@@ -1607,14 +1607,14 @@ fn identifiers(text: &str, label: Option<&str>) -> Vec<Identifier> {
         if is_date || token.len() > 24 || (!shaped && figures < 3) {
             continue;
         }
-        if shaped || introduced || labelled {
+        if shaped || introduced || labeled {
             let value = token.to_owned();
             if found.iter().any(|existing| existing.value == value) {
                 continue;
             }
             found.push(Identifier {
                 value,
-                label: if labelled {
+                label: if labeled {
                     label.map(str::to_owned)
                 } else if introduced {
                     Some(words[index - 1].trim_end_matches(':').to_lowercase())
@@ -1721,19 +1721,19 @@ mod tests {
         assert_eq!(total.kind, UnitKind::TableRow);
         assert_eq!(total.table_header, Some(header.ordinal));
         assert_eq!(total.features.money, vec!["$4,805.98".to_owned()]);
-        assert!(total.features.money_labelled);
+        assert!(total.features.money_labeled);
         assert_eq!(index.heading_context(total.ordinal), vec!["INVOICE"]);
         let number = index.unit("p1.b4.f1").unwrap();
         assert_eq!(number.features.identifiers[0].value, "INV-20417");
         let letterhead = &index.units()[0];
         assert!(letterhead.features.position.letterhead);
         assert_eq!(
-            letterhead.features.organisations,
+            letterhead.features.organizations,
             vec!["halvorsen fixture works llc".to_owned()]
         );
         let bill_to = index.unit("p1.b4.f4").unwrap();
         assert_eq!(
-            bill_to.features.organisations,
+            bill_to.features.organizations,
             vec!["quillon ridge bakery inc".to_owned()]
         );
     }
@@ -1818,18 +1818,18 @@ mod tests {
         assert!(
             preamble
                 .features
-                .organisations
+                .organizations
                 .contains(&"halden bay national bank na".to_owned()),
             "{:?}",
-            preamble.features.organisations
+            preamble.features.organizations
         );
         assert!(
             preamble
                 .features
-                .organisations
+                .organizations
                 .contains(&"marrowfield packaging holdings inc".to_owned()),
             "{:?}",
-            preamble.features.organisations
+            preamble.features.organizations
         );
     }
 

@@ -50,7 +50,7 @@ test('mixed batch can be reviewed, approved, and undone entirely in memory', asy
   await expect(page.getByRole('row', { name: /duplicate-invoice-a\.pdf/i })).toBeVisible();
 });
 
-test('naming your organisation in Settings files a waiting proposal by the other side', async ({ page }) => {
+test('naming your organization in Settings files a waiting proposal by the other side', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('main', { name: 'Intern' })).toBeVisible();
   const lease = page.getByRole('row', { name: /Lease Agreement - 123 Main St\.pdf/i });
@@ -59,7 +59,7 @@ test('naming your organisation in Settings files a waiting proposal by the other
   await page.getByRole('button', { name: /Settings/i }).click();
   const dialog = page.getByRole('dialog', { name: /Settings/i });
   // One name per line; the blank line a list picks up is not a name.
-  await dialog.getByLabel('Your organisation\'s names').fill('TenantCo Inc.\n\n');
+  await dialog.getByLabel('Your organization\'s names').fill('TenantCo Inc.\n\n');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
   await expect(dialog).toBeHidden();
 
@@ -70,10 +70,10 @@ test('naming your organisation in Settings files a waiting proposal by the other
   const inspector = page.getByRole('complementary', { name: 'Review item' });
   // The extension is locked beside the field; the field holds the name before it.
   await expect(inspector.getByLabel('Filename')).toHaveValue('2023-09-15 Lease Agreement with ABC Properties LLC');
-  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organisation, so it is left out of the name. Change this under Settings.');
+  await expect(inspector.getByRole('note', { name: 'Filed by the other side' })).toHaveText('Filed by the other side: TenantCo Inc. is your organization, so it is left out of the name. Change this under Settings.');
   await expect(inspector.getByText('TenantCo Inc.', { exact: true }).first()).toBeVisible();
 
   // Saved as the backend stores it.
   await page.getByRole('button', { name: /Settings/i }).click();
-  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organisation\'s names')).toHaveValue('TenantCo Inc.');
+  await expect(page.getByRole('dialog', { name: /Settings/i }).getByLabel('Your organization\'s names')).toHaveValue('TenantCo Inc.');
 });

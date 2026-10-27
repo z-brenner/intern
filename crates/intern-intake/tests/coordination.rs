@@ -425,7 +425,7 @@ fn prune_removes_expired_done_claims_dead_leases_and_conflict_copies() {
 /// A kept document's tombstone is the only record that a person decided to
 /// leave it where it is - kept under its own name, canceled, removed from the
 /// queue. Expired while the document still sat in the folder unchanged, it
-/// had the document picked up again as new and analysed once more, a month
+/// had the document picked up again as new and analyzed once more, a month
 /// after someone decided against it.
 #[test]
 fn a_kept_documents_tombstone_lasts_while_the_document_stays_in_place() {

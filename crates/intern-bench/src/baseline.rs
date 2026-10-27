@@ -110,7 +110,7 @@ pub struct BaselineDocument {
 ///
 /// Extraction is deterministic for one worker build on one machine, so the
 /// tolerance is not for noise. A score that counts whole items - a snippet,
-/// a row, a cell, a labelled value, a page's route, a date, a name, an
+/// a row, a cell, a labeled value, a page's route, a date, a name, an
 /// identifier, a piece of evidence in the digest - moves by a whole item or
 /// not at all, and any fall is a real loss: no tolerance.
 ///

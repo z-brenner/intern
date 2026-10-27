@@ -37,7 +37,7 @@ For scanned documents it also scores OCR itself, against the exact text
 drawn on each page: character and word error rates, and whether the dates,
 names and identifiers on the page survived. Where the page's layout says
 something plainly - the order its columns are read in, its tables, its
-labelled values, the route each page should take - it scores whether the
+labeled values, the route each page should take - it scores whether the
 text Intern reads keeps it ([Structure scores](#structure-scores)).
 
 Extraction can also be measured on its own, without a model
@@ -76,7 +76,7 @@ when any selected document's bytes disagree with it or it does not list one.
 | Long, information-dense PDFs | 10-page data processing addendum (20+ sub-processors); 25-page asset purchase agreement; 50-page credit agreement dated only by the definition of "Closing Date" on page 10; 100-page annual report dated on page 41, under the auditors' report, and again only in a later note |
 | Office, sheets, mail, text | separation agreement, demand letter, written consent (`.docx`); quarterly business review, launch plan (`.pptx`); payroll register with a date serial cell, harvest log (`.xlsx`); AP aging (`.csv`); approval email quoting an older message (`.eml`); hearing notice (`.txt`) |
 | Scans | clean 2- and 10-page image-only PDFs; a 25-page 200-DPI lease; a mixed PDF whose signature page is scanned; rotated 90° and 180°; 3° skew; 100 DPI; speckle noise and blur; faint uneven light; an invisible OCR text layer full of OCR errors; a two-frame TIFF fax; a scanned intake form |
-| Layout and OCR (added with the structure gold; first recorded in the phase 2 run) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organisations and identifiers |
+| Layout and OCR (added with the structure gold; first recorded in the phase 2 run) | a three-column newsletter; a two-column agreement with a full-width title and footnotes; one meeting notice written into the content stream column by column, row by row across both columns, and back to front (the same page to the eye); a freight rate confirmation whose landscape page is stored portrait with `/Rotate 90`; a ruled inspection log split across two pages; an unruled price list aligned only by position; invoices whose header facts sit under small captions, across the page from their labels (the date a table cell away), and in a grid of boxes; a check-box benefits form; a boxed-field loss notice; a freight claim whose landscape page was scanned sideways inside the PDF; a cancellation notice scanned at 150 DPI; a remittance advice at 120 DPI, blurred and grainy; a lease renewal with a scanned exhibit between two digital pages; a license amendment whose signature block - and with it the only signature dates - is a pasted scan; a certificate of liability insurance (300 DPI) and a bill of lading (200 DPI) dense with dates, organizations and identifiers |
 | Long documents for retrieval (added for phase 3, first recorded in its live run) | evidence that decides the name, deep inside: a 12-page master services agreement whose Effective Date is stated only in its definitions schedule on page 9; a 25-page industrial lease dated only in its Lease Particulars on page 23, after a letter of intent and an old lease dated on page 1; a 40-page term loan whose lender and borrower are named only on page 1 and on the signature page; a 60-page commercial property policy whose declarations - and policy period - sit on page 30 of its renewal packet; a 100-page watershed monitoring report whose cover dates the review draft and whose final issue date is in the certification on page 88 |
 
 Every document carries category tags (`multi_column`, `date_in_table`,
@@ -92,7 +92,7 @@ and that the long documents are information-dense rather than padded:
 almost every page is distinct after digits are masked, and five-word
 phrases rarely repeat.
 
-Scans are drawn with glyphs rasterised from an open-licence typeface
+Scans are drawn with glyphs rasterized from an open-license typeface
 (`bench/assets/raster-fonts.json`; see `bench/assets/OFL.txt`). OCR is
 therefore measured on text that looks like print, not on the 5×7 bitmap
 font `fixtures/` uses.
@@ -154,7 +154,7 @@ block, every part optional:
   or on the line below a label standing alone): the scorer could credit
   either, so the pair would not say which one is meant.
 * `expected_routes`: `{"<page>": "fast" | "layout" | "ocr" | "ocr_regions"}`,
-  only for the pages where the route is not a judgement call.
+  only for the pages where the route is not a judgment call.
 
 Thirty-three documents have one: the twenty added for it, the five long
 documents added for phase 3, and the two-column lease, the interleaved
@@ -389,7 +389,7 @@ found.
 | `party_forbidden` | A party the gold marks as a trap was named. |
 | `relation_correct`, `party_role_correct` | The joining word, and whether the party it points at holds that role: `from` an issuer or sender, `for` a subject, `to` a recipient, `with` a counterparty. For `between`, every role-holder must be named. Judged when parties were named. |
 | `description_completeness` | Fraction of the gold facts the sentence states. |
-| `description_factual` | Every checkable claim (dates, amounts, percentages, identifiers, capitalised names) occurs in the document, and no forbidden fact is asserted. The extraction is a heuristic that leans towards "supported", so a failure is worth reading. |
+| `description_factual` | Every checkable claim (dates, amounts, percentages, identifiers, capitalized names) occurs in the document, and no forbidden fact is asserted. The extraction is a heuristic that leans towards "supported", so a failure is worth reading. |
 | `description_specificity` | The mean of three marks: names a party or gold fact; carries a concrete detail; 10–42 words. |
 | `evidence_recall` | The model's quoted evidence contains the date and each party. |
 | `digest_recall`, `prompt_recall` | The gold evidence is in the distilled digest, or in the prompt actually sent. This is deterministic, so a distillation change can be measured in replay without a model. |
@@ -432,7 +432,7 @@ The `complex` slice is every document with any of these categories:
 `key_value`, `complex_pdf`. Each makes what the document says something to
 find or to reason out: a fact in the middle, a referenced agreement's own
 date and parties, names that are not parties, columns or a content-stream
-order that scramble the reading, a date or labelled value inside a table,
+order that scramble the reading, a date or labeled value inside a table,
 parties placed only by the layout, a page dense with figures. Three groups
 are left out on purpose. `competing_dates` is on 62 of the 72 documents of
 the corpus as it was when the slice was drawn, so it would make the slice
@@ -453,21 +453,21 @@ worker that sends no layouts is scored on the same footing as one that does.
 Only `route_correct` reads the layouts. The code is
 `crates/intern-bench/src/structure.rs`.
 
-Text is compared normalised: every run of whitespace one space, typographic
+Text is compared normalized: every run of whitespace one space, typographic
 quotes straight, dashes hyphens. Case counts. A gold string is found only
 where it stands on its own: one that begins or ends with a letter or digit
 may not continue a word there, and one that begins or ends with a digit may
 not continue a number (`4` is not found in `14`, `1,4` or `4.5`). The text
 is read as *lines*: each page's text split at line breaks, in page order,
-normalised, blank lines dropped; a table row linearised as `| a | b |` is
+normalized, blank lines dropped; a table row linearized as `| a | b |` is
 one line.
 
 | Score | Exact definition |
 | --- | --- |
-| `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalised). The snippets in order are the most of the found ones whose positions rise in the gold's order (a longest increasing subsequence); the score is their number over the number of gold snippets, so a snippet not found is out of order. Two whole columns read the wrong way round keep only the longer column in order: of eleven snippets, seven and four, the score is 7/11 (about 0.64), where counting consecutive pairs would have lost one pair in ten. |
+| `reading_order_accuracy` | Each snippet's position is its first occurrence in the whole text (pages joined by a line break, normalized). The snippets in order are the most of the found ones whose positions rise in the gold's order (a longest increasing subsequence); the score is their number over the number of gold snippets, so a snippet not found is out of order. Two whole columns read the wrong way round keep only the longer column in order: of eleven snippets, seven and four, the score is 7/11 (about 0.64), where counting consecutive pairs would have lost one pair in ten. |
 | `table_row_accuracy` | A gold row (its non-empty cells) is found when one line of its table's region (see `table_cell_recall`) holds every cell in order, each starting after the end of the one before, with no cell of another row of the table wholly between two of them, so two rows read across each other are neither found. A blank leading cell counts too: when some rows of a table leave it blank and others do not (a check-box group, its chosen options marked `X`), the values the others hold there are the table's marks, and a row with a blank leading cell is not found on a line where a mark stands between the cell of another row before it (or the line's start) and its first cell - that `X` is beside an option the gold leaves unmarked. The share of rows found, over every table of the document. |
 | `table_cell_recall` | The share of non-empty gold cells found in their table's region: the lines from the first one holding a cell of the table's first row (or the first line, if none does) to the last one, from there on, holding a cell of its last row (or the last line, if none does). Only cells of two characters or more place the region - a lone `X` or digit is printed all over a page, so it neither anchors nor widens a table - and a first or last row without one gives way to the nearest row with one. A table split over two pages spans the break. A value the table prints k times must be found k times, without overlap. |
-| `kv_accuracy` | A labelled value is found when a line holds the label and, after it but before the next gold label on the line, the value (a value after another label is that label's); or a line holds the label and nothing else (colons, bars, dashes, full stops aside) and the next line holds the value; or a table row holds the label as a whole cell (a colon after it aside; `CONTRACT DATE` is not the cell of `DATE`) and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearised as a table). The share of pairs found. |
+| `kv_accuracy` | A labeled value is found when a line holds the label and, after it but before the next gold label on the line, the value (a value after another label is that label's); or a line holds the label and nothing else (colons, bars, dashes, periods aside) and the next line holds the value; or a table row holds the label as a whole cell (a colon after it aside; `CONTRACT DATE` is not the cell of `DATE`) and the next line, a row of the same table, holds the value in the cell of the same column (a label set over its value, linearized as a table). The share of pairs found. |
 | `route_correct` | The share of pages with an expected route whose layout took that route. A page sent without a layout while others have one took none and is wrong. Not scored when the worker sent no layouts at all, nor for a document whose extraction failed (nothing was read, so nothing was routed). |
 
 Every count behind them is in the record (`structure`), so a corpus figure

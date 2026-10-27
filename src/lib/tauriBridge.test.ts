@@ -348,7 +348,7 @@ describe('TauriBridge', () => {
     expect(items[5].cancelable).toBe(false);
   });
 
-  it('carries the parties a name left out as the organisation\'s own, and nothing when there are none', async () => {
+  it('carries the parties a name left out as the organization\'s own, and nothing when there are none', async () => {
     const fake = fakeTransport({
       queue_list: [
         { id: 1, originalFilename: 'sow.pdf', status: 'ready', proposedFilename: '2026-04-01 Statement of Work with Ridgeline Cartography LLC.pdf', omittedParties: ['Contoso Worldwide, Inc.'] },

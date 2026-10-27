@@ -353,7 +353,7 @@ pub(crate) fn table_cells(line: &str) -> Vec<String> {
     cells
 }
 
-/// Whether a line starts with a bullet or a parenthesised enumerator.
+/// Whether a line starts with a bullet or a parenthesized enumerator.
 pub(crate) fn is_list_item_text(line: &str) -> bool {
     is_list_item(line.trim())
 }
@@ -527,7 +527,7 @@ const FIRM_SUFFIXES: &[&str] = &[
 /// one without descenders looks smaller than the line under it whatever
 /// its type size; what a label is has to be read from its words. A label
 /// holds no figures and does not end a sentence; a firm's name ends in its
-/// suffix; and a line whose every word is capitalised is a name - a
+/// suffix; and a line whose every word is capitalized is a name - a
 /// person's, a firm's, a document's title - unless one of its words names a
 /// field. Capitals alone are a label when short, or when a word of them
 /// names a field: `POST DRIVER HEAVY DUTY` is an item on a receipt.
@@ -559,15 +559,15 @@ pub(crate) fn reads_as_label(key: &str) -> bool {
     if letters.clone().all(char::is_uppercase) {
         return words.len() <= 3 || names_a_field;
     }
-    let every_word_capitalised = words.len() >= 2
+    let every_word_capitalized = words.len() >= 2
         && words
             .iter()
             .all(|word| word.chars().next().is_some_and(char::is_uppercase));
-    !every_word_capitalised || names_a_field
+    !every_word_capitalized || names_a_field
 }
 
 /// Whether a line opens a part of a document - `ARTICLE 4 - RENT`,
-/// `EXHIBIT C - WORK LETTER`, `Schedule 2` - rather than labelling a value.
+/// `EXHIBIT C - WORK LETTER`, `Schedule 2` - rather than labeling a value.
 pub(crate) fn is_part_heading(line: &str) -> bool {
     let mut words = line.split_whitespace();
     let (Some(first), Some(second)) = (words.next(), words.next()) else {
@@ -1038,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn list_markers_are_recognised() {
+    fn list_markers_are_recognized() {
         for item in [
             "• Bullet",
             "- dash item",

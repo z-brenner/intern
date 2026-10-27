@@ -148,7 +148,7 @@ pub struct RereadSettings {
 /// Each chosen line is read again once, made black and white.
 ///
 /// Measured against no second reading, at the 960 detector: on the
-/// synthetic business pages, binarised re-reading found 89 of 90 dates
+/// synthetic business pages, binarized re-reading found 89 of 90 dates
 /// against 85 (the fax tier's 29 of 30 against 25), at a fifth more OCR
 /// time; InternBench's character error fell from 0.50% to 0.49%. Reading
 /// each line twice more, contrast-stretched as well, found 87 dates and
@@ -175,14 +175,14 @@ impl Default for RereadSettings {
 /// detector's own configuration names.
 pub const DETECTION_LONG_SIDE: u32 = 960;
 
-/// Skew, in degrees, past which a page is levelled and detected again.
+/// Skew, in degrees, past which a page is leveled and detected again.
 ///
 /// Five InternBench pages turned 2, 4, 6 and 10 degrees read about as well
-/// with each line cut out along its own slope as levelled and detected
+/// with each line cut out along its own slope as leveled and detected
 /// again, and as they did unturned: character error 0.76% against 0.69%,
-/// all of the difference one noisy page at 2 degrees, with levelling worse
+/// all of the difference one noisy page at 2 degrees, with leveling worse
 /// at 4, and every critical field within one either way. Detecting again
-/// costs a second detector pass and levelling the page, a quarter more
+/// costs a second detector pass and leveling the page, a quarter more
 /// time on it, so it is kept for skew past the largest angle measured.
 /// docs/ocr.md has the numbers.
 pub const REDETECT_SKEW_DEGREES: f32 = 10.0;
@@ -203,9 +203,9 @@ pub struct PaddleConfig {
     pub orientation_min_probability: f32,
     /// Lines read with a mean probability below this are dropped as noise.
     pub drop_score: f32,
-    /// Skew, in degrees, past which the page is levelled and detected
+    /// Skew, in degrees, past which the page is leveled and detected
     /// again. Below it the lines are cut out along their own slopes and
-    /// only their reported boxes are levelled.
+    /// only their reported boxes are leveled.
     pub redetect_skew_degrees: f32,
     pub reread: Option<RereadSettings>,
     /// Lines recognized in one batch.
@@ -358,12 +358,12 @@ pub fn page_text(lines: &[PlacedLine]) -> String {
     let mut row: Option<[f32; 4]> = None;
     for line in lines {
         let [_, top, _, bottom] = line.bounds;
-        let centre = (top + bottom) / 2.0;
+        let center = (top + bottom) / 2.0;
         match row {
             None => {}
             Some([_, row_top, _, row_bottom]) => {
-                let row_centre = (row_top + row_bottom) / 2.0;
-                let same_row = (centre - row_centre).abs() < typical * 0.5 && top < row_bottom;
+                let row_center = (row_top + row_bottom) / 2.0;
+                let same_row = (center - row_center).abs() < typical * 0.5 && top < row_bottom;
                 if same_row {
                     text.push(' ');
                 } else if top - row_bottom > typical {

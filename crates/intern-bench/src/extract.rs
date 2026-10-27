@@ -5,7 +5,7 @@
 //! sends it (the same timeouts, the worker started on a throwaway document
 //! first, the worker's own account of its stages), and is then scored on
 //! the extraction alone: OCR against the drawn text, the structure the gold
-//! gives (reading order, tables, labelled values, routes), and whether the
+//! gives (reading order, tables, labeled values, routes), and whether the
 //! gold's evidence reaches the digest the engine would build. A document
 //! is `completed` when the worker read it and `extraction_failed` when it
 //! did not; a failure is a miss on every score its gold defines.

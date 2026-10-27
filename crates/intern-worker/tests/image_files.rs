@@ -43,7 +43,7 @@ impl OcrBackend for ShadeOcr {
     }
 }
 
-/// One frame of a fixture TIFF: a 2x2 greyscale image of one shade.
+/// One frame of a fixture TIFF: a 2x2 grayscale image of one shade.
 #[derive(Clone, Copy)]
 struct Frame {
     compression: u16,
@@ -66,7 +66,7 @@ impl Frame {
     }
 }
 
-/// The tags a minimal 2x2 greyscale frame needs, in the ascending tag order
+/// The tags a minimal 2x2 grayscale frame needs, in the ascending tag order
 /// the specification requires.
 fn directory(frame: Frame, data_offset: u32, next_directory: u32) -> Vec<u8> {
     let mut bytes = (frame.tags() as u16).to_le_bytes().to_vec();
@@ -318,7 +318,7 @@ fn oversized_photo_is_downscaled_before_ocr() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("receipt.jpg");
     // 240 x 200, black on the left and white on the right, so a crop would
-    // show as a page of one colour.
+    // show as a page of one color.
     RgbImage::from_fn(240, 200, |x, _| {
         if x < 120 {
             Rgb([0, 0, 0])
@@ -419,13 +419,13 @@ fn a_rotated_oversized_photo_is_scaled_and_turned_upright() {
     assert!(top < 64 && bottom > 192, "top {top}, bottom {bottom}");
 }
 
-/// A scanner's 48-bit colour mode decodes to six bytes a pixel, so the pixel
+/// A scanner's 48-bit color mode decodes to six bytes a pixel, so the pixel
 /// cap - written for 8-bit images - let a hundred megapixels of it take
 /// 600 MB before anything was scaled. It is held to the bytes the largest
 /// 8-bit image may take, and an 8-bit image with alpha at nearly the pixel
 /// cap is still read.
 #[test]
-fn a_deep_colour_image_is_held_to_the_bytes_an_8_bit_one_may_take() {
+fn a_deep_color_image_is_held_to_the_bytes_an_8_bit_one_may_take() {
     let limits = ResourceLimits {
         max_page_pixels: MAX_PAGE_PIXELS / 1_000,
         max_image_file_pixels: MAX_IMAGE_FILE_PIXELS / 1_000,

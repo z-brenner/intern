@@ -139,7 +139,7 @@ memory.
 | --- | --- |
 | Model | `fastino/gliner2-base-v1`, about 200M parameters, span extraction against labels given at run time |
 | License | Apache-2.0 |
-| Size | about 0.8 GB fp32, smaller once quantised or exported to ONNX |
+| Size | about 0.8 GB fp32, smaller once quantized or exported to ONNX |
 | Runtime | not llama.cpp. It needs ONNX Runtime (the `ort` crate) or a Python sidecar, so it is a new pinned runtime asset |
 
 **How it plugs in.** It runs between distill and prompt. GLiNER2 proposes

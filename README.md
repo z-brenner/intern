@@ -133,7 +133,7 @@ not find written in the document, review shows the date, says it is
 unverified, and accepts it in one click — into the name to edit, or straight
 through to the rename. When the model offered none, every date the document
 states is one click away, and the file's own last-modified date is the last,
-labelled resort. The date a reviewer gives a name is the date the document
+labeled resort. The date a reviewer gives a name is the date the document
 is filed under: the year folder and the description record follow it.
 
 Filed documents can be **arranged into subfolders** of the destination —
@@ -246,7 +246,7 @@ watched as your own only through folder setup; one typed into Settings by hand
 is still held for Microsoft upload verification, and private local mode is
 refused for synced folders. A build with the deployment hides these manual
 controls and uses the SharePoint connection instead. A folder on a **network
-share** — a UNC path or a mapped drive — is recognised and labelled too, and
+share** — a UNC path or a mapped drive — is recognized and labeled too, and
 can never be watched as your own, because anyone with access can add to it.
 A subfolder the account cannot read is counted and
 skipped rather than stopping the scan.
@@ -320,7 +320,7 @@ model's habit, and a document the model could not type but whose title names
 a type (`MUTUAL NON-DISCLOSURE AGREEMENT`, `Board Meeting Minutes`) is named
 from the title and sent to review with the reason shown.
 
-Names are sanitised for Windows, keep the original extension, shed the least
+Names are sanitized for Windows, keep the original extension, shed the least
 identifying detail first when they would be too long to scan, and get a numeric
 suffix on collision.
 

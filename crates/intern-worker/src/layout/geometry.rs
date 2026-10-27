@@ -1,5 +1,5 @@
 //! Blocks from where text sits on a page: reading order from the page's
-//! columns, tables from rows whose cells line up, labelled values paired
+//! columns, tables from rows whose cells line up, labeled values paired
 //! with their labels, headings from type size and weight.
 //!
 //! The input is runs: text on one line with no wide gap inside it, each
@@ -419,8 +419,8 @@ fn horizontal_cut(items: &[Item], ids: &[usize]) -> Option<Cut> {
     let mut bottom = f64::NEG_INFINITY;
     for (index, row) in rows.iter().enumerate() {
         let gap = row.y0 - bottom > height * 1.25;
-        let labelled = index > 0 && labels_over(items, &rows[index - 1], row);
-        if bands.is_empty() || (gap && !labelled) {
+        let labeled = index > 0 && labels_over(items, &rows[index - 1], row);
+        if bands.is_empty() || (gap && !labeled) {
             bands.push(Vec::new());
         }
         bottom = bottom.max(row.y1);
@@ -700,10 +700,10 @@ fn follow_gutter(
     // Whether a row can join the gutter, and the gutter it leaves. A gap of
     // a line and a half ends a gutter whatever the row: that is a new
     // section of the page, and its columns, if it has any, are its own.
-    let joins = |gutter: &Gutter, index: usize, neighbour: usize| -> Option<(f64, f64)> {
+    let joins = |gutter: &Gutter, index: usize, neighbor: usize| -> Option<(f64, f64)> {
         let gap = {
-            let (row, other) = (&rows[index], &rows[neighbour]);
-            if index < neighbour {
+            let (row, other) = (&rows[index], &rows[neighbor]);
+            if index < neighbor {
                 other.y0 - row.y1
             } else {
                 row.y0 - other.y1
@@ -784,14 +784,14 @@ fn follow_gutter(
 
 /// Whether two sides of a gutter are separate flows rather than the columns
 /// of one table: labels down both sides, prose on both sides, a grid of
-/// labelled values beside a block with none, or lines that mostly do not
+/// labeled values beside a block with none, or lines that mostly do not
 /// share a baseline - unless the two sides are one table whose cells wrap
 /// (see [`one_table`]).
 fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) -> bool {
     if left.len() < 2 || right.len() < 2 {
         return false;
     }
-    let labelled = |rows: &[Row]| {
+    let labeled = |rows: &[Row]| {
         rows.iter()
             .filter(|row| starts_with_label(items, row))
             .count()
@@ -806,9 +806,9 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
             })
             .count()
     };
-    let (left_labels, right_labels) = (labelled(left), labelled(right));
+    let (left_labels, right_labels) = (labeled(left), labeled(right));
     // A table running across the gutter, its rows level on both sides and
-    // none of them a label: boxes of labelled values over a schedule of
+    // none of them a label: boxes of labeled values over a schedule of
     // coverage or line items read that way, and cutting there splits every
     // row of the table in two. The labels above it say nothing then about
     // two flows side by side.
@@ -837,8 +837,8 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
         prose * 2 >= total
     };
     // Lines of a column follow one another at the line spacing, with the
-    // odd paragraph gap. A table column whose neighbour wraps has a line,
-    // then a gap where the neighbour's next lines are.
+    // odd paragraph gap. A table column whose neighbor wraps has a line,
+    // then a gap where the neighbor's next lines are.
     let dense = |rows: &[Row]| {
         let gaps = rows
             .windows(2)
@@ -855,7 +855,7 @@ fn separate_flows(items: &[Item], left: &[Row], right: &[Row], page_width: f64) 
     {
         return true;
     }
-    // A grid of labelled values beside a block with none: an address beside
+    // A grid of labeled values beside a block with none: an address beside
     // a statement's date and account number.
     if !table_across
         && ((left_labels == 0 && self_contained(right) >= 3)
@@ -1061,8 +1061,8 @@ fn tolerance(height: f64) -> f64 {
 }
 
 /// Whether a cell lines up with a column: the same left edge, or - for a
-/// short cell, a number set flush right or a centred heading - the same
-/// right edge or centre. Lines of prose end where they happen to, so a long
+/// short cell, a number set flush right or a centered heading - the same
+/// right edge or center. Lines of prose end where they happen to, so a long
 /// cell lines up by its right edge only when it ends exactly where the
 /// column does: a total's label set flush right.
 fn aligned(item: &Item, column: &Column, tolerance: f64) -> bool {
@@ -1315,7 +1315,7 @@ fn table_at(
                     >= 2
         });
         // A line ending in a period or a colon is prose, or the caption of
-        // what follows: it ends the table rather than labelling a group.
+        // what follows: it ends the table rather than labeling a group.
         if (item.x0 - first_column).abs() <= tolerance
             && next_is_row
             && !item.text.ends_with(['.', ':'])
@@ -1371,7 +1371,7 @@ fn table_at(
         });
     }
     let mut block = block_of(BlockKind::Table, block_lines, source);
-    // A header over a single row of values is a set of labelled values -
+    // A header over a single row of values is a set of labeled values -
     // the invoice number, date, and terms across the top of an invoice. Two
     // columns could as well be a letterhead beside a title, so it takes
     // three, or labels set smaller than what is filled in under them.
@@ -1402,7 +1402,7 @@ fn table_at(
 }
 
 /// Whether a run on the line under a table cell sits under it: flush with
-/// its left edge, or - text set flush right or centred, like a wrapped
+/// its left edge, or - text set flush right or centered, like a wrapped
 /// column heading - with its right edge, or inside its span.
 fn sits_under(items: &[Item], cell: &[usize], item: &Item, tolerance: f64) -> bool {
     let (x0, x1) = cell
@@ -1566,7 +1566,7 @@ fn smaller_than(items: &[Item], labels: &[Vec<usize>], values: &[Vec<usize>]) ->
     largest_label > 0.0 && largest_label <= smallest_value * 0.85
 }
 
-/// A line of labelled values: a label cell ending in a colon, or a single
+/// A line of labeled values: a label cell ending in a colon, or a single
 /// `Label: value`.
 fn is_key_value_line(items: &[Item], line: &Line) -> bool {
     let first = &items[line.cells[0]];
@@ -1574,7 +1574,7 @@ fn is_key_value_line(items: &[Item], line: &Line) -> bool {
         || (line.cells.len() == 1 && split_key_value(&first.text).is_some())
 }
 
-/// The labelled values that start at `start`, if any do: label cells with
+/// The labeled values that start at `start`, if any do: label cells with
 /// the value beside them, `Label: value` lines, and a label on a line of
 /// its own with its value on the lines under it.
 fn key_values_at(
@@ -2131,11 +2131,11 @@ mod tests {
         assert!(!table.rows[1].cells[0].header);
     }
 
-    /// Boxes of a certificate - a captioned producer on the left, labelled
+    /// Boxes of a certificate - a captioned producer on the left, labeled
     /// insurers on the right - over a schedule that runs across the gap
     /// between them: the schedule is one table, its rows whole.
     #[test]
-    fn a_table_across_the_gutter_under_labelled_boxes_stays_whole() {
+    fn a_table_across_the_gutter_under_labeled_boxes_stays_whole() {
         let mut runs = vec![
             run(54.0, 80.0, "PRODUCER", 8.0),
             run(54.0, 92.0, "Hartsfield Insurance Brokers", 9.0),
@@ -2221,7 +2221,7 @@ mod tests {
     }
 
     #[test]
-    fn labelled_values_in_two_columns_pair_with_their_labels() {
+    fn labeled_values_in_two_columns_pair_with_their_labels() {
         let rows = [
             ("POLICY NUMBER:", "CPP-4471-208815", "AGENT / PRODUCER:", ""),
             (
@@ -2309,7 +2309,7 @@ mod tests {
     }
 
     #[test]
-    fn a_header_over_one_row_of_values_is_also_labelled_values() {
+    fn a_header_over_one_row_of_values_is_also_labeled_values() {
         let runs = vec![
             run(54.0, 100.0, "Invoice Date", 8.0),
             run(200.0, 100.0, "Invoice No.", 8.0),
@@ -2546,7 +2546,7 @@ mod tests {
         assert!(blocks[1].fields.is_empty());
     }
 
-    /// Every labelled value OCR's layout found, as key and value.
+    /// Every labeled value OCR's layout found, as key and value.
     fn fields_of(blocks: &[LayoutBlock]) -> Vec<(&str, &str)> {
         blocks
             .iter()
@@ -2609,7 +2609,7 @@ mod tests {
 
     /// A signature block read by OCR: the firm is not the label of its
     /// signature line, and a line holding a label and its value is not the
-    /// label of the next one. Each labelled line is a field of its own.
+    /// label of the next one. Each labeled line is a field of its own.
     #[test]
     fn a_signature_block_read_by_ocr_pairs_only_its_own_labels() {
         let runs = vec![
@@ -2694,7 +2694,7 @@ mod tests {
     /// A value written after its label goes on under it only where its
     /// line wrapped.
     #[test]
-    fn a_labelled_line_continues_only_where_it_wrapped() {
+    fn a_labeled_line_continues_only_where_it_wrapped() {
         let runs = vec![
             run(
                 54.0,
@@ -2727,7 +2727,7 @@ mod tests {
     /// A page of more runs than the analysis takes on, or of too many on
     /// one line, has no geometry layout: it is read as its text instead.
     #[test]
-    fn a_page_past_the_analysis_bounds_is_not_analysed() {
+    fn a_page_past_the_analysis_bounds_is_not_analyzed() {
         let line = (0..=MAX_RUNS_PER_LINE)
             .map(|index| run(10.0 + index as f64 * 2.0, 100.0, "x", 3.0))
             .collect::<Vec<_>>();

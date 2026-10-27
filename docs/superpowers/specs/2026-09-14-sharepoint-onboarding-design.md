@@ -99,7 +99,7 @@ The same guard runs for watcher admission, manual import from the protected Inbo
 
 The normal Settings dialog shows a read-only **SharePoint connection** summary with site, library, Inbox, Filed, connected account, sync health, background/startup status, and a **Reconnect Microsoft** support action.
 
-The current manual shared-intake controls, local folder pickers, machine label, process-others toggle, tenant/client fields, drive/folder fields, and local-only bypass are removed from the ordinary UI. Diagnostic details may remain behind an explicitly labelled support disclosure. Intern does not offer alternative SharePoint destinations in this deployment.
+The current manual shared-intake controls, local folder pickers, machine label, process-others toggle, tenant/client fields, drive/folder fields, and local-only bypass are removed from the ordinary UI. Diagnostic details may remain behind an explicitly labeled support disclosure. Intern does not offer alternative SharePoint destinations in this deployment.
 
 Advanced model settings, learned spellings, update controls, and help remain available.
 

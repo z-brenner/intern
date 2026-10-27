@@ -146,7 +146,7 @@ pub struct LegacyOutcome {
 }
 
 /// Reproduces the old validation: any unsupported field nulls the field *and*
-/// sends the whole item to review, and any capitalised word in the description
+/// sends the whole item to review, and any capitalized word in the description
 /// that is missing from the packet counts as a hallucination.
 pub fn legacy_validate(candidate: &LegacyProposal, digest: &DocumentDigest) -> LegacyOutcome {
     use crate::evidence::{date_matches_evidence, digest_contains, is_valid_iso_date, normalize};

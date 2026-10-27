@@ -31,7 +31,7 @@ pub const MAX_DOCUMENT_CHARS: usize = 8_000_000;
 /// fixtures hold has under 700. A page past this goes without a layout, and
 /// the host segments it from its text.
 pub const MAX_PAGE_LAYOUT_PARTS: usize = 50_000;
-/// Lines, table cells and labelled values every layout a document keeps may
+/// Lines, table cells and labeled values every layout a document keeps may
 /// hold together, whatever route each page took, counted in page order. The
 /// densest document InternBench and the fixtures hold has about ten
 /// thousand.
@@ -54,11 +54,11 @@ pub const MAX_IMAGE_FILE_MEGAPIXELS: u64 = 100;
 pub const MAX_IMAGE_FILE_PIXELS: u64 = MAX_IMAGE_FILE_MEGAPIXELS * 1_000_000;
 /// The most bytes a pixel of an image file may decode to.
 ///
-/// The pixel cap is written for 8-bit images. A 16-bit colour TIFF - a
+/// The pixel cap is written for 8-bit images. A 16-bit color TIFF - a
 /// scanner's 48-bit mode - decodes to six or eight bytes a pixel, so the same
 /// hundred megapixels would be 600 or 800 MB before anything is scaled. Four
 /// bytes a pixel admits every 8-bit image up to the pixel cap, alpha and all,
-/// and holds a deep-colour image to the same 400 MB.
+/// and holds a deep-color image to the same 400 MB.
 pub const MAX_IMAGE_FILE_BYTES_PER_PIXEL: u64 = 4;
 /// The resolution a PDF page is rendered at when it fits the pixel budget.
 pub const RENDER_DPI: f64 = 300.0;

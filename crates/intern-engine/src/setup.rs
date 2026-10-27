@@ -20,7 +20,7 @@ pub struct SetupOperationGate {
 
 struct Operation {
     cancellation: CancellationToken,
-    /// The work has produced its result and cancelling can no longer change
+    /// The work has produced its result and canceling can no longer change
     /// it. The gate is still held, so no second operation may start until the
     /// outcome has been published.
     settled: bool,

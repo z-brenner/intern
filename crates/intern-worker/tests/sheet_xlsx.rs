@@ -255,7 +255,7 @@ fn a_corrupt_workbook_reports_a_parse_error_instead_of_panicking() {
 /// Two cells at opposite corners of the sheet describe a bounding box of
 /// seventeen billion cells. Reading the sheet as a dense range asks the
 /// allocator for that box before any cap applies, and the process aborts;
-/// only the window that is actually rendered may be materialised.
+/// only the window that is actually rendered may be materialized.
 #[test]
 fn a_sheet_with_a_far_away_cell_renders_the_cap_without_allocating_the_bounding_box() {
     let sheet_data = concat!(

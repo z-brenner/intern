@@ -19,8 +19,8 @@ pub struct MachineIdentity {
     pub name: String,
     /// The machine's actual hostname, which is what a sync client puts into
     /// the name of a conflict copy. It is kept alongside `name` because `name`
-    /// may be a label a person typed, and a labelled machine that only knew
-    /// its label would never recognise its own conflict copies.
+    /// may be a label a person typed, and a labeled machine that only knew
+    /// its label would never recognize its own conflict copies.
     pub host_name: String,
     pub user: String,
 }

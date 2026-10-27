@@ -66,7 +66,7 @@ const MIN_RECOGNITION_WIDTH: u32 = 320;
 /// it is cut out again for a second reading.
 const REREAD_PADDING: f32 = 0.15;
 
-/// Skew below this is not worth levelling even the reported boxes for.
+/// Skew below this is not worth leveling even the reported boxes for.
 const MIN_REPORTED_SKEW_DEGREES: f32 = 0.2;
 
 /// One worker's networks.
@@ -569,30 +569,30 @@ impl PaddleOcr {
         let mut frame = turned;
         let mut quads = self.detect(sessions, &frame, cancel)?;
         let sideways = mostly_vertical(&quads);
-        // Levelling. A page turned well off level is turned back and
+        // Leveling. A page turned well off level is turned back and
         // detected again; a page a little off is read as it is, along each
-        // line's own slope, and only the boxes it reports are levelled.
+        // line's own slope, and only the boxes it reports are leveled.
         let mut report_turn = 0.0_f32;
         if let Some(skew) = estimate_skew(&quads) {
             if skew.abs() >= self.config.redetect_skew_degrees {
-                let levelled = cancel.timed(
+                let leveled = cancel.timed(
                     |timings| &mut timings.ocr_encode_micros,
                     || rotate_page(&frame, -skew),
                 );
-                frame = Cow::Owned(levelled);
+                frame = Cow::Owned(leveled);
                 quads = self.detect(sessions, &frame, cancel)?;
             } else if skew.abs() >= MIN_REPORTED_SKEW_DEGREES {
                 report_turn = -skew;
             }
         }
-        let centre = Point::new(frame.width() as f32 / 2.0, frame.height() as f32 / 2.0);
+        let center = Point::new(frame.width() as f32 / 2.0, frame.height() as f32 / 2.0);
         let reported: Vec<Quad> = quads
             .iter()
             .map(|quad| {
                 if report_turn == 0.0 {
                     *quad
                 } else {
-                    quad.rotated_about(centre, report_turn.to_radians())
+                    quad.rotated_about(center, report_turn.to_radians())
                 }
             })
             .collect();
