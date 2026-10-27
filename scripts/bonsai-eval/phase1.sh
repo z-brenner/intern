@@ -4,7 +4,7 @@
 set -uo pipefail
 S=${S:?set S to the scratch directory}
 W=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-export LOCK=$S/bench.lock
+export LOCK=${LOCK-$S/bench.lock}  # LOCK="" when the caller holds the lock
 SW=$W/scripts/bonsai-eval/llama-bench-sweep.sh
 OUT=$S/results/bonsai/microbench/runtime-matrix.jsonl
 C=$S/cache/bonsai

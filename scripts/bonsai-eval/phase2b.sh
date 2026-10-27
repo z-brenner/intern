@@ -4,6 +4,7 @@
 set -uo pipefail
 S=${S:?set S to the scratch directory}
 W=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+LOCK=${LOCK-$S/bench.lock}  # LOCK="" when the caller holds the bench lock for the whole phase
 OUT=$S/results/bonsai/microbench/server.jsonl
 Q=$S/work/req2
 C=$S/cache/bonsai
@@ -14,7 +15,8 @@ WARM=$Q/real-scan-noisy-statement.json
 sb() { # label model threads requests extra [serverbench options...]
   local label=$1 model=$2 th=$3 reqs=$4 extra=$5; shift 5
   if [ -f "$OUT" ] && grep -q "\"label\": \"$label\"" "$OUT"; then echo "$label skipped"; return; fi
-  flock -x "$S/bench.turnstile" flock -x "$S/bench.lock" python3 -I "$W/scripts/bonsai-eval/serverbench.py" --server "$P26/llama-server" \
+  # LOCK="" when the caller already holds the bench lock for the whole phase
+  ${LOCK:+flock -x "$S/bench.turnstile" flock -x "$LOCK"} python3 -I "$W/scripts/bonsai-eval/serverbench.py" --server "$P26/llama-server" \
     --model "$model" --threads "$th" --label "$label" --out "$OUT" --requests "$reqs" --extra "$extra" "$@"
 }
 M2=$C/Ternary-Bonsai-2-2B-PQ2_0.gguf
