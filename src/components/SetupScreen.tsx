@@ -23,6 +23,8 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
   const canceled = setup.state === 'required' && setup.error === 'MODEL_DOWNLOAD_CANCELED';
   const resumable = setup.downloadedBytes > 0 && setup.downloadedBytes < setup.totalBytes;
   const showProgress = downloading || resumable || failed && setup.downloadedBytes > 0;
+  const first = setup.tiers?.find((tier) => tier.tier === 'fast');
+  const accurate = setup.tiers?.find((tier) => tier.tier === 'accurate');
   return <main className="setup-screen" aria-label="Intern setup"><section>
     <Icon icon={failed ? TriangleAlert : Download} /><h1>{failed ? 'Model setup needs attention' : 'Set up Intern'}</h1>
     {/*
@@ -33,7 +35,14 @@ export function SetupScreen({ setup, busy, canChooseExisting, operationError, on
       projector, from a design this pipeline no longer uses. The first screen a
       new user saw overstated the download by more than two and a half times.
     */}
-    <p>Download {setup.totalBytes > 0 ? `${formatBytes(setup.totalBytes)} of ` : ''}model files, or choose matching files already on this computer.</p>
+    <p>{first
+      ? `Download ${first.displayName}${setup.totalBytes > 0 ? ` (${formatBytes(setup.totalBytes)})` : ''} to start naming documents`
+      : `Download ${setup.totalBytes > 0 ? `${formatBytes(setup.totalBytes)} of ` : ''}model files`}, or choose matching files already on this computer.</p>
+    {/*
+      The second model is part of what Download fetches, so it is said here,
+      before anything is fetched - and that nobody waits for it.
+    */}
+    {accurate && accurate.state !== 'ready' && <p>{accurate.displayName}{accurate.totalBytes > 0 ? ` (${formatBytes(accurate.totalBytes)})` : ''}, the more accurate model, then follows in the background while you work.</p>}
     <p>Your documents and filenames stay on this device. After setup, processing runs fully locally with no network dependency.</p>
     {operationError && <p className="setup-error" role="alert">{operationError}</p>}
     {canceled && !operationError && <p role="status" aria-label="Setup status" aria-live="polite">Download canceled. Your progress was saved.</p>}

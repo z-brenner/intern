@@ -1,5 +1,5 @@
 import type { MicrosoftIntakeBridge } from '../features/intake/microsoft';
-import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, BackfillResult, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, ModelTier, OnboardingStatus, QueueItem, SetupState, SharePointSetupStatus } from '../types';
 
 /** A JSON-safe local document reference that Task 6 can pass to Tauri. */
 export interface FileSelection {
@@ -18,9 +18,13 @@ export interface SelectionResult {
   folder?: FolderSelection;
 }
 
-/** Intern needs one file: the text model. There is no vision projector. */
+/**
+ * Model files already on this computer: either of the two local models, or
+ * both, each recognised by its size and accepted only once its checksum
+ * matches. There is no vision projector.
+ */
 export interface ExistingModelFiles {
-  modelPath: string;
+  modelPaths: string[];
 }
 
 /** Platform-specific selection is injected; the Tauri bridge remains path-only. */
@@ -107,8 +111,13 @@ export interface DesktopBridge extends Partial<MicrosoftIntakeBridge> {
   startSharePointSync(): Promise<SharePointSetupStatus>;
   activateOnboarding(): Promise<SharePointSetupStatus>;
   completeOnboarding(): Promise<void>;
-  startModelDownload(): Promise<void>;
-  setupCancel(): Promise<void>;
+  /**
+   * Starts setup; with a `tier`, that model's download behind the window -
+   * how Settings resumes, retries or downloads again the accurate model.
+   */
+  startModelDownload(tier?: ModelTier): Promise<void>;
+  /** Cancels setup; with a `tier`, pauses that model's background download. */
+  setupCancel(tier?: ModelTier): Promise<void>;
   setupChooseExisting(files: ExistingModelFiles): Promise<void>;
   clearHistory(): Promise<void>;
   /** Finished rename/undo operations, newest first (capped at 500). */

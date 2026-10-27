@@ -1,7 +1,7 @@
 import { GUIDE_URL, SUPPORT_LINKS } from './bridge';
 import { SUPPORTED_EXTENSIONS } from './formats';
 import type { DesktopBridge, FileSelection, FolderSelection, SelectionBoundary, SelectionResult, UpdateStatus } from './bridge';
-import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, SharePointSetupProblem, SharePointSetupStatus } from '../types';
+import type { AddReport, AppSettings, CloudLocation, CloudRoot, DescriptionsStatus, HistoryEntry, HostedModelStatus, HostedModelTestResult, IntakeStatus, LearnedRule, OnboardingStatus, QueueItem, SetupState, SharePointSetupPhase, TierSetup, SharePointSetupProblem, SharePointSetupStatus } from '../types';
 import { filenameExtension, leadingDate, validateFilename, validateLeafFilename } from './filenames';
 import { OWN_NAME_MIN_CHARS, nameKey } from './ownNames';
 import { humanizeReason } from './reasons';
@@ -16,8 +16,15 @@ const PRE_ANALYSIS_CODES = new Set(['DUPLICATE', 'UPLOADER_UNVERIFIED']);
 /** A filename as Windows compares two in one folder, as pipeline.rs name_key does: regardless of case and of trailing dots and spaces. */
 const fileNameKey = (name: string) => name.replace(/[ .]+$/, '').toLowerCase();
 
-/** Exact size of the single pinned model file this build downloads. */
-export const PINNED_MODEL_BYTES = 1_280_835_840;
+/**
+ * Exact sizes of the two pinned models, from model-manifest.json: the fast
+ * one setup downloads first, which is all a person waits for, and the
+ * accurate one that follows behind the window.
+ */
+export const FAST_MODEL_BYTES = 517_312_992;
+export const ACCURATE_MODEL_BYTES = 1_146_465_120;
+/** What setup downloads before the first document: the fast model. */
+export const PINNED_MODEL_BYTES = FAST_MODEL_BYTES;
 
 const seedItems: QueueItem[] = [
   { id: 'employment', originalFilename: 'Employment Agreement - John Smith.pdf', status: 'ready', proposedFilename: '2024-04-12 Employment Agreement with John Smith.pdf', confidence: 0.98 },
@@ -110,6 +117,8 @@ export interface InMemoryBridgeOptions {
   /** Settings already saved, such as an earlier release's manual intake folders. */
   settings?: Partial<AppSettings>;
   setup?: Partial<SetupState>;
+  /** The accurate model's own setup, when not what the first model's implies. */
+  accurate?: Partial<TierSetup>;
   /** A hosted-model key already in the (fake) credential store. */
   hostedKey?: string;
   /** Spellings already learned from review. */
@@ -209,7 +218,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // skipUpdateChecks is spelled out because the desktop backend always
   // returns it - false for a file that predates it - so a bridge that left it
   // out would differ from the real one in exactly the case worth testing.
-  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
+  let settings: AppSettings = { destination: '', destinationLayout: 'flat', ourNames: [], startMinimized: false, automaticRename: false, intakeFolder: '', intakeEnabled: false, processOthersUploads: false, machineLabel: '', runInBackground: false, startAtLogin: false, skipUpdateChecks: false, recordDescriptions: false, modelSource: 'local', modelPreference: 'automatic', hostedProvider: 'anthropic', hostedBaseUrl: '', hostedModel: '', ...options.settings };
   // The hosted model's key, as the desktop backend keeps it: out of the
   // settings, reported only as stored-or-not with a hint.
   let hostedKey: string | undefined = options.hostedKey;
@@ -272,6 +281,21 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   // The previous value, 3_278_329_184, was a model plus a vision projector that
   // this pipeline does not download.
   let setup: SetupState = { state: 'ready', downloadedBytes: PINNED_MODEL_BYTES, totalBytes: PINNED_MODEL_BYTES, ...options.setup };
+  // The accurate model, which the backend downloads behind the window once
+  // the fast one is in place.
+  let accurate: TierSetup = {
+    tier: 'accurate',
+    displayName: 'Bonsai 2 4B',
+    ...(setup.state === 'ready'
+      ? { state: 'ready', downloadedBytes: ACCURATE_MODEL_BYTES }
+      : { state: 'required', downloadedBytes: 0 }),
+    totalBytes: ACCURATE_MODEL_BYTES,
+    ...options.accurate,
+  };
+  const tiers = (): TierSetup[] => [
+    { tier: 'fast', displayName: 'Bonsai 2 2B', state: setup.state, downloadedBytes: setup.downloadedBytes, totalBytes: setup.totalBytes, error: setup.state === 'failed' ? setup.error : undefined },
+    { ...accurate },
+  ];
   // Without a deployment the demo opens straight into the app; pass 0 to walk
   // folder setup instead.
   let completedOnboardingVersion = options.completedOnboardingVersion ?? (options.sharePoint === 'fake' ? 0 : 1);
@@ -358,6 +382,17 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
   const downloadStepBytes = options.downloadStepBytes ?? Math.max(1, Math.ceil(setup.totalBytes / 4));
   const downloadIntervalMs = options.downloadIntervalMs ?? 40;
   let downloadTimer: ReturnType<typeof setInterval> | undefined;
+  let accurateTimer: ReturnType<typeof setInterval> | undefined;
+  const accurateStep = Math.max(1, Math.ceil(ACCURATE_MODEL_BYTES / 4));
+  const startAccurate = () => {
+    if (accurateTimer || accurate.state === 'ready') return;
+    accurate = { ...accurate, state: 'downloading', error: undefined };
+    accurateTimer = setInterval(() => {
+      const downloadedBytes = Math.min(accurate.totalBytes, accurate.downloadedBytes + accurateStep);
+      accurate = { ...accurate, downloadedBytes, state: downloadedBytes >= accurate.totalBytes ? 'ready' : 'downloading' };
+      if (accurate.state === 'ready' && accurateTimer) { clearInterval(accurateTimer); accurateTimer = undefined; }
+    }, downloadIntervalMs);
+  };
   const idByPath = new Map<string, string>();
   const pathById = new Map<string, string>();
   const update = (id: string, change: Partial<QueueItem>) => { items = items.map((item) => item.id === id ? { ...item, ...change } : item); };
@@ -409,7 +444,9 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     });
   };
   renameWaiting();
-  const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; };
+  // As the backend: pressing Download asked for both models, and the
+  // accurate one follows once the fast one is in place.
+  const finishDownload = () => { if (downloadTimer) clearInterval(downloadTimer); downloadTimer = undefined; setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes }; startAccurate(); };
   // Mirrors the backend's partial add: what it would leave out is reported by
   // name, everything else is queued, and a path already queued says so.
   const addSelections = (files: FileSelection[], report: AddReport) => {
@@ -562,7 +599,7 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
       settings = next.ourNames === undefined ? { ...next } : { ...next, ourNames: ownNames(next.ourNames) };
       renameWaiting();
     },
-    getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings) }),
+    getSetup: async () => ({ ...setup, hostedModelReady: settings.modelSource === 'hosted' && hostedConfigured(settings), tiers: tiers() }),
     getOnboarding: async (): Promise<OnboardingStatus> => ({
       currentVersion: 1,
       completedVersion: completedOnboardingVersion,
@@ -587,7 +624,8 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
     microsoftBindIntake: async () => { throw new Error(microsoftUnavailable); },
     microsoftOpenSignIn: async () => { throw new Error(microsoftUnavailable); },
     ...(sharePointEnabled ? fakeSharePoint : {}),
-    startModelDownload: async () => {
+    startModelDownload: async (tier) => {
+      if (tier === 'accurate' && setup.state === 'ready') { startAccurate(); return; }
       if (setup.state === 'downloading') return;
       setup = { ...setup, state: 'downloading', error: undefined };
       downloadTimer = setInterval(() => {
@@ -596,14 +634,22 @@ function createBridge(options: InMemoryBridgeOptions, fixtureBatch: boolean): De
         if (downloadedBytes >= setup.totalBytes) finishDownload();
       }, downloadIntervalMs);
     },
-    setupCancel: async () => {
+    setupCancel: async (tier) => {
+      if (tier === 'accurate' && accurateTimer) {
+        clearInterval(accurateTimer);
+        accurateTimer = undefined;
+        accurate = { ...accurate, state: 'required' };
+        return;
+      }
       if (downloadTimer) clearInterval(downloadTimer);
       downloadTimer = undefined;
       setup = { ...setup, state: 'required', error: 'MODEL_DOWNLOAD_CANCELED' };
     },
-    setupChooseExisting: async () => {
+    setupChooseExisting: async (files) => {
       if (setup.state === 'downloading') throw { code: 'SETUP_BUSY', message: 'a model setup operation is already active' };
       setup = { ...setup, state: 'ready', downloadedBytes: setup.totalBytes, error: undefined };
+      // Two files are both models; one is the fast one.
+      if (files.modelPaths.length > 1) accurate = { ...accurate, state: 'ready', downloadedBytes: accurate.totalBytes, error: undefined };
     },
     // Mirrors the backend: clearing history deletes terminal queue rows and,
     // through cascade, the receipts the history view lists.

@@ -1,3 +1,5 @@
+import { LocalModel } from '../features/settings/LocalModel';
+import { useModelSetup } from '../features/setup/useModelSetup';
 import { IntakeHealthNotice } from '../features/intake/IntakeHealth';
 import { MicrosoftIntakeSettings } from '../features/intake/MicrosoftIntakeSettings';
 import { SharePointConnection } from '../features/settings/SharePointConnection';
@@ -231,6 +233,8 @@ interface Props {
 
 export function SettingsDialog({ settings, bridge, selection, onSave, onClose, onCheckForUpdate, onInstallUpdate, renameApplying = false, hideSharePointConnection = false, onChooseFolder }: Props) {
   const [next, setNext] = useState(settings);
+  // Where each local model is, live while one downloads behind the window.
+  const localModel = useModelSetup(bridge, selection);
   const shortOwnNames = tooShortOwnNames(next.ourNames);
   const [status, setStatus] = useState<UpdateStatus>();
   const [checking, setChecking] = useState(false);
@@ -561,6 +565,7 @@ export function SettingsDialog({ settings, bridge, selection, onSave, onClose, o
         <p className="section-lead">Which model reads your documents. The local model keeps every document on this computer. A hosted model sends the text of each document to the service you name, under your own API key.</p>
         <label className="check-label"><input type="radio" name="model-source" value="local" checked={next.modelSource === 'local'} onChange={() => setNext({ ...next, modelSource: 'local' })} />Local model on this computer (recommended)</label>
         <label className="check-label"><input type="radio" name="model-source" value="hosted" checked={next.modelSource === 'hosted'} onChange={() => setNext({ ...next, modelSource: 'hosted' })} />Hosted model with my API key</label>
+        {next.modelSource === 'local' && <LocalModel next={next} onChange={(modelPreference) => setNext({ ...next, modelPreference })} setup={localModel.setup} busy={localModel.busy} onStartTier={localModel.startTier} onPauseTier={localModel.pauseTier} />}
         {next.modelSource === 'hosted' && <div className="hosted-model" role="group" aria-label="Hosted model">
           <p className="privacy-warning" role="note">With this on, the text Intern reads from each document — not the file, but the words in it, condensed — is sent to this service to be named. It is the only setting that sends document text off this computer. Your key, your account, your provider's terms.</p>
           <label>Provider<select value={next.hostedProvider} onChange={(event) => { const value = event.target.value; if (isProvider(value)) setNext({ ...next, hostedProvider: value }); }}>

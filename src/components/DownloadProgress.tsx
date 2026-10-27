@@ -7,12 +7,15 @@ import type { SetupState } from '../types';
 const RATE_WINDOW_MS = 30_000;
 
 /**
- * The model download as a person reads it: "393 MiB of 1.19 GiB · 32% · about
+ * A model download as a person reads it: "393 MiB of 1.19 GiB · 32% · about
  * 2 min left". It used to be "412,090,368 of 1,280,835,840 bytes", which
  * answers neither how far along it is nor how long to wait. The exact count
  * stays in the title, for anyone comparing it with a file on disk.
  */
-export function DownloadProgress({ setup }: { setup: SetupState }) {
+/** The progress of setup's first model, or of one model's own download. */
+type Progress = Pick<SetupState, 'state' | 'downloadedBytes' | 'totalBytes'>;
+
+export function DownloadProgress({ setup, label = 'Model setup progress' }: { setup: Progress; label?: string }) {
   const samples = useRateSamples(setup);
   const { downloadedBytes: done, totalBytes: total } = setup;
   const left = setup.state === 'downloading' ? eta(samples, total) : undefined;
@@ -23,7 +26,7 @@ export function DownloadProgress({ setup }: { setup: SetupState }) {
   // Before the manifest is read the total is 0, and "of 0 bytes" is not a size.
   const exact = percent === undefined ? `${byteCount(done)} bytes` : `${byteCount(done)} of ${byteCount(total)} bytes`;
   return <>
-    <progress aria-label="Model setup progress" value={done} max={total} />
+    <progress aria-label={label} value={done} max={total} />
     <p aria-live="polite" title={exact}>{parts.join(' · ')}</p>
   </>;
 }
@@ -33,7 +36,7 @@ export function DownloadProgress({ setup }: { setup: SetupState }) {
  * only those that moved, so a stalled download's estimate grows instead of
  * freezing at the last good one.
  */
-function useRateSamples(setup: SetupState): ProgressSample[] {
+function useRateSamples(setup: Progress): ProgressSample[] {
   const [samples, setSamples] = useState<ProgressSample[]>([]);
   useEffect(() => {
     if (setup.state !== 'downloading') {

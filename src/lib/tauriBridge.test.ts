@@ -164,7 +164,9 @@ describe('TauriBridge', () => {
     await bridge.getSetup();
     await bridge.startModelDownload();
     await bridge.setupCancel();
-    await bridge.setupChooseExisting({ modelPath: 'C:\\Models\\intern-q4.gguf' });
+    await bridge.startModelDownload('accurate');
+    await bridge.setupCancel('accurate');
+    await bridge.setupChooseExisting({ modelPaths: ['C:\\Models\\intern-q4.gguf'] });
     await bridge.getOnboarding();
     await bridge.completeOnboarding();
     await bridge.clearHistory();
@@ -194,7 +196,9 @@ describe('TauriBridge', () => {
       { command: 'setup_get', args: undefined },
       { command: 'setup_start', args: undefined },
       { command: 'setup_cancel', args: undefined },
-      { command: 'setup_choose_existing', args: { files: { modelPath: 'C:\\Models\\intern-q4.gguf' } } },
+      { command: 'setup_start', args: { tier: 'accurate' } },
+      { command: 'setup_cancel', args: { tier: 'accurate' } },
+      { command: 'setup_choose_existing', args: { files: { modelPaths: ['C:\\Models\\intern-q4.gguf'] } } },
       { command: 'onboarding_status', args: undefined },
       { command: 'onboarding_complete', args: undefined },
       { command: 'history_clear', args: undefined },
@@ -634,26 +638,28 @@ describe('TauriBridge', () => {
     expect(fake.calls).toEqual([]);
   });
 
-  it('asks for the model GGUF once and never for a projector', async () => {
+  it('asks once for either model GGUF or both, and never for a projector', async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const transport: TauriTransport = {
       invoke: async <T>(command: string, args?: Record<string, unknown>) => {
         calls.push({ command, args });
-        return 'C:\\Models\\intern-q4.gguf' as T;
+        return ['C:\\Models\\small.gguf', 'C:\\Models\\large.gguf', 'C:\\Models\\third.gguf'] as T;
       },
       listen: async () => () => undefined,
     };
 
     const files = await createTauriSelectionBoundary(transport).pickExistingModelFiles();
 
-    expect(files).toEqual({ modelPath: 'C:\\Models\\intern-q4.gguf' });
+    // Two at most: there are two models, and the backend tells them apart
+    // by size.
+    expect(files).toEqual({ modelPaths: ['C:\\Models\\small.gguf', 'C:\\Models\\large.gguf'] });
     // Exactly one dialog. Intern loads no vision projector, so asking for one
     // would make the user hunt for a file it would then never read.
     expect(calls).toEqual([
       { command: 'plugin:dialog|open', args: { options: {
-        multiple: false,
+        multiple: true,
         directory: false,
-        title: 'Choose the model GGUF',
+        title: 'Choose the model GGUF files',
         filters: [{ name: 'GGUF model files', extensions: ['gguf'] }],
       } } },
     ]);
