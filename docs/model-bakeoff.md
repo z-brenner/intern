@@ -193,6 +193,64 @@ Text-document date role went from the 6/13 reported above to 12/12, and
 document type from 13/17 to 17/17, on the same model. What remains is listed
 under known misses.
 
+### Validation rules from #26, measured on Qwen3.5-2B
+
+The unmerged Bonsai 4B branch (#26, `feat/bonsai-default`) added seven
+deterministic checks to validation for Bonsai's trap dates and wrong names
+marked ready. Each check is model-agnostic: it reads the document's own text
+and leaves the prompt as it was. Each was ported onto this engine and
+replayed alone, then with the others, over Qwen3.5-2B's committed recordings.
+The three gates were the corpus (`fixtures/corpus-recording.json`), the
+digest pipeline (`fixtures/corpus-recording-digest.json`) and InternBench
+(`bench/recording.json`). A check was kept only if it changed a result for
+the better and caused no gated regression. Neither corpus replay moved
+under any check, so every difference below is on InternBench:
+
+| Check (#26) | InternBench, Qwen3.5-2B | Kept |
+| --- | --- | --- |
+| An agreement or amendment dated by a signature block that holds the document's only statement of that date, when a later signing date stands in another signature block, takes the latest signing date | `mixed-signature-region`: 2026-08-18, the first party's signature and a trap, becomes 2026-08-21, the last signature, which the amendment says makes it effective. Date right and exact; trap date gone. Its parties are still the two signatories, so the filename stays wrong | **Yes** |
+| A bare "Letter", "Document" or "Agreement" is no type: review (`TYPE_MISSING`) | `agreement-two-column-footnotes`: "Agreement between Larkhaven Seed Company and Prairie Wren Growers Cooperative", wrong and ready, goes to review. Unsafe-ready 15 -> 14, but `readiness_match` true -> false: a gated regression, and routing falls from 44 to 43 of 57 | No |
+| "No later than" / "not later than" before a date makes it a deadline | none | No |
+| A date in a table column naming another event (coverage, birth, hire, due, delivery) is not the document's; new reason `DATE_IS_OTHER_KIND` | none | No |
+| A date stated only in signature blocks, or cited only from them, gives way to the one stated effective date, else to the one "Date of this ..." date | none | No |
+| A type loses a date phrase or a trailing document number written into it | none | No |
+| An audience or a body ("Fellow Shareholders", "Board of Directors") is no party | none | No |
+| A type ending "of the <filename party>" drops it | none | No |
+
+#26 split its signature-date check in two. The table gives the two halves
+separate rows, so it has eight rows for seven checks. The six rows that
+changed nothing on Qwen's replies target Bonsai's errors:
+`demand-letter`'s deadline, `scan-patient-intake-form`'s coverage date,
+`sow-under-msa-5p`'s signing date, the corpus scans whose type absorbed the
+date, `board-resolution`'s board, and the newsletter's repeated party. Qwen
+does not make these errors. Each check is still in #26 if a recording ever
+needs one.
+
+The bare-type check makes a trade: it moves one wrong name from ready to
+review, and the gate counts that move as a regression because the gold
+expects this document to be ready. The fix that would remove the trade is
+naming the document right. Qwen cites the title "SEED PRODUCTION AND
+SUPPLY AGREEMENT", but the title reader takes only "Agreement" from it.
+Fixing that is separate work.
+
+Totals with the kept check:
+
+| InternBench (replay) | Before | After |
+| --- | ---: | ---: |
+| Filename right | 54/77 | 54/77 |
+| Date right | 75/77 | 76/77 |
+| Trap dates filed | 1 | **0** |
+| Wrong filename marked ready | 15 | 15 |
+| Forbidden party named | 8 | 8 |
+| Routing right | 44/57 | 44/57 |
+| Sent to review | 12 | 12 |
+
+`bench/baseline.json` was rewritten from this replay with
+`--write-baseline`. The only score that changed is the
+`mixed-signature-region` fix above. The rewrite also added replay's own
+`index_ms` and `retrieval_ms` timings, which the earlier baseline did not
+have. The two corpus baselines did not change.
+
 ## Performance
 
 Measured over the same runs, per document, including extraction:
