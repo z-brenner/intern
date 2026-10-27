@@ -1558,11 +1558,22 @@ const fn nothing_published(stage: OperationStage) -> bool {
     )
 }
 
-/// A unique, dot-prefixed name beside `destination` to write a copy under
-/// before it is published onto `destination` with `rename_no_replace`. The
-/// leading dot keeps the intake scanner and every add away from a copy that
-/// is still being written.
-pub fn temporary_path(destination: &Path) -> PathBuf {
+/// Sets or clears the hidden attribute of `path` on Windows, where a leading
+/// dot hides nothing in Explorer; elsewhere the dot already hides it, and this
+/// does nothing.
+pub fn set_hidden(path: &Path, hidden: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        windows_file::set_hidden(path, hidden)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, hidden);
+        Ok(())
+    }
+}
+
+fn temporary_path(destination: &Path) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1593,9 +1604,10 @@ mod windows_file {
     use windows_sys::Win32::{
         Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE},
         Storage::FileSystem::{
-            BY_HANDLE_FILE_INFORMATION, DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileDispositionInfo,
-            GetFileInformationByHandle, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+            BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ATTRIBUTE_HIDDEN, FILE_DISPOSITION_INFO,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FileDispositionInfo, GetFileAttributesW, GetFileInformationByHandle,
+            INVALID_FILE_ATTRIBUTES, MOVEFILE_WRITE_THROUGH, MoveFileExW, SetFileAttributesW,
             SetFileInformationByHandle,
         },
     };
@@ -1730,6 +1742,28 @@ mod windows_file {
             .open(path)?;
         let identity = file_identity(&file)?;
         Ok(Box::new(WindowsLockedFile { file, identity }))
+    }
+
+    pub(super) fn set_hidden(path: &Path, hidden: bool) -> io::Result<()> {
+        let path = wide(path.as_os_str());
+        // SAFETY: `path` is a NUL-terminated UTF-16 path that outlives both calls.
+        let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
+        if attributes == INVALID_FILE_ATTRIBUTES {
+            return Err(io::Error::last_os_error());
+        }
+        let wanted = if hidden {
+            attributes | FILE_ATTRIBUTE_HIDDEN
+        } else {
+            attributes & !FILE_ATTRIBUTE_HIDDEN
+        };
+        if wanted == attributes {
+            return Ok(());
+        }
+        // SAFETY: as above; the attributes are the file's own with one bit changed.
+        if unsafe { SetFileAttributesW(path.as_ptr(), wanted) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     pub(super) fn rename_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
