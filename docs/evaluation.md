@@ -151,8 +151,10 @@ builds, which is why the OCR fixtures are marked `needs_review` in the gold
 corpus and scored on routing rather than on the digits they misread. A
 recording made on the packaged Windows runtime supersedes it; the workflow is
 the same, with `INTERN_RUNTIME_DIR` pointing at a directory holding
-`libpdfium.so`, a `tesseract.exe` symlink to the Tesseract binary, and
-`tessdata/`.
+`libpdfium.so` and `tessdata/`; the worker uses the Tesseract on `PATH` unless
+the directory holds a `tesseract` of its own. `scripts/fetch-linux-assets.sh`
+and `scripts/stage-linux-runtime.sh` build exactly such a directory, the Linux
+package's runtime ([Linux](linux.md)).
 
 ## Re-recording only some fixtures
 
