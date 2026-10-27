@@ -105,7 +105,7 @@ describe('describeQueueStop', () => {
   // the same code says to retry that document, or that Intern will retry it,
   // and neither is what a person reading the banner has to do.
   it('says to resume the queue, not to retry a document, for the pauses a document sentence would get wrong', () => {
-    for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE']) {
+    for (const code of ['MODEL_FAILED', 'MODEL_OUTPUT_INVALID', 'HOSTED_MODEL_RATE_LIMITED', 'HOSTED_MODEL_UNREACHABLE', 'READER_CRASHED', 'READER_CHECK_UNWRITABLE']) {
       const sentence = describeQueueStop(code);
       expect(sentence, code).toMatch(/resume the queue/i);
       expect(sentence, code).not.toMatch(/Retry it|Intern will retry/);

@@ -19,6 +19,23 @@ const rescan: QueueItem = {
   nearDuplicateOf: '2024-04-12 Employment Agreement between John Smith and Acme Corporation.pdf (filed from Front desk)',
 };
 
+describe('a document waiting to be read again', () => {
+  it('says why it waits, not that it is in review', async () => {
+    const doubted: QueueItem = {
+      id: 'doubted',
+      originalFilename: 'Slow scan.pdf',
+      status: 'waiting',
+      reason: 'Waiting to be read again once Intern has shown it can read another document.',
+    };
+    render(<App bridge={createInMemoryBridge({ items: [doubted] })} />);
+    selectRow(await screen.findByRole('row', { name: /Slow scan.pdf/i }));
+
+    const why = screen.getByRole('heading', { name: 'Why it is waiting' }).closest('section')!;
+    expect(why).toHaveTextContent('Waiting to be read again once Intern has shown it can read another document.');
+    expect(screen.queryByRole('heading', { name: 'Reason for review' })).not.toBeInTheDocument();
+  });
+});
+
 describe('a document that repeats a filed one', () => {
   it('says so in words and names the filing it repeats', async () => {
     render(<App bridge={createInMemoryBridge({ items: [rescan] })} />);

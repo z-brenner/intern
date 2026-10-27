@@ -307,7 +307,8 @@ export function ReviewInspector({ item, drawer, busy, ref, position, onNext, onC
         <dd>{quotes.map((quote) => <q key={quote}>{quote}</q>)}</dd>
       </div>)}</dl></section>}
     {/* Settled, a reason is no longer why the item waits - "already had this name" is a note about what happened. */}
-    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : 'Reason for review'}</h3><p>{item.reason}</p>
+    {/* A waiting document is not in review: its reason says why it waits (a document in doubt, to be read again once Intern has shown it can read). */}
+    {item.reason && <section className={`note${item.status === 'failed' ? ' note--failed' : completed || item.status === 'waiting' ? '' : ' note--review'}`}><h3>{item.status === 'failed' ? 'Failure details' : completed ? 'Note' : item.status === 'waiting' ? 'Why it is waiting' : 'Reason for review'}</h3><p>{item.reason}</p>
       {/*
         The sentence says "a document that was filed already"; this says
         which one, so the person can open it and compare rather than take
