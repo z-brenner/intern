@@ -2382,7 +2382,13 @@ impl PendingLaunch {
             let temporary = file.with_extension("json.tmp");
             serde_json::to_vec(documents)
                 .map_err(std::io::Error::other)
-                .and_then(|bytes| std::fs::write(&temporary, bytes))
+                .and_then(|bytes| {
+                    // On disk before it replaces the list, so a power cut
+                    // leaves the old list or the new one, never an empty file.
+                    let mut written = std::fs::File::create(&temporary)?;
+                    std::io::Write::write_all(&mut written, &bytes)?;
+                    written.sync_all()
+                })
                 .and_then(|()| std::fs::rename(&temporary, file))
         };
         if let Err(error) = written {

@@ -50,7 +50,9 @@ function heldSentence(reason: string | undefined, held: number, into: string): s
     case 'AWAITING_MICROSOFT':
       return `${one ? 'It joins' : 'They join'} the queue once OneDrive has uploaded ${one ? 'it' : 'them'} and Microsoft confirms ${one ? 'it is' : 'they are'} yours.`;
     case 'UPLOADER_OTHER':
-      return `${held} ${one ? 'was' : 'were'} left in ${into}: Microsoft reports another account uploaded ${one ? 'a file' : 'files'} under ${one ? 'that name' : 'those names'}, so Intern does not process ${one ? 'it' : 'them'} here.`;
+      return `${held} ${one ? 'was' : 'were'} left in ${into}: Microsoft reports another account uploaded ${one ? 'a file' : 'files'} under ${one ? 'that name' : 'those names'}, so Intern does not process ${one ? 'it' : 'them'} here. To process yours, rename ${one ? 'it' : 'them'} and add ${one ? 'it' : 'them'} again.`;
+    case 'LEFT_IN_INPUT_FOLDER':
+      return `${held} ${one ? 'stays' : 'stay'} in ${into} and ${one ? 'is' : 'are'} picked up from there.`;
     default:
       return `${held} ${one ? 'waits' : 'wait'} in ${into} until Intern can confirm who uploaded ${one ? 'it' : 'them'}.`;
   }

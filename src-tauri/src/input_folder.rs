@@ -53,6 +53,10 @@ pub(crate) const UPLOADER_UNVERIFIED: &str = "UPLOADER_UNVERIFIED";
 /// Held only until Microsoft can answer: OneDrive has not uploaded the copy
 /// yet, or Microsoft could not be asked just now.
 pub(crate) const AWAITING_MICROSOFT: &str = "AWAITING_MICROSOFT";
+/// A copy the queue did not take that could not be taken back out - a sync
+/// client or scanner still held it, or the name no longer held this copy. It
+/// stays in the input folder, and the scan takes it from there.
+pub(crate) const LEFT_IN_INPUT_FOLDER: &str = "LEFT_IN_INPUT_FOLDER";
 
 /// The ending of a copy still being written into the input folder. Its own,
 /// so a sweep of leftovers never touches the temporary file of a filing or an
@@ -199,12 +203,25 @@ pub(crate) fn copy_into_input(
                 // meanwhile hold a teammate's document, and deleting that would
                 // delete it for everyone.
                 let refused = matches!(arrival, Arrival::Refused(_) | Arrival::ClaimedElsewhere);
-                if !(refused && take_back(filesystem, &copy, &fingerprint, &identity)) {
+                let taken_back = refused && take_back(filesystem, &copy, &fingerprint, &identity);
+                if !taken_back {
                     report.copied = report.copied.map(|count| count.saturating_add(1));
                 }
                 if !refused {
                     copied_now.insert(fingerprint);
                 }
+                // A refused copy still in the folder is reported as what it
+                // is - copied, and waiting there - not also as left out: the
+                // scan will find it, and the report must not say otherwise.
+                let arrival = match arrival {
+                    Arrival::Refused(code) if !taken_back && code == UPLOADER_UNVERIFIED => {
+                        Arrival::Held(code)
+                    }
+                    Arrival::Refused(_) | Arrival::ClaimedElsewhere if !taken_back => {
+                        Arrival::Held(LEFT_IN_INPUT_FOLDER.into())
+                    }
+                    arrival => arrival,
+                };
                 report.tally(name, arrival);
             }
             Err(code) => report.skip(name, code),
@@ -245,14 +262,15 @@ pub(crate) fn queue_existing(
 
 /// Takes back a copy that was not queued - but only while it is provably
 /// still the copy: the same file (by its identity on disk) with the same
-/// content. True when it was removed.
+/// content. A sync client or antivirus holding the new copy for a moment is
+/// waited out. True when it was removed.
 fn take_back(
     filesystem: &dyn FileSystem,
     copy: &Path,
     fingerprint: &str,
     identity: &FileIdentity,
 ) -> bool {
-    let Ok(mut locked) = filesystem.lock_for_delete(copy) else {
+    let Ok(mut locked) = LockRetry::default().run(|| filesystem.lock_for_delete(copy)) else {
         return false;
     };
     let ours = locked.identity().is_ok_and(|found| found == *identity)
@@ -943,6 +961,70 @@ mod tests {
         );
         assert!(folders.input.join("deed.pdf").exists());
         assert_eq!(report.copied, Some(1));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A file system whose files can never be opened for deletion: a sync
+    /// client or antivirus that will not let go of a new copy.
+    struct Held;
+
+    impl FileSystem for Held {
+        fn exists(&self, path: &Path) -> bool {
+            StdFileSystem.exists(path)
+        }
+        fn hash(&self, path: &Path) -> std::io::Result<String> {
+            StdFileSystem.hash(path)
+        }
+        fn same_volume(&self, source: &Path, destination: &Path) -> std::io::Result<bool> {
+            StdFileSystem.same_volume(source, destination)
+        }
+        fn rename_no_replace(&self, source: &Path, destination: &Path) -> std::io::Result<()> {
+            StdFileSystem.rename_no_replace(source, destination)
+        }
+        fn copy_new_locked(
+            &self,
+            source: &Path,
+            destination: &Path,
+        ) -> std::io::Result<Box<dyn intern_core::LockedFile>> {
+            StdFileSystem.copy_new_locked(source, destination)
+        }
+        fn lock_for_delete(
+            &self,
+            _path: &Path,
+        ) -> std::io::Result<Box<dyn intern_core::LockedFile>> {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        }
+    }
+
+    /// A refused copy that cannot be taken back is reported once, as what it
+    /// is: copied and waiting in the input folder - not counted as copied and
+    /// named as left out as well, when the scan will process it from there.
+    #[test]
+    fn a_refused_copy_that_cannot_be_taken_back_is_reported_as_left_in_the_folder() {
+        let root = folder("copy-stuck");
+        let folders = folders(&root);
+        let stuck = write(&root, "stuck.pdf", b"%PDF-1.7 stuck");
+        let unverified = write(&root, "unverified.pdf", b"%PDF-1.7 unverified");
+        let report = copy_into_input(
+            &[stuck, unverified],
+            &folders,
+            &Held,
+            &|_| false,
+            &|_| false,
+            &|_| None,
+            &|path| {
+                if path.ends_with("stuck.pdf") {
+                    Arrival::Refused("CLAIM_IO_FAILED".into())
+                } else {
+                    Arrival::Refused(super::UPLOADER_UNVERIFIED.into())
+                }
+            },
+        );
+        assert_eq!(report.copied, Some(2));
+        assert_eq!(report.held, 2);
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(report.held_reason.as_deref(), Some("LEFT_IN_INPUT_FOLDER"));
+        assert_eq!(names(&folders.input), vec!["stuck.pdf", "unverified.pdf"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 

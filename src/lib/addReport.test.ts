@@ -41,7 +41,12 @@ describe('describeAddReport', () => {
 
   it('says a copy Microsoft reports as another account\'s upload is left in the Inbox', () => {
     expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 1, held: 1, heldReason: 'UPLOADER_OTHER', inputFolder: 'C:\\Users\\pat\\Contoso\\Files\\Inbox' }))
-      .toBe('Copied 1 file into Inbox. 1 was left in Inbox: Microsoft reports another account uploaded a file under that name, so Intern does not process it here.');
+      .toBe('Copied 1 file into Inbox. 1 was left in Inbox: Microsoft reports another account uploaded a file under that name, so Intern does not process it here. To process yours, rename it and add it again.');
+  });
+
+  it('says a copy that could not be taken back stays in the input folder', () => {
+    expect(describeAddReport({ added: 0, alreadyQueued: 0, skipped: [], copied: 1, held: 1, heldReason: 'LEFT_IN_INPUT_FOLDER', inputFolder: 'D:\\Input' }))
+      .toBe('Copied 1 file into Input. 1 stays in Input and is picked up from there.');
   });
 
   it('says the shared folder\'s own refusals in words', () => {

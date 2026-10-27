@@ -199,8 +199,11 @@ take is removed again, so the folder is as it was and the report's "left out"
 is true - but only while it is provably still the copy: it is opened for
 deletion and its file identity and fingerprint must match what the copy step
 wrote. In a synced folder the name can hold a teammate's document by then, and
-deleting that would delete it for everyone; a name that holds anything else is
-left alone and the copy counted. Where the admission check holds a document -
+deleting that would delete it for everyone. A sync client or antivirus holding
+the new copy is waited out for a few seconds; a copy that still cannot be taken
+back, or a name that holds anything else, is left alone and reported once, as
+copied and staying in the input folder for the scan to pick up - never also as
+left out. Where the admission check holds a document -
 the verified team Inbox, before Microsoft has heard of the upload, or when
 Microsoft reports another account's upload under that name - the copy stays in
 the folder, unclaimed, for the scans to ask about again, and the window says
