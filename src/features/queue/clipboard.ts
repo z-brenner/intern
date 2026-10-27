@@ -106,5 +106,8 @@ export function useGridClipboard({ rows, store, onCopied, onFailed }: Options) {
     if (!copied.rows.length) return;
     writeClipboard(payloadFor(copied)).then(() => latest.current.onCopied(copied), (error: unknown) => latest.current.onFailed(error));
   };
-  return { copy, hasSelection: useGridValue(store, (state) => Boolean(state.anchor)) };
+  // Selected cells on screen: a selection whose rows have all left the view
+  // (every one filed) is not one the button can copy.
+  const anchored = useGridValue(store, (state) => Boolean(state.anchor));
+  return { copy, hasSelection: anchored && Boolean(selectedBlock(selectionOf(store.get()), rows)) };
 }

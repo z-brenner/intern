@@ -324,6 +324,26 @@ describe('queue cells', () => {
     }
   });
 
+  // With every row it covered filed, there is no table left to drop the
+  // selection, and the disabled button went on saying "Copy selection".
+  it('forgets a selection once every row it covered has left the view', async () => {
+    await start([tricky[1], { ...tricky[1], id: 'two-b', originalFilename: 'Scan 2b.pdf', proposedFilename: '2024-02-04 Receipt.pdf' }]);
+    clickCell(queueCell('Scan 2 東京.pdf'));
+    clickCell(queueCell('Scan 2b.pdf', 'description'), { shiftKey: true });
+    expect(screen.getByRole('button', { name: 'Copy selection' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply all ready' }));
+    await waitFor(() => expect(screen.queryByRole('grid', { name: 'Queue' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Copy table' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Copy selection' })).not.toBeInTheDocument();
+
+    // A selection does not come back with the next row; in Completed the filed rows are unselected.
+    fireEvent.click(screen.getByRole('button', { name: /^Completed, / }));
+    await screen.findByRole('grid', { name: 'Queue' });
+    expect(selectedCells()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Copy table' })).toBeEnabled();
+  });
+
   it('says so when the clipboard cannot be written', async () => {
     vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
     await start(tricky);

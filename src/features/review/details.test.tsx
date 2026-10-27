@@ -177,6 +177,8 @@ describe('the Details panel', () => {
     fireEvent.keyDown(document.activeElement!, { key: 'Delete' });
     expect(within(panel()!).queryByRole('group', { name: 'Confirm removal' })).not.toBeInTheDocument();
     expect(bridge.remove).not.toHaveBeenCalled();
+    // Not silently: the key says why it did nothing.
+    expect(screen.getByRole('status', { name: 'Action status' })).toHaveTextContent('Select one row to remove it.');
 
     // One row's cells: Delete asks about that row's document, as ever.
     clickCell(queueCell('Scan 0102.pdf', 'proposed'), { shiftKey: false });

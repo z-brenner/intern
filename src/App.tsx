@@ -355,6 +355,10 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
   // A drawer emptied by its item leaving (filed, removed) is closed, not left
   // to spring open again over the next row a person clicks.
   useEffect(() => { if (!selected) setDetailsAskedFor(false); }, [selected]);
+  // With no rows on screen there is no table to clear its own selection; a
+  // selection left behind would come back with the next row that arrives.
+  const nothingShown = visible.length === 0;
+  useEffect(() => { if (nothingShown) clearCellSelection(); }, [nothingShown]);
   const clipboard = useGridClipboard({
     rows: visible,
     store: gridStore,
@@ -693,6 +697,7 @@ function MainApp({ bridge, selection, demo, pendingSettings, initialSetup }: { b
     // Delete removes the panel's one item; with several rows of cells
     // selected it would read as removing them all, so it does nothing.
     selectionSpansRows: () => { const bounds = selectionBounds(selectionOf(gridStore.get()), visible); return Boolean(bounds && bounds.bottom > bounds.top); },
+    onDeleteRefused: () => setActionMessage('Select one row to remove it.'),
     onFilter: () => {
       const box = document.querySelector<HTMLInputElement>('.queue-filter input');
       box?.focus();

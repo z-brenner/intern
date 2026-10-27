@@ -31,6 +31,8 @@ export interface ReviewShortcutOptions {
   onFilter(): boolean;
   /** Whether the queue table's selected cells span more than one row, when Delete is ignored. */
   selectionSpansRows?(): boolean;
+  /** Delete was pressed with cells of several rows selected, and did nothing: say why. */
+  onDeleteRefused?(): void;
 }
 
 const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'color', 'file', 'image']);
@@ -75,7 +77,7 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
   useLayoutEffect(() => { latest.current = options; });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const { enabled, rows, selected, inspector, onMove, onOpen, onFilter, selectionSpansRows } = latest.current;
+      const { enabled, rows, selected, inspector, onMove, onOpen, onFilter, selectionSpansRows, onDeleteRefused } = latest.current;
       // A key a field or dialog already handled (Enter in the name, Escape
       // in the filter) is not a shortcut as well.
       if (!enabled || event.defaultPrevented || event.isComposing) return;
@@ -131,7 +133,8 @@ export function useReviewShortcuts(options: ReviewShortcutOptions) {
           onOpen(selected);
           return;
         case 'Delete':
-          if (!actions?.remove || selectionSpansRows?.()) return;
+          if (!actions?.remove) return;
+          if (selectionSpansRows?.()) { event.preventDefault(); if (!event.repeat) onDeleteRefused?.(); return; }
           event.preventDefault();
           if (!event.repeat) inspector.current?.requestRemove();
           return;
