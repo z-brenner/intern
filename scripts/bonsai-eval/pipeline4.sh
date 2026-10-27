@@ -36,7 +36,9 @@ if [ "${1:-}" = block ]; then
   esac
   exit
 fi
-for b in subsets server matrix noprofile sweep; do
+BLOCKS="subsets server matrix noprofile sweep"
+if [ "${1:-}" = run ]; then shift; BLOCKS="$*"; fi   # e.g. pipeline4.sh run matrix
+for b in $BLOCKS; do
   echo "block $b start $(date -u +%H:%M)"
   locked bash "$0" block $b
   echo "block $b end $(date -u +%H:%M)"
