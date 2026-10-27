@@ -607,11 +607,17 @@ nothing moved, and both names taken is settled by the bytes - and a document
 left in review without its mark is marked then. A rename that is refused (a
 held file, a folder that may not be written) moves nothing and is recorded as
 refused rather than retried for ever. Keep original takes the prefix off again
-with the same journal, completing the item in the same commit, and Retry and
-approval read and file the document from wherever its file now is. Every scan
-and add skips the prefix, in any case, and the intake watcher still finds the
-row by the name the document arrived under, so its claim follows the document
-instead of reading it as removed.
+with the same journal, completing the item in the same commit, and Retry -
+which fingerprints the file again, since removing a password changes it - and
+approval read and file the document from wherever its file now is. A marked
+document that is canceled, or fails after a retry, gets its own name back the
+same way, so clearing the history never leaves a file every scan skips. Every scan
+and add skips the prefix, in any case. The intake watcher's claims are tied
+to the queue item each one handed over (`intake_claims`), so a claim follows
+its own document - renamed for review, given its name back as `name (2)`, or
+with a new upload arriving under its old name - and after a restart the
+watcher takes back its open claims on documents no longer where they were
+claimed, rather than leaving them open until they expire.
 
 A document that changed after it was read - signed, edited, saved over - is
 never filed under a name that described the earlier version: approving it
@@ -865,10 +871,24 @@ not what its extension says, a document past the extraction limits or too long
 for the model, a damaged file the parser rejects, an internal failure on that
 one document, and a model refusal. Each of these is the document's own
 problem, so it does not fail: it waits in review under its code
-(`UNREADABLE_CODES` in `intern-core`), and its file is renamed in place to
-`NEEDS REVIEW - <name>` so the input folder shows it too. A parser that crashed
-on the document on both attempts, and a model that timed out on it on both,
-send it to review the same way. Asking again would only re-read the file —
+(`UNREADABLE_CODES` in `intern-core`), and its file in the input folder is
+renamed in place to `NEEDS REVIEW - <name>` so the folder shows it too. A
+parser that crashed on the document on both attempts, and a model that timed
+out on it on both, send it to review the same way.
+
+Only reasons that are the document's by their nature - a password, a file that
+is not what it says, one too large, a parse failure that is not a crash, a
+refusal - rename it at once. A reply that could not be used, an internal
+failure, a time-out and a crash look the same from one document whether the
+document or the machine is at fault, so the rename is put off until a later
+document is read successfully; three such failures in a row (replies,
+time-outs, or reader crashes, each counted on its own) stop the queue instead,
+and the documents of that run go back to wait under their own names with
+nothing counted against them. Nothing is renamed outside the input folder, and
+nothing admitted on Microsoft's word about its uploader: that proof names the
+file - its name in the library - and every later stage asks for it again, so a
+renamed file could never be retried, named or filed; such a document waits in
+review under its own name. Asking again would only re-read the file —
 thirty minutes of it, for a scan that hit the time limit — or re-send and
 re-bill the request. A worker crash, a failure the worker says may pass, and a
 model request that timed out or was called off get one more attempt. A failure
@@ -925,7 +945,9 @@ analysis, `copy_of` naming the original - and moved through the same
 journaled apply as any approval into the original's folder (or the output
 folder's root, for a teammate's filing or an original whose folder is not
 known), as `COPY - <the original's filed name>` with the duplicate's own
-extension and the usual ` (2)` on collision. It is filed now when the queue
+extension and the usual ` (2)` on collision. Only a duplicate in the input
+folder is moved; if the output folder changed while a copy waited, it goes to
+the new output folder's root rather than recreating a folder of the old one. It is filed now when the queue
 is free and between documents otherwise, whatever automatic renaming says. A
 copy is not a filing of its own: no fingerprint, no description record, no
 shared filed marker, and the queue row's `copy_filing` mark keeps it out of

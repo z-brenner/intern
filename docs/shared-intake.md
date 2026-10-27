@@ -306,9 +306,11 @@ describes the record and the flow that consumes it.
 - **Document Intern cannot read** (password-protected, damaged, mislabeled,
   too large, or one the model declined, could not answer for, or timed out on
   twice): it waits in review on the machine that read it, and its file is
-  renamed in place to `NEEDS REVIEW - <name>`. No machine's scan claims that
-  name, and the claim on the name it arrived under stays held - renewed like
-  any review item's, never withdrawn - until a person decides: filed (the
+  renamed in place to `NEEDS REVIEW - <name>` (never for a document admitted
+  on Microsoft's word about its uploader, whose proof names the file). No
+  machine's scan claims that name, and the claim on the name it arrived under
+  stays held - tied to its queue item, renewed like any review item's, taken
+  back after a restart, never withdrawn - until a person decides: filed (the
   claim closes as renamed), kept under its own name (the prefix comes off and
   the claim closes as kept), or removed from the queue (the file stays as it
   is and Intern leaves it alone).
